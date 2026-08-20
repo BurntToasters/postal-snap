@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Postal Snap
+Comment=Easy, secure email without clutter
+Exec=postal-snap %u
+Icon=run.rosie.snap
+Terminal=false
+Categories=Office;Email;
+MimeType=x-scheme-handler/mailto;

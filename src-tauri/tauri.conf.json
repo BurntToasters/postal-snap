@@ -1,0 +1,98 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Postal Snap",
+  "version": "0.1.0",
+  "identifier": "run.rosie.snap",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Postal Snap",
+        "width": 1240,
+        "height": 820,
+        "minWidth": 620,
+        "minHeight": 540,
+        "resizable": true,
+        "decorations": true,
+        "backgroundColor": "#f4f7fa"
+      }
+    ],
+    "security": {
+      "capabilities": [
+        "default"
+      ],
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'none'; font-src 'self' data:; frame-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; form-action 'none'",
+      "freezePrototype": true,
+      "assetProtocol": {
+        "enable": false,
+        "scope": []
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "dmg",
+      "app",
+      "nsis",
+      "appimage"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png",
+      "icons/icon.ico",
+      "icons/icon.icns"
+    ],
+    "createUpdaterArtifacts": true,
+    "resources": {
+      "../THIRD_PARTY_NOTICES.npm.txt": "THIRD_PARTY_NOTICES.npm.txt",
+      "../THIRD_PARTY_NOTICES.cargo.txt": "THIRD_PARTY_NOTICES.cargo.txt"
+    },
+    "category": "Productivity",
+    "shortDescription": "Easy, secure email without clutter.",
+    "longDescription": "Postal Snap is a calm, accessible desktop email client with secure IMAP and SMTP support.",
+    "windows": {
+      "digestAlgorithm": "sha256",
+      "nsis": {
+        "installMode": "currentUser",
+        "installerIcon": "icons/icon.ico"
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "14.0",
+      "hardenedRuntime": true,
+      "entitlements": "entitlements.plist",
+      "infoPlist": "Info.plist"
+    },
+    "linux": {
+      "appimage": {
+        "bundleMediaFramework": false
+      }
+    },
+    "fileAssociations": []
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "mailto"
+        ]
+      }
+    },
+    "updater": {
+      "endpoints": [
+        "https://github.com/BurntToasters/postal-snap/releases/latest/download/latest-{{target}}-{{arch}}.json"
+      ],
+      "pubkey": "POSTAL_SNAP_UPDATER_PUBLIC_KEY"
+    }
+  }
+}

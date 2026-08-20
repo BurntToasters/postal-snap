@@ -1,0 +1,17 @@
+services:
+  greenmail:
+    image: greenmail/standalone:2.1.11
+    environment:
+      GREENMAIL_OPTS: >-
+        -Dgreenmail.setup.test.smtp
+        -Dgreenmail.setup.test.imaps
+        -Dgreenmail.hostname=0.0.0.0
+        -Dgreenmail.users=senior:mail-test-password@example.test
+        -Dgreenmail.users.login=email
+        -Dgreenmail.tls.keystore.file=/home/greenmail/postal-snap.p12
+        -Dgreenmail.tls.keystore.password=changeit
+    ports:
+      - "127.0.0.1:3025:3025"
+      - "127.0.0.1:3993:3993"
+    volumes:
+      - "${POSTAL_SNAP_GREENMAIL_P12}:/home/greenmail/postal-snap.p12:ro"

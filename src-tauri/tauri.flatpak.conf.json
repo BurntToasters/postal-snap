@@ -1,0 +1,6 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": { "security": { "capabilities": ["store"] } },
+  "bundle": { "createUpdaterArtifacts": false },
+  "plugins": { "updater": null }
+}

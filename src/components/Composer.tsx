@@ -1,0 +1,986 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Extension } from "@tiptap/core";
+import { useEditor, EditorContent } from "@tiptap/react";
+import StarterKit from "@tiptap/starter-kit";
+import Underline from "@tiptap/extension-underline";
+import Link from "@tiptap/extension-link";
+import Image from "@tiptap/extension-image";
+import TextAlign from "@tiptap/extension-text-align";
+import Highlight from "@tiptap/extension-highlight";
+import Color from "@tiptap/extension-color";
+import FontFamily from "@tiptap/extension-font-family";
+import { TextStyle } from "@tiptap/extension-text-style";
+import {
+  Table,
+  TableCell,
+  TableHeader,
+  TableRow,
+} from "@tiptap/extension-table";
+import {
+  AlignCenter,
+  AlignLeft,
+  AlignRight,
+  Bold,
+  Highlighter,
+  ImagePlus,
+  IndentDecrease,
+  IndentIncrease,
+  Italic,
+  Link as LinkIcon,
+  List,
+  ListOrdered,
+  Minus,
+  Paperclip,
+  Redo2,
+  RemoveFormatting,
+  Send,
+  Strikethrough,
+  Table2,
+  TriangleAlert,
+  Underline as UnderlineIcon,
+  Undo2,
+  X,
+} from "lucide-react";
+import { api } from "../api";
+import { strings } from "../i18n";
+import { htmlToPlainText, sanitizeReceivedHtml } from "../security";
+import { useAppStore, type ComposerSeed } from "../store";
+import type { ComposeAttachment, ComposeDraft } from "../types";
+import { useDialogFocus } from "./useDialogFocus";
+
+declare module "@tiptap/core" {
+  interface Commands<ReturnType> {
+    fontSize: {
+      setFontSize: (fontSize: string) => ReturnType;
+      unsetFontSize: () => ReturnType;
+    };
+  }
+}
+
+const FontSize = Extension.create({
+  name: "fontSize",
+  addGlobalAttributes() {
+    return [
+      {
+        types: ["textStyle"],
+        attributes: {
+          fontSize: {
+            default: null,
+            parseHTML: (element) => element.style.fontSize || null,
+            renderHTML: (attributes) =>
+              attributes.fontSize
+                ? { style: `font-size: ${attributes.fontSize}` }
+                : {},
+          },
+        },
+      },
+    ];
+  },
+  addCommands() {
+    return {
+      setFontSize:
+        (fontSize) =>
+        ({ chain }) =>
+          chain().setMark("textStyle", { fontSize }).run(),
+      unsetFontSize:
+        () =>
+        ({ chain }) =>
+          chain()
+            .setMark("textStyle", { fontSize: null })
+            .removeEmptyTextStyle()
+            .run(),
+    };
+  },
+});
+
+const Indentation = Extension.create({
+  name: "indentation",
+  addGlobalAttributes() {
+    return [
+      {
+        types: ["paragraph", "heading"],
+        attributes: {
+          indent: {
+            default: 0,
+            parseHTML: (element) => {
+              const rem = Number.parseFloat(element.style.marginLeft);
+              return Number.isFinite(rem)
+                ? Math.min(6, Math.round(rem / 2))
+                : 0;
+            },
+            renderHTML: (attributes) =>
+              attributes.indent
+                ? { style: `margin-left: ${attributes.indent * 2}rem` }
+                : {},
+          },
+        },
+      },
+    ];
+  },
+});
+
+interface Props {
+  accountId: string;
+}
+
+export function Composer({ accountId }: Props) {
+  const seed = useAppStore((state) => state.composeSeed);
+  const accountEmail = useAppStore(
+    (state) =>
+      state.accounts.find((account) => account.id === accountId)?.email ?? "",
+  );
+  const close = useAppStore((state) => state.closeComposer);
+  const setError = useAppStore((state) => state.setError);
+  const [to, setTo] = useState(seedRecipients(seed, "to", accountEmail));
+  const [cc, setCc] = useState(seedRecipients(seed, "cc", accountEmail));
+  const [bcc, setBcc] = useState(
+    seed?.draft?.bcc.join(", ") ?? seed?.prefill?.bcc?.join(", ") ?? "",
+  );
+  const [subject, setSubject] = useState(seedSubject(seed));
+  const [attachments, setAttachments] = useState<ComposeAttachment[]>(
+    seed?.draft?.attachments ?? seed?.prefill?.attachments ?? [],
+  );
+  const [draftId, setDraftId] = useState<string | undefined>(seed?.draft?.id);
+  const [inlineImages, setInlineImages] = useState(
+    new Map<string, { dataUrl: string; contentId: string }>(),
+  );
+  const [sending, setSending] = useState(false);
+  const [showCc, setShowCc] = useState(Boolean(cc));
+  const [recipientError, setRecipientError] = useState<string>();
+  const [subjectError, setSubjectError] = useState<string>();
+  const [saveState, setSaveState] = useState<"unsaved" | "saving" | "saved">(
+    seed?.draft ? "saved" : "unsaved",
+  );
+  const [draftSyncState, setDraftSyncState] = useState(
+    seed?.draftSummary?.syncState,
+  );
+  const [draftSyncDetail, setDraftSyncDetail] = useState(
+    seed?.draftSummary?.syncDetail,
+  );
+  const restoredInlineImages = useRef(false);
+  const dialogRef = useDialogFocus(requestClose);
+
+  const editor = useEditor({
+    extensions: [
+      StarterKit.configure({ link: false, underline: false }),
+      Underline,
+      Link.configure({ openOnClick: false }),
+      Image.configure({ allowBase64: true }),
+      TextStyle,
+      FontSize,
+      Indentation,
+      Color,
+      FontFamily,
+      Highlight.configure({ multicolor: true }),
+      TextAlign.configure({ types: ["heading", "paragraph"] }),
+      Table.configure({ resizable: true }),
+      TableRow,
+      TableHeader,
+      TableCell,
+    ],
+    content: seedBody(seed),
+    editorProps: {
+      attributes: {
+        class: "composer-editor",
+        "aria-label": strings.composer.messageBody,
+      },
+      transformPastedHTML: (html) => sanitizeReceivedHtml(html).html,
+    },
+    onUpdate: () => setSaveState("unsaved"),
+  });
+
+  const canSend = useMemo(
+    () =>
+      Boolean(
+        editor &&
+        !sending &&
+        [...splitAddresses(to), ...splitAddresses(cc), ...splitAddresses(bcc)]
+          .length > 0 &&
+        validateRecipientFields(to, cc, bcc) === undefined &&
+        validateSubject(subject) === undefined,
+      ),
+    [bcc, cc, editor, sending, subject, to],
+  );
+
+  useEffect(() => {
+    if (!editor || restoredInlineImages.current) return;
+    restoredInlineImages.current = true;
+    const inline = attachments.filter(
+      (attachment) => attachment.inline && attachment.contentId,
+    );
+    if (inline.length === 0) return;
+    let cancelled = false;
+    void Promise.all(
+      inline.map(async (attachment) => ({
+        attachment,
+        dataUrl: await api.readComposeImage(accountId, attachment.token),
+      })),
+    )
+      .then((loaded) => {
+        if (cancelled) return;
+        let html = editor.getHTML();
+        const next = new Map<string, { dataUrl: string; contentId: string }>();
+        for (const { attachment, dataUrl } of loaded) {
+          const contentId = attachment.contentId!;
+          html = html.split(`cid:${contentId}`).join(dataUrl);
+          next.set(attachment.token, { dataUrl, contentId });
+        }
+        setInlineImages(next);
+        editor.commands.setContent(html, { emitUpdate: false });
+      })
+      .catch((cause) => setError(String(cause)));
+    return () => {
+      cancelled = true;
+    };
+  }, [accountId, attachments, editor, setError]);
+
+  const buildDraft = useCallback((): ComposeDraft => {
+    let htmlBody = editor?.getHTML() ?? "";
+    for (const { dataUrl, contentId } of inlineImages.values())
+      htmlBody = htmlBody.split(dataUrl).join(`cid:${contentId}`);
+    return {
+      id: draftId,
+      accountId,
+      to: splitAddresses(to),
+      cc: splitAddresses(cc),
+      bcc: splitAddresses(bcc),
+      subject: subject.trim(),
+      htmlBody,
+      textBody: htmlToPlainText(htmlBody),
+      attachments,
+      inReplyTo:
+        seed?.draft?.inReplyTo ?? seed?.sourceMessage?.messageId ?? undefined,
+      references:
+        seed?.draft?.references ??
+        (seed?.sourceMessage?.messageId
+          ? [seed.sourceMessage.messageId]
+          : undefined),
+    };
+  }, [
+    accountId,
+    attachments,
+    bcc,
+    cc,
+    draftId,
+    editor,
+    inlineImages,
+    seed,
+    subject,
+    to,
+  ]);
+
+  useEffect(() => {
+    if (!editor) return;
+    const saveTimer = window.setInterval(() => {
+      const draft = buildDraft();
+      if (
+        !sending &&
+        saveState === "unsaved" &&
+        hasDraftContent(draft, editor.getText())
+      ) {
+        setSaveState("saving");
+        void api
+          .saveDraft(draft)
+          .then((outcome) => {
+            setDraftId(outcome.id);
+            setSaveState("saved");
+            setDraftSyncState(outcome.syncState);
+            setDraftSyncDetail(undefined);
+            announceLocalMailChanged(accountId);
+          })
+          .catch((cause) => {
+            setSaveState("unsaved");
+            setError(String(cause));
+          });
+      }
+    }, 30_000);
+    return () => window.clearInterval(saveTimer);
+  }, [accountId, buildDraft, editor, saveState, sending, setError]);
+
+  function requestClose() {
+    if (sending) return;
+    const draft = buildDraft();
+    if (
+      saveState === "unsaved" &&
+      hasDraftContent(draft, editor?.getText() ?? "") &&
+      !window.confirm(strings.composer.saveCloseQuestion)
+    )
+      return;
+    void saveDraft(true);
+  }
+
+  async function saveDraft(showStatus = true) {
+    if (sending) return;
+    const draft = buildDraft();
+    if (!hasDraftContent(draft, editor?.getText() ?? "")) {
+      close();
+      return;
+    }
+    setSaveState("saving");
+    try {
+      const outcome = await api.saveDraft(draft);
+      setDraftId(outcome.id);
+      setSaveState("saved");
+      setDraftSyncState(outcome.syncState);
+      setDraftSyncDetail(undefined);
+      announceLocalMailChanged(accountId);
+      if (showStatus) close();
+    } catch (cause) {
+      setSaveState("unsaved");
+      setError(String(cause));
+    }
+  }
+
+  async function discardDraft() {
+    if (sending) return;
+    if (
+      hasDraftContent(buildDraft(), editor?.getText() ?? "") &&
+      !window.confirm(strings.composer.discardQuestion)
+    )
+      return;
+    try {
+      if (draftId) await api.deleteDraft(draftId, accountId);
+      await api.releaseComposeAttachments(
+        accountId,
+        attachments.map((attachment) => attachment.token),
+      );
+      announceLocalMailChanged(accountId);
+      close();
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }
+
+  async function sendMessage() {
+    const validation = validateRecipientFields(to, cc, bcc);
+    const subjectValidation = validateSubject(subject);
+    setRecipientError(validation);
+    setSubjectError(subjectValidation);
+    if (!canSend || validation || subjectValidation) return;
+    setSending(true);
+    try {
+      const outcome = await api.sendMessage(buildDraft());
+      announceLocalMailChanged(accountId);
+      if (outcome.detail) setError(outcome.detail);
+      close();
+    } catch (cause) {
+      announceLocalMailChanged(accountId);
+      setError(String(cause));
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function addAttachments() {
+    try {
+      const selected = await api.chooseAttachments(accountId, false);
+      setAttachments((items) => [...items, ...selected]);
+      if (selected.length) setSaveState("unsaved");
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }
+
+  async function addInlineImage() {
+    try {
+      const [selected] = await api.chooseAttachments(accountId, true);
+      if (!selected) return;
+      const dataUrl = await api.readComposeImage(accountId, selected.token);
+      const contentId = `postal-${crypto.randomUUID()}@inline`;
+      setInlineImages((items) =>
+        new Map(items).set(selected.token, { dataUrl, contentId }),
+      );
+      setAttachments((items) => [
+        ...items,
+        { ...selected, inline: true, contentId },
+      ]);
+      setSaveState("unsaved");
+      editor
+        ?.chain()
+        .focus()
+        .setImage({ src: dataUrl, alt: strings.composer.inlineImage })
+        .run();
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }
+
+  function addLink() {
+    const current = editor?.getAttributes("link").href as string | undefined;
+    const href = window.prompt(
+      strings.composer.webAddress,
+      current ?? "https://",
+    );
+    if (href === null) return;
+    if (!/^https?:\/\//i.test(href)) {
+      setError(strings.composer.unsafeLink);
+      return;
+    }
+    editor?.chain().focus().extendMarkRange("link").setLink({ href }).run();
+  }
+
+  function adjustIndent(delta: number) {
+    if (!editor) return;
+    const { from, to } = editor.state.selection;
+    const transaction = editor.state.tr;
+    editor.state.doc.nodesBetween(from, to, (node, position) => {
+      if (!["paragraph", "heading"].includes(node.type.name)) return;
+      const current = Number(node.attrs.indent ?? 0);
+      const indent = Math.max(0, Math.min(6, current + delta));
+      transaction.setNodeMarkup(position, undefined, { ...node.attrs, indent });
+    });
+    if (transaction.docChanged) editor.view.dispatch(transaction);
+    editor.commands.focus();
+  }
+
+  function removeAttachment(index: number) {
+    const item = attachments[index];
+    const inline = item ? inlineImages.get(item.token) : undefined;
+    if (inline && editor) {
+      const transaction = editor.state.tr;
+      editor.state.doc.descendants((node, position) => {
+        if (node.type.name === "image" && node.attrs.src === inline.dataUrl)
+          transaction.delete(position, position + node.nodeSize);
+      });
+      if (transaction.docChanged) editor.view.dispatch(transaction);
+      setInlineImages((items) => {
+        const next = new Map(items);
+        next.delete(item.token);
+        return next;
+      });
+    }
+    setAttachments((all) => all.filter((_, itemIndex) => itemIndex !== index));
+    setSaveState("unsaved");
+    if (item)
+      void api
+        .releaseComposeAttachments(accountId, [item.token])
+        .catch((cause) => setError(String(cause)));
+  }
+
+  return (
+    <div
+      className="modal-layer composer-layer"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="composer-title"
+    >
+      <button
+        className="modal-backdrop"
+        type="button"
+        onClick={requestClose}
+        disabled={sending}
+        aria-label={strings.composer.saveClose}
+      />
+      <section className="composer-window" ref={dialogRef}>
+        <header>
+          <span>
+            <h1 id="composer-title">{composerTitle(seed)}</h1>
+            <small aria-live="polite">
+              {saveState === "saving"
+                ? strings.common.saving
+                : saveState === "saved"
+                  ? strings.composer.draftSaved
+                  : ""}
+            </small>
+          </span>
+          <button
+            className="icon-button"
+            type="button"
+            onClick={requestClose}
+            disabled={sending}
+            aria-label={strings.composer.saveClose}
+          >
+            <X />
+          </button>
+        </header>
+        {draftSyncState && draftSyncState !== "synced" ? (
+          <div
+            className={`draft-sync-banner ${draftSyncState}`}
+            role={draftSyncState === "conflict" ? "alert" : "status"}
+          >
+            <TriangleAlert aria-hidden="true" />
+            <span>
+              <strong>
+                {draftSyncState === "conflict"
+                  ? strings.composer.recoveredTitle
+                  : draftSyncState === "localOnly"
+                    ? strings.composer.localTitle
+                    : strings.composer.syncingTitle}
+              </strong>
+              <small>
+                {draftSyncDetail ??
+                  (draftSyncState === "conflict"
+                    ? strings.composer.recoveredDetail
+                    : draftSyncState === "localOnly"
+                      ? strings.composer.localDetail
+                      : strings.composer.syncingDetail)}
+              </small>
+            </span>
+          </div>
+        ) : null}
+        <div className="address-fields">
+          <label>
+            <span>{strings.composer.to}</span>
+            <input
+              autoFocus
+              value={to}
+              onChange={(event) => {
+                setTo(event.target.value);
+                setSaveState("unsaved");
+              }}
+              onBlur={() =>
+                setRecipientError(validateRecipientFields(to, cc, bcc))
+              }
+              placeholder={strings.composer.addressPlaceholder}
+              aria-invalid={Boolean(recipientError)}
+              aria-describedby={recipientError ? "recipient-error" : undefined}
+            />
+          </label>
+          <button
+            type="button"
+            className="cc-toggle"
+            onClick={() => setShowCc((value) => !value)}
+          >
+            {strings.composer.ccBcc}
+          </button>
+          {showCc ? (
+            <>
+              <label>
+                <span>{strings.composer.cc}</span>
+                <input
+                  value={cc}
+                  onChange={(event) => {
+                    setCc(event.target.value);
+                    setSaveState("unsaved");
+                  }}
+                  onBlur={() =>
+                    setRecipientError(validateRecipientFields(to, cc, bcc))
+                  }
+                  aria-invalid={Boolean(recipientError)}
+                />
+              </label>
+              <label>
+                <span>{strings.composer.bcc}</span>
+                <input
+                  value={bcc}
+                  onChange={(event) => {
+                    setBcc(event.target.value);
+                    setSaveState("unsaved");
+                  }}
+                  onBlur={() =>
+                    setRecipientError(validateRecipientFields(to, cc, bcc))
+                  }
+                  aria-invalid={Boolean(recipientError)}
+                />
+              </label>
+            </>
+          ) : null}
+          {recipientError ? (
+            <p id="recipient-error" className="field-error" role="alert">
+              {recipientError}
+            </p>
+          ) : null}
+          <label>
+            <span>{strings.composer.subject}</span>
+            <input
+              value={subject}
+              onChange={(event) => {
+                setSubject(event.target.value);
+                setSaveState("unsaved");
+              }}
+              onBlur={() => setSubjectError(validateSubject(subject))}
+              maxLength={998}
+              aria-invalid={Boolean(subjectError)}
+              aria-describedby={subjectError ? "subject-error" : undefined}
+            />
+          </label>
+          {subjectError ? (
+            <p id="subject-error" className="field-error" role="alert">
+              {subjectError}
+            </p>
+          ) : null}
+        </div>
+        <div
+          className="format-toolbar"
+          role="toolbar"
+          aria-label={strings.composer.formatting}
+        >
+          <button
+            type="button"
+            onClick={() => editor?.chain().focus().undo().run()}
+            aria-label={strings.composer.undo}
+          >
+            <Undo2 />
+          </button>
+          <button
+            type="button"
+            onClick={() => editor?.chain().focus().redo().run()}
+            aria-label={strings.composer.redo}
+          >
+            <Redo2 />
+          </button>
+          <span />
+          <select
+            aria-label={strings.composer.font}
+            defaultValue=""
+            onChange={(event) =>
+              event.target.value
+                ? editor
+                    ?.chain()
+                    .focus()
+                    .setFontFamily(event.target.value)
+                    .run()
+                : editor?.chain().focus().unsetFontFamily().run()
+            }
+          >
+            <option value="">{strings.composer.defaultFont}</option>
+            <option value="Arial">Arial</option>
+            <option value="Georgia">Georgia</option>
+            <option value="Verdana">Verdana</option>
+            <option value="'Courier New'">Courier</option>
+          </select>
+          <select
+            aria-label={strings.composer.fontSize}
+            defaultValue="16px"
+            onChange={(event) =>
+              editor?.chain().focus().setFontSize(event.target.value).run()
+            }
+          >
+            <option value="12px">{strings.composer.small}</option>
+            <option value="16px">{strings.composer.normal}</option>
+            <option value="20px">{strings.composer.large}</option>
+            <option value="26px">{strings.composer.extraLarge}</option>
+          </select>
+          <button
+            className={editor?.isActive("bold") ? "active" : ""}
+            type="button"
+            onClick={() => editor?.chain().focus().toggleBold().run()}
+            aria-label={strings.composer.bold}
+          >
+            <Bold />
+          </button>
+          <button
+            className={editor?.isActive("italic") ? "active" : ""}
+            type="button"
+            onClick={() => editor?.chain().focus().toggleItalic().run()}
+            aria-label={strings.composer.italic}
+          >
+            <Italic />
+          </button>
+          <button
+            className={editor?.isActive("underline") ? "active" : ""}
+            type="button"
+            onClick={() => editor?.chain().focus().toggleUnderline().run()}
+            aria-label={strings.composer.underline}
+          >
+            <UnderlineIcon />
+          </button>
+          <button
+            className={editor?.isActive("strike") ? "active" : ""}
+            type="button"
+            onClick={() => editor?.chain().focus().toggleStrike().run()}
+            aria-label={strings.composer.strike}
+          >
+            <Strikethrough />
+          </button>
+          <label className="color-control" title={strings.composer.textColor}>
+            <input
+              type="color"
+              defaultValue="#20252b"
+              onChange={(event) =>
+                editor?.chain().focus().setColor(event.target.value).run()
+              }
+            />
+            <span>A</span>
+          </label>
+          <button
+            type="button"
+            onClick={() =>
+              editor
+                ?.chain()
+                .focus()
+                .toggleHighlight({ color: "#fff1a8" })
+                .run()
+            }
+            aria-label={strings.composer.highlight}
+          >
+            <Highlighter />
+          </button>
+          <span />
+          <button
+            type="button"
+            onClick={() => editor?.chain().focus().setTextAlign("left").run()}
+            aria-label={strings.composer.alignLeft}
+          >
+            <AlignLeft />
+          </button>
+          <button
+            type="button"
+            onClick={() => editor?.chain().focus().setTextAlign("center").run()}
+            aria-label={strings.composer.alignCenter}
+          >
+            <AlignCenter />
+          </button>
+          <button
+            type="button"
+            onClick={() => editor?.chain().focus().setTextAlign("right").run()}
+            aria-label={strings.composer.alignRight}
+          >
+            <AlignRight />
+          </button>
+          <button
+            type="button"
+            onClick={() => editor?.chain().focus().toggleBulletList().run()}
+            aria-label={strings.composer.bullets}
+          >
+            <List />
+          </button>
+          <button
+            type="button"
+            onClick={() => editor?.chain().focus().toggleOrderedList().run()}
+            aria-label={strings.composer.numbers}
+          >
+            <ListOrdered />
+          </button>
+          <button
+            type="button"
+            onClick={() => adjustIndent(-1)}
+            aria-label={strings.composer.indentLess}
+          >
+            <IndentDecrease />
+          </button>
+          <button
+            type="button"
+            onClick={() => adjustIndent(1)}
+            aria-label={strings.composer.indentMore}
+          >
+            <IndentIncrease />
+          </button>
+          <button
+            type="button"
+            onClick={addLink}
+            aria-label={strings.composer.insertLink}
+          >
+            <LinkIcon />
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              editor
+                ?.chain()
+                .focus()
+                .insertTable({ rows: 3, cols: 3, withHeaderRow: true })
+                .run()
+            }
+            aria-label={strings.composer.insertTable}
+          >
+            <Table2 />
+          </button>
+          <button
+            type="button"
+            onClick={() => editor?.chain().focus().setHorizontalRule().run()}
+            aria-label={strings.composer.insertRule}
+          >
+            <Minus />
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              editor?.chain().focus().clearNodes().unsetAllMarks().run()
+            }
+            aria-label={strings.composer.clearFormatting}
+          >
+            <RemoveFormatting />
+          </button>
+        </div>
+        <EditorContent editor={editor} />
+        {attachments.length > 0 ? (
+          <div className="compose-attachments">
+            {attachments.map((item, index) => (
+              <span key={`${item.token}-${index}`}>
+                {item.inline ? strings.composer.imagePrefix : ""}
+                {item.filename}
+                <button
+                  type="button"
+                  onClick={() => removeAttachment(index)}
+                  disabled={sending}
+                  aria-label={strings.composer.removeAttachment(item.filename)}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        ) : null}
+        <footer>
+          <button
+            className="primary-button send-button"
+            type="button"
+            disabled={!canSend}
+            onClick={() => void sendMessage()}
+          >
+            <Send />
+            {sending ? strings.composer.sending : strings.composer.send}
+          </button>
+          <button
+            className="toolbar-button"
+            type="button"
+            onClick={() => void addAttachments()}
+            disabled={sending}
+          >
+            <Paperclip />
+            {strings.composer.attach}
+          </button>
+          <button
+            className="toolbar-button"
+            type="button"
+            onClick={() => void addInlineImage()}
+            disabled={sending}
+          >
+            <ImagePlus />
+            {strings.composer.picture}
+          </button>
+          <button
+            className="discard-button"
+            type="button"
+            onClick={() => void discardDraft()}
+            disabled={sending}
+          >
+            {strings.composer.discard}
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function splitAddresses(value: string): string[] {
+  return value
+    .split(/[;,]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function validateRecipientFields(
+  to: string,
+  cc: string,
+  bcc: string,
+): string | undefined {
+  const addresses = [to, cc, bcc].flatMap(splitAddresses);
+  if (addresses.length === 0) return strings.composer.recipientRequired;
+  if (addresses.some(hasControlCharacter))
+    return strings.composer.invalidHeader;
+  if (addresses.some((value) => !isMailbox(value)))
+    return strings.composer.invalidRecipient;
+  return undefined;
+}
+
+function isMailbox(value: string): boolean {
+  if (hasControlCharacter(value)) return false;
+  const bracketed = value.match(/<([^<>]+)>$/)?.[1];
+  const address = (bracketed ?? value).trim();
+  return /^[^\s@<>]+@[^\s@<>]+$/.test(address) && address.length <= 320;
+}
+
+function hasControlCharacter(value: string): boolean {
+  return [...value].some((character) => {
+    const code = character.codePointAt(0) ?? 0;
+    return code < 32 || code === 127;
+  });
+}
+
+function validateSubject(value: string): string | undefined {
+  return hasControlCharacter(value)
+    ? strings.composer.invalidSubject
+    : undefined;
+}
+
+function hasDraftContent(draft: ComposeDraft, editorText: string): boolean {
+  return Boolean(
+    draft.to.length ||
+    draft.cc.length ||
+    draft.bcc.length ||
+    draft.subject ||
+    editorText.trim() ||
+    draft.attachments.length,
+  );
+}
+function seedRecipients(
+  seed: ComposerSeed | undefined,
+  field: "to" | "cc",
+  accountEmail: string,
+): string {
+  if (!seed) return "";
+  if (seed.draft) return seed.draft[field].join(", ");
+  if (seed.prefill?.[field]) return seed.prefill[field]?.join(", ") ?? "";
+  const message = seed.sourceMessage;
+  if (!message) return "";
+  if (seed.composeMode === "forward") return "";
+  const replyAddress = message.replyTo ?? message.senderAddress;
+  if (field === "to") return replyAddress ?? message.to.join(", ");
+  return seed.composeMode === "replyAll"
+    ? [...message.to, ...message.cc]
+        .filter(
+          (address) =>
+            ![accountEmail, message.senderAddress, replyAddress].some(
+              (excluded) => excluded?.toLowerCase() === address.toLowerCase(),
+            ),
+        )
+        .join(", ")
+    : "";
+}
+function seedSubject(seed?: ComposerSeed): string {
+  const subject =
+    seed?.draft?.subject ??
+    seed?.prefill?.subject ??
+    seed?.sourceMessage?.subject;
+  if (!subject) return "";
+  if (!seed?.composeMode) return subject;
+  const prefix = seed.composeMode === "forward" ? "Fwd:" : "Re:";
+  return /^(re|fwd):/i.test(subject) ? subject : `${prefix} ${subject}`;
+}
+function seedBody(seed?: ComposerSeed): string {
+  const draftHtml = seed?.draft?.htmlBody ?? seed?.prefill?.htmlBody;
+  const draftText = seed?.draft?.textBody ?? seed?.prefill?.textBody;
+  if (!seed?.sourceMessage) {
+    if (!draftHtml && !draftText) return "<p></p>";
+    return (
+      draftHtml ??
+      `<p>${escapeHtml(draftText ?? "").replace(/\n/g, "<br>")}</p>`
+    );
+  }
+  const message = seed.sourceMessage;
+  const intro =
+    seed.composeMode === "forward"
+      ? strings.composer.forwardedMessage
+      : strings.composer.wrote(
+          message.receivedAt,
+          message.senderName ||
+            message.senderAddress ||
+            strings.composer.sender,
+        );
+  return `<p></p><p><br></p><blockquote><p><strong>${escapeHtml(intro)}</strong></p>${message.htmlBody ? sanitizeReceivedHtml(message.htmlBody).html : `<p>${escapeHtml(message.textBody)}</p>`}</blockquote>`;
+}
+
+function composerTitle(seed?: ComposerSeed): string {
+  if (seed?.draft) return strings.composer.editDraft;
+  if (seed?.composeMode === "reply" || seed?.composeMode === "replyAll")
+    return strings.composer.reply;
+  if (seed?.composeMode === "forward") return strings.composer.forward;
+  return strings.composer.newMessage;
+}
+function escapeHtml(value: string): string {
+  return value.replace(
+    /[&<>"']/g,
+    (char) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
+        char
+      ]!,
+  );
+}
+
+function announceLocalMailChanged(accountId: string) {
+  window.dispatchEvent(
+    new CustomEvent("postal:local-mail-changed", { detail: accountId }),
+  );
+}

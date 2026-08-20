@@ -1,0 +1,32 @@
+app-id: run.rosie.snap
+runtime: org.gnome.Platform
+runtime-version: "49"
+sdk: org.gnome.Sdk
+command: postal-snap
+finish-args:
+  - --share=network
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  - --device=dri
+  - --talk-name=org.freedesktop.secrets
+modules:
+  - name: postal-snap
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 postal-snap /app/bin/postal-snap
+      - install -Dm644 run.rosie.snap.desktop /app/share/applications/run.rosie.snap.desktop
+      - install -Dm644 icon.png /app/share/icons/hicolor/512x512/apps/run.rosie.snap.png
+      - install -Dm644 THIRD_PARTY_NOTICES.npm.txt /app/share/doc/run.rosie.snap/THIRD_PARTY_NOTICES.npm.txt
+      - install -Dm644 THIRD_PARTY_NOTICES.cargo.txt /app/share/doc/run.rosie.snap/THIRD_PARTY_NOTICES.cargo.txt
+    sources:
+      - type: file
+        path: ../../src-tauri/target/release/postal-snap
+      - type: file
+        path: run.rosie.snap.desktop
+      - type: file
+        path: ../../src-tauri/icons/icon.png
+      - type: file
+        path: ../../THIRD_PARTY_NOTICES.npm.txt
+      - type: file
+        path: ../../THIRD_PARTY_NOTICES.cargo.txt

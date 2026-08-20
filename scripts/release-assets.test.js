@@ -1,0 +1,182 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+import { join } from "node:path";
+import { artifactArch, artifactPlatform, root } from "./_utils.js";
+import { validateManifest } from "./validate-updater-manifest.js";
+import { remoteTagCommit } from "./release-identity.js";
+
+test("artifact platform and architecture mapping", () => {
+  assert.equal(artifactPlatform("Postal-Snap-Windows-x64.nsis.zip"), "windows");
+  assert.equal(
+    artifactArch("Postal-Snap-Linux-arm64.AppImage.tar.gz"),
+    "aarch64",
+  );
+  assert.equal(artifactArch("Postal-Snap-macOS.app.tar.gz"), "universal");
+});
+
+test("signed GitHub updater manifest shape", () => {
+  assert.equal(
+    validateManifest({
+      version: "0.1.0-beta.1",
+      platforms: {
+        "windows-x86_64": {
+          signature: "a".repeat(80),
+          url: "https://github.com/BurntToasters/postal-snap/releases/download/v0.1.0-beta.1/payload.zip",
+        },
+      },
+    }),
+    true,
+  );
+});
+
+test("annotated release tags resolve to their commit", async () => {
+  const calls = [];
+  const execute = async (_command, args) => {
+    calls.push(args.at(-1));
+    if (args.at(-1).includes("/git/ref/tags/"))
+      return JSON.stringify({ object: { type: "tag", sha: "a".repeat(40) } });
+    return JSON.stringify({
+      object: { type: "commit", sha: "b".repeat(40) },
+    });
+  };
+  assert.equal(
+    await remoteTagCommit("owner/repo", "v0.1.0", execute),
+    "b".repeat(40),
+  );
+  assert.equal(calls.length, 2);
+});
+
+test("direct and Store builds keep separate capabilities", async () => {
+  const readJson = async (path) =>
+    JSON.parse(await readFile(join(root, path), "utf8"));
+  const direct = await readJson("src-tauri/tauri.conf.json");
+  const mas = await readJson("src-tauri/tauri.mas.conf.json");
+  const msstore = await readJson("src-tauri/tauri.msstore.conf.json");
+  const flatpak = await readJson("src-tauri/tauri.flatpak.conf.json");
+  const directCapability = await readJson(
+    "src-tauri/capabilities/direct/default.json",
+  );
+  const storeCapability = await readJson(
+    "src-tauri/capabilities/store/store.json",
+  );
+
+  assert.deepEqual(direct.app.security.capabilities, ["default"]);
+  assert.deepEqual(mas.app.security.capabilities, ["store"]);
+  assert.deepEqual(msstore.app.security.capabilities, ["store"]);
+  assert.deepEqual(flatpak.app.security.capabilities, ["store"]);
+  assert.ok(directCapability.permissions.includes("updater:default"));
+  assert.ok(directCapability.permissions.includes("process:default"));
+  assert.ok(!storeCapability.permissions.includes("updater:default"));
+  assert.ok(!storeCapability.permissions.includes("process:default"));
+  assert.equal(mas.bundle.createUpdaterArtifacts, false);
+  assert.equal(msstore.bundle.createUpdaterArtifacts, false);
+  assert.equal(flatpak.bundle.createUpdaterArtifacts, false);
+  assert.equal(mas.plugins.updater, null);
+  assert.equal(msstore.plugins.updater, null);
+  assert.equal(flatpak.plugins.updater, null);
+});
+
+test("direct updater is GitHub-only and notices are bundled", async () => {
+  const config = JSON.parse(
+    await readFile(join(root, "src-tauri/tauri.conf.json"), "utf8"),
+  );
+  const serialized = JSON.stringify(config);
+  assert.ok(serialized.includes("github.com/BurntToasters/postal-snap"));
+  assert.ok(!serialized.includes("prod.rosie.run"));
+  assert.equal(
+    config.bundle.resources["../THIRD_PARTY_NOTICES.npm.txt"],
+    "THIRD_PARTY_NOTICES.npm.txt",
+  );
+  assert.equal(
+    config.bundle.resources["../THIRD_PARTY_NOTICES.cargo.txt"],
+    "THIRD_PARTY_NOTICES.cargo.txt",
+  );
+});
+
+test("release environment template covers every supported credential path", async () => {
+  const template = await readFile(join(root, ".env.example"), "utf8");
+  const names = new Set(
+    template
+      .split(/\r?\n/)
+      .map((line) => line.match(/^([A-Z][A-Z0-9_]*)=/)?.[1])
+      .filter(Boolean),
+  );
+  for (const name of [
+    "GH_TOKEN",
+    "GPG_KEY_ID",
+    "GPG_PASSPHRASE",
+    "GPG_PRIVATE_KEY_BASE64",
+    "TAURI_SIGNING_PRIVATE_KEY",
+    "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+    "TAURI_UPDATER_PUBLIC_KEY",
+    "WINDOWS_CERTIFICATE_THUMBPRINT",
+    "WINDOWS_TIMESTAMP_URL",
+    "WINDOWS_CERTIFICATE_PFX_BASE64",
+    "WINDOWS_CERTIFICATE_PASSWORD",
+    "MSSTORE_IDENTITY_NAME",
+    "MSSTORE_PUBLISHER",
+    "MSSTORE_PUBLISHER_DISPLAY_NAME",
+    "APPLE_SIGNING_IDENTITY",
+    "APPLE_INSTALLER_IDENTITY",
+    "APPLE_TEAM_ID",
+    "APPLE_API_KEY",
+    "APPLE_API_ISSUER",
+    "APPLE_API_KEY_PATH",
+    "APPLE_ID",
+    "APPLE_PASSWORD",
+    "MAS_PROVISIONING_PROFILE",
+    "MAS_BUILD_NUMBER",
+    "APPLE_CERTIFICATE_P12_BASE64",
+    "APPLE_CERTIFICATE_PASSWORD",
+    "APPLE_KEYCHAIN_PASSWORD",
+    "MAC_KEYCHAIN_PASSWORD",
+    "POSTAL_SNAP_TEST_ICLOUD_EMAIL",
+    "POSTAL_SNAP_TEST_ICLOUD_PASSWORD",
+    "ALLOW_DIRTY_RELEASE",
+  ]) {
+    assert.ok(names.has(name), `${name} is missing from .env.example`);
+  }
+});
+
+test("release verification covers generated manifests after finalization", async () => {
+  const verifier = await readFile(
+    join(root, "scripts/verify-release-directory.js"),
+    "utf8",
+  );
+  const workflow = await readFile(
+    join(root, ".github/workflows/release.yml"),
+    "utf8",
+  );
+  assert.ok(verifier.includes("latest-${platform}${channel}-${arch}.json"));
+  assert.ok(verifier.includes("platformEntry.signature !== expectedSignature"));
+  assert.ok(
+    workflow.indexOf("npm run release:finalize") <
+      workflow.indexOf("npm run release:verify:local"),
+  );
+  const remoteVerifier = await readFile(
+    join(root, "scripts/verify-release-draft.js"),
+    "utf8",
+  );
+  assert.ok(remoteVerifier.includes('"download"'));
+  assert.ok(remoteVerifier.includes("verify-release-directory.js"));
+});
+
+test("test-all and package.json include cargo safe update and policy check", async () => {
+  const packageJson = JSON.parse(
+    await readFile(join(root, "package.json"), "utf8"),
+  );
+  assert.equal(
+    packageJson.scripts["test:cargo-safe-update"],
+    "node --test scripts/cargo-safe-update.test.mjs scripts/check-cargo-update-policy.test.mjs",
+  );
+  assert.equal(
+    packageJson.scripts["check:cargo-update-policy"],
+    "node scripts/check-cargo-update-policy.mjs",
+  );
+  assert.match(packageJson.scripts["u"], /cargo-safe-update\.mjs/);
+
+  const testAll = await readFile(join(root, "scripts/test-all.js"), "utf8");
+  assert.ok(testAll.includes('["run", "check:cargo-update-policy"]'));
+  assert.ok(testAll.includes('["run", "test:cargo-safe-update"]'));
+});

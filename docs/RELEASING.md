@@ -1,0 +1,21 @@
+# Releasing Postal Snap
+
+Copy `.env.example` to `.env` and provide signing values outside version control. Generate a dedicated Tauri updater key with `npm run tauri -- signer generate`; store the private key in a password manager/CI secret and put only its public value in `TAURI_UPDATER_PUBLIC_KEY`.
+
+Install the release-only Rust audit tool with `cargo install cargo-audit --locked`. Run `npm run audit` while online and `npm run workspace:prepare` before starting a release session. Run `npm run test:mail-integration` with Docker and OpenSSL available; it starts pinned GreenMail 2.1.11 with test-only TLS, runs the ignored Rust protocol suite, and removes the service afterward. CI repeats the format, lint, type, test, build, GreenMail, npm-audit, and RustSec gates. Current Tauri transitive advisories from its Linux GTK3 and URL-pattern graphs are explicitly acknowledged in `scripts/audit-cargo.js`; every new vulnerability, unsoundness, or maintenance warning fails the gate. Review and remove acknowledgements whenever Tauri updates its graph.
+
+Run `npm run release:prepare` once, then the platform release command on its signing host. Resume commands validate the saved version and commit before continuing. Platform builds collect normalized artifacts in `release/`; `release:sign:gpg` adds SHA-256 and detached GPG signatures. `release:finalize` generates and validates updater manifests, then uploads into the GitHub draft without publishing. With one complete local artifact directory, run `npm run release:verify:local` after finalization; it verifies checksums, GPG signatures, Tauri signatures, and every manifest-to-payload mapping. After every architecture and Flatpak bundle is present and the manual checklist is complete, `npm run release:finalize:hard` verifies the remote asset set and publishes.
+
+The release workflow builds Windows x64/arm64, universal macOS, and Linux x64/arm64 on native runners, merges their artifacts, and leaves one complete unpublished GitHub draft. Treat that draft as the release candidate. Do not replace `release:finalize` with `release:finalize:hard` in CI; stable publication remains a deliberate go/no-go action after signed-package and real-iCloud testing.
+
+Beta builds generate `latest-<target>-beta-<arch>.json`; stable builds generate `latest-<target>-<arch>.json`. Publishing a beta synchronizes beta manifests onto the latest stable GitHub release so the `/releases/latest/download/` endpoint remains stable.
+
+Microsoft Store builds require Partner Center identity values and run on Windows with `makeappx.exe`; Store performs final signing. Mac App Store builds require a distribution identity, installer identity, and provisioning profile. Use `npm run build:mas:upload` only after validating the signed package. Direct Mac releases use Developer ID signing/notarization through Tauri.
+
+CI may import signing identities from `WINDOWS_CERTIFICATE_PFX_BASE64` or `APPLE_CERTIFICATE_P12_BASE64`. Keep the associated passwords and generated thumbprints in encrypted secrets. Local signing can use already-installed identities and the non-base64 variables from `.env.example`.
+
+For direct-Mac notarization, use either `APPLE_API_KEY`, `APPLE_API_ISSUER`, and `APPLE_API_KEY_PATH`, or the Apple ID credential trio shown in `.env.example`. Mac App Store upload accepts the API key/issuer pair when the `.p8` key is in altool's standard private-key directory, or `APPLE_ID` plus its app-specific password. Increment `MAS_BUILD_NUMBER` for every App Store Connect upload; the MAS script strips the prerelease suffix from the Store marketing version only.
+
+Before publishing, smoke-test iCloud with a dedicated account and app-specific password: set `POSTAL_SNAP_TEST_ICLOUD_EMAIL` and `POSTAL_SNAP_TEST_ICLOUD_PASSWORD` in `.env`, then run `npm run test:icloud`. Validate mailto registration, inspect sandbox/MSIX identities, and run the platform certification tools listed in the product plan.
+
+Use [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) as the final go/no-go record. Never publish a draft until every required architecture, signature, checksum, and updater manifest has been verified.

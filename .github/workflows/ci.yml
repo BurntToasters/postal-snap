@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, beta]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Install Tauri Linux prerequisites
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run format:rust:check
+      - run: npm run lint
+      - run: npm run lint:rust
+      - run: npm run check:native-process-policy
+      - run: npm run typecheck
+      - run: npm run typecheck:test
+      - run: npm test
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - run: npm run test:release-assets
+      - run: npm run test:rust
+      - run: npm run test:mail-integration
+      - run: npm run build
+      - run: npm run audit:npm
+      - run: cargo install cargo-audit --locked
+      - run: npm run audit:cargo

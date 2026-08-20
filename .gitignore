@@ -1,0 +1,17 @@
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+src-tauri/target/
+src-tauri/gen/schemas/
+release/
+msstore/
+flatpak-build/
+flatpak-repo/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+THIRD_PARTY_NOTICES*.txt
