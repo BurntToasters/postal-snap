@@ -19,6 +19,7 @@ import {
   CARGO_SAFE_UPDATE_VERSION,
   MIN_PUBLISH_AGE_MS,
   crateIndexPath,
+  filterRegistryIndex,
   findWorkspaceRoot,
   locateWorkspaceRoot,
   installValidatedLock,
@@ -915,8 +916,8 @@ test("29. unit: findWorkspaceRoot correctly locates roots for standalone, member
 });
 
 test("30. version markers are exported", () => {
-  assert.equal(CARGO_SAFE_UPDATE_POLICY_VERSION, 3);
-  assert.equal(CARGO_SAFE_UPDATE_VERSION, 3);
+  assert.equal(CARGO_SAFE_UPDATE_POLICY_VERSION, 4);
+  assert.equal(CARGO_SAFE_UPDATE_VERSION, 4);
 });
 
 // --- Phase 2: Cargo-authoritative workspace root tests ---
@@ -1456,4 +1457,36 @@ test("41. transaction: rollback existing lock restores exact bytes on verificati
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
+});
+
+test("42. registry filter keeps eligible releases while hiding only too-young releases", () => {
+  const source = [
+    { name: "foo", vers: "1.0.0", pubtime: youngerThan72h },
+    { name: "foo", vers: "1.1.0", pubtime: olderThan72h },
+    { name: "foo", vers: "1.2.0", pubtime: youngerThan72h },
+    { name: "foo", vers: "1.3.0", pubtime: youngerThan72h },
+  ]
+    .map((record) => JSON.stringify(record))
+    .join("\n");
+
+  const filtered = filterRegistryIndex(
+    source,
+    [
+      {
+        name: "foo",
+        version: "1.0.0",
+        source: "registry+https://github.com/rust-lang/crates.io-index",
+      },
+    ],
+    { allowYoung: new Set(["foo@1.3.0"]), allowGit: new Set() },
+    now,
+  );
+
+  assert.deepEqual(
+    filtered
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line).vers),
+    ["1.0.0", "1.1.0", "1.3.0"],
+  );
 });
