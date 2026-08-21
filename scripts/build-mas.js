@@ -11,6 +11,7 @@ import {
   run,
   output,
 } from "./_utils.js";
+import { buildMasTauriArgs } from "./build-mas-args.js";
 
 requireEnv([
   "APPLE_SIGNING_IDENTITY",
@@ -45,23 +46,7 @@ storeConfig.bundle.macOS.files = {
 const storeConfigPath = join(temporary, "tauri.mas.conf.json");
 await writeFile(storeConfigPath, `${JSON.stringify(storeConfig, null, 2)}\n`);
 try {
-  await run("npm", [
-    "run",
-    "tauri",
-    "--",
-    "build",
-    "--target",
-    "universal-apple-darwin",
-    "--bundles",
-    "app",
-    "--features",
-    "mas",
-    "--config",
-    storeConfigPath,
-    "--",
-    "--locked",
-    "--no-default-features",
-  ]);
+  await run("npm", buildMasTauriArgs({ storeConfigPath }));
   const info = await newestMatching(
     join(root, "src-tauri/target/universal-apple-darwin/release/bundle/macos"),
     (path) => path.endsWith("Postal Snap.app/Contents/Info.plist"),

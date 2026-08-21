@@ -1,25 +1,9 @@
 import test from "node:test";
 import assert from "node:assert";
+import { buildMasTauriArgs } from "./build-mas-args.js";
 
 test("MAS build argument verification", () => {
-  // In build-mas.js, the argument construction is static. We replicate the static construction to assert it.
-  const args = [
-    "run",
-    "tauri",
-    "--",
-    "build",
-    "--target",
-    "universal-apple-darwin",
-    "--bundles",
-    "app",
-    "--features",
-    "mas",
-    "--config",
-    "temp.json",
-    "--",
-    "--locked",
-    "--no-default-features",
-  ];
+  const args = buildMasTauriArgs({ storeConfigPath: "temp.json" });
 
   const tailIndex = args.lastIndexOf("--");
   const tauriSide = args.slice(0, tailIndex);
