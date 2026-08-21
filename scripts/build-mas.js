@@ -59,6 +59,7 @@ try {
     "--config",
     storeConfigPath,
     "--",
+    "--locked",
     "--no-default-features",
   ]);
   const info = await newestMatching(

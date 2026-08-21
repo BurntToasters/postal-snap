@@ -18,8 +18,8 @@
     "test:watch": "vitest",
     "test:cov": "vitest run --coverage",
     "test:cov:watch": "vitest --coverage",
-    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml --all-targets",
-    "test:icloud": "dotenv -e .env -- cargo test --manifest-path src-tauri/Cargo.toml icloud_live_connection_smoke -- --ignored",
+    "test:rust": "cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets",
+    "test:icloud": "dotenv -e .env -- cargo test --locked --manifest-path src-tauri/Cargo.toml icloud_live_connection_smoke -- --ignored",
     "test:mail-integration": "node scripts/test-mail-integration.js",
     "test:e2e": "playwright test",
     "setup:e2e": "playwright install chromium",
@@ -35,7 +35,7 @@
     "lint:test": "eslint src/tests e2e",
     "lint:scripts": "eslint scripts playwright.config.ts vite.config.ts vitest.config.ts eslint.config.js --max-warnings 0",
     "lint:fix": "eslint src scripts e2e playwright.config.ts vite.config.ts vitest.config.ts eslint.config.js --fix",
-    "lint:rust": "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings",
+    "lint:rust": "cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings",
     "check:native-process-policy": "node scripts/check-native-process-policy.js",
     "format": "prettier --write \"src/**/*.{ts,tsx,css,html}\" \"e2e/**/*.ts\" \"scripts/**/*.{js,mjs}\" \".github/workflows/*.{yml,yaml}\" \"*.{ts,js,json,md}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,css,html}\" \"e2e/**/*.ts\" \"scripts/**/*.{js,mjs}\" \".github/workflows/*.{yml,yaml}\" \"*.{ts,js,json,md}\"",
@@ -199,5 +199,8 @@
     "typescript-eslint": "^8.53.0",
     "vite": "^8.0.2",
     "vitest": "^4.0.16"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
   }
 }

@@ -109,11 +109,23 @@ try {
     : updaterOverride;
   const overridePath = join(overrideDir, "build.json");
   await writeJson(overridePath, override);
+
+  // Split tauri args from cargo args using the first "--"
+  const delimiterIndex = input.indexOf("--");
+  const tauriArgs =
+    delimiterIndex < 0 ? [...input] : input.slice(0, delimiterIndex);
+  const cargoArgs = delimiterIndex < 0 ? [] : input.slice(delimiterIndex + 1);
+
+  // Normalize cargo args to ensure exactly one "--locked" is present
+  const normalizedCargoArgs = cargoArgs.filter((arg) => arg !== "--locked");
+
   const args = ["run", "tauri", "--", "build", "--config", overridePath];
   if (target) args.push("--target", target);
   if (bundles) args.push("--bundles", bundles);
   if (noBundle) args.push("--no-bundle");
-  args.push(...input);
+  args.push(...tauriArgs);
+  args.push("--", "--locked", ...normalizedCargoArgs);
+
   await run("npm", args);
 } finally {
   await rm(overrideDir, { recursive: true, force: true });
