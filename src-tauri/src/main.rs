@@ -11,7 +11,7 @@ mod settings;
 use commands::AppState;
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder},
-    Emitter, Manager,
+    Emitter, Manager, RunEvent, WindowEvent,
 };
 
 fn main() {
