@@ -5,27 +5,37 @@
 
 import { execFile, spawnSync } from "node:child_process";
 import console from "node:console";
+import { randomUUID } from "node:crypto";
 import {
+  closeSync,
   copyFileSync,
   cpSync,
   existsSync,
+  fsyncSync,
   lstatSync,
   mkdtempSync,
+  openSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { createServer } from "node:http";
 import { URL, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
-export const CARGO_SAFE_UPDATE_POLICY_VERSION = 4;
-export const CARGO_SAFE_UPDATE_VERSION = 4;
+export const CARGO_SAFE_UPDATE_POLICY_VERSION = 5;
+export const CARGO_SAFE_UPDATE_VERSION = 5;
 export const MIN_PUBLISH_AGE_MS = 72 * 60 * 60 * 1000;
 const CRATES_IO_INDEX = "https://index.crates.io";
+const CRATES_IO_REGISTRY_SOURCES = new Set([
+  "registry+https://github.com/rust-lang/crates.io-index",
+  "registry+sparse+https://index.crates.io",
+  "registry+sparse+https://index.crates.io/",
+]);
 const execFileAsync = promisify(execFile);
 const IGNORED_COPY_DIRECTORIES = new Set([
   ".git",
@@ -163,7 +173,9 @@ async function runAsync(
       .trim();
     throw new Error(
       `${command} ${args.join(" ")} failed${detail ? `\n${detail}` : ""}`,
-      { cause: error },
+      {
+        cause: error,
+      },
     );
   }
 }
@@ -239,8 +251,8 @@ function packageOverride(set, pkg, value) {
   return set.has(`${pkg.name}@${value}`);
 }
 
-export function cargoSupportsTemporaryLockfile() {
-  const version = run("cargo", ["--version"]).stdout;
+export function cargoSupportsTemporaryLockfile(env = process.env) {
+  const version = run("cargo", ["--version"], { env }).stdout;
   const match = version.match(/cargo\s+(\d+)\.(\d+)/i);
   if (!match) return false;
   const major = Number(match[1]);
@@ -251,7 +263,11 @@ export function cargoSupportsTemporaryLockfile() {
 // P1: Authoritative workspace root via `cargo locate-project --workspace`.
 // Fails closed if Cargo cannot determine the workspace root.
 // Do NOT fall back silently to dirname(manifest) for ambiguous workspaces.
-export function locateWorkspaceRoot(manifest, cwd = process.cwd()) {
+export function locateWorkspaceRoot(
+  manifest,
+  cwd = process.cwd(),
+  env = process.env,
+) {
   const result = run(
     "cargo",
     [
@@ -262,7 +278,7 @@ export function locateWorkspaceRoot(manifest, cwd = process.cwd()) {
       "--manifest-path",
       manifest,
     ],
-    { cwd, env: process.env },
+    { cwd, env },
   );
 
   const workspaceManifest = result.stdout.trim();
@@ -350,8 +366,9 @@ export function prepareCandidate({
   baselineMetadata,
   tempRoot,
   workspaceRoot,
+  cargoEnv = process.env,
 }) {
-  const useTemporaryLockfile = cargoSupportsTemporaryLockfile();
+  const useTemporaryLockfile = cargoSupportsTemporaryLockfile(cargoEnv);
   const dryArgs = cargoArgs.filter(
     (argument) => argument !== "--dry" && argument !== "--dry-run",
   );
@@ -364,7 +381,7 @@ export function prepareCandidate({
     return {
       args: dryArgs,
       cwd,
-      env: { ...process.env, CARGO_RESOLVER_LOCKFILE_PATH: candidateLock },
+      env: { ...cargoEnv, CARGO_RESOLVER_LOCKFILE_PATH: candidateLock },
       candidateLock,
       copiedWorkspace: false,
     };
@@ -380,7 +397,7 @@ export function prepareCandidate({
   return {
     args: rewriteManifestArguments(dryArgs, cwd, copiedRoot, sourceRoot),
     cwd: copiedRoot,
-    env: process.env,
+    env: cargoEnv,
     candidateLock: path.join(copiedRoot, "Cargo.lock"),
     copiedWorkspace: true,
   };
@@ -388,16 +405,13 @@ export function prepareCandidate({
 
 function registryIndexBase(source) {
   const registry = source.slice("registry+".length).replace(/\/$/u, "");
-  if (registry.includes("crates.io-index")) return CRATES_IO_INDEX;
+  if (CRATES_IO_REGISTRY_SOURCES.has(source)) return CRATES_IO_INDEX;
   if (registry.startsWith("sparse+")) return registry.slice("sparse+".length);
   return registry;
 }
 
 function isCratesIoRegistry(source) {
-  return (
-    sourceKind(source) === "registry" &&
-    registryIndexBase(source) === CRATES_IO_INDEX
-  );
+  return CRATES_IO_REGISTRY_SOURCES.has(source);
 }
 
 export function filterRegistryIndex(
@@ -516,6 +530,9 @@ async function startCratesIoAgeFilter({
 }
 
 async function readRegistryRecord(pkg) {
+  if (!isCratesIoRegistry(pkg.source)) {
+    throw new Error(`unsupported registry source ${pkg.source}`);
+  }
   const url = `${registryIndexBase(pkg.source)}/${crateIndexPath(pkg.name)}`;
   const response = await globalThis.fetch(url, {
     headers: { accept: "application/json" },
@@ -560,6 +577,24 @@ export async function validateCandidate(
   overrides,
   now = nowTimestamp(),
 ) {
+  const unsupportedRegistries = candidate.filter(
+    (pkg) =>
+      sourceKind(pkg.source) === "registry" && !isCratesIoRegistry(pkg.source),
+  );
+  if (unsupportedRegistries.length > 0) {
+    throw new Error(
+      [
+        "Blocked dependency from unsupported registry:",
+        ...unsupportedRegistries.map(
+          (pkg) => `${pkg.name} ${pkg.version} ${pkg.source ?? "<missing>"}`,
+        ),
+        "Only exact canonical crates.io registry sources are allowed.",
+        "",
+        "Cargo.lock was not modified.",
+      ].join("\n"),
+    );
+  }
+
   const baselineKeys = new Set(baseline.map(packageKey));
   const baselineByName = new Map();
   for (const pkg of baseline) {
@@ -651,8 +686,97 @@ export async function validateCandidate(
   return { newlySelected, approved };
 }
 
-function finalMetadata(cargoArgs, cwd) {
-  return cargoMetadata(cargoArgs, cwd, process.env);
+function syncDirectory(directory) {
+  let descriptor;
+  try {
+    descriptor = openSync(directory, "r");
+    fsyncSync(descriptor);
+  } catch {
+    // Windows and some filesystems do not allow directory fsync.
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
+}
+
+function writeBytesAtomically(targetPath, bytes) {
+  const temporaryPath = path.join(
+    path.dirname(targetPath),
+    `.${path.basename(targetPath)}.${process.pid}.${randomUUID()}.tmp`,
+  );
+  let descriptor;
+  try {
+    descriptor = openSync(temporaryPath, "wx", 0o666);
+    writeFileSync(descriptor, bytes);
+    fsyncSync(descriptor);
+    closeSync(descriptor);
+    descriptor = undefined;
+    renameSync(temporaryPath, targetPath);
+    syncDirectory(path.dirname(targetPath));
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+    if (existsSync(temporaryPath)) rmSync(temporaryPath, { force: true });
+  }
+}
+
+function assertOriginalLockUnchanged(targetPath, existed, previousBytes) {
+  if (!existed) {
+    if (existsSync(targetPath)) {
+      throw new Error(
+        "Cargo.lock changed since dependency update started; refusing to overwrite it",
+      );
+    }
+    return;
+  }
+
+  if (
+    previousBytes === null ||
+    !existsSync(targetPath) ||
+    !readFileSync(targetPath).equals(previousBytes)
+  ) {
+    throw new Error(
+      "Cargo.lock changed since dependency update started; refusing to overwrite it",
+    );
+  }
+}
+
+export function acquireUpdateLock(workspaceRoot) {
+  const lockPath = path.join(workspaceRoot, ".cargo-safe-update.lock");
+  const owner = `${JSON.stringify({ pid: process.pid, host: os.hostname(), id: randomUUID() })}\n`;
+  let descriptor;
+  try {
+    descriptor = openSync(lockPath, "wx", 0o600);
+    writeFileSync(descriptor, owner);
+    fsyncSync(descriptor);
+  } catch (error) {
+    if (descriptor !== undefined) {
+      closeSync(descriptor);
+      if (existsSync(lockPath)) rmSync(lockPath, { force: true });
+    }
+    if (error?.code === "EEXIST") {
+      throw new Error(`Another Cargo dependency update holds ${lockPath}`, {
+        cause: error,
+      });
+    }
+    throw error;
+  }
+  closeSync(descriptor);
+
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    try {
+      if (existsSync(lockPath) && readFileSync(lockPath, "utf8") === owner) {
+        rmSync(lockPath, { force: true });
+      }
+    } catch {
+      // Never delete a lock whose ownership cannot be verified.
+    }
+  };
+}
+
+function finalMetadata(cargoArgs, cwd, env) {
+  return cargoMetadata(cargoArgs, cwd, env);
 }
 
 export function installValidatedLock(
@@ -660,6 +784,7 @@ export function installValidatedLock(
   originalLockOrPath,
   cargoArgs,
   cwd,
+  env = process.env,
 ) {
   const targetPath =
     typeof originalLockOrPath === "object" &&
@@ -682,12 +807,13 @@ export function installValidatedLock(
         ? readFileSync(targetPath)
         : null;
 
-  copyFileSync(candidateLock, targetPath);
+  assertOriginalLockUnchanged(targetPath, existed, previousBytes);
+  writeBytesAtomically(targetPath, readFileSync(candidateLock));
   try {
-    finalMetadata(cargoArgs, cwd);
+    finalMetadata(cargoArgs, cwd, env);
   } catch (error) {
     if (existed && previousBytes !== null) {
-      writeFileSync(targetPath, previousBytes);
+      writeBytesAtomically(targetPath, previousBytes);
     } else {
       rmSync(targetPath, { force: true });
     }
@@ -712,7 +838,7 @@ export function restoreRealLock(realLock, original) {
 
   if (existed && bytes !== null) {
     if (!existsSync(targetPath) || !readFileSync(targetPath).equals(bytes)) {
-      writeFileSync(targetPath, bytes);
+      writeBytesAtomically(targetPath, bytes);
     }
   } else {
     if (existsSync(targetPath)) {
@@ -728,22 +854,28 @@ async function main() {
   if (!existsSync(manifest))
     throw new Error(`Cargo manifest not found: ${manifest}`);
 
-  // P1: Use Cargo's authoritative workspace root determination. Fail closed if it fails.
-  const workspaceRoot = locateWorkspaceRoot(manifest, cwd);
-  const destinationLock = path.join(workspaceRoot, "Cargo.lock");
-  const originalLock = {
-    path: destinationLock,
-    existed: existsSync(destinationLock),
-    bytes: existsSync(destinationLock) ? readFileSync(destinationLock) : null,
-  };
-
-  const baselineMetadata = originalLock.existed
-    ? cargoMetadata(parsed.cargoArgs, cwd, process.env)
-    : null;
-  const baseline = baselineMetadata ? selectedPackages(baselineMetadata) : [];
   const tempRoot = mkdtempSync(path.join(os.tmpdir(), "cargo-safe-update-"));
+  const cargoEnv = {
+    ...process.env,
+    CARGO_HOME: path.join(tempRoot, "cargo-home"),
+  };
+  let releaseUpdateLock;
 
   try {
+    // Use Cargo's authoritative workspace root determination inside isolated Cargo state.
+    const workspaceRoot = locateWorkspaceRoot(manifest, cwd, cargoEnv);
+    releaseUpdateLock = acquireUpdateLock(workspaceRoot);
+    const destinationLock = path.join(workspaceRoot, "Cargo.lock");
+    const originalLock = {
+      path: destinationLock,
+      existed: existsSync(destinationLock),
+      bytes: existsSync(destinationLock) ? readFileSync(destinationLock) : null,
+    };
+    const baselineMetadata = originalLock.existed
+      ? cargoMetadata(parsed.cargoArgs, cwd, cargoEnv)
+      : null;
+    const baseline = baselineMetadata ? selectedPackages(baselineMetadata) : [];
+
     const candidate = prepareCandidate({
       cargoArgs: parsed.cargoArgs,
       cwd,
@@ -751,6 +883,7 @@ async function main() {
       baselineMetadata,
       tempRoot,
       workspaceRoot,
+      cargoEnv,
     });
 
     let updateResult;
@@ -765,10 +898,7 @@ async function main() {
         ["update", ...ageFilter.cargoArgs, ...candidate.args],
         {
           cwd: candidate.cwd,
-          env: {
-            ...candidate.env,
-            CARGO_HOME: path.join(tempRoot, "cargo-home"),
-          },
+          env: candidate.env,
         },
       );
     } catch (error) {
@@ -831,12 +961,22 @@ async function main() {
       return;
     }
 
-    installValidatedLock(candidateLock, originalLock, parsed.cargoArgs, cwd);
+    installValidatedLock(
+      candidateLock,
+      originalLock,
+      parsed.cargoArgs,
+      cwd,
+      cargoEnv,
+    );
     console.log(`Validated Cargo.lock installed: ${originalLock.path}`);
     if (parsed.reason)
       console.log(`Emergency override reason: ${parsed.reason}`);
   } finally {
-    rmSync(tempRoot, { recursive: true, force: true });
+    try {
+      rmSync(tempRoot, { recursive: true, force: true });
+    } finally {
+      releaseUpdateLock?.();
+    }
   }
 }
 

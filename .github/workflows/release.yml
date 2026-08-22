@@ -6,17 +6,30 @@ on:
 permissions:
   contents: write
 
+env:
+  NPM_VERSION: "12.0.2"
+  RUST_VERSION: "1.97.1"
+  CARGO_AUDIT_VERSION: "0.22.2"
+
 jobs:
   quality:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with: { node-version: 24, cache: npm }
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Pin npm
+        run: npm install --global npm@${{ env.NPM_VERSION }} --ignore-scripts
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: clippy, rustfmt
       - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-      - run: cargo install cargo-audit --locked
-      - run: npm ci
+      - run: cargo install cargo-audit --version ${{ env.CARGO_AUDIT_VERSION }} --locked
+      - run: npm ci --ignore-scripts
+      - run: npm audit signatures
       - run: npx playwright install --with-deps chromium
       - run: npm run test:all
       - run: npm run test:mail-integration
@@ -51,13 +64,21 @@ jobs:
             post: ""
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with: { node-version: 24, cache: npm }
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Pin npm
+        run: npm install --global npm@${{ env.NPM_VERSION }} --ignore-scripts
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: clippy, rustfmt
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y flatpak flatpak-builder libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-      - run: npm ci
+      - run: npm ci --ignore-scripts
+      - run: npm audit signatures
       - if: runner.os == 'Windows'
         shell: pwsh
         run: npm run setup:win:artifact-signing
@@ -86,7 +107,7 @@ jobs:
         run: npm run setup:flatpak
       - if: matrix.flatpak != ''
         run: npm run ${{ matrix.flatpak }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: postal-snap-${{ matrix.os }}-${{ matrix.command }}
           path: release/
@@ -95,11 +116,16 @@ jobs:
     needs: desktop
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with: { node-version: 24, cache: npm }
-      - run: npm ci
-      - uses: actions/download-artifact@v4
+      - name: Pin npm
+        run: npm install --global npm@${{ env.NPM_VERSION }} --ignore-scripts
+      - run: npm ci --ignore-scripts
+      - run: npm audit signatures
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: postal-snap-*
           path: release

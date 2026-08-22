@@ -9,8 +9,8 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-export const CARGO_UPDATE_POLICY_SCANNER_VERSION = 3;
-export const CARGO_UPDATE_SCANNER_VERSION = 3;
+export const CARGO_UPDATE_POLICY_SCANNER_VERSION = 5;
+export const CARGO_UPDATE_SCANNER_VERSION = 5;
 
 const repoRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -33,6 +33,7 @@ export const EXECUTABLE_EXTENSIONS = new Set([
   ".bat",
   ".yml",
   ".yaml",
+  ".py",
 ]);
 
 export const EXACT_AUTOMATION_FILES = new Set([
@@ -62,6 +63,7 @@ export const IGNORED_DIRECTORIES = new Set([
 
 export const EXCLUDED_FILES = new Set([
   "scripts/cargo-safe-update.mjs",
+  "scripts/npm-safe-update.mjs",
   "scripts/cargo-safe-update.test.mjs",
   "scripts/check-cargo-update-policy.mjs",
   "scripts/check-cargo-update-policy.test.mjs",
@@ -69,7 +71,9 @@ export const EXCLUDED_FILES = new Set([
 
 // P0: raw shell-level Cargo mutation command
 const RAW_CARGO_MUTATION_REGEX =
-  /\bcargo\s+(update|upgrade|add|generate-lockfile)\b/;
+  /\bcargo(?:\s+\+[A-Za-z0-9._-]+)?\s+(update|upgrade|add|generate-lockfile)\b/;
+const RAW_NPM_MUTATION_REGEX =
+  /\bnpm(?:\.cmd)?\s+(?:update|upgrade)\b|\bnpm(?:\.cmd)?\s+audit\s+fix\b/;
 
 // Cargo.lock deletion via shell/PowerShell/Node API
 const LOCKFILE_DELETE_REGEX =
@@ -84,10 +88,14 @@ const LOCKFILE_TRUNCATE_OVERWRITE_REGEX =
 // Also catches execSync("cargo update") style calls.
 // Uses conservative regex — false positives in docs are reviewable.
 const PROGRAMMATIC_CARGO_MUTATION_REGEX =
-  /\b(?:spawn(?:Sync)?|execFile(?:Sync)?|execa(?:Sync)?)\s*\(\s*['"]cargo['"]\s*,\s*\[\s*['"](?:update|upgrade|add|generate-lockfile)['"]/;
+  /\b(?:spawn(?:Sync)?|execFile(?:Sync)?|execa(?:Sync)?)\s*\(\s*['"]cargo['"]\s*,\s*\[\s*(?:['"]\+[A-Za-z0-9._-]+['"]\s*,\s*)?['"](?:update|upgrade|add|generate-lockfile)['"]/;
 // Also catch execSync("cargo update") / exec("cargo update") forms
 const EXEC_SYNC_CARGO_MUTATION_REGEX =
-  /\b(?:execSync|exec)\s*\(\s*['"]cargo\s+(?:update|upgrade|add|generate-lockfile)\b/;
+  /\b(?:execSync|exec)\s*\(\s*['"]cargo(?:\s+\+[A-Za-z0-9._-]+)?\s+(?:update|upgrade|add|generate-lockfile)\b/;
+const PYTHON_CARGO_MUTATION_REGEX =
+  /\bsubprocess\.(?:run|call|check_call|check_output|Popen)\s*\(\s*\[?\s*['"]cargo['"]\s*,\s*(?:['"]\+[A-Za-z0-9._-]+['"]\s*,\s*)?['"](?:update|upgrade|add|generate-lockfile)['"]/;
+const PROGRAMMATIC_NPM_MUTATION_REGEX =
+  /\b(?:spawn(?:Sync)?|execFile(?:Sync)?|execa(?:Sync)?)\s*\(\s*['"]npm(?:\.cmd)?['"]\s*,\s*\[\s*['"](?:update|upgrade)['"]/;
 
 export function normalizeRelPath(relPath) {
   return relPath.split(path.sep).join("/");
@@ -95,6 +103,10 @@ export function normalizeRelPath(relPath) {
 
 export function commandSegments(command) {
   return command.split(/&&|\|\||;|\n/u);
+}
+
+export function collapseLineContinuations(text) {
+  return text.replace(/\\\r?\n[\t ]*/gu, " ");
 }
 
 export function stripCommentLines(text) {
@@ -122,6 +134,13 @@ export function stripCommentLines(text) {
 // Any raw Cargo mutation is always a violation outside the exact approved helper path.
 export function classifyLine(line) {
   for (const segment of commandSegments(line)) {
+    if (RAW_NPM_MUTATION_REGEX.test(segment)) {
+      return {
+        kind: "raw npm dependency mutation",
+        text: segment.trim(),
+      };
+    }
+
     if (RAW_CARGO_MUTATION_REGEX.test(segment)) {
       return {
         kind: "raw Cargo mutation",
@@ -147,10 +166,14 @@ export function classifyLine(line) {
     // typically chained with &&; checking each segment is still correct)
     if (
       PROGRAMMATIC_CARGO_MUTATION_REGEX.test(segment) ||
-      EXEC_SYNC_CARGO_MUTATION_REGEX.test(segment)
+      EXEC_SYNC_CARGO_MUTATION_REGEX.test(segment) ||
+      PYTHON_CARGO_MUTATION_REGEX.test(segment) ||
+      PROGRAMMATIC_NPM_MUTATION_REGEX.test(segment)
     ) {
       return {
-        kind: "programmatic Cargo mutation",
+        kind: PROGRAMMATIC_NPM_MUTATION_REGEX.test(segment)
+          ? "programmatic npm dependency mutation"
+          : "programmatic Cargo mutation",
         text: segment.trim(),
       };
     }
@@ -199,8 +222,28 @@ export function scanFile(relPath, fullPath, violations) {
     return;
   }
 
-  const stripped = stripCommentLines(content);
+  const stripped = stripCommentLines(collapseLineContinuations(content));
   const lines = stripped.split(/\r?\n/u);
+
+  const dynamicCargoVariables = new Set();
+  const dynamicNpmVariables = new Set();
+  for (const match of stripped.matchAll(
+    /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([^;\n]+)/gu,
+  )) {
+    const expression = match[2];
+    if (
+      /['"]cargo['"]/u.test(expression) &&
+      /['"](?:update|upgrade|add|generate-lockfile)['"]/u.test(expression)
+    ) {
+      dynamicCargoVariables.add(match[1]);
+    }
+    if (
+      /['"]npm(?:\.cmd)?['"]/u.test(expression) &&
+      /['"](?:update|upgrade)['"]/u.test(expression)
+    ) {
+      dynamicNpmVariables.add(match[1]);
+    }
+  }
 
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i];
@@ -214,6 +257,39 @@ export function scanFile(relPath, fullPath, violations) {
         kind: finding.kind,
         text: finding.text,
       });
+      continue;
+    }
+
+    for (const variable of dynamicCargoVariables) {
+      const dynamicExecution = new RegExp(
+        `\\b(?:execSync|exec)\\s*\\(\\s*${variable.replace(/[$]/gu, "\\$&")}\\s*[),]`,
+        "u",
+      );
+      if (dynamicExecution.test(line)) {
+        violations.push({
+          file: normalizedRel,
+          line: i + 1,
+          kind: "dynamic Cargo mutation",
+          text: line.trim(),
+        });
+        break;
+      }
+    }
+
+    for (const variable of dynamicNpmVariables) {
+      const dynamicExecution = new RegExp(
+        `\\b(?:execSync|exec)\\s*\\(\\s*${variable.replace(/[$]/gu, "\\$&")}\\s*[),]`,
+        "u",
+      );
+      if (dynamicExecution.test(line)) {
+        violations.push({
+          file: normalizedRel,
+          line: i + 1,
+          kind: "dynamic npm dependency mutation",
+          text: line.trim(),
+        });
+        break;
+      }
     }
   }
 }
@@ -229,7 +305,7 @@ export function scanPackageJson(root, violations) {
 
   for (const [name, command] of Object.entries(scripts)) {
     if (typeof command !== "string") continue;
-    for (const segment of commandSegments(command)) {
+    for (const segment of commandSegments(collapseLineContinuations(command))) {
       const finding = classifyLine(segment);
       if (finding) {
         violations.push({
@@ -366,6 +442,7 @@ export function runPolicyCheck({
     ".ts",
     ".mts",
     ".cts",
+    ".py",
   ]);
   try {
     const rootEntries = readdirSync(root, { withFileTypes: true });
@@ -395,12 +472,12 @@ export function runPolicyCheck({
       }
     }
     error(
-      "Dependency-changing workflows must route through scripts/cargo-safe-update.mjs (72-hour publish-age guard).",
+      "Dependency-changing workflows must route through scripts/npm-safe-update.mjs and scripts/cargo-safe-update.mjs.",
     );
     return false;
   }
 
-  log("cargo-update-policy: no unguarded cargo dependency mutation found.");
+  log("cargo-update-policy: no unguarded dependency mutation found.");
   return true;
 }
 

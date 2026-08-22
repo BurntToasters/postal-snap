@@ -8,22 +8,35 @@ on:
 permissions:
   contents: read
 
+env:
+  NPM_VERSION: "12.0.2"
+  RUST_VERSION: "1.97.1"
+  CARGO_AUDIT_VERSION: "0.22.2"
+
 jobs:
   test:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           cache: npm
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - name: Pin npm
+        run: npm install --global npm@${{ env.NPM_VERSION }} --ignore-scripts
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri
       - name: Install Tauri Linux prerequisites
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-      - run: npm ci
+      - run: npm ci --ignore-scripts
+      - run: npm audit signatures
       - run: npm run format:check
       - run: npm run format:rust:check
       - run: npm run lint
@@ -39,5 +52,5 @@ jobs:
       - run: npm run test:mail-integration
       - run: npm run build
       - run: npm run audit:npm
-      - run: cargo install cargo-audit --locked
+      - run: cargo install cargo-audit --version ${{ env.CARGO_AUDIT_VERSION }} --locked
       - run: npm run audit:cargo
