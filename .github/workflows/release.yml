@@ -7,6 +7,7 @@ permissions:
   contents: write
 
 env:
+  NODE_VERSION: "24.16.0"
   NPM_VERSION: "12.0.2"
   RUST_VERSION: "1.97.1"
   CARGO_AUDIT_VERSION: "0.22.2"
@@ -19,7 +20,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with: { node-version: 24, cache: npm }
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm }
       - name: Pin npm
         run: npm install --global npm@${{ env.NPM_VERSION }} --ignore-scripts
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
@@ -68,7 +69,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with: { node-version: 24, cache: npm }
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm }
       - name: Pin npm
         run: npm install --global npm@${{ env.NPM_VERSION }} --ignore-scripts
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
@@ -120,7 +121,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with: { node-version: 24, cache: npm }
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm }
       - name: Pin npm
         run: npm install --global npm@${{ env.NPM_VERSION }} --ignore-scripts
       - run: npm ci --ignore-scripts
