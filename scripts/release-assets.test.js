@@ -103,7 +103,6 @@ test("release environment template covers every supported credential path", asyn
       .filter(Boolean),
   );
   for (const name of [
-    "GH_TOKEN",
     "GPG_KEY_ID",
     "GPG_PASSPHRASE",
     "GPG_PRIVATE_KEY_BASE64",
@@ -137,6 +136,8 @@ test("release environment template covers every supported credential path", asyn
   ]) {
     assert.ok(names.has(name), `${name} is missing from .env.example`);
   }
+  assert.ok(!names.has("GH_TOKEN"));
+  assert.ok(template.includes("gh auth login"));
 });
 
 test("release verification covers generated manifests after finalization", async () => {
