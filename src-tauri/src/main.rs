@@ -11,8 +11,10 @@ mod settings;
 use commands::AppState;
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder},
-    Emitter, Manager, RunEvent, WindowEvent,
+    Emitter, Manager,
 };
+#[cfg(target_os = "macos")]
+use tauri::{RunEvent, WindowEvent};
 
 fn main() {
     let builder = tauri::Builder::default()
