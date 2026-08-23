@@ -144,16 +144,27 @@ test("release verification covers generated manifests after finalization", async
     join(root, "scripts/verify-release-directory.js"),
     "utf8",
   );
-  const workflow = await readFile(
-    join(root, ".github/workflows/release.yml"),
-    "utf8",
+  const packageJson = JSON.parse(
+    await readFile(join(root, "package.json"), "utf8"),
   );
   assert.ok(verifier.includes("latest-${platform}${channel}-${arch}.json"));
   assert.ok(verifier.includes("platformEntry.signature !== expectedSignature"));
-  assert.ok(
-    workflow.indexOf("npm run release:finalize") <
-      workflow.indexOf("npm run release:verify:local"),
-  );
+  for (const scriptName of [
+    "release:win:continue",
+    "release:mac:continue",
+    "release:linux:x64:continue",
+    "release:linux:arm64:continue",
+  ]) {
+    const script = packageJson.scripts[scriptName];
+    assert.ok(
+      script.indexOf("npm run release:finalize") <
+        script.indexOf("npm run release:verify:local"),
+    );
+    assert.ok(
+      script.indexOf("npm run release:verify:local") <
+        script.indexOf("npm run release:verify-draft"),
+    );
+  }
   const remoteVerifier = await readFile(
     join(root, "scripts/verify-release-draft.js"),
     "utf8",
