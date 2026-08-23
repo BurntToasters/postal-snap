@@ -66,7 +66,7 @@ try {
   await run("docker", ["compose", "-p", project, "-f", compose, "up", "-d"], {
     env: environment,
   });
-  await Promise.all([waitForPort(3025), waitForPort(3993)]);
+  await Promise.all([waitForPort(3465), waitForPort(3993)]);
   await run(
     "cargo",
     [

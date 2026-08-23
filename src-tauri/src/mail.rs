@@ -1592,8 +1592,8 @@ mod tests {
             },
             smtp: ServerConfig {
                 host: "localhost".into(),
-                port: 3025,
-                tls_mode: TlsMode::StartTls,
+                port: 3465,
+                tls_mode: TlsMode::Tls,
                 username: "senior@example.test".into(),
             },
         };
