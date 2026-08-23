@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { connect } from "node:net";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -62,6 +62,7 @@ try {
     "-passout",
     "pass:changeit",
   ]);
+  await chmod(store, 0o644);
   await run("docker", ["compose", "-p", project, "-f", compose, "up", "-d"], {
     env: environment,
   });
