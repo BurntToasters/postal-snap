@@ -1,2 +1,18 @@
 #!/bin/sh
-npm run typecheck && npm run test
+# Git hooks run under sh on Windows; route npm through cmd.exe so we never
+# hit the POSIX shim at "C:/Program Files/nodejs/npm".
+# Bypass with: git commit --no-verify
+
+set -e
+
+run_npm() {
+  if [ "${OS:-}" = "Windows_NT" ] && command -v cmd.exe >/dev/null 2>&1; then
+    cmd.exe //d //c npm.cmd "$@"
+  elif command -v npm.cmd >/dev/null 2>&1; then
+    npm.cmd "$@"
+  else
+    npm "$@"
+  fi
+}
+
+run_npm run typecheck && run_npm run test
