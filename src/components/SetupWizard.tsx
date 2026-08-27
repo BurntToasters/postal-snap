@@ -8,9 +8,11 @@ import {
   EyeOff,
   Server,
   ShieldCheck,
+  TriangleAlert,
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "../api";
+import { describeSetupError } from "../errors";
 import { strings } from "../i18n";
 import type {
   AccountSetupRequest,
@@ -24,18 +26,43 @@ interface Props {
   onComplete: () => Promise<void>;
 }
 
-const iCloudImap: ServerConfig = {
+const APPLE_APP_PASSWORD_GUIDE = "https://support.apple.com/102654";
+
+const iCloudImapSummary = {
   host: "imap.mail.me.com",
   port: 993,
-  tlsMode: "tls",
-  username: "",
+  security: strings.setup.tls,
 };
-const iCloudSmtp: ServerConfig = {
+
+const iCloudSmtpSummary = {
   host: "smtp.mail.me.com",
   port: 587,
-  tlsMode: "startTls",
-  username: "",
+  security: strings.setup.startTls,
 };
+
+function emptyManualImap(username = ""): ServerConfig {
+  return { host: "", port: 993, tlsMode: "tls", username };
+}
+
+function emptyManualSmtp(username = ""): ServerConfig {
+  return { host: "", port: 587, tlsMode: "startTls", username };
+}
+
+function defaultPort(kind: "imap" | "smtp", tlsMode: TlsMode): number {
+  if (kind === "imap") return tlsMode === "tls" ? 993 : 143;
+  return tlsMode === "tls" ? 465 : 587;
+}
+
+function isStandardPort(kind: "imap" | "smtp", port: number): boolean {
+  return kind === "imap"
+    ? port === 993 || port === 143
+    : port === 465 || port === 587;
+}
+
+function preparePassword(provider: ProviderKind, password: string): string {
+  const trimmed = password.trim();
+  return provider === "icloud" ? trimmed.replace(/\s+/g, "") : trimmed;
+}
 
 export function SetupWizard({ onComplete }: Props) {
   const [provider, setProvider] = useState<ProviderKind>();
@@ -43,12 +70,14 @@ export function SetupWizard({ onComplete }: Props) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [imap, setImap] = useState(iCloudImap);
-  const [smtp, setSmtp] = useState(iCloudSmtp);
+  const [imap, setImap] = useState(emptyManualImap);
+  const [smtp, setSmtp] = useState(emptyManualSmtp);
   const [testing, setTesting] = useState(false);
   const [status, setStatus] = useState<{
     kind: "working" | "success" | "error";
     text: string;
+    hint?: string;
+    showAppPasswordLink?: boolean;
   }>();
 
   const normalizedEmail = useMemo(() => {
@@ -64,17 +93,62 @@ export function SetupWizard({ onComplete }: Props) {
       provider: provider ?? "icloud",
       displayName: displayName.trim(),
       email: normalizedEmail,
-      password,
+      password: preparePassword(provider ?? "icloud", password),
       imap: provider === "manual" ? imap : undefined,
       smtp: provider === "manual" ? smtp : undefined,
     }),
     [displayName, imap, normalizedEmail, password, provider, smtp],
   );
 
+  function chooseProvider(next: ProviderKind) {
+    const username = email.trim();
+    setProvider(next);
+    setStatus(undefined);
+    if (next === "manual") {
+      setImap((current) =>
+        current.host ? current : emptyManualImap(username),
+      );
+      setSmtp((current) =>
+        current.host ? current : emptyManualSmtp(username),
+      );
+    }
+  }
+
+  function updateEmail(value: string) {
+    const previous = email.trim();
+    setEmail(value);
+    if (provider !== "manual") return;
+    const next = value.trim();
+    setImap((server) => ({
+      ...server,
+      username:
+        !server.username || server.username === previous
+          ? next
+          : server.username,
+    }));
+    setSmtp((server) => ({
+      ...server,
+      username:
+        !server.username || server.username === previous
+          ? next
+          : server.username,
+    }));
+  }
+
   function updateServer(kind: "imap" | "smtp", patch: Partial<ServerConfig>) {
-    const update = (server: ServerConfig) => ({ ...server, ...patch });
-    if (kind === "imap") setImap(update);
-    else setSmtp(update);
+    const apply = (server: ServerConfig) => {
+      const next = { ...server, ...patch };
+      if (
+        patch.tlsMode &&
+        patch.tlsMode !== server.tlsMode &&
+        isStandardPort(kind, server.port)
+      ) {
+        next.port = defaultPort(kind, patch.tlsMode);
+      }
+      return next;
+    };
+    if (kind === "imap") setImap(apply);
+    else setSmtp(apply);
   }
 
   async function submit(event: FormEvent) {
@@ -91,7 +165,13 @@ export function SetupWizard({ onComplete }: Props) {
       setPassword("");
       await onComplete();
     } catch (cause) {
-      setStatus({ kind: "error", text: String(cause) });
+      const described = describeSetupError(cause, provider);
+      setStatus({
+        kind: "error",
+        text: described.text,
+        hint: described.hint,
+        showAppPasswordLink: described.showAppPasswordLink,
+      });
     } finally {
       setTesting(false);
     }
@@ -123,7 +203,7 @@ export function SetupWizard({ onComplete }: Props) {
             <button
               type="button"
               className="provider-button provider-primary"
-              onClick={() => setProvider("icloud")}
+              onClick={() => chooseProvider("icloud")}
             >
               <span className="provider-symbol" aria-hidden="true">
                 <Cloud />
@@ -139,7 +219,7 @@ export function SetupWizard({ onComplete }: Props) {
             <button
               type="button"
               className="provider-button"
-              onClick={() => setProvider("manual")}
+              onClick={() => chooseProvider("manual")}
             >
               <span className="provider-symbol" aria-hidden="true">
                 <Server />
@@ -209,7 +289,7 @@ export function SetupWizard({ onComplete }: Props) {
             <button
               type="button"
               className="text-button"
-              onClick={() => void openUrl("https://support.apple.com/102654")}
+              onClick={() => void openUrl(APPLE_APP_PASSWORD_GUIDE)}
             >
               {strings.setup.createAppPassword} <ExternalLink />
             </button>
@@ -234,7 +314,7 @@ export function SetupWizard({ onComplete }: Props) {
               inputMode="email"
               autoComplete="email"
               value={email}
-              onChange={(event) => setEmail(event.target.value)}
+              onChange={(event) => updateEmail(event.target.value)}
               onBlur={() => {
                 if (
                   provider === "icloud" &&
@@ -252,6 +332,9 @@ export function SetupWizard({ onComplete }: Props) {
             />
           </label>
         </div>
+        {provider === "icloud" ? (
+          <p className="setup-field-hint">{strings.setup.icloudEmailHint}</p>
+        ) : null}
         <label className="field-label">
           {provider === "icloud"
             ? strings.setup.appPassword
@@ -261,8 +344,14 @@ export function SetupWizard({ onComplete }: Props) {
               required
               type={showPassword ? "text" : "password"}
               autoComplete="new-password"
+              spellCheck={false}
               value={password}
               onChange={(event) => setPassword(event.target.value)}
+              placeholder={
+                provider === "icloud"
+                  ? strings.setup.appPasswordPlaceholder
+                  : undefined
+              }
             />
             <button
               type="button"
@@ -277,7 +366,31 @@ export function SetupWizard({ onComplete }: Props) {
             </button>
           </span>
         </label>
-        {provider === "manual" ? (
+        {provider === "icloud" ? (
+          <p className="setup-field-hint">{strings.setup.appPasswordHint}</p>
+        ) : null}
+        {provider === "icloud" ? (
+          <div
+            className="server-summary"
+            aria-label={strings.setup.icloudServers}
+          >
+            <p>{strings.setup.icloudServers}</p>
+            <dl>
+              <div>
+                <dt>{strings.setup.incoming}</dt>
+                <dd>
+                  {`${iCloudImapSummary.host} · ${iCloudImapSummary.port} · ${iCloudImapSummary.security}`}
+                </dd>
+              </div>
+              <div>
+                <dt>{strings.setup.outgoing}</dt>
+                <dd>
+                  {`${iCloudSmtpSummary.host} · ${iCloudSmtpSummary.port} · ${iCloudSmtpSummary.security}`}
+                </dd>
+              </div>
+            </dl>
+          </div>
+        ) : (
           <div className="server-settings">
             <ServerFields
               title={strings.setup.incoming}
@@ -290,15 +403,33 @@ export function SetupWizard({ onComplete }: Props) {
               onChange={(patch) => updateServer("smtp", patch)}
             />
           </div>
-        ) : null}
+        )}
         {status ? (
           <div
             className={`connection-status ${status.kind}`}
             role="status"
             aria-live="polite"
           >
-            {status.kind === "success" ? <Check /> : <ShieldCheck />}
-            <span>{status.text}</span>
+            {status.kind === "error" ? (
+              <TriangleAlert />
+            ) : status.kind === "success" ? (
+              <Check />
+            ) : (
+              <ShieldCheck />
+            )}
+            <span>
+              {status.text}
+              {status.hint ? <small>{status.hint}</small> : null}
+              {status.showAppPasswordLink ? (
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={() => void openUrl(APPLE_APP_PASSWORD_GUIDE)}
+                >
+                  {strings.setup.createAppPassword} <ExternalLink />
+                </button>
+              ) : null}
+            </span>
           </div>
         ) : null}
         <button
@@ -333,6 +464,8 @@ function ServerFields({
             value={value.host}
             onChange={(event) => onChange({ host: event.target.value })}
             placeholder={strings.setup.serverPlaceholder}
+            autoComplete="off"
+            spellCheck={false}
           />
         </label>
         <label>
@@ -364,6 +497,9 @@ function ServerFields({
             required
             value={value.username}
             onChange={(event) => onChange({ username: event.target.value })}
+            placeholder={strings.setup.usernamePlaceholder}
+            autoComplete="username"
+            spellCheck={false}
           />
         </label>
       </div>

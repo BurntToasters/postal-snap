@@ -590,9 +590,18 @@ export function MailShell({ onOpenSettings }: Props) {
           <PanelLeft />
         </button>
         <div className="app-brand" aria-label={strings.appName}>
-          <AppMark size={32} />
+          <AppMark size={28} />
           <strong>{strings.appName}</strong>
         </div>
+        <button
+          className="toolbar-button get-mail-button"
+          type="button"
+          onClick={() => void refresh()}
+          disabled={busy}
+        >
+          <RefreshCw className={busy ? "spinning" : ""} />
+          <span>{strings.mail.getMail}</span>
+        </button>
         <button
           className="primary-button compose-button"
           type="button"
@@ -633,15 +642,6 @@ export function MailShell({ onOpenSettings }: Props) {
             </label>
           ) : null}
         </form>
-        <button
-          className="toolbar-button get-mail-button"
-          type="button"
-          onClick={() => void refresh()}
-          disabled={busy}
-        >
-          <RefreshCw className={busy ? "spinning" : ""} />
-          <span>{strings.mail.getMail}</span>
-        </button>
         <button
           className="icon-button"
           type="button"
@@ -705,9 +705,7 @@ export function MailShell({ onOpenSettings }: Props) {
           <MailPlus /> {strings.mail.addAccount}
         </button>
         <nav className="folder-list" aria-label={strings.mail.mailboxes}>
-          <p className="sidebar-section-title">
-            {strings.mail.postalSnapFolders}
-          </p>
+          <p className="sidebar-section-title">{strings.mail.localFolders}</p>
           <FolderButton
             icon={FileText}
             label={strings.mail.drafts}

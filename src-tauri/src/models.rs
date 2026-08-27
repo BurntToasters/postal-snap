@@ -376,7 +376,7 @@ impl From<String> for IpcError {
             "notFound" => "That item is no longer available. Refresh mail and try again.",
             "limitExceeded" => "That item exceeds Postal Snap's safety limit.",
             "authenticationFailed" => {
-                "Sign-in failed. Check the email address and app-specific password."
+                "Sign-in failed. Check the email address and password."
             }
             "connectionFailed" => "Could not reach the mail server. Check your connection.",
             "localStorageFailed" => "Postal Snap could not save this change on your computer.",
@@ -624,5 +624,28 @@ mod tests {
         let connection = IpcError::from("Incoming connection failed.");
         assert_eq!(connection.code, "connectionFailed");
         assert!(connection.retryable);
+        let auth = IpcError::from("IMAP sign-in was rejected.");
+        assert_eq!(auth.code, "authenticationFailed");
+        assert!(auth.message.contains("password"));
+        assert!(!auth.message.contains("app-specific"));
+    }
+
+    #[test]
+    fn icloud_accepts_me_and_mac_addresses() {
+        for email in ["Pat@me.com", "pat@mac.com"] {
+            let request = AccountSetupRequest {
+                provider: ProviderKind::Icloud,
+                email: email.into(),
+                display_name: "Pat".into(),
+                password: "secret".into(),
+                imap: None,
+                smtp: None,
+            };
+            let (imap, smtp) = validated_setup(&request).unwrap();
+            assert_eq!(imap.username, "pat");
+            assert_eq!(smtp.username, email.to_ascii_lowercase());
+            assert_eq!(imap.host, "imap.mail.me.com");
+            assert_eq!(smtp.host, "smtp.mail.me.com");
+        }
     }
 }
