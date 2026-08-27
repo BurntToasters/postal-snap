@@ -158,6 +158,7 @@ export function Composer({ accountId }: Props) {
     seed?.draftSummary?.syncDetail,
   );
   const restoredInlineImages = useRef(false);
+  const isDiscarding = useRef(false);
   const dialogRef = useDialogFocus(requestClose);
 
   const editor = useEditor({
@@ -275,6 +276,7 @@ export function Composer({ accountId }: Props) {
       const draft = buildDraft();
       if (
         !sending &&
+        !isDiscarding.current &&
         saveState === "unsaved" &&
         hasDraftContent(draft, editor.getText())
       ) {
@@ -282,6 +284,7 @@ export function Composer({ accountId }: Props) {
         void api
           .saveDraft(draft)
           .then((outcome) => {
+            if (isDiscarding.current) return;
             setDraftId(outcome.id);
             setSaveState("saved");
             setDraftSyncState(outcome.syncState);
@@ -289,6 +292,7 @@ export function Composer({ accountId }: Props) {
             announceLocalMailChanged(accountId);
           })
           .catch((cause) => {
+            if (isDiscarding.current) return;
             setSaveState("unsaved");
             setError(String(cause));
           });
@@ -298,7 +302,7 @@ export function Composer({ accountId }: Props) {
   }, [accountId, buildDraft, editor, saveState, sending, setError]);
 
   function requestClose() {
-    if (sending) return;
+    if (sending || isDiscarding.current) return;
     const draft = buildDraft();
     if (
       saveState === "unsaved" &&
@@ -310,7 +314,7 @@ export function Composer({ accountId }: Props) {
   }
 
   async function saveDraft(showStatus = true) {
-    if (sending) return;
+    if (sending || isDiscarding.current) return;
     const draft = buildDraft();
     if (!hasDraftContent(draft, editor?.getText() ?? "")) {
       close();
@@ -319,6 +323,7 @@ export function Composer({ accountId }: Props) {
     setSaveState("saving");
     try {
       const outcome = await api.saveDraft(draft);
+      if (isDiscarding.current) return;
       setDraftId(outcome.id);
       setSaveState("saved");
       setDraftSyncState(outcome.syncState);
@@ -326,18 +331,20 @@ export function Composer({ accountId }: Props) {
       announceLocalMailChanged(accountId);
       if (showStatus) close();
     } catch (cause) {
+      if (isDiscarding.current) return;
       setSaveState("unsaved");
       setError(String(cause));
     }
   }
 
   async function discardDraft() {
-    if (sending) return;
+    if (sending || isDiscarding.current) return;
     if (
       hasDraftContent(buildDraft(), editor?.getText() ?? "") &&
       !window.confirm(strings.composer.discardQuestion)
     )
       return;
+    isDiscarding.current = true;
     try {
       if (draftId) await api.deleteDraft(draftId, accountId);
       await api.releaseComposeAttachments(
@@ -347,11 +354,18 @@ export function Composer({ accountId }: Props) {
       announceLocalMailChanged(accountId);
       close();
     } catch (cause) {
+      isDiscarding.current = false;
       setError(String(cause));
     }
   }
 
-  async function sendMessage() {
+  const totalAttachmentBytes = useMemo(
+    () => attachments.reduce((sum, item) => sum + (item.size ?? 0), 0),
+    [attachments],
+  );
+  const isAttachmentSizeWarning = totalAttachmentBytes > 25 * 1024 * 1024;
+
+  const sendMessage = useCallback(async () => {
     const validation = validateRecipientFields(to, cc, bcc);
     const subjectValidation = validateSubject(subject);
     setRecipientError(validation);
@@ -369,7 +383,18 @@ export function Composer({ accountId }: Props) {
     } finally {
       setSending(false);
     }
-  }
+  }, [accountId, bcc, buildDraft, canSend, cc, close, setError, subject, to]);
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+        event.preventDefault();
+        void sendMessage();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [sendMessage]);
 
   async function addAttachments() {
     try {
@@ -412,7 +437,7 @@ export function Composer({ accountId }: Props) {
       current ?? "https://",
     );
     if (href === null) return;
-    if (!/^https?:\/\//i.test(href)) {
+    if (!/^(https?|mailto):/i.test(href)) {
       setError(strings.composer.unsafeLink);
       return;
     }
@@ -609,6 +634,7 @@ export function Composer({ accountId }: Props) {
             type="button"
             onClick={() => editor?.chain().focus().undo().run()}
             aria-label={strings.composer.undo}
+            title={strings.composer.undo}
           >
             <Undo2 />
           </button>
@@ -616,12 +642,14 @@ export function Composer({ accountId }: Props) {
             type="button"
             onClick={() => editor?.chain().focus().redo().run()}
             aria-label={strings.composer.redo}
+            title={strings.composer.redo}
           >
             <Redo2 />
           </button>
           <span />
           <select
             aria-label={strings.composer.font}
+            title={strings.composer.font}
             defaultValue=""
             onChange={(event) =>
               event.target.value
@@ -641,6 +669,7 @@ export function Composer({ accountId }: Props) {
           </select>
           <select
             aria-label={strings.composer.fontSize}
+            title={strings.composer.fontSize}
             defaultValue="16px"
             onChange={(event) =>
               editor?.chain().focus().setFontSize(event.target.value).run()
@@ -656,6 +685,7 @@ export function Composer({ accountId }: Props) {
             type="button"
             onClick={() => editor?.chain().focus().toggleBold().run()}
             aria-label={strings.composer.bold}
+            title={strings.composer.bold}
           >
             <Bold />
           </button>
@@ -664,6 +694,7 @@ export function Composer({ accountId }: Props) {
             type="button"
             onClick={() => editor?.chain().focus().toggleItalic().run()}
             aria-label={strings.composer.italic}
+            title={strings.composer.italic}
           >
             <Italic />
           </button>
@@ -672,6 +703,7 @@ export function Composer({ accountId }: Props) {
             type="button"
             onClick={() => editor?.chain().focus().toggleUnderline().run()}
             aria-label={strings.composer.underline}
+            title={strings.composer.underline}
           >
             <UnderlineIcon />
           </button>
@@ -680,6 +712,7 @@ export function Composer({ accountId }: Props) {
             type="button"
             onClick={() => editor?.chain().focus().toggleStrike().run()}
             aria-label={strings.composer.strike}
+            title={strings.composer.strike}
           >
             <Strikethrough />
           </button>
@@ -703,6 +736,7 @@ export function Composer({ accountId }: Props) {
                 .run()
             }
             aria-label={strings.composer.highlight}
+            title={strings.composer.highlight}
           >
             <Highlighter />
           </button>
@@ -711,6 +745,7 @@ export function Composer({ accountId }: Props) {
             type="button"
             onClick={() => editor?.chain().focus().setTextAlign("left").run()}
             aria-label={strings.composer.alignLeft}
+            title={strings.composer.alignLeft}
           >
             <AlignLeft />
           </button>
@@ -718,6 +753,7 @@ export function Composer({ accountId }: Props) {
             type="button"
             onClick={() => editor?.chain().focus().setTextAlign("center").run()}
             aria-label={strings.composer.alignCenter}
+            title={strings.composer.alignCenter}
           >
             <AlignCenter />
           </button>
@@ -725,6 +761,7 @@ export function Composer({ accountId }: Props) {
             type="button"
             onClick={() => editor?.chain().focus().setTextAlign("right").run()}
             aria-label={strings.composer.alignRight}
+            title={strings.composer.alignRight}
           >
             <AlignRight />
           </button>
@@ -732,6 +769,7 @@ export function Composer({ accountId }: Props) {
             type="button"
             onClick={() => editor?.chain().focus().toggleBulletList().run()}
             aria-label={strings.composer.bullets}
+            title={strings.composer.bullets}
           >
             <List />
           </button>
@@ -739,6 +777,7 @@ export function Composer({ accountId }: Props) {
             type="button"
             onClick={() => editor?.chain().focus().toggleOrderedList().run()}
             aria-label={strings.composer.numbers}
+            title={strings.composer.numbers}
           >
             <ListOrdered />
           </button>
@@ -746,6 +785,7 @@ export function Composer({ accountId }: Props) {
             type="button"
             onClick={() => adjustIndent(-1)}
             aria-label={strings.composer.indentLess}
+            title={strings.composer.indentLess}
           >
             <IndentDecrease />
           </button>
@@ -753,6 +793,7 @@ export function Composer({ accountId }: Props) {
             type="button"
             onClick={() => adjustIndent(1)}
             aria-label={strings.composer.indentMore}
+            title={strings.composer.indentMore}
           >
             <IndentIncrease />
           </button>
@@ -760,6 +801,7 @@ export function Composer({ accountId }: Props) {
             type="button"
             onClick={addLink}
             aria-label={strings.composer.insertLink}
+            title={strings.composer.insertLink}
           >
             <LinkIcon />
           </button>
@@ -773,6 +815,7 @@ export function Composer({ accountId }: Props) {
                 .run()
             }
             aria-label={strings.composer.insertTable}
+            title={strings.composer.insertTable}
           >
             <Table2 />
           </button>
@@ -780,6 +823,7 @@ export function Composer({ accountId }: Props) {
             type="button"
             onClick={() => editor?.chain().focus().setHorizontalRule().run()}
             aria-label={strings.composer.insertRule}
+            title={strings.composer.insertRule}
           >
             <Minus />
           </button>
@@ -789,6 +833,7 @@ export function Composer({ accountId }: Props) {
               editor?.chain().focus().clearNodes().unsetAllMarks().run()
             }
             aria-label={strings.composer.clearFormatting}
+            title={strings.composer.clearFormatting}
           >
             <RemoveFormatting />
           </button>
@@ -810,6 +855,14 @@ export function Composer({ accountId }: Props) {
                 </button>
               </span>
             ))}
+          </div>
+        ) : null}
+        {isAttachmentSizeWarning ? (
+          <div className="draft-sync-banner localOnly" role="alert">
+            <TriangleAlert aria-hidden="true" />
+            <span>
+              <strong>{strings.composer.attachmentSizeWarning}</strong>
+            </span>
           </div>
         ) : null}
         <footer>

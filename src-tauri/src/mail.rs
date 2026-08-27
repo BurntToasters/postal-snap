@@ -27,6 +27,7 @@ use crate::{
 };
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+const IMAP_COMMAND_TIMEOUT: Duration = Duration::from_secs(45);
 pub const MAX_MESSAGE_BYTES: usize = 50 * 1024 * 1024;
 const MAX_MIME_PARTS: usize = 500;
 const MAX_MULTIPART_DECLARATIONS: usize = 64;
@@ -137,7 +138,14 @@ pub async fn sync_account(
         let attributes = name
             .attributes()
             .iter()
-            .map(|attribute| format!("{attribute:?}"))
+            .map(|attribute| match attribute {
+                async_imap::types::NameAttribute::NoSelect => "NoSelect".to_string(),
+                async_imap::types::NameAttribute::NoInferiors => "NoInferiors".to_string(),
+                async_imap::types::NameAttribute::Marked => "Marked".to_string(),
+                async_imap::types::NameAttribute::Unmarked => "Unmarked".to_string(),
+                async_imap::types::NameAttribute::Extension(val) => val.to_string(),
+                _ => format!("{attribute:?}"),
+            })
             .collect::<Vec<_>>();
         if attributes
             .iter()
@@ -356,10 +364,10 @@ pub async fn idle_inbox(
             },
         }
     };
-    let mut session = idle
-        .done()
-        .await
-        .map_err(|error| redact_error(&error, "Inbox monitoring"))?;
+    let mut session = match tokio::time::timeout(Duration::from_secs(5), idle.done()).await {
+        Ok(Ok(session)) => session,
+        _ => return Ok(()),
+    };
     let _ = session.logout().await;
     match response {
         IdleResponse::ManualInterrupt | IdleResponse::Timeout | IdleResponse::NewData(_) => Ok(()),
@@ -468,17 +476,21 @@ pub async fn download_message(
         return Err("This message is too large to download safely.".into());
     }
     let mut session = connect_imap(&account.imap, password).await?;
-    session
-        .examine(mailbox)
+    tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.examine(mailbox))
         .await
+        .map_err(|_| "Message download timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Message download"))?;
-    let mut rows = session
-        .uid_fetch(uid.to_string(), "(UID FLAGS RFC822.SIZE BODY.PEEK[])")
-        .await
-        .map_err(|error| redact_error(&error, "Message download"))?
-        .try_collect::<Vec<_>>()
-        .await
-        .map_err(|error| redact_error(&error, "Message download"))?;
+    let mut rows = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
+        session
+            .uid_fetch(uid.to_string(), "(UID FLAGS RFC822.SIZE BODY.PEEK[])")
+            .await
+            .map_err(|error| redact_error(&error, "Message download"))?
+            .try_collect::<Vec<_>>()
+            .await
+            .map_err(|error| redact_error(&error, "Message download"))
+    })
+    .await
+    .map_err(|_| "Message download timed out.".to_string())??;
     let item = rows
         .pop()
         .ok_or_else(|| "This message is no longer available on the server.".to_string())?;
@@ -508,9 +520,9 @@ pub async fn set_remote_flags(
     is_starred: Option<bool>,
 ) -> Result<(), String> {
     let mut session = connect_imap(&account.imap, password).await?;
-    session
-        .select(mailbox)
+    tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(mailbox))
         .await
+        .map_err(|_| "Message update timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Message update"))?;
     if let Some(value) = is_read {
         let operation = if value {
@@ -518,13 +530,17 @@ pub async fn set_remote_flags(
         } else {
             "-FLAGS.SILENT (\\Seen)"
         };
-        session
-            .uid_store(uid.to_string(), operation)
-            .await
-            .map_err(|error| redact_error(&error, "Message update"))?
-            .try_collect::<Vec<_>>()
-            .await
-            .map_err(|error| redact_error(&error, "Message update"))?;
+        tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
+            session
+                .uid_store(uid.to_string(), operation)
+                .await
+                .map_err(|error| redact_error(&error, "Message update"))?
+                .try_collect::<Vec<_>>()
+                .await
+                .map_err(|error| redact_error(&error, "Message update"))
+        })
+        .await
+        .map_err(|_| "Message update timed out.".to_string())??;
     }
     if let Some(value) = is_starred {
         let operation = if value {
@@ -532,13 +548,17 @@ pub async fn set_remote_flags(
         } else {
             "-FLAGS.SILENT (\\Flagged)"
         };
-        session
-            .uid_store(uid.to_string(), operation)
-            .await
-            .map_err(|error| redact_error(&error, "Message update"))?
-            .try_collect::<Vec<_>>()
-            .await
-            .map_err(|error| redact_error(&error, "Message update"))?;
+        tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
+            session
+                .uid_store(uid.to_string(), operation)
+                .await
+                .map_err(|error| redact_error(&error, "Message update"))?
+                .try_collect::<Vec<_>>()
+                .await
+                .map_err(|error| redact_error(&error, "Message update"))
+        })
+        .await
+        .map_err(|_| "Message update timed out.".to_string())??;
     }
     let _ = session.logout().await;
     Ok(())
@@ -552,38 +572,52 @@ pub async fn move_remote(
     uid: u32,
 ) -> Result<(), String> {
     let mut session = connect_imap(&account.imap, password).await?;
-    session
-        .select(source)
+    tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(source))
         .await
+        .map_err(|_| "Move timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Move"))?;
-    let capabilities = session
-        .capabilities()
+    let capabilities = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.capabilities())
         .await
+        .map_err(|_| "Move timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Move capability check"))?;
     if capabilities.has_str("MOVE") {
-        session
-            .uid_mv(uid.to_string(), destination)
-            .await
-            .map_err(|error| redact_error(&error, "Move"))?;
+        tokio::time::timeout(
+            IMAP_COMMAND_TIMEOUT,
+            session.uid_mv(uid.to_string(), destination),
+        )
+        .await
+        .map_err(|_| "Move timed out.".to_string())?
+        .map_err(|error| redact_error(&error, "Move"))?;
     } else if capabilities.has_str("UIDPLUS") {
-        session
-            .uid_copy(uid.to_string(), destination)
-            .await
-            .map_err(|error| redact_error(&error, "Move"))?;
-        session
-            .uid_store(uid.to_string(), "+FLAGS.SILENT (\\Deleted)")
-            .await
-            .map_err(|error| redact_error(&error, "Move"))?
-            .try_collect::<Vec<_>>()
-            .await
-            .map_err(|error| redact_error(&error, "Move"))?;
-        session
-            .uid_expunge(uid.to_string())
-            .await
-            .map_err(|error| redact_error(&error, "Move"))?
-            .try_collect::<Vec<_>>()
-            .await
-            .map_err(|error| redact_error(&error, "Move"))?;
+        tokio::time::timeout(
+            IMAP_COMMAND_TIMEOUT,
+            session.uid_copy(uid.to_string(), destination),
+        )
+        .await
+        .map_err(|_| "Move timed out.".to_string())?
+        .map_err(|error| redact_error(&error, "Move"))?;
+        tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
+            session
+                .uid_store(uid.to_string(), "+FLAGS.SILENT (\\Deleted)")
+                .await
+                .map_err(|error| redact_error(&error, "Move"))?
+                .try_collect::<Vec<_>>()
+                .await
+                .map_err(|error| redact_error(&error, "Move"))
+        })
+        .await
+        .map_err(|_| "Move timed out.".to_string())??;
+        tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
+            session
+                .uid_expunge(uid.to_string())
+                .await
+                .map_err(|error| redact_error(&error, "Move"))?
+                .try_collect::<Vec<_>>()
+                .await
+                .map_err(|error| redact_error(&error, "Move"))
+        })
+        .await
+        .map_err(|_| "Move timed out.".to_string())??;
     } else {
         return Err("This mail server cannot safely move messages.".into());
     }
@@ -958,24 +992,27 @@ async fn connect_imap(server: &ServerConfig, password: &str) -> Result<ImapSessi
                 .map_err(|_| "Incoming TLS negotiation timed out.".to_string())?
                 .map_err(|error| redact_error(&error, "Incoming TLS negotiation"))?;
             let mut client = async_imap::Client::new(tls);
-            client
-                .read_response()
+            tokio::time::timeout(CONNECT_TIMEOUT, client.read_response())
                 .await
+                .map_err(|_| "Incoming greeting timed out.".to_string())?
                 .map_err(|error| redact_error(&error, "Incoming greeting"))?
                 .ok_or_else(|| "The incoming server closed the secure connection.".to_string())?;
             client
         }
         TlsMode::StartTls => {
             let mut plain = async_imap::Client::new(tcp);
-            plain
-                .read_response()
+            tokio::time::timeout(CONNECT_TIMEOUT, plain.read_response())
                 .await
+                .map_err(|_| "Incoming greeting timed out.".to_string())?
                 .map_err(|error| redact_error(&error, "Incoming greeting"))?
                 .ok_or_else(|| "The incoming server closed the connection.".to_string())?;
-            plain
-                .run_command_and_check_ok("STARTTLS", None)
-                .await
-                .map_err(|error| redact_error(&error, "Required incoming STARTTLS"))?;
+            tokio::time::timeout(
+                CONNECT_TIMEOUT,
+                plain.run_command_and_check_ok("STARTTLS", None),
+            )
+            .await
+            .map_err(|_| "Incoming STARTTLS timed out.".to_string())?
+            .map_err(|error| redact_error(&error, "Required incoming STARTTLS"))?;
             let tls = tokio::time::timeout(
                 CONNECT_TIMEOUT,
                 connector.connect(&server.host, plain.into_inner()),
@@ -1634,6 +1671,7 @@ mod tests {
                 content_type: Some("text/plain".into()),
                 inline: false,
                 content_id: None,
+                size: None,
             }],
             in_reply_to: None,
             references: None,

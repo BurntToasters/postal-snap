@@ -1749,7 +1749,10 @@ fn has_remote_images(html: &str) -> bool {
 fn fts_query(value: &str) -> String {
     value
         .split_whitespace()
-        .filter(|term| !term.is_empty())
+        .map(|term| {
+            term.trim_matches(|c: char| !c.is_alphanumeric() && c != '@' && c != '.' && c != '_')
+        })
+        .filter(|term| term.chars().any(|c| c.is_alphanumeric()))
         .take(12)
         .map(|term| format!("\"{}\"*", term.replace('"', "\"\"")))
         .collect::<Vec<_>>()
@@ -2181,6 +2184,8 @@ mod tests {
     fn fts_terms_are_quoted_and_bounded() {
         assert_eq!(fts_query("hello world"), "\"hello\"* AND \"world\"*");
         assert!(fts_query("").is_empty());
+        assert!(fts_query("::: ... ???").is_empty());
+        assert_eq!(fts_query("user@example.com"), "\"user@example.com\"*");
     }
 
     #[test]
@@ -2704,6 +2709,7 @@ mod tests {
             content_type: Some("text/plain".into()),
             inline: false,
             content_id: None,
+            size: Some(4),
         });
         db.save_draft(&draft).unwrap();
         db.queue_outbox(

@@ -8,6 +8,7 @@ import {
   Image,
   Mail,
   MailOpen,
+  Printer,
   Reply,
   ReplyAll,
   ShieldAlert,
@@ -43,6 +44,7 @@ export function MessageReader() {
   }>();
   const [loadingImages, setLoadingImages] = useState(false);
   const [preparingForward, setPreparingForward] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
 
   useEffect(() => {
     if (settings.readingPane !== "hidden" || !message) return;
@@ -117,7 +119,7 @@ export function MessageReader() {
   function wireFrameLinks() {
     const body = frame.current?.contentDocument?.body;
     if (!body) return;
-    body.addEventListener("click", (event) => {
+    const handleLink = (event: MouseEvent) => {
       const target = (event.target as HTMLElement).closest<HTMLAnchorElement>(
         "a[href]",
       );
@@ -127,7 +129,9 @@ export function MessageReader() {
       if (/^https?:/i.test(url) && window.confirm(strings.reader.openLink(url)))
         void openUrl(url);
       if (/^mailto:/i.test(url)) openComposer({ prefill: parseMailto(url) });
-    });
+    };
+    body.addEventListener("click", handleLink);
+    body.addEventListener("auxclick", handleLink);
   }
 
   async function loadImages() {
@@ -146,9 +150,13 @@ export function MessageReader() {
         images.map(async (image) => {
           const url = image.dataset.remoteSrc;
           if (!url) return;
-          image.src = await api.fetchRemoteImage(url);
-          image.removeAttribute("data-remote-src");
-          image.classList.remove("remote-image-blocked");
+          try {
+            image.src = await api.fetchRemoteImage(url);
+            image.removeAttribute("data-remote-src");
+            image.classList.remove("remote-image-blocked");
+          } catch {
+            // Keep placeholder on individual image error without blocking other images
+          }
         }),
       );
       if (message)
@@ -354,6 +362,21 @@ export function MessageReader() {
           <Forward />
           {preparingForward ? strings.reader.preparing : strings.reader.forward}
         </button>
+        <button
+          type="button"
+          onClick={() => {
+            if (frame.current?.contentWindow) {
+              frame.current.contentWindow.focus();
+              frame.current.contentWindow.print();
+            } else {
+              window.print();
+            }
+          }}
+          aria-label={strings.reader.print}
+          title={strings.reader.print}
+        >
+          <Printer />
+        </button>
         <span className="action-spacer" />
         <button
           type="button"
@@ -375,6 +398,11 @@ export function MessageReader() {
               ? strings.reader.removeStar
               : strings.reader.addStar
           }
+          title={
+            message.isStarred
+              ? strings.reader.removeStar
+              : strings.reader.addStar
+          }
         >
           <Star fill={message.isStarred ? "currentColor" : "none"} />
         </button>
@@ -382,6 +410,7 @@ export function MessageReader() {
           type="button"
           onClick={() => void move("archive")}
           aria-label={strings.reader.archive}
+          title={strings.reader.archive}
         >
           <Archive />
         </button>
@@ -389,6 +418,7 @@ export function MessageReader() {
           type="button"
           onClick={() => void move("junk")}
           aria-label={strings.reader.junk}
+          title={strings.reader.junk}
         >
           <ShieldAlert />
         </button>
@@ -396,6 +426,7 @@ export function MessageReader() {
           type="button"
           onClick={() => void move("trash")}
           aria-label={strings.reader.trash}
+          title={strings.reader.trash}
         >
           <Trash2 />
         </button>
@@ -435,6 +466,26 @@ export function MessageReader() {
           <span>
             {strings.reader.to} {message.to.join(", ")}
           </span>
+          {showDetails && message.cc && message.cc.length > 0 ? (
+            <span>
+              {strings.reader.cc} {message.cc.join(", ")}
+            </span>
+          ) : null}
+          {showDetails && message.replyTo ? (
+            <span>
+              {strings.reader.replyTo} {message.replyTo}
+            </span>
+          ) : null}
+          <button
+            type="button"
+            className="details-toggle"
+            onClick={() => setShowDetails((v) => !v)}
+            aria-expanded={showDetails}
+          >
+            {showDetails
+              ? strings.reader.hideDetails
+              : strings.reader.showDetails}
+          </button>
         </div>
         <time dateTime={message.receivedAt}>
           {new Intl.DateTimeFormat(undefined, {

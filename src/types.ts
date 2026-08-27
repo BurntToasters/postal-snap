@@ -95,6 +95,7 @@ export interface ComposeAttachment {
   contentType?: string;
   inline: boolean;
   contentId?: string;
+  size?: number;
 }
 
 export interface ComposeDraft {

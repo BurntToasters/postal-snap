@@ -19,4 +19,15 @@ describe("account setup", () => {
       expect(select).not.toHaveTextContent(/none|plain/i);
     }
   });
+
+  it("auto-completes @icloud.com domain when username is entered without domain", () => {
+    render(<SetupWizard onComplete={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /iCloud Mail/i }));
+    const emailInput = screen.getByLabelText(
+      /Email address/i,
+    ) as HTMLInputElement;
+    fireEvent.change(emailInput, { target: { value: "johnappleseed" } });
+    fireEvent.blur(emailInput);
+    expect(emailInput.value).toBe("johnappleseed@icloud.com");
+  });
 });

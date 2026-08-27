@@ -4,6 +4,7 @@ import {
   Database,
   DownloadCloud,
   Eye,
+  Keyboard,
   Mail,
   Monitor,
   ShieldCheck,
@@ -22,7 +23,13 @@ interface Props {
 }
 
 type SettingsTab =
-  "general" | "reading" | "notifications" | "storage" | "accounts" | "updates";
+  | "general"
+  | "reading"
+  | "notifications"
+  | "storage"
+  | "accounts"
+  | "shortcuts"
+  | "updates";
 
 const tabs: Array<{
   id: SettingsTab;
@@ -34,6 +41,7 @@ const tabs: Array<{
   { id: "notifications", label: strings.settings.notifications, icon: Bell },
   { id: "storage", label: strings.settings.storage, icon: Database },
   { id: "accounts", label: strings.settings.accounts, icon: UserRound },
+  { id: "shortcuts", label: strings.settings.shortcuts, icon: Keyboard },
   { id: "updates", label: strings.settings.updates, icon: DownloadCloud },
 ];
 
@@ -50,6 +58,8 @@ export function SettingsDialog({ onClose }: Props) {
     strings.settings.checkUpdates,
   );
   const [saving, setSaving] = useState(false);
+  const [testingAccountId, setTestingAccountId] = useState<string>();
+  const [testedHealthy, setTestedHealthy] = useState<string>();
   const dialogRef = useDialogFocus(onClose);
 
   useEffect(() => {
@@ -123,6 +133,20 @@ export function SettingsDialog({ onClose }: Props) {
       if (accounts.length === 1) onClose();
     } catch (cause) {
       setError(String(cause));
+    }
+  }
+
+  async function testAccount(id: string) {
+    if (testingAccountId) return;
+    setTestingAccountId(id);
+    setTestedHealthy(undefined);
+    try {
+      await api.syncAccount(id);
+      setTestedHealthy(id);
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setTestingAccountId(undefined);
     }
   }
 
@@ -299,6 +323,7 @@ export function SettingsDialog({ onClose }: Props) {
                       void update({ textScale: Number(event.target.value) })
                     }
                   >
+                    <option value={0.85}>{strings.settings.small}</option>
                     <option value={1}>{strings.settings.normal}</option>
                     <option value={1.15}>{strings.settings.large}</option>
                     <option value={1.3}>{strings.settings.extraLarge}</option>
@@ -350,6 +375,80 @@ export function SettingsDialog({ onClose }: Props) {
                     </small>
                   </span>
                 </div>
+                <SettingRow
+                  title={strings.settings.cacheMode}
+                  help={strings.settings.cachePolicyHelp}
+                >
+                  <select
+                    aria-label={strings.settings.cacheMode}
+                    value={settings.cachePolicy.mode}
+                    onChange={(event) =>
+                      void update({
+                        cachePolicy: {
+                          ...settings.cachePolicy,
+                          mode: event.target.value as "recent" | "full",
+                        },
+                      })
+                    }
+                  >
+                    <option value="recent">
+                      {strings.settings.cacheRecent}
+                    </option>
+                    <option value="full">{strings.settings.cacheFull}</option>
+                  </select>
+                </SettingRow>
+                <SettingRow
+                  title={strings.settings.cacheDays}
+                  help={strings.settings.cachePolicyHelp}
+                >
+                  <select
+                    aria-label={strings.settings.cacheDays}
+                    value={settings.cachePolicy.days}
+                    onChange={(event) =>
+                      void update({
+                        cachePolicy: {
+                          ...settings.cachePolicy,
+                          days: Number(event.target.value),
+                        },
+                      })
+                    }
+                  >
+                    <option value={30}>
+                      {strings.settings.cacheDaysOption(30)}
+                    </option>
+                    <option value={90}>
+                      {strings.settings.cacheDaysOption(90)}
+                    </option>
+                    <option value={180}>
+                      {strings.settings.cacheDaysOption(180)}
+                    </option>
+                    <option value={365}>
+                      {strings.settings.cacheDaysOption(365)}
+                    </option>
+                  </select>
+                </SettingRow>
+                <SettingRow
+                  title={strings.settings.cacheLimit}
+                  help={strings.settings.cachePolicyHelp}
+                >
+                  <select
+                    aria-label={strings.settings.cacheLimit}
+                    value={settings.cachePolicy.maxBytes}
+                    onChange={(event) =>
+                      void update({
+                        cachePolicy: {
+                          ...settings.cachePolicy,
+                          maxBytes: Number(event.target.value),
+                        },
+                      })
+                    }
+                  >
+                    <option value={524_288_000}>500 MB</option>
+                    <option value={1_073_741_824}>1 GB</option>
+                    <option value={2_147_483_648}>2 GB</option>
+                    <option value={5_368_709_120}>5 GB</option>
+                  </select>
+                </SettingRow>
                 <button
                   className="secondary-button"
                   type="button"
@@ -371,7 +470,22 @@ export function SettingsDialog({ onClose }: Props) {
                       <span>
                         <strong>{account.displayName || account.email}</strong>
                         <small>{account.email}</small>
+                        {testedHealthy === account.id ? (
+                          <small style={{ color: "var(--success)" }}>
+                            ✓ {strings.settings.connectionHealthy}
+                          </small>
+                        ) : null}
                       </span>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() => void testAccount(account.id)}
+                        disabled={testingAccountId === account.id}
+                      >
+                        {testingAccountId === account.id
+                          ? strings.settings.testingConnection
+                          : strings.settings.testConnection}
+                      </button>
                       <button
                         type="button"
                         className="danger-button"
@@ -386,6 +500,39 @@ export function SettingsDialog({ onClose }: Props) {
                       </button>
                     </div>
                   ))}
+                </div>
+              </SettingsPanel>
+            ) : null}
+            {tab === "shortcuts" ? (
+              <SettingsPanel
+                id="shortcuts"
+                title={strings.settings.shortcutsTitle}
+              >
+                <div className="shortcuts-list">
+                  <div className="shortcut-row">
+                    <span>{strings.composer.newMessage}</span>
+                    <kbd>⌘ N</kbd>
+                  </div>
+                  <div className="shortcut-row">
+                    <span>{strings.mail.getMail}</span>
+                    <kbd>⌘ R</kbd>
+                  </div>
+                  <div className="shortcut-row">
+                    <span>{strings.mail.search}</span>
+                    <kbd>⌘ F / /</kbd>
+                  </div>
+                  <div className="shortcut-row">
+                    <span>{strings.composer.send}</span>
+                    <kbd>⌘ ↵</kbd>
+                  </div>
+                  <div className="shortcut-row">
+                    <span>{strings.reader.trash}</span>
+                    <kbd>⌫ / Delete</kbd>
+                  </div>
+                  <div className="shortcut-row">
+                    <span>{strings.settings.textSize}</span>
+                    <kbd>⌘ + / ⌘ -</kbd>
+                  </div>
                 </div>
               </SettingsPanel>
             ) : null}

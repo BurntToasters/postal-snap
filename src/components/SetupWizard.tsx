@@ -51,16 +51,24 @@ export function SetupWizard({ onComplete }: Props) {
     text: string;
   }>();
 
+  const normalizedEmail = useMemo(() => {
+    const trimmed = email.trim();
+    if (provider === "icloud" && trimmed && !trimmed.includes("@")) {
+      return `${trimmed}@icloud.com`;
+    }
+    return trimmed;
+  }, [email, provider]);
+
   const request = useMemo<AccountSetupRequest>(
     () => ({
       provider: provider ?? "icloud",
       displayName: displayName.trim(),
-      email: email.trim(),
+      email: normalizedEmail,
       password,
       imap: provider === "manual" ? imap : undefined,
       smtp: provider === "manual" ? smtp : undefined,
     }),
-    [displayName, email, imap, password, provider, smtp],
+    [displayName, imap, normalizedEmail, password, provider, smtp],
   );
 
   function updateServer(kind: "imap" | "smtp", patch: Partial<ServerConfig>) {
@@ -80,11 +88,11 @@ export function SetupWizard({ onComplete }: Props) {
     try {
       await api.addAccount(request);
       setStatus({ kind: "success", text: strings.setup.connected });
+      setPassword("");
       await onComplete();
     } catch (cause) {
       setStatus({ kind: "error", text: String(cause) });
     } finally {
-      setPassword("");
       setTesting(false);
     }
   }
@@ -222,10 +230,20 @@ export function SetupWizard({ onComplete }: Props) {
             {strings.setup.email}
             <input
               required
-              type="email"
+              type="text"
+              inputMode="email"
               autoComplete="email"
               value={email}
               onChange={(event) => setEmail(event.target.value)}
+              onBlur={() => {
+                if (
+                  provider === "icloud" &&
+                  email.trim() &&
+                  !email.includes("@")
+                ) {
+                  setEmail(`${email.trim()}@icloud.com`);
+                }
+              }}
               placeholder={
                 provider === "icloud"
                   ? strings.setup.icloudEmailPlaceholder

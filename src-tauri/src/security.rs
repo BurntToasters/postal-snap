@@ -56,7 +56,8 @@ async fn fetch_public_image_inner(raw_url: &str) -> Result<String, String> {
             .split(';')
             .next()
             .unwrap_or("application/octet-stream")
-            .to_string();
+            .trim()
+            .to_ascii_lowercase();
         if !matches!(
             content_type.as_str(),
             "image/png" | "image/jpeg" | "image/gif" | "image/webp"

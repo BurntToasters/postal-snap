@@ -176,6 +176,8 @@ pub struct ComposeAttachment {
     pub content_type: Option<String>,
     pub inline: bool,
     pub content_id: Option<String>,
+    #[serde(default)]
+    pub size: Option<usize>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

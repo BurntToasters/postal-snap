@@ -525,6 +525,7 @@ async fn import_remote_drafts_locked(
                 content_type: Some(attachment.content_type),
                 inline: attachment.inline,
                 content_id: attachment.content_id,
+                size: Some(attachment.bytes.len()),
             });
         }
         if write_failed {
@@ -582,9 +583,12 @@ async fn import_remote_drafts_locked(
 
 fn parse_postal_draft_message_id(value: &str) -> Option<(String, u32)> {
     let value = value.trim().trim_start_matches('<').trim_end_matches('>');
-    let local = value
-        .strip_suffix("@run.rosie.snap")?
-        .strip_prefix("draft-")?;
+    let at_index = value.rfind('@')?;
+    let (local, domain) = value.split_at(at_index);
+    if !domain.eq_ignore_ascii_case("@run.rosie.snap") {
+        return None;
+    }
+    let local = local.strip_prefix("draft-")?;
     let (id, revision) = local.rsplit_once('-')?;
     uuid::Uuid::parse_str(id).ok()?;
     Some((id.to_string(), revision.parse().ok()?))
@@ -1327,6 +1331,7 @@ pub async fn prepare_forward_attachments(
                 content_type: Some(attachment.content_type),
                 inline: false,
                 content_id: None,
+                size: Some(bytes.len()),
             });
         }
         Ok(prepared)
@@ -1415,6 +1420,7 @@ pub async fn choose_attachments(
                 ),
                 inline,
                 content_id: None,
+                size: Some(bytes.len()),
             });
         }
         Ok(attachments)

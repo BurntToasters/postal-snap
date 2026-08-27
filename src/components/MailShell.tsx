@@ -187,6 +187,59 @@ export function MailShell({ onOpenSettings }: Props) {
     }
   }
 
+  const chooseMessage = useCallback(
+    async (summary: MessageSummary) => {
+      const accountId = activeAccountId;
+      const mailboxId = activeMailboxId;
+      if (!accountId || !mailboxId) return;
+      const request = ++detailRequest.current;
+      setLoadingMessageId(summary.id);
+      try {
+        const detail = await api.getMessage(accountId, summary.id);
+        const current = useAppStore.getState();
+        if (
+          request !== detailRequest.current ||
+          current.activeAccountId !== accountId ||
+          current.activeMailboxId !== mailboxId
+        )
+          return;
+        selectMessage(detail);
+        if (!summary.isRead) {
+          await api.setMessageFlags(accountId, summary.id, true, undefined);
+          const latest = useAppStore.getState();
+          if (
+            latest.activeAccountId === accountId &&
+            latest.activeMailboxId === mailboxId
+          ) {
+            setMessages(
+              latest.messages.map((message) =>
+                message.id === summary.id
+                  ? { ...message, isRead: true }
+                  : message,
+              ),
+              latest.messageCursor,
+              latest.hasMoreMessages,
+            );
+            selectMessage({ ...detail, isRead: true });
+            await loadAccountData();
+          }
+        }
+      } catch (cause) {
+        if (request === detailRequest.current) setError(String(cause));
+      } finally {
+        if (request === detailRequest.current) setLoadingMessageId(undefined);
+      }
+    },
+    [
+      activeAccountId,
+      activeMailboxId,
+      loadAccountData,
+      selectMessage,
+      setError,
+      setMessages,
+    ],
+  );
+
   useEffect(() => {
     void loadAccountData();
   }, [loadAccountData]);
@@ -245,14 +298,94 @@ export function MailShell({ onOpenSettings }: Props) {
     };
     const keyboard = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if (
-        event.key === "/" &&
-        !event.metaKey &&
-        !event.ctrlKey &&
-        !target?.matches("input,textarea,select,[contenteditable='true']")
+      const isEditing = target?.matches(
+        "input,textarea,select,[contenteditable='true']",
+      );
+      if (isEditing) return;
+
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n") {
+        event.preventDefault();
+        openComposer();
+      } else if (
+        ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "r") ||
+        event.key === "F5"
+      ) {
+        event.preventDefault();
+        void refresh();
+      } else if (
+        (event.key === "/" && !event.metaKey && !event.ctrlKey) ||
+        ((event.metaKey || event.ctrlKey) &&
+          (event.key.toLowerCase() === "f" || event.key.toLowerCase() === "k"))
       ) {
         event.preventDefault();
         searchInput.current?.focus();
+        searchInput.current?.select();
+      } else if (event.key === "Delete" || event.key === "Backspace") {
+        const state = useAppStore.getState();
+        const currentMsg = state.selectedMessage;
+        if (currentMsg) {
+          const trashBox = state.mailboxes.find((m) => m.role === "trash");
+          if (trashBox && trashBox.id !== currentMsg.mailboxId) {
+            event.preventDefault();
+            const prevMailboxes = state.mailboxes;
+            state.setMessages(
+              state.messages.filter((summary) => summary.id !== currentMsg.id),
+              state.messageCursor,
+              state.hasMoreMessages,
+            );
+            state.selectMessage(undefined);
+            void api
+              .moveMessageToMailbox(
+                currentMsg.accountId,
+                currentMsg.id,
+                trashBox.id,
+              )
+              .then(() => void loadAccountData())
+              .catch((cause) => {
+                state.setMailboxes(prevMailboxes);
+                state.setError(String(cause));
+              });
+          }
+        }
+      } else if (event.key === "ArrowDown" || event.key === "j") {
+        const state = useAppStore.getState();
+        if (state.messages.length > 0) {
+          const currentIndex = state.selectedMessage
+            ? state.messages.findIndex(
+                (m) => m.id === state.selectedMessage?.id,
+              )
+            : -1;
+          const nextIndex = Math.min(
+            state.messages.length - 1,
+            currentIndex + 1,
+          );
+          if (
+            nextIndex >= 0 &&
+            nextIndex !== currentIndex &&
+            state.messages[nextIndex]
+          ) {
+            event.preventDefault();
+            void chooseMessage(state.messages[nextIndex]);
+          }
+        }
+      } else if (event.key === "ArrowUp" || event.key === "k") {
+        const state = useAppStore.getState();
+        if (state.messages.length > 0) {
+          const currentIndex = state.selectedMessage
+            ? state.messages.findIndex(
+                (m) => m.id === state.selectedMessage?.id,
+              )
+            : state.messages.length;
+          const prevIndex = Math.max(0, currentIndex - 1);
+          if (
+            prevIndex >= 0 &&
+            prevIndex !== currentIndex &&
+            state.messages[prevIndex]
+          ) {
+            event.preventDefault();
+            void chooseMessage(state.messages[prevIndex]);
+          }
+        }
       }
     };
     window.addEventListener("postal:menu-action", menuAction);
@@ -261,7 +394,16 @@ export function MailShell({ onOpenSettings }: Props) {
       window.removeEventListener("postal:menu-action", menuAction);
       window.removeEventListener("keydown", keyboard);
     };
-  }, [onOpenSettings, openComposer, refresh, setError, setSettings, settings]);
+  }, [
+    chooseMessage,
+    loadAccountData,
+    onOpenSettings,
+    openComposer,
+    refresh,
+    setError,
+    setSettings,
+    settings,
+  ]);
 
   useEffect(() => {
     if (!activeAccountId) return;
@@ -351,49 +493,6 @@ export function MailShell({ onOpenSettings }: Props) {
       current.activeMailboxId === mailboxId &&
       !current.activeLocalView
     );
-  }
-
-  async function chooseMessage(summary: MessageSummary) {
-    const accountId = activeAccountId;
-    const mailboxId = activeMailboxId;
-    if (!accountId || !mailboxId) return;
-    const request = ++detailRequest.current;
-    setLoadingMessageId(summary.id);
-    try {
-      const detail = await api.getMessage(accountId, summary.id);
-      const current = useAppStore.getState();
-      if (
-        request !== detailRequest.current ||
-        current.activeAccountId !== accountId ||
-        current.activeMailboxId !== mailboxId
-      )
-        return;
-      selectMessage(detail);
-      if (!summary.isRead) {
-        await api.setMessageFlags(accountId, summary.id, true, undefined);
-        const latest = useAppStore.getState();
-        if (
-          latest.activeAccountId === accountId &&
-          latest.activeMailboxId === mailboxId
-        ) {
-          setMessages(
-            latest.messages.map((message) =>
-              message.id === summary.id
-                ? { ...message, isRead: true }
-                : message,
-            ),
-            latest.messageCursor,
-            latest.hasMoreMessages,
-          );
-          selectMessage({ ...detail, isRead: true });
-          await loadAccountData();
-        }
-      }
-    } catch (cause) {
-      if (request === detailRequest.current) setError(String(cause));
-    } finally {
-      if (request === detailRequest.current) setLoadingMessageId(undefined);
-    }
   }
 
   async function openDraft(id: string) {
