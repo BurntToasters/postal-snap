@@ -75,6 +75,7 @@ export const strings = {
     dismissSentCopy:
       "Stop trying to save a Sent copy? The message was already sent.",
     dismissWarning: "Dismiss warning",
+    yesterday: "Yesterday",
     itemCount: (count: number) => (count === 1 ? "1 item" : `${count} items`),
     partialSearch: (detail: string) =>
       `Server search unavailable. Showing cached results. ${detail}`,
@@ -127,11 +128,13 @@ export const strings = {
       "No usable Drafts mailbox is available. Postal Snap will keep trying.",
     syncingTitle: "Saving to mail server",
     syncingDetail: "Local copy is safe while server sync finishes.",
+    from: "From",
     to: "To",
     cc: "Cc",
     bcc: "Bcc",
     ccBcc: "Cc/Bcc",
     subject: "Subject",
+    saveDraft: "Save draft",
     addressPlaceholder: "name@example.com",
     formatting: "Formatting",
     undo: "Undo",

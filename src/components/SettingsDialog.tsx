@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { api } from "../api";
 import { strings } from "../i18n";
+import { shortcutMod, shortcutShiftMod } from "../format";
 import { applySettings } from "../settings";
 import { useAppStore } from "../store";
 import type { AppSettings, CacheUsage, DistributionChannel } from "../types";
@@ -517,27 +518,51 @@ export function SettingsDialog({ onClose }: Props) {
                 <div className="shortcuts-list">
                   <div className="shortcut-row">
                     <span>{strings.composer.newMessage}</span>
-                    <kbd>⌘ N</kbd>
+                    <kbd>{`${shortcutMod()} N`}</kbd>
                   </div>
                   <div className="shortcut-row">
                     <span>{strings.mail.getMail}</span>
-                    <kbd>⌘ R</kbd>
+                    <kbd>{`${shortcutShiftMod()} M`}</kbd>
                   </div>
                   <div className="shortcut-row">
-                    <span>{strings.mail.search}</span>
-                    <kbd>⌘ F / /</kbd>
+                    <span>{strings.reader.reply}</span>
+                    <kbd>{`${shortcutMod()} R`}</kbd>
                   </div>
                   <div className="shortcut-row">
-                    <span>{strings.composer.send}</span>
-                    <kbd>⌘ ↵</kbd>
+                    <span>{strings.reader.replyAll}</span>
+                    <kbd>{`${shortcutShiftMod()} R`}</kbd>
+                  </div>
+                  <div className="shortcut-row">
+                    <span>{strings.reader.forward}</span>
+                    <kbd>{`${shortcutShiftMod()} F`}</kbd>
+                  </div>
+                  <div className="shortcut-row">
+                    <span>{strings.reader.archive}</span>
+                    <kbd>{`${shortcutMod()} E`}</kbd>
                   </div>
                   <div className="shortcut-row">
                     <span>{strings.reader.trash}</span>
-                    <kbd>⌫ / Delete</kbd>
+                    <kbd>{`${shortcutMod()} ⌫`}</kbd>
+                  </div>
+                  <div className="shortcut-row">
+                    <span>{strings.mail.search}</span>
+                    <kbd>{`${shortcutMod()} F / /`}</kbd>
+                  </div>
+                  <div className="shortcut-row">
+                    <span>{strings.composer.send}</span>
+                    <kbd>{`${shortcutMod()} ↵`}</kbd>
+                  </div>
+                  <div className="shortcut-row">
+                    <span>{strings.composer.saveDraft}</span>
+                    <kbd>{`${shortcutMod()} S`}</kbd>
                   </div>
                   <div className="shortcut-row">
                     <span>{strings.settings.textSize}</span>
-                    <kbd>⌘ + / ⌘ -</kbd>
+                    <kbd>{`${shortcutMod()} + / ${shortcutMod()} -`}</kbd>
+                  </div>
+                  <div className="shortcut-row">
+                    <span>{strings.mail.settings}</span>
+                    <kbd>{`${shortcutMod()} ,`}</kbd>
                   </div>
                 </div>
               </SettingsPanel>

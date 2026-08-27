@@ -992,12 +992,37 @@ legend {
 }
 
 :root[data-density="compact"] .message-row {
-  min-height: 68px;
-  padding-block: 7px;
+  min-height: 52px;
+  padding-block: 6px;
+  grid-template-areas: "dot sender date" "dot subject subject";
 }
 
 :root[data-density="compact"] .message-preview {
-  font-size: 0.8rem;
+  display: none;
+}
+
+:root[data-density="compact"] .pane-heading {
+  min-height: 48px;
+  padding-block: 6px;
+}
+
+:root[data-density="compact"] .pane-heading h1 {
+  font-size: 1.08rem;
+}
+
+:root[data-density="compact"] .reader-actions {
+  min-height: 48px;
+  padding-block: 4px;
+}
+
+:root[data-density="compact"] .message-header {
+  padding-block: 10px 8px;
+}
+
+:root[data-density="compact"] .local-mail-row,
+:root[data-density="compact"] .attention-row {
+  min-height: 56px;
+  padding-block: 8px;
 }
 
 .local-mail-row,
@@ -1407,6 +1432,7 @@ legend {
 }
 
 .address-fields label {
+  position: relative;
   display: grid;
   min-height: 44px;
   grid-template-columns: 70px 1fr;
@@ -1419,17 +1445,25 @@ legend {
 }
 
 .address-fields input {
-  padding-right: 64px;
   border: 0;
   border-radius: 0;
   background: transparent;
 }
 
+.address-fields .from-field input {
+  color: var(--text-muted);
+}
+
+.address-fields .to-field input {
+  padding-right: 64px;
+}
+
 .cc-toggle {
   position: absolute;
   z-index: 2;
-  top: 5px;
-  right: 20px;
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%);
   font-size: 0.82rem;
 }
 
