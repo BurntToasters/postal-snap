@@ -469,7 +469,13 @@ export function SettingsDialog({ onClose }: Props) {
                       <Mail />
                       <span>
                         <strong>{account.displayName || account.email}</strong>
-                        <small>{account.email}</small>
+                        <small>
+                          {account.provider === "icloud"
+                            ? strings.setup.icloud
+                            : strings.setup.other}
+                          {" · "}
+                          {account.email}
+                        </small>
                         {testedHealthy === account.id ? (
                           <small style={{ color: "var(--success)" }}>
                             ✓ {strings.settings.connectionHealthy}
