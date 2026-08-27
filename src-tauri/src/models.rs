@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum ProviderKind {
     Icloud,
@@ -443,7 +443,7 @@ pub fn validated_setup(
     Ok((imap, smtp))
 }
 
-pub fn normalize_setup_password(provider: ProviderKind, password: &str) -> String {
+pub fn normalize_setup_password(provider: &ProviderKind, password: &str) -> String {
     match provider {
         ProviderKind::Icloud => password.chars().filter(|ch| !ch.is_whitespace()).collect(),
         ProviderKind::Manual => password.trim().to_string(),
@@ -454,7 +454,7 @@ pub fn take_validated_setup(
     request: &mut AccountSetupRequest,
 ) -> Result<(ServerConfig, ServerConfig, String), String> {
     let (imap, smtp) = validated_setup(request)?;
-    let password = normalize_setup_password(request.provider, &request.password);
+    let password = normalize_setup_password(&request.provider, &request.password);
     request.password.clear();
     if password.is_empty() || password.len() > 4096 {
         return Err("Enter the app-specific or email password.".into());
