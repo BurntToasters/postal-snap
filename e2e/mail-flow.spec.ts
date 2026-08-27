@@ -403,6 +403,9 @@ test("reads, replies, and sends through typed IPC", async ({ page }) => {
   await expect(page.getByRole("textbox", { name: "To" })).toHaveValue(
     "jane@example.com",
   );
+  await expect(page.getByRole("textbox", { name: "From" })).toHaveValue(
+    /Sam <sam@icloud.com>/,
+  );
   await page.getByLabel("Message body").pressSequentially("Yes, see you then.");
   await page.getByRole("button", { name: "Send", exact: true }).click();
 
@@ -630,17 +633,7 @@ test("replies from the Mail shortcut and shows a From address", async ({
   await expect(
     page.getByRole("heading", { name: "Weekend plans" }),
   ).toBeVisible();
-  await page.evaluate(() => {
-    window.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "r",
-        ctrlKey: true,
-        metaKey: true,
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
-  });
+  await page.keyboard.press("Meta+r");
   await expect(page.getByRole("textbox", { name: "To" })).toHaveValue(
     "jane@example.com",
   );
