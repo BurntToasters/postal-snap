@@ -1,5 +1,5 @@
 import { strings } from "./i18n";
-import type { IpcErrorCode, IpcErrorPayload } from "./types";
+import type { IpcErrorCode, IpcErrorPayload, ProviderKind } from "./types";
 
 const codes = new Set<IpcErrorCode>([
   "accessDenied",
@@ -36,6 +36,30 @@ export function normalizeIpcError(cause: unknown): PostalError {
     message: message || strings.errors.operationFailed,
     retryable: true,
   });
+}
+
+export function describeSetupError(
+  cause: unknown,
+  provider: ProviderKind,
+): { text: string; hint?: string; showAppPasswordLink?: boolean } {
+  const error = cause instanceof PostalError ? cause : normalizeIpcError(cause);
+  if (error.code === "authenticationFailed") {
+    return {
+      text: error.message,
+      hint:
+        provider === "icloud"
+          ? strings.setup.authHintIcloud
+          : strings.setup.authHintManual,
+      showAppPasswordLink: provider === "icloud",
+    };
+  }
+  if (error.code === "connectionFailed") {
+    return {
+      text: error.message,
+      hint: strings.setup.connectionHint,
+    };
+  }
+  return { text: error.message };
 }
 
 function isPayload(value: unknown): value is IpcErrorPayload {

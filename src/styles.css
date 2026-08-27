@@ -434,6 +434,53 @@ select {
   min-height: 44px;
 }
 
+.setup-field-hint {
+  margin: -8px 0 0;
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.server-summary {
+  display: grid;
+  gap: 10px;
+  padding: 13px 15px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-muted);
+}
+
+.server-summary > p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.86rem;
+}
+
+.server-summary dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.server-summary div {
+  display: grid;
+  gap: 2px;
+}
+
+.server-summary dt {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.server-summary dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
 fieldset {
   min-width: 0;
   margin: 0;
@@ -470,6 +517,7 @@ legend {
 
 .connection-status.error {
   color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, var(--surface));
 }
 
 .connection-status.success {
@@ -478,6 +526,23 @@ legend {
 
 .connection-status svg {
   width: 19px;
+}
+
+.connection-status span {
+  display: grid;
+  gap: 4px;
+}
+
+.connection-status small {
+  color: inherit;
+  font-size: 0.86rem;
+  line-height: 1.45;
+  opacity: 0.92;
+}
+
+.connection-status .text-button {
+  width: fit-content;
+  min-height: 40px;
 }
 
 /* Main mail window */
@@ -567,22 +632,23 @@ legend {
   grid-area: toolbar;
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 7px 12px;
+  gap: 8px;
+  padding: 6px 12px;
   border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  background: var(--surface-muted);
 }
 
 .app-brand {
   display: flex;
-  min-width: 164px;
+  min-width: 148px;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
 }
 
 .app-brand strong {
   white-space: nowrap;
-  letter-spacing: -0.015em;
+  font-size: 0.95rem;
+  letter-spacing: -0.02em;
 }
 
 .app-brand > svg,
@@ -599,13 +665,13 @@ legend {
 .search-box {
   display: flex;
   min-width: 160px;
-  max-width: 620px;
+  max-width: 560px;
   flex: 1;
   align-items: center;
   margin-inline: auto;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface-muted);
+  border-radius: 9px;
+  background: var(--surface);
 }
 
 .search-box > svg {
@@ -646,7 +712,7 @@ legend {
   grid-area: folders;
   display: flex;
   flex-direction: column;
-  padding: 12px 9px;
+  padding: 10px 8px;
   overflow: hidden;
   border-right: 1px solid var(--border);
   background: var(--surface-muted);
@@ -727,7 +793,7 @@ legend {
 }
 
 .folder.active {
-  color: color-mix(in srgb, var(--accent) 90%, var(--text));
+  color: color-mix(in srgb, var(--accent) 88%, var(--text));
   background: var(--accent-soft);
   font-weight: 700;
 }
@@ -855,14 +921,14 @@ legend {
 }
 
 .message-row.selected {
-  background: var(--accent-soft);
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
   box-shadow: inset 3px 0 var(--accent);
 }
 
 .unread-dot {
   grid-area: dot;
-  width: 7px;
-  height: 7px;
+  width: 8px;
+  height: 8px;
   align-self: start;
   margin-top: 7px;
   border-radius: 50%;
@@ -889,6 +955,12 @@ legend {
   grid-area: date;
   color: var(--text-muted);
   font-size: 0.76rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.message-row.unread .message-date {
+  color: var(--accent);
+  font-weight: 650;
 }
 
 .message-subject {
@@ -1827,7 +1899,7 @@ legend {
   }
 
   .app-brand {
-    min-width: 142px;
+    min-width: 128px;
   }
 
   .folder-pane {

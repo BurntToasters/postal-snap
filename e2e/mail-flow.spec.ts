@@ -102,6 +102,14 @@ async function installMockIpc(page: Page) {
               state.setupRequest = args.request;
               return undefined;
             case "add_account":
+              if (location.search.includes("setupFail")) {
+                throw {
+                  code: "authenticationFailed",
+                  message:
+                    "Sign-in failed. Check the email address and password.",
+                  retryable: true,
+                };
+              }
               state.added = true;
               state.setupRequest = args.request;
               return account;
@@ -321,6 +329,9 @@ test.beforeEach(async ({ page }) => installMockIpc(page));
 test("completes guided iCloud first run", async ({ page }) => {
   await page.goto("/?firstRun=1");
   await page.getByRole("button", { name: /iCloud Mail/i }).click();
+  await expect(page.locator(".server-summary")).toContainText(
+    "imap.mail.me.com",
+  );
   await page.getByLabel("Your name").fill("Sam");
   await page.getByLabel("Email address").fill("sam@icloud.com");
   await page.getByLabel("App-specific password").fill("app-password");
@@ -330,6 +341,56 @@ test("completes guided iCloud first run", async ({ page }) => {
   await expect(
     page.getByRole("navigation", { name: "Mailboxes" }),
   ).toContainText("Inbox");
+});
+
+test("completes secure manual first run", async ({ page }) => {
+  await page.goto("/?firstRun=1");
+  await page.getByRole("button", { name: /Other email/i }).click();
+  await expect(page.getByText("imap.mail.me.com")).toHaveCount(0);
+  await page.getByLabel("Your name").fill("Sam");
+  await page.getByLabel("Email address").fill("sam@example.com");
+  await page.getByLabel("Email password").fill("secret");
+  const incoming = page.getByRole("group", { name: "Incoming IMAP" });
+  const outgoing = page.getByRole("group", { name: "Outgoing SMTP" });
+  await incoming.getByLabel("Server").fill("imap.example.com");
+  await outgoing.getByLabel("Server").fill("smtp.example.com");
+  await page.getByRole("button", { name: "Connect securely" }).click();
+
+  await expect(page.getByRole("button", { name: "Write" })).toBeVisible();
+  const setup = await page.evaluate(
+    () =>
+      (
+        window as typeof window & {
+          __POSTAL_SNAP_TEST__: {
+            setupRequest?: {
+              provider: string;
+              imap?: { host: string };
+              smtp?: { host: string };
+            };
+          };
+        }
+      ).__POSTAL_SNAP_TEST__.setupRequest,
+  );
+  expect(setup).toMatchObject({
+    provider: "manual",
+    imap: { host: "imap.example.com" },
+    smtp: { host: "smtp.example.com" },
+  });
+});
+
+test("explains how to recover from a failed iCloud sign-in", async ({
+  page,
+}) => {
+  await page.goto("/?firstRun=1&setupFail=1");
+  await page.getByRole("button", { name: /iCloud Mail/i }).click();
+  await page.getByLabel("Your name").fill("Sam");
+  await page.getByLabel("Email address").fill("sam@icloud.com");
+  await page.getByLabel("App-specific password").fill("wrong-password");
+  await page.getByRole("button", { name: "Connect securely" }).click();
+  await expect(
+    page.getByText(/regular Apple Account password will not work/i),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Write" })).toHaveCount(0);
 });
 
 test("reads, replies, and sends through typed IPC", async ({ page }) => {

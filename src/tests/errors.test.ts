@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeIpcError, PostalError } from "../errors";
+import { describeSetupError, normalizeIpcError, PostalError } from "../errors";
 
 describe("structured IPC errors", () => {
   it("maps backend codes through the centralized safe catalog", () => {
@@ -19,5 +19,20 @@ describe("structured IPC errors", () => {
     const error = normalizeIpcError({ secret: "do-not-display" });
     expect(error.code).toBe("operationFailed");
     expect(error.message).not.toContain("do-not-display");
+  });
+
+  it("adds recoverable setup hints without leaking raw failures", () => {
+    const auth = new PostalError({
+      code: "authenticationFailed",
+      message: "ignored",
+      retryable: true,
+    });
+    expect(describeSetupError(auth, "icloud").hint).toMatch(/app-specific/i);
+    expect(describeSetupError(auth, "icloud").showAppPasswordLink).toBe(true);
+    expect(describeSetupError(auth, "manual").hint).toMatch(/username/i);
+    expect(describeSetupError(auth, "manual").showAppPasswordLink).toBeFalsy();
+    expect(
+      describeSetupError({ secret: "vault-token" }, "manual").text,
+    ).not.toContain("vault-token");
   });
 });

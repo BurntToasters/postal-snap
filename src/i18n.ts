@@ -36,7 +36,7 @@ export const strings = {
     showMailboxes: "Show mailboxes",
     hideMailboxes: "Hide mailboxes",
     closeMailboxes: "Close mailboxes",
-    postalSnapFolders: "Postal Snap",
+    localFolders: "On This Computer",
     checkingMail: "Checking mail…",
     mailUpToDate: "Mail is up to date",
     clearSearch: "Clear search",
@@ -187,17 +187,26 @@ export const strings = {
     chooseAccount: "Choose account",
     signIn: "Sign in securely",
     icloud: "iCloud Mail",
-    icloudRecommended: "Recommended guided setup",
+    icloudRecommended: "Apple ID email and app-specific password",
     other: "Other email account",
-    otherDetail: "Secure IMAP and SMTP",
+    otherDetail: "Enter IMAP and SMTP settings yourself",
     privacy: "No tracking. No Postal Snap cloud.",
     stepTwo: "Step 2 of 2",
     connectIcloud: "Connect iCloud Mail",
     connectOther: "Connect another account",
-    icloudIntro: "Use your iCloud address and an app-specific password.",
-    manualIntro: "Enter secure incoming and outgoing mail settings.",
-    normalPasswordWarning: "Do not use your normal Apple Account password.",
+    icloudIntro:
+      "Sign in with your iCloud Mail address and an app-specific password.",
+    manualIntro:
+      "Enter the incoming IMAP and outgoing SMTP settings from your email provider.",
+    normalPasswordWarning:
+      "Do not use your normal Apple Account password. iCloud Mail needs an app-specific password.",
     createAppPassword: "Create app-specific password",
+    icloudEmailHint:
+      "Use the iCloud Mail address (@icloud.com, @me.com, or @mac.com), even if your Apple ID is different.",
+    appPasswordHint:
+      "Apple shows this as 16 characters, often in four groups. Spaces are removed automatically.",
+    appPasswordPlaceholder: "xxxx-xxxx-xxxx-xxxx",
+    icloudServers: "Postal Snap uses Apple’s iCloud mail servers.",
     yourName: "Your name",
     namePlaceholder: "Jane Smith",
     email: "Email address",
@@ -215,11 +224,18 @@ export const strings = {
     security: "Security",
     tls: "TLS",
     username: "Username",
+    usernamePlaceholder: "Usually your full email address",
     startTls: "STARTTLS required",
     connecting: "Connecting…",
     connect: "Connect securely",
     testing: "Testing secure incoming and outgoing connections…",
     connected: "Connected securely. Your mail is ready.",
+    authHintIcloud:
+      "Create a new app-specific password at appleid.apple.com, then paste it here. Your regular Apple Account password will not work.",
+    authHintManual:
+      "Check the username, password, server names, ports, and TLS settings. Usernames are often the full email address.",
+    connectionHint:
+      "Check the server name, port, and that this computer can reach the internet.",
   },
   settings: {
     title: "Settings",
@@ -300,7 +316,7 @@ export const strings = {
     notFound: "That item is no longer available. Refresh mail and try again.",
     limitExceeded: "That item exceeds Postal Snap’s safety limit.",
     authenticationFailed:
-      "Sign-in failed. Check the email address and app-specific password.",
+      "Sign-in failed. Check the email address and password.",
     connectionFailed: "Could not reach the mail server. Check your connection.",
     localStorageFailed:
       "Postal Snap could not save this change on your computer.",
