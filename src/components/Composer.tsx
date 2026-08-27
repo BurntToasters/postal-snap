@@ -125,10 +125,15 @@ interface Props {
 
 export function Composer({ accountId }: Props) {
   const seed = useAppStore((state) => state.composeSeed);
-  const accountEmail = useAppStore(
-    (state) =>
-      state.accounts.find((account) => account.id === accountId)?.email ?? "",
+  const account = useAppStore((state) =>
+    state.accounts.find((item) => item.id === accountId),
   );
+  const accountEmail = account?.email ?? "";
+  const fromValue = account
+    ? account.displayName
+      ? `${account.displayName} <${account.email}>`
+      : account.email
+    : "";
   const close = useAppStore((state) => state.closeComposer);
   const setError = useAppStore((state) => state.setError);
   const [to, setTo] = useState(seedRecipients(seed, "to", accountEmail));
@@ -301,6 +306,33 @@ export function Composer({ accountId }: Props) {
     return () => window.clearInterval(saveTimer);
   }, [accountId, buildDraft, editor, saveState, sending, setError]);
 
+  const saveDraft = useCallback(
+    async (showStatus = true) => {
+      if (sending || isDiscarding.current) return;
+      const draft = buildDraft();
+      if (!hasDraftContent(draft, editor?.getText() ?? "")) {
+        if (showStatus) close();
+        return;
+      }
+      setSaveState("saving");
+      try {
+        const outcome = await api.saveDraft(draft);
+        if (isDiscarding.current) return;
+        setDraftId(outcome.id);
+        setSaveState("saved");
+        setDraftSyncState(outcome.syncState);
+        setDraftSyncDetail(undefined);
+        announceLocalMailChanged(accountId);
+        if (showStatus) close();
+      } catch (cause) {
+        if (isDiscarding.current) return;
+        setSaveState("unsaved");
+        setError(String(cause));
+      }
+    },
+    [accountId, buildDraft, close, editor, sending, setError],
+  );
+
   function requestClose() {
     if (sending || isDiscarding.current) return;
     const draft = buildDraft();
@@ -311,30 +343,6 @@ export function Composer({ accountId }: Props) {
     )
       return;
     void saveDraft(true);
-  }
-
-  async function saveDraft(showStatus = true) {
-    if (sending || isDiscarding.current) return;
-    const draft = buildDraft();
-    if (!hasDraftContent(draft, editor?.getText() ?? "")) {
-      close();
-      return;
-    }
-    setSaveState("saving");
-    try {
-      const outcome = await api.saveDraft(draft);
-      if (isDiscarding.current) return;
-      setDraftId(outcome.id);
-      setSaveState("saved");
-      setDraftSyncState(outcome.syncState);
-      setDraftSyncDetail(undefined);
-      announceLocalMailChanged(accountId);
-      if (showStatus) close();
-    } catch (cause) {
-      if (isDiscarding.current) return;
-      setSaveState("unsaved");
-      setError(String(cause));
-    }
   }
 
   async function discardDraft() {
@@ -387,14 +395,18 @@ export function Composer({ accountId }: Props) {
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+      if (!(event.metaKey || event.ctrlKey)) return;
+      if (event.key === "Enter") {
         event.preventDefault();
         void sendMessage();
+      } else if (event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        void saveDraft(false);
       }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [sendMessage]);
+  }, [saveDraft, sendMessage]);
 
   async function addAttachments() {
     try {
@@ -544,7 +556,11 @@ export function Composer({ accountId }: Props) {
           </div>
         ) : null}
         <div className="address-fields">
-          <label>
+          <label className="from-field">
+            <span>{strings.composer.from}</span>
+            <input readOnly value={fromValue} aria-readonly="true" />
+          </label>
+          <label className="to-field">
             <span>{strings.composer.to}</span>
             <input
               autoFocus
@@ -560,14 +576,17 @@ export function Composer({ accountId }: Props) {
               aria-invalid={Boolean(recipientError)}
               aria-describedby={recipientError ? "recipient-error" : undefined}
             />
+            <button
+              type="button"
+              className="cc-toggle"
+              onClick={(event) => {
+                event.preventDefault();
+                setShowCc((value) => !value);
+              }}
+            >
+              {strings.composer.ccBcc}
+            </button>
           </label>
-          <button
-            type="button"
-            className="cc-toggle"
-            onClick={() => setShowCc((value) => !value)}
-          >
-            {strings.composer.ccBcc}
-          </button>
           {showCc ? (
             <>
               <label>

@@ -18,7 +18,7 @@ use crate::{
     db::Database,
     mail,
     models::{
-        validate_compose_draft, validated_setup, AccountRecord, AccountSetupRequest,
+        take_validated_setup, validate_compose_draft, AccountRecord, AccountSetupRequest,
         AccountSummary, AppSettings, CacheUsage, ComposeAttachment, ComposeDraft,
         DistributionChannel, DraftSaveOutcome, DraftSummary, IpcError, MailboxSummary,
         MessageCursor, MessageDetail, MessagePage, MessageSummary, OutboxSummary, SearchQuery,
@@ -173,8 +173,8 @@ pub fn list_accounts(state: State<'_, AppState>) -> CommandResult<Vec<AccountSum
 
 #[tauri::command]
 pub async fn test_account(mut request: AccountSetupRequest) -> CommandResult<()> {
-    let password = Zeroizing::new(std::mem::take(&mut request.password));
-    let (imap, smtp) = validated_setup(&request)?;
+    let (imap, smtp, password) = take_validated_setup(&mut request)?;
+    let password = Zeroizing::new(password);
     mail::test_account(&request, &imap, &smtp, &password).await?;
     Ok(())
 }
@@ -185,8 +185,8 @@ pub async fn add_account(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<AccountSummary> {
-    let password = Zeroizing::new(std::mem::take(&mut request.password));
-    let (imap, smtp) = validated_setup(&request)?;
+    let (imap, smtp, password) = take_validated_setup(&mut request)?;
+    let password = Zeroizing::new(password);
     let (imap, smtp) = mail::test_account(&request, &imap, &smtp, &password).await?;
     let id = uuid::Uuid::new_v4().to_string();
     let summary = AccountSummary {

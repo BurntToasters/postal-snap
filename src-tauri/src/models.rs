@@ -443,6 +443,25 @@ pub fn validated_setup(
     Ok((imap, smtp))
 }
 
+pub fn normalize_setup_password(provider: &ProviderKind, password: &str) -> String {
+    match provider {
+        ProviderKind::Icloud => password.chars().filter(|ch| !ch.is_whitespace()).collect(),
+        ProviderKind::Manual => password.trim().to_string(),
+    }
+}
+
+pub fn take_validated_setup(
+    request: &mut AccountSetupRequest,
+) -> Result<(ServerConfig, ServerConfig, String), String> {
+    let (imap, smtp) = validated_setup(request)?;
+    let password = normalize_setup_password(&request.provider, &request.password);
+    request.password.clear();
+    if password.is_empty() || password.len() > 4096 {
+        return Err("Enter the app-specific or email password.".into());
+    }
+    Ok((imap, smtp, password))
+}
+
 fn validate_server(server: &ServerConfig) -> Result<(), String> {
     if server.host.trim().is_empty()
         || server.host.len() > 253
@@ -645,5 +664,71 @@ mod tests {
             assert_eq!(imap.host, "imap.mail.me.com");
             assert_eq!(smtp.host, "smtp.mail.me.com");
         }
+    }
+
+    #[test]
+    fn take_validated_setup_keeps_password_until_after_validation() {
+        let mut request = AccountSetupRequest {
+            provider: ProviderKind::Icloud,
+            email: "jane@icloud.com".into(),
+            display_name: "Jane".into(),
+            password: "abcd efgh ijkl mnop".into(),
+            imap: None,
+            smtp: None,
+        };
+        let (_, _, password) = take_validated_setup(&mut request).unwrap();
+        assert_eq!(password, "abcdefghijklmnop");
+        assert!(request.password.is_empty());
+    }
+
+    #[test]
+    fn take_validated_setup_rejects_whitespace_only_icloud_password() {
+        let mut request = AccountSetupRequest {
+            provider: ProviderKind::Icloud,
+            email: "jane@icloud.com".into(),
+            display_name: "Jane".into(),
+            password: " \t  ".into(),
+            imap: None,
+            smtp: None,
+        };
+        assert!(take_validated_setup(&mut request).is_err());
+    }
+
+    #[test]
+    fn taking_password_before_validation_would_fail() {
+        let mut request = AccountSetupRequest {
+            provider: ProviderKind::Icloud,
+            email: "jane@icloud.com".into(),
+            display_name: "Jane".into(),
+            password: "secret".into(),
+            imap: None,
+            smtp: None,
+        };
+        let _taken = std::mem::take(&mut request.password);
+        assert!(validated_setup(&request).is_err());
+    }
+
+    #[test]
+    fn manual_setup_trims_password_without_removing_internal_spaces() {
+        let mut request = AccountSetupRequest {
+            provider: ProviderKind::Manual,
+            email: "sam@example.com".into(),
+            display_name: "Sam".into(),
+            password: "  phrase with spaces  ".into(),
+            imap: Some(ServerConfig {
+                host: "imap.example.com".into(),
+                port: 993,
+                tls_mode: TlsMode::Tls,
+                username: "sam@example.com".into(),
+            }),
+            smtp: Some(ServerConfig {
+                host: "smtp.example.com".into(),
+                port: 587,
+                tls_mode: TlsMode::StartTls,
+                username: "sam@example.com".into(),
+            }),
+        };
+        let (_, _, password) = take_validated_setup(&mut request).unwrap();
+        assert_eq!(password, "phrase with spaces");
     }
 }

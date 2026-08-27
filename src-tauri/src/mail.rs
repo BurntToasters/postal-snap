@@ -913,7 +913,7 @@ fn parse_remote_draft(uid: u32, raw: &[u8], updated_at: String) -> Result<Remote
         .collect();
     Ok(RemoteDraftData {
         uid,
-        message_id: message.message_id().map(ToOwned::to_owned),
+        message_id: message.message_id().and_then(normalize_rfc_message_id),
         updated_at,
         to: parsed_addresses(message.to()),
         cc: parsed_addresses(message.cc()),
@@ -1297,7 +1297,12 @@ fn parse_envelope(
         .join(", ");
     Ok(CachedMessage {
         uid,
-        message_id: envelope.message_id.as_deref().map(decode_imap_text),
+        message_id: envelope
+            .message_id
+            .as_deref()
+            .map(decode_imap_text)
+            .as_deref()
+            .and_then(normalize_rfc_message_id),
         subject: envelope
             .subject
             .as_deref()
@@ -1416,7 +1421,7 @@ fn parse_message(
         .join(", ");
     Ok(CachedMessage {
         uid,
-        message_id: message.message_id().map(ToOwned::to_owned),
+        message_id: message.message_id().and_then(normalize_rfc_message_id),
         subject: message.subject().unwrap_or_default().to_string(),
         sender_name,
         sender_address,
@@ -1469,6 +1474,20 @@ fn attachment_id(index: usize, filename: &str) -> String {
         .collect()
 }
 
+fn normalize_rfc_message_id(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    let inner = trimmed
+        .strip_prefix('<')
+        .and_then(|value| value.strip_suffix('>'))
+        .unwrap_or(trimmed)
+        .trim();
+    if inner.is_empty() {
+        None
+    } else {
+        Some(format!("<{inner}>"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1482,6 +1501,65 @@ mod tests {
         assert_eq!(parsed.sender_address, "jane@example.com");
         assert_eq!(parsed.subject, "Hello");
         assert!(parsed.text_body.contains("Hello from Postal Snap"));
+        assert_eq!(parsed.message_id.as_deref(), Some("<one@example.com>"));
+    }
+
+    #[test]
+    fn normalizes_message_ids_with_or_without_brackets() {
+        assert_eq!(
+            normalize_rfc_message_id("<one@example.com>").as_deref(),
+            Some("<one@example.com>")
+        );
+        assert_eq!(
+            normalize_rfc_message_id("one@example.com").as_deref(),
+            Some("<one@example.com>")
+        );
+        assert_eq!(normalize_rfc_message_id("  "), None);
+    }
+
+    #[tokio::test]
+    async fn parsed_drafts_keep_the_prepared_message_id() {
+        let account = AccountRecord {
+            summary: AccountSummary {
+                id: "account-1".into(),
+                provider: ProviderKind::Manual,
+                email: "sam@example.com".into(),
+                display_name: "Sam".into(),
+                sync_state: "idle".into(),
+                error: None,
+            },
+            imap: ServerConfig {
+                host: "imap.example.com".into(),
+                port: 993,
+                tls_mode: TlsMode::Tls,
+                username: "sam@example.com".into(),
+            },
+            smtp: ServerConfig {
+                host: "smtp.example.com".into(),
+                port: 587,
+                tls_mode: TlsMode::StartTls,
+                username: "sam@example.com".into(),
+            },
+        };
+        let draft = ComposeDraft {
+            id: None,
+            account_id: account.summary.id.clone(),
+            to: vec!["jane@example.com".into()],
+            cc: vec![],
+            bcc: vec![],
+            subject: "Draft identity".into(),
+            html_body: "<p>Draft</p>".into(),
+            text_body: "Draft".into(),
+            attachments: vec![],
+            in_reply_to: None,
+            references: None,
+        };
+        let message_id = "<draft-22222222-2222-4222-8222-222222222222-1@run.rosie.snap>";
+        let bytes = prepare_draft_message(&account, &draft, message_id)
+            .await
+            .unwrap();
+        let parsed = parse_remote_draft(1, &bytes, "2026-08-27T00:00:00Z".into()).unwrap();
+        assert_eq!(parsed.message_id.as_deref(), Some(message_id));
     }
 
     #[test]

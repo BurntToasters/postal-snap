@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import { api } from "../api";
 import { strings } from "../i18n";
+import { formatMessageDate } from "../format";
 import { applySettings } from "../settings";
 import { useAppStore } from "../store";
 import type { MailboxRole, MessageSummary } from "../types";
@@ -48,6 +49,23 @@ const folderIcons: Record<MailboxRole, typeof Inbox> = {
   junk: ShieldAlert,
   other: Menu,
 };
+
+function relativeMessage(delta: number): MessageSummary | undefined {
+  const state = useAppStore.getState();
+  const items = state.messages;
+  if (items.length === 0) return undefined;
+  const currentId = state.selectedMessage?.id;
+  const index = items.findIndex((item) => item.id === currentId);
+  const nextIndex =
+    index === -1
+      ? delta > 0
+        ? 0
+        : items.length - 1
+      : Math.max(0, Math.min(items.length - 1, index + delta));
+  const next = items[nextIndex];
+  if (!next || next.id === currentId) return undefined;
+  return next;
+}
 
 export function MailShell({ onOpenSettings }: Props) {
   const accounts = useAppStore((state) => state.accounts);
@@ -297,94 +315,122 @@ export function MailShell({ onOpenSettings }: Props) {
       }
     };
     const keyboard = (event: KeyboardEvent) => {
+      if (document.querySelector(".modal-layer")) return;
       const target = event.target as HTMLElement | null;
-      const isEditing = target?.matches(
-        "input,textarea,select,[contenteditable='true']",
+      const isEditing = Boolean(
+        target?.matches("input,textarea,select,[contenteditable='true']"),
       );
-      if (isEditing) return;
+      const mod = event.metaKey || event.ctrlKey;
+      const key = event.key.toLowerCase();
 
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n") {
+      if (mod && event.key === ",") {
+        event.preventDefault();
+        onOpenSettings();
+        return;
+      }
+      if (mod && !event.shiftKey && key === "n") {
         event.preventDefault();
         openComposer();
-      } else if (
-        ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "r") ||
-        event.key === "F5"
-      ) {
+        return;
+      }
+      if ((mod && event.shiftKey && key === "m") || event.key === "F5") {
         event.preventDefault();
         void refresh();
-      } else if (
-        (event.key === "/" && !event.metaKey && !event.ctrlKey) ||
-        ((event.metaKey || event.ctrlKey) &&
-          (event.key.toLowerCase() === "f" || event.key.toLowerCase() === "k"))
+        return;
+      }
+      if (mod && !event.shiftKey && key === "r") {
+        event.preventDefault();
+        window.dispatchEvent(
+          new CustomEvent("postal:menu-action", { detail: "reply" }),
+        );
+        return;
+      }
+      if (mod && event.shiftKey && key === "r") {
+        event.preventDefault();
+        window.dispatchEvent(
+          new CustomEvent("postal:menu-action", { detail: "reply-all" }),
+        );
+        return;
+      }
+      if (mod && event.shiftKey && key === "f") {
+        event.preventDefault();
+        window.dispatchEvent(
+          new CustomEvent("postal:menu-action", { detail: "forward" }),
+        );
+        return;
+      }
+      if (mod && !event.shiftKey && key === "e") {
+        event.preventDefault();
+        window.dispatchEvent(
+          new CustomEvent("postal:menu-action", { detail: "archive" }),
+        );
+        return;
+      }
+      if (mod && event.shiftKey && key === "u") {
+        event.preventDefault();
+        window.dispatchEvent(
+          new CustomEvent("postal:menu-action", { detail: "toggle-read" }),
+        );
+        return;
+      }
+      if (mod && event.shiftKey && key === "l") {
+        event.preventDefault();
+        window.dispatchEvent(
+          new CustomEvent("postal:menu-action", { detail: "toggle-star" }),
+        );
+        return;
+      }
+      if (
+        (event.key === "/" && !mod) ||
+        (mod && !event.shiftKey && key === "f")
       ) {
         event.preventDefault();
         searchInput.current?.focus();
         searchInput.current?.select();
-      } else if (event.key === "Delete" || event.key === "Backspace") {
+        return;
+      }
+      if (isEditing) return;
+
+      if (
+        event.key === "Delete" ||
+        event.key === "Backspace" ||
+        (mod && event.key === "Backspace")
+      ) {
         const state = useAppStore.getState();
         const currentMsg = state.selectedMessage;
         if (currentMsg) {
           const trashBox = state.mailboxes.find((m) => m.role === "trash");
           if (trashBox && trashBox.id !== currentMsg.mailboxId) {
             event.preventDefault();
-            const prevMailboxes = state.mailboxes;
-            state.setMessages(
-              state.messages.filter((summary) => summary.id !== currentMsg.id),
-              state.messageCursor,
-              state.hasMoreMessages,
+            window.dispatchEvent(
+              new CustomEvent("postal:menu-action", { detail: "trash" }),
             );
-            state.selectMessage(undefined);
-            void api
-              .moveMessageToMailbox(
-                currentMsg.accountId,
-                currentMsg.id,
-                trashBox.id,
-              )
-              .then(() => void loadAccountData())
-              .catch((cause) => {
-                state.setMailboxes(prevMailboxes);
-                state.setError(String(cause));
-              });
           }
         }
       } else if (event.key === "ArrowDown" || event.key === "j") {
-        const state = useAppStore.getState();
-        if (state.messages.length > 0) {
-          const currentIndex = state.selectedMessage
-            ? state.messages.findIndex(
-                (m) => m.id === state.selectedMessage?.id,
-              )
-            : -1;
-          const nextIndex = Math.min(
-            state.messages.length - 1,
-            currentIndex + 1,
-          );
-          if (
-            nextIndex >= 0 &&
-            nextIndex !== currentIndex &&
-            state.messages[nextIndex]
-          ) {
-            event.preventDefault();
-            void chooseMessage(state.messages[nextIndex]);
-          }
+        const next = relativeMessage(1);
+        if (next) {
+          event.preventDefault();
+          void chooseMessage(next);
         }
       } else if (event.key === "ArrowUp" || event.key === "k") {
-        const state = useAppStore.getState();
-        if (state.messages.length > 0) {
-          const currentIndex = state.selectedMessage
-            ? state.messages.findIndex(
-                (m) => m.id === state.selectedMessage?.id,
-              )
-            : state.messages.length;
-          const prevIndex = Math.max(0, currentIndex - 1);
-          if (
-            prevIndex >= 0 &&
-            prevIndex !== currentIndex &&
-            state.messages[prevIndex]
-          ) {
-            event.preventDefault();
-            void chooseMessage(state.messages[prevIndex]);
-          }
+        const previous = relativeMessage(-1);
+        if (previous) {
+          event.preventDefault();
+          void chooseMessage(previous);
+        }
+      } else if (event.key === "Home") {
+        const first = useAppStore.getState().messages[0];
+        if (first) {
+          event.preventDefault();
+          void chooseMessage(first);
+        }
+      } else if (event.key === "End") {
+        const items = useAppStore.getState().messages;
+        const last = items[items.length - 1];
+        if (last) {
+          event.preventDefault();
+          void chooseMessage(last);
         }
       }
     };
@@ -396,7 +442,6 @@ export function MailShell({ onOpenSettings }: Props) {
     };
   }, [
     chooseMessage,
-    loadAccountData,
     onOpenSettings,
     openComposer,
     refresh,
@@ -967,6 +1012,17 @@ function MessageList({
   hasMore: boolean;
   onLoadMore: () => Promise<void>;
 }) {
+  const listRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const selected = listRef.current?.querySelector<HTMLElement>(
+      "[role='option'][aria-selected='true']",
+    );
+    if (!selected) return;
+    selected.scrollIntoView({ block: "nearest" });
+    if (listRef.current?.contains(document.activeElement)) selected.focus();
+  }, [selectedId]);
+
   if (loading && messages.length === 0)
     return (
       <div className="list-state" role="status">
@@ -977,6 +1033,7 @@ function MessageList({
     return <div className="list-state">{strings.mail.emptyMailbox}</div>;
   return (
     <div
+      ref={listRef}
       className="message-list"
       role="listbox"
       aria-label={strings.mail.messages}
@@ -998,7 +1055,8 @@ function MessageList({
             if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key))
               return;
             event.preventDefault();
-            const next =
+            event.stopPropagation();
+            const nextIndex =
               event.key === "Home"
                 ? 0
                 : event.key === "End"
@@ -1010,10 +1068,8 @@ function MessageList({
                         index + (event.key === "ArrowDown" ? 1 : -1),
                       ),
                     );
-            event.currentTarget.parentElement
-              ?.querySelectorAll<HTMLElement>("[role='option']")
-              .item(next)
-              .focus();
+            const next = messages[nextIndex];
+            if (next && next.id !== message.id) void onChoose(next);
           }}
         >
           <span
@@ -1194,23 +1250,4 @@ function OutboxList({
       ))}
     </div>
   );
-}
-
-function formatMessageDate(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  const now = new Date();
-  const today = date.toDateString() === now.toDateString();
-  if (today)
-    return new Intl.DateTimeFormat(undefined, {
-      hour: "numeric",
-      minute: "2-digit",
-    }).format(date);
-  const sameYear = date.getFullYear() === now.getFullYear();
-  return new Intl.DateTimeFormat(
-    undefined,
-    sameYear
-      ? { month: "short", day: "numeric" }
-      : { year: "numeric", month: "short", day: "numeric" },
-  ).format(date);
 }
