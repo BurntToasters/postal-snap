@@ -403,6 +403,9 @@ test("reads, replies, and sends through typed IPC", async ({ page }) => {
   await expect(page.getByRole("textbox", { name: "To" })).toHaveValue(
     "jane@example.com",
   );
+  await expect(page.getByRole("textbox", { name: "From" })).toHaveValue(
+    /Sam <sam@icloud.com>/,
+  );
   await page.getByLabel("Message body").pressSequentially("Yes, see you then.");
   await page.getByRole("button", { name: "Send", exact: true }).click();
 
@@ -620,6 +623,55 @@ test("reopens inline draft previews from managed storage", async ({ page }) => {
   await page.getByRole("button", { name: /^Drafts/ }).click();
   await page.getByRole("button", { name: /Family update/i }).click();
   await expect(page.locator(".compose-attachments")).toContainText("photo.png");
+});
+
+test("replies from the Mail shortcut and shows a From address", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("option", { name: /Weekend plans/i }).click();
+  await expect(
+    page.getByRole("heading", { name: "Weekend plans" }),
+  ).toBeVisible();
+  await page.keyboard.press("Meta+r");
+  await expect(page.getByRole("textbox", { name: "To" })).toHaveValue(
+    "jane@example.com",
+  );
+  await expect(page.getByRole("textbox", { name: "From" })).toHaveValue(
+    /Sam <sam@icloud.com>/,
+  );
+});
+
+test("hides message previews in compact density", async ({ page }) => {
+  await page.goto("/");
+  await expect(
+    page.getByText("Are we still meeting on Saturday?"),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("tab", { name: "General" }).click();
+  await page.getByLabel("Interface spacing").selectOption("compact");
+  await page.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-density", "compact");
+  await expect(
+    page.getByText("Are we still meeting on Saturday?"),
+  ).toBeHidden();
+});
+
+test("lists Mail-like shortcuts instead of using R for Get Mail", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("tab", { name: "Shortcuts" }).click();
+  const getMail = page.locator(".shortcut-row").filter({ hasText: "Get Mail" });
+  await expect(getMail.locator("kbd")).toContainText("M");
+  await expect(getMail.locator("kbd")).not.toContainText("R");
+  await expect(
+    page
+      .locator(".shortcut-row")
+      .filter({ has: page.getByText("Reply", { exact: true }) })
+      .locator("kbd"),
+  ).toContainText("R");
 });
 
 test("mail shell has no detectable serious accessibility violations", async ({
