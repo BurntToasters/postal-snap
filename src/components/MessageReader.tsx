@@ -66,10 +66,16 @@ export function MessageReader() {
       if (action === "forward") void forwardMessage();
       if (action === "archive") void move("archive");
       if (action === "trash") void move("trash");
+      if (action === "toggle-read") void setRead();
+      if (action === "toggle-star") void setStarred();
     };
     window.addEventListener("postal:menu-action", menuAction);
     return () => window.removeEventListener("postal:menu-action", menuAction);
   });
+
+  useEffect(() => {
+    setShowDetails(false);
+  }, [message?.id]);
 
   const htmlBody = message?.htmlBody;
   const attachments = message?.attachments;
