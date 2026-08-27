@@ -44,7 +44,7 @@ export function MessageReader() {
   }>();
   const [loadingImages, setLoadingImages] = useState(false);
   const [preparingForward, setPreparingForward] = useState(false);
-  const [showDetails, setShowDetails] = useState(false);
+  const [showDetailsFor, setShowDetailsFor] = useState<number>();
 
   useEffect(() => {
     if (settings.readingPane !== "hidden" || !message) return;
@@ -72,10 +72,6 @@ export function MessageReader() {
     window.addEventListener("postal:menu-action", menuAction);
     return () => window.removeEventListener("postal:menu-action", menuAction);
   });
-
-  useEffect(() => {
-    setShowDetails(false);
-  }, [message?.id]);
 
   const htmlBody = message?.htmlBody;
   const attachments = message?.attachments;
@@ -320,6 +316,8 @@ export function MessageReader() {
       </section>
     );
 
+  const showDetails = showDetailsFor === message.id;
+
   return (
     <article className="reader-pane" aria-labelledby="message-title">
       <div className="reader-actions">
@@ -485,7 +483,11 @@ export function MessageReader() {
           <button
             type="button"
             className="details-toggle"
-            onClick={() => setShowDetails((v) => !v)}
+            onClick={() =>
+              setShowDetailsFor((id) =>
+                id === message.id ? undefined : message.id,
+              )
+            }
             aria-expanded={showDetails}
           >
             {showDetails
