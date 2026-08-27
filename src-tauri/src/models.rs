@@ -375,9 +375,7 @@ impl From<String> for IpcError {
             "accessDenied" => "That item is not available for this account.",
             "notFound" => "That item is no longer available. Refresh mail and try again.",
             "limitExceeded" => "That item exceeds Postal Snap's safety limit.",
-            "authenticationFailed" => {
-                "Sign-in failed. Check the email address and password."
-            }
+            "authenticationFailed" => "Sign-in failed. Check the email address and password.",
             "connectionFailed" => "Could not reach the mail server. Check your connection.",
             "localStorageFailed" => "Postal Snap could not save this change on your computer.",
             "invalidInput" => "Check the highlighted information and try again.",
