@@ -203,6 +203,59 @@ test("rust:update passes clippy and rustfmt as one --component value", async () 
   }
 });
 
+test("workspace:prepare skips Playwright e2e for every platform release", async () => {
+  const packageJson = JSON.parse(
+    await readFile(join(root, "package.json"), "utf8"),
+  );
+  assert.equal(
+    packageJson.scripts["workspace:prepare"],
+    "npm run workspace:bootstrap && npm run licenses && cross-env SKIP_E2E=1 npm run test:all",
+  );
+  assert.match(
+    packageJson.scripts["release:prepare"],
+    /^npm run workspace:prepare &&/,
+  );
+  assert.equal(packageJson.scripts["test:all"], "node scripts/test-all.js");
+  assert.equal(packageJson.scripts["test:e2e"], "playwright test");
+  assert.ok(packageJson.devDependencies["cross-env"]);
+
+  for (const name of [
+    "release:win",
+    "release:mac",
+    "release:linux:x64",
+    "release:linux:arm64",
+  ]) {
+    assert.match(
+      packageJson.scripts[name],
+      /npm run release:prepare &&/,
+      `${name} must run the shared quality gate`,
+    );
+  }
+  assert.equal(
+    packageJson.scripts["release:linux"],
+    "npm run release:linux:x64",
+  );
+  assert.equal(
+    packageJson.scripts["release:linux:resume"],
+    "npm run release:linux:x64:resume",
+  );
+
+  for (const [name, script] of Object.entries(packageJson.scripts)) {
+    if (!name.startsWith("release:")) continue;
+    if (!/(?:continue|resume)$/.test(name)) continue;
+    assert.doesNotMatch(
+      script,
+      /npm run (?:test:all|test:e2e|workspace:prepare|release:prepare)(?:\s|&|$)/,
+      `${name} must not re-run the quality gate or Playwright`,
+    );
+  }
+
+  const testAll = await readFile(join(root, "scripts/test-all.js"), "utf8");
+  assert.ok(testAll.includes('["run", "test:e2e"]'));
+  assert.match(testAll, /process\.env\.SKIP_E2E/);
+  assert.doesNotMatch(testAll, /process\.platform/);
+});
+
 test("test-all and package.json include cargo safe update and policy check", async () => {
   const packageJson = JSON.parse(
     await readFile(join(root, "package.json"), "utf8"),
