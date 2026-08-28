@@ -92,7 +92,7 @@
       "endpoints": [
         "https://github.com/BurntToasters/postal-snap/releases/latest/download/latest-{{target}}-{{arch}}.json"
       ],
-      "pubkey": "POSTAL_SNAP_UPDATER_PUBLIC_KEY"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDdFQjRGQUVGRDc4MEZFRTgKUldUby9vRFg3L3EwZm9CaWhVc2pFY3VyOVhwTFRWMVlScHpLc1M2RXAzVWJXTjdlcTl5NWtTKzgK"
     }
   }
 }
