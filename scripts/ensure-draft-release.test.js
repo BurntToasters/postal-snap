@@ -1,19 +1,23 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
-import test from "node:test";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import test from "node:test";
 import { root } from "./_utils.js";
 import {
   ensureDraftRelease,
   existingDraft,
   listAllGithubPages,
   main,
+  readChangelogReleaseBody,
+  releaseTitle,
   waitForDraftRelease,
   waitTiming,
 } from "./ensure-draft-release.js";
 
 const tag = "v0.1.0";
-const draft = { id: 11, tag_name: tag, draft: true, name: "Postal Snap 0.1.0" };
+const notes = "changelog-body";
+const draft = { id: 11, tag_name: tag, draft: true, name: "0.1.0" };
 const published = { id: 12, tag_name: tag, draft: false };
 
 function recordingRequest(handler) {
@@ -69,21 +73,75 @@ test("lists GitHub releases page by page before matching a draft", async () => {
   assert.equal(existingDraft(items, tag)?.id, 11);
 });
 
-test("create mode reuses a draft without PATCH when no target is provided", async () => {
-  const { calls, request } = recordingRequest(async (method) => {
-    if (method === "GET") return [published, draft];
-    throw new Error("create mode must not PATCH when no target is provided");
+test("release titles are the version with no v prefix or app name", () => {
+  assert.equal(releaseTitle("0.1.0"), "0.1.0");
+  assert.equal(releaseTitle("v0.1.0"), "0.1.0");
+  assert.equal(releaseTitle("0.1.0-beta.1"), "0.1.0-beta.1");
+  assert.equal(releaseTitle("v0.1.0-beta.2"), "0.1.0-beta.2");
+});
+
+test("CHANGELOG.md is required and cannot be empty", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "postal-snap-changelog-"));
+  try {
+    await assert.rejects(
+      () => readChangelogReleaseBody(join(dir, "missing.md")),
+      /CHANGELOG.md is required for GitHub release notes/,
+    );
+    const emptyPath = join(dir, "CHANGELOG.md");
+    await writeFile(emptyPath, " \n");
+    await assert.rejects(
+      () => readChangelogReleaseBody(emptyPath),
+      /CHANGELOG.md is empty/,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("CHANGELOG.md matches the package version for GitHub notes", async () => {
+  const packageJson = JSON.parse(
+    await readFile(join(root, "package.json"), "utf8"),
+  );
+  const changelog = await readChangelogReleaseBody();
+  assert.match(
+    changelog,
+    new RegExp(`## Changes in \`v${packageJson.version}:\``),
+  );
+  assert.match(changelog, new RegExp(`/download/v${packageJson.version}/`));
+  assert.doesNotMatch(changelog, /This is a Beta build/);
+});
+
+test("create mode reuses a leftover draft and refreshes title plus notes", async () => {
+  const leftoverDraft = {
+    ...draft,
+    name: "Postal Snap 0.1.0",
+  };
+  const { calls, request } = recordingRequest(
+    async (method, _endpoint, body) => {
+      if (method === "GET") return [published, leftoverDraft];
+      if (method === "PATCH") return { ...leftoverDraft, ...body };
+      throw new Error("create mode must not POST when a draft already exists");
+    },
+  );
+  const reused = await ensureDraftRelease({
+    tag,
+    version: "0.1.0",
+    body: notes,
+    request,
   });
-  const reused = await ensureDraftRelease({ tag, request });
   assert.equal(reused.id, 11);
-  assert.ok(calls.every((call) => call.method === "GET"));
+  assert.equal(calls[0].method, "GET");
   assert.ok(calls[0].endpoint.includes("page=1"));
+  assert.equal(calls[1].method, "PATCH");
+  assert.deepEqual(calls[1].body, { name: "0.1.0", body: notes });
+  assert.ok(!calls.some((call) => call.method === "POST"));
 });
 
 test("create mode PATCHes target_commitish when reusing a leftover draft", async () => {
   const sessionCommit = "f".repeat(40);
   const leftoverDraft = {
     ...draft,
+    name: "Postal Snap 0.1.0",
     target_commitish: "e".repeat(40),
   };
   const { calls, request } = recordingRequest(
@@ -97,6 +155,8 @@ test("create mode PATCHes target_commitish when reusing a leftover draft", async
   );
   const reused = await ensureDraftRelease({
     tag,
+    version: "0.1.0",
+    body: notes,
     target: sessionCommit,
     request,
   });
@@ -108,7 +168,11 @@ test("create mode PATCHes target_commitish when reusing a leftover draft", async
     calls[1].endpoint,
     "repos/BurntToasters/postal-snap/releases/11",
   );
-  assert.deepEqual(calls[1].body, { target_commitish: sessionCommit });
+  assert.deepEqual(calls[1].body, {
+    name: "0.1.0",
+    body: notes,
+    target_commitish: sessionCommit,
+  });
   assert.ok(!calls.some((call) => call.method === "POST"));
 });
 
@@ -116,12 +180,13 @@ test("create mode creates a draft when none exists", async () => {
   const { calls, request } = recordingRequest(
     async (method, _endpoint, body) => {
       if (method === "GET") return [];
-      return { id: 21, tag_name: body.tag_name, draft: true };
+      return { id: 21, tag_name: body.tag_name, draft: true, name: body.name };
     },
   );
   const created = await ensureDraftRelease({
     tag,
-    title: "Postal Snap 0.1.0",
+    version: "0.1.0",
+    body: notes,
     prerelease: false,
     target: "a".repeat(40),
     request,
@@ -132,32 +197,42 @@ test("create mode creates a draft when none exists", async () => {
   assert.equal(posts[0].endpoint, "repos/BurntToasters/postal-snap/releases");
   assert.deepEqual(posts[0].body, {
     tag_name: tag,
-    name: "Postal Snap 0.1.0",
+    name: "0.1.0",
+    body: notes,
     draft: true,
     prerelease: false,
     target_commitish: "a".repeat(40),
-    generate_release_notes: true,
   });
+  assert.equal(posts[0].body.generate_release_notes, undefined);
 });
 
 test("create mode refetches after a 422 instead of splitting drafts", async () => {
   let lists = 0;
-  const { calls, request } = recordingRequest(async (method) => {
-    if (method === "GET") {
-      lists += 1;
-      return lists === 1 ? [] : [draft];
-    }
-    const error = new Error("HTTP 422: Validation Failed");
-    error.statusCode = 422;
-    throw error;
-  });
+  const { calls, request } = recordingRequest(
+    async (method, _endpoint, body) => {
+      if (method === "GET") {
+        lists += 1;
+        return lists === 1 ? [] : [draft];
+      }
+      if (method === "PATCH") return { ...draft, ...body };
+      const error = new Error("HTTP 422: Validation Failed");
+      error.statusCode = 422;
+      throw error;
+    },
+  );
   const created = await ensureDraftRelease({
     tag,
+    version: "0.1.0",
+    body: notes,
     request,
     sleepFn: async () => {},
   });
   assert.equal(created.id, 11);
   assert.equal(calls.filter((call) => call.method === "POST").length, 1);
+  assert.deepEqual(calls.find((call) => call.method === "PATCH")?.body, {
+    name: "0.1.0",
+    body: notes,
+  });
 });
 
 test("create and wait refuse a published release as the draft target", async () => {
@@ -277,7 +352,7 @@ test("main wait mode never creates and create mode is the only creator", async (
 
   const create = recordingRequest(async (method, _endpoint, body) => {
     if (method === "GET") return [];
-    return { id: 31, draft: true, tag_name: body.tag_name };
+    return { id: 31, draft: true, tag_name: body.tag_name, name: body.name };
   });
   const created = await main({
     argv: ["node", "ensure-draft-release.js"],
@@ -285,6 +360,14 @@ test("main wait mode never creates and create mode is the only creator", async (
     session: async () => ({ commit: "b".repeat(40) }),
     request: create.request,
   });
+  const changelog = await readChangelogReleaseBody();
+  const packageJson = JSON.parse(
+    await readFile(join(root, "package.json"), "utf8"),
+  );
+  const posts = create.calls.filter((call) => call.method === "POST");
   assert.equal(created.id, 31);
-  assert.equal(create.calls.filter((call) => call.method === "POST").length, 1);
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].body.name, packageJson.version);
+  assert.equal(posts[0].body.body, changelog);
+  assert.equal(posts[0].body.generate_release_notes, undefined);
 });
