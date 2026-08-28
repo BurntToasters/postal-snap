@@ -86,13 +86,15 @@ test("create mode PATCHes target_commitish when reusing a leftover draft", async
     ...draft,
     target_commitish: "e".repeat(40),
   };
-  const { calls, request } = recordingRequest(async (method, endpoint, body) => {
-    if (method === "GET") return [leftoverDraft];
-    if (method === "PATCH") {
-      return { ...leftoverDraft, ...body };
-    }
-    throw new Error("create mode must not POST when a draft already exists");
-  });
+  const { calls, request } = recordingRequest(
+    async (method, endpoint, body) => {
+      if (method === "GET") return [leftoverDraft];
+      if (method === "PATCH") {
+        return { ...leftoverDraft, ...body };
+      }
+      throw new Error("create mode must not POST when a draft already exists");
+    },
+  );
   const reused = await ensureDraftRelease({
     tag,
     target: sessionCommit,
