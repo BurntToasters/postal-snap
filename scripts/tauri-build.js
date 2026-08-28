@@ -60,7 +60,6 @@ if (requireTauriSigning)
   requireEnv([
     "TAURI_SIGNING_PRIVATE_KEY",
     "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
-    "TAURI_UPDATER_PUBLIC_KEY",
   ]);
 if (requireWindowsSigning) requireEnv(["WINDOWS_CERTIFICATE_THUMBPRINT"]);
 if (requireMacosSigning) requireEnv(["APPLE_SIGNING_IDENTITY"]);
