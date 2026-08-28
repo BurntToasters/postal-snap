@@ -1,6 +1,6 @@
 import { basename, join } from "node:path";
 import process from "node:process";
-import { json, root } from "./_utils.js";
+import { json, readFile, root } from "./_utils.js";
 import { assertGitHubCliAuthenticated, githubApi } from "./github-cli.js";
 import { verifiedReleaseSession } from "./release-identity.js";
 
@@ -81,11 +81,53 @@ function publishedReleaseError(tag, action) {
   );
 }
 
-async function refreshDraftTarget({ repository, draft, target, request }) {
-  if (!target) return draft;
-  return request("PATCH", `repos/${repository}/releases/${draft.id}`, {
-    target_commitish: target,
-  });
+export function releaseTitle(version) {
+  return String(version ?? "")
+    .trim()
+    .replace(/^v/i, "");
+}
+
+export async function readChangelogReleaseBody(
+  changelogPath = join(root, "CHANGELOG.md"),
+) {
+  let body;
+  try {
+    body = await readFile(changelogPath, "utf8");
+  } catch (error) {
+    throw new Error(
+      `CHANGELOG.md is required for GitHub release notes: ${error.message}`,
+      { cause: error },
+    );
+  }
+  if (!body.trim()) {
+    throw new Error(
+      "CHANGELOG.md is empty; refusing to set blank release notes.",
+    );
+  }
+  return body;
+}
+
+async function refreshDraft({
+  repository,
+  draft,
+  target,
+  name,
+  body,
+  request,
+}) {
+  const payload = { name, body };
+  if (target) payload.target_commitish = target;
+  const updated = await request(
+    "PATCH",
+    `repos/${repository}/releases/${draft.id}`,
+    payload,
+  );
+  console.log(
+    `   Synced CHANGELOG.md into release notes (${body.length} chars) for ${
+      updated?.name || name
+    }.`,
+  );
+  return updated;
 }
 
 export function describeDraft(release, tag) {
@@ -97,17 +139,30 @@ export function describeDraft(release, tag) {
 export async function ensureDraftRelease({
   repository = REPOSITORY,
   tag,
-  title,
+  version,
   prerelease,
   target,
+  body,
+  changelogPath,
   request = githubApi,
   sleepFn = sleep,
 } = {}) {
+  const notes = body ?? (await readChangelogReleaseBody(changelogPath));
+  const name = releaseTitle(version || tag);
   const matching = await listMatchingReleases({ repository, tag, request });
   const draft = existingDraft(matching, tag);
   if (draft) {
-    console.log(`   Draft already exists: ${describeDraft(draft, tag)}.`);
-    return refreshDraftTarget({ repository, draft, target, request });
+    console.log(
+      `   Draft already exists: ${describeDraft(draft, tag)} - refreshing release notes.`,
+    );
+    return refreshDraft({
+      repository,
+      draft,
+      target,
+      name,
+      body: notes,
+      request,
+    });
   }
   if (hasPublishedRelease(matching, tag)) {
     throw publishedReleaseError(tag, "create");
@@ -117,13 +172,15 @@ export async function ensureDraftRelease({
     console.log("   No release found. Creating draft...");
     const created = await request("POST", `repos/${repository}/releases`, {
       tag_name: tag,
-      name: title,
+      name,
+      body: notes,
       draft: true,
       prerelease,
       target_commitish: target,
-      generate_release_notes: true,
     });
-    console.log(`   Created draft release: ${describeDraft(created, tag)}.`);
+    console.log(
+      `   Created draft release: ${describeDraft(created, tag)} with CHANGELOG.md release notes.`,
+    );
     return created;
   } catch (error) {
     if (error.statusCode === 422) {
@@ -139,10 +196,12 @@ export async function ensureDraftRelease({
         console.log(
           `   Found existing draft after retry: ${describeDraft(reused, tag)}.`,
         );
-        return refreshDraftTarget({
+        return refreshDraft({
           repository,
           draft: reused,
           target,
+          name,
+          body: notes,
           request,
         });
       }
@@ -203,7 +262,7 @@ export async function main({
   const options = {
     repository: REPOSITORY,
     tag,
-    title: `Postal Snap ${pkg.version}`,
+    version: pkg.version,
     prerelease: pkg.version.includes("-"),
     target: releaseSession.commit,
     request,
