@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   quoteWindowsCmdArg,
   resolveSpawnInvocation,
+  RM_RETRY_OPTIONS,
   windowsCmdLine,
 } from "./_utils.js";
 
@@ -45,4 +46,9 @@ test("non-cmd commands stay as file plus argv without a shell", () => {
   assert.equal(linuxNpm.command, "npm");
   assert.deepEqual(linuxNpm.args, ["run", "test"]);
   assert.equal(linuxNpm.options.shell, false);
+});
+
+test("Windows directory removal retries locked files like IYERIS", () => {
+  assert.equal(RM_RETRY_OPTIONS.maxRetries, 8);
+  assert.equal(RM_RETRY_OPTIONS.retryDelay, 100);
 });

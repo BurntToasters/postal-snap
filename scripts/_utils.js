@@ -4,6 +4,7 @@ import {
   mkdir,
   readFile,
   readdir,
+  rm,
   stat,
   writeFile,
 } from "node:fs/promises";
@@ -14,6 +15,11 @@ import process from "node:process";
 
 export const root = resolve(import.meta.dirname, "..");
 export const releaseDir = join(root, "release");
+export const RM_RETRY_OPTIONS = { maxRetries: 8, retryDelay: 100 };
+
+export async function rmRetry(path, options = {}) {
+  await rm(path, { force: true, ...RM_RETRY_OPTIONS, ...options });
+}
 
 function denyGitHubCliPassthrough(command) {
   if (command === "gh") {

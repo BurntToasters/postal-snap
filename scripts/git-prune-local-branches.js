@@ -12,6 +12,7 @@ const branches = (
   ])
 )
   .split("\n")
+  .map((line) => line.replace(/\r$/, ""))
   .filter(Boolean)
   .filter((line) => line.includes("[gone]"))
   .map((line) => line.split(" ")[0])

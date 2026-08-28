@@ -1,4 +1,4 @@
-import { copyFile, mkdtemp, rm } from "node:fs/promises";
+import { copyFile, mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { buildTauriBuildArgs } from "./tauri-build-args.js";
@@ -9,6 +9,7 @@ import {
   output,
   process,
   requireEnv,
+  rmRetry,
   root,
   run,
   writeJson,
@@ -144,7 +145,11 @@ try {
 
   await run("npm", args);
 } finally {
-  await rm(overrideDir, { recursive: true, force: true });
+  try {
+    await rmRetry(overrideDir, { recursive: true });
+  } catch {
+    console.warn("[tauri-build] Could not remove temporary config directory.");
+  }
 }
 
 function merge(base, override) {
