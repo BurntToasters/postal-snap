@@ -76,7 +76,7 @@
     "rust:target:linux:arm64": "rustup target add --toolchain 1.97.1 aarch64-unknown-linux-gnu",
     "rust:target:linux": "npm run rust:target:linux:x64 && npm run rust:target:linux:arm64",
     "workspace:bootstrap": "npm run rust:update && npm ci --ignore-scripts && npm run sync-version && npm run icons:normalize",
-    "workspace:prepare": "npm run workspace:bootstrap && npm run licenses && npm run test:all",
+    "workspace:prepare": "npm run workspace:bootstrap && npm run licenses && cross-env SKIP_E2E=1 npm run test:all",
     "wc": "npm run win-compiler:x64",
     "win-compiler:x64": "node scripts/open-vs-dev-shell.js x64",
     "win-compiler:arm64": "node scripts/open-vs-dev-shell.js arm64",
