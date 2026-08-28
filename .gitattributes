@@ -1,0 +1,6 @@
+* text=auto eol=lf
+
+# Icons and other image binaries must not be treated as text.
+*.png binary
+*.ico binary
+*.icns binary
