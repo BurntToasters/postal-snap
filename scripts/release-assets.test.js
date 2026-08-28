@@ -4,7 +4,7 @@ import test from "node:test";
 import { join } from "node:path";
 import { artifactArch, artifactPlatform, root } from "./_utils.js";
 import { validateManifest } from "./validate-updater-manifest.js";
-import { remoteTagCommit } from "./release-identity.js";
+import { remoteTagCommit, verifyDraftReleaseCommit, verifyRemoteReleaseCommit } from "./release-identity.js";
 
 test("artifact platform and architecture mapping", () => {
   assert.equal(artifactPlatform("Postal-Snap-Windows-x64.nsis.zip"), "windows");
@@ -45,6 +45,144 @@ test("annotated release tags resolve to their commit", async () => {
     "b".repeat(40),
   );
   assert.equal(calls.length, 2);
+});
+
+const sessionCommit = "c".repeat(40);
+const releaseSession = {
+  version: "0.1.0",
+  tag: "v0.1.0",
+  commit: sessionCommit,
+};
+
+test("draft finalize verifies target_commitish without a git tag ref", async () => {
+  const tagCalls = [];
+  const execute = async (args) => {
+    tagCalls.push(args.at(-1));
+    throw new Error("gh: Not Found (HTTP 404)");
+  };
+  await assert.rejects(
+    () => remoteTagCommit("owner/repo", "v0.1.0", execute),
+    /Not Found/,
+  );
+  assert.equal(tagCalls.length, 1);
+  assert.match(tagCalls[0], /\/git\/ref\/tags\//);
+
+  await verifyDraftReleaseCommit("owner/repo", releaseSession, {
+    listReleases: async () => [
+      {
+        tag_name: "v0.1.0",
+        draft: true,
+        target_commitish: sessionCommit,
+      },
+    ],
+    resolveCommitish: async (_repository, commitish) => commitish.toLowerCase(),
+  });
+});
+
+test("draft finalize fails when no draft exists", async () => {
+  await assert.rejects(
+    () =>
+      verifyDraftReleaseCommit("owner/repo", releaseSession, {
+        listReleases: async () => [],
+      }),
+    /No draft release found for v0\.1\.0/,
+  );
+});
+
+test("draft finalize refuses a published release for the same tag", async () => {
+  await assert.rejects(
+    () =>
+      verifyDraftReleaseCommit("owner/repo", releaseSession, {
+        listReleases: async () => [
+          { tag_name: "v0.1.0", draft: false },
+          {
+            tag_name: "v0.1.0",
+            draft: true,
+            target_commitish: sessionCommit,
+          },
+        ],
+      }),
+    /already exists as published/,
+  );
+});
+
+test("draft finalize fails when target_commitish does not match the session commit", async () => {
+  const otherCommit = "d".repeat(40);
+  await assert.rejects(
+    () =>
+      verifyDraftReleaseCommit("owner/repo", releaseSession, {
+        listReleases: async () => [
+          {
+            tag_name: "v0.1.0",
+            draft: true,
+            target_commitish: otherCommit,
+          },
+        ],
+        resolveCommitish: async (_repository, commitish) => commitish.toLowerCase(),
+      }),
+    /not release session commit/,
+  );
+});
+
+test("draft finalize resolves branch target_commitish to the session commit", async () => {
+  const resolveCalls = [];
+  await verifyDraftReleaseCommit("owner/repo", releaseSession, {
+    listReleases: async () => [
+      {
+        tag_name: "v0.1.0",
+        draft: true,
+        target_commitish: "main",
+      },
+    ],
+    resolveCommitish: async (repository, commitish) => {
+      resolveCalls.push({ repository, commitish });
+      return sessionCommit;
+    },
+  });
+  assert.deepEqual(resolveCalls, [
+    { repository: "owner/repo", commitish: "main" },
+  ]);
+});
+
+test("hard finalize still requires the published git tag to match the session commit", async () => {
+  const execute = async (args) => {
+    if (args.at(-1).includes("/git/ref/tags/")) {
+      return { object: { type: "commit", sha: sessionCommit } };
+    }
+    throw new Error("unexpected gh api call");
+  };
+  await verifyRemoteReleaseCommit("owner/repo", releaseSession, execute);
+
+  await assert.rejects(
+    () =>
+      verifyRemoteReleaseCommit(
+        "owner/repo",
+        releaseSession,
+        async () => ({
+          object: { type: "commit", sha: "e".repeat(40) },
+        }),
+      ),
+    /not release session commit/,
+  );
+});
+
+test("finalize-release verifies drafts before upload and tags only after publish", async () => {
+  const finalize = await readFile(
+    join(root, "scripts/finalize-release.js"),
+    "utf8",
+  );
+  const draftIndex = finalize.indexOf("await verifyDraftReleaseCommit");
+  const uploadIndex = finalize.indexOf('runGitHub([\n  "release",\n  "upload"');
+  const remoteIndex = finalize.indexOf("await verifyRemoteReleaseCommit");
+  const publishIndex = finalize.indexOf('"--draft=false"');
+  assert.ok(draftIndex >= 0);
+  assert.ok(uploadIndex > draftIndex);
+  assert.ok(remoteIndex > publishIndex);
+  assert.ok(publishIndex > uploadIndex);
+  assert.doesNotMatch(
+    finalize.slice(draftIndex, uploadIndex),
+    /verifyRemoteReleaseCommit/,
+  );
 });
 
 test("direct and Store builds keep separate capabilities", async () => {
