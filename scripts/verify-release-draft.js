@@ -1,24 +1,29 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { json, output, root, run } from "./_utils.js";
+import { json, root, run } from "./_utils.js";
+import {
+  assertGitHubCliAuthenticated,
+  githubJson,
+  runGitHub,
+} from "./github-cli.js";
+
+assertGitHubCliAuthenticated();
 
 const pkg = await json(join(root, "package.json"));
 const tag = `v${pkg.version}`;
 const channel = pkg.version.includes("-") ? "-beta" : "";
-const assets = JSON.parse(
-  await output("gh", [
-    "release",
-    "view",
-    tag,
-    "--repo",
-    "BurntToasters/postal-snap",
-    "--json",
-    "assets",
-    "--jq",
-    ".assets | map(.name)",
-  ]),
-);
+const assets = githubJson([
+  "release",
+  "view",
+  tag,
+  "--repo",
+  "BurntToasters/postal-snap",
+  "--json",
+  "assets",
+  "--jq",
+  ".assets | map(.name)",
+]);
 const required = [
   "Postal-Snap-Windows-x64.exe",
   "Postal-Snap-Windows-arm64.exe",
@@ -61,7 +66,7 @@ if (missing.length)
   throw new Error(`Draft release is missing: ${missing.join(", ")}`);
 const temporary = await mkdtemp(join(tmpdir(), "postal-snap-release-verify-"));
 try {
-  await run("gh", [
+  runGitHub([
     "release",
     "download",
     tag,
