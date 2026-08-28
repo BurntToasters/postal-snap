@@ -174,6 +174,35 @@ test("release verification covers generated manifests after finalization", async
   assert.ok(remoteVerifier.includes("verify-release-directory.js"));
 });
 
+test("rust:update passes clippy and rustfmt as one --component value", async () => {
+  const packageJson = JSON.parse(
+    await readFile(join(root, "package.json"), "utf8"),
+  );
+  const rustUpdate = packageJson.scripts["rust:update"];
+  assert.equal(
+    rustUpdate,
+    "rustup toolchain install 1.97.1 --profile minimal --component cargo,clippy,rustfmt",
+  );
+
+  for (const [name, script] of Object.entries(packageJson.scripts)) {
+    const argv = String(script).split(/\s+/);
+    if (argv[0] !== "rustup") continue;
+    for (let index = 0; index < argv.length; index += 1) {
+      if (argv[index] !== "--component" && argv[index] !== "-c") continue;
+      const value = argv[index + 1];
+      assert.ok(
+        value && !value.startsWith("-"),
+        `${name} must pass a value to --component`,
+      );
+      const next = argv[index + 2];
+      assert.ok(
+        next === undefined || next.startsWith("-"),
+        `${name} must not pass extra rustup components as positional args`,
+      );
+    }
+  }
+});
+
 test("test-all and package.json include cargo safe update and policy check", async () => {
   const packageJson = JSON.parse(
     await readFile(join(root, "package.json"), "utf8"),
