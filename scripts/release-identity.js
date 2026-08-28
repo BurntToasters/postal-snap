@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { json, output, root } from "./_utils.js";
+import { githubJson } from "./github-cli.js";
 
 export async function verifiedReleaseSession() {
   const [session, pkg, commit] = await Promise.all([
@@ -20,22 +21,18 @@ export async function verifiedReleaseSession() {
   return session;
 }
 
-export async function remoteTagCommit(repository, tag, execute = output) {
+export async function remoteTagCommit(repository, tag, execute = githubJson) {
   const encodedTag = encodeURIComponent(tag);
-  const reference = JSON.parse(
-    await execute("gh", [
-      "api",
-      `repos/${repository}/git/ref/tags/${encodedTag}`,
-    ]),
-  );
+  const reference = await execute([
+    "api",
+    `repos/${repository}/git/ref/tags/${encodedTag}`,
+  ]);
   let object = reference.object;
   for (let depth = 0; object?.type === "tag" && depth < 8; depth += 1) {
-    const tagObject = JSON.parse(
-      await execute("gh", [
-        "api",
-        `repos/${repository}/git/tags/${object.sha}`,
-      ]),
-    );
+    const tagObject = await execute([
+      "api",
+      `repos/${repository}/git/tags/${object.sha}`,
+    ]);
     object = tagObject.object;
   }
   if (object?.type !== "commit" || !/^[a-f0-9]{40}$/i.test(object.sha ?? ""))

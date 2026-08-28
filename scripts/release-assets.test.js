@@ -32,13 +32,13 @@ test("signed GitHub updater manifest shape", () => {
 
 test("annotated release tags resolve to their commit", async () => {
   const calls = [];
-  const execute = async (_command, args) => {
+  const execute = async (args) => {
     calls.push(args.at(-1));
     if (args.at(-1).includes("/git/ref/tags/"))
-      return JSON.stringify({ object: { type: "tag", sha: "a".repeat(40) } });
-    return JSON.stringify({
+      return { object: { type: "tag", sha: "a".repeat(40) } };
+    return {
       object: { type: "commit", sha: "b".repeat(40) },
-    });
+    };
   };
   assert.equal(
     await remoteTagCommit("owner/repo", "v0.1.0", execute),

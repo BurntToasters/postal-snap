@@ -1,9 +1,16 @@
 import { join } from "node:path";
-import { json, output, process, root, run } from "./_utils.js";
+import { json, process, root } from "./_utils.js";
+import {
+  assertGitHubCliAuthenticated,
+  githubJson,
+  runGitHub,
+} from "./github-cli.js";
 import {
   verifiedReleaseSession,
   verifyRemoteReleaseCommit,
 } from "./release-identity.js";
+
+assertGitHubCliAuthenticated();
 
 const pkg = await json(join(root, "package.json"));
 const tag = `v${pkg.version}`;
@@ -11,19 +18,17 @@ const prerelease = pkg.version.includes("-");
 const session = await verifiedReleaseSession();
 let release;
 try {
-  release = JSON.parse(
-    await output("gh", [
-      "release",
-      "view",
-      tag,
-      "--repo",
-      "BurntToasters/postal-snap",
-      "--json",
-      "isDraft,tagName",
-    ]),
-  );
+  release = githubJson([
+    "release",
+    "view",
+    tag,
+    "--repo",
+    "BurntToasters/postal-snap",
+    "--json",
+    "isDraft,tagName",
+  ]);
 } catch {
-  await run("gh", [
+  runGitHub([
     "release",
     "create",
     tag,
@@ -44,7 +49,7 @@ await verifyRemoteReleaseCommit("BurntToasters/postal-snap", session);
 if (process.argv.includes("--wait")) {
   for (let attempt = 0; attempt < 60; attempt += 1) {
     try {
-      await run("gh", [
+      runGitHub([
         "release",
         "view",
         tag,
