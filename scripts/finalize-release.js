@@ -5,13 +5,17 @@ import {
   artifactPlatform,
   ensureReleaseDir,
   json,
-  output,
   process,
   root,
   run,
   writeJson,
   readFile,
 } from "./_utils.js";
+import {
+  assertGitHubCliAuthenticated,
+  githubOutput,
+  runGitHub,
+} from "./github-cli.js";
 import { validateManifest } from "./validate-updater-manifest.js";
 import {
   verifiedReleaseSession,
@@ -24,10 +28,12 @@ const tag = `v${pkg.version}`;
 const directory = await ensureReleaseDir();
 const prerelease = pkg.version.includes("-");
 
+assertGitHubCliAuthenticated();
+
 if (process.argv.includes("--sync-beta-manifests")) {
   let stableTag;
   try {
-    stableTag = await output("gh", [
+    stableTag = githubOutput([
       "api",
       `repos/${repository}/releases/latest`,
       "--jq",
@@ -43,7 +49,7 @@ if (process.argv.includes("--sync-beta-manifests")) {
     .map((name) => join(directory, name));
   if (!betaFiles.length)
     throw new Error("No beta updater manifests are staged.");
-  await run("gh", [
+  runGitHub([
     "release",
     "upload",
     stableTag,
@@ -97,7 +103,7 @@ const upload = (await readdir(directory))
   .filter((name) => name !== ".session.json")
   .map((name) => join(directory, name));
 if (!upload.length) throw new Error("Nothing is staged in release/.");
-await run("gh", [
+runGitHub([
   "release",
   "upload",
   tag,
@@ -108,7 +114,7 @@ await run("gh", [
 ]);
 if (process.argv.includes("--hard")) {
   await run("node", ["scripts/verify-release-draft.js"]);
-  await run("gh", [
+  runGitHub([
     "release",
     "edit",
     tag,
