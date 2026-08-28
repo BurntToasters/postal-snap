@@ -62,7 +62,7 @@
     "dist:clean-release": "node scripts/dist-tools.js clean-release",
     "dist:clean-release-artifacts": "node scripts/dist-tools.js clean-release-artifacts",
     "dist:clean-all": "node scripts/dist-tools.js clean-all",
-    "rust:update": "rustup toolchain install 1.97.1 --profile minimal --component clippy rustfmt",
+    "rust:update": "rustup toolchain install 1.97.1 --profile minimal --component cargo,clippy,rustfmt",
     "rust:targets:win": "rustup target add --toolchain 1.97.1 x86_64-pc-windows-msvc aarch64-pc-windows-msvc",
     "rust:targets:mac": "rustup target add --toolchain 1.97.1 x86_64-apple-darwin aarch64-apple-darwin",
     "rust:targets:linux": "rustup target add --toolchain 1.97.1 x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu",
