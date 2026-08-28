@@ -23,21 +23,55 @@ function denyGitHubCliPassthrough(command) {
   }
 }
 
-export async function run(command, args = [], options = {}) {
+export function quoteWindowsCmdArg(value) {
+  const text = String(value);
+  if (text.length === 0) return '""';
+  if (!/[\s"]/.test(text)) return text;
+  return `"${text.replaceAll('"', '\\"')}"`;
+}
+
+export function windowsCmdLine(command, args = []) {
+  return [command, ...args].map(quoteWindowsCmdArg).join(" ");
+}
+
+export function resolveSpawnInvocation(
+  command,
+  args = [],
+  options = {},
+  platform = process.platform,
+) {
   denyGitHubCliPassthrough(command);
   const actualCmd =
-    process.platform === "win32" && command === "npm" ? "npm.cmd" : command;
+    platform === "win32" && command === "npm" ? "npm.cmd" : command;
   const useShell =
     options.shell ??
-    (process.platform === "win32" &&
-      (command === "npm" || /\.cmd$/i.test(actualCmd)));
+    (platform === "win32" && (command === "npm" || /\.cmd$/i.test(actualCmd)));
+  const spawnOptions = {
+    cwd: root,
+    ...options,
+    shell: useShell,
+  };
+  // Node DEP0190: never pass an args array with shell:true.
+  if (useShell) {
+    return {
+      command: windowsCmdLine(actualCmd, args),
+      args: undefined,
+      options: spawnOptions,
+    };
+  }
+  return { command: actualCmd, args, options: spawnOptions };
+}
+
+function spawnChild(command, args, options) {
+  const invocation = resolveSpawnInvocation(command, args, options);
+  return invocation.args === undefined
+    ? spawn(invocation.command, invocation.options)
+    : spawn(invocation.command, invocation.args, invocation.options);
+}
+
+export async function run(command, args = [], options = {}) {
   await new Promise((resolvePromise, reject) => {
-    const child = spawn(actualCmd, args, {
-      cwd: root,
-      stdio: "inherit",
-      shell: useShell,
-      ...options,
-    });
+    const child = spawnChild(command, args, { stdio: "inherit", ...options });
     child.on("error", reject);
     child.on("exit", (code) =>
       code === 0
@@ -48,18 +82,9 @@ export async function run(command, args = [], options = {}) {
 }
 
 export async function runWithInput(command, args, input, options = {}) {
-  denyGitHubCliPassthrough(command);
-  const actualCmd =
-    process.platform === "win32" && command === "npm" ? "npm.cmd" : command;
-  const useShell =
-    options.shell ??
-    (process.platform === "win32" &&
-      (command === "npm" || /\.cmd$/i.test(actualCmd)));
   await new Promise((resolvePromise, reject) => {
-    const child = spawn(actualCmd, args, {
-      cwd: root,
+    const child = spawnChild(command, args, {
       stdio: ["pipe", "inherit", "inherit"],
-      shell: useShell,
       ...options,
     });
     child.on("error", reject);
@@ -73,18 +98,9 @@ export async function runWithInput(command, args, input, options = {}) {
 }
 
 export async function output(command, args = [], options = {}) {
-  denyGitHubCliPassthrough(command);
-  const actualCmd =
-    process.platform === "win32" && command === "npm" ? "npm.cmd" : command;
-  const useShell =
-    options.shell ??
-    (process.platform === "win32" &&
-      (command === "npm" || /\.cmd$/i.test(actualCmd)));
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(actualCmd, args, {
-      cwd: root,
+    const child = spawnChild(command, args, {
       stdio: ["ignore", "pipe", "pipe"],
-      shell: useShell,
       ...options,
     });
     let stdout = "";

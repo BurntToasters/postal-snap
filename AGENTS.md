@@ -99,8 +99,9 @@ These are release blockers. Do not weaken them for convenience.
 - Direct Windows: signed x64/arm64 NSIS `.exe` plus signed updater payloads.
 - Direct macOS: universal Developer ID signed/notarized DMG and ZIP.
 - Linux: x64/arm64 AppImage and Flatpak only; no DEB/RPM.
-- Microsoft Store: x64/arm64 MSIX bundle, Store-managed updates, Windows 10 22H2 floor.
-- Mac App Store: universal sandboxed app and signed installer PKG, Store-managed updates.
+- First 0.1.0 shipment is GitHub-only. Microsoft Store and Mac App Store packaging scripts exist for a later train; they are not a 0.1.0 ship gate.
+- Microsoft Store (later): x64/arm64 MSIX bundle, Store-managed updates, Windows 10 22H2 floor.
+- Mac App Store (later): universal sandboxed app and signed installer PKG, Store-managed updates.
 - Mac Store and direct Mac builds use separate configuration/entitlements.
 - All packages include generated npm and Cargo third-party notices.
 
@@ -143,15 +144,15 @@ The `b` and `r` package scripts intentionally perform destructive branch cleanup
 
 ## Release status and manual gates
 
-Automated frontend, Playwright, Rust, lint, clippy, type, config, and production-build gates are established. Final release approval still requires external systems and real credentials:
+Automated frontend, Playwright, Rust, lint, clippy, type, config, and production-build gates are established. They do not make a release ready. Final GitHub 0.1.0 approval still requires external systems and real credentials:
 
 - Online npm and RustSec audits.
 - Pinned GreenMail 2.1.11 TLS integration run (requires Docker and OpenSSL).
-- Dedicated iCloud smoke test via `npm run test:icloud`.
-- Signed builds on every target architecture.
+- Dedicated iCloud smoke test via `npm run test:icloud` on a signing host (not CI).
+- Signed GitHub builds on every target architecture.
 - Authenticode, Gatekeeper, notarization, updater-signature, entitlement, and manifest verification.
-- Windows App Certification Kit and clean Windows 10/11 VM tests.
-- Mac App Store Connect validation.
 - Clean install, update, `mailto:`, offline restart, and uninstall testing.
 
-Use `docs/RELEASE_CHECKLIST.md` as the authoritative final checklist. Prefer a signed release candidate before publishing stable `0.1.0`.
+Windows App Certification Kit, Mac App Store Connect, and store metadata are later store-train gates.
+
+Use `docs/RELEASE_CHECKLIST.md` as the authoritative final checklist. Prefer a signed GitHub release candidate before publishing stable `0.1.0`.
