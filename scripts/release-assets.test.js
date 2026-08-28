@@ -408,6 +408,29 @@ test("rust:update passes clippy and rustfmt as one --component value", async () 
   }
 });
 
+test("vi.js is the IYERIS/Zinnia VM setup path used by r and b", async () => {
+  const packageJson = JSON.parse(
+    await readFile(join(root, "package.json"), "utf8"),
+  );
+  const vi = await readFile(join(root, "scripts/vi.js"), "utf8");
+  const distTools = await readFile(join(root, "scripts/dist-tools.js"), "utf8");
+  const tauriBuild = await readFile(
+    join(root, "scripts/tauri-build.js"),
+    "utf8",
+  );
+  assert.equal(packageJson.scripts.vi, "node scripts/vi.js");
+  assert.match(packageJson.scripts.r, /npm run vi && npm run gitprune:force/);
+  assert.match(packageJson.scripts.b, /npm run vi$/);
+  assert.match(vi, /git", \["fetch", "origin"\]/);
+  assert.match(vi, /reset", "--hard", "@\{u\}"/);
+  assert.match(vi, /clean", "-fd"/);
+  assert.match(vi, /npm", \["ci", "--ignore-scripts"\]/);
+  assert.match(vi, /VM Setup Complete/);
+  assert.doesNotMatch(vi, /writeJson\(packagePath/);
+  assert.match(distTools, /rmRetry\(/);
+  assert.match(tauriBuild, /rmRetry\(/);
+});
+
 test("test:all still includes Playwright e2e unless SKIP_E2E is set", async () => {
   const packageJson = JSON.parse(
     await readFile(join(root, "package.json"), "utf8"),
