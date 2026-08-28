@@ -15,7 +15,16 @@ import process from "node:process";
 export const root = resolve(import.meta.dirname, "..");
 export const releaseDir = join(root, "release");
 
+function denyGitHubCliPassthrough(command) {
+  if (command === "gh") {
+    throw new Error(
+      "GitHub CLI must be spawned through scripts/github-cli.js so leftover GH_TOKEN and GITHUB_TOKEN cannot authenticate gh.",
+    );
+  }
+}
+
 export async function run(command, args = [], options = {}) {
+  denyGitHubCliPassthrough(command);
   const actualCmd =
     process.platform === "win32" && command === "npm" ? "npm.cmd" : command;
   const useShell =
@@ -39,6 +48,7 @@ export async function run(command, args = [], options = {}) {
 }
 
 export async function runWithInput(command, args, input, options = {}) {
+  denyGitHubCliPassthrough(command);
   const actualCmd =
     process.platform === "win32" && command === "npm" ? "npm.cmd" : command;
   const useShell =
@@ -63,6 +73,7 @@ export async function runWithInput(command, args, input, options = {}) {
 }
 
 export async function output(command, args = [], options = {}) {
+  denyGitHubCliPassthrough(command);
   const actualCmd =
     process.platform === "win32" && command === "npm" ? "npm.cmd" : command;
   const useShell =
