@@ -58,7 +58,7 @@ const releaseSession = {
   commit: sessionCommit,
 };
 
-test("draft finalize verifies target_commitish without a git tag ref", async () => {
+test("draft finalize requires a draft without resolving git tag refs", async () => {
   const tagCalls = [];
   const execute = async (args) => {
     tagCalls.push(args.at(-1));
@@ -79,7 +79,6 @@ test("draft finalize verifies target_commitish without a git tag ref", async () 
         target_commitish: sessionCommit,
       },
     ],
-    resolveCommitish: async (_repository, commitish) => commitish.toLowerCase(),
   });
 });
 
@@ -110,43 +109,17 @@ test("draft finalize refuses a published release for the same tag", async () => 
   );
 });
 
-test("draft finalize fails when target_commitish does not match the session commit", async () => {
+test("draft finalize accepts a leftover draft with a different target_commitish", async () => {
   const otherCommit = "d".repeat(40);
-  await assert.rejects(
-    () =>
-      verifyDraftReleaseCommit("owner/repo", releaseSession, {
-        listReleases: async () => [
-          {
-            tag_name: "v0.1.0",
-            draft: true,
-            target_commitish: otherCommit,
-          },
-        ],
-        resolveCommitish: async (_repository, commitish) =>
-          commitish.toLowerCase(),
-      }),
-    /not release session commit/,
-  );
-});
-
-test("draft finalize resolves branch target_commitish to the session commit", async () => {
-  const resolveCalls = [];
   await verifyDraftReleaseCommit("owner/repo", releaseSession, {
     listReleases: async () => [
       {
         tag_name: "v0.1.0",
         draft: true,
-        target_commitish: "main",
+        target_commitish: otherCommit,
       },
     ],
-    resolveCommitish: async (repository, commitish) => {
-      resolveCalls.push({ repository, commitish });
-      return sessionCommit;
-    },
   });
-  assert.deepEqual(resolveCalls, [
-    { repository: "owner/repo", commitish: "main" },
-  ]);
 });
 
 test("hard finalize still requires the published git tag to match the session commit", async () => {

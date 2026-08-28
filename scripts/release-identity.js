@@ -58,25 +58,6 @@ export async function verifyRemoteReleaseCommit(
   }
 }
 
-export async function resolveTargetCommitish(
-  repository,
-  commitish,
-  execute = githubJson,
-) {
-  if (/^[a-f0-9]{40}$/i.test(commitish ?? "")) {
-    return commitish.toLowerCase();
-  }
-  const commit = await execute([
-    "api",
-    `repos/${repository}/commits/${encodeURIComponent(commitish)}`,
-  ]);
-  const sha = commit?.sha;
-  if (!/^[a-f0-9]{40}$/i.test(sha ?? "")) {
-    throw new Error(`Could not resolve ${commitish} to a commit.`);
-  }
-  return sha.toLowerCase();
-}
-
 function publishedReleaseUploadError(tag) {
   return new Error(
     `Release ${tag} already exists as published. Refusing to upload to the published release.`,
@@ -86,10 +67,7 @@ function publishedReleaseUploadError(tag) {
 export async function verifyDraftReleaseCommit(
   repository,
   session,
-  {
-    listReleases = listMatchingReleases,
-    resolveCommitish = resolveTargetCommitish,
-  } = {},
+  { listReleases = listMatchingReleases } = {},
 ) {
   const matching = await listReleases({
     repository,
@@ -102,16 +80,6 @@ export async function verifyDraftReleaseCommit(
   if (!draft) {
     throw new Error(
       `No draft release found for ${session.tag}. Run "npm run release:draft" on the Windows machine first.`,
-    );
-  }
-  const targetCommitish = draft.target_commitish;
-  if (!targetCommitish) {
-    throw new Error(`Draft release ${session.tag} has no target commit.`);
-  }
-  const commit = await resolveCommitish(repository, targetCommitish);
-  if (commit !== session.commit.toLowerCase()) {
-    throw new Error(
-      `Draft ${session.tag} targets ${targetCommitish} (${commit}), not release session commit ${session.commit}.`,
     );
   }
 }
