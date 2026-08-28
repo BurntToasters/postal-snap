@@ -138,6 +138,14 @@ test("release environment template covers every supported credential path", asyn
   }
   assert.ok(!names.has("GH_TOKEN"));
   assert.ok(template.includes("gh auth login"));
+  assert.match(
+    template,
+    /TAURI_UPDATER_PUBLIC_KEY is optional; if set, it must match that committed key/,
+  );
+  assert.match(
+    template,
+    /private key and password are required for signed builds/,
+  );
 });
 
 test("release verification covers generated manifests after finalization", async () => {

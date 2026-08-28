@@ -38,22 +38,50 @@ test("signed builds reject a placeholder updater pubkey", () => {
   assert.throws(
     () =>
       resolveUpdaterPublicKey({
-        committed: realKey,
+        committed: PLACEHOLDER_UPDATER_PUBLIC_KEY,
         fromEnv: "",
         requireSigning: true,
       }),
-    /TAURI_UPDATER_PUBLIC_KEY/,
+    /placeholder/,
+  );
+  assert.throws(
+    () =>
+      resolveUpdaterPublicKey({
+        committed: PLACEHOLDER_UPDATER_PUBLIC_KEY,
+        fromEnv: realKey,
+        requireSigning: true,
+      }),
+    /does not match|placeholder/,
   );
 });
 
-test("signed builds require the env pubkey to match tauri.conf.json", () => {
+test("signed builds use the committed key when TAURI_UPDATER_PUBLIC_KEY is unset", () => {
+  assert.equal(
+    resolveUpdaterPublicKey({
+      committed: realKey,
+      fromEnv: "",
+      requireSigning: true,
+    }),
+    realKey,
+  );
+  assert.equal(
+    resolveUpdaterPublicKey({
+      committed: realKey,
+      fromEnv: undefined,
+      requireSigning: true,
+    }),
+    realKey,
+  );
+});
+
+test("signed builds require the env pubkey to match tauri.conf.json when set", () => {
   assert.equal(
     resolveUpdaterPublicKey({
       committed: realKey,
       fromEnv: `  ${realKey}  `,
       requireSigning: true,
-    }).replace(/\s+/g, ""),
-    realKey.replace(/\s+/g, ""),
+    }),
+    realKey,
   );
   assert.throws(
     () =>
@@ -84,6 +112,16 @@ test("unsigned builds use the committed key instead of the placeholder", () => {
         requireSigning: false,
       }),
     /real Tauri updater public key/,
+  );
+  assert.throws(
+    () =>
+      resolveUpdaterPublicKey({
+        committed: realKey,
+        fromEnv:
+          "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEZDNzY0QzNGQTREMDVENjMKUldSalhkQ2tQMHgyL0Q1MzVEckJXU05jS0ZMa2lqOGdGZnoxTHpYL1J5Y2JhdFVwNzY1bmFreEIK",
+        requireSigning: false,
+      }),
+    /does not match/,
   );
 });
 
@@ -122,6 +160,17 @@ test("tauri-build never falls back to the placeholder pubkey", async () => {
   assert.match(source, /resolveUpdaterPublicKey/);
   assert.doesNotMatch(source, /process\.env\.TAURI_UPDATER_PUBLIC_KEY \?\?/);
   assert.doesNotMatch(source, /"POSTAL_SNAP_UPDATER_PUBLIC_KEY"/);
+});
+
+test("signed tauri-build does not require TAURI_UPDATER_PUBLIC_KEY in the environment", async () => {
+  const source = await readFile(join(root, "scripts/tauri-build.js"), "utf8");
+  const signingEnv = source.slice(
+    source.indexOf("if (requireTauriSigning)"),
+    source.indexOf("if (requireWindowsSigning)"),
+  );
+  assert.match(signingEnv, /TAURI_SIGNING_PRIVATE_KEY/);
+  assert.match(signingEnv, /TAURI_SIGNING_PRIVATE_KEY_PASSWORD/);
+  assert.doesNotMatch(signingEnv, /TAURI_UPDATER_PUBLIC_KEY/);
 });
 
 test("prerelease-prepare refuses a placeholder updater pubkey", async () => {

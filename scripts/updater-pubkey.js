@@ -29,20 +29,14 @@ export function resolveUpdaterPublicKey({
   const envKey = String(fromEnv ?? "").trim();
   const committedKey = String(committed ?? "").trim();
 
-  if (requireSigning) {
-    if (!envKey) {
-      throw new Error(
-        "Missing required environment variables: TAURI_UPDATER_PUBLIC_KEY",
-      );
-    }
+  if (envKey) {
     if (!isMinisignPublicKey(envKey)) {
       throw new Error(
-        "TAURI_UPDATER_PUBLIC_KEY is still a placeholder. Generate a Tauri updater key with `npm run tauri -- signer generate`, store the private key outside git, and put the public key in both TAURI_UPDATER_PUBLIC_KEY and src-tauri/tauri.conf.json.",
+        "TAURI_UPDATER_PUBLIC_KEY is still a placeholder. Generate a Tauri updater key with `npm run tauri -- signer generate`, store the private key outside git, and put the public key in src-tauri/tauri.conf.json (`plugins.updater.pubkey`).",
       );
     }
     if (
       committedKey &&
-      !isPlaceholderUpdaterPublicKey(committedKey) &&
       normalizeUpdaterPublicKey(envKey) !==
         normalizeUpdaterPublicKey(committedKey)
     ) {
@@ -50,7 +44,15 @@ export function resolveUpdaterPublicKey({
         "TAURI_UPDATER_PUBLIC_KEY does not match plugins.updater.pubkey in tauri.conf.json.",
       );
     }
-    return envKey;
+  }
+
+  if (requireSigning) {
+    if (!isMinisignPublicKey(committedKey)) {
+      throw new Error(
+        "The updater public key in src-tauri/tauri.conf.json (`plugins.updater.pubkey`) is still a placeholder. Generate a Tauri updater key with `npm run tauri -- signer generate`, store the private key outside git, and commit the public key there.",
+      );
+    }
+    return committedKey;
   }
 
   const chosen = envKey || committedKey;
