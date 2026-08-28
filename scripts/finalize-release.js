@@ -3,6 +3,7 @@ import { join } from "node:path";
 import {
   artifactArch,
   artifactPlatform,
+  basename,
   ensureReleaseDir,
   json,
   process,
@@ -29,6 +30,7 @@ const tag = `v${pkg.version}`;
 const directory = await ensureReleaseDir();
 const prerelease = pkg.version.includes("-");
 
+console.log(`\nPostal Snap ${pkg.version} — release pipeline\n`);
 assertGitHubCliAuthenticated();
 
 if (process.argv.includes("--sync-beta-manifests")) {
@@ -50,6 +52,7 @@ if (process.argv.includes("--sync-beta-manifests")) {
     .map((name) => join(directory, name));
   if (!betaFiles.length)
     throw new Error("No beta updater manifests are staged.");
+  console.log("[1/1] Uploading beta manifests to the latest stable release...");
   runGitHub([
     "release",
     "upload",
@@ -59,13 +62,19 @@ if (process.argv.includes("--sync-beta-manifests")) {
     repository,
     "--clobber",
   ]);
+  for (const filePath of betaFiles) {
+    console.log(`  ~ synced ${basename(filePath)} to latest stable release`);
+  }
+  console.log("Done: beta manifests synced to latest stable release.\n");
   process.exit(0);
 }
 
 const session = await verifiedReleaseSession();
 const hardFinalize = process.argv.includes("--hard");
+console.log("[1/3] Verifying draft...");
 await verifyDraftReleaseCommit(repository, session);
 
+console.log("[2/3] Generating updater manifests...");
 const artifacts = await readdir(directory);
 const updaterPayloads = artifacts.filter((name) =>
   /\.(nsis\.zip|app\.tar\.gz|AppImage\.tar\.gz)$/.test(name),
@@ -98,6 +107,7 @@ for (const payload of updaterPayloads) {
     };
     validateManifest(manifest);
     await writeJson(join(directory, filename), manifest);
+    console.log(`  + ${filename}`);
   }
 }
 
@@ -105,6 +115,7 @@ const upload = (await readdir(directory))
   .filter((name) => name !== ".session.json")
   .map((name) => join(directory, name));
 if (!upload.length) throw new Error("Nothing is staged in release/.");
+console.log("[3/3] Uploading to GitHub...");
 runGitHub([
   "release",
   "upload",
@@ -114,6 +125,7 @@ runGitHub([
   repository,
   "--clobber",
 ]);
+for (const filePath of upload) console.log(`  ^ ${basename(filePath)}`);
 if (hardFinalize) {
   await run("node", ["scripts/verify-release-draft.js"]);
   runGitHub([
@@ -130,5 +142,5 @@ if (hardFinalize) {
     await run("node", ["scripts/finalize-release.js", "--sync-beta-manifests"]);
 }
 console.log(
-  `Uploaded Postal Snap ${pkg.version} release assets${hardFinalize ? " and published the release" : " to the draft"}.`,
+  `\nDone — ${tag} uploaded as ${hardFinalize ? "published" : "draft"}.\n`,
 );

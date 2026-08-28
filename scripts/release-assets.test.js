@@ -450,7 +450,12 @@ test("test:all still includes Playwright e2e unless SKIP_E2E is set", async () =
   );
 
   const testAll = await readFile(join(root, "scripts/test-all.js"), "utf8");
-  assert.doesNotMatch(testAll, /process\.platform/);
+  assert.match(testAll, /env\.SKIP_E2E/);
+  assert.match(testAll, /POSTAL SNAP TEST SUITE/);
+  assert.match(
+    packageJson.scripts["prerelease:prepare"],
+    /^node scripts\/release-warning\.js &&/,
+  );
 
   const ci = await readFile(join(root, ".github/workflows/ci.yml"), "utf8");
   assert.match(ci, /npx playwright install --with-deps chromium/);

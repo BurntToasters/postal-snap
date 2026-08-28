@@ -110,7 +110,7 @@
     "build:msstore": "npm run build:msstore:win && dotenv -e .env -- node scripts/msstore-pack.js",
     "build:msstore:x64": "npm run build:msstore:win:x64 && dotenv -e .env -- node scripts/msstore-pack.js x64",
     "build:msstore:arm64": "npm run build:msstore:win:arm64 && dotenv -e .env -- node scripts/msstore-pack.js arm64",
-    "prerelease:prepare": "dotenv -e .env -- node scripts/prerelease-prepare.js",
+    "prerelease:prepare": "node scripts/release-warning.js && dotenv -e .env -- node scripts/prerelease-prepare.js",
     "release:prepare": "npm run workspace:prepare && npm run dist:clean-release-artifacts && npm run release:session:start",
     "release:session:start": "node scripts/release-session.js start",
     "release:session:verify": "node scripts/release-session.js verify",

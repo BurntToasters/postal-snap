@@ -15,10 +15,14 @@ if (action === "start") {
     commit,
     startedAt: new Date().toISOString(),
   });
-  console.log(`Release session started for v${pkg.version}.`);
+  console.log(
+    `release-session: started (${pkg.version}, ${commit.slice(0, 12)})`,
+  );
 } else if (action === "verify") {
   const session = await verifiedReleaseSession();
-  console.log(`Release session verified for ${session.tag}.`);
+  console.log(
+    `release-session: ok (${session.version}, ${session.commit.slice(0, 12)})`,
+  );
 } else if (action === "clear") {
   await rm(path, { force: true });
 } else throw new Error("Use release-session.js start|verify|clear");
