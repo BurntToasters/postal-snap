@@ -4,7 +4,11 @@ import test from "node:test";
 import { join } from "node:path";
 import { artifactArch, artifactPlatform, root } from "./_utils.js";
 import { validateManifest } from "./validate-updater-manifest.js";
-import { remoteTagCommit, verifyDraftReleaseCommit, verifyRemoteReleaseCommit } from "./release-identity.js";
+import {
+  remoteTagCommit,
+  verifyDraftReleaseCommit,
+  verifyRemoteReleaseCommit,
+} from "./release-identity.js";
 
 test("artifact platform and architecture mapping", () => {
   assert.equal(artifactPlatform("Postal-Snap-Windows-x64.nsis.zip"), "windows");
@@ -118,7 +122,8 @@ test("draft finalize fails when target_commitish does not match the session comm
             target_commitish: otherCommit,
           },
         ],
-        resolveCommitish: async (_repository, commitish) => commitish.toLowerCase(),
+        resolveCommitish: async (_repository, commitish) =>
+          commitish.toLowerCase(),
       }),
     /not release session commit/,
   );
@@ -155,13 +160,9 @@ test("hard finalize still requires the published git tag to match the session co
 
   await assert.rejects(
     () =>
-      verifyRemoteReleaseCommit(
-        "owner/repo",
-        releaseSession,
-        async () => ({
-          object: { type: "commit", sha: "e".repeat(40) },
-        }),
-      ),
+      verifyRemoteReleaseCommit("owner/repo", releaseSession, async () => ({
+        object: { type: "commit", sha: "e".repeat(40) },
+      })),
     /not release session commit/,
   );
 });
