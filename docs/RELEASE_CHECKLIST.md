@@ -15,7 +15,7 @@ Mocked frontend, Playwright, and unit tests do not by themselves mean the releas
 - [ ] A copy of the oldest supported v1 database opens, migrates transactionally, and preserves referenced draft/outbox attachments.
 - [ ] Direct feature builds compile. Store (`mas` / `msstore`) compile checks are optional for GitHub-only 0.1.0.
 - [ ] Generated npm and Cargo notices are present in every package.
-- [ ] `src-tauri/tauri.conf.json` updater pubkey is a real minisign key and matches `TAURI_UPDATER_PUBLIC_KEY`.
+- [ ] `src-tauri/tauri.conf.json` updater pubkey is a real minisign key. `TAURI_UPDATER_PUBLIC_KEY` is not required in `.env`; if it is set, it matches the committed key.
 
 ## Mail behavior
 
