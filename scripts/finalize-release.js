@@ -19,6 +19,7 @@ import {
 import { validateManifest } from "./validate-updater-manifest.js";
 import {
   verifiedReleaseSession,
+  verifyDraftReleaseCommit,
   verifyRemoteReleaseCommit,
 } from "./release-identity.js";
 
@@ -62,7 +63,8 @@ if (process.argv.includes("--sync-beta-manifests")) {
 }
 
 const session = await verifiedReleaseSession();
-await verifyRemoteReleaseCommit(repository, session);
+const hardFinalize = process.argv.includes("--hard");
+await verifyDraftReleaseCommit(repository, session);
 
 const artifacts = await readdir(directory);
 const updaterPayloads = artifacts.filter((name) =>
@@ -112,7 +114,7 @@ runGitHub([
   repository,
   "--clobber",
 ]);
-if (process.argv.includes("--hard")) {
+if (hardFinalize) {
   await run("node", ["scripts/verify-release-draft.js"]);
   runGitHub([
     "release",
@@ -123,9 +125,10 @@ if (process.argv.includes("--hard")) {
     "--draft=false",
     ...(prerelease ? ["--prerelease"] : ["--latest"]),
   ]);
+  await verifyRemoteReleaseCommit(repository, session);
   if (prerelease)
     await run("node", ["scripts/finalize-release.js", "--sync-beta-manifests"]);
 }
 console.log(
-  `Uploaded Postal Snap ${pkg.version} release assets${process.argv.includes("--hard") ? " and published the release" : " to the draft"}.`,
+  `Uploaded Postal Snap ${pkg.version} release assets${hardFinalize ? " and published the release" : " to the draft"}.`,
 );
