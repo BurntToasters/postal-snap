@@ -44,6 +44,8 @@ jobs:
       - run: npm run lint
       - run: npm run lint:rust
       - run: npm run check:native-process-policy
+      - run: npm run check:cargo-update-policy
+      - run: npm run test:cargo-safe-update
       - run: npm run typecheck
       - run: npm run typecheck:test
       - run: npm test
