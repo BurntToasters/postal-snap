@@ -203,7 +203,33 @@ test("rust:update passes clippy and rustfmt as one --component value", async () 
   }
 });
 
-test("workspace:prepare skips Playwright e2e for every platform release", async () => {
+test("test:all still includes Playwright e2e unless SKIP_E2E is set", async () => {
+  const packageJson = JSON.parse(
+    await readFile(join(root, "package.json"), "utf8"),
+  );
+  assert.equal(packageJson.scripts["test:all"], "node scripts/test-all.js");
+  assert.equal(packageJson.scripts["test:e2e"], "playwright test");
+
+  const { qualityGateSteps } = await import("./test-all.js");
+  assert.deepEqual(
+    qualityGateSteps({}).find((args) => args.includes("test:e2e")),
+    ["run", "test:e2e"],
+  );
+  assert.ok(
+    !qualityGateSteps({ SKIP_E2E: "1" }).some((args) =>
+      args.includes("test:e2e"),
+    ),
+  );
+
+  const testAll = await readFile(join(root, "scripts/test-all.js"), "utf8");
+  assert.doesNotMatch(testAll, /process\.platform/);
+
+  const ci = await readFile(join(root, ".github/workflows/ci.yml"), "utf8");
+  assert.match(ci, /npx playwright install --with-deps chromium/);
+  assert.match(ci, /npm run test:e2e/);
+});
+
+test("workspace:prepare sets SKIP_E2E for every platform release", async () => {
   const packageJson = JSON.parse(
     await readFile(join(root, "package.json"), "utf8"),
   );
@@ -215,8 +241,6 @@ test("workspace:prepare skips Playwright e2e for every platform release", async 
     packageJson.scripts["release:prepare"],
     /^npm run workspace:prepare &&/,
   );
-  assert.equal(packageJson.scripts["test:all"], "node scripts/test-all.js");
-  assert.equal(packageJson.scripts["test:e2e"], "playwright test");
   assert.ok(packageJson.devDependencies["cross-env"]);
 
   for (const name of [
@@ -249,11 +273,6 @@ test("workspace:prepare skips Playwright e2e for every platform release", async 
       `${name} must not re-run the quality gate or Playwright`,
     );
   }
-
-  const testAll = await readFile(join(root, "scripts/test-all.js"), "utf8");
-  assert.ok(testAll.includes('["run", "test:e2e"]'));
-  assert.match(testAll, /process\.env\.SKIP_E2E/);
-  assert.doesNotMatch(testAll, /process\.platform/);
 });
 
 test("test-all and package.json include cargo safe update and policy check", async () => {
