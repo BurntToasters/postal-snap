@@ -88,6 +88,12 @@ async function refreshDraftTarget({ repository, draft, target, request }) {
   });
 }
 
+export function describeDraft(release, tag) {
+  const name = release?.name || tag;
+  const assets = Array.isArray(release?.assets) ? release.assets.length : 0;
+  return `${name} (id ${release?.id}, ${assets} assets)`;
+}
+
 export async function ensureDraftRelease({
   repository = REPOSITORY,
   tag,
@@ -100,6 +106,7 @@ export async function ensureDraftRelease({
   const matching = await listMatchingReleases({ repository, tag, request });
   const draft = existingDraft(matching, tag);
   if (draft) {
+    console.log(`   Draft already exists: ${describeDraft(draft, tag)}.`);
     return refreshDraftTarget({ repository, draft, target, request });
   }
   if (hasPublishedRelease(matching, tag)) {
@@ -107,7 +114,8 @@ export async function ensureDraftRelease({
   }
 
   try {
-    return await request("POST", `repos/${repository}/releases`, {
+    console.log("   No release found. Creating draft...");
+    const created = await request("POST", `repos/${repository}/releases`, {
       tag_name: tag,
       name: title,
       draft: true,
@@ -115,19 +123,25 @@ export async function ensureDraftRelease({
       target_commitish: target,
       generate_release_notes: true,
     });
+    console.log(`   Created draft release: ${describeDraft(created, tag)}.`);
+    return created;
   } catch (error) {
     if (error.statusCode === 422) {
+      console.log("   Create returned 422; re-checking for existing draft...");
       await sleepFn(2000);
       const afterRetry = await listMatchingReleases({
         repository,
         tag,
         request,
       });
-      const created = existingDraft(afterRetry, tag);
-      if (created) {
+      const reused = existingDraft(afterRetry, tag);
+      if (reused) {
+        console.log(
+          `   Found existing draft after retry: ${describeDraft(reused, tag)}.`,
+        );
         return refreshDraftTarget({
           repository,
-          draft: created,
+          draft: reused,
           target,
           request,
         });
@@ -155,7 +169,10 @@ export async function waitForDraftRelease({
     attempt += 1;
     const matching = await listMatchingReleases({ repository, tag, request });
     const draft = existingDraft(matching, tag);
-    if (draft) return draft;
+    if (draft) {
+      console.log(`   Found draft: ${describeDraft(draft, tag)}. Proceeding.`);
+      return draft;
+    }
     if (hasPublishedRelease(matching, tag)) {
       throw publishedReleaseError(tag, "wait for");
     }

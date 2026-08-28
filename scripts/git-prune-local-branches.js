@@ -21,3 +21,10 @@ for (const branch of branches) {
   if (dryRun) console.log(branch);
   else await run("git", ["branch", force ? "-D" : "-d", branch]);
 }
+if (dryRun && branches.length) {
+  console.log(`gitprune: would delete ${branches.length} gone branch(es).`);
+} else if (branches.length) {
+  console.log(`gitprune: deleted ${branches.length} gone branch(es).`);
+} else {
+  console.log("gitprune: no gone branches.");
+}
