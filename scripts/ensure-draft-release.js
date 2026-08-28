@@ -125,7 +125,12 @@ export async function ensureDraftRelease({
       });
       const created = existingDraft(afterRetry, tag);
       if (created) {
-        return refreshDraftTarget({ repository, draft: created, target, request });
+        return refreshDraftTarget({
+          repository,
+          draft: created,
+          target,
+          request,
+        });
       }
       if (hasPublishedRelease(afterRetry, tag)) {
         throw publishedReleaseError(tag, "create");
