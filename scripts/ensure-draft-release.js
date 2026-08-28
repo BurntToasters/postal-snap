@@ -81,6 +81,13 @@ function publishedReleaseError(tag, action) {
   );
 }
 
+async function refreshDraftTarget({ repository, draft, target, request }) {
+  if (!target) return draft;
+  return request("PATCH", `repos/${repository}/releases/${draft.id}`, {
+    target_commitish: target,
+  });
+}
+
 export async function ensureDraftRelease({
   repository = REPOSITORY,
   tag,
@@ -92,7 +99,9 @@ export async function ensureDraftRelease({
 } = {}) {
   const matching = await listMatchingReleases({ repository, tag, request });
   const draft = existingDraft(matching, tag);
-  if (draft) return draft;
+  if (draft) {
+    return refreshDraftTarget({ repository, draft, target, request });
+  }
   if (hasPublishedRelease(matching, tag)) {
     throw publishedReleaseError(tag, "create");
   }
@@ -115,7 +124,9 @@ export async function ensureDraftRelease({
         request,
       });
       const created = existingDraft(afterRetry, tag);
-      if (created) return created;
+      if (created) {
+        return refreshDraftTarget({ repository, draft: created, target, request });
+      }
       if (hasPublishedRelease(afterRetry, tag)) {
         throw publishedReleaseError(tag, "create");
       }

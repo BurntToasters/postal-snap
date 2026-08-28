@@ -69,15 +69,45 @@ test("lists GitHub releases page by page before matching a draft", async () => {
   assert.equal(existingDraft(items, tag)?.id, 11);
 });
 
-test("create mode reuses a draft and is the only creator", async () => {
+test("create mode reuses a draft without PATCH when no target is provided", async () => {
   const { calls, request } = recordingRequest(async (method) => {
     if (method === "GET") return [published, draft];
-    throw new Error("create mode must not POST when a draft already exists");
+    throw new Error("create mode must not PATCH when no target is provided");
   });
   const reused = await ensureDraftRelease({ tag, request });
   assert.equal(reused.id, 11);
   assert.ok(calls.every((call) => call.method === "GET"));
   assert.ok(calls[0].endpoint.includes("page=1"));
+});
+
+test("create mode PATCHes target_commitish when reusing a leftover draft", async () => {
+  const sessionCommit = "f".repeat(40);
+  const leftoverDraft = {
+    ...draft,
+    target_commitish: "e".repeat(40),
+  };
+  const { calls, request } = recordingRequest(async (method, endpoint, body) => {
+    if (method === "GET") return [leftoverDraft];
+    if (method === "PATCH") {
+      return { ...leftoverDraft, ...body };
+    }
+    throw new Error("create mode must not POST when a draft already exists");
+  });
+  const reused = await ensureDraftRelease({
+    tag,
+    target: sessionCommit,
+    request,
+  });
+  assert.equal(reused.target_commitish, sessionCommit);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].method, "GET");
+  assert.equal(calls[1].method, "PATCH");
+  assert.equal(
+    calls[1].endpoint,
+    "repos/BurntToasters/postal-snap/releases/11",
+  );
+  assert.deepEqual(calls[1].body, { target_commitish: sessionCommit });
+  assert.ok(!calls.some((call) => call.method === "POST"));
 });
 
 test("create mode creates a draft when none exists", async () => {
@@ -169,6 +199,7 @@ test("wait mode never calls create", async () => {
   );
   assert.ok(calls.every((call) => call.method === "GET"));
   assert.ok(!calls.some((call) => call.method === "POST"));
+  assert.ok(!calls.some((call) => call.method === "PATCH"));
 });
 
 test("wait mode returns the Windows draft without creating", async () => {
@@ -240,6 +271,7 @@ test("main wait mode never creates and create mode is the only creator", async (
     /Timed out after 0s waiting for draft v0\.1\.0/,
   );
   assert.ok(wait.calls.every((call) => call.method === "GET"));
+  assert.ok(!wait.calls.some((call) => call.method === "PATCH"));
 
   const create = recordingRequest(async (method, _endpoint, body) => {
     if (method === "GET") return [];
