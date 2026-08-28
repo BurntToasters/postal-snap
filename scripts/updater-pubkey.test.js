@@ -166,11 +166,12 @@ test("signed tauri-build does not require TAURI_UPDATER_PUBLIC_KEY in the enviro
   const source = await readFile(join(root, "scripts/tauri-build.js"), "utf8");
   const signingEnv = source.slice(
     source.indexOf("if (requireTauriSigning)"),
-    source.indexOf("if (requireWindowsSigning)"),
+    source.indexOf("const windowsSigning"),
   );
   assert.match(signingEnv, /TAURI_SIGNING_PRIVATE_KEY/);
   assert.match(signingEnv, /TAURI_SIGNING_PRIVATE_KEY_PASSWORD/);
   assert.doesNotMatch(signingEnv, /TAURI_UPDATER_PUBLIC_KEY/);
+  assert.doesNotMatch(source, /WINDOWS_CERTIFICATE_THUMBPRINT/);
 });
 
 test("prerelease-prepare refuses a placeholder updater pubkey", async () => {

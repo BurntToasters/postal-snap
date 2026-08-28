@@ -1,3 +1,6 @@
+# Quality gates and unsigned compile checks. Signed Windows NSIS stays on the
+# release VM (`npm run release:win` with Azure Artifact Signing).
+
 name: CI
 
 on:
