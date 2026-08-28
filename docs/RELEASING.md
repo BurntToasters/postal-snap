@@ -18,7 +18,7 @@ Beta builds generate `latest-<target>-beta-<arch>.json`; stable builds generate 
 
 Microsoft Store and Mac App Store packaging remain available in `package.json` for a later store train. They are out of scope for the first GitHub 0.1.0. Direct Mac releases use Developer ID signing/notarization through Tauri. `APPLE_APP_SPECIFIC_PASSWORD` is accepted as a legacy alias for `APPLE_PASSWORD`. Signed Mac builds fail early if `APPLE_SIGNING_IDENTITY` is missing from the keychain; on SSH sessions run `npm run mac:ssh:keychain` first.
 
-CI may import signing identities from `WINDOWS_CERTIFICATE_PFX_BASE64` or `APPLE_CERTIFICATE_P12_BASE64`. Keep the associated passwords and generated thumbprints in encrypted secrets. Local signing can use already-installed identities and the non-base64 variables from `.env.example`.
+Direct Windows NSIS installers are signed after `tauri build` with Azure Artifact Signing (Public Trust), using the same `.env` variables as Zinnia/IYERIS. Once per Windows VM, run `npm run setup:win:artifact-signing` as Administrator to install Microsoft Artifact Signing Client Tools. `SKIP_WIN_CODESIGN=1` is the unsigned escape hatch. GitHub CI does not sign Windows artifacts; `npm run release:win` on the signing VM is the release path. Direct macOS still uses Developer ID identities; CI may import those from `APPLE_CERTIFICATE_P12_BASE64`.
 
 Before publishing, smoke-test iCloud with a dedicated account and app-specific password: set `POSTAL_SNAP_TEST_ICLOUD_EMAIL` and `POSTAL_SNAP_TEST_ICLOUD_PASSWORD` in `.env`, then run `npm run test:icloud`. That live connection is a human/signing-host gate; CI does not run it. Validate mailto registration and run the platform certification tools listed in the GitHub-only section of the checklist.
 
