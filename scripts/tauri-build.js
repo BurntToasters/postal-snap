@@ -16,7 +16,10 @@ import {
 import { resolveUpdaterPublicKey } from "./updater-pubkey.js";
 import {
   applyApplePasswordCompatibility,
+  artifactSigningPowershellArgs,
   assertAppleSigningIdentityAvailable,
+  assertWindowsSigningConfigured,
+  windowsArtifactsToSign,
 } from "./tauri-signing-env.js";
 
 const input = process.argv.slice(2);
@@ -61,7 +64,18 @@ if (requireTauriSigning)
     "TAURI_SIGNING_PRIVATE_KEY",
     "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
   ]);
-if (requireWindowsSigning) requireEnv(["WINDOWS_CERTIFICATE_THUMBPRINT"]);
+const windowsSigning = assertWindowsSigningConfigured({
+  requireWindowsSigning,
+  target,
+  noBundle,
+  platform: process.platform,
+  env: process.env,
+});
+if (requireWindowsSigning && windowsSigning.skipSigning) {
+  console.warn(
+    "[tauri-build] SKIP_WIN_CODESIGN=1; producing unsigned Windows artifacts.",
+  );
+}
 if (requireMacosSigning) requireEnv(["APPLE_SIGNING_IDENTITY"]);
 if (requireMacosNotarization) {
   const apiCredentials =
@@ -114,18 +128,6 @@ try {
           },
         },
       };
-  if (requireWindowsSigning) {
-    updaterOverride.bundle = {
-      windows: {
-        certificateThumbprint:
-          process.env.WINDOWS_CERTIFICATE_THUMBPRINT.trim(),
-        digestAlgorithm: "sha256",
-        timestampUrl:
-          process.env.WINDOWS_TIMESTAMP_URL?.trim() ||
-          "http://timestamp.digicert.com",
-      },
-    };
-  }
   const override = additionalConfig
     ? merge(await json(join(root, additionalConfig)), updaterOverride)
     : updaterOverride;
@@ -166,10 +168,36 @@ function merge(base, override) {
 if (!noBundle) {
   const pkg = await json(join(root, "package.json"));
   const release = await ensureReleaseDir();
-  const actualTargetDir = target
-    ? join(root, "src-tauri/target", target, "release", "bundle")
-    : join(root, "src-tauri/target/release/bundle");
+  const targetReleaseDir = target
+    ? join(root, "src-tauri/target", target, "release")
+    : join(root, "src-tauri/target/release");
+  const actualTargetDir = join(targetReleaseDir, "bundle");
   const arch = /aarch64|arm64/.test(target ?? "") ? "arm64" : "x64";
+  if (requireWindowsSigning && !windowsSigning.skipSigning) {
+    const artifacts = await windowsArtifactsToSign(targetReleaseDir);
+    if (!artifacts.length) {
+      throw new Error(
+        `No Windows runtime or installer executables found under ${targetReleaseDir}`,
+      );
+    }
+    const signScript = join(root, "scripts/windows-artifact-sign.ps1");
+    for (const artifact of artifacts) {
+      console.log(
+        `[tauri-build] Finalizing Authenticode signature: ${artifact}`,
+      );
+      await run(
+        "powershell.exe",
+        artifactSigningPowershellArgs(signScript, ["-FilePath", artifact]),
+      );
+    }
+    await run(
+      "powershell.exe",
+      artifactSigningPowershellArgs(
+        join(root, "scripts/verify-windows-authenticode.ps1"),
+        ["-TargetReleaseDir", targetReleaseDir],
+      ),
+    );
+  }
   const candidates = [
     {
       test: (path) => path.endsWith("-setup.exe"),
@@ -208,15 +236,6 @@ if (!noBundle) {
   for (const candidate of candidates) {
     const source = await newestMatching(actualTargetDir, candidate.test);
     if (source) await copyFile(source, join(release, candidate.name));
-  }
-  if (requireWindowsSigning && process.platform === "win32") {
-    const installer = join(release, `Postal-Snap-Windows-${arch}.exe`);
-    const escaped = installer.replaceAll("'", "''");
-    await run("powershell.exe", [
-      "-NoProfile",
-      "-Command",
-      `$signature = Get-AuthenticodeSignature -LiteralPath '${escaped}'; if ($signature.Status -ne 'Valid') { throw "Invalid Authenticode signature: $($signature.Status)" }`,
-    ]);
   }
   if (requireMacosSigning && process.platform === "darwin") {
     const info = await newestMatching(actualTargetDir, (path) =>

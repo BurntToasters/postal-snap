@@ -1,24 +1,62 @@
-$ErrorActionPreference = "Stop"
-if ($env:WINDOWS_CERTIFICATE_PFX_BASE64) {
-  if (-not $env:WINDOWS_CERTIFICATE_PASSWORD) { throw "Set WINDOWS_CERTIFICATE_PASSWORD for the PFX." }
-  $temporary = Join-Path ([IO.Path]::GetTempPath()) ("postal-snap-" + [Guid]::NewGuid().ToString() + ".pfx")
-  try {
-    [IO.File]::WriteAllBytes($temporary, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_PFX_BASE64))
-    $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
-    $imported = Import-PfxCertificate -FilePath $temporary -CertStoreLocation Cert:\CurrentUser\My -Password $password
-    if (-not $imported) { throw "The Windows signing certificate could not be imported." }
-    if ($env:WINDOWS_CERTIFICATE_THUMBPRINT -and $imported.Thumbprint -ne $env:WINDOWS_CERTIFICATE_THUMBPRINT) {
-      throw "The imported Windows certificate does not match WINDOWS_CERTIFICATE_THUMBPRINT."
-    }
-    $env:WINDOWS_CERTIFICATE_THUMBPRINT = $imported.Thumbprint
-  } finally {
-    Remove-Item $temporary -Force -ErrorAction SilentlyContinue
+#requires -Version 5.1
+[CmdletBinding()]
+param()
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+if ($env:OS -ne 'Windows_NT') { throw 'Artifact Signing Client Tools setup must run on Windows.' }
+
+. (Join-Path $PSScriptRoot 'artifact-signing-tools.ps1')
+
+try {
+  $tools = Get-ArtifactSigningTools
+  Write-Host 'Artifact Signing Client Tools are already installed.'
+  Write-Host "SignTool: $($tools.SignToolPath)"
+  Write-Host "Dlib: $($tools.DlibPath)"
+  exit 0
+} catch {
+  Write-Host 'Installing official Microsoft Artifact Signing Client Tools...'
+}
+
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$principal = New-Object Security.Principal.WindowsPrincipal($identity)
+if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+  throw 'Installing Artifact Signing Client Tools requires an elevated PowerShell session. Run this setup command once as Administrator.'
+}
+
+$installed = $false
+$winget = Get-Command winget.exe -ErrorAction SilentlyContinue
+if ($winget) {
+  & $winget.Source install -e --id Microsoft.Azure.ArtifactSigningClientTools --accept-package-agreements --accept-source-agreements --silent
+  if ($LASTEXITCODE -eq 0) {
+    $installed = $true
+  } else {
+    Write-Warning "winget failed with exit code $LASTEXITCODE; falling back to Microsoft's MSI."
   }
 }
-if (-not $env:WINDOWS_CERTIFICATE_THUMBPRINT) { throw "Set WINDOWS_CERTIFICATE_THUMBPRINT or provide the PFX secrets." }
-$cert = Get-ChildItem Cert:\CurrentUser\My\$env:WINDOWS_CERTIFICATE_THUMBPRINT
-if (-not $cert.HasPrivateKey) { throw "The configured signing certificate has no private key." }
-if ($env:GITHUB_ENV) {
-  "WINDOWS_CERTIFICATE_THUMBPRINT=$($cert.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+if (-not $installed) {
+  $msiPath = Join-Path ([IO.Path]::GetTempPath()) "ArtifactSigningClientTools-$PID.msi"
+  try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $ProgressPreference = 'SilentlyContinue'
+    Invoke-WebRequest -UseBasicParsing -Uri 'https://download.microsoft.com/download/70ad2c3b-761f-4aa9-a9de-e7405aa2b4c1/ArtifactSigningClientTools.msi' -OutFile $msiPath
+    Import-BundledPowerShellSecurityModule
+    $signature = Get-AuthenticodeSignature -LiteralPath $msiPath
+    if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+      throw "Artifact Signing Client Tools MSI signature is not valid: $($signature.Status)"
+    }
+    if (-not $signature.SignerCertificate -or $signature.SignerCertificate.Subject -notmatch '(?i)(?:^|,\s*)O=Microsoft Corporation(?:,|$)') {
+      throw 'Artifact Signing Client Tools MSI is not signed by Microsoft Corporation.'
+    }
+    $process = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @('/i', ('"{0}"' -f $msiPath), '/quiet', '/norestart')
+    if ($process.ExitCode -notin @(0, 1641, 3010)) { throw "Artifact Signing Client Tools MSI failed with exit code $($process.ExitCode)" }
+    if ($process.ExitCode -in @(1641, 3010)) { Write-Warning 'Installation succeeded and Windows requested a restart.' }
+  } finally {
+    Remove-Item -LiteralPath $msiPath -Force -ErrorAction SilentlyContinue
+  }
 }
-Write-Host "Windows artifact signing certificate is available: $($cert.Subject)"
+
+$tools = Get-ArtifactSigningTools
+Write-Host 'Artifact Signing Client Tools are ready.'
+Write-Host "SignTool: $($tools.SignToolPath)"
+Write-Host "Dlib: $($tools.DlibPath)"

@@ -109,10 +109,16 @@ test("release environment template covers every supported credential path", asyn
     "TAURI_SIGNING_PRIVATE_KEY",
     "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
     "TAURI_UPDATER_PUBLIC_KEY",
-    "WINDOWS_CERTIFICATE_THUMBPRINT",
-    "WINDOWS_TIMESTAMP_URL",
-    "WINDOWS_CERTIFICATE_PFX_BASE64",
-    "WINDOWS_CERTIFICATE_PASSWORD",
+    "AZURE_CLIENT_ID",
+    "AZURE_TENANT_ID",
+    "AZURE_SUBSCRIPTION_ID",
+    "AZURE_CLIENT_SECRET",
+    "AZURE_ARTIFACT_SIGNING_ENDPOINT",
+    "AZURE_ARTIFACT_SIGNING_ACCOUNT",
+    "AZURE_ARTIFACT_SIGNING_PROFILE",
+    "AZURE_ARTIFACT_SIGNING_PUBLISHER",
+    "AZURE_ARTIFACT_SIGNING_PUBLISHER_DN",
+    "SKIP_WIN_CODESIGN",
     "MSSTORE_IDENTITY_NAME",
     "MSSTORE_PUBLISHER",
     "MSSTORE_PUBLISHER_DISPLAY_NAME",
@@ -146,6 +152,64 @@ test("release environment template covers every supported credential path", asyn
     template,
     /private key and password are required for signed builds/,
   );
+  assert.ok(!names.has("WINDOWS_CERTIFICATE_THUMBPRINT"));
+  assert.ok(!names.has("WINDOWS_CERTIFICATE_PFX_BASE64"));
+  assert.ok(!names.has("WINDOWS_CERTIFICATE_PASSWORD"));
+  assert.ok(!names.has("WINDOWS_TIMESTAMP_URL"));
+  assert.match(template, /npm run setup:win:artifact-signing/);
+  assert.match(template, /AZURE_ARTIFACT_SIGNING_SIGNTOOL_PATH=/);
+  assert.match(template, /AZURE_ARTIFACT_SIGNING_DLIB_PATH=/);
+});
+
+test("Windows release signing uses Azure Artifact Signing, not a local PFX", async () => {
+  const packageJson = JSON.parse(
+    await readFile(join(root, "package.json"), "utf8"),
+  );
+  const tauriBuild = await readFile(
+    join(root, "scripts/tauri-build.js"),
+    "utf8",
+  );
+  const setup = await readFile(
+    join(root, "scripts/setup-windows-artifact-signing.ps1"),
+    "utf8",
+  );
+  const sign = await readFile(
+    join(root, "scripts/windows-artifact-sign.ps1"),
+    "utf8",
+  );
+  const verify = await readFile(
+    join(root, "scripts/verify-windows-authenticode.ps1"),
+    "utf8",
+  );
+
+  assert.equal(
+    packageJson.scripts["setup:win:artifact-signing"],
+    "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/setup-windows-artifact-signing.ps1",
+  );
+  assert.match(
+    packageJson.scripts["build:win:x64:prepared"],
+    /--require-windows-signing --target x86_64-pc-windows-msvc --bundles nsis/,
+  );
+  assert.doesNotMatch(tauriBuild, /WINDOWS_CERTIFICATE_THUMBPRINT/);
+  assert.doesNotMatch(tauriBuild, /certificateThumbprint/);
+  assert.match(tauriBuild, /windows-artifact-sign\.ps1/);
+  assert.match(tauriBuild, /verify-windows-authenticode\.ps1/);
+  assert.match(setup, /Microsoft\.Azure\.ArtifactSigningClientTools/);
+  assert.doesNotMatch(setup, /WINDOWS_CERTIFICATE_/);
+  assert.doesNotMatch(setup, /Import-PfxCertificate/);
+  assert.match(sign, /Get-ArtifactSigningTools/);
+  assert.match(sign, /timestamp\.acs\.microsoft\.com/);
+  assert.doesNotMatch(sign, /WINDOWS_CERTIFICATE_/);
+  assert.doesNotMatch(sign, /AllowSparseMsix/);
+  assert.match(verify, /AZURE_ARTIFACT_SIGNING_PUBLISHER/);
+  assert.doesNotMatch(verify, /zinnia_shell|ZinniaContextMenu/);
+
+  const ci = await readFile(join(root, ".github/workflows/ci.yml"), "utf8");
+  assert.doesNotMatch(
+    ci,
+    /Microsoft\.Azure\.ArtifactSigningClientTools|ArtifactSigningClientTools\.msi/,
+  );
+  assert.match(ci, /Azure Artifact Signing/);
 });
 
 test("release verification covers generated manifests after finalization", async () => {

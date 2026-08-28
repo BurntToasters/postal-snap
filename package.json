@@ -80,7 +80,7 @@
     "wc": "npm run win-compiler:x64",
     "win-compiler:x64": "node scripts/open-vs-dev-shell.js x64",
     "win-compiler:arm64": "node scripts/open-vs-dev-shell.js arm64",
-    "setup:win:artifact-signing": "dotenv -e .env -- powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/setup-windows-artifact-signing.ps1",
+    "setup:win:artifact-signing": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/setup-windows-artifact-signing.ps1",
     "build:win:x64:prepared": "dotenv -e .env -- node scripts/tauri-build.js --require-tauri-signing --require-windows-signing --target x86_64-pc-windows-msvc --bundles nsis",
     "build:win:arm64:prepared": "dotenv -e .env -- node scripts/tauri-build.js --require-tauri-signing --require-windows-signing --target aarch64-pc-windows-msvc --bundles nsis",
     "build:win:prepared": "npm run build:win:x64:prepared && npm run build:win:arm64:prepared",
