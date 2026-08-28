@@ -150,28 +150,49 @@ test("release verification covers generated manifests after finalization", async
   );
   assert.ok(verifier.includes("latest-${platform}${channel}-${arch}.json"));
   assert.ok(verifier.includes("platformEntry.signature !== expectedSignature"));
-  for (const scriptName of [
-    "release:win:continue",
-    "release:mac:continue",
-    "release:linux:x64:continue",
-    "release:linux:arm64:continue",
-  ]) {
-    const script = packageJson.scripts[scriptName];
-    assert.ok(
-      script.indexOf("npm run release:finalize") <
-        script.indexOf("npm run release:verify:local"),
-    );
-    assert.ok(
-      script.indexOf("npm run release:verify:local") <
-        script.indexOf("npm run release:verify-draft"),
-    );
-  }
+  assert.match(
+    packageJson.scripts["release:finalize:hard"],
+    /finalize-release\.js --hard/,
+  );
+  const finalizer = await readFile(
+    join(root, "scripts/finalize-release.js"),
+    "utf8",
+  );
+  assert.ok(finalizer.includes("verify-release-draft.js"));
   const remoteVerifier = await readFile(
     join(root, "scripts/verify-release-draft.js"),
     "utf8",
   );
   assert.ok(remoteVerifier.includes('"download"'));
   assert.ok(remoteVerifier.includes("verify-release-directory.js"));
+});
+
+test("per-platform continue uploads without requiring the complete artifact set", async () => {
+  const packageJson = JSON.parse(
+    await readFile(join(root, "package.json"), "utf8"),
+  );
+  for (const name of [
+    "release:win:continue",
+    "release:mac:continue",
+    "release:linux:x64:continue",
+    "release:linux:arm64:continue",
+  ]) {
+    const script = packageJson.scripts[name];
+    assert.match(script, /npm run release:finalize(?:\s|$)/);
+    assert.doesNotMatch(
+      script,
+      /npm run release:verify:(?:local|draft)/,
+      `${name} must not require every architecture on the first signing host`,
+    );
+  }
+  assert.equal(
+    packageJson.scripts["release:linux:x64:continue"],
+    "npm run release:session:verify && npm run release:wait-draft && npm run rust:target:linux:x64 && npm run build:linux:x64:prepared && npm run flatpak:clean && npm run flatpak:bundle && npm run release:sign:gpg && npm run release:finalize",
+  );
+  assert.equal(
+    packageJson.scripts["release:linux:arm64:continue"],
+    "npm run release:session:verify && npm run release:wait-draft && npm run rust:target:linux:arm64 && npm run build:linux:arm64:prepared && npm run flatpak:clean && npm run flatpak:bundle:arm64 && npm run release:sign:gpg && npm run release:finalize",
+  );
 });
 
 test("rust:update passes clippy and rustfmt as one --component value", async () => {
@@ -227,6 +248,8 @@ test("test:all still includes Playwright e2e unless SKIP_E2E is set", async () =
   const ci = await readFile(join(root, ".github/workflows/ci.yml"), "utf8");
   assert.match(ci, /npx playwright install --with-deps chromium/);
   assert.match(ci, /npm run test:e2e/);
+  assert.match(ci, /npm run check:cargo-update-policy/);
+  assert.match(ci, /npm run test:cargo-safe-update/);
 });
 
 test("workspace:prepare sets SKIP_E2E for every platform release", async () => {

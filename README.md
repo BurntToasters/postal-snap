@@ -27,8 +27,10 @@ Real iCloud and signed-package checks remain manual release gates. See [Releasin
 
 ## Distribution
 
+First releases are GitHub-only.
+
 - Direct: signed Windows NSIS installers, notarized universal macOS DMG/ZIP, Linux AppImage/Flatpak.
-- Stores: Microsoft Store MSIX bundle and Mac App Store PKG.
 - Updates: signed manifests and payloads from GitHub Releases.
+- Later: Microsoft Store MSIX and Mac App Store PKG (scripts exist; not part of 0.1.0).
 
 This repository and application are proprietary. All rights reserved.

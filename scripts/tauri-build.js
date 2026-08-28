@@ -6,12 +6,18 @@ import {
   ensureReleaseDir,
   json,
   newestMatching,
+  output,
   process,
   requireEnv,
   root,
   run,
   writeJson,
 } from "./_utils.js";
+import { resolveUpdaterPublicKey } from "./updater-pubkey.js";
+import {
+  applyApplePasswordCompatibility,
+  assertAppleSigningIdentityAvailable,
+} from "./tauri-signing-env.js";
 
 const input = process.argv.slice(2);
 const take = (flag) => {
@@ -49,6 +55,7 @@ const storeBuild =
           )) ||
       /^--features=(?:.*,)?(?:flatpak|mas|msstore)(?:,.*)?$/.test(value),
   );
+applyApplePasswordCompatibility(process.env);
 if (requireTauriSigning)
   requireEnv([
     "TAURI_SIGNING_PRIVATE_KEY",
@@ -72,6 +79,18 @@ if (requireMacosNotarization) {
     );
   }
 }
+if (requireMacosSigning && process.platform === "darwin") {
+  const identities = await output("security", [
+    "find-identity",
+    "-v",
+    "-p",
+    "codesigning",
+  ]);
+  assertAppleSigningIdentityAvailable(
+    process.env.APPLE_SIGNING_IDENTITY,
+    identities,
+  );
+}
 
 const overrideDir = await mkdtemp(join(tmpdir(), "postal-snap-config-"));
 try {
@@ -79,14 +98,17 @@ try {
   const manifestName = packageInfo.version.includes("-")
     ? "latest-{{target}}-beta-{{arch}}.json"
     : "latest-{{target}}-{{arch}}.json";
+  const committedConfig = await json(join(root, "src-tauri/tauri.conf.json"));
   const updaterOverride = storeBuild
     ? { plugins: { updater: null } }
     : {
         plugins: {
           updater: {
-            pubkey:
-              process.env.TAURI_UPDATER_PUBLIC_KEY ??
-              "POSTAL_SNAP_UPDATER_PUBLIC_KEY",
+            pubkey: resolveUpdaterPublicKey({
+              committed: committedConfig.plugins?.updater?.pubkey,
+              fromEnv: process.env.TAURI_UPDATER_PUBLIC_KEY,
+              requireSigning: requireTauriSigning,
+            }),
             endpoints: [
               `https://github.com/BurntToasters/postal-snap/releases/latest/download/${manifestName}`,
             ],
