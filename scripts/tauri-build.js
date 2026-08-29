@@ -286,11 +286,11 @@ if (!noBundle) {
       "--verbose=2",
       app,
     ]);
-    await run("spctl", ["--assess", "--type", "execute", "--verbose=2", app]);
     if (requireMacosNotarization) {
-      const dmg = join(release, "Postal-Snap-macOS.dmg");
-      await run("xcrun", ["stapler", "validate", dmg]);
+      await run("xcrun", ["stapler", "validate", app]);
     }
+    await run("spctl", ["--assess", "--type", "execute", "--verbose=2", app]);
+    await run("hdiutil", ["verify", join(release, "Postal-Snap-macOS.dmg")]);
   }
   console.log(`Collected ${pkg.name} ${pkg.version} artifacts in release/`);
 }
