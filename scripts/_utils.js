@@ -75,14 +75,22 @@ function spawnChild(command, args, options) {
     : spawn(invocation.command, invocation.args, invocation.options);
 }
 
+function commandFailure(command, code, signal, stderr = "") {
+  const status = signal ? `signal ${signal}` : `exit code ${code ?? "unknown"}`;
+  const detail = stderr.trim();
+  return new Error(
+    `${command} failed with ${status}${detail ? `:\n${detail}` : "."}`,
+  );
+}
+
 export async function run(command, args = [], options = {}) {
   await new Promise((resolvePromise, reject) => {
     const child = spawnChild(command, args, { stdio: "inherit", ...options });
-    child.on("error", reject);
-    child.on("exit", (code) =>
+    child.once("error", reject);
+    child.once("close", (code, signal) =>
       code === 0
         ? resolvePromise()
-        : reject(new Error(`${command} exited with code ${code}`)),
+        : reject(commandFailure(command, code, signal)),
     );
   });
 }
@@ -93,11 +101,12 @@ export async function runWithInput(command, args, input, options = {}) {
       stdio: ["pipe", "inherit", "inherit"],
       ...options,
     });
-    child.on("error", reject);
-    child.on("exit", (code) =>
+    child.once("error", reject);
+    child.stdin.once("error", reject);
+    child.once("close", (code, signal) =>
       code === 0
         ? resolvePromise()
-        : reject(new Error(`${command} exited with code ${code}`)),
+        : reject(commandFailure(command, code, signal)),
     );
     child.stdin.end(input);
   });
@@ -117,13 +126,11 @@ export async function output(command, args = [], options = {}) {
     child.stderr.on("data", (chunk) => {
       stderr += chunk;
     });
-    child.on("error", reject);
-    child.on("exit", (code) =>
+    child.once("error", reject);
+    child.once("close", (code, signal) =>
       code === 0
         ? resolvePromise(stdout.trim())
-        : reject(
-            new Error(stderr.trim() || `${command} exited with code ${code}`),
-          ),
+        : reject(commandFailure(command, code, signal, stderr)),
     );
   });
 }

@@ -22,6 +22,7 @@ import {
   assertWindowsSigningConfigured,
   windowsArtifactsToSign,
 } from "./tauri-signing-env.js";
+import { validateEntitlementsPlist } from "./validate-macos-entitlements.js";
 
 const input = process.argv.slice(2);
 const take = (flag) => {
@@ -59,6 +60,18 @@ const storeBuild =
           )) ||
       /^--features=(?:.*,)?(?:flatpak|mas|msstore)(?:,.*)?$/.test(value),
   );
+const macosBuild =
+  requireMacosSigning ||
+  /apple-darwin/i.test(target ?? "") ||
+  (process.platform === "darwin" && !target);
+const targetReleaseDir = target
+  ? join(root, "src-tauri/target", target, "release")
+  : join(root, "src-tauri/target/release");
+const bundleOutputDir = join(targetReleaseDir, "bundle");
+
+if (macosBuild && !storeBuild) {
+  await validateEntitlementsPlist(join(root, "src-tauri/entitlements.plist"));
+}
 applyApplePasswordCompatibility(process.env);
 if (requireTauriSigning)
   requireEnv([
@@ -104,6 +117,11 @@ if (requireMacosSigning && process.platform === "darwin") {
     process.env.APPLE_SIGNING_IDENTITY,
     identities,
   );
+}
+
+if (!noBundle) {
+  await rmRetry(bundleOutputDir, { recursive: true });
+  console.log(`[tauri-build] Cleared stale bundle output: ${bundleOutputDir}`);
 }
 
 const overrideDir = await mkdtemp(join(tmpdir(), "postal-snap-config-"));
@@ -173,10 +191,6 @@ function merge(base, override) {
 if (!noBundle) {
   const pkg = await json(join(root, "package.json"));
   const release = await ensureReleaseDir();
-  const targetReleaseDir = target
-    ? join(root, "src-tauri/target", target, "release")
-    : join(root, "src-tauri/target/release");
-  const actualTargetDir = join(targetReleaseDir, "bundle");
   const arch = /aarch64|arm64/.test(target ?? "") ? "arm64" : "x64";
   if (requireWindowsSigning && !windowsSigning.skipSigning) {
     const artifacts = await windowsArtifactsToSign(targetReleaseDir);
@@ -238,12 +252,29 @@ if (!noBundle) {
       name: `Postal-Snap-Linux-${arch}.AppImage.tar.gz.sig`,
     },
   ];
+  const collected = new Set();
   for (const candidate of candidates) {
-    const source = await newestMatching(actualTargetDir, candidate.test);
-    if (source) await copyFile(source, join(release, candidate.name));
+    const source = await newestMatching(bundleOutputDir, candidate.test);
+    if (source) {
+      await copyFile(source, join(release, candidate.name));
+      collected.add(candidate.name);
+    }
+  }
+  if (requireMacosSigning) {
+    const required = [
+      "Postal-Snap-macOS.dmg",
+      "Postal-Snap-macOS.app.tar.gz",
+      "Postal-Snap-macOS.app.tar.gz.sig",
+    ];
+    const missing = required.filter((name) => !collected.has(name));
+    if (missing.length) {
+      throw new Error(
+        `Signed macOS build did not produce required artifacts: ${missing.join(", ")}`,
+      );
+    }
   }
   if (requireMacosSigning && process.platform === "darwin") {
-    const info = await newestMatching(actualTargetDir, (path) =>
+    const info = await newestMatching(bundleOutputDir, (path) =>
       path.endsWith("Postal Snap.app/Contents/Info.plist"),
     );
     if (!info) throw new Error("Signed Postal Snap.app was not produced.");

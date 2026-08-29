@@ -50,7 +50,7 @@ Required for GitHub 0.1.0. The live iCloud smoke is a signing-host gate; do not 
 Windows creates the GitHub draft. Mac and Linux wait for that draft and never create a second one. Each continue path uploads only that host's artifacts; do not run complete-set verification until every architecture is present.
 
 - [ ] Windows x64 and arm64 NSIS installers have valid Azure Artifact Signing Authenticode signatures and updater signatures. Run `npm run setup:win:artifact-signing` once as Administrator on the VM before `release:win`.
-- [ ] Universal macOS DMG/ZIP passes `codesign`, Gatekeeper, notarization, and staple validation.
+- [ ] `npm run validate:macos-entitlements` passes before compilation; the universal macOS DMG/ZIP then passes `codesign`, Gatekeeper, notarization, and staple validation.
 - [ ] Linux x64 and arm64 AppImages launch; Flatpak bundles pass sandbox smoke tests.
 - [ ] `mailto:` opens a prefilled Postal Snap composer on every platform.
 - [ ] Direct builds update from the correct signed stable or beta GitHub manifest.

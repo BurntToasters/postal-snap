@@ -57,6 +57,7 @@
     "sync-version": "node scripts/sync-version.js",
     "icons:normalize": "node scripts/normalize-icons.js",
     "validate:updater": "node scripts/validate-updater-manifest.js",
+    "validate:macos-entitlements": "node scripts/validate-macos-entitlements.js",
     "validate:updater:live": "node scripts/validate-updater-live.js --shape-only",
     "release:verify:published": "node scripts/validate-updater-live.js --expected-version=current",
     "dist:clean": "node scripts/dist-tools.js clean",
