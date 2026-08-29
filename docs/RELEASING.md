@@ -1,6 +1,6 @@
 # Releasing Postal Snap
 
-The first 0.1.0 shipment is **GitHub-only**: signed Windows NSIS, notarized universal macOS DMG/ZIP, and Linux AppImage/Flatpak. Mac App Store and Microsoft Store scripts exist for later work; they are not a 0.1.0 go/no-go.
+The first 0.1.0 shipment is **GitHub-only**: signed Windows NSIS, universal macOS DMG/ZIP containing the notarized and stapled app, and Linux AppImage/Flatpak. Mac App Store and Microsoft Store scripts exist for later work; they are not a 0.1.0 go/no-go.
 
 Copy `.env.example` to `.env` and provide signing values outside version control. Generate a dedicated Tauri updater key with `npm run tauri -- signer generate`. Store the private key and password in a password manager and in `.env` (`TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`). Commit only the public key in `src-tauri/tauri.conf.json` (`plugins.updater.pubkey`). Signed prepare and signed tauri-build use that committed minisign key; `TAURI_UPDATER_PUBLIC_KEY` is optional in `.env` and, if set, must match the committed key. Signed builds refuse the placeholder `POSTAL_SNAP_UPDATER_PUBLIC_KEY`.
 
@@ -18,7 +18,7 @@ Treat the unpublished GitHub draft as the release candidate. Do not replace `rel
 
 Beta builds generate `latest-<target>-beta-<arch>.json`; stable builds generate `latest-<target>-<arch>.json`. Publishing a beta synchronizes beta manifests onto the latest stable GitHub release so the `/releases/latest/download/` endpoint remains stable.
 
-Microsoft Store and Mac App Store packaging remain available in `package.json` for a later store train. They are out of scope for the first GitHub 0.1.0. Direct Mac releases use Developer ID signing/notarization through Tauri. `APPLE_APP_SPECIFIC_PASSWORD` is accepted as a legacy alias for `APPLE_PASSWORD`. Signed Mac builds fail early if `APPLE_SIGNING_IDENTITY` is missing from the keychain; on SSH sessions run `npm run mac:ssh:keychain` first.
+Microsoft Store and Mac App Store packaging remain available in `package.json` for a later store train. They are out of scope for the first GitHub 0.1.0. Direct Mac releases use Developer ID signing/notarization through Tauri. Tauri notarizes and staples the application bundle; Postal Snap validates that local app ticket and Gatekeeper acceptance, verifies the enclosing DMG with `hdiutil`, and archives the same app into the ZIP. The DMG and ZIP are containers, not additional stapler targets in this workflow. `APPLE_APP_SPECIFIC_PASSWORD` is accepted as a legacy alias for `APPLE_PASSWORD`. Signed Mac builds fail early if `APPLE_SIGNING_IDENTITY` is missing from the keychain; on SSH sessions run `npm run mac:ssh:keychain` first.
 
 Direct Windows NSIS installers are signed after `tauri build` with Azure Artifact Signing (Public Trust), using the same `.env` variables as Zinnia/IYERIS. Once per Windows VM, run `npm run setup:win:artifact-signing` as Administrator to install Microsoft Artifact Signing Client Tools. `SKIP_WIN_CODESIGN=1` is the unsigned escape hatch. GitHub CI does not sign Windows artifacts; `npm run release:win` on the signing VM is the release path. Direct macOS still uses Developer ID identities; CI may import those from `APPLE_CERTIFICATE_P12_BASE64`.
 
