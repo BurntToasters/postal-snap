@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { json, output, root } from "./_utils.js";
+import { json, output, process, root, sha256 } from "./_utils.js";
 import { githubJson } from "./github-cli.js";
 import {
   existingDraft,
@@ -7,22 +7,66 @@ import {
   listMatchingReleases,
 } from "./ensure-draft-release.js";
 
-export async function verifiedReleaseSession() {
-  const [session, pkg, commit] = await Promise.all([
-    json(join(root, "release/.session.json")),
-    json(join(root, "package.json")),
-    output("git", ["rev-parse", "HEAD"]),
-  ]);
-  const expectedTag = `v${pkg.version}`;
-  if (
-    session.version !== pkg.version ||
-    session.tag !== expectedTag ||
-    session.commit !== commit
-  ) {
+export const RELEASE_SESSION_SCHEMA = 2;
+export const RELEASE_SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const RELEASE_SESSION_FUTURE_TOLERANCE_MS = 5 * 60 * 1000;
+
+export async function currentReleaseSessionIdentity() {
+  const [pkg, commit, rust, packageLockSha256, cargoLockSha256] =
+    await Promise.all([
+      json(join(root, "package.json")),
+      output("git", ["rev-parse", "HEAD"]),
+      output("rustc", ["--version"]),
+      sha256(join(root, "package-lock.json")),
+      sha256(join(root, "src-tauri/Cargo.lock")),
+    ]);
+  return {
+    schema: RELEASE_SESSION_SCHEMA,
+    version: pkg.version,
+    tag: `v${pkg.version}`,
+    commit,
+    platform: process.platform,
+    arch: process.arch,
+    node: process.version,
+    rust,
+    packageLockSha256,
+    cargoLockSha256,
+  };
+}
+
+function verifyReleaseSessionTime(session, now = Date.now()) {
+  const startedAt = Date.parse(session.startedAt);
+  if (!Number.isFinite(startedAt)) {
     throw new Error(
-      "Release session does not match the current version, tag, and commit.",
+      "Release session has an invalid start time; start a new session.",
     );
   }
+  const age = now - startedAt;
+  if (age < -RELEASE_SESSION_FUTURE_TOLERANCE_MS) {
+    throw new Error(
+      "Release session start time is in the future; check the host clock.",
+    );
+  }
+  if (age > RELEASE_SESSION_MAX_AGE_MS) {
+    throw new Error(
+      "Release session is older than 24 hours; start a new session.",
+    );
+  }
+}
+
+export async function verifiedReleaseSession() {
+  const [session, current] = await Promise.all([
+    json(join(root, "release/.session.json")),
+    currentReleaseSessionIdentity(),
+  ]);
+  for (const [field, value] of Object.entries(current)) {
+    if (session[field] !== value) {
+      throw new Error(
+        `Release session ${field} does not match this host and checkout; start a new session.`,
+      );
+    }
+  }
+  verifyReleaseSessionTime(session);
   return session;
 }
 
