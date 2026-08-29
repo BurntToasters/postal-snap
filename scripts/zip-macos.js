@@ -1,6 +1,11 @@
-import { copyFile } from "node:fs/promises";
 import { join } from "node:path";
-import { ensureReleaseDir, newestMatching, root, run } from "./_utils.js";
+import {
+  ensureReleaseDir,
+  existsSync,
+  newestMatching,
+  root,
+  run,
+} from "./_utils.js";
 
 const app = await newestMatching(
   join(root, "src-tauri/target/universal-apple-darwin/release/bundle/macos"),
@@ -12,6 +17,12 @@ if (!app)
   );
 const appPath = app.slice(0, -"/Contents/Info.plist".length);
 const release = await ensureReleaseDir();
+const dmg = join(release, "Postal-Snap-macOS.dmg");
+if (!existsSync(dmg)) {
+  throw new Error(
+    "Verified Postal-Snap-macOS.dmg not found in release/. Run build:mac:universal first.",
+  );
+}
 const destination = join(release, "Postal-Snap-macOS.zip");
 await run("ditto", [
   "-c",
@@ -21,8 +32,3 @@ await run("ditto", [
   appPath,
   destination,
 ]);
-const dmg = await newestMatching(
-  join(root, "src-tauri/target/universal-apple-darwin/release/bundle"),
-  (path) => path.endsWith(".dmg"),
-);
-if (dmg) await copyFile(dmg, join(release, "Postal-Snap-macOS.dmg"));
