@@ -53,12 +53,16 @@ function runGate({ failing = [] } = {}) {
 }
 
 test("the quality-gate plan stays in lockstep with qualityGateSteps", () => {
-  const plan = createStepPlan({ npm: "npm" });
-  const names = plan.map((step) => scriptName(step.args));
-  assert.deepEqual(
-    names,
-    qualityGateSteps({}).map((args) => (args[0] === "run" ? args[1] : args[0])),
-  );
+  for (const env of [{}, { SKIP_E2E: "1" }]) {
+    const plan = createStepPlan({ npm: "npm", env });
+    const names = plan.map((step) => scriptName(step.args));
+    assert.deepEqual(
+      names,
+      qualityGateSteps(env).map((args) =>
+        args[0] === "run" ? args[1] : args[0],
+      ),
+    );
+  }
   assert.equal(readScripts()["test:all"], "node scripts/test-all.js");
 });
 
