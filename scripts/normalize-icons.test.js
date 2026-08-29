@@ -22,6 +22,14 @@ test("icons:normalize keeps desktop and padded macOS sources distinct", () => {
   assert.match(script, /app-icon-macos\.png/);
   assert.match(script, /icon\.icns/);
   assert.doesNotMatch(script, /icon\.svg/);
+  for (const [name, command] of Object.entries(scripts)) {
+    if (name === "icons:normalize") continue;
+    assert.doesNotMatch(
+      command,
+      /icons:normalize/,
+      `${name} must not regenerate committed icons`,
+    );
+  }
   assert.ok(existsSync(path.join(repoRoot, "src-tauri/icons/app-icon.png")));
   assert.ok(
     existsSync(path.join(repoRoot, "src-tauri/icons/app-icon-macos.png")),
