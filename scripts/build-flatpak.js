@@ -31,6 +31,12 @@ const manifest = (
   "../../src-tauri/target/release/postal-snap",
   `../../src-tauri/target/${rustTarget}/release/postal-snap`,
 );
+const branch = manifest.match(/^branch:\s*["']?([^\s#"']+)/m)?.[1];
+if (!branch) {
+  throw new Error(
+    "Flatpak manifest must set branch so build-bundle matches the exported ref.",
+  );
+}
 await writeFile(generatedManifest, manifest);
 await mkdir(join(root, "flatpak-build"), { recursive: true });
 try {
@@ -51,7 +57,7 @@ try {
       `Postal-Snap-Linux-${arch === "aarch64" ? "arm64" : "x64"}.flatpak`,
     ),
     "run.rosie.snap",
-    "stable",
+    branch,
   ]);
 } finally {
   await rm(generatedManifest, { force: true });

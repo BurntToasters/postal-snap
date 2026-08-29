@@ -189,6 +189,17 @@ test("direct and Store builds keep separate capabilities", async () => {
   assert.equal(flatpak.plugins.updater, null);
 });
 
+test("flatpak build-bundle uses the manifest branch, not a hardcoded mismatch", async () => {
+  const manifest = await readFile(
+    join(root, "packaging/flatpak/run.rosie.snap.yml"),
+    "utf8",
+  );
+  const script = await readFile(join(root, "scripts/build-flatpak.js"), "utf8");
+  assert.match(manifest, /^branch:\s*stable\s*$/m);
+  assert.match(script, /manifest\.match\(\/\^branch:/);
+  assert.doesNotMatch(script, /"run\.rosie\.snap",\s*"stable"/);
+});
+
 test("direct updater is GitHub-only and notices are bundled", async () => {
   const config = JSON.parse(
     await readFile(join(root, "src-tauri/tauri.conf.json"), "utf8"),
@@ -247,7 +258,7 @@ test("release environment template covers every supported credential path", asyn
     "APPLE_CERTIFICATE_P12_BASE64",
     "APPLE_CERTIFICATE_PASSWORD",
     "APPLE_KEYCHAIN_PASSWORD",
-    "MAC_KEYCHAIN_PASSWORD",
+    "SSH_USER_PWD",
     "POSTAL_SNAP_TEST_ICLOUD_EMAIL",
     "POSTAL_SNAP_TEST_ICLOUD_PASSWORD",
     "ALLOW_DIRTY_RELEASE",
