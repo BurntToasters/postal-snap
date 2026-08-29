@@ -1,6 +1,6 @@
 # Postal Snap
 
-Postal Snap is a private, accessible desktop email client built for seniors and anyone who wants a calm mail experience.
+Postal Snap is a accessible desktop email client built for seniors and anyone who wants a calm mail experience.
 
 ## Development
 
