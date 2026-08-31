@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { normalizeIpcError } from "./errors";
 import type {
   AccountChangeEvent,
+  AccountRemovalOutcome,
   AccountSetupRequest,
   AccountSummary,
   AppSettings,
@@ -25,6 +26,30 @@ import type {
   SyncState,
   SendOutcome,
 } from "./types";
+
+// Settings mutations share one native write queue. This keeps an autosave from
+// racing an import/reset dialog and preserves invocation order across views.
+let settingsQueue: Promise<unknown> = Promise.resolve();
+let settingsGeneration = 0;
+
+function queueSettings<T>(
+  operation: () => Promise<T>,
+  generation = settingsGeneration,
+  staleOperation?: () => Promise<T>,
+): Promise<T> {
+  const next = settingsQueue
+    .catch(() => undefined)
+    .then(() =>
+      generation === settingsGeneration || !staleOperation
+        ? operation()
+        : staleOperation(),
+    );
+  settingsQueue = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  return next;
+}
 
 function inTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -52,7 +77,7 @@ export const api = {
   addAccount: (request: AccountSetupRequest) =>
     call<AccountSummary>("add_account", { request }),
   removeAccount: (accountId: string) =>
-    call<void>("remove_account", { accountId }),
+    call<AccountRemovalOutcome>("remove_account", { accountId }),
   listMailboxes: (accountId: string) =>
     call<MailboxSummary[]>("list_mailboxes", { accountId }),
   syncAccount: (accountId: string) => call<void>("sync_account", { accountId }),
@@ -150,8 +175,28 @@ export const api = {
     call<void>("release_compose_attachments", { accountId, tokens }),
   getSettings: () => call<AppSettings>("get_settings"),
   saveSettings: (settings: AppSettings) =>
-    call<AppSettings>("save_settings", { settings }),
+    queueSettings(
+      () => call<AppSettings>("save_settings", { settings }),
+      settingsGeneration,
+      () => call<AppSettings>("get_settings"),
+    ),
+  exportSettings: () => queueSettings(() => call<boolean>("export_settings")),
+  importSettings: () => {
+    return queueSettings(async () => {
+      const imported = await call<AppSettings | null>("import_settings");
+      if (imported) settingsGeneration += 1;
+      return imported;
+    });
+  },
+  resetSettings: () => {
+    return queueSettings(async () => {
+      const reset = await call<AppSettings>("reset_settings");
+      settingsGeneration += 1;
+      return reset;
+    });
+  },
   getStartupNotice: () => call<string | null>("get_startup_notice"),
+  getStartupError: () => call<string | null>("get_startup_error"),
   cacheUsage: () => call<CacheUsage>("get_cache_usage"),
   clearCache: () => call<void>("clear_downloaded_mail"),
   distribution: () => call<DistributionChannel>("get_distribution_channel"),
@@ -194,6 +239,10 @@ export const api = {
   async onMenuAction(handler: (action: string) => void): Promise<UnlistenFn> {
     if (!inTauri()) return () => undefined;
     return listen<string>("menu-action", ({ payload }) => handler(payload));
+  },
+  async onAppWarning(handler: (warning: string) => void): Promise<UnlistenFn> {
+    if (!inTauri()) return () => undefined;
+    return listen<string>("app-warning", ({ payload }) => handler(payload));
   },
 };
 

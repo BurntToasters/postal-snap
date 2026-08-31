@@ -31,6 +31,10 @@ export interface AccountSummary {
   error?: string | null;
 }
 
+export interface AccountRemovalOutcome {
+  cleanupPending: boolean;
+}
+
 export interface MailboxSummary {
   id: number;
   accountId: string;
@@ -207,6 +211,12 @@ export type IpcErrorCode =
   | "accessDenied"
   | "notFound"
   | "limitExceeded"
+  | "settingsNotFound"
+  | "settingsTooLarge"
+  | "settingsInvalid"
+  | "settingsMigrationFailed"
+  | "settingsReadFailed"
+  | "settingsWriteFailed"
   | "authenticationFailed"
   | "connectionFailed"
   | "localStorageFailed"

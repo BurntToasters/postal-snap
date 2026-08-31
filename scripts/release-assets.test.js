@@ -503,11 +503,11 @@ test("workspace:prepare sets SKIP_E2E for every platform release", async () => {
   }
   assert.equal(
     packageJson.scripts["release:linux"],
-    "npm run release:linux:x64",
+    "node scripts/run-linux-release.js",
   );
   assert.equal(
     packageJson.scripts["release:linux:resume"],
-    "npm run release:linux:x64:resume",
+    "node scripts/run-linux-release.js --resume",
   );
 
   for (const [name, script] of Object.entries(packageJson.scripts)) {

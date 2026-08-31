@@ -1,6 +1,6 @@
 {
   "name": "postal-snap",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "packageManager": "npm@12.0.2",
   "license": "UNLICENSED",
@@ -143,8 +143,8 @@
     "release:linux:arm64:resume": "npm run prerelease:prepare && npm run release:linux:arm64:continue",
     "release:linux:x64": "npm run prerelease:prepare && npm run release:prepare && npm run release:linux:x64:continue",
     "release:linux:arm64": "npm run prerelease:prepare && npm run release:prepare && npm run release:linux:arm64:continue",
-    "release:linux:resume": "npm run release:linux:x64:resume",
-    "release:linux": "npm run release:linux:x64",
+    "release:linux:resume": "node scripts/run-linux-release.js --resume",
+    "release:linux": "node scripts/run-linux-release.js",
     "release:sync-beta-manifests": "dotenv -e .env -- node scripts/finalize-release.js --sync-beta-manifests",
     "gitprune": "node scripts/git-prune-local-branches.js",
     "gitprune:dry": "node scripts/git-prune-local-branches.js --dry-run",

@@ -63,6 +63,12 @@ pub struct AccountSummary {
     pub error: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountRemovalOutcome {
+    pub cleanup_pending: bool,
+}
+
 #[derive(Clone, Debug)]
 pub struct AccountRecord {
     pub summary: AccountSummary,
@@ -255,7 +261,7 @@ pub struct SyncState {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct CachePolicy {
     pub mode: String,
     pub days: u32,
@@ -287,6 +293,36 @@ pub struct AppSettings {
     pub folder_pane_width: u32,
     pub message_pane_width: u32,
     pub reader_pane_height: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct PortableCachePolicy {
+    pub mode: String,
+    pub days: u32,
+    pub max_bytes: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct PortableSettings {
+    pub reading_pane: String,
+    pub text_scale: f64,
+    pub private_notifications: bool,
+    pub theme: String,
+    pub density: String,
+    pub cache_policy: PortableCachePolicy,
+    pub folder_pane_width: u32,
+    pub message_pane_width: u32,
+    pub reader_pane_height: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct PortableSettingsFile {
+    pub application: String,
+    pub format_version: u32,
+    pub preferences: PortableSettings,
 }
 
 impl Default for AppSettings {
@@ -334,7 +370,31 @@ pub struct IpcError {
 impl From<String> for IpcError {
     fn from(message: String) -> Self {
         let lower = message.to_ascii_lowercase();
-        let (code, retryable) = if lower.contains("does not belong")
+        let (code, retryable) = if lower.contains("settings could not be migrated") {
+            ("settingsMigrationFailed", true)
+        } else if lower.contains("settings file was not found") {
+            ("settingsNotFound", false)
+        } else if lower.contains("settings file is too large")
+            || lower.contains("settings payload is too large")
+        {
+            ("settingsTooLarge", false)
+        } else if lower.contains("settings export is invalid")
+            || lower.contains("invalid application settings")
+            || lower.contains("settings path is invalid")
+        {
+            ("settingsInvalid", false)
+        } else if lower.contains("could not inspect application settings")
+            || lower.contains("could not open application settings")
+            || lower.contains("could not read application settings")
+            || lower.contains("settings path is not a regular file")
+            || lower.contains("choose a valid settings file")
+        {
+            ("settingsReadFailed", true)
+        } else if lower.contains("could not create application data directory") {
+            ("localStorageFailed", true)
+        } else if lower.contains("settings") {
+            ("settingsWriteFailed", true)
+        } else if lower.contains("does not belong")
             || lower.contains("between accounts")
             || lower.contains("permission has expired")
         {
@@ -357,8 +417,6 @@ impl From<String> for IpcError {
             || lower.contains("offline")
         {
             ("connectionFailed", true)
-        } else if lower.contains("database") || lower.contains("settings") {
-            ("localStorageFailed", true)
         } else if lower.contains("invalid")
             || lower.starts_with("enter ")
             || lower.starts_with("choose ")
@@ -368,6 +426,8 @@ impl From<String> for IpcError {
             || lower.starts_with("only ")
         {
             ("invalidInput", false)
+        } else if lower.contains("database") || lower.contains("settings") {
+            ("localStorageFailed", true)
         } else {
             ("operationFailed", true)
         };
@@ -375,6 +435,22 @@ impl From<String> for IpcError {
             "accessDenied" => "That item is not available for this account.",
             "notFound" => "That item is no longer available. Refresh mail and try again.",
             "limitExceeded" => "That item exceeds Postal Snap's safety limit.",
+            "settingsNotFound" => {
+                "Settings file could not be found. Choose a Postal Snap settings export."
+            }
+            "settingsTooLarge" => {
+                "That settings file is too large. Choose a file smaller than 64 KiB."
+            }
+            "settingsInvalid" => "That file is not a valid Postal Snap settings export.",
+            "settingsMigrationFailed" => {
+                "Postal Snap could not migrate saved settings. Restart Postal Snap, or import/reset settings."
+            }
+            "settingsReadFailed" => {
+                "Postal Snap could not read that settings file. Check its permissions and try again."
+            }
+            "settingsWriteFailed" => {
+                "Postal Snap could not save settings. Check the destination and available disk space, then try again."
+            }
             "authenticationFailed" => "Sign-in failed. Check the email address and password.",
             "connectionFailed" => "Could not reach the mail server. Check your connection.",
             "localStorageFailed" => "Postal Snap could not save this change on your computer.",
@@ -645,6 +721,42 @@ mod tests {
         assert_eq!(auth.code, "authenticationFailed");
         assert!(auth.message.contains("password"));
         assert!(!auth.message.contains("app-specific"));
+    }
+
+    #[test]
+    fn settings_errors_use_safe_actionable_categories() {
+        assert_eq!(
+            IpcError::from("Settings export is invalid or unsupported.").code,
+            "settingsInvalid"
+        );
+        assert_eq!(
+            IpcError::from("Settings file is too large.").code,
+            "settingsTooLarge"
+        );
+        assert_eq!(
+            IpcError::from("Could not replace application settings.").code,
+            "settingsWriteFailed"
+        );
+        assert_eq!(
+            IpcError::from("Settings file was not found.").code,
+            "settingsNotFound"
+        );
+        assert_eq!(
+            IpcError::from("Could not read application settings.").code,
+            "settingsReadFailed"
+        );
+        assert_eq!(
+            IpcError::from("Invalid application settings.").code,
+            "settingsInvalid"
+        );
+        assert_eq!(
+            IpcError::from("Saved application settings could not be migrated.").code,
+            "settingsMigrationFailed"
+        );
+        assert_eq!(
+            IpcError::from("Could not create application data directory.").code,
+            "localStorageFailed"
+        );
     }
 
     #[test]

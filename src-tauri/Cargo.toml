@@ -1,6 +1,6 @@
 [package]
 name = "postal-snap"
-version = "0.1.0"
+version = "0.1.1"
 description = "A calm, accessible desktop email client."
 authors = ["BurntToasters <code@rosie.run>"]
 edition = "2021"
@@ -48,6 +48,7 @@ zeroize = { version = "1", features = ["derive"] }
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 
 [dev-dependencies]
+tauri = { version = "2", features = ["test"] }
 tempfile = "3"
 
 [lints.rust]

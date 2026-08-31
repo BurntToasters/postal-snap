@@ -97,16 +97,51 @@ export const useAppStore = create<AppState>((set) => ({
   composerOpen: false,
   busy: false,
   setAccounts: (accounts) =>
-    set((state) => ({
-      accounts,
-      activeAccountId:
-        state.activeAccountId &&
-        accounts.some((account) => account.id === state.activeAccountId)
+    set((state) => {
+      const accountIds = new Set(accounts.map((account) => account.id));
+      const activeAccountId =
+        state.activeAccountId && accountIds.has(state.activeAccountId)
           ? state.activeAccountId
           : (accounts.find(
               (account) => account.id === state.settings.lastAccountId,
-            )?.id ?? accounts[0]?.id),
-    })),
+            )?.id ?? accounts[0]?.id);
+      const activeAccountChanged = activeAccountId !== state.activeAccountId;
+      const composerAccountRemoved = Boolean(
+        state.composerAccountId && !accountIds.has(state.composerAccountId),
+      );
+      const sync = Object.fromEntries(
+        Object.entries(state.sync).filter(([accountId]) =>
+          accountIds.has(accountId),
+        ),
+      );
+
+      return {
+        accounts,
+        activeAccountId,
+        sync,
+        ...(activeAccountChanged
+          ? {
+              activeMailboxId: undefined,
+              activeLocalView: undefined,
+              mailboxes: [],
+              messages: [],
+              messageCursor: undefined,
+              hasMoreMessages: false,
+              drafts: [],
+              outbox: [],
+              selectedMessage: undefined,
+              busy: false,
+            }
+          : {}),
+        ...(composerAccountRemoved
+          ? {
+              composerOpen: false,
+              composerAccountId: undefined,
+              composeSeed: undefined,
+            }
+          : {}),
+      };
+    }),
   selectAccount: (activeAccountId) =>
     set({
       activeAccountId,

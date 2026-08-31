@@ -16,6 +16,9 @@ export const strings = {
     preview: "Run npm run tauri:dev to connect native mail services.",
     openingEditor: "Opening editor…",
     dismissError: "Dismiss error",
+    startupRecoveryTitle: "Postal Snap could not open your mail data",
+    startupRecoveryHelp:
+      "Your saved mail was not deleted. Restart Postal Snap and try again.",
   },
   mail: {
     compose: "Write",
@@ -194,6 +197,7 @@ export const strings = {
     other: "Other email account",
     otherDetail: "Enter IMAP and SMTP settings yourself",
     privacy: "No tracking. No Postal Snap cloud.",
+    openSettings: "Open Settings",
     stepTwo: "Step 2 of 2",
     connectIcloud: "Connect iCloud Mail",
     connectOther: "Connect another account",
@@ -246,6 +250,21 @@ export const strings = {
     sections: "Settings sections",
     saving: "Saving…",
     autosave: "Changes save automatically",
+    settingsData: "Settings data",
+    settingsDataHelp:
+      "Export or import Postal Snap preferences. Accounts and passwords are never included.",
+    exportSettings: "Export settings",
+    importSettings: "Import settings",
+    resetSettings: "Reset settings",
+    exportSaved: "Settings exported.",
+    importApplied: "Settings imported.",
+    resetApplied: "Settings reset.",
+    importQuestion:
+      "Replace Postal Snap preferences with settings from this file? Accounts, passwords, and mail stay.",
+    resetQuestion:
+      "Reset appearance, reading, notification, and storage preferences? Accounts, passwords, and mail stay.",
+    noAccounts: "No email accounts configured yet.",
+    returnToSetup: "Return to account setup",
     general: "General",
     reading: "Reading",
     notifications: "Notifications",
@@ -302,6 +321,8 @@ export const strings = {
       "Keeps message lists, accounts, drafts, and unsent mail. Bodies download again when opened.",
     removeAccount: (name: string) =>
       `Remove ${name} from Postal Snap? Mail stays on server.`,
+    accountCleanupWarning:
+      "Account removed. Some downloaded draft files could not be cleaned up; you can remove them from Postal Snap’s data folder.",
     checkUpdates: "Check for updates",
     checking: "Checking…",
     upToDate: "Postal Snap is up to date",
@@ -318,6 +339,17 @@ export const strings = {
     accessDenied: "That item is not available for this account.",
     notFound: "That item is no longer available. Refresh mail and try again.",
     limitExceeded: "That item exceeds Postal Snap’s safety limit.",
+    settingsNotFound:
+      "Settings file could not be found. Choose a Postal Snap settings export.",
+    settingsTooLarge:
+      "That settings file is too large. Choose a file smaller than 64 KiB.",
+    settingsInvalid: "That file is not a valid Postal Snap settings export.",
+    settingsMigrationFailed:
+      "Postal Snap could not migrate saved settings. Restart Postal Snap, or import/reset settings.",
+    settingsReadFailed:
+      "Postal Snap could not read that settings file. Check its permissions and try again.",
+    settingsWriteFailed:
+      "Postal Snap could not save settings. Check the destination and available disk space, then try again.",
     authenticationFailed:
       "Sign-in failed. Check the email address and password.",
     connectionFailed: "Could not reach the mail server. Check your connection.",
