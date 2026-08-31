@@ -174,9 +174,19 @@ impl Database {
 
     pub fn remove_account(&self, id: &str) -> Result<(), String> {
         let conn = self.conn()?;
-        conn.execute("DELETE FROM accounts WHERE id = ?1", [id])
+        let removed = conn
+            .execute("DELETE FROM accounts WHERE id = ?1", [id])
             .map_err(db_error)?;
+        if removed != 1 {
+            return Err("Account not found.".into());
+        }
         Ok(())
+    }
+
+    pub fn account_count(&self) -> Result<usize, String> {
+        self.conn()?
+            .query_row("SELECT COUNT(*) FROM accounts", [], |row| row.get(0))
+            .map_err(db_error)
     }
 
     pub fn set_account_state(
@@ -1579,9 +1589,23 @@ impl Database {
             })
             .optional()
             .map_err(db_error)?;
-        Ok(json
-            .and_then(|value| serde_json::from_str(&value).ok())
-            .unwrap_or_default())
+        json.map(|value| {
+            serde_json::from_str(&value)
+                .map_err(|_| "Saved application settings are damaged.".to_string())
+        })
+        .transpose()
+        .map(|settings| settings.unwrap_or_default())
+    }
+
+    #[cfg(test)]
+    pub fn set_legacy_settings_raw_for_test(&self, value: &str) {
+        self.conn()
+            .unwrap()
+            .execute(
+                "INSERT OR REPLACE INTO settings(key,value) VALUES('app',?1)",
+                [value],
+            )
+            .unwrap();
     }
 
     pub fn cache_usage(&self, max_bytes: u64) -> Result<CacheUsage, String> {
@@ -2181,6 +2205,23 @@ mod tests {
     }
 
     #[test]
+    fn damaged_legacy_settings_are_reported_instead_of_defaulted() {
+        let db = Database::memory();
+        db.conn()
+            .unwrap()
+            .execute(
+                "INSERT INTO settings(key,value) VALUES('app','not-json')",
+                [],
+            )
+            .unwrap();
+
+        assert_eq!(
+            db.legacy_settings().unwrap_err(),
+            "Saved application settings are damaged."
+        );
+    }
+
+    #[test]
     fn fts_terms_are_quoted_and_bounded() {
         assert_eq!(fts_query("hello world"), "\"hello\"* AND \"world\"*");
         assert!(fts_query("").is_empty());
@@ -2736,6 +2777,20 @@ mod tests {
                 0
             );
         }
+    }
+
+    #[test]
+    fn removing_an_unknown_account_fails_without_changing_account_count() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+
+        assert_eq!(
+            db.remove_account(&uuid::Uuid::new_v4().to_string()),
+            Err("Account not found.".into())
+        );
+        assert_eq!(db.account_count().unwrap(), 1);
+        assert!(db.account(&account.summary.id).is_ok());
     }
 
     #[test]

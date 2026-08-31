@@ -64,7 +64,11 @@ async function installMockIpc(page: Page) {
       inlineReads: 0,
       retried: false,
       moved: false,
+      exportedSettings: 0,
+      importedSettings: 0,
+      resetSettings: 0,
       callbacks: new Map<number, (...args: unknown[]) => void>(),
+      eventListeners: new Map<string, Set<number>>(),
       nextCallback: 1,
     };
     Object.defineProperty(window, "__POSTAL_SNAP_TEST__", { value: state });
@@ -86,15 +90,45 @@ async function installMockIpc(page: Page) {
         },
         async invoke(command: string, args: Record<string, unknown> = {}) {
           switch (command) {
-            case "plugin:event|listen":
-              return state.nextCallback++;
-            case "plugin:event|unlisten":
+            case "plugin:event|listen": {
+              const event = String(args.event);
+              const handler = Number(args.handler);
+              const listeners = state.eventListeners.get(event) ?? new Set();
+              listeners.add(handler);
+              state.eventListeners.set(event, listeners);
+              return handler;
+            }
+            case "plugin:event|unlisten": {
+              const listeners = state.eventListeners.get(String(args.event));
+              listeners?.delete(Number(args.eventId));
+              return undefined;
+            }
+            case "plugin:event|emit": {
+              const event = String(args.event);
+              for (const handler of state.eventListeners.get(event) ?? []) {
+                state.callbacks.get(handler)?.({
+                  event,
+                  id: handler,
+                  payload: args.payload,
+                });
+              }
+              return null;
+            }
+            case "plugin:process|restart":
               return undefined;
             case "plugin:deep-link|get_current":
               return [];
             case "plugin:notification|is_permission_granted":
               return true;
             case "list_accounts":
+              if (location.search.includes("startupFail")) {
+                throw {
+                  code: "localStorageFailed",
+                  message:
+                    "Postal Snap could not save this change on your computer.",
+                  retryable: true,
+                };
+              }
               return location.search.includes("firstRun") && !state.added
                 ? []
                 : [account];
@@ -303,8 +337,55 @@ async function installMockIpc(page: Page) {
               };
             case "save_settings":
               return args.settings;
+            case "export_settings":
+              state.exportedSettings += 1;
+              return true;
+            case "import_settings":
+              state.importedSettings += 1;
+              return {
+                schemaVersion: 2,
+                readingPane: "bottom",
+                textScale: 1.15,
+                privateNotifications: true,
+                theme: "dark",
+                density: "compact",
+                cachePolicy: {
+                  mode: "recent",
+                  days: 90,
+                  maxBytes: 1_073_741_824,
+                },
+                lastAccountId: null,
+                lastMailboxId: null,
+                folderPaneWidth: 248,
+                messagePaneWidth: 390,
+                readerPaneHeight: 360,
+              };
+            case "reset_settings":
+              state.resetSettings += 1;
+              return {
+                schemaVersion: 2,
+                readingPane: "right",
+                textScale: 1,
+                privateNotifications: false,
+                theme: "system",
+                density: "comfortable",
+                cachePolicy: {
+                  mode: "recent",
+                  days: 90,
+                  maxBytes: 1_073_741_824,
+                },
+                lastAccountId: null,
+                lastMailboxId: null,
+                folderPaneWidth: 248,
+                messagePaneWidth: 390,
+                readerPaneHeight: 360,
+              };
             case "get_startup_notice":
               return null;
+            case "get_startup_error":
+              return location.search.includes("startupFail")
+                ? "Postal Snap could not open saved accounts. Your mail data was not deleted. Restart Postal Snap to try again."
+                : null;
             case "get_cache_usage":
               return { bytes: 0, maxBytes: 1_073_741_824, messageCount: 0 };
             case "get_distribution_channel":
@@ -341,6 +422,131 @@ test("completes guided iCloud first run", async ({ page }) => {
   await expect(
     page.getByRole("navigation", { name: "Mailboxes" }),
   ).toContainText("Inbox");
+});
+
+test("opens settings before an account is configured", async ({ page }) => {
+  await page.goto("/?firstRun=1");
+  await page.getByRole("button", { name: "Open Settings" }).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await page.getByRole("tab", { name: "Accounts" }).click();
+  await expect(
+    page.getByText("No email accounts configured yet."),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Return to account setup" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page.keyboard.press("Meta+,");
+  await expect(page.getByRole("dialog")).toBeVisible();
+});
+
+test("shows recovery instead of an empty setup wizard when saved accounts fail to load", async ({
+  page,
+}) => {
+  await page.goto("/?startupFail=1");
+  await expect(
+    page.getByRole("heading", {
+      name: "Postal Snap could not open your mail data",
+    }),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open Settings" })).toHaveCount(
+    0,
+  );
+});
+
+test("routes native settings and update menu actions", async ({ page }) => {
+  await page.goto("/?firstRun=1");
+  await page.evaluate(() =>
+    (
+      window as typeof window & {
+        __TAURI_INTERNALS__: {
+          invoke: (
+            command: string,
+            args?: Record<string, unknown>,
+          ) => Promise<unknown>;
+        };
+      }
+    ).__TAURI_INTERNALS__.invoke("plugin:event|emit", {
+      event: "menu-action",
+      payload: "settings",
+    }),
+  );
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await page.getByRole("tab", { name: "Accounts" }).click();
+  await page.evaluate(() =>
+    (
+      window as typeof window & {
+        __TAURI_INTERNALS__: {
+          invoke: (
+            command: string,
+            args?: Record<string, unknown>,
+          ) => Promise<unknown>;
+        };
+      }
+    ).__TAURI_INTERNALS__.invoke("plugin:event|emit", {
+      event: "menu-action",
+      payload: "check-for-updates",
+    }),
+  );
+  await expect(page.getByRole("tab", { name: "Updates" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+});
+
+test("keeps settings tab names accessible in a narrow window", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 540, height: 800 });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await expect
+    .poll(() =>
+      page
+        .getByRole("tab")
+        .evaluateAll((tabs) =>
+          tabs.map((tab) => tab.getAttribute("aria-label")),
+        ),
+    )
+    .toEqual([
+      "General",
+      "Reading",
+      "Notifications",
+      "Storage",
+      "Accounts",
+      "Shortcuts",
+      "Updates",
+    ]);
+});
+
+test("exports, imports, and resets portable settings", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Export settings" }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as typeof window & {
+              __POSTAL_SNAP_TEST__: { exportedSettings: number };
+            }
+          ).__POSTAL_SNAP_TEST__.exportedSettings,
+      ),
+    )
+    .toBe(1);
+
+  page.once("dialog", (dialog) => void dialog.accept());
+  await page.getByRole("button", { name: "Import settings" }).click();
+  await expect(page.locator(".settings-data-status")).toContainText(
+    "Settings imported.",
+  );
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+
+  page.once("dialog", (dialog) => void dialog.accept());
+  await page.getByRole("button", { name: "Reset settings" }).click();
+  await expect(page.locator(".settings-data-status")).toContainText(
+    "Settings reset.",
+  );
+  await expect(page.locator("html")).not.toHaveAttribute("data-theme", "dark");
 });
 
 test("completes secure manual first run", async ({ page }) => {

@@ -1,4 +1,11 @@
-import { useEffect, useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import {
   Bell,
   Database,
@@ -7,7 +14,9 @@ import {
   Keyboard,
   Mail,
   Monitor,
+  RotateCcw,
   ShieldCheck,
+  Upload,
   UserRound,
   X,
 } from "lucide-react";
@@ -17,13 +26,20 @@ import { shortcutMod, shortcutShiftMod } from "../format";
 import { applySettings } from "../settings";
 import { useAppStore } from "../store";
 import type { AppSettings, CacheUsage, DistributionChannel } from "../types";
+import {
+  removeUpdateFoundListener,
+  runUpdateSingleFlight,
+  type UpdateFoundListener,
+} from "../update";
 import { useDialogFocus } from "./useDialogFocus";
 
 interface Props {
   onClose: () => void;
+  initialTab?: SettingsTab;
+  checkUpdatesRequest?: number;
 }
 
-type SettingsTab =
+export type SettingsTab =
   | "general"
   | "reading"
   | "notifications"
@@ -46,22 +62,39 @@ const tabs: Array<{
   { id: "updates", label: strings.settings.updates, icon: DownloadCloud },
 ];
 
-export function SettingsDialog({ onClose }: Props) {
+export function SettingsDialog({
+  onClose,
+  initialTab = "general",
+  checkUpdatesRequest,
+}: Props) {
   const settings = useAppStore((state) => state.settings);
   const accounts = useAppStore((state) => state.accounts);
   const setAccounts = useAppStore((state) => state.setAccounts);
   const setSettings = useAppStore((state) => state.setSettings);
   const setError = useAppStore((state) => state.setError);
-  const [tab, setTab] = useState<SettingsTab>("general");
+  const [tab, setTab] = useState<SettingsTab>(initialTab);
   const [usage, setUsage] = useState<CacheUsage>();
   const [distribution, setDistribution] = useState<DistributionChannel>();
   const [updateStatus, setUpdateStatus] = useState<string>(
     strings.settings.checkUpdates,
   );
   const [saving, setSaving] = useState(false);
+  const [dataBusy, setDataBusy] = useState(false);
+  const [dataStatus, setDataStatus] = useState<string>();
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const handledCheckRequest = useRef<number | undefined>(undefined);
   const [testingAccountId, setTestingAccountId] = useState<string>();
   const [testedHealthy, setTestedHealthy] = useState<string>();
   const dialogRef = useDialogFocus(onClose);
+
+  const handleUpdateFound = useCallback<UpdateFoundListener>((version) => {
+    setUpdateStatus(strings.settings.installing(version ?? ""));
+  }, []);
+
+  useEffect(
+    () => () => removeUpdateFoundListener(handleUpdateFound),
+    [handleUpdateFound],
+  );
 
   useEffect(() => {
     void api
@@ -104,34 +137,93 @@ export function SettingsDialog({ onClose }: Props) {
     }
   }
 
-  async function checkForUpdates() {
-    if (distribution?.updatesManagedBy === "store") return;
+  async function exportSettings() {
+    if (dataBusy) return;
+    setDataBusy(true);
+    setDataStatus(undefined);
+    try {
+      if (await api.exportSettings())
+        setDataStatus(strings.settings.exportSaved);
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setDataBusy(false);
+    }
+  }
+
+  async function importSettings() {
+    if (dataBusy || !window.confirm(strings.settings.importQuestion)) return;
+    setDataBusy(true);
+    setDataStatus(undefined);
+    try {
+      const imported = await api.importSettings();
+      if (imported) {
+        setSettings(imported);
+        applySettings(imported);
+        setDataStatus(strings.settings.importApplied);
+      }
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setDataBusy(false);
+    }
+  }
+
+  async function resetSettings() {
+    if (dataBusy || !window.confirm(strings.settings.resetQuestion)) return;
+    setDataBusy(true);
+    setDataStatus(undefined);
+    try {
+      const reset = await api.resetSettings();
+      setSettings(reset);
+      applySettings(reset);
+      setDataStatus(strings.settings.resetApplied);
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setDataBusy(false);
+    }
+  }
+
+  const checkForUpdates = useCallback(async () => {
+    if (checkingUpdate || distribution?.updatesManagedBy !== "postalSnap")
+      return;
+    setCheckingUpdate(true);
     setUpdateStatus(strings.settings.checking);
     try {
-      const [{ check }, { relaunch }] = await Promise.all([
-        import("@tauri-apps/plugin-updater"),
-        import("@tauri-apps/plugin-process"),
-      ]);
-      const update = await check();
-      if (!update) {
+      const result = await runUpdateSingleFlight(handleUpdateFound);
+      if (!result.available) {
         setUpdateStatus(strings.settings.upToDate);
-        return;
       }
-      setUpdateStatus(strings.settings.installing(update.version));
-      await update.downloadAndInstall();
-      await relaunch();
     } catch (cause) {
       setUpdateStatus(strings.settings.checkUpdates);
       setError(String(cause));
+    } finally {
+      setCheckingUpdate(false);
     }
-  }
+  }, [checkingUpdate, distribution, handleUpdateFound, setError]);
+
+  useEffect(() => {
+    if (
+      !checkUpdatesRequest ||
+      handledCheckRequest.current === checkUpdatesRequest ||
+      !distribution
+    )
+      return;
+    handledCheckRequest.current = checkUpdatesRequest;
+    void checkForUpdates();
+  }, [checkForUpdates, checkUpdatesRequest, distribution]);
 
   async function removeAccount(id: string, name: string) {
     if (!window.confirm(strings.settings.removeAccount(name))) return;
     try {
-      await api.removeAccount(id);
-      setAccounts(await api.listAccounts());
-      if (accounts.length === 1) onClose();
+      const result = await api.removeAccount(id);
+      const remaining = await api.listAccounts();
+      setAccounts(remaining);
+      if (result?.cleanupPending) {
+        setError(strings.settings.accountCleanupWarning);
+      }
+      if (remaining.length === 0) onClose();
     } catch (cause) {
       setError(String(cause));
     }
@@ -225,6 +317,7 @@ export function SettingsDialog({ onClose }: Props) {
                 id={`settings-tab-${id}`}
                 type="button"
                 role="tab"
+                aria-label={label}
                 aria-selected={tab === id}
                 aria-controls={`settings-${id}`}
                 tabIndex={tab === id ? 0 : -1}
@@ -285,6 +378,43 @@ export function SettingsDialog({ onClose }: Props) {
                     <strong>{strings.settings.vaultTitle}</strong>
                     <small>{strings.settings.vaultHelp}</small>
                   </span>
+                </div>
+                <div className="settings-data-card">
+                  <div>
+                    <strong>{strings.settings.settingsData}</strong>
+                    <small>{strings.settings.settingsDataHelp}</small>
+                  </div>
+                  <div className="settings-actions">
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={() => void exportSettings()}
+                      disabled={dataBusy}
+                    >
+                      <Upload /> {strings.settings.exportSettings}
+                    </button>
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={() => void importSettings()}
+                      disabled={dataBusy}
+                    >
+                      <DownloadCloud /> {strings.settings.importSettings}
+                    </button>
+                    <button
+                      className="danger-button"
+                      type="button"
+                      onClick={() => void resetSettings()}
+                      disabled={dataBusy}
+                    >
+                      <RotateCcw /> {strings.settings.resetSettings}
+                    </button>
+                  </div>
+                  {dataStatus ? (
+                    <small className="settings-data-status" role="status">
+                      {dataStatus}
+                    </small>
+                  ) : null}
                 </div>
               </SettingsPanel>
             ) : null}
@@ -464,6 +594,19 @@ export function SettingsDialog({ onClose }: Props) {
             ) : null}
             {tab === "accounts" ? (
               <SettingsPanel id="accounts" title={strings.settings.accounts}>
+                {accounts.length === 0 ? (
+                  <div className="settings-empty-state">
+                    <Mail />
+                    <p>{strings.settings.noAccounts}</p>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={onClose}
+                    >
+                      {strings.settings.returnToSetup}
+                    </button>
+                  </div>
+                ) : null}
                 <div className="account-settings-list">
                   {accounts.map((account) => (
                     <div key={account.id}>
@@ -589,6 +732,7 @@ export function SettingsDialog({ onClose }: Props) {
                     className="secondary-button"
                     type="button"
                     onClick={() => void checkForUpdates()}
+                    disabled={checkingUpdate}
                   >
                     {updateStatus}
                   </button>
