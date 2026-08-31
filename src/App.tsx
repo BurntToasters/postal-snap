@@ -9,8 +9,8 @@ import { strings } from "./i18n";
 import { parseMailto } from "./mailto";
 import { SetupWizard } from "./components/SetupWizard";
 import { MailShell } from "./components/MailShell";
-import { SettingsDialog } from "./components/SettingsDialog";
-import { defaultSettings, useAppStore } from "./store";
+import { SettingsDialog, type SettingsTab } from "./components/SettingsDialog";
+import { useAppStore } from "./store";
 import { applySettings } from "./settings";
 
 const Composer = lazy(() =>
@@ -31,30 +31,50 @@ export default function App() {
   const composeSeed = useAppStore((state) => state.composeSeed);
   const openComposer = useAppStore((state) => state.openComposer);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
+  const [settingsRouteRequest, setSettingsRouteRequest] = useState(0);
+  const [checkUpdatesRequest, setCheckUpdatesRequest] = useState(0);
+  const [startupError, setStartupError] = useState<string>();
   const [ready, setReady] = useState(!inTauri());
+
+  const openSettings = useCallback(
+    (tab: SettingsTab = "general", checkUpdates = false) => {
+      setSettingsTab(tab);
+      if (!checkUpdates) setSettingsRouteRequest((value) => value + 1);
+      if (checkUpdates) setCheckUpdatesRequest((value) => value + 1);
+      setSettingsOpen(true);
+    },
+    [],
+  );
 
   const loadAccounts = useCallback(async () => {
     try {
-      const [loadedAccounts, loadedSettings] = await Promise.all([
+      const [
+        loadedAccounts,
+        loadedSettings,
+        startupNotice,
+        nativeStartupError,
+      ] = await Promise.all([
         api.listAccounts(),
-        api.getSettings().catch(() => defaultSettings),
+        api.getSettings(),
+        api.getStartupNotice(),
+        api.getStartupError(),
       ]);
+      if (nativeStartupError) {
+        setStartupError(nativeStartupError);
+        return;
+      }
       setSettings(loadedSettings);
       setAccounts(loadedAccounts);
       applySettings(loadedSettings);
-      void api
-        .getStartupNotice()
-        .then((notice) => {
-          if (notice) setError(notice);
-        })
-        .catch(() => undefined);
+      if (startupNotice) setError(startupNotice);
       if (loadedAccounts.length > 0) {
         void isPermissionGranted()
           .then((granted) => (granted ? undefined : requestPermission()))
           .catch(() => undefined);
       }
-    } catch (cause) {
-      setError(String(cause));
+    } catch {
+      setStartupError(strings.app.startupRecoveryHelp);
     } finally {
       setReady(true);
     }
@@ -62,11 +82,20 @@ export default function App() {
 
   useEffect(() => {
     if (!inTauri()) return;
-    void loadAccounts();
+    void Promise.resolve().then(() => loadAccounts());
     const unsubscribers: Array<() => void> = [];
     void api.onSyncState(setSync).then((fn) => unsubscribers.push(fn));
+    void api.onAppWarning(setError).then((fn) => unsubscribers.push(fn));
     void api
       .onMenuAction((action) => {
+        if (action === "settings") {
+          openSettings();
+          return;
+        }
+        if (action === "check-for-updates") {
+          openSettings("updates", true);
+          return;
+        }
         window.dispatchEvent(
           new CustomEvent("postal:menu-action", { detail: action }),
         );
@@ -83,7 +112,18 @@ export default function App() {
       .catch(() => undefined);
     void onOpenUrl(handleUrls).then((fn) => unsubscribers.push(fn));
     return () => unsubscribers.forEach((fn) => fn());
-  }, [loadAccounts, openComposer, setSync]);
+  }, [loadAccounts, openComposer, openSettings, setError, setSync]);
+
+  useEffect(() => {
+    const keyboard = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === ",") {
+        event.preventDefault();
+        openSettings();
+      }
+    };
+    window.addEventListener("keydown", keyboard);
+    return () => window.removeEventListener("keydown", keyboard);
+  }, [openSettings]);
 
   useEffect(() => {
     document.documentElement.dataset.platform = /Mac/i.test(navigator.userAgent)
@@ -112,15 +152,35 @@ export default function App() {
     );
   }
 
+  const mainContent = startupError ? (
+    <main className="startup-recovery" role="alert">
+      <div className="brand-mark" aria-hidden="true">
+        ✉
+      </div>
+      <h1>{strings.app.startupRecoveryTitle}</h1>
+      <p>{startupError}</p>
+      <button
+        type="button"
+        className="primary-button"
+        onClick={() => openSettings()}
+      >
+        {strings.mail.settings}
+      </button>
+    </main>
+  ) : accounts.length === 0 ? (
+    <main className="setup-host">
+      <SetupWizard
+        onComplete={loadAccounts}
+        onOpenSettings={() => openSettings()}
+      />
+    </main>
+  ) : (
+    <MailShell onOpenSettings={() => openSettings()} />
+  );
+
   return (
     <>
-      {accounts.length === 0 ? (
-        <main className="setup-host">
-          <SetupWizard onComplete={loadAccounts} />
-        </main>
-      ) : (
-        <MailShell onOpenSettings={() => setSettingsOpen(true)} />
-      )}
+      {mainContent}
       {composerOpen && composerAccountId ? (
         <Suspense
           fallback={
@@ -136,7 +196,12 @@ export default function App() {
         </Suspense>
       ) : null}
       {settingsOpen ? (
-        <SettingsDialog onClose={() => setSettingsOpen(false)} />
+        <SettingsDialog
+          key={`${settingsTab}:${settingsRouteRequest}:${checkUpdatesRequest}`}
+          initialTab={settingsTab}
+          checkUpdatesRequest={checkUpdatesRequest}
+          onClose={() => setSettingsOpen(false)}
+        />
       ) : null}
       {error ? (
         <div className="toast error-toast" role="alert">

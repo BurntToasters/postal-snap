@@ -10,8 +10,8 @@ mod settings;
 
 use commands::AppState;
 use tauri::{
-    menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder},
-    Emitter, Manager,
+    menu::{MenuBuilder, MenuItemBuilder, MenuItemKind, SubmenuBuilder},
+    Emitter, Manager, Runtime,
 };
 #[cfg(target_os = "macos")]
 use tauri::{RunEvent, WindowEvent};
@@ -19,7 +19,14 @@ use tauri::{RunEvent, WindowEvent};
 fn main() {
     let builder = tauri::Builder::default()
         .on_menu_event(|app, event| {
-            let _ = app.emit("menu-action", event.id().as_ref());
+            let action = event.id().as_ref();
+            if matches!(action, "settings" | "check-for-updates") {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+            let _ = app.emit("menu-action", action);
         })
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
@@ -40,7 +47,6 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build());
     let app = builder
         .setup(|app| {
-            install_menu(app)?;
             let data_dir = app
                 .path()
                 .app_data_dir()
@@ -54,6 +60,7 @@ fn main() {
             let database_path = data_dir.join("postal-snap.sqlite3");
             let attachment_dir = data_dir.join("draft-attachments");
             std::fs::create_dir_all(&attachment_dir)?;
+            let orphan_cleanup_dir = attachment_dir.clone();
             let database = db::Database::open(&database_path).map_err(std::io::Error::other)?;
             #[cfg(unix)]
             {
@@ -65,14 +72,47 @@ fn main() {
             app.manage(AppState::new(database, settings, attachment_dir));
 
             let handle = app.handle().clone();
-            let accounts = app
+            let (accounts, startup_error) = match app
                 .state::<AppState>()
                 .db
                 .list_accounts()
-                .unwrap_or_default();
+            {
+                Ok(accounts) => (accounts, None),
+                Err(_) => (
+                    Vec::new(),
+                    Some(
+                        "Postal Snap could not open saved accounts. Your mail data was not deleted. Restart Postal Snap to try again.".to_string(),
+                    ),
+                ),
+            };
+            let has_startup_error = startup_error.is_some();
+            app.state::<AppState>().set_startup_error(startup_error)?;
+            install_menu(
+                app,
+                !has_startup_error && mail_actions_enabled(accounts.len()),
+            )?;
+            if !has_startup_error {
+                let account_ids = accounts
+                    .iter()
+                    .map(|account| account.id.clone())
+                    .collect();
+                tauri::async_runtime::spawn(commands::cleanup_orphaned_account_dirs(
+                    orphan_cleanup_dir,
+                    account_ids,
+                ));
+            }
             for account in accounts {
-                app.state::<AppState>()
-                    .ensure_watcher(account.id, handle.clone())?;
+                let state = app.state::<AppState>();
+                if state
+                    .ensure_watcher(account.id.clone(), handle.clone())
+                    .is_err()
+                {
+                    let _ = state.db.set_account_state(
+                        &account.id,
+                        "offline",
+                        Some("Background sync is unavailable. Use Get Mail to retry."),
+                    );
+                }
             }
             Ok(())
         })
@@ -109,7 +149,11 @@ fn main() {
             commands::release_compose_attachments,
             commands::get_settings,
             commands::save_settings,
+            commands::export_settings,
+            commands::import_settings,
+            commands::reset_settings,
             commands::get_startup_notice,
+            commands::get_startup_error,
             commands::get_cache_usage,
             commands::clear_downloaded_mail,
             commands::get_distribution_channel,
@@ -148,30 +192,37 @@ fn main() {
     });
 }
 
-fn install_menu(app: &tauri::App) -> tauri::Result<()> {
+fn install_menu<R: Runtime>(app: &tauri::App<R>, has_accounts: bool) -> tauri::Result<()> {
     let handle = app.handle();
     let settings = MenuItemBuilder::with_id("settings", "Settings…")
         .accelerator("CmdOrCtrl+Comma")
         .build(handle)?;
     let compose = MenuItemBuilder::with_id("compose", "New Message")
+        .enabled(has_accounts)
         .accelerator("CmdOrCtrl+N")
         .build(handle)?;
     let get_mail = MenuItemBuilder::with_id("get-mail", "Get Mail")
+        .enabled(has_accounts)
         .accelerator("CmdOrCtrl+Shift+M")
         .build(handle)?;
     let reply = MenuItemBuilder::with_id("reply", "Reply")
+        .enabled(has_accounts)
         .accelerator("CmdOrCtrl+R")
         .build(handle)?;
     let reply_all = MenuItemBuilder::with_id("reply-all", "Reply All")
+        .enabled(has_accounts)
         .accelerator("CmdOrCtrl+Shift+R")
         .build(handle)?;
     let forward = MenuItemBuilder::with_id("forward", "Forward")
+        .enabled(has_accounts)
         .accelerator("CmdOrCtrl+Shift+F")
         .build(handle)?;
     let archive = MenuItemBuilder::with_id("archive", "Archive")
+        .enabled(has_accounts)
         .accelerator("CmdOrCtrl+E")
         .build(handle)?;
     let trash = MenuItemBuilder::with_id("trash", "Move to Trash")
+        .enabled(has_accounts)
         .accelerator("CmdOrCtrl+Backspace")
         .build(handle)?;
     let text_larger = MenuItemBuilder::with_id("text-larger", "Make Text Larger")
@@ -181,25 +232,32 @@ fn install_menu(app: &tauri::App) -> tauri::Result<()> {
         .accelerator("CmdOrCtrl+-")
         .build(handle)?;
 
-    let app_menu = SubmenuBuilder::new(handle, "Postal Snap")
+    let check_updates =
+        MenuItemBuilder::with_id("check-for-updates", "Check for Updates…").build(handle)?;
+
+    let mut app_menu_builder = SubmenuBuilder::with_id(handle, "app", "Postal Snap")
         .about(None)
-        .separator()
+        .separator();
+    if compiled_updater_menu_visible() {
+        app_menu_builder = app_menu_builder.item(&check_updates);
+    }
+    let app_menu_builder = app_menu_builder
         .item(&settings)
         .separator()
         .services()
         .separator()
         .hide()
-        .hide_others()
-        .separator()
-        .quit()
-        .build()?;
-    let file_menu = SubmenuBuilder::new(handle, "File")
+        .hide_others();
+    #[cfg(target_os = "macos")]
+    let app_menu_builder = app_menu_builder.show_all();
+    let app_menu = app_menu_builder.separator().quit().build()?;
+    let file_menu = SubmenuBuilder::with_id(handle, "file", "File")
         .item(&compose)
         .item(&get_mail)
         .separator()
         .close_window()
         .build()?;
-    let edit_menu = SubmenuBuilder::new(handle, "Edit")
+    let edit_menu = SubmenuBuilder::with_id(handle, "edit", "Edit")
         .undo()
         .redo()
         .separator()
@@ -208,7 +266,7 @@ fn install_menu(app: &tauri::App) -> tauri::Result<()> {
         .paste()
         .select_all()
         .build()?;
-    let message_menu = SubmenuBuilder::new(handle, "Message")
+    let message_menu = SubmenuBuilder::with_id(handle, "message", "Message")
         .item(&reply)
         .item(&reply_all)
         .item(&forward)
@@ -216,15 +274,168 @@ fn install_menu(app: &tauri::App) -> tauri::Result<()> {
         .item(&archive)
         .item(&trash)
         .build()?;
-    let view_menu = SubmenuBuilder::new(handle, "View")
+    let view_menu = SubmenuBuilder::with_id(handle, "view", "View")
         .item(&text_larger)
         .item(&text_smaller)
         .separator()
         .fullscreen()
         .build()?;
+    #[cfg(target_os = "macos")]
+    let window_menu = SubmenuBuilder::with_id(handle, "window", "Window")
+        .minimize()
+        .maximize()
+        .separator()
+        .bring_all_to_front()
+        .build()?;
     let menu = MenuBuilder::new(handle)
-        .items(&[&app_menu, &file_menu, &edit_menu, &message_menu, &view_menu])
+        .items(&[
+            &app_menu,
+            &file_menu,
+            &edit_menu,
+            &message_menu,
+            &view_menu,
+            #[cfg(target_os = "macos")]
+            &window_menu,
+        ])
         .build()?;
     app.set_menu(menu)?;
     Ok(())
+}
+
+pub(crate) fn mail_actions_enabled(account_count: usize) -> bool {
+    account_count > 0
+}
+
+fn updater_menu_policy(target_is_macos: bool, direct_updater: bool, store_build: bool) -> bool {
+    target_is_macos && direct_updater && !store_build
+}
+
+fn compiled_updater_menu_visible() -> bool {
+    updater_menu_policy(
+        cfg!(target_os = "macos"),
+        cfg!(feature = "direct-updater"),
+        cfg!(any(
+            feature = "flatpak",
+            feature = "mas",
+            feature = "msstore"
+        )),
+    )
+}
+
+pub fn set_mail_menu_enabled<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+    enabled: bool,
+) -> Result<(), String> {
+    let Some(menu) = app.menu() else {
+        return Err("Application menu is unavailable.".into());
+    };
+    for (submenu_id, item_ids) in [
+        ("file", &["compose", "get-mail"][..]),
+        (
+            "message",
+            &["reply", "reply-all", "forward", "archive", "trash"][..],
+        ),
+    ] {
+        let Some(MenuItemKind::Submenu(submenu)) = menu.get(submenu_id) else {
+            return Err("Application mail menu is unavailable.".into());
+        };
+        for id in item_ids {
+            let Some(MenuItemKind::MenuItem(item)) = submenu.get(*id) else {
+                return Err("Application mail command is unavailable.".into());
+            };
+            item.set_enabled(enabled)
+                .map_err(|_| "Application mail command could not be updated.".to_string())?;
+        }
+    }
+    Ok(())
+}
+
+pub fn update_mail_menu_or_warn<R: Runtime>(app: &tauri::AppHandle<R>, enabled: bool) {
+    if set_mail_menu_enabled(app, enabled).is_err() {
+        let _ = app.emit(
+            "app-warning",
+            "Postal Snap could not update menu commands. Restart Postal Snap to restore them.",
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(not(target_os = "macos"))]
+    use super::{install_menu, set_mail_menu_enabled};
+    use super::{mail_actions_enabled, updater_menu_policy};
+    #[cfg(not(target_os = "macos"))]
+    use tauri::menu::MenuItemKind;
+
+    #[test]
+    fn mail_actions_follow_account_lifecycle() {
+        assert!(!mail_actions_enabled(0));
+        assert!(mail_actions_enabled(1));
+        assert!(mail_actions_enabled(2));
+    }
+
+    #[test]
+    fn updater_menu_policy_is_direct_macos_only() {
+        assert!(updater_menu_policy(true, true, false));
+        assert!(!updater_menu_policy(true, true, true));
+        assert!(!updater_menu_policy(true, false, false));
+        assert!(!updater_menu_policy(false, true, false));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn actual_mail_menu_items_follow_account_lifecycle() {
+        let app = tauri::test::mock_app();
+        install_menu(&app, false).unwrap();
+        assert_mail_items_enabled(&app, false);
+
+        set_mail_menu_enabled(app.handle(), true).unwrap();
+        assert_mail_items_enabled(&app, true);
+
+        set_mail_menu_enabled(app.handle(), false).unwrap();
+        assert_mail_items_enabled(&app, false);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn updater_menu_visibility_matches_distribution_features() {
+        let app = tauri::test::mock_app();
+        install_menu(&app, false).unwrap();
+        let menu = app.menu().unwrap();
+        let Some(MenuItemKind::Submenu(app_menu)) = menu.get("app") else {
+            panic!("app menu missing");
+        };
+        let expected = cfg!(all(
+            target_os = "macos",
+            feature = "direct-updater",
+            not(any(
+                feature = "flatpak",
+                feature = "mas",
+                feature = "msstore"
+            ))
+        ));
+        assert_eq!(app_menu.get("check-for-updates").is_some(), expected);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn assert_mail_items_enabled(app: &tauri::App<tauri::test::MockRuntime>, expected: bool) {
+        let menu = app.menu().unwrap();
+        for (submenu_id, item_ids) in [
+            ("file", &["compose", "get-mail"][..]),
+            (
+                "message",
+                &["reply", "reply-all", "forward", "archive", "trash"][..],
+            ),
+        ] {
+            let Some(MenuItemKind::Submenu(submenu)) = menu.get(submenu_id) else {
+                panic!("{submenu_id} menu missing");
+            };
+            for id in item_ids {
+                let Some(MenuItemKind::MenuItem(item)) = submenu.get(*id) else {
+                    panic!("{id} item missing");
+                };
+                assert_eq!(item.is_enabled().unwrap(), expected, "{id}");
+            }
+        }
+    }
 }

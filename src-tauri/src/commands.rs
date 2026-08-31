@@ -18,11 +18,11 @@ use crate::{
     db::Database,
     mail,
     models::{
-        take_validated_setup, validate_compose_draft, AccountRecord, AccountSetupRequest,
-        AccountSummary, AppSettings, CacheUsage, ComposeAttachment, ComposeDraft,
-        DistributionChannel, DraftSaveOutcome, DraftSummary, IpcError, MailboxSummary,
-        MessageCursor, MessageDetail, MessagePage, MessageSummary, OutboxSummary, SearchQuery,
-        SendOutcome, SyncState,
+        take_validated_setup, validate_compose_draft, AccountRecord, AccountRemovalOutcome,
+        AccountSetupRequest, AccountSummary, AppSettings, CacheUsage, ComposeAttachment,
+        ComposeDraft, DistributionChannel, DraftSaveOutcome, DraftSummary, IpcError,
+        MailboxSummary, MessageCursor, MessageDetail, MessagePage, MessageSummary, OutboxSummary,
+        SearchQuery, SendOutcome, SyncState,
     },
     security,
     settings::SettingsStore,
@@ -40,6 +40,7 @@ pub struct AppState {
     attachment_dir: PathBuf,
     account_actors: Mutex<HashMap<String, Arc<AccountActor>>>,
     watchers: Mutex<HashSet<String>>,
+    startup_error: Mutex<Option<String>>,
 }
 
 struct AccountActor {
@@ -55,7 +56,24 @@ impl AppState {
             attachment_dir,
             account_actors: Mutex::new(HashMap::new()),
             watchers: Mutex::new(HashSet::new()),
+            startup_error: Mutex::new(None),
         }
+    }
+
+    pub fn set_startup_error(&self, error: Option<String>) -> Result<(), String> {
+        *self
+            .startup_error
+            .lock()
+            .map_err(|_| "Application startup status is unavailable.".to_string())? = error;
+        Ok(())
+    }
+
+    pub fn take_startup_error(&self) -> Result<Option<String>, String> {
+        let mut error = self
+            .startup_error
+            .lock()
+            .map_err(|_| "Application startup status is unavailable.".to_string())?;
+        Ok(error.take())
     }
 
     fn actor(&self, account_id: &str) -> Result<Arc<AccountActor>, String> {
@@ -157,6 +175,12 @@ impl AppState {
         });
         Ok(())
     }
+
+    fn retire_actor(&self, account_id: &str) {
+        if let Ok(mut actors) = self.account_actors.lock() {
+            actors.remove(account_id);
+        }
+    }
 }
 
 fn reconnect_delay(account_id: &str, seconds: u64) -> Duration {
@@ -207,25 +231,61 @@ pub async fn add_account(
         let _ = credentials::remove(&id);
         return Err(error.into());
     }
-    state.ensure_watcher(id, app)?;
+    crate::update_mail_menu_or_warn(&app, true);
+    // The account is already durably saved. A transient watcher setup failure
+    // must not make setup look unsuccessful or roll back the account.
+    if state.ensure_watcher(id.clone(), app.clone()).is_err() {
+        let _ = state.db.set_account_state(
+            &id,
+            "offline",
+            Some("Background sync is unavailable. Use Get Mail to retry."),
+        );
+    }
     Ok(summary)
 }
 
 #[tauri::command]
-pub async fn remove_account(account_id: String, state: State<'_, AppState>) -> CommandResult<()> {
-    let _guard = state.lock_account(&account_id).await?;
+pub async fn remove_account(
+    account_id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<AccountRemovalOutcome> {
     let attachment_dir = managed_account_dir(&state.attachment_dir, &account_id)?;
-    credentials::remove(&account_id)?;
-    state.db.remove_account(&account_id)?;
-    if attachment_dir.exists() {
-        tokio::fs::remove_dir_all(attachment_dir)
-            .await
-            .map_err(|_| {
-                "The account was removed, but downloaded draft files need manual cleanup."
-                    .to_string()
-            })?;
+    state.db.account(&account_id)?;
+    let guard = state.lock_account(&account_id).await?;
+    // Recheck after waiting for another account operation so a concurrent
+    // removal can never reach the credential vault twice.
+    if let Err(error) = state.db.account(&account_id) {
+        drop(guard);
+        state.retire_actor(&account_id);
+        return Err(error.into());
     }
-    Ok(())
+    // Keep a zeroized copy so a database failure can restore the vault entry;
+    // account deletion is treated as one user-visible transaction.
+    let password = credentials::load_for_removal(&account_id)?;
+    credentials::remove(&account_id)?;
+    if let Err(error) = state.db.remove_account(&account_id) {
+        if password
+            .as_deref()
+            .is_some_and(|password| credentials::store(&account_id, password).is_err())
+        {
+            return Err(
+                "Postal Snap could not finish removing this account. Contact support before trying again."
+                    .into(),
+            );
+        }
+        return Err(error.into());
+    }
+    // Removal has committed; a count failure must not turn it into a reported
+    // command failure. Disable mail actions rather than allowing commands with
+    // unknown ownership.
+    let account_count = state.db.account_count().unwrap_or(0);
+    crate::update_mail_menu_or_warn(&app, crate::mail_actions_enabled(account_count));
+    let cleanup_pending =
+        attachment_dir.exists() && tokio::fs::remove_dir_all(attachment_dir).await.is_err();
+    drop(guard);
+    state.retire_actor(&account_id);
+    Ok(AccountRemovalOutcome { cleanup_pending })
 }
 
 #[tauri::command]
@@ -1532,8 +1592,54 @@ pub fn save_settings(
 }
 
 #[tauri::command]
+pub fn export_settings(app: AppHandle, state: State<'_, AppState>) -> CommandResult<bool> {
+    let destination = app
+        .dialog()
+        .file()
+        .set_file_name("Postal Snap Settings.json")
+        .add_filter("JSON settings", &["json"])
+        .blocking_save_file();
+    let Some(destination) = destination else {
+        return Ok(false);
+    };
+    let destination = destination
+        .into_path()
+        .map_err(|_| "Choose a valid settings export location.".to_string())?;
+    command_result(state.settings.export_to(&destination).map(|()| true))
+}
+
+#[tauri::command]
+pub fn import_settings(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<Option<AppSettings>> {
+    let source = app
+        .dialog()
+        .file()
+        .add_filter("JSON settings", &["json"])
+        .blocking_pick_file();
+    let Some(source) = source else {
+        return Ok(None);
+    };
+    let source = source
+        .into_path()
+        .map_err(|_| "Choose a valid settings file.".to_string())?;
+    command_result(state.settings.import_from(&source).map(Some))
+}
+
+#[tauri::command]
+pub fn reset_settings(state: State<'_, AppState>) -> CommandResult<AppSettings> {
+    command_result(state.settings.reset_preferences())
+}
+
+#[tauri::command]
 pub fn get_startup_notice(state: State<'_, AppState>) -> CommandResult<Option<String>> {
     command_result(state.settings.take_startup_notice())
+}
+
+#[tauri::command]
+pub fn get_startup_error(state: State<'_, AppState>) -> CommandResult<Option<String>> {
+    command_result(state.take_startup_error())
 }
 
 #[tauri::command]
@@ -1773,6 +1879,31 @@ fn managed_account_dir(root: &Path, account_id: &str) -> Result<PathBuf, String>
     Ok(root.join(id.hyphenated().to_string()))
 }
 
+pub(crate) async fn cleanup_orphaned_account_dirs(root: PathBuf, active_account_ids: Vec<String>) {
+    let active_account_ids = active_account_ids.into_iter().collect::<HashSet<_>>();
+    let Ok(mut entries) = tokio::fs::read_dir(root).await else {
+        return;
+    };
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let Ok(id) = uuid::Uuid::parse_str(name) else {
+            continue;
+        };
+        if id.hyphenated().to_string() != name || active_account_ids.contains(name) {
+            continue;
+        }
+        let Ok(file_type) = entry.file_type().await else {
+            continue;
+        };
+        if file_type.is_dir() && !file_type.is_symlink() {
+            let _ = tokio::fs::remove_dir_all(entry.path()).await;
+        }
+    }
+}
+
 async fn write_managed_file(
     state: &AppState,
     account_id: &str,
@@ -1874,4 +2005,26 @@ fn notify_new_mail(
         serde_json::json!({ "accountId": account_id, "messageId": message.id }),
     );
     let _ = app.notification().builder().title(title).body(body).show();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cleanup_orphaned_account_dirs;
+
+    #[tokio::test]
+    async fn startup_cleanup_removes_only_orphaned_uuid_directories() {
+        let root = tempfile::tempdir().unwrap();
+        let active = uuid::Uuid::new_v4().hyphenated().to_string();
+        let orphaned = uuid::Uuid::new_v4().hyphenated().to_string();
+        let unrelated = "user-files";
+        std::fs::create_dir(root.path().join(&active)).unwrap();
+        std::fs::create_dir(root.path().join(&orphaned)).unwrap();
+        std::fs::create_dir(root.path().join(unrelated)).unwrap();
+
+        cleanup_orphaned_account_dirs(root.path().to_path_buf(), vec![active.clone()]).await;
+
+        assert!(root.path().join(active).is_dir());
+        assert!(!root.path().join(orphaned).exists());
+        assert!(root.path().join(unrelated).is_dir());
+    }
 }

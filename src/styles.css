@@ -378,6 +378,14 @@ select {
   color: var(--success);
 }
 
+.setup-settings-button {
+  margin-top: 16px;
+}
+
+.setup-form-header .setup-settings-button {
+  margin-top: 0;
+}
+
 .account-form {
   display: grid;
   gap: 18px;
@@ -1736,6 +1744,60 @@ legend {
   color: var(--success);
 }
 
+.settings-data-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-muted);
+}
+
+.settings-data-card > div:first-child,
+.settings-empty-state {
+  display: grid;
+  gap: 4px;
+}
+
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-actions svg,
+.settings-empty-state > svg {
+  width: 17px;
+  height: 17px;
+}
+
+.settings-data-status {
+  color: var(--success) !important;
+  font-weight: 700;
+}
+
+.settings-empty-state {
+  place-items: center;
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.settings-empty-state > svg {
+  width: 30px;
+  height: 30px;
+}
+
+.settings-empty-state p {
+  margin: 0;
+}
+
 .storage-card span {
   flex: 1;
 }
@@ -1805,6 +1867,7 @@ legend {
 
 /* App state and alerts */
 .preview-notice,
+.startup-recovery,
 .splash {
   display: grid;
   height: 100%;

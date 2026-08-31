@@ -5,19 +5,29 @@ use std::{
     sync::Mutex,
 };
 
-use crate::{db::Database, models::AppSettings};
+use crate::{
+    db::Database,
+    models::{
+        AppSettings, CachePolicy, PortableCachePolicy, PortableSettings, PortableSettingsFile,
+    },
+};
 
 const MAX_SETTINGS_BYTES: usize = 64 * 1024;
+const PORTABLE_APPLICATION: &str = "postal-snap";
+const PORTABLE_FORMAT_VERSION: u32 = 1;
 
 pub struct SettingsStore {
     path: PathBuf,
     current: Mutex<AppSettings>,
     startup_notice: Mutex<Option<String>>,
+    write_lock: Mutex<()>,
+    migration_pending: Mutex<bool>,
 }
 
 impl SettingsStore {
     pub fn load(path: PathBuf, db: &Database) -> Result<Self, String> {
         let mut startup_notice = None;
+        let mut migration_pending = false;
         let settings = match read_bounded(&path) {
             Ok(Some(raw)) => match parse_and_validate(&raw) {
                 Ok(settings) => settings,
@@ -32,12 +42,20 @@ impl SettingsStore {
                     settings
                 }
             },
-            Ok(None) => {
-                let settings = db.legacy_settings().unwrap_or_default();
-                let settings = normalize_legacy(settings);
-                write_atomic(&path, &serialize(&settings)?)?;
-                settings
-            }
+            Ok(None) => match db.legacy_settings().and_then(normalize_legacy) {
+                Ok(settings) => {
+                    write_atomic(&path, &serialize(&settings)?)?;
+                    settings
+                }
+                Err(_) => {
+                    migration_pending = true;
+                    startup_notice = Some(
+                        "Postal Snap could not migrate saved settings. Safe defaults are temporary; restart Postal Snap to try again."
+                            .to_string(),
+                    );
+                    AppSettings::default()
+                }
+            },
             Err(_) => {
                 backup_invalid(&path)?;
                 startup_notice = Some(
@@ -52,6 +70,8 @@ impl SettingsStore {
             path,
             current: Mutex::new(settings),
             startup_notice: Mutex::new(startup_notice),
+            write_lock: Mutex::new(()),
+            migration_pending: Mutex::new(migration_pending),
         })
     }
 
@@ -64,12 +84,34 @@ impl SettingsStore {
     }
 
     pub fn save(&self, settings: AppSettings) -> Result<AppSettings, String> {
+        let _write_guard = self
+            .write_lock
+            .lock()
+            .map_err(|_| "Application settings are unavailable.".to_string())?;
+        if *self
+            .migration_pending
+            .lock()
+            .map_err(|_| "Application settings are unavailable.".to_string())?
+        {
+            return Err(
+                "Saved application settings could not be migrated. Restart Postal Snap or import/reset settings."
+                    .to_string(),
+            );
+        }
+        self.save_locked(settings)
+    }
+
+    fn save_locked(&self, settings: AppSettings) -> Result<AppSettings, String> {
         validate(&settings)?;
         write_atomic(&self.path, &serialize(&settings)?)?;
         *self
             .current
             .lock()
             .map_err(|_| "Application settings are unavailable.".to_string())? = settings.clone();
+        *self
+            .migration_pending
+            .lock()
+            .map_err(|_| "Application settings are unavailable.".to_string())? = false;
         Ok(settings)
     }
 
@@ -81,25 +123,127 @@ impl SettingsStore {
             .take();
         Ok(notice)
     }
+
+    pub fn export_to(&self, path: &Path) -> Result<(), String> {
+        let _write_guard = self
+            .write_lock
+            .lock()
+            .map_err(|_| "Application settings are unavailable.".to_string())?;
+        let current = self.get()?;
+        let portable = PortableSettingsFile {
+            application: PORTABLE_APPLICATION.into(),
+            format_version: PORTABLE_FORMAT_VERSION,
+            preferences: PortableSettings::from(&current),
+        };
+        let contents = serde_json::to_string_pretty(&portable)
+            .map_err(|_| "Could not prepare settings export.".to_string())?;
+        write_atomic(path, &contents)
+    }
+
+    pub fn import_from(&self, path: &Path) -> Result<AppSettings, String> {
+        let _write_guard = self
+            .write_lock
+            .lock()
+            .map_err(|_| "Application settings are unavailable.".to_string())?;
+        let raw = read_bounded(path)?.ok_or_else(|| "Settings file was not found.".to_string())?;
+        let portable: PortableSettingsFile = serde_json::from_str(&raw)
+            .map_err(|_| "Settings export is invalid or unsupported.".to_string())?;
+        if portable.application != PORTABLE_APPLICATION
+            || portable.format_version != PORTABLE_FORMAT_VERSION
+        {
+            return Err("Settings export is invalid or unsupported.".to_string());
+        }
+        let current = self.get()?;
+        let next = portable.preferences.apply_to(&current);
+        self.save_locked(next)
+    }
+
+    pub fn reset_preferences(&self) -> Result<AppSettings, String> {
+        let _write_guard = self
+            .write_lock
+            .lock()
+            .map_err(|_| "Application settings are unavailable.".to_string())?;
+        let current = self.get()?;
+        let next = PortableSettings::default().apply_to(&current);
+        self.save_locked(next)
+    }
 }
 
-fn normalize_legacy(mut settings: AppSettings) -> AppSettings {
+impl From<&AppSettings> for PortableSettings {
+    fn from(settings: &AppSettings) -> Self {
+        Self {
+            reading_pane: settings.reading_pane.clone(),
+            text_scale: settings.text_scale,
+            private_notifications: settings.private_notifications,
+            theme: settings.theme.clone(),
+            density: settings.density.clone(),
+            cache_policy: PortableCachePolicy::from(&settings.cache_policy),
+            folder_pane_width: settings.folder_pane_width,
+            message_pane_width: settings.message_pane_width,
+            reader_pane_height: settings.reader_pane_height,
+        }
+    }
+}
+
+impl PortableSettings {
+    fn apply_to(&self, current: &AppSettings) -> AppSettings {
+        AppSettings {
+            schema_version: 2,
+            reading_pane: self.reading_pane.clone(),
+            text_scale: self.text_scale,
+            private_notifications: self.private_notifications,
+            theme: self.theme.clone(),
+            density: self.density.clone(),
+            cache_policy: (&self.cache_policy).into(),
+            last_account_id: current.last_account_id.clone(),
+            last_mailbox_id: current.last_mailbox_id,
+            folder_pane_width: self.folder_pane_width,
+            message_pane_width: self.message_pane_width,
+            reader_pane_height: self.reader_pane_height,
+        }
+    }
+}
+
+impl Default for PortableSettings {
+    fn default() -> Self {
+        Self::from(&AppSettings::default())
+    }
+}
+
+impl From<&CachePolicy> for PortableCachePolicy {
+    fn from(policy: &CachePolicy) -> Self {
+        Self {
+            mode: policy.mode.clone(),
+            days: policy.days,
+            max_bytes: policy.max_bytes,
+        }
+    }
+}
+
+impl From<&PortableCachePolicy> for CachePolicy {
+    fn from(policy: &PortableCachePolicy) -> Self {
+        Self {
+            mode: policy.mode.clone(),
+            days: policy.days,
+            max_bytes: policy.max_bytes,
+        }
+    }
+}
+
+fn normalize_legacy(mut settings: AppSettings) -> Result<AppSettings, String> {
     settings.schema_version = 2;
     if !matches!(settings.density.as_str(), "comfortable" | "compact") {
         settings.density = "comfortable".into();
     }
-    if validate(&settings).is_ok() {
-        settings
-    } else {
-        AppSettings::default()
-    }
+    validate(&settings)?;
+    Ok(settings)
 }
 
 fn parse_and_validate(raw: &str) -> Result<AppSettings, String> {
     let settings: AppSettings =
         serde_json::from_str(raw).map_err(|_| "Settings JSON is invalid.".to_string())?;
     let settings = if settings.schema_version == 1 {
-        normalize_legacy(settings)
+        normalize_legacy(settings)?
     } else {
         settings
     };
@@ -258,6 +402,30 @@ mod tests {
     }
 
     #[test]
+    fn atomic_failure_keeps_current_settings() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let store = SettingsStore::load(path.clone(), &Database::memory()).unwrap();
+        store
+            .save(AppSettings {
+                theme: "dark".into(),
+                ..AppSettings::default()
+            })
+            .unwrap();
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+
+        assert!(store
+            .save(AppSettings {
+                theme: "light".into(),
+                ..AppSettings::default()
+            })
+            .is_err());
+        assert_eq!(store.get().unwrap().theme, "dark");
+        assert!(path.is_dir());
+    }
+
+    #[test]
     fn corrupt_settings_are_preserved_and_replaced_with_defaults() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.json");
@@ -274,5 +442,176 @@ mod tests {
                 .starts_with("settings.json.corrupt-")
         }));
         assert!(fs::read_to_string(path).unwrap().contains("schemaVersion"));
+    }
+
+    #[test]
+    fn failed_legacy_migration_uses_temporary_defaults_without_committing_them() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let db = Database::memory();
+        db.set_legacy_settings_raw_for_test("not-json");
+
+        let store = SettingsStore::load(path.clone(), &db).unwrap();
+
+        assert_eq!(store.get().unwrap().theme, "system");
+        assert!(store.take_startup_notice().unwrap().is_some());
+        assert!(!path.exists());
+        assert!(store.save(AppSettings::default()).is_err());
+        assert!(!path.exists());
+
+        store.reset_preferences().unwrap();
+        assert!(path.is_file());
+        assert!(store.save(AppSettings::default()).is_ok());
+    }
+
+    #[test]
+    fn portable_export_excludes_account_selection_and_round_trips_preferences() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let export_path = directory.path().join("Postal Snap Settings.json");
+        let store = SettingsStore::load(path, &Database::memory()).unwrap();
+        store
+            .save(AppSettings {
+                theme: "dark".into(),
+                last_account_id: Some(uuid::Uuid::new_v4().to_string()),
+                last_mailbox_id: Some(42),
+                ..AppSettings::default()
+            })
+            .unwrap();
+
+        store.export_to(&export_path).unwrap();
+        let raw = fs::read_to_string(&export_path).unwrap();
+        assert!(!raw.contains("lastAccountId"));
+        assert!(!raw.contains("lastMailboxId"));
+        assert_eq!(
+            serde_json::from_str::<PortableSettingsFile>(&raw)
+                .unwrap()
+                .preferences
+                .theme,
+            "dark"
+        );
+
+        let imported = store.import_from(&export_path).unwrap();
+        assert_eq!(imported.theme, "dark");
+        assert_eq!(imported.last_mailbox_id, Some(42));
+    }
+
+    #[test]
+    fn portable_import_rejects_invalid_data_without_mutating_current_settings() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let import_path = directory.path().join("invalid.json");
+        let store = SettingsStore::load(path, &Database::memory()).unwrap();
+        store
+            .save(AppSettings {
+                theme: "dark".into(),
+                ..AppSettings::default()
+            })
+            .unwrap();
+        let mut value = serde_json::to_value(PortableSettingsFile {
+            application: PORTABLE_APPLICATION.into(),
+            format_version: PORTABLE_FORMAT_VERSION,
+            preferences: PortableSettings::from(&store.get().unwrap()),
+        })
+        .unwrap();
+        value["formatVersion"] = serde_json::json!(99);
+        fs::write(&import_path, serde_json::to_vec(&value).unwrap()).unwrap();
+
+        assert!(store.import_from(&import_path).is_err());
+        assert_eq!(store.get().unwrap().theme, "dark");
+    }
+
+    #[test]
+    fn portable_import_rejects_foreign_application_without_mutating_current_settings() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let import_path = directory.path().join("foreign.json");
+        let store = SettingsStore::load(path, &Database::memory()).unwrap();
+        store
+            .save(AppSettings {
+                theme: "dark".into(),
+                ..AppSettings::default()
+            })
+            .unwrap();
+        let mut value = serde_json::to_value(PortableSettingsFile {
+            application: PORTABLE_APPLICATION.into(),
+            format_version: PORTABLE_FORMAT_VERSION,
+            preferences: PortableSettings::from(&store.get().unwrap()),
+        })
+        .unwrap();
+        value["application"] = serde_json::json!("another-app");
+        fs::write(&import_path, serde_json::to_vec(&value).unwrap()).unwrap();
+
+        assert!(store.import_from(&import_path).is_err());
+        assert_eq!(store.get().unwrap().theme, "dark");
+    }
+
+    #[test]
+    fn portable_import_rejects_partial_cache_policy_without_mutating_current_settings() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let import_path = directory.path().join("partial.json");
+        let store = SettingsStore::load(path, &Database::memory()).unwrap();
+        store
+            .save(AppSettings {
+                theme: "dark".into(),
+                ..AppSettings::default()
+            })
+            .unwrap();
+        let mut value = serde_json::to_value(PortableSettingsFile {
+            application: PORTABLE_APPLICATION.into(),
+            format_version: PORTABLE_FORMAT_VERSION,
+            preferences: PortableSettings::from(&store.get().unwrap()),
+        })
+        .unwrap();
+        value["preferences"]["cachePolicy"]
+            .as_object_mut()
+            .unwrap()
+            .remove("days");
+        fs::write(&import_path, serde_json::to_vec(&value).unwrap()).unwrap();
+
+        assert!(store.import_from(&import_path).is_err());
+        assert_eq!(store.get().unwrap().theme, "dark");
+    }
+
+    #[test]
+    fn portable_import_rejects_oversized_files_without_mutating_current_settings() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let import_path = directory.path().join("oversized.json");
+        let store = SettingsStore::load(path, &Database::memory()).unwrap();
+        store
+            .save(AppSettings {
+                theme: "dark".into(),
+                ..AppSettings::default()
+            })
+            .unwrap();
+        fs::write(&import_path, vec![b'x'; MAX_SETTINGS_BYTES + 1]).unwrap();
+
+        assert!(store.import_from(&import_path).is_err());
+        assert_eq!(store.get().unwrap().theme, "dark");
+    }
+
+    #[test]
+    fn reset_preferences_preserves_account_selection() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let account_id = uuid::Uuid::new_v4().to_string();
+        let store = SettingsStore::load(path, &Database::memory()).unwrap();
+        store
+            .save(AppSettings {
+                theme: "dark".into(),
+                density: "compact".into(),
+                last_account_id: Some(account_id.clone()),
+                last_mailbox_id: Some(42),
+                ..AppSettings::default()
+            })
+            .unwrap();
+
+        let reset = store.reset_preferences().unwrap();
+        assert_eq!(reset.theme, "system");
+        assert_eq!(reset.density, "comfortable");
+        assert_eq!(reset.last_account_id, Some(account_id));
+        assert_eq!(reset.last_mailbox_id, Some(42));
     }
 }
