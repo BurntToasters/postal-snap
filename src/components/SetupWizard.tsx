@@ -24,6 +24,7 @@ import { AppMark } from "./AppMark";
 
 interface Props {
   onComplete: () => Promise<void>;
+  onOpenSettings?: () => void;
 }
 
 const APPLE_APP_PASSWORD_GUIDE = "https://support.apple.com/102654";
@@ -64,7 +65,7 @@ function preparePassword(provider: ProviderKind, password: string): string {
   return provider === "icloud" ? trimmed.replace(/\s+/g, "") : trimmed;
 }
 
-export function SetupWizard({ onComplete }: Props) {
+export function SetupWizard({ onComplete, onOpenSettings }: Props) {
   const [provider, setProvider] = useState<ProviderKind>();
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
@@ -237,6 +238,15 @@ export function SetupWizard({ onComplete }: Props) {
             <ShieldCheck aria-hidden="true" />
             <span>{strings.setup.privacy}</span>
           </div>
+          {onOpenSettings ? (
+            <button
+              type="button"
+              className="secondary-button full-button setup-settings-button"
+              onClick={onOpenSettings}
+            >
+              {strings.setup.openSettings}
+            </button>
+          ) : null}
         </section>
       </div>
     );
@@ -260,6 +270,15 @@ export function SetupWizard({ onComplete }: Props) {
           >
             <ArrowLeft /> {strings.common.back}
           </button>
+          {onOpenSettings ? (
+            <button
+              type="button"
+              className="secondary-button setup-settings-button"
+              onClick={onOpenSettings}
+            >
+              {strings.setup.openSettings}
+            </button>
+          ) : null}
           <div
             className="setup-progress compact"
             aria-label={strings.setup.stepTwo}

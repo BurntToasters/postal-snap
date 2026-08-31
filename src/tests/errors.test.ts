@@ -35,4 +35,28 @@ describe("structured IPC errors", () => {
       describeSetupError({ secret: "vault-token" }, "manual").text,
     ).not.toContain("vault-token");
   });
+
+  it("uses actionable messages for settings file failures", () => {
+    expect(
+      normalizeIpcError({
+        code: "settingsInvalid",
+        message: "ignored",
+        retryable: false,
+      }).message,
+    ).toMatch(/valid Postal Snap settings export/i);
+    expect(
+      normalizeIpcError({
+        code: "settingsTooLarge",
+        message: "ignored",
+        retryable: false,
+      }).message,
+    ).toMatch(/64 KiB/i);
+    expect(
+      normalizeIpcError({
+        code: "settingsMigrationFailed",
+        message: "ignored",
+        retryable: true,
+      }).message,
+    ).toMatch(/restart Postal Snap/i);
+  });
 });

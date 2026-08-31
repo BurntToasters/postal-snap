@@ -16,6 +16,14 @@ pub fn load(account_id: &str) -> Result<Zeroizing<String>, String> {
         .map_err(|_| "The password is unavailable. Remove and add this account again.".into())
 }
 
+pub fn load_for_removal(account_id: &str) -> Result<Option<Zeroizing<String>>, String> {
+    match entry(account_id)?.get_password() {
+        Ok(password) => Ok(Some(Zeroizing::new(password))),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(_) => Err("The system password vault is unavailable.".into()),
+    }
+}
+
 pub fn remove(account_id: &str) -> Result<(), String> {
     match entry(account_id)?.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),

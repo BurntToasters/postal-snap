@@ -323,11 +323,6 @@ export function MailShell({ onOpenSettings }: Props) {
       const mod = event.metaKey || event.ctrlKey;
       const key = event.key.toLowerCase();
 
-      if (mod && event.key === ",") {
-        event.preventDefault();
-        onOpenSettings();
-        return;
-      }
       if (mod && !event.shiftKey && key === "n") {
         event.preventDefault();
         openComposer();
