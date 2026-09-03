@@ -534,6 +534,7 @@ test("test-all and package.json include cargo safe update and policy check", asy
     "node scripts/check-cargo-update-policy.mjs",
   );
   assert.match(packageJson.scripts["u"], /cargo-safe-update\.mjs/);
+  assert.match(packageJson.scripts["u"], /sync-version/);
 
   const testAll = await readFile(join(root, "scripts/test-all.js"), "utf8");
   assert.ok(testAll.includes('["run", "check:cargo-update-policy"]'));

@@ -152,7 +152,7 @@
     "vi": "node scripts/vi.js",
     "b": "git fetch origin && git reset --hard && git clean -fd && git switch -C beta origin/beta && git reset --hard origin/beta && git clean -fd && npm run vi",
     "r": "git fetch origin && git reset --hard && git clean -fd && git switch -C main origin/main && git reset --hard origin/main && git clean -fd && npm run vi && npm run gitprune:force",
-    "u": "node scripts/npm-safe-update.mjs && node scripts/cargo-safe-update.mjs --manifest-path src-tauri/Cargo.toml"
+    "u": "node scripts/npm-safe-update.mjs && node scripts/cargo-safe-update.mjs --manifest-path src-tauri/Cargo.toml && npm run sync-version"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.0",
