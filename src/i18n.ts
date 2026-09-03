@@ -47,6 +47,8 @@ export const strings = {
     loadingMessages: "Loading messages…",
     downloadingMessage: "Downloading message…",
     openToDownload: "Open to download message",
+    messageTooLarge:
+      "This message is too large to download safely. You can still move, archive, or delete it from the list.",
     loadOlder: "Load older mail",
     loadingOlder: "Loading older mail…",
     read: "Read",

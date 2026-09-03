@@ -11,6 +11,8 @@ use crate::models::{
 
 const CURRENT_SCHEMA_VERSION: u32 = 4;
 
+pub type MailboxSyncState = (Option<u32>, Option<u32>, u32, Option<u32>);
+
 pub struct Database {
     connection: Mutex<Connection>,
 }
@@ -692,13 +694,13 @@ impl Database {
         if has_more {
             items.truncate(page_size as usize);
         }
-        let next_cursor = has_more.then(|| {
-            let last = items.last().expect("non-empty page when more rows exist");
-            MessageCursor {
+        let next_cursor = has_more
+            .then(|| items.last())
+            .flatten()
+            .map(|last| MessageCursor {
                 received_at: last.received_at.clone(),
                 uid: last.uid,
-            }
-        });
+            });
         Ok(MessagePage {
             items,
             next_cursor,
@@ -943,6 +945,23 @@ impl Database {
         Ok(value.flatten())
     }
 
+    pub fn mailbox_sync_state(
+        &self,
+        account_id: &str,
+        mailbox: &str,
+    ) -> Result<Option<MailboxSyncState>, String> {
+        let value: Option<MailboxSyncState> = self
+            .conn()?
+            .query_row(
+                "SELECT uid_validity, uid_next, server_total, server_unread FROM mailboxes WHERE account_id=?1 AND name=?2",
+                params![account_id, mailbox],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()
+            .map_err(db_error)?;
+        Ok(value)
+    }
+
     pub fn message_fetch_location(
         &self,
         id: i64,
@@ -1056,7 +1075,7 @@ impl Database {
         let mut statement = conn
             .prepare(
                 "SELECT id,draft_json,updated_at,sync_state,sync_detail FROM drafts
-                 WHERE account_id=?1 AND deleted_at IS NULL ORDER BY updated_at DESC",
+                 WHERE account_id=?1 AND (deleted_at IS NULL OR sync_state='deletePending') ORDER BY updated_at DESC",
             )
             .map_err(db_error)?;
         let rows = statement
@@ -1093,7 +1112,7 @@ impl Database {
         let json: String = self
             .conn()?
             .query_row(
-                "SELECT draft_json FROM drafts WHERE id=?1 AND account_id=?2 AND deleted_at IS NULL",
+                "SELECT draft_json FROM drafts WHERE id=?1 AND account_id=?2 AND (deleted_at IS NULL OR sync_state='deletePending')",
                 params![id, account_id],
                 |row| row.get(0),
             )
@@ -1352,6 +1371,24 @@ impl Database {
             &stored.attachments,
         )?;
         transaction.commit().map_err(db_error)
+    }
+
+    pub fn update_remote_draft_tracking(
+        &self,
+        id: &str,
+        account_id: &str,
+        mailbox: &str,
+        uid: u32,
+        uid_validity: Option<u32>,
+        message_id: Option<&str>,
+    ) -> Result<(), String> {
+        self.conn()?
+            .execute(
+                "UPDATE drafts SET remote_mailbox=?3,remote_uid=?4,remote_uid_validity=?5,remote_message_id=?6 WHERE id=?1 AND account_id=?2",
+                params![id, account_id, mailbox, uid, uid_validity, message_id],
+            )
+            .map_err(db_error)?;
+        Ok(())
     }
 
     pub fn reconcile_remote_drafts(
@@ -2448,6 +2485,79 @@ mod tests {
 
         assert_eq!(db.max_uid(mailbox).unwrap(), 0);
         assert_eq!(db.backfill_cursor(mailbox).unwrap(), None);
+    }
+
+    #[test]
+    fn mailbox_sync_state_reports_counts_for_skip_decision() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        db.upsert_mailbox(
+            &account.summary.id,
+            "INBOX",
+            &MailboxRole::Inbox,
+            Some(11),
+            Some(100),
+            Some(3),
+            7,
+        )
+        .unwrap();
+        assert_eq!(
+            db.mailbox_sync_state(&account.summary.id, "INBOX").unwrap(),
+            Some((Some(11), Some(100), 7, Some(3)))
+        );
+    }
+
+    #[test]
+    fn newer_local_skip_still_tracks_server_uid() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let draft = draft(&account.summary.id);
+        let id = db.save_draft(&draft).unwrap();
+        db.update_remote_draft_tracking(&id, &account.summary.id, "Drafts", 77, Some(9), None)
+            .unwrap();
+        let known = db
+            .remote_draft_uids(&account.summary.id, "Drafts", Some(9))
+            .unwrap();
+        assert!(known.contains(&77));
+    }
+
+    #[test]
+    fn delete_pending_drafts_stay_visible_for_retry() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let mut draft = draft(&account.summary.id);
+        draft.to = vec!["jane@example.com".into()];
+        let id = db.save_draft(&draft).unwrap();
+        db.conn()
+            .unwrap()
+            .execute(
+                "UPDATE drafts SET remote_uid=5, sync_state='deletePending', deleted_at=CURRENT_TIMESTAMP WHERE id=?1",
+                [id.clone()],
+            )
+            .unwrap();
+        let listed = db.list_drafts(&account.summary.id).unwrap();
+        assert!(listed.iter().any(|item| item.id == id));
+        assert!(db.draft(&id, &account.summary.id).is_ok());
+    }
+
+    #[test]
+    fn cursor_pagination_clamps_zero_limit_without_panicking() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let mailbox = mailbox(&db, &account.summary.id, "INBOX", &MailboxRole::Inbox);
+        db.upsert_message(
+            &account.summary.id,
+            mailbox,
+            &message(1, "2026-08-18T12:00:00Z"),
+        )
+        .unwrap();
+        let page = db.list_messages(mailbox, None, 0).unwrap();
+        assert_eq!(page.items.len(), 1);
+        assert!(page.next_cursor.is_none());
     }
 
     #[test]

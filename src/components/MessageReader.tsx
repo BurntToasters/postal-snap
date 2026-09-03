@@ -29,6 +29,8 @@ import { parseMailto } from "../mailto";
 import { messageFrameDocument, sanitizeReceivedHtml } from "../security";
 import { useAppStore } from "../store";
 import type { Attachment } from "../types";
+import { moveToolbarFocus } from "./toolbarNav";
+import { useDialogFocus } from "./useDialogFocus";
 
 export function MessageReader() {
   const message = useAppStore((state) => state.selectedMessage);
@@ -57,6 +59,23 @@ export function MessageReader() {
   const [loadingImagesFor, setLoadingImagesFor] = useState<number>();
   const [preparingForward, setPreparingForward] = useState(false);
   const [showDetailsFor, setShowDetailsFor] = useState<number>();
+  const isOverlay = settings.readingPane === "hidden" && message !== undefined;
+  const dialogRef = useDialogFocus(() => selectMessage(undefined));
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  const overlayMessageId = message?.id;
+
+  useEffect(() => {
+    if (overlayMessageId === undefined) return;
+    const narrow =
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(max-width: 760px)").matches;
+    if (!isOverlay && !narrow) return;
+    const previous = document.activeElement as HTMLElement | null;
+    titleRef.current?.focus();
+    return () => {
+      previous?.focus();
+    };
+  }, [isOverlay, overlayMessageId]);
 
   const account = accounts.find((a) => a.id === message?.accountId);
   const currentMailbox = mailboxes.find((m) => m.id === message?.mailboxId);
@@ -577,10 +596,16 @@ export function MessageReader() {
   }
 
   if (settings.readingPane === "hidden" && !message)
-    return <section className="reader-pane reader-hidden" aria-hidden="true" />;
+    return (
+      <section
+        className="reader-pane reader-hidden"
+        id="reader-pane"
+        aria-hidden="true"
+      />
+    );
   if (!message)
     return (
-      <section className="reader-pane empty-reader">
+      <section className="reader-pane empty-reader" id="reader-pane">
         <div className="brand-watermark" aria-hidden="true">
           ✉
         </div>
@@ -591,8 +616,19 @@ export function MessageReader() {
   const showDetails = showDetailsFor === message.id;
 
   return (
-    <article className="reader-pane" aria-labelledby="message-title">
-      <div className="reader-actions">
+    <article
+      className="reader-pane"
+      aria-labelledby="message-title"
+      ref={isOverlay ? dialogRef : undefined}
+      role={isOverlay ? "dialog" : undefined}
+      aria-modal={isOverlay ? "true" : undefined}
+    >
+      <div
+        className="reader-actions"
+        role="toolbar"
+        aria-label="Message actions"
+        onKeyDown={moveToolbarFocus}
+      >
         <button
           className="mobile-reader-back"
           type="button"
@@ -735,7 +771,11 @@ export function MessageReader() {
         </label>
       </div>
       <header className="message-header">
-        <h1 id="message-title">
+        <h1
+          id="message-title"
+          ref={titleRef}
+          tabIndex={isOverlay ? -1 : undefined}
+        >
           {message.subject || strings.common.noSubject}
         </h1>
         <div className="sender-avatar" aria-hidden="true">
@@ -914,7 +954,13 @@ export function MessageReader() {
         </div>
       ) : null}
       <div className="message-body">
-        {message.htmlBody ? (
+        {!message.htmlBody &&
+        !message.textBody &&
+        message.size > 50 * 1024 * 1024 ? (
+          <p className="plain-text-body" role="note">
+            {strings.mail.messageTooLarge}
+          </p>
+        ) : message.htmlBody ? (
           <iframe
             ref={frame}
             title={strings.reader.messageContent}
