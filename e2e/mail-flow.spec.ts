@@ -125,7 +125,7 @@ async function installMockIpc(page: Page) {
                 throw {
                   code: "localStorageFailed",
                   message:
-                    "Postal Snap could not save this change on your computer.",
+                    "Postal Snap could not access local mail data on your computer.",
                   retryable: true,
                 };
               }

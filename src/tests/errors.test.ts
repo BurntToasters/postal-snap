@@ -21,6 +21,16 @@ describe("structured IPC errors", () => {
     expect(error.message).not.toContain("do-not-display");
   });
 
+  it("describes local database failures as access failures", () => {
+    expect(
+      normalizeIpcError({
+        code: "localStorageFailed",
+        message: "ignored",
+        retryable: true,
+      }).message,
+    ).toMatch(/access local mail data/i);
+  });
+
   it("adds recoverable setup hints without leaking raw failures", () => {
     const auth = new PostalError({
       code: "authenticationFailed",
