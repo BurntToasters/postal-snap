@@ -20,6 +20,7 @@ vi.mock("../api", () => ({
     setMessageFlags: vi.fn(),
     searchCached: vi.fn(),
     searchServer: vi.fn(),
+    saveSettings: vi.fn(),
     onFolderCountsChanged: vi.fn(),
     onMessageChanged: vi.fn(),
   },
@@ -84,6 +85,7 @@ const mockedGetMessage = vi.mocked(api.getMessage);
 const mockedSetMessageFlags = vi.mocked(api.setMessageFlags);
 const mockedSearchCached = vi.mocked(api.searchCached);
 const mockedSearchServer = vi.mocked(api.searchServer);
+const mockedSaveSettings = vi.mocked(api.saveSettings);
 const mockedOnFolderCountsChanged = vi.mocked(api.onFolderCountsChanged);
 const mockedOnMessageChanged = vi.mocked(api.onMessageChanged);
 
@@ -145,6 +147,7 @@ describe("mail shell", () => {
       return detail(summary);
     });
     mockedSetMessageFlags.mockResolvedValue(undefined);
+    mockedSaveSettings.mockImplementation(async (next) => next);
     mockedOnFolderCountsChanged.mockResolvedValue(() => undefined);
     mockedOnMessageChanged.mockResolvedValue(() => undefined);
     mockedSearchCached.mockResolvedValue([]);
