@@ -776,6 +776,9 @@ test("25. dependency update entry points use guarded Cargo resolution", () => {
     if (!command) continue;
     assert.doesNotMatch(command, /\bcargo update\b/);
     assert.match(command, /cargo-safe-update/);
+    if (name === "u" || name === "u2") {
+      assert.match(command, /sync-version/);
+    }
   }
   assert.match(packageJson.scripts.u, /npm-safe-update/);
   assert.doesNotMatch(
