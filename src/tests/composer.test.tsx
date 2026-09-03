@@ -62,7 +62,7 @@ describe("composer draft persistence", () => {
     });
 
     await act(async () => {
-      vi.advanceTimersByTime(30_000);
+      vi.advanceTimersByTime(6_000);
       await Promise.resolve();
     });
     expect(mockedSaveDraft).toHaveBeenCalledTimes(1);
@@ -93,7 +93,7 @@ describe("composer draft persistence", () => {
       target: { value: "jane@example.test" },
     });
     await act(async () => {
-      vi.advanceTimersByTime(30_000);
+      vi.advanceTimersByTime(6_000);
       await Promise.resolve();
     });
     expect(mockedSaveDraft).toHaveBeenCalledTimes(1);
@@ -140,5 +140,13 @@ describe("composer draft persistence", () => {
 
     fireEvent.change(select, { target: { value: "alias1@example.test" } });
     expect(select.value).toBe("alias1@example.test");
+  });
+
+  it("exposes Cc/Bcc toggle state for assistive tech", () => {
+    render(<Composer accountId={account.id} />);
+    const toggle = screen.getByRole("button", { name: "Cc/Bcc" });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
   });
 });

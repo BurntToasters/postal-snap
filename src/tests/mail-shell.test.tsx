@@ -224,4 +224,13 @@ describe("mail shell", () => {
 
     expect(await screen.findByRole("button", { name: /^Inbox/ })).toBeVisible();
   });
+
+  it("keeps toolbar actions named when labels collapse on narrow windows", async () => {
+    renderShell();
+
+    expect(
+      await screen.findByRole("button", { name: "Get Mail" }),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "Write" })).toBeVisible();
+  });
 });

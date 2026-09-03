@@ -104,6 +104,28 @@ describe("SettingsDialog component", () => {
     expect(api.discoverAccountAliases).toHaveBeenCalledWith("account-1");
   });
 
+  it("renders alias header title, help, and detect action together", async () => {
+    const onClose = vi.fn();
+    const { container } = render(
+      <SettingsDialog initialTab="accounts" onClose={onClose} />,
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("Email Aliases & Custom Domains")).toBeDefined();
+    expect(
+      screen.getByText(/Send and receive using iCloud aliases/),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Detect from iCloud" }),
+    ).toBeDefined();
+    const header = container.querySelector(".aliases-header");
+    expect(header?.querySelector("strong")).toBeDefined();
+    expect(header?.querySelector(".settings-note")).toBeDefined();
+  });
+
   it("updates cache policy to unlimited when Download all is selected", async () => {
     const onClose = vi.fn();
     render(<SettingsDialog initialTab="storage" onClose={onClose} />);

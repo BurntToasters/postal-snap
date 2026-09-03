@@ -668,12 +668,17 @@ pub fn mailbox_role(name: &str, attributes: &[String]) -> MailboxRole {
         .unwrap_or(name)
         .to_ascii_lowercase();
     match leaf.as_str() {
-        "inbox" => MailboxRole::Inbox,
-        "sent" | "sent messages" | "sent mail" | "sent items" => MailboxRole::Sent,
-        "drafts" => MailboxRole::Drafts,
-        "archive" | "all mail" => MailboxRole::Archive,
-        "trash" | "deleted messages" | "deleted items" | "bin" => MailboxRole::Trash,
-        "junk" | "spam" | "junk email" | "junk e-mail" => MailboxRole::Junk,
+        "inbox" | "posteingang" | "boîte de réception" => MailboxRole::Inbox,
+        "sent" | "sent messages" | "sent mail" | "sent items" | "gesendet" | "gesendete"
+        | "gesendete objekte" | "messages envoyés" | "enviados" => MailboxRole::Sent,
+        "drafts" | "entwürfe" | "entwurfe" | "brouillons" | "borradores" => MailboxRole::Drafts,
+        "archive" | "all mail" | "archiv" | "alle e-mails" | "tous les messages" | "archivados" => {
+            MailboxRole::Archive
+        }
+        "trash" | "deleted messages" | "deleted items" | "bin" | "papierkorb"
+        | "gelöschte objekte" | "corbeille" | "papelera" => MailboxRole::Trash,
+        "junk" | "spam" | "junk email" | "junk e-mail" | "spamverdacht" | "indésirables"
+        | "correo no deseado" => MailboxRole::Junk,
         _ => MailboxRole::Other,
     }
 }
@@ -897,5 +902,14 @@ mod tests {
         assert_eq!(mailbox_role("Sent Items", &[]), MailboxRole::Sent);
         assert_eq!(mailbox_role("Junk Email", &[]), MailboxRole::Junk);
         assert_eq!(mailbox_role("Bin", &[]), MailboxRole::Trash);
+    }
+
+    #[test]
+    fn maps_gmail_and_international_fallback_roles() {
+        assert_eq!(mailbox_role("[Gmail]/Sent Mail", &[]), MailboxRole::Sent);
+        assert_eq!(mailbox_role("[Gmail]/All Mail", &[]), MailboxRole::Archive);
+        assert_eq!(mailbox_role("Gesendet", &[]), MailboxRole::Sent);
+        assert_eq!(mailbox_role("Entwürfe", &[]), MailboxRole::Drafts);
+        assert_eq!(mailbox_role("Papierkorb", &[]), MailboxRole::Trash);
     }
 }

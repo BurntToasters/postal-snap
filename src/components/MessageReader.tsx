@@ -29,6 +29,7 @@ import { parseMailto } from "../mailto";
 import { messageFrameDocument, sanitizeReceivedHtml } from "../security";
 import { useAppStore } from "../store";
 import type { Attachment } from "../types";
+import { useDialogFocus } from "./useDialogFocus";
 
 export function MessageReader() {
   const message = useAppStore((state) => state.selectedMessage);
@@ -57,6 +58,19 @@ export function MessageReader() {
   const [loadingImagesFor, setLoadingImagesFor] = useState<number>();
   const [preparingForward, setPreparingForward] = useState(false);
   const [showDetailsFor, setShowDetailsFor] = useState<number>();
+  const isOverlay = settings.readingPane === "hidden" && message !== undefined;
+  const dialogRef = useDialogFocus(() => selectMessage(undefined));
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  const overlayMessageId = message?.id;
+
+  useEffect(() => {
+    if (!isOverlay || overlayMessageId === undefined) return;
+    const previous = document.activeElement as HTMLElement | null;
+    titleRef.current?.focus();
+    return () => {
+      previous?.focus();
+    };
+  }, [isOverlay, overlayMessageId]);
 
   const account = accounts.find((a) => a.id === message?.accountId);
   const currentMailbox = mailboxes.find((m) => m.id === message?.mailboxId);
@@ -591,8 +605,18 @@ export function MessageReader() {
   const showDetails = showDetailsFor === message.id;
 
   return (
-    <article className="reader-pane" aria-labelledby="message-title">
-      <div className="reader-actions">
+    <article
+      className="reader-pane"
+      aria-labelledby="message-title"
+      ref={isOverlay ? dialogRef : undefined}
+      role={isOverlay ? "dialog" : undefined}
+      aria-modal={isOverlay ? "true" : undefined}
+    >
+      <div
+        className="reader-actions"
+        role="toolbar"
+        aria-label="Message actions"
+      >
         <button
           className="mobile-reader-back"
           type="button"
@@ -735,7 +759,11 @@ export function MessageReader() {
         </label>
       </div>
       <header className="message-header">
-        <h1 id="message-title">
+        <h1
+          id="message-title"
+          ref={titleRef}
+          tabIndex={isOverlay ? -1 : undefined}
+        >
           {message.subject || strings.common.noSubject}
         </h1>
         <div className="sender-avatar" aria-hidden="true">

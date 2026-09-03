@@ -125,8 +125,12 @@
 }
 
 .switch-row input {
-  width: 22px;
-  min-height: 22px;
+  width: 28px;
+  height: 28px;
+  min-width: 44px;
+  min-height: 44px;
+  accent-color: var(--accent);
+  cursor: pointer;
 }
 
 .security-summary,
@@ -226,7 +230,8 @@
 
 .account-card-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  flex-wrap: wrap;
   gap: 12px;
 }
 
@@ -240,6 +245,7 @@
 .account-card-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -255,10 +261,24 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+  flex-wrap: wrap;
+}
+
+.aliases-header > div {
+  display: grid;
+  gap: 4px;
+  flex: 1 1 220px;
+  min-width: 0;
 }
 
 .aliases-header strong {
+  display: block;
   font-size: 0.92rem;
+  line-height: 1.35;
+}
+
+.aliases-header .settings-note {
+  margin: 0;
 }
 
 .detect-aliases-button {
@@ -266,12 +286,16 @@
   min-height: 44px;
   padding: 8px 14px;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .alias-status-message {
   font-size: 0.84rem;
   color: var(--success);
   font-weight: 500;
+  line-height: 1.45;
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .aliases-list {
@@ -331,11 +355,12 @@
   display: flex;
   gap: 8px;
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .add-alias-form input {
-  flex: 1;
-  min-height: 44px;
+  flex: 1 1 200px;
+  min-width: 0;
   padding: 8px 12px;
   font-size: 0.88rem;
   border: 1px solid var(--border);

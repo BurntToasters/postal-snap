@@ -378,7 +378,7 @@ export function Composer({ accountId }: Props) {
             saveInFlight.current = false;
           });
       }
-    }, 30_000);
+    }, 6_000);
     return () => window.clearInterval(saveTimer);
   }, [accountId, editor, sending, setError]);
 
@@ -778,6 +778,7 @@ export function Composer({ accountId }: Props) {
             <button
               type="button"
               className="cc-toggle"
+              aria-expanded={showCc}
               onClick={(event) => {
                 event.preventDefault();
                 setShowCc((value) => !value);

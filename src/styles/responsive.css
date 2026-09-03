@@ -43,12 +43,16 @@
     inset: 58px auto 0 0;
     width: min(290px, 88vw);
     transform: translateX(-105%);
+    visibility: hidden;
     box-shadow: var(--shadow);
-    transition: transform 150ms ease;
+    transition:
+      transform 150ms ease,
+      visibility 150ms ease;
   }
 
   .sidebar-open .folder-pane {
     transform: translateX(0);
+    visibility: visible;
   }
 
   .sidebar-scrim {
@@ -257,7 +261,33 @@
   }
 
   .address-fields label {
-    grid-template-columns: 58px 1fr;
+    grid-template-columns: 58px minmax(0, 1fr);
+  }
+
+  .address-fields .to-field {
+    grid-template-columns: 58px minmax(0, 1fr) auto;
+  }
+
+  .aliases-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .detect-aliases-button {
+    align-self: flex-start;
+  }
+
+  .add-alias-form {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .add-alias-form button {
+    width: 100%;
+  }
+
+  .account-card-actions {
+    width: 100%;
   }
 
   .toolbar-button {
@@ -281,7 +311,10 @@
   .message-row.selected,
   .primary-button,
   .settings-nav button.active,
-  .update-ready-badge {
+  .update-ready-badge,
+  .alias-chip.primary,
+  .toast,
+  .pane-hidden .reader-pane:not(.reader-hidden):not(.empty-reader) {
     border: 2px solid Highlight;
   }
 
