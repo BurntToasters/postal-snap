@@ -489,7 +489,9 @@ test("routes native settings and update menu actions", async ({ page }) => {
     }),
   );
   await expect(page.getByRole("dialog")).toBeVisible();
-  await page.getByRole("tab", { name: "Accounts" }).click();
+  await page.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  const dialogPromise = page.waitForEvent("dialog");
   await page.evaluate(() =>
     (
       window as typeof window & {
@@ -505,10 +507,11 @@ test("routes native settings and update menu actions", async ({ page }) => {
       payload: "check-for-updates",
     }),
   );
-  await expect(page.getByRole("tab", { name: "Updates" })).toHaveAttribute(
-    "aria-selected",
-    "true",
-  );
+  const dialog = await dialogPromise;
+  expect(dialog.message()).toContain("Postal Snap");
+  await dialog.accept();
+  // Ensure settings window was not redundantly opened by the menu action
+  await expect(page.getByRole("dialog")).toHaveCount(0);
 });
 
 test("keeps settings tab names accessible in a narrow window", async ({

@@ -1348,6 +1348,9 @@ async fn deliver_outbox_locked(
     );
     match mail::send_prepared(&account, &password, &draft, &mime_bytes).await {
         Ok(()) => {
+            if let Some(draft_id) = draft.id.as_deref() {
+                let _ = state.db.remove_draft(draft_id, account_id);
+            }
             let sent_mailbox = state.db.mailbox_for_role(account_id, "sent")?;
             let copy_result = match sent_mailbox {
                 Some((_, mailbox)) => {
@@ -1374,9 +1377,6 @@ async fn deliver_outbox_locked(
                 });
             }
             state.db.remove_outbox(outbox_id)?;
-            if let Some(draft_id) = draft.id.as_deref() {
-                let _ = state.db.remove_draft(draft_id, account_id);
-            }
             release_attachment_tokens(
                 state,
                 account_id,
@@ -1681,6 +1681,20 @@ pub async fn read_message_inline_image(
     ))
 }
 
+fn detect_image_mime(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if bytes.starts_with(b"\xff\xd8\xff") {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
+}
+
 #[tauri::command]
 pub async fn read_compose_image(
     token: String,
@@ -1691,24 +1705,25 @@ pub async fn read_compose_image(
     if !path.is_absolute() || !path.is_file() {
         return Err("Choose a valid image file.".into());
     }
-    let mime = mime_guess::from_path(&path).first_or_octet_stream();
-    if !matches!(
-        mime.essence_str(),
-        "image/png" | "image/jpeg" | "image/gif" | "image/webp"
-    ) {
-        return Err("Choose a PNG, JPEG, GIF, or WebP image.".into());
-    }
-    let bytes = tokio::fs::read(path)
+    let bytes = tokio::fs::read(&path)
         .await
         .map_err(|_| "Could not read that image.".to_string())?;
     if bytes.len() > 20 * 1024 * 1024 {
         return Err("That image is too large.".into());
     }
-    Ok(format!(
-        "data:{};base64,{}",
-        mime.essence_str(),
-        STANDARD.encode(bytes)
-    ))
+    let mime = detect_image_mime(&bytes)
+        .or_else(|| {
+            let guessed = mime_guess::from_path(&path).first_or_octet_stream();
+            match guessed.essence_str() {
+                "image/png" => Some("image/png"),
+                "image/jpeg" => Some("image/jpeg"),
+                "image/gif" => Some("image/gif"),
+                "image/webp" => Some("image/webp"),
+                _ => None,
+            }
+        })
+        .ok_or_else(|| "Choose a PNG, JPEG, GIF, or WebP image.".to_string())?;
+    Ok(format!("data:{mime};base64,{}", STANDARD.encode(bytes)))
 }
 
 #[tauri::command]

@@ -161,12 +161,12 @@ fn is_public_v6(ip: Ipv6Addr) -> bool {
         return is_public_v4(mapped);
     }
     let segments = ip.segments();
-    // NAT64 Well-Known Prefix 64:ff9b::/96
-    if segments[0] == 0x0064
-        && segments[1] == 0xff9b
+    // IPv4-Translated address ::ffff:0:a.b.c.d (RFC 6052 / RFC 6144)
+    if segments[0] == 0
+        && segments[1] == 0
         && segments[2] == 0
         && segments[3] == 0
-        && segments[4] == 0
+        && segments[4] == 0xffff
         && segments[5] == 0
     {
         let v4 = Ipv4Addr::new(
@@ -176,6 +176,21 @@ fn is_public_v6(ip: Ipv6Addr) -> bool {
             (segments[7] & 0xff) as u8,
         );
         return is_public_v4(v4);
+    }
+    // NAT64 Well-Known Prefix 64:ff9b::/96 (RFC 6052) and Local-Use 64:ff9b:1::/48 (RFC 8215)
+    if segments[0] == 0x0064 && segments[1] == 0xff9b {
+        if segments[2] == 0 && segments[3] == 0 && segments[4] == 0 && segments[5] == 0 {
+            let v4 = Ipv4Addr::new(
+                (segments[6] >> 8) as u8,
+                (segments[6] & 0xff) as u8,
+                (segments[7] >> 8) as u8,
+                (segments[7] & 0xff) as u8,
+            );
+            return is_public_v4(v4);
+        }
+        if segments[2] == 1 {
+            return false;
+        }
     }
     // 6to4 prefix 2002::/16
     if segments[0] == 0x2002 {
@@ -218,8 +233,9 @@ pub fn safe_filename(value: &str) -> String {
         .collect();
     let cleaned = cleaned.trim().trim_matches('.');
     let upper = cleaned.to_ascii_uppercase();
+    let stem = upper.split('.').next().unwrap_or(&upper);
     let is_dos_reserved = matches!(
-        upper.as_str(),
+        stem,
         "CON"
             | "PRN"
             | "AUX"
@@ -242,10 +258,7 @@ pub fn safe_filename(value: &str) -> String {
             | "LPT7"
             | "LPT8"
             | "LPT9"
-    ) || upper.starts_with("CON.")
-        || upper.starts_with("PRN.")
-        || upper.starts_with("AUX.")
-        || upper.starts_with("NUL.");
+    );
     if cleaned.is_empty() || is_dos_reserved {
         if is_dos_reserved {
             format!("attachment_{cleaned}")
@@ -298,6 +311,8 @@ mod tests {
         assert_eq!(safe_filename("CON"), "attachment_CON");
         assert_eq!(safe_filename("nul.txt"), "attachment_nul.txt");
         assert_eq!(safe_filename("AUX.tar.gz"), "attachment_AUX.tar.gz");
+        assert_eq!(safe_filename("com1.txt"), "attachment_com1.txt");
+        assert_eq!(safe_filename("lpt1.pdf"), "attachment_lpt1.pdf");
     }
 
     #[test]

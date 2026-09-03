@@ -662,14 +662,18 @@ pub fn mailbox_role(name: &str, attributes: &[String]) -> MailboxRole {
     if has("junk") || has("spam") {
         return MailboxRole::Junk;
     }
-    let leaf = name.rsplit('/').next().unwrap_or(name).to_ascii_lowercase();
+    let leaf = name
+        .rsplit(['/', '.'])
+        .next()
+        .unwrap_or(name)
+        .to_ascii_lowercase();
     match leaf.as_str() {
         "inbox" => MailboxRole::Inbox,
-        "sent" | "sent messages" | "sent mail" => MailboxRole::Sent,
+        "sent" | "sent messages" | "sent mail" | "sent items" => MailboxRole::Sent,
         "drafts" => MailboxRole::Drafts,
         "archive" | "all mail" => MailboxRole::Archive,
-        "trash" | "deleted messages" => MailboxRole::Trash,
-        "junk" | "spam" => MailboxRole::Junk,
+        "trash" | "deleted messages" | "deleted items" | "bin" => MailboxRole::Trash,
+        "junk" | "spam" | "junk email" | "junk e-mail" => MailboxRole::Junk,
         _ => MailboxRole::Other,
     }
 }
@@ -882,5 +886,16 @@ mod tests {
         };
         let (_, _, password) = take_validated_setup(&mut request).unwrap();
         assert_eq!(password, "phrase with spaces");
+    }
+
+    #[test]
+    fn maps_dot_hierarchy_and_extended_fallback_roles() {
+        assert_eq!(mailbox_role("INBOX.Sent", &[]), MailboxRole::Sent);
+        assert_eq!(mailbox_role("INBOX.Drafts", &[]), MailboxRole::Drafts);
+        assert_eq!(mailbox_role("INBOX.Trash", &[]), MailboxRole::Trash);
+        assert_eq!(mailbox_role("Deleted Items", &[]), MailboxRole::Trash);
+        assert_eq!(mailbox_role("Sent Items", &[]), MailboxRole::Sent);
+        assert_eq!(mailbox_role("Junk Email", &[]), MailboxRole::Junk);
+        assert_eq!(mailbox_role("Bin", &[]), MailboxRole::Trash);
     }
 }

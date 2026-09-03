@@ -1,7 +1,6 @@
 import {
   useCallback,
   useEffect,
-  useRef,
   useState,
   type KeyboardEvent,
   type ReactNode,
@@ -27,8 +26,8 @@ import { applySettings } from "../settings";
 import { useAppStore } from "../store";
 import type { AppSettings, CacheUsage, DistributionChannel } from "../types";
 import {
+  checkUpdateInteractive,
   removeUpdateFoundListener,
-  runUpdateSingleFlight,
   type UpdateFoundListener,
 } from "../update";
 import { useDialogFocus } from "./useDialogFocus";
@@ -36,7 +35,6 @@ import { useDialogFocus } from "./useDialogFocus";
 interface Props {
   onClose: () => void;
   initialTab?: SettingsTab;
-  checkUpdatesRequest?: number;
 }
 
 export type SettingsTab =
@@ -62,11 +60,7 @@ const tabs: Array<{
   { id: "updates", label: strings.settings.updates, icon: DownloadCloud },
 ];
 
-export function SettingsDialog({
-  onClose,
-  initialTab = "general",
-  checkUpdatesRequest,
-}: Props) {
+export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
   const settings = useAppStore((state) => state.settings);
   const accounts = useAppStore((state) => state.accounts);
   const setAccounts = useAppStore((state) => state.setAccounts);
@@ -82,7 +76,6 @@ export function SettingsDialog({
   const [dataBusy, setDataBusy] = useState(false);
   const [dataStatus, setDataStatus] = useState<string>();
   const [checkingUpdate, setCheckingUpdate] = useState(false);
-  const handledCheckRequest = useRef<number | undefined>(undefined);
   const [testingAccountId, setTestingAccountId] = useState<string>();
   const [testedHealthy, setTestedHealthy] = useState<string>();
   const updateReady = useAppStore((state) => state.updateReady);
@@ -104,14 +97,22 @@ export function SettingsDialog({
   );
 
   useEffect(() => {
+    let active = true;
     void api
       .cacheUsage()
-      .then(setUsage)
+      .then((u) => {
+        if (active) setUsage(u);
+      })
       .catch(() => undefined);
     void api
       .distribution()
-      .then(setDistribution)
+      .then((d) => {
+        if (active) setDistribution(d);
+      })
       .catch(() => undefined);
+    return () => {
+      active = false;
+    };
   }, []);
 
   async function update(patch: Partial<AppSettings>) {
@@ -212,28 +213,14 @@ export function SettingsDialog({
     setCheckingUpdate(true);
     setUpdateStatus(strings.settings.checking);
     try {
-      const result = await runUpdateSingleFlight(handleUpdateFound);
-      if (!result.available) {
-        setUpdateStatus(strings.settings.upToDate);
-      }
+      await checkUpdateInteractive();
     } catch (cause) {
-      setUpdateStatus(strings.settings.checkUpdates);
       setError(String(cause));
     } finally {
       setCheckingUpdate(false);
+      setUpdateStatus(strings.settings.checkUpdates);
     }
-  }, [checkingUpdate, distribution, handleUpdateFound, setError]);
-
-  useEffect(() => {
-    if (
-      !checkUpdatesRequest ||
-      handledCheckRequest.current === checkUpdatesRequest ||
-      !distribution
-    )
-      return;
-    handledCheckRequest.current = checkUpdatesRequest;
-    void checkForUpdates();
-  }, [checkForUpdates, checkUpdatesRequest, distribution]);
+  }, [checkingUpdate, distribution, setError]);
 
   async function removeAccount(id: string, name: string) {
     const confirmed = await api.showNativeConfirm(
@@ -374,8 +361,9 @@ export function SettingsDialog({
       <button
         className="modal-backdrop"
         type="button"
+        tabIndex={-1}
+        aria-hidden="true"
         onClick={onClose}
-        aria-label={strings.settings.close}
       />
       <section className="settings-window" ref={dialogRef}>
         <header>
@@ -804,7 +792,11 @@ export function SettingsDialog({
                         </div>
 
                         {aliasStatus[account.id] ? (
-                          <div className="alias-status-message">
+                          <div
+                            className="alias-status-message"
+                            role="status"
+                            aria-live="polite"
+                          >
                             {aliasStatus[account.id]}
                           </div>
                         ) : null}
@@ -822,7 +814,7 @@ export function SettingsDialog({
                                 onClick={() =>
                                   void handleRemoveAlias(account.id, alias)
                                 }
-                                aria-label={strings.common.remove}
+                                aria-label={`${strings.common.remove} ${alias}`}
                               >
                                 ×
                               </button>
@@ -834,6 +826,7 @@ export function SettingsDialog({
                           <input
                             type="email"
                             placeholder={strings.settings.aliasPlaceholder}
+                            aria-label={strings.settings.aliasPlaceholder}
                             value={newAliasInputs[account.id] ?? ""}
                             onChange={(e) =>
                               setNewAliasInputs((prev) => ({

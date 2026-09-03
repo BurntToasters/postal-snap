@@ -1581,7 +1581,17 @@ fn parse_envelope(
 }
 
 fn decode_imap_text(value: &[u8]) -> String {
-    String::from_utf8_lossy(value).trim().to_string()
+    let lossy = String::from_utf8_lossy(value).trim().to_string();
+    if lossy.contains("=?") {
+        let single_line = lossy.replace(['\r', '\n'], " ");
+        let dummy = format!("Subject: {single_line}\r\n\r\n");
+        if let Some(msg) = MessageParser::default().parse(dummy.as_bytes()) {
+            if let Some(subject) = msg.subject() {
+                return subject.trim().to_string();
+            }
+        }
+    }
+    lossy
 }
 
 fn imap_address(address: &async_imap::imap_proto::types::Address<'_>) -> Option<String> {
@@ -2218,5 +2228,16 @@ mod tests {
         assert!(principal.contains("/12345/principal/"));
         let href = extract_tag_value(&principal, "href").unwrap();
         assert_eq!(href, "/12345/principal/");
+    }
+
+    #[test]
+    fn decodes_rfc2047_encoded_imap_text() {
+        // "Hello World" encoded in Base64 UTF-8
+        let encoded = b"=?UTF-8?B?SGVsbG8gV29ybGQ=?=";
+        assert_eq!(decode_imap_text(encoded), "Hello World");
+
+        // Plain text passes through untouched
+        let plain = b"Standard English Subject";
+        assert_eq!(decode_imap_text(plain), "Standard English Subject");
     }
 }

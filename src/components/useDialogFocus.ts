@@ -14,30 +14,46 @@ export function useDialogFocus(onClose: () => void) {
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     const dialog = ref.current;
-    if (!dialog) return;
-    const first =
-      dialog.querySelector<HTMLElement>("[autofocus]") ??
-      dialog.querySelector<HTMLElement>(focusable);
-    window.setTimeout(() => first?.focus(), 0);
+    if (dialog) {
+      const first =
+        dialog.querySelector<HTMLElement>("[autofocus]") ??
+        dialog.querySelector<HTMLElement>(focusable);
+      window.setTimeout(() => first?.focus(), 0);
+    }
 
     function onKeyDown(event: KeyboardEvent) {
-      if (dialog && !document.contains(dialog)) return;
+      const currentDialog = ref.current;
+      if (!currentDialog || !document.contains(currentDialog)) return;
       if (event.key === "Escape") {
         event.preventDefault();
         closeRef.current();
         return;
       }
-      if (event.key !== "Tab" || !dialog) return;
-      const items = [...dialog.querySelectorAll<HTMLElement>(focusable)].filter(
-        (item) => !item.hidden && item.offsetParent !== null,
+      if (event.key !== "Tab") return;
+      const items = [
+        ...currentDialog.querySelectorAll<HTMLElement>(focusable),
+      ].filter(
+        (item) =>
+          !item.hidden &&
+          (typeof item.checkVisibility === "function"
+            ? item.checkVisibility()
+            : item.offsetParent !== null || item.getClientRects().length > 0),
       );
       if (items.length === 0) return;
       const firstItem = items[0];
       const lastItem = items.at(-1)!;
-      if (event.shiftKey && document.activeElement === firstItem) {
+      if (
+        event.shiftKey &&
+        (document.activeElement === firstItem ||
+          !currentDialog.contains(document.activeElement))
+      ) {
         event.preventDefault();
         lastItem.focus();
-      } else if (!event.shiftKey && document.activeElement === lastItem) {
+      } else if (
+        !event.shiftKey &&
+        (document.activeElement === lastItem ||
+          !currentDialog.contains(document.activeElement))
+      ) {
         event.preventDefault();
         firstItem.focus();
       }
