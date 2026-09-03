@@ -3,12 +3,13 @@ use std::{path::Path, sync::Mutex};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
 use crate::models::{
-    AccountRecord, AccountSummary, AppSettings, Attachment, CachePolicy, CacheUsage, ComposeDraft,
-    DraftSummary, MailboxRole, MailboxSummary, MessageCursor, MessageDetail, MessagePage,
-    MessageSummary, OutboxSummary, ProviderKind, SearchQuery, ServerConfig, TlsMode,
+    AccountInboxCount, AccountRecord, AccountSummary, AppSettings, Attachment, CachePolicy,
+    CacheUsage, ComposeDraft, DraftSummary, MailboxRole, MailboxSummary, MessageCursor,
+    MessageDetail, MessagePage, MessageSummary, OutboxSummary, ProviderKind, SearchQuery,
+    ServerConfig, TlsMode,
 };
 
-const CURRENT_SCHEMA_VERSION: u32 = 3;
+const CURRENT_SCHEMA_VERSION: u32 = 4;
 
 pub struct Database {
     connection: Mutex<Connection>,
@@ -90,10 +91,12 @@ impl Database {
     pub fn list_accounts(&self) -> Result<Vec<AccountSummary>, String> {
         let conn = self.conn()?;
         let mut statement = conn.prepare(
-            "SELECT id, provider, email, display_name, sync_state, error FROM accounts ORDER BY created_at",
+            "SELECT id, provider, email, display_name, sync_state, error, aliases_json FROM accounts ORDER BY created_at",
         ).map_err(db_error)?;
         let rows = statement
             .query_map([], |row| {
+                let aliases_json: String = row.get(6).unwrap_or_else(|_| "[]".into());
+                let aliases: Vec<String> = serde_json::from_str(&aliases_json).unwrap_or_default();
                 Ok(AccountSummary {
                     id: row.get(0)?,
                     provider: parse_provider(&row.get::<_, String>(1)?),
@@ -101,6 +104,7 @@ impl Database {
                     display_name: row.get(3)?,
                     sync_state: row.get(4)?,
                     error: row.get(5)?,
+                    aliases,
                 })
             })
             .map_err(db_error)?;
@@ -112,10 +116,13 @@ impl Database {
         conn.query_row(
             "SELECT id, provider, email, display_name, sync_state, error,
                     imap_host, imap_port, imap_tls, imap_username,
-                    smtp_host, smtp_port, smtp_tls, smtp_username
+                    smtp_host, smtp_port, smtp_tls, smtp_username,
+                    aliases_json
              FROM accounts WHERE id = ?1",
             [id],
             |row| {
+                let aliases_json: String = row.get(14).unwrap_or_else(|_| "[]".into());
+                let aliases: Vec<String> = serde_json::from_str(&aliases_json).unwrap_or_default();
                 Ok(AccountRecord {
                     summary: AccountSummary {
                         id: row.get(0)?,
@@ -124,6 +131,7 @@ impl Database {
                         display_name: row.get(3)?,
                         sync_state: row.get(4)?,
                         error: row.get(5)?,
+                        aliases,
                     },
                     imap: ServerConfig {
                         host: row.get(6)?,
@@ -147,12 +155,15 @@ impl Database {
 
     pub fn insert_account(&self, account: &AccountRecord) -> Result<(), String> {
         let conn = self.conn()?;
+        let aliases_json =
+            serde_json::to_string(&account.summary.aliases).unwrap_or_else(|_| "[]".into());
         conn.execute(
             "INSERT INTO accounts (
                 id, provider, email, display_name, sync_state,
                 imap_host, imap_port, imap_tls, imap_username,
-                smtp_host, smtp_port, smtp_tls, smtp_username
-             ) VALUES (?1, ?2, ?3, ?4, 'idle', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                smtp_host, smtp_port, smtp_tls, smtp_username,
+                aliases_json
+             ) VALUES (?1, ?2, ?3, ?4, 'idle', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 account.summary.id,
                 account.summary.provider.as_str(),
@@ -166,9 +177,43 @@ impl Database {
                 account.smtp.port,
                 account.smtp.tls_mode.as_str(),
                 account.smtp.username,
+                aliases_json,
             ],
         )
         .map_err(db_error)?;
+        Ok(())
+    }
+
+    pub fn update_account_aliases(
+        &self,
+        id: &str,
+        aliases: &[String],
+    ) -> Result<AccountSummary, String> {
+        let aliases_json = serde_json::to_string(aliases)
+            .map_err(|_| "Failed to serialize aliases.".to_string())?;
+        {
+            let conn = self.conn()?;
+            conn.execute(
+                "UPDATE accounts SET aliases_json = ?2 WHERE id = ?1",
+                params![id, aliases_json],
+            )
+            .map_err(db_error)?;
+        }
+        let record = self.account(id)?;
+        Ok(record.summary)
+    }
+
+    pub fn update_account_display_name(&self, id: &str, display_name: &str) -> Result<(), String> {
+        let conn = self.conn()?;
+        let updated = conn
+            .execute(
+                "UPDATE accounts SET display_name = ?1 WHERE id = ?2",
+                params![display_name.trim(), id],
+            )
+            .map_err(db_error)?;
+        if updated != 1 {
+            return Err("Account not found.".into());
+        }
         Ok(())
     }
 
@@ -282,6 +327,55 @@ impl Database {
         rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
     }
 
+    pub fn list_all_mailboxes(&self) -> Result<Vec<MailboxSummary>, String> {
+        let conn = self.conn()?;
+        let mut statement = conn.prepare(
+            "SELECT f.id, f.account_id, f.name, f.display_name, f.role,
+                    MAX(0, COALESCE(f.server_unread, SUM(CASE WHEN m.is_read = 0 AND m.pending_move_to IS NULL THEN 1 ELSE 0 END)) + f.local_unread_delta),
+                    MAX(0, COALESCE(f.server_total, SUM(CASE WHEN m.pending_move_to IS NULL AND m.id IS NOT NULL THEN 1 ELSE 0 END)) + f.local_total_delta)
+             FROM mailboxes f LEFT JOIN messages m ON m.mailbox_id = f.id
+             GROUP BY f.id
+             ORDER BY f.account_id, CASE f.role WHEN 'inbox' THEN 0 WHEN 'starred' THEN 1 WHEN 'drafts' THEN 2 WHEN 'sent' THEN 3 WHEN 'archive' THEN 4 WHEN 'junk' THEN 5 WHEN 'trash' THEN 6 ELSE 7 END, f.display_name COLLATE NOCASE",
+        ).map_err(db_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok(MailboxSummary {
+                    id: row.get(0)?,
+                    account_id: row.get(1)?,
+                    name: row.get(2)?,
+                    display_name: row.get(3)?,
+                    role: parse_role(&row.get::<_, String>(4)?),
+                    unread_count: row.get::<_, u32>(5)?,
+                    total_count: row.get::<_, u32>(6)?,
+                })
+            })
+            .map_err(db_error)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+    }
+
+    pub fn list_account_inbox_counts(&self) -> Result<Vec<AccountInboxCount>, String> {
+        let conn = self.conn()?;
+        let mut statement = conn.prepare(
+            "SELECT f.account_id,
+                    MAX(0, COALESCE(f.server_unread, SUM(CASE WHEN m.is_read = 0 AND m.pending_move_to IS NULL THEN 1 ELSE 0 END)) + f.local_unread_delta),
+                    MAX(0, COALESCE(f.server_total, SUM(CASE WHEN m.pending_move_to IS NULL AND m.id IS NOT NULL THEN 1 ELSE 0 END)) + f.local_total_delta)
+             FROM mailboxes f LEFT JOIN messages m ON m.mailbox_id = f.id
+             WHERE f.role = 'inbox'
+             GROUP BY f.id, f.account_id
+             ORDER BY f.account_id",
+        ).map_err(db_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok(AccountInboxCount {
+                    account_id: row.get(0)?,
+                    unread_count: row.get::<_, u32>(1)?,
+                    total_count: row.get::<_, u32>(2)?,
+                })
+            })
+            .map_err(db_error)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+    }
+
     pub fn mailbox_for_role(
         &self,
         account_id: &str,
@@ -389,6 +483,27 @@ impl Database {
             .map_err(db_error)?;
         let rows = statement
             .query_map([mailbox_id], |row| row.get(0))
+            .map_err(db_error)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+    }
+
+    pub fn uncached_message_uids(
+        &self,
+        mailbox_id: i64,
+        limit: u32,
+        max_size: u64,
+    ) -> Result<Vec<u32>, String> {
+        let conn = self.conn()?;
+        let mut statement = conn
+            .prepare(
+                "SELECT uid FROM messages
+                 WHERE mailbox_id = ?1 AND LENGTH(raw_message) = 0 AND size <= ?2
+                 ORDER BY received_at DESC, uid DESC
+                 LIMIT ?3",
+            )
+            .map_err(db_error)?;
+        let rows = statement
+            .query_map(params![mailbox_id, max_size, limit], |row| row.get(0))
             .map_err(db_error)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
     }
@@ -711,6 +826,23 @@ impl Database {
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .map_err(db_error)?;
+        let source_account: String = transaction
+            .query_row(
+                "SELECT account_id FROM mailboxes WHERE id=?1",
+                [source_id],
+                |row| row.get(0),
+            )
+            .map_err(db_error)?;
+        let dest_account: String = transaction
+            .query_row(
+                "SELECT account_id FROM mailboxes WHERE id=?1",
+                [mailbox_id],
+                |row| row.get(0),
+            )
+            .map_err(db_error)?;
+        if source_account != dest_account {
+            return Err("Messages cannot be moved between different accounts.".into());
+        }
         transaction
             .execute(
                 "UPDATE messages SET pending_move_to=?2 WHERE id=?1",
@@ -751,23 +883,6 @@ impl Database {
             adjust_mailbox_counts(&transaction, destination_id, -1, (!is_read).then_some(-1))?;
         }
         transaction.commit().map_err(db_error)?;
-        Ok(())
-    }
-
-    pub fn apply_pending_move_overlay(&self, id: i64) -> Result<(), String> {
-        let conn = self.conn()?;
-        let row: Option<(i64, bool, i64)> = conn
-            .query_row(
-                "SELECT mailbox_id,is_read != 0,pending_move_to FROM messages WHERE id=?1 AND pending_move_to IS NOT NULL",
-                [id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .optional()
-            .map_err(db_error)?;
-        if let Some((source_id, is_read, destination_id)) = row {
-            adjust_mailbox_counts(&conn, source_id, -1, (!is_read).then_some(-1))?;
-            adjust_mailbox_counts(&conn, destination_id, 1, (!is_read).then_some(1))?;
-        }
         Ok(())
     }
 
@@ -852,6 +967,27 @@ impl Database {
                 ],
                 map_message_summary,
             )
+            .map_err(db_error)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+    }
+
+    pub fn search_all_accounts(
+        &self,
+        text: &str,
+        limit: u32,
+    ) -> Result<Vec<MessageSummary>, String> {
+        let conn = self.conn()?;
+        let terms = fts_query(text);
+        if terms.is_empty() {
+            return Ok(Vec::new());
+        }
+        let sql = format!(
+            "{} JOIN message_fts fts ON fts.message_id=m.id WHERE m.pending_move_to IS NULL AND message_fts MATCH ?1 ORDER BY bm25(message_fts), m.received_at DESC LIMIT ?2",
+            MESSAGE_SUMMARY_SELECT,
+        );
+        let mut statement = conn.prepare(&sql).map_err(db_error)?;
+        let rows = statement
+            .query_map(params![terms, limit.min(500)], map_message_summary)
             .map_err(db_error)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
     }
@@ -1654,71 +1790,83 @@ impl Database {
     }
 
     pub fn evict_to_policy(&self, policy: &CachePolicy) -> Result<(), String> {
-        if policy.mode == "full" {
+        if policy.is_unlimited() {
             return Ok(());
         }
         let mut conn = self.conn()?;
-        let transaction = conn.transaction().map_err(db_error)?;
-        let cutoff = format!("-{} days", policy.days);
-        transaction.execute(
-            "UPDATE message_fts SET body='' WHERE message_id IN (
-                SELECT id FROM messages WHERE received_at < datetime('now', ?1)
-                AND LENGTH(raw_message) > 0 AND id NOT IN (SELECT message_id FROM protected_messages)
-             )",
-            [&cutoff],
-        ).map_err(db_error)?;
-        transaction
-            .execute(
-                "UPDATE messages SET text_body='',html_body=NULL,raw_message=X''
-             WHERE received_at < datetime('now', ?1) AND LENGTH(raw_message) > 0
-             AND id NOT IN (SELECT message_id FROM protected_messages)",
-                [&cutoff],
-            )
-            .map_err(db_error)?;
-        transaction.commit().map_err(db_error)?;
-        loop {
-            let bytes: u64 = conn
-                .query_row(
-                    "SELECT COALESCE(SUM(LENGTH(raw_message)),0) FROM messages",
-                    [],
-                    |row| row.get(0),
+        if policy.mode == "recent" && policy.days > 0 {
+            let transaction = conn.transaction().map_err(db_error)?;
+            let cutoff = format!("-{} days", policy.days);
+            transaction
+                .execute(
+                    "UPDATE message_fts SET body='' WHERE message_id IN (
+                    SELECT id FROM messages WHERE received_at < datetime('now', ?1)
+                    AND LENGTH(raw_message) > 0
+                 )",
+                    [&cutoff],
                 )
                 .map_err(db_error)?;
-            if bytes <= policy.max_bytes {
-                break;
-            }
-            let ids = {
-                let mut statement = conn
-                    .prepare(
-                        "SELECT id FROM messages WHERE LENGTH(raw_message) > 0
-                     AND id NOT IN (SELECT message_id FROM protected_messages)
-                     ORDER BY accessed_at ASC LIMIT 25",
+            transaction
+                .execute(
+                    "DELETE FROM attachment_blobs WHERE message_id IN (
+                        SELECT id FROM messages WHERE received_at < datetime('now', ?1)
+                    )",
+                    [&cutoff],
+                )
+                .map_err(db_error)?;
+            transaction
+                .execute(
+                    "UPDATE messages SET text_body='',html_body=NULL,raw_message=X''
+                 WHERE received_at < datetime('now', ?1) AND LENGTH(raw_message) > 0",
+                    [&cutoff],
+                )
+                .map_err(db_error)?;
+            transaction.commit().map_err(db_error)?;
+        }
+        if policy.max_bytes > 0 {
+            loop {
+                let bytes: u64 = conn
+                    .query_row(
+                        "SELECT COALESCE(SUM(LENGTH(raw_message)),0) + COALESCE((SELECT SUM(LENGTH(bytes)) FROM attachment_blobs),0) FROM messages",
+                        [],
+                        |row| row.get(0),
                     )
                     .map_err(db_error)?;
-                let ids = statement
-                    .query_map([], |row| row.get::<_, i64>(0))
-                    .map_err(db_error)?
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(db_error)?;
-                ids
-            };
-            if ids.is_empty() {
-                break;
+                if bytes <= policy.max_bytes {
+                    break;
+                }
+                let ids = {
+                    let mut statement = conn
+                        .prepare(
+                            "SELECT id FROM messages WHERE LENGTH(raw_message) > 0
+                         ORDER BY accessed_at ASC LIMIT 25",
+                        )
+                        .map_err(db_error)?;
+                    let ids = statement
+                        .query_map([], |row| row.get::<_, i64>(0))
+                        .map_err(db_error)?
+                        .collect::<Result<Vec<_>, _>>()
+                        .map_err(db_error)?;
+                    ids
+                };
+                if ids.is_empty() {
+                    break;
+                }
+                let transaction = conn.transaction().map_err(db_error)?;
+                for id in ids {
+                    transaction
+                        .execute("UPDATE message_fts SET body='' WHERE message_id=?1", [id])
+                        .map_err(db_error)?;
+                    transaction.execute(
+                        "UPDATE messages SET text_body='',html_body=NULL,raw_message=X'' WHERE id=?1",
+                        [id],
+                    ).map_err(db_error)?;
+                    transaction
+                        .execute("DELETE FROM attachment_blobs WHERE message_id=?1", [id])
+                        .map_err(db_error)?;
+                }
+                transaction.commit().map_err(db_error)?;
             }
-            let transaction = conn.transaction().map_err(db_error)?;
-            for id in ids {
-                transaction
-                    .execute("UPDATE message_fts SET body='' WHERE message_id=?1", [id])
-                    .map_err(db_error)?;
-                transaction.execute(
-                    "UPDATE messages SET text_body='',html_body=NULL,raw_message=X'' WHERE id=?1",
-                    [id],
-                ).map_err(db_error)?;
-                transaction
-                    .execute("DELETE FROM attachment_blobs WHERE message_id=?1", [id])
-                    .map_err(db_error)?;
-            }
-            transaction.commit().map_err(db_error)?;
         }
         Ok(())
     }
@@ -2011,6 +2159,20 @@ fn migrate_schema(connection: &mut Connection) -> Result<(), String> {
             "ALTER TABLE mailboxes ADD COLUMN local_unread_delta INTEGER NOT NULL DEFAULT 0",
         )?;
     }
+    if version < 4 {
+        ensure_column(
+            &transaction,
+            "accounts",
+            "aliases_json",
+            "ALTER TABLE accounts ADD COLUMN aliases_json TEXT NOT NULL DEFAULT '[]'",
+        )?;
+        ensure_column(
+            &transaction,
+            "drafts",
+            "sender_email",
+            "ALTER TABLE drafts ADD COLUMN sender_email TEXT",
+        )?;
+    }
     transaction
         .pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)
         .map_err(db_error)?;
@@ -2138,6 +2300,7 @@ mod tests {
                 display_name: "Sam".into(),
                 sync_state: "idle".into(),
                 error: None,
+                aliases: vec![],
             },
             imap: ServerConfig {
                 host: "imap.example.com".into(),
@@ -2191,6 +2354,7 @@ mod tests {
         ComposeDraft {
             id: None,
             account_id: account_id.into(),
+            from: None,
             to: vec!["jane@example.com".into()],
             cc: vec![],
             bcc: vec![],
@@ -2857,5 +3021,164 @@ mod tests {
         .unwrap();
         assert!(db.resolve_file("opaque-token", &first.summary.id).is_ok());
         assert!(db.resolve_file("opaque-token", &second.summary.id).is_err());
+    }
+
+    #[test]
+    fn uncached_message_uids_returns_newest_empty_bodies() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let mailbox_id = mailbox(&db, &account.summary.id, "INBOX", &MailboxRole::Inbox);
+
+        for uid in 1..=4 {
+            let mut msg = message(uid, &format!("2026-08-1{uid}T12:00:00Z"));
+            if uid == 2 {
+                msg.raw_message = b"cached body".to_vec();
+            } else {
+                msg.raw_message = vec![];
+            }
+            db.upsert_message(&account.summary.id, mailbox_id, &msg)
+                .unwrap();
+        }
+
+        let uncached = db.uncached_message_uids(mailbox_id, 10, 1000).unwrap();
+        assert_eq!(uncached, vec![4, 3, 1]);
+    }
+
+    #[test]
+    fn account_aliases_persist_and_update() {
+        let db = Database::memory();
+        let mut account = account();
+        account.summary.aliases = vec![
+            "alias1@example.com".into(),
+            "alias2@customdomain.com".into(),
+        ];
+        db.insert_account(&account).unwrap();
+
+        let loaded = db.account(&account.summary.id).unwrap();
+        assert_eq!(
+            loaded.summary.aliases,
+            vec!["alias1@example.com", "alias2@customdomain.com"]
+        );
+
+        let listed = db.list_accounts().unwrap();
+        assert_eq!(
+            listed[0].aliases,
+            vec!["alias1@example.com", "alias2@customdomain.com"]
+        );
+
+        let updated = db
+            .update_account_aliases(&account.summary.id, &["new@customdomain.com".into()])
+            .unwrap();
+        assert_eq!(updated.aliases, vec!["new@customdomain.com"]);
+
+        let reloaded = db.account(&account.summary.id).unwrap();
+        assert_eq!(reloaded.summary.aliases, vec!["new@customdomain.com"]);
+    }
+
+    #[test]
+    fn multi_account_isolation_and_operations() {
+        let db = Database::memory();
+
+        let mut acc1 = account();
+        acc1.summary.id = "acc-1".into();
+        acc1.summary.email = "acc1@example.com".into();
+        acc1.summary.display_name = "Account 1".into();
+        db.insert_account(&acc1).unwrap();
+        let acc1_inbox = db
+            .upsert_mailbox(
+                "acc-1",
+                "INBOX",
+                &MailboxRole::Inbox,
+                Some(1),
+                Some(2),
+                None,
+                0,
+            )
+            .unwrap();
+
+        let mut acc2 = account();
+        acc2.summary.id = "acc-2".into();
+        acc2.summary.email = "acc2@example.com".into();
+        acc2.summary.display_name = "Account 2".into();
+        db.insert_account(&acc2).unwrap();
+        let acc2_inbox = db
+            .upsert_mailbox(
+                "acc-2",
+                "INBOX",
+                &MailboxRole::Inbox,
+                Some(1),
+                Some(2),
+                None,
+                0,
+            )
+            .unwrap();
+
+        let mut msg1 = message(101, "2026-09-01T10:00:00Z");
+        msg1.subject = "Urgent project report".into();
+        msg1.is_read = false;
+        db.upsert_message("acc-1", acc1_inbox, &msg1).unwrap();
+        let id1 = db
+            .message_summary_by_uid(acc1_inbox, 101)
+            .unwrap()
+            .unwrap()
+            .id;
+
+        let mut msg2 = message(201, "2026-09-02T10:00:00Z");
+        msg2.subject = "Project status update".into();
+        msg2.is_read = false;
+        db.upsert_message("acc-2", acc2_inbox, &msg2).unwrap();
+        let id2 = db
+            .message_summary_by_uid(acc2_inbox, 201)
+            .unwrap()
+            .unwrap()
+            .id;
+
+        let counts = db.list_account_inbox_counts().unwrap();
+        assert_eq!(counts.len(), 2);
+        assert_eq!(counts[0].account_id, "acc-1");
+        assert_eq!(counts[0].unread_count, 1);
+        assert_eq!(counts[1].account_id, "acc-2");
+        assert_eq!(counts[1].unread_count, 1);
+
+        let res1 = db
+            .search(&SearchQuery {
+                account_id: "acc-1".into(),
+                mailbox_id: None,
+                text: "project".into(),
+                limit: 10,
+                all_folders: true,
+            })
+            .unwrap();
+        assert_eq!(res1.len(), 1);
+        assert_eq!(res1[0].id, id1);
+
+        let all_res = db.search_all_accounts("project", 10).unwrap();
+        assert_eq!(all_res.len(), 2);
+
+        let move_err = db.mark_pending_move(id1, acc2_inbox);
+        assert!(move_err.is_err());
+        assert!(move_err.unwrap_err().contains("different accounts"));
+
+        db.update_account_display_name("acc-1", "Work Mail")
+            .unwrap();
+        assert_eq!(
+            db.account("acc-1").unwrap().summary.display_name,
+            "Work Mail"
+        );
+        assert_eq!(
+            db.account("acc-2").unwrap().summary.display_name,
+            "Account 2"
+        );
+
+        db.remove_account("acc-1").unwrap();
+        assert_eq!(db.list_accounts().unwrap().len(), 1);
+        assert!(db.account("acc-1").is_err());
+        assert!(db.account("acc-2").is_ok());
+        assert_eq!(db.list_mailboxes("acc-2").unwrap().len(), 1);
+        assert_eq!(
+            db.message_detail(id2, "acc-2").unwrap().summary.subject,
+            "Project status update"
+        );
     }
 }

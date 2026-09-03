@@ -29,10 +29,17 @@ export interface AccountSummary {
   displayName: string;
   syncState: SyncPhase;
   error?: string | null;
+  aliases?: string[];
 }
 
 export interface AccountRemovalOutcome {
   cleanupPending: boolean;
+}
+
+export interface AccountInboxCount {
+  accountId: string;
+  unreadCount: number;
+  totalCount: number;
 }
 
 export interface MailboxSummary {
@@ -105,6 +112,7 @@ export interface ComposeAttachment {
 export interface ComposeDraft {
   id?: string;
   accountId: string;
+  from?: string;
   to: string[];
   cc: string[];
   bcc: string[];

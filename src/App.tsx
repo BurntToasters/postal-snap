@@ -12,6 +12,7 @@ import { MailShell } from "./components/MailShell";
 import { SettingsDialog, type SettingsTab } from "./components/SettingsDialog";
 import { useAppStore } from "./store";
 import { applySettings } from "./settings";
+import { checkUpdateInteractive, runUpdateSingleFlight } from "./update";
 
 const Composer = lazy(() =>
   import("./components/Composer").then((module) => ({
@@ -82,10 +83,21 @@ export default function App() {
 
   useEffect(() => {
     if (!inTauri()) return;
-    void Promise.resolve().then(() => loadAccounts());
+    void Promise.resolve()
+      .then(() => loadAccounts())
+      .then(() => {
+        void runUpdateSingleFlight().catch(() => undefined);
+      });
+    let active = true;
     const unsubscribers: Array<() => void> = [];
-    void api.onSyncState(setSync).then((fn) => unsubscribers.push(fn));
-    void api.onAppWarning(setError).then((fn) => unsubscribers.push(fn));
+    void api.onSyncState(setSync).then((fn) => {
+      if (active) unsubscribers.push(fn);
+      else fn();
+    });
+    void api.onAppWarning(setError).then((fn) => {
+      if (active) unsubscribers.push(fn);
+      else fn();
+    });
     void api
       .onMenuAction((action) => {
         if (action === "settings") {
@@ -94,13 +106,17 @@ export default function App() {
         }
         if (action === "check-for-updates") {
           openSettings("updates", true);
+          void checkUpdateInteractive();
           return;
         }
         window.dispatchEvent(
           new CustomEvent("postal:menu-action", { detail: action }),
         );
       })
-      .then((fn) => unsubscribers.push(fn));
+      .then((fn) => {
+        if (active) unsubscribers.push(fn);
+        else fn();
+      });
     const handleUrls = (urls: string[]) =>
       urls
         .filter((url) => /^mailto:/i.test(url))
@@ -110,8 +126,14 @@ export default function App() {
         if (urls) handleUrls(urls);
       })
       .catch(() => undefined);
-    void onOpenUrl(handleUrls).then((fn) => unsubscribers.push(fn));
-    return () => unsubscribers.forEach((fn) => fn());
+    void onOpenUrl(handleUrls).then((fn) => {
+      if (active) unsubscribers.push(fn);
+      else fn();
+    });
+    return () => {
+      active = false;
+      unsubscribers.forEach((fn) => fn());
+    };
   }, [loadAccounts, openComposer, openSettings, setError, setSync]);
 
   useEffect(() => {

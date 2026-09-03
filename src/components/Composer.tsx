@@ -29,6 +29,8 @@ import {
   Link as LinkIcon,
   List,
   ListOrdered,
+  Maximize2,
+  Minimize2,
   Minus,
   Paperclip,
   Redo2,
@@ -42,6 +44,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../api";
+import { shortcutMod } from "../format";
 import { strings } from "../i18n";
 import { htmlToPlainText, sanitizeReceivedHtml } from "../security";
 import { useAppStore, type ComposerSeed } from "../store";
@@ -134,6 +137,52 @@ export function Composer({ accountId }: Props) {
       ? `${account.displayName} <${account.email}>`
       : account.email
     : "";
+  const availableSenders = useMemo(() => {
+    if (!account) return [];
+    const set = new Set([account.email.toLowerCase()]);
+    const list = [
+      {
+        email: account.email,
+        label: account.displayName
+          ? `${account.displayName} <${account.email}>`
+          : account.email,
+      },
+    ];
+    for (const alias of account.aliases ?? []) {
+      const lower = alias.toLowerCase();
+      if (!set.has(lower)) {
+        set.add(lower);
+        list.push({
+          email: alias,
+          label: account.displayName
+            ? `${account.displayName} <${alias}>`
+            : alias,
+        });
+      }
+    }
+    return list;
+  }, [account]);
+
+  const [fromAddress, setFromAddress] = useState(() => {
+    if (seed?.draft?.from) return seed.draft.from;
+    if (seed?.sourceMessage) {
+      const rec = seed.sourceMessage.recipients.toLowerCase();
+      for (const alias of account?.aliases ?? []) {
+        if (rec.includes(alias.toLowerCase())) {
+          return alias;
+        }
+      }
+    }
+    return account?.email ?? "";
+  });
+
+  const [minimized, setMinimized] = useState(false);
+  const [maximized, setMaximized] = useState(false);
+  const [prevSeed, setPrevSeed] = useState(seed);
+  if (seed !== prevSeed) {
+    setPrevSeed(seed);
+    setMinimized(false);
+  }
   const close = useAppStore((state) => state.closeComposer);
   const setError = useAppStore((state) => state.setError);
   const [to, setTo] = useState(seedRecipients(seed, "to", accountEmail));
@@ -254,6 +303,7 @@ export function Composer({ accountId }: Props) {
     return {
       id: draftId,
       accountId,
+      from: fromAddress.trim() || undefined,
       to: splitAddresses(to),
       cc: splitAddresses(cc),
       bcc: splitAddresses(bcc),
@@ -276,6 +326,7 @@ export function Composer({ accountId }: Props) {
     cc,
     draftId,
     editor,
+    fromAddress,
     inlineImages,
     seed,
     subject,
@@ -358,7 +409,7 @@ export function Composer({ accountId }: Props) {
     [accountId, buildDraft, close, editor, sending, setError],
   );
 
-  function requestClose() {
+  async function requestClose() {
     if (sending || isDiscarding.current || saveInFlight.current) return;
     const draft = buildDraft();
     if (!hasDraftContent(draft, editor?.getText() ?? "")) {
@@ -369,21 +420,25 @@ export function Composer({ accountId }: Props) {
       close();
       return;
     }
-    if (
-      saveState === "unsaved" &&
-      !window.confirm(strings.composer.saveCloseQuestion)
-    )
-      return;
+    if (saveState === "unsaved") {
+      const confirmed = await api.showNativeConfirm(
+        strings.appName,
+        strings.composer.saveCloseQuestion,
+      );
+      if (!confirmed) return;
+    }
     void saveDraft(true);
   }
 
   async function discardDraft() {
     if (sending || isDiscarding.current || saveInFlight.current) return;
-    if (
-      hasDraftContent(buildDraft(), editor?.getText() ?? "") &&
-      !window.confirm(strings.composer.discardQuestion)
-    )
-      return;
+    if (hasDraftContent(buildDraft(), editor?.getText() ?? "")) {
+      const confirmed = await api.showNativeConfirm(
+        strings.composer.discard,
+        strings.composer.discardQuestion,
+      );
+      if (!confirmed) return;
+    }
     isDiscarding.current = true;
     try {
       if (draftId) await api.deleteDraft(draftId, accountId);
@@ -427,6 +482,7 @@ export function Composer({ accountId }: Props) {
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
+      if (minimized) return;
       if (!(event.metaKey || event.ctrlKey)) return;
       if (event.key === "Enter") {
         event.preventDefault();
@@ -438,7 +494,7 @@ export function Composer({ accountId }: Props) {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [saveDraft, sendMessage]);
+  }, [minimized, saveDraft, sendMessage]);
 
   async function addAttachments() {
     try {
@@ -532,9 +588,57 @@ export function Composer({ accountId }: Props) {
         .catch((cause) => setError(String(cause)));
   }
 
+  if (minimized) {
+    return (
+      <div
+        className="composer-docked-pill"
+        role="dialog"
+        aria-label={composerTitle(seed)}
+      >
+        <button
+          type="button"
+          className="docked-pill-restore"
+          onClick={() => setMinimized(false)}
+          aria-label={`${strings.composer.restore}: ${subject.trim() || strings.common.noSubject}`}
+        >
+          <span className="docked-pill-title">
+            {subject.trim() || strings.common.noSubject}
+          </span>
+          <span className="docked-pill-status">
+            {saveState === "saving"
+              ? strings.common.saving
+              : saveState === "saved"
+                ? strings.composer.draftSaved
+                : ""}
+          </span>
+        </button>
+        <div className="docked-pill-actions">
+          <button
+            className="icon-button"
+            type="button"
+            onClick={() => setMinimized(false)}
+            aria-label={strings.composer.maximize}
+            title={strings.composer.maximize}
+          >
+            <Maximize2 size={16} />
+          </button>
+          <button
+            className="icon-button"
+            type="button"
+            onClick={() => void requestClose()}
+            aria-label={strings.composer.saveClose}
+            title={strings.composer.saveClose}
+          >
+            <X size={16} />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
-      className="modal-layer composer-layer"
+      className={`modal-layer composer-layer${maximized ? " composer-layer-maximized" : ""}`}
       role="dialog"
       aria-modal="true"
       aria-labelledby="composer-title"
@@ -542,11 +646,14 @@ export function Composer({ accountId }: Props) {
       <button
         className="modal-backdrop"
         type="button"
-        onClick={requestClose}
+        onClick={() => void requestClose()}
         disabled={sending || saveState === "saving"}
         aria-label={strings.composer.saveClose}
       />
-      <section className="composer-window" ref={dialogRef}>
+      <section
+        className={`composer-window${maximized ? " composer-maximized" : ""}`}
+        ref={dialogRef}
+      >
         <header>
           <span>
             <h1 id="composer-title">{composerTitle(seed)}</h1>
@@ -558,15 +665,42 @@ export function Composer({ accountId }: Props) {
                   : ""}
             </small>
           </span>
-          <button
-            className="icon-button"
-            type="button"
-            onClick={requestClose}
-            disabled={sending || saveState === "saving"}
-            aria-label={strings.composer.saveClose}
-          >
-            <X />
-          </button>
+          <div className="composer-window-controls">
+            <button
+              className="icon-button"
+              type="button"
+              onClick={() => setMinimized(true)}
+              disabled={sending}
+              aria-label={strings.composer.minimize}
+              title={strings.composer.minimize}
+            >
+              <Minus />
+            </button>
+            <button
+              className="icon-button"
+              type="button"
+              onClick={() => setMaximized((v) => !v)}
+              disabled={sending}
+              aria-label={
+                maximized ? strings.composer.restore : strings.composer.maximize
+              }
+              title={
+                maximized ? strings.composer.restore : strings.composer.maximize
+              }
+            >
+              {maximized ? <Minimize2 /> : <Maximize2 />}
+            </button>
+            <button
+              className="icon-button"
+              type="button"
+              onClick={() => void requestClose()}
+              disabled={sending || saveState === "saving"}
+              aria-label={strings.composer.saveClose}
+              title={strings.composer.saveClose}
+            >
+              <X />
+            </button>
+          </div>
         </header>
         {draftSyncState && draftSyncState !== "synced" ? (
           <div
@@ -596,7 +730,25 @@ export function Composer({ accountId }: Props) {
         <div className="address-fields">
           <label className="from-field">
             <span>{strings.composer.from}</span>
-            <input readOnly value={fromValue} aria-readonly="true" />
+            {availableSenders.length > 1 ? (
+              <select
+                className="composer-from-select"
+                value={fromAddress}
+                onChange={(event) => {
+                  setFromAddress(event.target.value);
+                  markUnsaved();
+                }}
+                aria-label={strings.composer.fromAlias}
+              >
+                {availableSenders.map((item) => (
+                  <option key={item.email} value={item.email}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input readOnly value={fromValue} aria-readonly="true" />
+            )}
           </label>
           <label className="to-field">
             <span>{strings.composer.to}</span>
@@ -687,213 +839,232 @@ export function Composer({ accountId }: Props) {
           role="toolbar"
           aria-label={strings.composer.formatting}
         >
-          <button
-            type="button"
-            onClick={() => editor?.chain().focus().undo().run()}
-            aria-label={strings.composer.undo}
-            title={strings.composer.undo}
-          >
-            <Undo2 />
-          </button>
-          <button
-            type="button"
-            onClick={() => editor?.chain().focus().redo().run()}
-            aria-label={strings.composer.redo}
-            title={strings.composer.redo}
-          >
-            <Redo2 />
-          </button>
-          <span />
-          <select
-            aria-label={strings.composer.font}
-            title={strings.composer.font}
-            defaultValue=""
-            onChange={(event) =>
-              event.target.value
-                ? editor
-                    ?.chain()
-                    .focus()
-                    .setFontFamily(event.target.value)
-                    .run()
-                : editor?.chain().focus().unsetFontFamily().run()
-            }
-          >
-            <option value="">{strings.composer.defaultFont}</option>
-            <option value="Arial">Arial</option>
-            <option value="Georgia">Georgia</option>
-            <option value="Verdana">Verdana</option>
-            <option value="'Courier New'">Courier</option>
-          </select>
-          <select
-            aria-label={strings.composer.fontSize}
-            title={strings.composer.fontSize}
-            defaultValue="16px"
-            onChange={(event) =>
-              editor?.chain().focus().setFontSize(event.target.value).run()
-            }
-          >
-            <option value="12px">{strings.composer.small}</option>
-            <option value="16px">{strings.composer.normal}</option>
-            <option value="20px">{strings.composer.large}</option>
-            <option value="26px">{strings.composer.extraLarge}</option>
-          </select>
-          <button
-            className={editor?.isActive("bold") ? "active" : ""}
-            type="button"
-            onClick={() => editor?.chain().focus().toggleBold().run()}
-            aria-label={strings.composer.bold}
-            title={strings.composer.bold}
-          >
-            <Bold />
-          </button>
-          <button
-            className={editor?.isActive("italic") ? "active" : ""}
-            type="button"
-            onClick={() => editor?.chain().focus().toggleItalic().run()}
-            aria-label={strings.composer.italic}
-            title={strings.composer.italic}
-          >
-            <Italic />
-          </button>
-          <button
-            className={editor?.isActive("underline") ? "active" : ""}
-            type="button"
-            onClick={() => editor?.chain().focus().toggleUnderline().run()}
-            aria-label={strings.composer.underline}
-            title={strings.composer.underline}
-          >
-            <UnderlineIcon />
-          </button>
-          <button
-            className={editor?.isActive("strike") ? "active" : ""}
-            type="button"
-            onClick={() => editor?.chain().focus().toggleStrike().run()}
-            aria-label={strings.composer.strike}
-            title={strings.composer.strike}
-          >
-            <Strikethrough />
-          </button>
-          <label className="color-control" title={strings.composer.textColor}>
-            <input
-              type="color"
-              defaultValue="#20252b"
+          <div className="toolbar-group">
+            <button
+              type="button"
+              onClick={() => editor?.chain().focus().undo().run()}
+              aria-label={strings.composer.undo}
+              title={strings.composer.undo}
+            >
+              <Undo2 />
+            </button>
+            <button
+              type="button"
+              onClick={() => editor?.chain().focus().redo().run()}
+              aria-label={strings.composer.redo}
+              title={strings.composer.redo}
+            >
+              <Redo2 />
+            </button>
+          </div>
+
+          <div className="toolbar-group">
+            <select
+              aria-label={strings.composer.font}
+              title={strings.composer.font}
+              defaultValue=""
               onChange={(event) =>
-                editor?.chain().focus().setColor(event.target.value).run()
+                event.target.value
+                  ? editor
+                      ?.chain()
+                      .focus()
+                      .setFontFamily(event.target.value)
+                      .run()
+                  : editor?.chain().focus().unsetFontFamily().run()
               }
-            />
-            <span>A</span>
-          </label>
-          <button
-            type="button"
-            onClick={() =>
-              editor
-                ?.chain()
-                .focus()
-                .toggleHighlight({ color: "#fff1a8" })
-                .run()
-            }
-            aria-label={strings.composer.highlight}
-            title={strings.composer.highlight}
-          >
-            <Highlighter />
-          </button>
-          <span />
-          <button
-            type="button"
-            onClick={() => editor?.chain().focus().setTextAlign("left").run()}
-            aria-label={strings.composer.alignLeft}
-            title={strings.composer.alignLeft}
-          >
-            <AlignLeft />
-          </button>
-          <button
-            type="button"
-            onClick={() => editor?.chain().focus().setTextAlign("center").run()}
-            aria-label={strings.composer.alignCenter}
-            title={strings.composer.alignCenter}
-          >
-            <AlignCenter />
-          </button>
-          <button
-            type="button"
-            onClick={() => editor?.chain().focus().setTextAlign("right").run()}
-            aria-label={strings.composer.alignRight}
-            title={strings.composer.alignRight}
-          >
-            <AlignRight />
-          </button>
-          <button
-            type="button"
-            onClick={() => editor?.chain().focus().toggleBulletList().run()}
-            aria-label={strings.composer.bullets}
-            title={strings.composer.bullets}
-          >
-            <List />
-          </button>
-          <button
-            type="button"
-            onClick={() => editor?.chain().focus().toggleOrderedList().run()}
-            aria-label={strings.composer.numbers}
-            title={strings.composer.numbers}
-          >
-            <ListOrdered />
-          </button>
-          <button
-            type="button"
-            onClick={() => adjustIndent(-1)}
-            aria-label={strings.composer.indentLess}
-            title={strings.composer.indentLess}
-          >
-            <IndentDecrease />
-          </button>
-          <button
-            type="button"
-            onClick={() => adjustIndent(1)}
-            aria-label={strings.composer.indentMore}
-            title={strings.composer.indentMore}
-          >
-            <IndentIncrease />
-          </button>
-          <button
-            type="button"
-            onClick={addLink}
-            aria-label={strings.composer.insertLink}
-            title={strings.composer.insertLink}
-          >
-            <LinkIcon />
-          </button>
-          <button
-            type="button"
-            onClick={() =>
-              editor
-                ?.chain()
-                .focus()
-                .insertTable({ rows: 3, cols: 3, withHeaderRow: true })
-                .run()
-            }
-            aria-label={strings.composer.insertTable}
-            title={strings.composer.insertTable}
-          >
-            <Table2 />
-          </button>
-          <button
-            type="button"
-            onClick={() => editor?.chain().focus().setHorizontalRule().run()}
-            aria-label={strings.composer.insertRule}
-            title={strings.composer.insertRule}
-          >
-            <Minus />
-          </button>
-          <button
-            type="button"
-            onClick={() =>
-              editor?.chain().focus().clearNodes().unsetAllMarks().run()
-            }
-            aria-label={strings.composer.clearFormatting}
-            title={strings.composer.clearFormatting}
-          >
-            <RemoveFormatting />
-          </button>
+            >
+              <option value="">{strings.composer.defaultFont}</option>
+              <option value="Arial">Arial</option>
+              <option value="Georgia">Georgia</option>
+              <option value="Verdana">Verdana</option>
+              <option value="'Courier New'">Courier</option>
+            </select>
+            <select
+              aria-label={strings.composer.fontSize}
+              title={strings.composer.fontSize}
+              defaultValue="16px"
+              onChange={(event) =>
+                editor?.chain().focus().setFontSize(event.target.value).run()
+              }
+            >
+              <option value="12px">{strings.composer.small}</option>
+              <option value="16px">{strings.composer.normal}</option>
+              <option value="20px">{strings.composer.large}</option>
+              <option value="26px">{strings.composer.extraLarge}</option>
+            </select>
+          </div>
+
+          <div className="toolbar-group">
+            <button
+              className={editor?.isActive("bold") ? "active" : ""}
+              type="button"
+              onClick={() => editor?.chain().focus().toggleBold().run()}
+              aria-label={strings.composer.bold}
+              title={strings.composer.bold}
+            >
+              <Bold />
+            </button>
+            <button
+              className={editor?.isActive("italic") ? "active" : ""}
+              type="button"
+              onClick={() => editor?.chain().focus().toggleItalic().run()}
+              aria-label={strings.composer.italic}
+              title={strings.composer.italic}
+            >
+              <Italic />
+            </button>
+            <button
+              className={editor?.isActive("underline") ? "active" : ""}
+              type="button"
+              onClick={() => editor?.chain().focus().toggleUnderline().run()}
+              aria-label={strings.composer.underline}
+              title={strings.composer.underline}
+            >
+              <UnderlineIcon />
+            </button>
+            <button
+              className={editor?.isActive("strike") ? "active" : ""}
+              type="button"
+              onClick={() => editor?.chain().focus().toggleStrike().run()}
+              aria-label={strings.composer.strike}
+              title={strings.composer.strike}
+            >
+              <Strikethrough />
+            </button>
+            <label className="color-control" title={strings.composer.textColor}>
+              <input
+                type="color"
+                defaultValue="#20252b"
+                onChange={(event) =>
+                  editor?.chain().focus().setColor(event.target.value).run()
+                }
+              />
+              <span>A</span>
+            </label>
+            <button
+              type="button"
+              onClick={() =>
+                editor
+                  ?.chain()
+                  .focus()
+                  .toggleHighlight({ color: "#fff1a8" })
+                  .run()
+              }
+              aria-label={strings.composer.highlight}
+              title={strings.composer.highlight}
+            >
+              <Highlighter />
+            </button>
+          </div>
+
+          <div className="toolbar-group">
+            <button
+              type="button"
+              onClick={() => editor?.chain().focus().setTextAlign("left").run()}
+              aria-label={strings.composer.alignLeft}
+              title={strings.composer.alignLeft}
+            >
+              <AlignLeft />
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                editor?.chain().focus().setTextAlign("center").run()
+              }
+              aria-label={strings.composer.alignCenter}
+              title={strings.composer.alignCenter}
+            >
+              <AlignCenter />
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                editor?.chain().focus().setTextAlign("right").run()
+              }
+              aria-label={strings.composer.alignRight}
+              title={strings.composer.alignRight}
+            >
+              <AlignRight />
+            </button>
+          </div>
+
+          <div className="toolbar-group">
+            <button
+              type="button"
+              onClick={() => editor?.chain().focus().toggleBulletList().run()}
+              aria-label={strings.composer.bullets}
+              title={strings.composer.bullets}
+            >
+              <List />
+            </button>
+            <button
+              type="button"
+              onClick={() => editor?.chain().focus().toggleOrderedList().run()}
+              aria-label={strings.composer.numbers}
+              title={strings.composer.numbers}
+            >
+              <ListOrdered />
+            </button>
+            <button
+              type="button"
+              onClick={() => adjustIndent(-1)}
+              aria-label={strings.composer.indentLess}
+              title={strings.composer.indentLess}
+            >
+              <IndentDecrease />
+            </button>
+            <button
+              type="button"
+              onClick={() => adjustIndent(1)}
+              aria-label={strings.composer.indentMore}
+              title={strings.composer.indentMore}
+            >
+              <IndentIncrease />
+            </button>
+          </div>
+
+          <div className="toolbar-group">
+            <button
+              type="button"
+              onClick={addLink}
+              aria-label={strings.composer.insertLink}
+              title={strings.composer.insertLink}
+            >
+              <LinkIcon />
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                editor
+                  ?.chain()
+                  .focus()
+                  .insertTable({ rows: 3, cols: 3, withHeaderRow: true })
+                  .run()
+              }
+              aria-label={strings.composer.insertTable}
+              title={strings.composer.insertTable}
+            >
+              <Table2 />
+            </button>
+            <button
+              type="button"
+              onClick={() => editor?.chain().focus().setHorizontalRule().run()}
+              aria-label={strings.composer.insertRule}
+              title={strings.composer.insertRule}
+            >
+              <Minus />
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                editor?.chain().focus().clearNodes().unsetAllMarks().run()
+              }
+              aria-label={strings.composer.clearFormatting}
+              title={strings.composer.clearFormatting}
+            >
+              <RemoveFormatting />
+            </button>
+          </div>
         </div>
         <EditorContent editor={editor} />
         {attachments.length > 0 ? (
@@ -928,9 +1099,16 @@ export function Composer({ accountId }: Props) {
             type="button"
             disabled={!canSend}
             onClick={() => void sendMessage()}
+            aria-label={
+              sending ? strings.composer.sending : strings.composer.send
+            }
+            title={`${sending ? strings.composer.sending : strings.composer.send} (${shortcutMod()}↵)`}
           >
             <Send />
-            {sending ? strings.composer.sending : strings.composer.send}
+            <span>
+              {sending ? strings.composer.sending : strings.composer.send}
+            </span>
+            <kbd className="send-kbd-hint">{`${shortcutMod()}↵`}</kbd>
           </button>
           <button
             className="toolbar-button"

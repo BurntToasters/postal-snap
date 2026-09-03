@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroize;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -41,7 +42,7 @@ pub struct ServerConfig {
     pub username: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountSetupRequest {
     pub provider: ProviderKind,
@@ -52,7 +53,20 @@ pub struct AccountSetupRequest {
     pub smtp: Option<ServerConfig>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+impl std::fmt::Debug for AccountSetupRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AccountSetupRequest")
+            .field("provider", &self.provider)
+            .field("email", &self.email)
+            .field("display_name", &self.display_name)
+            .field("password", &"[REDACTED]")
+            .field("imap", &self.imap)
+            .field("smtp", &self.smtp)
+            .finish()
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountSummary {
     pub id: String,
@@ -61,12 +75,22 @@ pub struct AccountSummary {
     pub display_name: String,
     pub sync_state: String,
     pub error: Option<String>,
+    #[serde(default)]
+    pub aliases: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountRemovalOutcome {
     pub cleanup_pending: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountInboxCount {
+    pub account_id: String,
+    pub unread_count: u32,
+    pub total_count: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -191,6 +215,7 @@ pub struct ComposeAttachment {
 pub struct ComposeDraft {
     pub id: Option<String>,
     pub account_id: String,
+    pub from: Option<String>,
     pub to: Vec<String>,
     pub cc: Vec<String>,
     pub bcc: Vec<String>,
@@ -275,6 +300,12 @@ impl Default for CachePolicy {
             days: 90,
             max_bytes: 1_073_741_824,
         }
+    }
+}
+
+impl CachePolicy {
+    pub fn is_unlimited(&self) -> bool {
+        self.mode == "full" && self.max_bytes == 0
     }
 }
 
@@ -426,7 +457,7 @@ impl From<String> for IpcError {
             || lower.starts_with("only ")
         {
             ("invalidInput", false)
-        } else if lower.contains("database") || lower.contains("settings") {
+        } else if lower.contains("database") {
             ("localStorageFailed", true)
         } else {
             ("operationFailed", true)
@@ -531,7 +562,7 @@ pub fn take_validated_setup(
 ) -> Result<(ServerConfig, ServerConfig, String), String> {
     let (imap, smtp) = validated_setup(request)?;
     let password = normalize_setup_password(&request.provider, &request.password);
-    request.password.clear();
+    request.password.zeroize();
     if password.is_empty() || password.len() > 4096 {
         return Err("Enter the app-specific or email password.".into());
     }
@@ -557,6 +588,14 @@ fn validate_server(server: &ServerConfig) -> Result<(), String> {
 }
 
 pub fn validate_compose_draft(draft: &ComposeDraft) -> Result<(), String> {
+    if let Some(from) = &draft.from {
+        if from.len() > 320
+            || from.contains(char::is_control)
+            || from.trim().parse::<lettre::message::Mailbox>().is_err()
+        {
+            return Err("The sender address is invalid.".into());
+        }
+    }
     let recipients = draft.to.iter().chain(&draft.cc).chain(&draft.bcc);
     if draft.to.len() + draft.cc.len() + draft.bcc.len() > 500
         || recipients
@@ -690,6 +729,7 @@ mod tests {
         let mut draft = ComposeDraft {
             id: None,
             account_id: "account-1".into(),
+            from: None,
             to: vec!["jane@example.com".into()],
             cc: vec![],
             bcc: vec![],

@@ -21,7 +21,7 @@ use crate::{
     db::{CachedMessage, Database},
     models::{
         mailbox_role, AccountRecord, AccountSetupRequest, Attachment, CachePolicy, ComposeDraft,
-        MessageSummary, ProviderKind, SearchQuery, ServerConfig, TlsMode,
+        MailboxRole, MessageSummary, ProviderKind, SearchQuery, ServerConfig, TlsMode,
     },
     security::{redact_error, safe_filename},
 };
@@ -264,6 +264,13 @@ pub async fn sync_account(
                 .collect::<Vec<_>>();
             db.reconcile_flags(mailbox_id, &seen, &requested)?;
         }
+        let should_download_bodies = role == MailboxRole::Inbox || policy.mode == "full";
+        if should_download_bodies {
+            let limit = if policy.mode == "full" { 50 } else { 25 };
+            let _ =
+                download_uncached_bodies(&mut session, db, &account.summary.id, mailbox_id, limit)
+                    .await;
+        }
     }
     db.reconcile_mailboxes(&account.summary.id, &server_mailboxes)?;
     let _ = session.logout().await;
@@ -333,9 +340,9 @@ pub async fn idle_inbox(
     wake: &Notify,
 ) -> Result<(), String> {
     let mut session = connect_imap(&account.imap, password).await?;
-    let capabilities = session
-        .capabilities()
+    let capabilities = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.capabilities())
         .await
+        .map_err(|_| "IMAP capability check timed out.".to_string())?
         .map_err(|error| redact_error(&error, "IMAP capability check"))?;
     if !capabilities.has_str("IDLE") {
         let _ = session.logout().await;
@@ -345,13 +352,14 @@ pub async fn idle_inbox(
         }
         return Ok(());
     }
-    session
-        .select("INBOX")
+    tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select("INBOX"))
         .await
+        .map_err(|_| "Inbox monitoring timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Inbox monitoring"))?;
     let mut idle = session.idle();
-    idle.init()
+    tokio::time::timeout(IMAP_COMMAND_TIMEOUT, idle.init())
         .await
+        .map_err(|_| "Inbox monitoring initialization timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Inbox monitoring"))?;
     let response = {
         let (wait, interrupt) = idle.wait_with_timeout(Duration::from_secs(120));
@@ -408,18 +416,23 @@ pub async fn server_search(
     let mut session = connect_imap(&account.imap, password).await?;
     let mut results = Vec::new();
     for (mailbox_id, name) in mailboxes {
-        let selected = session
-            .examine(&name)
+        let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.examine(&name))
             .await
+            .map_err(|_| "Server search timed out.".to_string())?
             .map_err(|error| redact_error(&error, "Server search"))?;
         if let Some(expected_uid_validity) = db.mailbox_uid_validity(&account.summary.id, &name)? {
             if selected.uid_validity != Some(expected_uid_validity) {
                 return Err("This mailbox changed; get mail before searching.".into());
             }
         }
-        let mut uids = session
-            .uid_search(format!("TEXT \"{search_text}\""))
+        let search_cmd = if search_text.is_ascii() {
+            format!("TEXT \"{search_text}\"")
+        } else {
+            format!("CHARSET UTF-8 TEXT \"{search_text}\"")
+        };
+        let mut uids = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.uid_search(&search_cmd))
             .await
+            .map_err(|_| "Server search timed out.".to_string())?
             .map_err(|error| redact_error(&error, "Server search"))?
             .into_iter()
             .collect::<Vec<_>>();
@@ -433,13 +446,17 @@ pub async fn server_search(
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join(",");
-        let fetched = session
-            .uid_fetch(set, "(UID FLAGS RFC822.SIZE INTERNALDATE ENVELOPE)")
-            .await
-            .map_err(|error| redact_error(&error, "Server search"))?
-            .try_collect::<Vec<_>>()
-            .await
-            .map_err(|error| redact_error(&error, "Server search"))?;
+        let fetched = tokio::time::timeout(
+            IMAP_COMMAND_TIMEOUT,
+            session
+                .uid_fetch(set, "(UID FLAGS RFC822.SIZE INTERNALDATE ENVELOPE)")
+                .await
+                .map_err(|error| redact_error(&error, "Server search"))?
+                .try_collect::<Vec<_>>(),
+        )
+        .await
+        .map_err(|_| "Server search timed out.".to_string())?
+        .map_err(|error| redact_error(&error, "Server search"))?;
         for item in fetched {
             let flags = item
                 .flags()
@@ -518,6 +535,228 @@ pub async fn download_message(
     let parsed = parse_message(uid, raw, flags.contains("seen"), flags.contains("flagged"))?;
     let _ = session.logout().await;
     Ok(parsed)
+}
+
+async fn download_uncached_bodies(
+    session: &mut ImapSession,
+    db: &Database,
+    account_id: &str,
+    mailbox_id: i64,
+    limit: u32,
+) -> Result<(), String> {
+    let uncached = db.uncached_message_uids(mailbox_id, limit, MAX_MESSAGE_BYTES as u64)?;
+    if uncached.is_empty() {
+        return Ok(());
+    }
+    let range = uncached
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let fetch_result = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
+        session
+            .uid_fetch(range, "(UID FLAGS RFC822.SIZE BODY.PEEK[])")
+            .await
+            .map_err(|error| redact_error(&error, "Message prefetch"))?
+            .try_collect::<Vec<_>>()
+            .await
+            .map_err(|error| redact_error(&error, "Message prefetch"))
+    })
+    .await;
+
+    let rows = match fetch_result {
+        Ok(Ok(rows)) => rows,
+        Ok(Err(error)) => return Err(error),
+        Err(_) => return Err("Message prefetch timed out.".into()),
+    };
+
+    for item in rows {
+        let (Some(uid), Some(raw)) = (item.uid, item.body()) else {
+            continue;
+        };
+        if raw.len() > MAX_MESSAGE_BYTES {
+            continue;
+        }
+        let flags = item
+            .flags()
+            .map(|flag| format!("{flag:?}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_ascii_lowercase();
+        if let Ok(parsed) =
+            parse_message(uid, raw, flags.contains("seen"), flags.contains("flagged"))
+        {
+            let _ = db.upsert_message(account_id, mailbox_id, &parsed);
+        }
+    }
+    Ok(())
+}
+
+pub async fn discover_icloud_aliases(email: &str, password: &str) -> Result<Vec<String>, String> {
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(6))
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|_| "Could not connect to iCloud alias service.".to_string())?;
+
+    let auth = format!(
+        "Basic {}",
+        base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            format!("{email}:{password}")
+        )
+    );
+
+    let propfind_principal = r#"<?xml version="1.0" encoding="utf-8" ?>
+<D:propfind xmlns:D="DAV:">
+  <D:prop>
+    <D:current-user-principal/>
+  </D:prop>
+</D:propfind>"#;
+
+    let response = client
+        .request(
+            reqwest::Method::from_bytes(b"PROPFIND").unwrap(),
+            "https://caldav.icloud.com/",
+        )
+        .header("Authorization", &auth)
+        .header("Depth", "0")
+        .header("Content-Type", "application/xml; charset=utf-8")
+        .body(propfind_principal)
+        .send()
+        .await
+        .map_err(|error| redact_error(&error, "iCloud alias discovery"))?;
+
+    let status = response.status();
+    if !status.is_success() && status.as_u16() != 207 {
+        return Ok(Vec::new());
+    }
+
+    let final_url = response.url().clone();
+    let text = response
+        .text()
+        .await
+        .map_err(|error| redact_error(&error, "iCloud alias discovery"))?;
+
+    let principal_href = extract_tag_value(&text, "current-user-principal")
+        .and_then(|tag| extract_tag_value(&tag, "href"))
+        .or_else(|| extract_tag_value(&text, "href"));
+
+    let Some(href) = principal_href else {
+        return Ok(Vec::new());
+    };
+
+    let principal_url = if href.starts_with("http") {
+        href
+    } else {
+        let base = format!(
+            "{}://{}",
+            final_url.scheme(),
+            final_url.host_str().unwrap_or("caldav.icloud.com")
+        );
+        format!(
+            "{base}{}",
+            if href.starts_with('/') {
+                href
+            } else {
+                format!("/{href}")
+            }
+        )
+    };
+
+    let address_set_prop = r#"<?xml version="1.0" encoding="utf-8" ?>
+<D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+  <D:prop>
+    <C:calendar-user-address-set/>
+  </D:prop>
+</D:propfind>"#;
+
+    let address_res = client
+        .request(
+            reqwest::Method::from_bytes(b"PROPFIND").unwrap(),
+            &principal_url,
+        )
+        .header("Authorization", &auth)
+        .header("Depth", "0")
+        .header("Content-Type", "application/xml; charset=utf-8")
+        .body(address_set_prop)
+        .send()
+        .await
+        .map_err(|error| redact_error(&error, "iCloud alias discovery"))?;
+
+    let addr_status = address_res.status();
+    if !addr_status.is_success() && addr_status.as_u16() != 207 {
+        return Ok(Vec::new());
+    }
+
+    let address_xml = address_res
+        .text()
+        .await
+        .map_err(|error| redact_error(&error, "iCloud alias discovery"))?;
+
+    let mut aliases = Vec::new();
+    let primary_lower = email.trim().to_lowercase();
+
+    for part in address_xml.split("mailto:") {
+        if let Some(end) = part.find(['<', '"', ' ', '\n', '\r', '\t', '&']) {
+            let addr = part[..end].trim().to_lowercase();
+            if addr.contains('@')
+                && !addr.contains('/')
+                && addr != primary_lower
+                && addr.len() <= 320
+                && !addr.contains(char::is_control)
+                && addr.parse::<lettre::message::Mailbox>().is_ok()
+                && !aliases.contains(&addr)
+            {
+                aliases.push(addr);
+            }
+        }
+    }
+
+    Ok(aliases)
+}
+
+pub fn extract_tag_value(xml: &str, tag_name: &str) -> Option<String> {
+    let mut search_from = 0;
+    while let Some(start_bracket) = xml[search_from..].find('<') {
+        let idx = search_from + start_bracket;
+        let tag_start = idx + 1;
+        if let Some(close_bracket) = xml[tag_start..].find('>') {
+            let tag_head = &xml[tag_start..tag_start + close_bracket];
+            let tag_ident = tag_head
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .trim_end_matches('/');
+            let matches_tag = if let Some(local) = tag_ident.split(':').nth(1) {
+                local.eq_ignore_ascii_case(tag_name)
+            } else {
+                tag_ident.eq_ignore_ascii_case(tag_name)
+            };
+            if matches_tag && !tag_ident.starts_with('/') {
+                let content_start = tag_start + close_bracket + 1;
+                let after = &xml[content_start..];
+                for (close_idx, _) in after.match_indices("</") {
+                    let after_close = &after[close_idx + 2..];
+                    if let Some(gt) = after_close.find('>') {
+                        let close_ident = after_close[..gt].trim();
+                        let close_matches = if let Some(local) = close_ident.split(':').nth(1) {
+                            local.eq_ignore_ascii_case(tag_name)
+                        } else {
+                            close_ident.eq_ignore_ascii_case(tag_name)
+                        };
+                        if close_matches {
+                            return Some(after[..close_idx].trim().to_string());
+                        }
+                    }
+                }
+            }
+            search_from = tag_start + close_bracket + 1;
+        } else {
+            break;
+        }
+    }
+    None
 }
 
 pub async fn set_remote_flags(
@@ -1138,13 +1377,16 @@ async fn build_message_with_id(
         return Err("This message has too many attachments.".into());
     }
 
-    let from: Mailbox = format!(
-        "{} <{}>",
-        account.summary.display_name, account.summary.email
-    )
-    .parse()
-    .or_else(|_| account.summary.email.parse())
-    .map_err(|_| "The sender address is invalid.".to_string())?;
+    let sender_email = draft
+        .from
+        .as_deref()
+        .map(str::trim)
+        .filter(|addr| !addr.is_empty())
+        .unwrap_or(&account.summary.email);
+    let from: Mailbox = format!("{} <{}>", account.summary.display_name, sender_email)
+        .parse()
+        .or_else(|_| sender_email.parse())
+        .map_err(|_| "The sender address is invalid.".to_string())?;
     let mut builder = Message::builder()
         .from(from)
         .subject(draft.subject.clone())
@@ -1184,22 +1426,13 @@ async fn build_message_with_id(
     for item in &draft.attachments {
         let path = Path::new(&item.token);
         if !path.is_file() {
-            return Err(format!(
-                "Attachment '{}' is unavailable.",
-                safe_filename(&item.filename)
-            ));
+            return Err("An attachment file is no longer available.".into());
         }
-        let bytes = tokio::fs::read(path).await.map_err(|_| {
-            format!(
-                "Could not read attachment '{}'.",
-                safe_filename(&item.filename)
-            )
-        })?;
+        let bytes = tokio::fs::read(path)
+            .await
+            .map_err(|_| "Could not read an attachment file.".to_string())?;
         if bytes.len() > MAX_MESSAGE_BYTES {
-            return Err(format!(
-                "Attachment '{}' is too large.",
-                safe_filename(&item.filename)
-            ));
+            return Err("An attachment exceeds the maximum allowed size.".into());
         }
         total_bytes = total_bytes.saturating_add(bytes.len());
         if total_bytes > MAX_OUTGOING_BYTES {
@@ -1232,9 +1465,13 @@ async fn build_message_with_id(
 }
 
 fn message_envelope(account: &AccountRecord, draft: &ComposeDraft) -> Result<Envelope, String> {
-    let from = account
-        .summary
-        .email
+    let sender_email = draft
+        .from
+        .as_deref()
+        .map(str::trim)
+        .filter(|addr| !addr.is_empty())
+        .unwrap_or(&account.summary.email);
+    let from = sender_email
         .parse()
         .map_err(|_| "The sender address is invalid.".to_string())?;
     let recipients = draft
@@ -1544,6 +1781,7 @@ mod tests {
                 display_name: "Sam".into(),
                 sync_state: "idle".into(),
                 error: None,
+                aliases: vec![],
             },
             imap: ServerConfig {
                 host: "imap.example.com".into(),
@@ -1561,6 +1799,7 @@ mod tests {
         let draft = ComposeDraft {
             id: None,
             account_id: account.summary.id.clone(),
+            from: None,
             to: vec!["jane@example.com".into()],
             cc: vec![],
             bcc: vec![],
@@ -1616,6 +1855,7 @@ mod tests {
                 display_name: "Sam".into(),
                 sync_state: "idle".into(),
                 error: None,
+                aliases: vec![],
             },
             imap: ServerConfig {
                 host: "imap.example.com".into(),
@@ -1633,6 +1873,7 @@ mod tests {
         let draft = ComposeDraft {
             id: None,
             account_id: account.summary.id.clone(),
+            from: None,
             to: vec!["jane@example.com".into()],
             cc: vec![],
             bcc: vec![],
@@ -1661,6 +1902,7 @@ mod tests {
                 display_name: "Sam".into(),
                 sync_state: "idle".into(),
                 error: None,
+                aliases: vec![],
             },
             imap: ServerConfig {
                 host: "imap.example.com".into(),
@@ -1678,6 +1920,7 @@ mod tests {
         let draft = ComposeDraft {
             id: None,
             account_id: account.summary.id.clone(),
+            from: None,
             to: vec!["jane@example.com".into()],
             cc: vec![],
             bcc: vec!["hidden@example.com".into()],
@@ -1715,6 +1958,7 @@ mod tests {
                 display_name: "Postal Snap Test".into(),
                 sync_state: "idle".into(),
                 error: None,
+                aliases: vec![],
             },
             imap: ServerConfig {
                 host: "localhost".into(),
@@ -1754,6 +1998,7 @@ mod tests {
         let draft = ComposeDraft {
             id: None,
             account_id: account.summary.id.clone(),
+            from: None,
             to: vec![account.summary.email.clone()],
             cc: vec![],
             bcc: vec![],
@@ -1953,5 +2198,25 @@ mod tests {
         test_account(&request, &imap, &smtp, &request.password)
             .await
             .unwrap();
+    }
+
+    #[test]
+    fn extracts_xml_tag_values_with_namespaces() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<D:multistatus xmlns:D="DAV:">
+  <D:response>
+    <D:propstat>
+      <D:prop>
+        <D:current-user-principal>
+          <D:href>/12345/principal/</D:href>
+        </D:current-user-principal>
+      </D:prop>
+    </D:propstat>
+  </D:response>
+</D:multistatus>"#;
+        let principal = extract_tag_value(xml, "current-user-principal").unwrap();
+        assert!(principal.contains("/12345/principal/"));
+        let href = extract_tag_value(&principal, "href").unwrap();
+        assert_eq!(href, "/12345/principal/");
     }
 }
