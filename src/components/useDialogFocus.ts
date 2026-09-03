@@ -21,6 +21,7 @@ export function useDialogFocus(onClose: () => void) {
     window.setTimeout(() => first?.focus(), 0);
 
     function onKeyDown(event: KeyboardEvent) {
+      if (dialog && !document.contains(dialog)) return;
       if (event.key === "Escape") {
         event.preventDefault();
         closeRef.current();

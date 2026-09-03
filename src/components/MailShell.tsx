@@ -380,20 +380,27 @@ export function MailShell({ onOpenSettings }: Props) {
   }, [loadMessages]);
 
   useEffect(() => {
+    let active = true;
     const unsubs: Array<() => void> = [];
     void api
       .onFolderCountsChanged(({ accountId }) => {
         if (accountId === useAppStore.getState().activeAccountId)
           void loadAccountData();
       })
-      .then((fn) => unsubs.push(fn));
+      .then((fn) => {
+        if (active) unsubs.push(fn);
+        else fn();
+      });
     void api
       .onMessageChanged(({ accountId }) => {
         if (accountId !== useAppStore.getState().activeAccountId) return;
         if (queryRef.current.trim()) void runSearch();
         else void loadMessages();
       })
-      .then((fn) => unsubs.push(fn));
+      .then((fn) => {
+        if (active) unsubs.push(fn);
+        else fn();
+      });
     const refreshLocal = (event: Event) => {
       const accountId = (event as CustomEvent<string>).detail;
       if (accountId === useAppStore.getState().activeAccountId)
@@ -401,6 +408,7 @@ export function MailShell({ onOpenSettings }: Props) {
     };
     window.addEventListener("postal:local-mail-changed", refreshLocal);
     return () => {
+      active = false;
       unsubs.forEach((fn) => fn());
       window.removeEventListener("postal:local-mail-changed", refreshLocal);
     };
@@ -413,10 +421,20 @@ export function MailShell({ onOpenSettings }: Props) {
       if (action === "get-mail") void refresh();
       if (action === "settings") onOpenSettings();
       if (action === "text-larger" || action === "text-smaller") {
-        const delta = action === "text-larger" ? 0.1 : -0.1;
+        const scales = [0.85, 1, 1.15, 1.3, 1.5, 2];
+        const current = settings.textScale;
+        let index = scales.findIndex((s) => Math.abs(s - current) < 0.05);
+        if (index === -1) {
+          index = scales.findIndex((s) => s >= current);
+          if (index === -1) index = scales.length - 1;
+        }
+        const nextIndex =
+          action === "text-larger"
+            ? Math.min(scales.length - 1, index + 1)
+            : Math.max(0, index - 1);
         const next = {
           ...settings,
-          textScale: Math.min(2, Math.max(0.85, settings.textScale + delta)),
+          textScale: scales[nextIndex],
         };
         void api
           .saveSettings(next)
@@ -918,6 +936,8 @@ export function MailShell({ onOpenSettings }: Props) {
         label={strings.mail.resizeFolders}
         orientation="vertical"
         value={settings.folderPaneWidth}
+        min={210}
+        max={420}
         onChange={(value, persist) =>
           resizePane("folderPaneWidth", value, persist)
         }
@@ -973,6 +993,8 @@ export function MailShell({ onOpenSettings }: Props) {
           label={strings.mail.resizeMessages}
           orientation="vertical"
           value={settings.messagePaneWidth}
+          min={300}
+          max={720}
           onChange={(value, persist) =>
             resizePane("messagePaneWidth", value, persist)
           }
@@ -983,6 +1005,8 @@ export function MailShell({ onOpenSettings }: Props) {
           label={strings.mail.resizeReader}
           orientation="horizontal-reverse"
           value={settings.readerPaneHeight}
+          min={240}
+          max={800}
           onChange={(value, persist) =>
             resizePane("readerPaneHeight", value, persist)
           }
@@ -1014,12 +1038,16 @@ function PaneSplitter({
   label,
   orientation,
   value,
+  min,
+  max,
   onChange,
 }: {
   className: string;
   label: string;
   orientation: "vertical" | "horizontal-reverse";
   value: number;
+  min: number;
+  max: number;
   onChange: (value: number, persist: boolean) => void;
 }) {
   return (
@@ -1029,6 +1057,8 @@ function PaneSplitter({
       aria-label={label}
       aria-orientation={orientation === "vertical" ? "vertical" : "horizontal"}
       aria-valuenow={Math.round(value)}
+      aria-valuemin={min}
+      aria-valuemax={max}
       tabIndex={0}
       onKeyDown={(event) => {
         const decrement =
@@ -1138,74 +1168,84 @@ function MessageList({
   if (messages.length === 0)
     return <div className="list-state">{strings.mail.emptyMailbox}</div>;
   return (
-    <div
-      ref={listRef}
-      className="message-list"
-      role="listbox"
-      aria-label={strings.mail.messages}
-      aria-busy={loading}
-    >
-      {messages.map((message, index) => (
-        <button
-          key={message.id}
-          type="button"
-          role="option"
-          aria-selected={selectedId === message.id}
-          tabIndex={
-            selectedId === message.id || (!selectedId && index === 0) ? 0 : -1
-          }
-          aria-label={`${message.senderName || message.senderAddress}, ${message.subject || strings.common.noSubject}`}
-          className={`message-row ${message.isRead ? "read" : "unread"} ${selectedId === message.id ? "selected" : ""}`}
-          onClick={() => void onChoose(message)}
-          onKeyDown={(event) => {
-            if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key))
-              return;
-            event.preventDefault();
-            event.stopPropagation();
-            const nextIndex =
-              event.key === "Home"
-                ? 0
-                : event.key === "End"
-                  ? messages.length - 1
-                  : Math.max(
-                      0,
-                      Math.min(
-                        messages.length - 1,
-                        index + (event.key === "ArrowDown" ? 1 : -1),
-                      ),
-                    );
-            const next = messages[nextIndex];
-            if (next && next.id !== message.id) void onChoose(next);
-          }}
-        >
-          <span
-            className="unread-dot"
-            aria-label={
-              message.isRead ? strings.mail.read : strings.mail.unread
+    <div className="message-list">
+      <div
+        ref={listRef}
+        role="listbox"
+        aria-label={strings.mail.messages}
+        aria-busy={loading}
+      >
+        {messages.map((message, index) => (
+          <button
+            key={message.id}
+            type="button"
+            role="option"
+            aria-selected={selectedId === message.id}
+            tabIndex={
+              selectedId === message.id || (!selectedId && index === 0) ? 0 : -1
             }
-          />
-          <span className="message-sender">
-            {message.senderName || message.senderAddress}
-          </span>
-          <time className="message-date" dateTime={message.receivedAt}>
-            {formatMessageDate(message.receivedAt)}
-          </time>
-          <span className="message-subject">
-            {message.isStarred ? (
-              <Star fill="currentColor" aria-label={strings.mail.starred} />
-            ) : null}
-            <span>{message.subject || strings.common.noSubject}</span>
-            {message.hasAttachments ? (
-              <Paperclip aria-label={strings.mail.hasAttachments} />
-            ) : null}
-          </span>
-          <span className="message-preview">
-            {loadingMessageId === message.id
-              ? strings.mail.downloadingMessage
-              : message.preview || strings.mail.openToDownload}
-          </span>
-        </button>
-      ))}
+            aria-label={[
+              message.isRead ? strings.mail.read : strings.mail.unread,
+              message.isStarred ? strings.mail.starred : null,
+              message.senderName || message.senderAddress,
+              message.subject || strings.common.noSubject,
+              formatMessageDate(message.receivedAt),
+              message.hasAttachments ? strings.mail.hasAttachments : null,
+            ]
+              .filter(Boolean)
+              .join(", ")}
+            className={`message-row ${message.isRead ? "read" : "unread"} ${selectedId === message.id ? "selected" : ""}`}
+            onClick={() => void onChoose(message)}
+            onKeyDown={(event) => {
+              if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key))
+                return;
+              event.preventDefault();
+              event.stopPropagation();
+              const nextIndex =
+                event.key === "Home"
+                  ? 0
+                  : event.key === "End"
+                    ? messages.length - 1
+                    : Math.max(
+                        0,
+                        Math.min(
+                          messages.length - 1,
+                          index + (event.key === "ArrowDown" ? 1 : -1),
+                        ),
+                      );
+              const next = messages[nextIndex];
+              if (next && next.id !== message.id) void onChoose(next);
+            }}
+          >
+            <span
+              className="unread-dot"
+              aria-label={
+                message.isRead ? strings.mail.read : strings.mail.unread
+              }
+            />
+            <span className="message-sender">
+              {message.senderName || message.senderAddress}
+            </span>
+            <time className="message-date" dateTime={message.receivedAt}>
+              {formatMessageDate(message.receivedAt)}
+            </time>
+            <span className="message-subject">
+              {message.isStarred ? (
+                <Star fill="currentColor" aria-label={strings.mail.starred} />
+              ) : null}
+              <span>{message.subject || strings.common.noSubject}</span>
+              {message.hasAttachments ? (
+                <Paperclip aria-label={strings.mail.hasAttachments} />
+              ) : null}
+            </span>
+            <span className="message-preview">
+              {loadingMessageId === message.id
+                ? strings.mail.downloadingMessage
+                : message.preview || strings.mail.openToDownload}
+            </span>
+          </button>
+        ))}
+      </div>
       {hasMore ? (
         <button
           type="button"

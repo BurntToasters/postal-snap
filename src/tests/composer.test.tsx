@@ -108,4 +108,37 @@ describe("composer draft persistence", () => {
 
     expect(screen.queryByText("Draft saved")).toBeNull();
   });
+
+  it("minimizes into docked pill and restores back to full composer", () => {
+    render(<Composer accountId={account.id} />);
+    expect(screen.getByRole("dialog", { name: /New message/i })).toBeDefined();
+
+    const minimizeBtn = screen.getByRole("button", { name: "Minimize draft" });
+    fireEvent.click(minimizeBtn);
+
+    const restoreBtn = screen.getByRole("button", { name: /Restore/i });
+    expect(restoreBtn).toBeDefined();
+
+    fireEvent.click(restoreBtn);
+    expect(screen.getByRole("dialog", { name: /New message/i })).toBeDefined();
+  });
+
+  it("renders from alias selector when account has aliases", () => {
+    useAppStore.setState({
+      accounts: [
+        {
+          ...account,
+          aliases: ["alias1@example.test", "alias2@example.test"],
+        },
+      ],
+    });
+
+    render(<Composer accountId={account.id} />);
+    const select = screen.getByLabelText("From") as HTMLSelectElement;
+    expect(select).toBeDefined();
+    expect(select.value).toBe("sam@example.test");
+
+    fireEvent.change(select, { target: { value: "alias1@example.test" } });
+    expect(select.value).toBe("alias1@example.test");
+  });
 });

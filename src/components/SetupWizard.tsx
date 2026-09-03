@@ -268,7 +268,7 @@ export function SetupWizard({ onComplete, onOpenSettings }: Props) {
               setStatus(undefined);
             }}
           >
-            <ArrowLeft /> {strings.common.back}
+            <ArrowLeft aria-hidden="true" /> {strings.common.back}
           </button>
           {onOpenSettings ? (
             <button
@@ -284,7 +284,7 @@ export function SetupWizard({ onComplete, onOpenSettings }: Props) {
             aria-label={strings.setup.stepTwo}
           >
             <span className="done">
-              <Check />
+              <Check aria-hidden="true" />
             </span>
             <i />
             <span className="active">2</span>
@@ -310,7 +310,8 @@ export function SetupWizard({ onComplete, onOpenSettings }: Props) {
               className="text-button"
               onClick={() => void openUrl(APPLE_APP_PASSWORD_GUIDE)}
             >
-              {strings.setup.createAppPassword} <ExternalLink />
+              {strings.setup.createAppPassword}{" "}
+              <ExternalLink aria-hidden="true" />
             </button>
           </div>
         ) : null}
@@ -354,12 +355,15 @@ export function SetupWizard({ onComplete, onOpenSettings }: Props) {
         {provider === "icloud" ? (
           <p className="setup-field-hint">{strings.setup.icloudEmailHint}</p>
         ) : null}
-        <label className="field-label">
-          {provider === "icloud"
-            ? strings.setup.appPassword
-            : strings.setup.emailPassword}
+        <div className="field-label">
+          <label htmlFor="setup-password">
+            {provider === "icloud"
+              ? strings.setup.appPassword
+              : strings.setup.emailPassword}
+          </label>
           <span className="password-field">
             <input
+              id="setup-password"
               required
               type={showPassword ? "text" : "password"}
               autoComplete="new-password"
@@ -381,10 +385,14 @@ export function SetupWizard({ onComplete, onOpenSettings }: Props) {
                   : strings.setup.showPassword
               }
             >
-              {showPassword ? <EyeOff /> : <Eye />}
+              {showPassword ? (
+                <EyeOff aria-hidden="true" />
+              ) : (
+                <Eye aria-hidden="true" />
+              )}
             </button>
           </span>
-        </label>
+        </div>
         {provider === "icloud" ? (
           <p className="setup-field-hint">{strings.setup.appPasswordHint}</p>
         ) : null}
@@ -430,11 +438,11 @@ export function SetupWizard({ onComplete, onOpenSettings }: Props) {
             aria-live="polite"
           >
             {status.kind === "error" ? (
-              <TriangleAlert />
+              <TriangleAlert aria-hidden="true" />
             ) : status.kind === "success" ? (
-              <Check />
+              <Check aria-hidden="true" />
             ) : (
-              <ShieldCheck />
+              <ShieldCheck aria-hidden="true" />
             )}
             <span>
               {status.text}

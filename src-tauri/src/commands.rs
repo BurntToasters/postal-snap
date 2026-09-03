@@ -18,11 +18,11 @@ use crate::{
     db::Database,
     mail,
     models::{
-        take_validated_setup, validate_compose_draft, AccountRecord, AccountRemovalOutcome,
-        AccountSetupRequest, AccountSummary, AppSettings, CacheUsage, ComposeAttachment,
-        ComposeDraft, DistributionChannel, DraftSaveOutcome, DraftSummary, IpcError,
-        MailboxSummary, MessageCursor, MessageDetail, MessagePage, MessageSummary, OutboxSummary,
-        ProviderKind, SearchQuery, SendOutcome, SyncState,
+        take_validated_setup, validate_compose_draft, AccountInboxCount, AccountRecord,
+        AccountRemovalOutcome, AccountSetupRequest, AccountSummary, AppSettings, CacheUsage,
+        ComposeAttachment, ComposeDraft, DistributionChannel, DraftSaveOutcome, DraftSummary,
+        IpcError, MailboxSummary, MessageCursor, MessageDetail, MessagePage, MessageSummary,
+        OutboxSummary, ProviderKind, SearchQuery, SendOutcome, SyncState,
     },
     security,
     settings::SettingsStore,
@@ -345,6 +345,32 @@ pub fn update_account_aliases(
 }
 
 #[tauri::command]
+pub fn update_account_display_name(
+    account_id: String,
+    display_name: String,
+    state: State<'_, AppState>,
+) -> CommandResult<()> {
+    let trimmed = display_name.trim();
+    if trimmed.is_empty() || trimmed.len() > 120 || trimmed.contains(char::is_control) {
+        return Err("Account name is invalid.".into());
+    }
+    state.db.account(&account_id)?;
+    command_result(state.db.update_account_display_name(&account_id, trimmed))
+}
+
+#[tauri::command]
+pub fn get_account_inbox_counts(
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<AccountInboxCount>> {
+    command_result(state.db.list_account_inbox_counts())
+}
+
+#[tauri::command]
+pub fn list_all_mailboxes(state: State<'_, AppState>) -> CommandResult<Vec<MailboxSummary>> {
+    command_result(state.db.list_all_mailboxes())
+}
+
+#[tauri::command]
 pub fn list_mailboxes(
     account_id: String,
     state: State<'_, AppState>,
@@ -359,6 +385,26 @@ pub async fn sync_account(
     state: State<'_, AppState>,
 ) -> CommandResult<()> {
     command_result(sync_one(&account_id, &app, &state).await)
+}
+
+#[tauri::command]
+pub async fn sync_all_accounts(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<String>> {
+    let accounts = state.db.list_accounts()?;
+    let mut futures = Vec::new();
+    for account in &accounts {
+        futures.push(sync_one(&account.id, &app, &state));
+    }
+    let results = futures_util::future::join_all(futures).await;
+    let mut synced_ids = Vec::new();
+    for (account, result) in accounts.iter().zip(results) {
+        if result.is_ok() {
+            synced_ids.push(account.id.clone());
+        }
+    }
+    Ok(synced_ids)
 }
 
 pub async fn sync_one(account_id: &str, app: &AppHandle, state: &AppState) -> Result<(), String> {
@@ -986,6 +1032,15 @@ pub fn search_cached_messages(
 }
 
 #[tauri::command]
+pub fn search_all_cached_messages(
+    query: String,
+    limit: Option<u32>,
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<MessageSummary>> {
+    command_result(state.db.search_all_accounts(&query, limit.unwrap_or(50)))
+}
+
+#[tauri::command]
 pub async fn search_server_messages(
     query: SearchQuery,
     app: AppHandle,
@@ -1068,6 +1123,7 @@ pub async fn delete_draft(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<()> {
+    let _guard = state.lock_account(&account_id).await?;
     let draft = state.db.draft(&draft_id, &account_id)?;
     state.db.remove_draft(&draft_id, &account_id)?;
     release_attachment_tokens(
@@ -1089,21 +1145,18 @@ pub async fn send_message(
 ) -> CommandResult<SendOutcome> {
     let account = state.db.account(&draft.account_id)?;
     validate_compose_draft(&draft)?;
-    if draft.to.is_empty() && draft.cc.is_empty() && draft.bcc.is_empty() {
-        return Err("Add at least one recipient.".into());
-    }
     let resolved_draft = resolve_draft_files(&state.db, &draft)?;
     let prepared = mail::prepare_message(&account, &resolved_draft).await?;
     let offline = account.summary.sync_state == "offline";
     let initial_detail = offline.then_some("Waiting for a secure mail connection.");
-    let outbox_id = state.db.queue_outbox(
-        &draft,
-        "queued",
-        initial_detail,
-        &prepared.message_id,
-        &prepared.bytes,
-    )?;
     if offline {
+        let outbox_id = state.db.queue_outbox(
+            &draft,
+            "queued",
+            initial_detail,
+            &prepared.message_id,
+            &prepared.bytes,
+        )?;
         state.actor(&draft.account_id)?.wake.notify_one();
         emit_outbox_change(&app, &draft.account_id, Some(&outbox_id), Some("queued"));
         return Ok(SendOutcome {
@@ -1112,7 +1165,15 @@ pub async fn send_message(
             detail: initial_detail.map(Into::into),
         });
     }
-    command_result(deliver_outbox(&outbox_id, &draft.account_id, &app, &state).await)
+    let _guard = state.lock_account(&draft.account_id).await?;
+    let outbox_id = state.db.queue_outbox(
+        &draft,
+        "queued",
+        initial_detail,
+        &prepared.message_id,
+        &prepared.bytes,
+    )?;
+    command_result(deliver_outbox_locked(&outbox_id, &draft.account_id, &app, &state).await)
 }
 
 #[tauri::command]
@@ -1314,7 +1375,7 @@ async fn deliver_outbox_locked(
             }
             state.db.remove_outbox(outbox_id)?;
             if let Some(draft_id) = draft.id.as_deref() {
-                state.db.remove_draft(draft_id, account_id)?;
+                let _ = state.db.remove_draft(draft_id, account_id);
             }
             release_attachment_tokens(
                 state,
@@ -1373,7 +1434,7 @@ async fn retry_sent_copy_locked(
     mail::ensure_sent_copy(&account, &password, &mailbox, &message_id, &mime_bytes).await?;
     state.db.remove_outbox(outbox_id)?;
     if let Some(draft_id) = draft.id.as_deref() {
-        state.db.remove_draft(draft_id, account_id)?;
+        let _ = state.db.remove_draft(draft_id, account_id);
     }
     release_attachment_tokens(
         state,
@@ -1935,7 +1996,6 @@ async fn replay_offline_operations(
                         db.remove_operation(id)?;
                         continue;
                     }
-                    db.apply_pending_move_overlay(operation.message_id)?;
                     if operation.uid_validity.is_some()
                         && db.mailbox_uid_validity(&account.summary.id, &operation.source)?
                             != operation.uid_validity

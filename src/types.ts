@@ -36,6 +36,12 @@ export interface AccountRemovalOutcome {
   cleanupPending: boolean;
 }
 
+export interface AccountInboxCount {
+  accountId: string;
+  unreadCount: number;
+  totalCount: number;
+}
+
 export interface MailboxSummary {
   id: number;
   accountId: string;
