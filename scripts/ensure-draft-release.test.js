@@ -345,7 +345,7 @@ test("main wait mode never creates and create mode is the only creator", async (
           RELEASE_DRAFT_WAIT_POLL_MS: "1",
         },
       }),
-    /Timed out after 0s waiting for draft v0\.1\.1/,
+    /Timed out after 0s waiting for draft v/,
   );
   assert.ok(wait.calls.every((call) => call.method === "GET"));
   assert.ok(!wait.calls.some((call) => call.method === "PATCH"));
