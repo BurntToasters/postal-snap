@@ -233,4 +233,27 @@ describe("mail shell", () => {
     ).toBeVisible();
     expect(screen.getByRole("button", { name: "Write" })).toBeVisible();
   });
+
+  it("exposes the message toolbar for keyboard navigation", async () => {
+    renderShell();
+
+    await screen.findByRole("option", { name: /First message/i });
+    fireEvent.click(screen.getByRole("option", { name: /First message/i }));
+    expect(
+      await screen.findByRole("toolbar", { name: "Message actions" }),
+    ).toBeVisible();
+  });
+
+  it("keeps oversize envelopes actionable instead of a dead end", async () => {
+    mockedGetMessage.mockRejectedValueOnce(
+      new Error("This message is too large to download safely."),
+    );
+    renderShell();
+
+    await screen.findByRole("option", { name: /First message/i });
+    fireEvent.click(screen.getByRole("option", { name: /First message/i }));
+    expect(
+      await screen.findByRole("heading", { name: "First message" }),
+    ).toBeVisible();
+  });
 });

@@ -13,11 +13,12 @@ export function parseMailto(value: string): MailtoDraft {
     input
       .split(/[;,]/)
       .map((item) => item.trim())
-      .filter(Boolean);
+      .filter(Boolean)
+      .slice(0, 100);
   return {
     to: split(decodeURIComponent(url.pathname)),
     cc: split(url.searchParams.get("cc") ?? ""),
-    subject: url.searchParams.get("subject") ?? "",
-    textBody: url.searchParams.get("body") ?? "",
+    subject: (url.searchParams.get("subject") ?? "").slice(0, 998),
+    textBody: (url.searchParams.get("body") ?? "").slice(0, 100_000),
   };
 }

@@ -649,6 +649,14 @@ async fn import_remote_drafts_locked(
             .as_ref()
             .is_some_and(|(_, local_revision)| *local_revision > revision)
         {
+            let _ = state.db.update_remote_draft_tracking(
+                &id,
+                account_id,
+                mailbox,
+                remote.uid,
+                snapshot.uid_validity,
+                remote.message_id.as_deref(),
+            );
             continue;
         }
         let mut attachments = Vec::new();
@@ -702,7 +710,18 @@ async fn import_remote_drafts_locked(
         let draft = ComposeDraft {
             id: Some(id.clone()),
             account_id: account_id.clone(),
-            from: None,
+            from: remote.from.as_deref().and_then(|address| {
+                let lower = address.trim().to_ascii_lowercase();
+                let owned: Vec<String> = std::iter::once(&account.summary.email)
+                    .chain(account.summary.aliases.iter())
+                    .map(|item| item.trim().to_ascii_lowercase())
+                    .collect();
+                if owned.iter().any(|item| item == &lower) {
+                    Some(address.trim().to_string())
+                } else {
+                    None
+                }
+            }),
             to: remote.to,
             cc: remote.cc,
             bcc: remote.bcc,
@@ -785,7 +804,11 @@ pub fn list_messages(
     if owner != account_id {
         return Err("Mailbox does not belong to this account.".into());
     }
-    command_result(state.db.list_messages(mailbox_id, cursor.as_ref(), limit))
+    command_result(
+        state
+            .db
+            .list_messages(mailbox_id, cursor.as_ref(), limit.clamp(1, 500)),
+    )
 }
 
 async fn ensure_message_content(

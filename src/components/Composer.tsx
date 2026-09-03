@@ -49,6 +49,7 @@ import { strings } from "../i18n";
 import { htmlToPlainText, sanitizeReceivedHtml } from "../security";
 import { useAppStore, type ComposerSeed } from "../store";
 import type { ComposeAttachment, ComposeDraft } from "../types";
+import { moveToolbarFocus } from "./toolbarNav";
 import { useDialogFocus } from "./useDialogFocus";
 
 declare module "@tiptap/core" {
@@ -343,7 +344,7 @@ export function Composer({ accountId }: Props) {
 
   useEffect(() => {
     if (!editor) return;
-    const saveTimer = window.setInterval(() => {
+    const tryAutosave = () => {
       const draft = buildDraftRef.current();
       if (
         !sending &&
@@ -378,8 +379,19 @@ export function Composer({ accountId }: Props) {
             saveInFlight.current = false;
           });
       }
-    }, 6_000);
-    return () => window.clearInterval(saveTimer);
+    };
+    const saveTimer = window.setInterval(tryAutosave, 6_000);
+    const onBlur = () => tryAutosave();
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") tryAutosave();
+    };
+    window.addEventListener("blur", onBlur);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearInterval(saveTimer);
+      window.removeEventListener("blur", onBlur);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [accountId, editor, sending, setError]);
 
   const saveDraft = useCallback(
@@ -848,6 +860,7 @@ export function Composer({ accountId }: Props) {
           className="format-toolbar"
           role="toolbar"
           aria-label={strings.composer.formatting}
+          onKeyDown={moveToolbarFocus}
         >
           <div className="toolbar-group">
             <button

@@ -29,6 +29,7 @@ import { parseMailto } from "../mailto";
 import { messageFrameDocument, sanitizeReceivedHtml } from "../security";
 import { useAppStore } from "../store";
 import type { Attachment } from "../types";
+import { moveToolbarFocus } from "./toolbarNav";
 import { useDialogFocus } from "./useDialogFocus";
 
 export function MessageReader() {
@@ -64,7 +65,11 @@ export function MessageReader() {
   const overlayMessageId = message?.id;
 
   useEffect(() => {
-    if (!isOverlay || overlayMessageId === undefined) return;
+    if (overlayMessageId === undefined) return;
+    const narrow =
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(max-width: 760px)").matches;
+    if (!isOverlay && !narrow) return;
     const previous = document.activeElement as HTMLElement | null;
     titleRef.current?.focus();
     return () => {
@@ -591,10 +596,16 @@ export function MessageReader() {
   }
 
   if (settings.readingPane === "hidden" && !message)
-    return <section className="reader-pane reader-hidden" aria-hidden="true" />;
+    return (
+      <section
+        className="reader-pane reader-hidden"
+        id="reader-pane"
+        aria-hidden="true"
+      />
+    );
   if (!message)
     return (
-      <section className="reader-pane empty-reader">
+      <section className="reader-pane empty-reader" id="reader-pane">
         <div className="brand-watermark" aria-hidden="true">
           ✉
         </div>
@@ -616,6 +627,7 @@ export function MessageReader() {
         className="reader-actions"
         role="toolbar"
         aria-label="Message actions"
+        onKeyDown={moveToolbarFocus}
       >
         <button
           className="mobile-reader-back"
@@ -942,7 +954,13 @@ export function MessageReader() {
         </div>
       ) : null}
       <div className="message-body">
-        {message.htmlBody ? (
+        {!message.htmlBody &&
+        !message.textBody &&
+        message.size > 50 * 1024 * 1024 ? (
+          <p className="plain-text-body" role="note">
+            {strings.mail.messageTooLarge}
+          </p>
+        ) : message.htmlBody ? (
           <iframe
             ref={frame}
             title={strings.reader.messageContent}

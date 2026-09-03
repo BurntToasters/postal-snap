@@ -247,6 +247,13 @@ async function installMockIpc(page: Page) {
               }
               return { items: [summary], nextCursor: null, hasMore: false };
             case "get_message":
+              if (location.search.includes("oversize")) {
+                throw {
+                  code: "limitExceeded",
+                  message: "That item exceeds Postal Snap's safety limit.",
+                  retryable: false,
+                };
+              }
               return {
                 ...summary,
                 to: ["sam@icloud.com"],
@@ -948,4 +955,45 @@ test("detects and manages account aliases and presents From selector in composer
   await expect(page.getByLabel("From address")).toContainText(
     "custom@mydomain.com",
   );
+});
+
+test("renders alias header help without overlap blockers", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("tab", { name: "Accounts" }).click();
+  await expect(page.getByText("Email Aliases & Custom Domains")).toBeVisible();
+  await expect(
+    page.getByText(/Send and receive using iCloud aliases/),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Detect from iCloud" }),
+  ).toBeVisible();
+});
+
+test("keeps oversize envelopes actionable with an explicit notice", async ({
+  page,
+}) => {
+  await page.goto("/?oversize=1");
+  await page.getByRole("option", { name: /Weekend plans/i }).click();
+  await expect(
+    page.getByRole("heading", { name: "Weekend plans" }),
+  ).toBeVisible();
+});
+
+test("exposes the message toolbar for keyboard users", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("option", { name: /Weekend plans/i }).click();
+  await expect(
+    page.getByRole("toolbar", { name: "Message actions" }),
+  ).toBeVisible();
+});
+
+test("announces failed sign-ins as alerts", async ({ page }) => {
+  await page.goto("/?firstRun=1&setupFail=1");
+  await page.getByRole("button", { name: /iCloud Mail/i }).click();
+  await page.getByLabel("Your name").fill("Sam");
+  await page.getByLabel("Email address").fill("sam@icloud.com");
+  await page.getByLabel("App-specific password").fill("wrong-password");
+  await page.getByRole("button", { name: "Connect securely" }).click();
+  await expect(page.getByRole("alert")).toBeVisible();
 });
