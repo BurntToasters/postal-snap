@@ -649,6 +649,14 @@ async fn import_remote_drafts_locked(
             .as_ref()
             .is_some_and(|(_, local_revision)| *local_revision > revision)
         {
+            let _ = state.db.update_remote_draft_tracking(
+                &id,
+                account_id,
+                mailbox,
+                remote.uid,
+                snapshot.uid_validity,
+                remote.message_id.as_deref(),
+            );
             continue;
         }
         let mut attachments = Vec::new();
@@ -702,7 +710,18 @@ async fn import_remote_drafts_locked(
         let draft = ComposeDraft {
             id: Some(id.clone()),
             account_id: account_id.clone(),
-            from: None,
+            from: remote.from.as_deref().and_then(|address| {
+                let lower = address.trim().to_ascii_lowercase();
+                let owned: Vec<String> = std::iter::once(&account.summary.email)
+                    .chain(account.summary.aliases.iter())
+                    .map(|item| item.trim().to_ascii_lowercase())
+                    .collect();
+                if owned.iter().any(|item| item == &lower) {
+                    Some(address.trim().to_string())
+                } else {
+                    None
+                }
+            }),
             to: remote.to,
             cc: remote.cc,
             bcc: remote.bcc,
@@ -785,7 +804,11 @@ pub fn list_messages(
     if owner != account_id {
         return Err("Mailbox does not belong to this account.".into());
     }
-    command_result(state.db.list_messages(mailbox_id, cursor.as_ref(), limit))
+    command_result(
+        state
+            .db
+            .list_messages(mailbox_id, cursor.as_ref(), limit.clamp(1, 500)),
+    )
 }
 
 async fn ensure_message_content(
@@ -1206,15 +1229,10 @@ pub async fn delete_outbox(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<()> {
-    let (draft, outbox_state) = state.db.outbox(&outbox_id, &account_id)?;
+    let (draft, _outbox_state) = state.db.outbox(&outbox_id, &account_id)?;
     state
         .db
         .remove_outbox_for_account(&outbox_id, &account_id)?;
-    if outbox_state == "sent_copy_pending" {
-        if let Some(draft_id) = draft.id.as_deref() {
-            state.db.remove_draft(draft_id, &account_id)?;
-        }
-    }
     release_attachment_tokens(
         &state,
         &account_id,
@@ -1277,7 +1295,7 @@ async fn deliver_outbox_locked(
     app: &AppHandle,
     state: &AppState,
 ) -> Result<SendOutcome, String> {
-    let (draft, state_name, mut message_id, mut mime_bytes) =
+    let (draft, _state_name, mut message_id, mut mime_bytes) =
         match state.db.outbox_delivery(outbox_id, account_id) {
             Ok(value) => value,
             Err(error) => {
@@ -1303,15 +1321,6 @@ async fn deliver_outbox_locked(
         }
     };
     if message_id.is_empty() || mime_bytes.is_empty() {
-        if state_name != "queued" {
-            return outbox_preparation_failed(
-                outbox_id,
-                account_id,
-                app,
-                state,
-                "The uncertain message payload is unavailable.".into(),
-            );
-        }
         let resolved = match resolve_draft_files(&state.db, &draft) {
             Ok(draft) => draft,
             Err(error) => {
@@ -1521,7 +1530,7 @@ pub async fn prepare_forward_attachments(
     let mut created_tokens = Vec::new();
     let result = async {
         let mut total = 0usize;
-        for attachment in detail.attachments.into_iter().filter(|item| !item.inline) {
+        for attachment in detail.attachments.into_iter() {
             let (_, bytes) = mail::extract_attachment(&raw, &attachment.id)?;
             total = total.saturating_add(bytes.len());
             if total > mail::MAX_MESSAGE_BYTES {
@@ -1940,9 +1949,8 @@ async fn replay_offline_operations(
     account: &AccountRecord,
     password: &str,
 ) -> Result<bool, String> {
-    let mut remote_available = true;
     for (id, kind, payload) in db.queued_operations(&account.summary.id)? {
-        let result = match kind.as_str() {
+        match kind.as_str() {
             "flags" => match serde_json::from_str::<FlagOperation>(&payload) {
                 Ok(operation) => {
                     let Ok((owner, mailbox, uid)) = db.message_location(operation.message_id)
@@ -1964,20 +1972,16 @@ async fn replay_offline_operations(
                         db.remove_operation(id)?;
                         continue;
                     }
-                    let result = if remote_available {
-                        mail::set_remote_flags(
-                            account,
-                            password,
-                            &operation.mailbox,
-                            operation.uid,
-                            operation.uid_validity,
-                            operation.is_read,
-                            operation.is_starred,
-                        )
-                        .await
-                    } else {
-                        Err("Offline changes remain queued.".into())
-                    };
+                    let result = mail::set_remote_flags(
+                        account,
+                        password,
+                        &operation.mailbox,
+                        operation.uid,
+                        operation.uid_validity,
+                        operation.is_read,
+                        operation.is_starred,
+                    )
+                    .await;
                     // Initial sync restored server flags and reset local count
                     // overlays. Reapply user's queued intent whether remote
                     // replay succeeds now or remains queued.
@@ -1986,7 +1990,12 @@ async fn replay_offline_operations(
                         operation.is_read,
                         operation.is_starred,
                     )?;
-                    result
+                    if let Err(error) = &result {
+                        if is_terminal_mailbox_error(error) {
+                            db.remove_operation(id)?;
+                        }
+                        continue;
+                    }
                 }
                 Err(_) => {
                     db.remove_operation(id)?;
@@ -2019,23 +2028,24 @@ async fn replay_offline_operations(
                         db.remove_operation(id)?;
                         continue;
                     }
-                    let result = if remote_available {
-                        mail::move_remote(
-                            account,
-                            password,
-                            &operation.source,
-                            &operation.destination,
-                            operation.uid,
-                            operation.uid_validity,
-                        )
-                        .await
-                    } else {
-                        Err("Offline changes remain queued.".into())
-                    };
+                    let result = mail::move_remote(
+                        account,
+                        password,
+                        &operation.source,
+                        &operation.destination,
+                        operation.uid,
+                        operation.uid_validity,
+                    )
+                    .await;
                     if result.is_ok() {
                         db.remove_message(operation.message_id)?;
+                    } else if let Err(error) = &result {
+                        if is_terminal_mailbox_error(error) {
+                            let _ = db.clear_pending_move(operation.message_id);
+                            db.remove_operation(id)?;
+                            continue;
+                        }
                     }
-                    result
                 }
                 Err(_) => {
                     db.remove_operation(id)?;
@@ -2047,13 +2057,17 @@ async fn replay_offline_operations(
                 continue;
             }
         };
-        if result.is_err() {
-            remote_available = false;
-            continue;
-        }
         db.remove_operation(id)?;
     }
     Ok(!db.queued_operations(&account.summary.id)?.is_empty())
+}
+
+fn is_terminal_mailbox_error(error: &str) -> bool {
+    error.contains("mailbox changed")
+        || error.contains("cannot safely move")
+        || error.contains("does not belong")
+        || error.contains("message missing")
+        || error.contains("Message not found")
 }
 
 fn resolve_draft_files(db: &Database, draft: &ComposeDraft) -> Result<ComposeDraft, String> {

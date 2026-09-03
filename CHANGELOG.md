@@ -2,8 +2,8 @@
 
 | <img height="20" src="https://raw.githubusercontent.com/BurntToasters/bcls/main/media/windows.png" /> Windows                                                                                                                                                                                      | <img height="20" src="https://raw.githubusercontent.com/BurntToasters/bcls/main/media/mac.png" /> macOS                           | <img height="20" src="https://raw.githubusercontent.com/BurntToasters/bcls/main/media/linux.png" /> Linux                                                                                                                                                                       |
 | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | :-------------------------------------------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **EXE:** [x64](https://github.com/BurntToasters/postal-snap/releases/download/v0.1.4/Postal-Snap-Windows-x64.exe) / [arm64](https://github.com/BurntToasters/postal-snap/releases/download/v0.1.4/Postal-Snap-Windows-arm64.exe)                                                                   | **[Universal DMG](https://github.com/BurntToasters/postal-snap/releases/download/v0.1.4/Postal-Snap-macOS.dmg)**                  | **AppImage:** [x64](https://github.com/BurntToasters/postal-snap/releases/download/v0.1.4/Postal-Snap-Linux-x64.AppImage) / [arm64](https://github.com/BurntToasters/postal-snap/releases/download/v0.1.4/Postal-Snap-Linux-arm64.AppImage)                                    |
-| <!-- <div align="center"><a href="https://apps.microsoft.com/detail/<MS_STORE_ID>?referrer=appbadge&mode=full"><img src="https://get.microsoft.com/images/en-us%20light.svg" width="150"/></a></div> -->                                                                                           | **[Universal ZIP](https://github.com/BurntToasters/postal-snap/releases/download/v0.1.4/Postal-Snap-macOS.zip)**                  | **Flatpak:** [x64](https://github.com/BurntToasters/postal-snap/releases/download/v0.1.4/Postal-Snap-Linux-x64.flatpak) / [arm64](https://github.com/BurntToasters/postal-snap/releases/download/v0.1.4/Postal-Snap-Linux-arm64.flatpak)                                        |
+| **EXE:** [x64](https://github.com/BurntToasters/postal-snap/releases/download/v0.1.5/Postal-Snap-Windows-x64.exe) / [arm64](https://github.com/BurntToasters/postal-snap/releases/download/v0.1.5/Postal-Snap-Windows-arm64.exe)                                                                   | **[Universal DMG](https://github.com/BurntToasters/postal-snap/releases/download/v0.1.5/Postal-Snap-macOS.dmg)**                  | **AppImage:** [x64](https://github.com/BurntToasters/postal-snap/releases/download/v0.1.5/Postal-Snap-Linux-x64.AppImage) / [arm64](https://github.com/BurntToasters/postal-snap/releases/download/v0.1.5/Postal-Snap-Linux-arm64.AppImage)                                    |
+| <!-- <div align="center"><a href="https://apps.microsoft.com/detail/<MS_STORE_ID>?referrer=appbadge&mode=full"><img src="https://get.microsoft.com/images/en-us%20light.svg" width="150"/></a></div> -->                                                                                           | **[Universal ZIP](https://github.com/BurntToasters/postal-snap/releases/download/v0.1.5/Postal-Snap-macOS.zip)**                  | **Flatpak:** [x64](https://github.com/BurntToasters/postal-snap/releases/download/v0.1.5/Postal-Snap-Linux-x64.flatpak) / [arm64](https://github.com/BurntToasters/postal-snap/releases/download/v0.1.5/Postal-Snap-Linux-arm64.flatpak)                                        |
 
 > [!IMPORTANT]
 > The `.sig` files in this repo are NOT normal gpg signatures — they are for Tauri V2's
@@ -16,6 +16,25 @@
 ### ℹ️ Enjoying Postal Snap? Consider [❤️ Supporting Me! ❤️](https://rosie.run/support)
 
 Postal Snap is a calm, accessible desktop email client. Mail stays on your computer. There is no Postal Snap cloud, telemetry, or account of mine to log into.
+
+## Changes in `v0.1.5:`
+
+- **FIX - Settings Accounts Overlap:** Fixed overlapping text in Settings > Accounts alias management; the alias header, help text, status, and Detect button now wrap cleanly at narrow widths and 200% text scaling.
+- **FIX - Sync Timeouts & Efficiency:** Every IMAP sync step now has a 45s timeout instead of hanging forever, and unchanged mailboxes skip the flag re-download (verified by UIDVALIDITY/UIDNEXT/counts).
+- **FIX - Offline Queue Independence:** Queued flag/move operations now retry independently; one failed item no longer parks the rest, and mailbox changes retire only the affected item.
+- **FIX - Outbox Recovery:** Messages needing attention can rebuild their payload on explicit retry instead of sticking permanently; discarding a pending Sent copy no longer deletes the draft.
+- **FIX - Drafts Visibility & Autosave:** Drafts pending server delete stay visible until confirmed; autosave runs every 6s plus on blur/hide; server draft imports preserve the From alias and stop refetch loops.
+- **FIX - Forward Keeps Inline Images:** Forwarding now includes inline images as attachments instead of silently dropping them.
+- **FIX - Search Ranking:** Cached results keep full-text rank order; server-only body matches append newest-first instead of being re-sorted away.
+- **FIX - Oversize Messages:** Messages over the 50 MiB safety limit now open their envelope with an explicit notice; move, archive, and delete stay usable instead of a dead end.
+- **FIX - iCloud Alias Discovery Hardening:** CalDAV discovery follows no redirects (no credential forwarding) and allowlists `*.icloud.com` / `*.apple.com` principal hosts.
+- **FIX - Folder Roles:** Gmail labels and German/French/Spanish folder names now map to the right roles.
+- **UI - Reader Overlay Dialog:** Hidden-pane reader is a proper modal with focus trap, Escape, title focus, and focus restore; mobile overlay focuses the message too.
+- **UI - Toolbar Keyboard Nav:** Reader and composer toolbars support Arrow/Home/End navigation; splitters expose controlled panes and larger grab areas.
+- **UI - Setup Announcements:** Sign-in failures announce as alerts; iCloud hints linked to inputs; progress steps exposed to assistive tech.
+- **UI - Layout Fixes:** To/Cc-Bcc row no longer overlaps, toolbar/composer footer wrap, search and switches meet 44px targets, forced-colors covers dialogs/toasts/alias chips, vibrant-mode CSS variables fixed.
+- **Codebase:** Stable attachment IDs (name + CID + size anchored, legacy fallback); pagination limit clamped; remote-draft UID tracking covered by tests.
+- **PKG:** Updated packages.
 
 ## Changes in `v0.1.4:`
 

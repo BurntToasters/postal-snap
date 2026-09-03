@@ -193,10 +193,16 @@ export function SetupWizard({ onComplete, onOpenSettings }: Props) {
             </span>
           </header>
           <p className="setup-intro">{strings.setup.intro}</p>
-          <div className="setup-progress" aria-label={strings.setup.progress}>
-            <span className="active">1</span>
-            <i />
-            <span>2</span>
+          <div
+            className="setup-progress"
+            role="list"
+            aria-label={strings.setup.progress}
+          >
+            <span className="active" role="listitem" aria-current="step">
+              1
+            </span>
+            <i aria-hidden="true" />
+            <span role="listitem">2</span>
             <small>{strings.setup.chooseAccount}</small>
             <small>{strings.setup.signIn}</small>
           </div>
@@ -281,13 +287,16 @@ export function SetupWizard({ onComplete, onOpenSettings }: Props) {
           ) : null}
           <div
             className="setup-progress compact"
+            role="list"
             aria-label={strings.setup.stepTwo}
           >
-            <span className="done">
+            <span className="done" role="listitem">
               <Check aria-hidden="true" />
             </span>
-            <i />
-            <span className="active">2</span>
+            <i aria-hidden="true" />
+            <span className="active" role="listitem" aria-current="step">
+              2
+            </span>
           </div>
         </header>
         <div>
@@ -334,6 +343,9 @@ export function SetupWizard({ onComplete, onOpenSettings }: Props) {
               inputMode="email"
               autoComplete="email"
               value={email}
+              aria-describedby={
+                provider === "icloud" ? "setup-email-hint" : undefined
+              }
               onChange={(event) => updateEmail(event.target.value)}
               onBlur={() => {
                 if (
@@ -353,7 +365,9 @@ export function SetupWizard({ onComplete, onOpenSettings }: Props) {
           </label>
         </div>
         {provider === "icloud" ? (
-          <p className="setup-field-hint">{strings.setup.icloudEmailHint}</p>
+          <p className="setup-field-hint" id="setup-email-hint">
+            {strings.setup.icloudEmailHint}
+          </p>
         ) : null}
         <div className="field-label">
           <label htmlFor="setup-password">
@@ -369,6 +383,9 @@ export function SetupWizard({ onComplete, onOpenSettings }: Props) {
               autoComplete="new-password"
               spellCheck={false}
               value={password}
+              aria-describedby={
+                provider === "icloud" ? "setup-password-hint" : undefined
+              }
               onChange={(event) => setPassword(event.target.value)}
               placeholder={
                 provider === "icloud"
@@ -394,7 +411,9 @@ export function SetupWizard({ onComplete, onOpenSettings }: Props) {
           </span>
         </div>
         {provider === "icloud" ? (
-          <p className="setup-field-hint">{strings.setup.appPasswordHint}</p>
+          <p className="setup-field-hint" id="setup-password-hint">
+            {strings.setup.appPasswordHint}
+          </p>
         ) : null}
         {provider === "icloud" ? (
           <div
@@ -434,8 +453,8 @@ export function SetupWizard({ onComplete, onOpenSettings }: Props) {
         {status ? (
           <div
             className={`connection-status ${status.kind}`}
-            role="status"
-            aria-live="polite"
+            role={status.kind === "error" ? "alert" : "status"}
+            aria-live={status.kind === "error" ? "assertive" : "polite"}
           >
             {status.kind === "error" ? (
               <TriangleAlert aria-hidden="true" />

@@ -26,6 +26,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../api";
+import { PostalError } from "../errors";
 import { strings } from "../i18n";
 import { formatMessageDate } from "../format";
 import { applySettings } from "../settings";
@@ -355,7 +356,21 @@ export function MailShell({ onOpenSettings }: Props) {
           }
         }
       } catch (cause) {
-        if (request === detailRequest.current) setError(String(cause));
+        if (request !== detailRequest.current) return;
+        const detail = String(cause);
+        setError(detail);
+        if (isOversizeError(cause)) {
+          selectMessage({
+            ...summary,
+            to: [],
+            cc: [],
+            replyTo: null,
+            textBody: "",
+            htmlBody: null,
+            remoteImagesBlocked: false,
+            attachments: [],
+          });
+        }
       } finally {
         if (request === detailRequest.current) setLoadingMessageId(undefined);
       }
@@ -720,8 +735,9 @@ export function MailShell({ onOpenSettings }: Props) {
               : strings.mail.showMailboxes
           }
           aria-expanded={sidebarOpen}
+          aria-controls="folder-pane"
         >
-          <PanelLeft />
+          <PanelLeft aria-hidden="true" />
         </button>
         <div className="app-brand" aria-label={strings.appName}>
           <AppMark size={28} />
@@ -732,17 +748,19 @@ export function MailShell({ onOpenSettings }: Props) {
           type="button"
           onClick={() => void refresh()}
           disabled={busy}
+          aria-label={strings.mail.getMail}
         >
-          <RefreshCw className={busy ? "spinning" : ""} />
-          <span>{strings.mail.getMail}</span>
+          <RefreshCw aria-hidden="true" className={busy ? "spinning" : ""} />
+          <span aria-hidden="false">{strings.mail.getMail}</span>
         </button>
         <button
           className="primary-button compose-button"
           type="button"
           onClick={() => openComposer()}
+          aria-label={strings.mail.compose}
         >
-          <MailPlus />
-          <span>{strings.mail.compose}</span>
+          <MailPlus aria-hidden="true" />
+          <span aria-hidden="false">{strings.mail.compose}</span>
         </button>
         <form
           className="search-box"
@@ -811,6 +829,7 @@ export function MailShell({ onOpenSettings }: Props) {
         onClick={() => setSidebarOpen(false)}
       />
       <aside
+        id="folder-pane"
         className="folder-pane"
         aria-label={strings.mail.accountsAndMailboxes}
       >
@@ -930,6 +949,7 @@ export function MailShell({ onOpenSettings }: Props) {
       <PaneSplitter
         className="folder-splitter"
         label={strings.mail.resizeFolders}
+        controls="folder-pane message-pane"
         orientation="vertical"
         value={settings.folderPaneWidth}
         min={210}
@@ -939,7 +959,7 @@ export function MailShell({ onOpenSettings }: Props) {
         }
       />
 
-      <section className="message-pane" aria-label={heading}>
+      <section className="message-pane" id="message-pane" aria-label={heading}>
         <div className="pane-heading">
           <span>
             <h1>{heading}</h1>
@@ -993,6 +1013,7 @@ export function MailShell({ onOpenSettings }: Props) {
         <PaneSplitter
           className="reader-splitter"
           label={strings.mail.resizeMessages}
+          controls="message-pane reader-pane"
           orientation="vertical"
           value={settings.messagePaneWidth}
           min={300}
@@ -1005,6 +1026,7 @@ export function MailShell({ onOpenSettings }: Props) {
         <PaneSplitter
           className="reader-bottom-splitter"
           label={strings.mail.resizeReader}
+          controls="message-pane reader-pane"
           orientation="horizontal-reverse"
           value={settings.readerPaneHeight}
           min={240}
@@ -1038,6 +1060,7 @@ export function MailShell({ onOpenSettings }: Props) {
 function PaneSplitter({
   className,
   label,
+  controls,
   orientation,
   value,
   min,
@@ -1046,6 +1069,7 @@ function PaneSplitter({
 }: {
   className: string;
   label: string;
+  controls?: string;
   orientation: "vertical" | "horizontal-reverse";
   value: number;
   min: number;
@@ -1057,17 +1081,41 @@ function PaneSplitter({
       className={`pane-splitter ${className}`}
       role="separator"
       aria-label={label}
+      aria-controls={controls}
       aria-orientation={orientation === "vertical" ? "vertical" : "horizontal"}
       aria-valuenow={Math.round(value)}
       aria-valuemin={min}
       aria-valuemax={max}
+      aria-valuetext={`${Math.round(value)} pixels`}
       tabIndex={0}
       onKeyDown={(event) => {
         const decrement =
           orientation === "vertical" ? "ArrowLeft" : "ArrowDown";
         const increment = orientation === "vertical" ? "ArrowRight" : "ArrowUp";
-        if (event.key !== decrement && event.key !== increment) return;
-        event.preventDefault();
+        if (
+          event.key === "Home" ||
+          event.key === "End" ||
+          event.key === "PageUp" ||
+          event.key === "PageDown" ||
+          event.key === decrement ||
+          event.key === increment
+        ) {
+          event.preventDefault();
+        } else {
+          return;
+        }
+        if (event.key === "Home") {
+          onChange(min, true);
+          return;
+        }
+        if (event.key === "End") {
+          onChange(max, true);
+          return;
+        }
+        if (event.key === "PageUp" || event.key === "PageDown") {
+          onChange(value + (event.key === "PageUp" ? 64 : -64), true);
+          return;
+        }
         onChange(value + (event.key === increment ? 16 : -16), true);
       }}
       onPointerDown={(event) => {
@@ -1133,17 +1181,36 @@ function FolderButton({
   );
 }
 
+function isOversizeError(cause: unknown): boolean {
+  if (cause instanceof PostalError) return cause.code === "limitExceeded";
+  return /too large|exceeds.*safety limit/i.test(String(cause));
+}
+
 function mergeSearchResults(
   localItems: MessageSummary[],
   serverItems: MessageSummary[],
 ): MessageSummary[] {
-  const map = new Map<number, MessageSummary>();
-  for (const item of localItems) map.set(item.id, item);
-  for (const item of serverItems) map.set(item.id, item);
-  return Array.from(map.values()).sort(
-    (a, b) =>
-      new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime(),
-  );
+  // Cached FTS uses AND of up to 12 terms ranked by bm25; server uses IMAP
+  // TEXT phrase matching. Keep cached rank order, then append server-only
+  // body matches newest-first so server hits are not filtered through FTS.
+  const seen = new Set<number>();
+  const merged: MessageSummary[] = [];
+  for (const item of localItems) {
+    if (seen.has(item.id)) continue;
+    seen.add(item.id);
+    merged.push(item);
+  }
+  const serverOnly = serverItems
+    .filter((item) => !seen.has(item.id))
+    .sort(
+      (a, b) =>
+        new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime(),
+    );
+  for (const item of serverOnly) {
+    seen.add(item.id);
+    merged.push(item);
+  }
+  return merged;
 }
 
 function MessageList({
@@ -1350,6 +1417,11 @@ function DraftList({
           type="button"
           className="local-mail-row"
           onClick={() => void onOpen(draft.id)}
+          aria-label={
+            draft.syncDetail
+              ? `${draft.subject || strings.common.noSubject} — ${draft.syncDetail}`
+              : undefined
+          }
         >
           <FileText aria-hidden="true" />
           <span>
