@@ -408,10 +408,15 @@ pub async fn server_search(
     let mut session = connect_imap(&account.imap, password).await?;
     let mut results = Vec::new();
     for (mailbox_id, name) in mailboxes {
-        session
+        let selected = session
             .examine(&name)
             .await
             .map_err(|error| redact_error(&error, "Server search"))?;
+        if let Some(expected_uid_validity) = db.mailbox_uid_validity(&account.summary.id, &name)? {
+            if selected.uid_validity != Some(expected_uid_validity) {
+                return Err("This mailbox changed; get mail before searching.".into());
+            }
+        }
         let mut uids = session
             .uid_search(format!("TEXT \"{search_text}\""))
             .await
@@ -471,15 +476,19 @@ pub async fn download_message(
     mailbox: &str,
     uid: u32,
     expected_size: u64,
+    expected_uid_validity: Option<u32>,
 ) -> Result<CachedMessage, String> {
     if expected_size > MAX_MESSAGE_BYTES as u64 {
         return Err("This message is too large to download safely.".into());
     }
     let mut session = connect_imap(&account.imap, password).await?;
-    tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.examine(mailbox))
+    let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.examine(mailbox))
         .await
         .map_err(|_| "Message download timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Message download"))?;
+    if expected_uid_validity.is_some() && selected.uid_validity != expected_uid_validity {
+        return Err("This mailbox changed; refresh mail and try again.".into());
+    }
     let mut rows = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
         session
             .uid_fetch(uid.to_string(), "(UID FLAGS RFC822.SIZE BODY.PEEK[])")
@@ -516,14 +525,18 @@ pub async fn set_remote_flags(
     password: &str,
     mailbox: &str,
     uid: u32,
+    expected_uid_validity: Option<u32>,
     is_read: Option<bool>,
     is_starred: Option<bool>,
 ) -> Result<(), String> {
     let mut session = connect_imap(&account.imap, password).await?;
-    tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(mailbox))
+    let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(mailbox))
         .await
         .map_err(|_| "Message update timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Message update"))?;
+    if expected_uid_validity.is_some() && selected.uid_validity != expected_uid_validity {
+        return Err("This mailbox changed; refresh mail and try again.".into());
+    }
     if let Some(value) = is_read {
         let operation = if value {
             "+FLAGS.SILENT (\\Seen)"
@@ -570,12 +583,16 @@ pub async fn move_remote(
     source: &str,
     destination: &str,
     uid: u32,
+    expected_uid_validity: Option<u32>,
 ) -> Result<(), String> {
     let mut session = connect_imap(&account.imap, password).await?;
-    tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(source))
+    let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(source))
         .await
         .map_err(|_| "Move timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Move"))?;
+    if expected_uid_validity.is_some() && selected.uid_validity != expected_uid_validity {
+        return Err("This mailbox changed; refresh mail and try again.".into());
+    }
     let capabilities = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.capabilities())
         .await
         .map_err(|_| "Move timed out.".to_string())?
@@ -1782,9 +1799,17 @@ mod tests {
         }
         let summary = inbox_message.expect("SMTP delivery reached Inbox");
         assert_eq!(inbox_counts, Some((1, 1)));
-        let downloaded = download_message(&account, password, "INBOX", summary.uid, summary.size)
-            .await
-            .unwrap();
+        let downloaded = download_message(
+            &account,
+            password,
+            "INBOX",
+            summary.uid,
+            summary.size,
+            db.mailbox_uid_validity(&account.summary.id, "INBOX")
+                .unwrap(),
+        )
+        .await
+        .unwrap();
         assert!(downloaded.text_body.contains("Protocol integration body"));
         let attachment = downloaded.attachments.first().unwrap();
         let (_, bytes) = extract_attachment(&downloaded.raw_message, &attachment.id).unwrap();
@@ -1795,6 +1820,8 @@ mod tests {
             password,
             "INBOX",
             summary.uid,
+            db.mailbox_uid_validity(&account.summary.id, "INBOX")
+                .unwrap(),
             Some(true),
             Some(true),
         )
@@ -1888,9 +1915,17 @@ mod tests {
         .await
         .expect("IDLE interruption timed out")
         .unwrap();
-        move_remote(&account, password, "INBOX", "Archive", summary.uid)
-            .await
-            .unwrap();
+        move_remote(
+            &account,
+            password,
+            "INBOX",
+            "Archive",
+            summary.uid,
+            db.mailbox_uid_validity(&account.summary.id, "INBOX")
+                .unwrap(),
+        )
+        .await
+        .unwrap();
         let mut reconnected = connect_imap(&account.imap, password).await.unwrap();
         let inbox_status = reconnected.status("INBOX", "(MESSAGES)").await.unwrap();
         let archive_status = reconnected.status("Archive", "(MESSAGES)").await.unwrap();
