@@ -230,4 +230,34 @@ describe("account setup", () => {
     ).toBeVisible();
     expect(screen.queryByText(/regular Apple Account password/i)).toBeNull();
   });
+
+  it("announces sign-in failures as alerts and links iCloud hints", async () => {
+    addAccount.mockRejectedValueOnce(
+      new PostalError({
+        code: "authenticationFailed",
+        message: "Sign-in failed. Check the email address and password.",
+        retryable: true,
+      }),
+    );
+    render(<SetupWizard onComplete={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /iCloud Mail/i }));
+    expect(screen.getByText(/me\.com.*mac\.com/i)).toBeDefined();
+    const emailInput = screen.getByLabelText(/Email address/i);
+    expect(emailInput.getAttribute("aria-describedby")).toBe(
+      "setup-email-hint",
+    );
+    const passwordInput = screen.getByLabelText(/App-specific password/i);
+    expect(passwordInput.getAttribute("aria-describedby")).toBe(
+      "setup-password-hint",
+    );
+    fireEvent.change(screen.getByLabelText(/Your name/i), {
+      target: { value: "Sam" },
+    });
+    fireEvent.change(emailInput, { target: { value: "sam@icloud.com" } });
+    fireEvent.change(passwordInput, {
+      target: { value: "abcd efgh ijkl mnop" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Connect securely/i }));
+    expect(await screen.findByRole("alert")).toBeVisible();
+  });
 });

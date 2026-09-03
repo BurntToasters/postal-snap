@@ -206,17 +206,23 @@
   background: var(--surface-hover);
 }
 
+.address-fields .to-field {
+  grid-template-columns: 70px minmax(0, 1fr) auto;
+}
+
 .address-fields .to-field input {
-  padding-right: 64px;
+  min-width: 0;
+  padding-right: 8px;
 }
 
 .cc-toggle {
-  position: absolute;
-  z-index: 2;
-  top: 50%;
-  right: 0;
-  transform: translateY(-50%);
+  position: static;
+  transform: none;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 8px 12px;
   font-size: 0.82rem;
+  white-space: nowrap;
 }
 
 .format-toolbar {

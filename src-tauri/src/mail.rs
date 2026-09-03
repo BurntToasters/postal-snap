@@ -124,12 +124,13 @@ pub async fn sync_account(
     let mut session = connect_imap(&account.imap, password).await?;
     let cutoff = (policy.mode == "recent")
         .then(|| Utc::now() - chrono::Duration::days(i64::from(policy.days)));
-    let names = session
-        .list(None, Some("*"))
+    let list_stream = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.list(None, Some("*")))
         .await
-        .map_err(|error| redact_error(&error, "Mailbox discovery"))?
-        .try_collect::<Vec<_>>()
+        .map_err(|_| "Mailbox discovery timed out.".to_string())?
+        .map_err(|error| redact_error(&error, "Mailbox discovery"))?;
+    let names = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, list_stream.try_collect::<Vec<_>>())
         .await
+        .map_err(|_| "Mailbox discovery timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Mailbox discovery"))?;
     let mut server_mailboxes = std::collections::HashSet::new();
 
@@ -155,14 +156,24 @@ pub async fn sync_account(
         }
         server_mailboxes.insert(mailbox_name.clone());
         let role = mailbox_role(&mailbox_name, &attributes);
-        let status = session
-            .status(&mailbox_name, "(MESSAGES UNSEEN UIDNEXT UIDVALIDITY)")
+        let previous_state = db.mailbox_sync_state(&account.summary.id, &mailbox_name)?;
+        let status = tokio::time::timeout(
+            IMAP_COMMAND_TIMEOUT,
+            session.status(&mailbox_name, "(MESSAGES UNSEEN UIDNEXT UIDVALIDITY)"),
+        )
+        .await
+        .map_err(|_| "Mailbox status timed out.".to_string())?
+        .map_err(|error| redact_error(&error, "Mailbox status"))?;
+        let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.examine(&mailbox_name))
             .await
-            .map_err(|error| redact_error(&error, "Mailbox status"))?;
-        let selected = session
-            .examine(&mailbox_name)
-            .await
+            .map_err(|_| "Mailbox sync timed out.".to_string())?
             .map_err(|error| redact_error(&error, "Mailbox sync"))?;
+        let unchanged = previous_state.is_some_and(|(validity, next, total, unread)| {
+            validity == selected.uid_validity
+                && next == selected.uid_next
+                && total == status.exists
+                && unread == status.unseen
+        });
         let mailbox_id = db.upsert_mailbox(
             &account.summary.id,
             &mailbox_name,
@@ -231,38 +242,45 @@ pub async fn sync_account(
             };
             db.set_backfill_cursor(mailbox_id, next_cursor)?;
         }
-        for chunk in db.cached_uids(mailbox_id)?.chunks(250) {
-            if chunk.is_empty() {
-                continue;
-            }
-            let requested = chunk.to_vec();
-            let set = chunk
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(",");
-            let flag_rows = session
-                .uid_fetch(set, "(UID FLAGS)")
+        if !unchanged {
+            for chunk in db.cached_uids(mailbox_id)?.chunks(250) {
+                if chunk.is_empty() {
+                    continue;
+                }
+                let requested = chunk.to_vec();
+                let set = chunk
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let flag_stream = tokio::time::timeout(
+                    IMAP_COMMAND_TIMEOUT,
+                    session.uid_fetch(set, "(UID FLAGS)"),
+                )
                 .await
-                .map_err(|error| redact_error(&error, "Flag sync"))?
-                .try_collect::<Vec<_>>()
-                .await
+                .map_err(|_| "Flag sync timed out.".to_string())?
                 .map_err(|error| redact_error(&error, "Flag sync"))?;
-            let seen = flag_rows
-                .into_iter()
-                .filter_map(|item| {
-                    item.uid.map(|uid| {
-                        let flags = item
-                            .flags()
-                            .map(|flag| format!("{flag:?}"))
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                            .to_ascii_lowercase();
-                        (uid, flags.contains("seen"), flags.contains("flagged"))
+                let flag_rows =
+                    tokio::time::timeout(IMAP_COMMAND_TIMEOUT, flag_stream.try_collect::<Vec<_>>())
+                        .await
+                        .map_err(|_| "Flag sync timed out.".to_string())?
+                        .map_err(|error| redact_error(&error, "Flag sync"))?;
+                let seen = flag_rows
+                    .into_iter()
+                    .filter_map(|item| {
+                        item.uid.map(|uid| {
+                            let flags = item
+                                .flags()
+                                .map(|flag| format!("{flag:?}"))
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                                .to_ascii_lowercase();
+                            (uid, flags.contains("seen"), flags.contains("flagged"))
+                        })
                     })
-                })
-                .collect::<Vec<_>>();
-            db.reconcile_flags(mailbox_id, &seen, &requested)?;
+                    .collect::<Vec<_>>();
+                db.reconcile_flags(mailbox_id, &seen, &requested)?;
+            }
         }
         let should_download_bodies = role == MailboxRole::Inbox || policy.mode == "full";
         if should_download_bodies {
@@ -286,12 +304,16 @@ async fn newest_uid(session: &mut ImapSession, exists: u32) -> Result<Option<u32
     if exists == 0 {
         return Ok(None);
     }
-    let rows = session
-        .fetch(exists.to_string(), "(UID)")
+    let fetch_stream = tokio::time::timeout(
+        IMAP_COMMAND_TIMEOUT,
+        session.fetch(exists.to_string(), "(UID)"),
+    )
+    .await
+    .map_err(|_| "Mailbox cursor timed out.".to_string())?
+    .map_err(|error| redact_error(&error, "Mailbox cursor"))?;
+    let rows = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, fetch_stream.try_collect::<Vec<_>>())
         .await
-        .map_err(|error| redact_error(&error, "Mailbox cursor"))?
-        .try_collect::<Vec<_>>()
-        .await
+        .map_err(|_| "Mailbox cursor timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Mailbox cursor"))?;
     Ok(rows.into_iter().find_map(|item| item.uid))
 }
@@ -304,16 +326,22 @@ async fn cache_uid_range(
     range: &str,
     cutoff: Option<&DateTime<Utc>>,
 ) -> Result<FetchOutcome, String> {
-    let mut fetched = session
-        .uid_fetch(range, "(UID FLAGS RFC822.SIZE INTERNALDATE ENVELOPE)")
-        .await
-        .map_err(|error| redact_error(&error, "Message list download"))?;
-    let mut older_than_cutoff = false;
-    while let Some(item) = fetched
-        .try_next()
-        .await
-        .map_err(|error| redact_error(&error, "Message list download"))?
-    {
+    let mut fetched = tokio::time::timeout(
+        IMAP_COMMAND_TIMEOUT,
+        session.uid_fetch(range, "(UID FLAGS RFC822.SIZE INTERNALDATE ENVELOPE)"),
+    )
+    .await
+    .map_err(|_| "Message list download timed out.".to_string())?
+    .map_err(|error| redact_error(&error, "Message list download"))?;
+    let mut age_marks: Vec<(u32, bool)> = Vec::new();
+    loop {
+        let next = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, fetched.try_next())
+            .await
+            .map_err(|_| "Message list download timed out.".to_string())?
+            .map_err(|error| redact_error(&error, "Message list download"))?;
+        let Some(item) = next else {
+            break;
+        };
         let flags = item
             .flags()
             .map(|flag| format!("{flag:?}"))
@@ -324,14 +352,35 @@ async fn cache_uid_range(
         else {
             continue;
         };
-        older_than_cutoff |= cutoff.is_some_and(|cutoff| {
-            DateTime::parse_from_rfc3339(&parsed.received_at)
-                .map(|received| received.with_timezone(&Utc) < *cutoff)
-                .unwrap_or(false)
+        let is_old = cutoff.is_some_and(|cutoff| {
+            item.internal_date()
+                .map(|date| date.with_timezone(&Utc) < *cutoff)
+                .unwrap_or_else(|| {
+                    DateTime::parse_from_rfc3339(&parsed.received_at)
+                        .map(|received| received.with_timezone(&Utc) < *cutoff)
+                        .unwrap_or(false)
+                })
         });
+        if let Some(uid) = item.uid {
+            age_marks.push((uid, is_old));
+        }
         db.upsert_envelope(account_id, mailbox_id, &parsed)?;
     }
-    Ok(FetchOutcome { older_than_cutoff })
+    age_marks.sort_unstable_by_key(|(uid, _)| *uid);
+    let mut consecutive_old = 0u32;
+    for (_, is_old) in age_marks {
+        if is_old {
+            consecutive_old += 1;
+            if consecutive_old >= 3 {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    Ok(FetchOutcome {
+        older_than_cutoff: consecutive_old >= 3,
+    })
 }
 
 pub async fn idle_inbox(
@@ -422,7 +471,7 @@ pub async fn server_search(
             .map_err(|error| redact_error(&error, "Server search"))?;
         if let Some(expected_uid_validity) = db.mailbox_uid_validity(&account.summary.id, &name)? {
             if selected.uid_validity != Some(expected_uid_validity) {
-                return Err("This mailbox changed; get mail before searching.".into());
+                continue;
             }
         }
         let search_cmd = if search_text.is_ascii() {
@@ -594,7 +643,7 @@ async fn download_uncached_bodies(
 
 pub async fn discover_icloud_aliases(email: &str, password: &str) -> Result<Vec<String>, String> {
     let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::limited(6))
+        .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(15))
         .build()
         .map_err(|_| "Could not connect to iCloud alias service.".to_string())?;
@@ -628,6 +677,9 @@ pub async fn discover_icloud_aliases(email: &str, password: &str) -> Result<Vec<
         .map_err(|error| redact_error(&error, "iCloud alias discovery"))?;
 
     let status = response.status();
+    if status.is_redirection() {
+        return Ok(Vec::new());
+    }
     if !status.is_success() && status.as_u16() != 207 {
         return Ok(Vec::new());
     }
@@ -664,6 +716,16 @@ pub async fn discover_icloud_aliases(email: &str, password: &str) -> Result<Vec<
         )
     };
 
+    let Ok(parsed_principal) = reqwest::Url::parse(&principal_url) else {
+        return Ok(Vec::new());
+    };
+    let Some(principal_host) = parsed_principal.host_str() else {
+        return Ok(Vec::new());
+    };
+    if !is_allowed_icloud_principal_host(principal_host) {
+        return Ok(Vec::new());
+    }
+
     let address_set_prop = r#"<?xml version="1.0" encoding="utf-8" ?>
 <D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
   <D:prop>
@@ -685,6 +747,9 @@ pub async fn discover_icloud_aliases(email: &str, password: &str) -> Result<Vec<
         .map_err(|error| redact_error(&error, "iCloud alias discovery"))?;
 
     let addr_status = address_res.status();
+    if addr_status.is_redirection() {
+        return Ok(Vec::new());
+    }
     if !addr_status.is_success() && addr_status.as_u16() != 207 {
         return Ok(Vec::new());
     }
@@ -714,6 +779,14 @@ pub async fn discover_icloud_aliases(email: &str, password: &str) -> Result<Vec<
     }
 
     Ok(aliases)
+}
+
+pub fn is_allowed_icloud_principal_host(host: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    host == "caldav.icloud.com"
+        || host.ends_with(".icloud.com")
+        || host == "caldav.apple.com"
+        || host.ends_with(".apple.com")
 }
 
 pub fn extract_tag_value(xml: &str, tag_name: &str) -> Option<String> {
@@ -1221,7 +1294,8 @@ pub fn extract_attachment(raw: &[u8], requested_id: &str) -> Result<(String, Vec
         .ok_or_else(|| "The attachment could not be decoded.".to_string())?;
     for (index, part) in message.attachments().take(MAX_ATTACHMENTS).enumerate() {
         let filename = safe_filename(part.attachment_name().unwrap_or("attachment"));
-        if attachment_id(index, &filename) == requested_id {
+        let stable = attachment_id(&filename, part.content_id(), part.len(), index);
+        if stable == requested_id || legacy_attachment_id(index, &filename) == requested_id {
             return Ok((filename, part.contents().to_vec()));
         }
     }
@@ -1668,7 +1742,7 @@ fn parse_message(
                         .to_string()
                 });
             Attachment {
-                id: attachment_id(index, &filename),
+                id: attachment_id(&filename, part.content_id(), part.len(), index),
                 filename,
                 content_type,
                 size: part.len() as u64,
@@ -1730,7 +1804,19 @@ fn parsed_addresses(value: Option<&mail_parser::Address<'_>>) -> Vec<String> {
         .collect()
 }
 
-fn attachment_id(index: usize, filename: &str) -> String {
+fn attachment_id(filename: &str, content_id: Option<&str>, size: usize, index: usize) -> String {
+    let digest = Sha256::digest(format!(
+        "{}|{}|{size}|{index}",
+        filename.to_ascii_lowercase(),
+        content_id.unwrap_or_default().to_ascii_lowercase()
+    ));
+    digest[..12]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn legacy_attachment_id(index: usize, filename: &str) -> String {
     let digest = Sha256::digest(format!("{index}:{filename}"));
     digest[..12]
         .iter()
@@ -1830,8 +1916,14 @@ mod tests {
 
     #[test]
     fn builds_stable_opaque_attachment_ids() {
-        assert_eq!(attachment_id(0, "photo.jpg"), attachment_id(0, "photo.jpg"));
-        assert_ne!(attachment_id(0, "photo.jpg"), attachment_id(1, "photo.jpg"));
+        let first = attachment_id("photo.jpg", None, 1024, 0);
+        assert_eq!(first, attachment_id("photo.jpg", None, 1024, 0));
+        assert_ne!(first, attachment_id("photo.jpg", None, 1024, 1));
+        assert_ne!(
+            first,
+            attachment_id("photo.jpg", Some("cid@example.com"), 1024, 0)
+        );
+        assert_ne!(first, attachment_id("photo.jpg", None, 2048, 0));
     }
 
     #[test]
@@ -2239,5 +2331,17 @@ mod tests {
         // Plain text passes through untouched
         let plain = b"Standard English Subject";
         assert_eq!(decode_imap_text(plain), "Standard English Subject");
+    }
+
+    #[test]
+    fn icloud_principal_host_allowlist_blocks_redirect_targets() {
+        assert!(is_allowed_icloud_principal_host("caldav.icloud.com"));
+        assert!(is_allowed_icloud_principal_host("p123-caldav.icloud.com"));
+        assert!(is_allowed_icloud_principal_host("caldav.apple.com"));
+        assert!(!is_allowed_icloud_principal_host("evil.example.com"));
+        assert!(!is_allowed_icloud_principal_host(
+            "icloud.com.evil.example.com"
+        ));
+        assert!(!is_allowed_icloud_principal_host(""));
     }
 }

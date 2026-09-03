@@ -720,8 +720,9 @@ export function MailShell({ onOpenSettings }: Props) {
               : strings.mail.showMailboxes
           }
           aria-expanded={sidebarOpen}
+          aria-controls="folder-pane"
         >
-          <PanelLeft />
+          <PanelLeft aria-hidden="true" />
         </button>
         <div className="app-brand" aria-label={strings.appName}>
           <AppMark size={28} />
@@ -732,17 +733,19 @@ export function MailShell({ onOpenSettings }: Props) {
           type="button"
           onClick={() => void refresh()}
           disabled={busy}
+          aria-label={strings.mail.getMail}
         >
-          <RefreshCw className={busy ? "spinning" : ""} />
-          <span>{strings.mail.getMail}</span>
+          <RefreshCw aria-hidden="true" className={busy ? "spinning" : ""} />
+          <span aria-hidden="false">{strings.mail.getMail}</span>
         </button>
         <button
           className="primary-button compose-button"
           type="button"
           onClick={() => openComposer()}
+          aria-label={strings.mail.compose}
         >
-          <MailPlus />
-          <span>{strings.mail.compose}</span>
+          <MailPlus aria-hidden="true" />
+          <span aria-hidden="false">{strings.mail.compose}</span>
         </button>
         <form
           className="search-box"
@@ -811,6 +814,7 @@ export function MailShell({ onOpenSettings }: Props) {
         onClick={() => setSidebarOpen(false)}
       />
       <aside
+        id="folder-pane"
         className="folder-pane"
         aria-label={strings.mail.accountsAndMailboxes}
       >
@@ -1061,13 +1065,36 @@ function PaneSplitter({
       aria-valuenow={Math.round(value)}
       aria-valuemin={min}
       aria-valuemax={max}
+      aria-valuetext={`${Math.round(value)} pixels`}
       tabIndex={0}
       onKeyDown={(event) => {
         const decrement =
           orientation === "vertical" ? "ArrowLeft" : "ArrowDown";
         const increment = orientation === "vertical" ? "ArrowRight" : "ArrowUp";
-        if (event.key !== decrement && event.key !== increment) return;
-        event.preventDefault();
+        if (
+          event.key === "Home" ||
+          event.key === "End" ||
+          event.key === "PageUp" ||
+          event.key === "PageDown" ||
+          event.key === decrement ||
+          event.key === increment
+        ) {
+          event.preventDefault();
+        } else {
+          return;
+        }
+        if (event.key === "Home") {
+          onChange(min, true);
+          return;
+        }
+        if (event.key === "End") {
+          onChange(max, true);
+          return;
+        }
+        if (event.key === "PageUp" || event.key === "PageDown") {
+          onChange(value + (event.key === "PageUp" ? 64 : -64), true);
+          return;
+        }
         onChange(value + (event.key === increment ? 16 : -16), true);
       }}
       onPointerDown={(event) => {
@@ -1137,13 +1164,27 @@ function mergeSearchResults(
   localItems: MessageSummary[],
   serverItems: MessageSummary[],
 ): MessageSummary[] {
-  const map = new Map<number, MessageSummary>();
-  for (const item of localItems) map.set(item.id, item);
-  for (const item of serverItems) map.set(item.id, item);
-  return Array.from(map.values()).sort(
-    (a, b) =>
-      new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime(),
-  );
+  // Cached FTS uses AND of up to 12 terms ranked by bm25; server uses IMAP
+  // TEXT phrase matching. Keep cached rank order, then append server-only
+  // body matches newest-first so server hits are not filtered through FTS.
+  const seen = new Set<number>();
+  const merged: MessageSummary[] = [];
+  for (const item of localItems) {
+    if (seen.has(item.id)) continue;
+    seen.add(item.id);
+    merged.push(item);
+  }
+  const serverOnly = serverItems
+    .filter((item) => !seen.has(item.id))
+    .sort(
+      (a, b) =>
+        new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime(),
+    );
+  for (const item of serverOnly) {
+    seen.add(item.id);
+    merged.push(item);
+  }
+  return merged;
 }
 
 function MessageList({
@@ -1350,6 +1391,11 @@ function DraftList({
           type="button"
           className="local-mail-row"
           onClick={() => void onOpen(draft.id)}
+          aria-label={
+            draft.syncDetail
+              ? `${draft.subject || strings.common.noSubject} — ${draft.syncDetail}`
+              : undefined
+          }
         >
           <FileText aria-hidden="true" />
           <span>
