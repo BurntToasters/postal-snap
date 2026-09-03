@@ -60,6 +60,7 @@ pub struct RemoteDraftData {
     pub uid: u32,
     pub message_id: Option<String>,
     pub updated_at: String,
+    pub from: Option<String>,
     pub to: Vec<String>,
     pub cc: Vec<String>,
     pub bcc: Vec<String>,
@@ -1244,6 +1245,12 @@ fn parse_remote_draft(uid: u32, raw: &[u8], updated_at: String) -> Result<Remote
         uid,
         message_id: message.message_id().and_then(normalize_rfc_message_id),
         updated_at,
+        from: message
+            .from()
+            .and_then(|address| address.first())
+            .and_then(|entry| entry.address.as_deref())
+            .filter(|address| address.contains('@'))
+            .map(ToOwned::to_owned),
         to: parsed_addresses(message.to()),
         cc: parsed_addresses(message.cc()),
         bcc: parsed_addresses(message.bcc()),
@@ -1912,6 +1919,7 @@ mod tests {
             .unwrap();
         let parsed = parse_remote_draft(1, &bytes, "2026-08-27T00:00:00Z".into()).unwrap();
         assert_eq!(parsed.message_id.as_deref(), Some(message_id));
+        assert_eq!(parsed.from.as_deref(), Some("sam@example.com"));
     }
 
     #[test]

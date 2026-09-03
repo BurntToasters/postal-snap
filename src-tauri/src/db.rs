@@ -694,13 +694,13 @@ impl Database {
         if has_more {
             items.truncate(page_size as usize);
         }
-        let next_cursor = has_more.then(|| {
-            let last = items.last().expect("non-empty page when more rows exist");
-            MessageCursor {
+        let next_cursor = has_more
+            .then(|| items.last())
+            .flatten()
+            .map(|last| MessageCursor {
                 received_at: last.received_at.clone(),
                 uid: last.uid,
-            }
-        });
+            });
         Ok(MessagePage {
             items,
             next_cursor,
@@ -1371,6 +1371,24 @@ impl Database {
             &stored.attachments,
         )?;
         transaction.commit().map_err(db_error)
+    }
+
+    pub fn update_remote_draft_tracking(
+        &self,
+        id: &str,
+        account_id: &str,
+        mailbox: &str,
+        uid: u32,
+        uid_validity: Option<u32>,
+        message_id: Option<&str>,
+    ) -> Result<(), String> {
+        self.conn()?
+            .execute(
+                "UPDATE drafts SET remote_mailbox=?3,remote_uid=?4,remote_uid_validity=?5,remote_message_id=?6 WHERE id=?1 AND account_id=?2",
+                params![id, account_id, mailbox, uid, uid_validity, message_id],
+            )
+            .map_err(db_error)?;
+        Ok(())
     }
 
     pub fn reconcile_remote_drafts(
@@ -2491,6 +2509,21 @@ mod tests {
     }
 
     #[test]
+    fn newer_local_skip_still_tracks_server_uid() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let draft = draft(&account.summary.id);
+        let id = db.save_draft(&draft).unwrap();
+        db.update_remote_draft_tracking(&id, &account.summary.id, "Drafts", 77, Some(9), None)
+            .unwrap();
+        let known = db
+            .remote_draft_uids(&account.summary.id, "Drafts", Some(9))
+            .unwrap();
+        assert!(known.contains(&77));
+    }
+
+    #[test]
     fn delete_pending_drafts_stay_visible_for_retry() {
         let db = Database::memory();
         let account = account();
@@ -2508,6 +2541,23 @@ mod tests {
         let listed = db.list_drafts(&account.summary.id).unwrap();
         assert!(listed.iter().any(|item| item.id == id));
         assert!(db.draft(&id, &account.summary.id).is_ok());
+    }
+
+    #[test]
+    fn cursor_pagination_clamps_zero_limit_without_panicking() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let mailbox = mailbox(&db, &account.summary.id, "INBOX", &MailboxRole::Inbox);
+        db.upsert_message(
+            &account.summary.id,
+            mailbox,
+            &message(1, "2026-08-18T12:00:00Z"),
+        )
+        .unwrap();
+        let page = db.list_messages(mailbox, None, 0).unwrap();
+        assert_eq!(page.items.len(), 1);
+        assert!(page.next_cursor.is_none());
     }
 
     #[test]

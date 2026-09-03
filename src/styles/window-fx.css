@@ -11,7 +11,7 @@ html[data-window-fx="vibrant"] body {
 }
 
 html[data-window-fx="vibrant"] .mail-shell {
-  background: color-mix(in srgb, var(--bg) 68%, transparent) !important;
+  background: color-mix(in srgb, var(--canvas) 68%, transparent) !important;
 }
 
 /* 2. Sidebars, Toolbars, and Lists: Translucent Glass */
@@ -41,7 +41,7 @@ html[data-window-fx="vibrant"] .message-pane {
 }
 
 html[data-window-fx="vibrant"] .reader-pane {
-  background: color-mix(in srgb, var(--bg) 50%, transparent) !important;
+  background: color-mix(in srgb, var(--canvas) 50%, transparent) !important;
 }
 
 html[data-window-fx="vibrant"] .reader-actions {
@@ -75,7 +75,7 @@ html[data-window-fx="vibrant"] .modal {
    proper sender HTML display, and contrast. */
 html[data-window-fx="vibrant"] .message-body {
   background: var(--surface) !important;
-  border-radius: var(--radius);
+  border-radius: 12px;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
 }
 
@@ -90,5 +90,5 @@ html[data-window-fx="vibrant"] .message-body .plain-text-body {
 /* 5. Solid opaque shell when native FX is off */
 html[data-window-fx="opaque"] body,
 html:not([data-window-fx]) body {
-  background: var(--bg);
+  background: var(--canvas);
 }

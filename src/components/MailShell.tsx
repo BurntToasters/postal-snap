@@ -26,6 +26,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../api";
+import { PostalError } from "../errors";
 import { strings } from "../i18n";
 import { formatMessageDate } from "../format";
 import { applySettings } from "../settings";
@@ -355,7 +356,21 @@ export function MailShell({ onOpenSettings }: Props) {
           }
         }
       } catch (cause) {
-        if (request === detailRequest.current) setError(String(cause));
+        if (request !== detailRequest.current) return;
+        const detail = String(cause);
+        setError(detail);
+        if (isOversizeError(cause)) {
+          selectMessage({
+            ...summary,
+            to: [],
+            cc: [],
+            replyTo: null,
+            textBody: "",
+            htmlBody: null,
+            remoteImagesBlocked: false,
+            attachments: [],
+          });
+        }
       } finally {
         if (request === detailRequest.current) setLoadingMessageId(undefined);
       }
@@ -934,6 +949,7 @@ export function MailShell({ onOpenSettings }: Props) {
       <PaneSplitter
         className="folder-splitter"
         label={strings.mail.resizeFolders}
+        controls="folder-pane message-pane"
         orientation="vertical"
         value={settings.folderPaneWidth}
         min={210}
@@ -943,7 +959,7 @@ export function MailShell({ onOpenSettings }: Props) {
         }
       />
 
-      <section className="message-pane" aria-label={heading}>
+      <section className="message-pane" id="message-pane" aria-label={heading}>
         <div className="pane-heading">
           <span>
             <h1>{heading}</h1>
@@ -997,6 +1013,7 @@ export function MailShell({ onOpenSettings }: Props) {
         <PaneSplitter
           className="reader-splitter"
           label={strings.mail.resizeMessages}
+          controls="message-pane reader-pane"
           orientation="vertical"
           value={settings.messagePaneWidth}
           min={300}
@@ -1009,6 +1026,7 @@ export function MailShell({ onOpenSettings }: Props) {
         <PaneSplitter
           className="reader-bottom-splitter"
           label={strings.mail.resizeReader}
+          controls="message-pane reader-pane"
           orientation="horizontal-reverse"
           value={settings.readerPaneHeight}
           min={240}
@@ -1042,6 +1060,7 @@ export function MailShell({ onOpenSettings }: Props) {
 function PaneSplitter({
   className,
   label,
+  controls,
   orientation,
   value,
   min,
@@ -1050,6 +1069,7 @@ function PaneSplitter({
 }: {
   className: string;
   label: string;
+  controls?: string;
   orientation: "vertical" | "horizontal-reverse";
   value: number;
   min: number;
@@ -1061,6 +1081,7 @@ function PaneSplitter({
       className={`pane-splitter ${className}`}
       role="separator"
       aria-label={label}
+      aria-controls={controls}
       aria-orientation={orientation === "vertical" ? "vertical" : "horizontal"}
       aria-valuenow={Math.round(value)}
       aria-valuemin={min}
@@ -1158,6 +1179,11 @@ function FolderButton({
       {count > 0 ? <strong>{count > 999 ? "999+" : count}</strong> : null}
     </button>
   );
+}
+
+function isOversizeError(cause: unknown): boolean {
+  if (cause instanceof PostalError) return cause.code === "limitExceeded";
+  return /too large|exceeds.*safety limit/i.test(String(cause));
 }
 
 function mergeSearchResults(

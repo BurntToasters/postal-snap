@@ -24,7 +24,11 @@ async fn fetch_public_image_inner(raw_url: &str) -> Result<String, String> {
             .redirect(Policy::none())
             .no_proxy()
             .timeout(std::time::Duration::from_secs(15))
-            .user_agent("Postal Snap/0.1 remote-image-proxy")
+            .user_agent(concat!(
+                "Postal Snap/",
+                env!("CARGO_PKG_VERSION"),
+                " remote-image-proxy"
+            ))
             .resolve_to_addrs(&host, &addresses)
             .build()
             .map_err(|_| "Could not create a secure image request.".to_string())?;
