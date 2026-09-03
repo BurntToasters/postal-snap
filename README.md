@@ -32,5 +32,3 @@ First releases are GitHub-only.
 - Direct: signed Windows NSIS installers, notarized universal macOS DMG/ZIP, Linux AppImage/Flatpak.
 - Updates: signed manifests and payloads from GitHub Releases.
 - Later: Microsoft Store MSIX and Mac App Store PKG (scripts exist; not part of GitHub 0.1.x).
-
-This repository and application are proprietary. All rights reserved.
