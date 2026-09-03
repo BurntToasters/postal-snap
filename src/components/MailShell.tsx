@@ -109,35 +109,54 @@ export function MailShell({ onOpenSettings }: Props) {
   const detailRequest = useRef(0);
   const searchRequest = useRef(0);
   const searchInput = useRef<HTMLInputElement>(null);
+  const queryRef = useRef(query);
+  const allFoldersRef = useRef(allFolders);
+  useEffect(() => {
+    queryRef.current = query;
+    allFoldersRef.current = allFolders;
+  }, [allFolders, query]);
 
   const loadAccountData = useCallback(async () => {
     if (!activeAccountId) return;
     const accountId = activeAccountId;
     const request = ++mailboxRequest.current;
     try {
-      const [loadedMailboxes, loadedDrafts, loadedOutbox] = await Promise.all([
-        api.listMailboxes(accountId),
-        api.listDrafts(accountId),
-        api.listOutbox(accountId),
-      ]);
+      const [mailboxesResult, draftsResult, outboxResult] =
+        await Promise.allSettled([
+          api.listMailboxes(accountId),
+          api.listDrafts(accountId),
+          api.listOutbox(accountId),
+        ]);
       if (
         request !== mailboxRequest.current ||
         useAppStore.getState().activeAccountId !== accountId
       )
         return;
-      setMailboxes(loadedMailboxes);
-      setDrafts(loadedDrafts);
-      setOutbox(loadedOutbox);
+      if (mailboxesResult.status === "fulfilled")
+        setMailboxes(mailboxesResult.value);
+      if (draftsResult.status === "fulfilled") setDrafts(draftsResult.value);
+      if (outboxResult.status === "fulfilled") setOutbox(outboxResult.value);
+      const failed = [mailboxesResult, draftsResult, outboxResult].find(
+        (result) => result.status === "rejected",
+      );
+      if (failed?.status === "rejected") setError(String(failed.reason));
     } catch (cause) {
       if (request === mailboxRequest.current) setError(String(cause));
     }
   }, [activeAccountId, setDrafts, setError, setMailboxes, setOutbox]);
 
   const loadMessages = useCallback(async () => {
-    if (!activeAccountId || !activeMailboxId || activeLocalView) return;
+    if (
+      !activeAccountId ||
+      !activeMailboxId ||
+      activeLocalView ||
+      queryRef.current.trim()
+    )
+      return;
     const accountId = activeAccountId;
     const mailboxId = activeMailboxId;
     const request = ++messageRequest.current;
+    searchRequest.current += 1;
     setLoadingMessages(true);
     try {
       const loaded = await api.listMessages(accountId, mailboxId);
@@ -188,22 +207,110 @@ export function MailShell({ onOpenSettings }: Props) {
       return;
     const accountId = activeAccountId;
     const mailboxId = activeMailboxId;
+    const request = messageRequest.current;
     setLoadingMessages(true);
     try {
       const page = await api.listMessages(accountId, mailboxId, messageCursor);
       const current = useAppStore.getState();
       if (
+        request === messageRequest.current &&
         current.activeAccountId === accountId &&
         current.activeMailboxId === mailboxId &&
-        !current.activeLocalView
+        !current.activeLocalView &&
+        !queryRef.current.trim()
       )
         appendMessages(page.items, page.nextCursor ?? undefined, page.hasMore);
     } catch (cause) {
-      setError(String(cause));
+      if (request === messageRequest.current) setError(String(cause));
     } finally {
-      setLoadingMessages(false);
+      if (request === messageRequest.current) setLoadingMessages(false);
     }
   }
+
+  function searchStillCurrent(
+    request: number,
+    accountId: string,
+    mailboxId?: number,
+    text?: string,
+    searchAllFolders?: boolean,
+  ) {
+    const current = useAppStore.getState();
+    return (
+      request === searchRequest.current &&
+      current.activeAccountId === accountId &&
+      current.activeMailboxId === mailboxId &&
+      !current.activeLocalView &&
+      (text === undefined || queryRef.current.trim() === text) &&
+      (searchAllFolders === undefined ||
+        allFoldersRef.current === searchAllFolders)
+    );
+  }
+
+  const runSearch = useCallback(async () => {
+    if (!activeAccountId || activeLocalView) return;
+    const text = queryRef.current.trim();
+    const searchAllFolders = allFoldersRef.current;
+    const request = ++searchRequest.current;
+    messageRequest.current += 1;
+    if (!text) {
+      await loadMessages();
+      return;
+    }
+    const accountId = activeAccountId;
+    const mailboxId = activeMailboxId;
+    const search = {
+      accountId,
+      mailboxId,
+      text,
+      allFolders: searchAllFolders,
+      limit: 250,
+    };
+    setLoadingMessages(true);
+    try {
+      const cached = await api.searchCached(search);
+      if (
+        searchStillCurrent(
+          request,
+          accountId,
+          mailboxId,
+          search.text,
+          search.allFolders,
+        )
+      )
+        setMessages(cached, undefined, false);
+      const server = await api.searchServer(search);
+      if (
+        searchStillCurrent(
+          request,
+          accountId,
+          mailboxId,
+          search.text,
+          search.allFolders,
+        )
+      )
+        setMessages(server, undefined, false);
+    } catch (cause) {
+      if (
+        searchStillCurrent(
+          request,
+          accountId,
+          mailboxId,
+          search.text,
+          search.allFolders,
+        )
+      )
+        setError(strings.mail.partialSearch(String(cause)));
+    } finally {
+      if (request === searchRequest.current) setLoadingMessages(false);
+    }
+  }, [
+    activeAccountId,
+    activeLocalView,
+    activeMailboxId,
+    loadMessages,
+    setError,
+    setMessages,
+  ]);
 
   const chooseMessage = useCallback(
     async (summary: MessageSummary) => {
@@ -226,8 +333,10 @@ export function MailShell({ onOpenSettings }: Props) {
           await api.setMessageFlags(accountId, summary.id, true, undefined);
           const latest = useAppStore.getState();
           if (
+            request === detailRequest.current &&
             latest.activeAccountId === accountId &&
-            latest.activeMailboxId === mailboxId
+            latest.activeMailboxId === mailboxId &&
+            !latest.activeLocalView
           ) {
             setMessages(
               latest.messages.map((message) =>
@@ -238,7 +347,8 @@ export function MailShell({ onOpenSettings }: Props) {
               latest.messageCursor,
               latest.hasMoreMessages,
             );
-            selectMessage({ ...detail, isRead: true });
+            if (latest.selectedMessage?.id === summary.id)
+              selectMessage({ ...detail, isRead: true });
             await loadAccountData();
           }
         }
@@ -277,8 +387,9 @@ export function MailShell({ onOpenSettings }: Props) {
       .then((fn) => unsubs.push(fn));
     void api
       .onMessageChanged(({ accountId }) => {
-        if (accountId === useAppStore.getState().activeAccountId)
-          void loadMessages();
+        if (accountId !== useAppStore.getState().activeAccountId) return;
+        if (queryRef.current.trim()) void runSearch();
+        else void loadMessages();
       })
       .then((fn) => unsubs.push(fn));
     const refreshLocal = (event: Event) => {
@@ -291,7 +402,7 @@ export function MailShell({ onOpenSettings }: Props) {
       unsubs.forEach((fn) => fn());
       window.removeEventListener("postal:local-mail-changed", refreshLocal);
     };
-  }, [loadAccountData, loadMessages]);
+  }, [loadAccountData, loadMessages, runSearch]);
 
   useEffect(() => {
     const menuAction = (event: Event) => {
@@ -489,58 +600,20 @@ export function MailShell({ onOpenSettings }: Props) {
         .catch((cause) => setError(String(cause)));
   }
 
-  async function runSearch() {
-    if (!activeAccountId || activeLocalView) return;
-    if (!query.trim()) {
-      await loadMessages();
-      return;
-    }
-    const accountId = activeAccountId;
-    const mailboxId = activeMailboxId;
-    const request = ++searchRequest.current;
-    const search = {
-      accountId,
-      mailboxId,
-      text: query.trim(),
-      allFolders,
-      limit: 250,
-    };
-    setLoadingMessages(true);
-    try {
-      const cached = await api.searchCached(search);
-      if (searchStillCurrent(request, accountId, mailboxId))
-        setMessages(cached, undefined, false);
-      const server = await api.searchServer(search);
-      if (searchStillCurrent(request, accountId, mailboxId))
-        setMessages(server, undefined, false);
-    } catch (cause) {
-      if (searchStillCurrent(request, accountId, mailboxId))
-        setError(strings.mail.partialSearch(String(cause)));
-    } finally {
-      if (request === searchRequest.current) setLoadingMessages(false);
-    }
-  }
-
-  function searchStillCurrent(
-    request: number,
-    accountId: string,
-    mailboxId?: number,
-  ) {
-    const current = useAppStore.getState();
-    return (
-      request === searchRequest.current &&
-      current.activeAccountId === accountId &&
-      current.activeMailboxId === mailboxId &&
-      !current.activeLocalView
-    );
-  }
-
   async function openDraft(id: string) {
     if (!activeAccountId) return;
+    const accountId = activeAccountId;
     try {
+      const draft = await api.getDraft(id, accountId);
+      const current = useAppStore.getState();
+      if (
+        current.activeAccountId !== accountId ||
+        current.activeLocalView !== "drafts"
+      )
+        return;
       openComposer({
-        draft: await api.getDraft(id, activeAccountId),
-        draftSummary: drafts.find((draft) => draft.id === id),
+        draft,
+        draftSummary: current.drafts.find((draft) => draft.id === id),
       });
     } catch (cause) {
       setError(String(cause));
@@ -662,7 +735,10 @@ export function MailShell({ onOpenSettings }: Props) {
           <input
             ref={searchInput}
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => {
+              queryRef.current = event.target.value;
+              setQuery(event.target.value);
+            }}
             placeholder={
               activeLocalView
                 ? strings.mail.searchMailboxOnly
@@ -676,7 +752,10 @@ export function MailShell({ onOpenSettings }: Props) {
               <input
                 type="checkbox"
                 checked={allFolders}
-                onChange={(event) => setAllFolders(event.target.checked)}
+                onChange={(event) => {
+                  allFoldersRef.current = event.target.checked;
+                  setAllFolders(event.target.checked);
+                }}
               />
               {strings.mail.allFolders}
             </label>
@@ -723,6 +802,7 @@ export function MailShell({ onOpenSettings }: Props) {
                 messageRequest.current += 1;
                 detailRequest.current += 1;
                 searchRequest.current += 1;
+                queryRef.current = "";
                 setQuery("");
                 setAllFolders(false);
                 selectAccount(event.target.value);
@@ -752,7 +832,9 @@ export function MailShell({ onOpenSettings }: Props) {
             count={drafts.length}
             active={activeLocalView === "drafts"}
             onClick={() => {
+              messageRequest.current += 1;
               searchRequest.current += 1;
+              queryRef.current = "";
               setQuery("");
               selectLocalView("drafts");
               setSidebarOpen(false);
@@ -765,7 +847,9 @@ export function MailShell({ onOpenSettings }: Props) {
             active={activeLocalView === "outbox"}
             tone={outbox.length ? "warning" : undefined}
             onClick={() => {
+              messageRequest.current += 1;
               searchRequest.current += 1;
+              queryRef.current = "";
               setQuery("");
               selectLocalView("outbox");
               setSidebarOpen(false);
@@ -782,10 +866,15 @@ export function MailShell({ onOpenSettings }: Props) {
                 count={mailbox.unreadCount}
                 active={mailbox.id === activeMailboxId}
                 onClick={() => {
+                  const sameMailbox =
+                    mailbox.id === activeMailboxId && !activeLocalView;
+                  if (!sameMailbox) messageRequest.current += 1;
                   searchRequest.current += 1;
+                  queryRef.current = "";
                   setQuery("");
                   selectMailbox(mailbox.id);
                   setSidebarOpen(false);
+                  if (sameMailbox) void loadMessages();
                 }}
               />
             );
@@ -826,6 +915,9 @@ export function MailShell({ onOpenSettings }: Props) {
               type="button"
               className="text-button"
               onClick={() => {
+                messageRequest.current += 1;
+                searchRequest.current += 1;
+                queryRef.current = "";
                 setQuery("");
                 void loadMessages();
               }}
@@ -1014,7 +1106,7 @@ function MessageList({
       "[role='option'][aria-selected='true']",
     );
     if (!selected) return;
-    selected.scrollIntoView({ block: "nearest" });
+    selected.scrollIntoView?.({ block: "nearest" });
     if (listRef.current?.contains(document.activeElement)) selected.focus();
   }, [selectedId]);
 

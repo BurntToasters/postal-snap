@@ -453,7 +453,7 @@ impl From<String> for IpcError {
             }
             "authenticationFailed" => "Sign-in failed. Check the email address and password.",
             "connectionFailed" => "Could not reach the mail server. Check your connection.",
-            "localStorageFailed" => "Postal Snap could not save this change on your computer.",
+            "localStorageFailed" => "Postal Snap could not access local mail data on your computer.",
             "invalidInput" => "Check the highlighted information and try again.",
             _ => "Postal Snap could not finish that action. Try again.",
         };
