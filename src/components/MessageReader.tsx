@@ -27,6 +27,7 @@ import type { Attachment } from "../types";
 export function MessageReader() {
   const message = useAppStore((state) => state.selectedMessage);
   const selectMessage = useAppStore((state) => state.selectMessage);
+  const activeMailboxId = useAppStore((state) => state.activeMailboxId);
   const mailboxes = useAppStore((state) => state.mailboxes);
   const setMailboxes = useAppStore((state) => state.setMailboxes);
   const messages = useAppStore((state) => state.messages);
@@ -38,11 +39,15 @@ export function MessageReader() {
   const setError = useAppStore((state) => state.setError);
   const frame = useRef<HTMLIFrameElement>(null);
   const contentOperation = useRef(0);
+  const starredOperation = useRef(0);
+  const readOperation = useRef(0);
+  const moveOperation = useRef(0);
+  const forwardOperation = useRef(0);
   const [loadedHtml, setLoadedHtml] = useState<{
     messageId: number;
     html: string;
   }>();
-  const [loadingImages, setLoadingImages] = useState(false);
+  const [loadingImagesFor, setLoadingImagesFor] = useState<number>();
   const [preparingForward, setPreparingForward] = useState(false);
   const [showDetailsFor, setShowDetailsFor] = useState<number>();
 
@@ -85,6 +90,7 @@ export function MessageReader() {
   );
   const messageId = message?.id;
   const messageAccountId = message?.accountId;
+  const loadingImages = loadingImagesFor === messageId;
   const currentLoadedHtml =
     loadedHtml && loadedHtml.messageId === message?.id
       ? loadedHtml.html
@@ -137,8 +143,8 @@ export function MessageReader() {
   }
 
   async function loadImages() {
-    if (!sanitized || loadingImages) return;
-    setLoadingImages(true);
+    if (!sanitized || loadingImages || !messageId) return;
+    setLoadingImagesFor(messageId);
     const operation = ++contentOperation.current;
     try {
       const doc = new DOMParser().parseFromString(
@@ -161,7 +167,7 @@ export function MessageReader() {
           }
         }),
       );
-      if (message)
+      if (message && contentOperation.current === operation)
         await hydrateInlineImages(
           doc,
           message.accountId,
@@ -171,14 +177,17 @@ export function MessageReader() {
       if (message && contentOperation.current === operation)
         setLoadedHtml({ messageId: message.id, html: doc.body.innerHTML });
     } catch (cause) {
-      setError(String(cause));
+      if (contentOperation.current === operation) setError(String(cause));
     } finally {
-      setLoadingImages(false);
+      if (contentOperation.current === operation)
+        setLoadingImagesFor(undefined);
     }
   }
 
   async function setStarred() {
     if (!message) return;
+    const operation = ++starredOperation.current;
+    const viewMailboxId = activeMailboxId;
     const next = !message.isStarred;
     selectMessage({ ...message, isStarred: next });
     setMessages(
@@ -191,16 +200,43 @@ export function MessageReader() {
     try {
       await api.setMessageFlags(message.accountId, message.id, undefined, next);
     } catch (cause) {
-      selectMessage(message);
-      setMessages(messages, messageCursor, hasMoreMessages);
+      const current = useAppStore.getState();
+      if (
+        operation !== starredOperation.current ||
+        current.activeAccountId !== message.accountId ||
+        current.activeMailboxId !== viewMailboxId ||
+        current.activeLocalView
+      )
+        return;
+      setMessages(
+        current.messages.map((summary) =>
+          summary.id === message.id && summary.isStarred === next
+            ? { ...summary, isStarred: message.isStarred }
+            : summary,
+        ),
+        current.messageCursor,
+        current.hasMoreMessages,
+      );
+      if (
+        current.selectedMessage?.id === message.id &&
+        current.selectedMessage.isStarred === next
+      )
+        selectMessage({
+          ...current.selectedMessage,
+          isStarred: message.isStarred,
+        });
       setError(String(cause));
     }
   }
 
   async function setRead() {
     if (!message) return;
+    const operation = ++readOperation.current;
+    const viewMailboxId = activeMailboxId;
     const next = !message.isRead;
-    const previousMailboxes = mailboxes;
+    const previousUnreadCount = mailboxes.find(
+      (mailbox) => mailbox.id === message.mailboxId,
+    )?.unreadCount;
     selectMessage({ ...message, isRead: next });
     setMailboxes(
       mailboxes.map((mailbox) =>
@@ -222,17 +258,62 @@ export function MessageReader() {
     try {
       await api.setMessageFlags(message.accountId, message.id, next, undefined);
     } catch (cause) {
-      selectMessage(message);
-      setMessages(messages, messageCursor, hasMoreMessages);
-      setMailboxes(previousMailboxes);
+      const current = useAppStore.getState();
+      if (
+        operation !== readOperation.current ||
+        current.activeAccountId !== message.accountId ||
+        current.activeMailboxId !== viewMailboxId ||
+        current.activeLocalView
+      )
+        return;
+      setMessages(
+        current.messages.map((summary) =>
+          summary.id === message.id && summary.isRead === next
+            ? { ...summary, isRead: message.isRead }
+            : summary,
+        ),
+        current.messageCursor,
+        current.hasMoreMessages,
+      );
+      if (
+        current.selectedMessage?.id === message.id &&
+        current.selectedMessage.isRead === next
+      )
+        selectMessage({ ...current.selectedMessage, isRead: message.isRead });
+      if (previousUnreadCount !== undefined) {
+        const expectedUnreadCount = previousUnreadCount + (next ? -1 : 1);
+        setMailboxes(
+          current.mailboxes.map((mailbox) =>
+            mailbox.id === message.mailboxId &&
+            mailbox.unreadCount === expectedUnreadCount
+              ? { ...mailbox, unreadCount: previousUnreadCount }
+              : mailbox,
+          ),
+        );
+      }
       setError(String(cause));
     }
   }
 
   async function move(role: "archive" | "trash" | "junk") {
     if (!message) return;
-    const previousMailboxes = mailboxes;
     const destination = mailboxes.find((mailbox) => mailbox.role === role);
+    const source = mailboxes.find(
+      (mailbox) => mailbox.id === message.mailboxId,
+    );
+    if (
+      destination?.id === message.mailboxId ||
+      (destination && source?.name === destination.name)
+    )
+      return;
+    const operation = ++moveOperation.current;
+    const viewMailboxId = activeMailboxId;
+    const previousUnreadCounts = new Map(
+      mailboxes.map((mailbox) => [mailbox.id, mailbox.unreadCount]),
+    );
+    const previousIndex = messages.findIndex(
+      (summary) => summary.id === message.id,
+    );
     setMailboxes(moveCounts(mailboxes, message, destination?.id));
     setMessages(
       messages.filter((summary) => summary.id !== message.id),
@@ -243,16 +324,76 @@ export function MessageReader() {
     try {
       await api.moveMessage(message.accountId, message.id, role);
     } catch (cause) {
-      setMailboxes(previousMailboxes);
-      setMessages(messages, messageCursor, hasMoreMessages);
-      selectMessage(message);
+      const current = useAppStore.getState();
+      if (
+        operation !== moveOperation.current ||
+        current.activeAccountId !== message.accountId ||
+        current.activeMailboxId !== viewMailboxId ||
+        current.activeLocalView
+      )
+        return;
+      const expectedMessages = messages.filter(
+        (summary) => summary.id !== message.id,
+      );
+      const listStillOptimistic =
+        previousIndex >= 0 &&
+        !current.messages.some((summary) => summary.id === message.id) &&
+        current.messages.length === expectedMessages.length &&
+        current.messages.every(
+          (summary, index) => summary.id === expectedMessages[index]?.id,
+        );
+      if (listStillOptimistic) {
+        const restoredMessages = [...messages];
+        restoredMessages.splice(
+          Math.min(
+            previousIndex < 0 ? restoredMessages.length : previousIndex,
+            restoredMessages.length,
+          ),
+          0,
+          message,
+        );
+        setMessages(
+          restoredMessages,
+          current.messageCursor,
+          current.hasMoreMessages,
+        );
+      }
+      setMailboxes(
+        current.mailboxes.map((mailbox) => {
+          const previousUnreadCount = previousUnreadCounts.get(mailbox.id);
+          if (previousUnreadCount === undefined) return mailbox;
+          const delta =
+            mailbox.id === message.mailboxId
+              ? message.isRead
+                ? 0
+                : -1
+              : mailbox.id === destination?.id
+                ? message.isRead
+                  ? 0
+                  : 1
+                : 0;
+          return mailbox.unreadCount === previousUnreadCount + delta
+            ? { ...mailbox, unreadCount: previousUnreadCount }
+            : mailbox;
+        }),
+      );
+      if (listStillOptimistic && !current.selectedMessage)
+        selectMessage(message);
       setError(String(cause));
     }
   }
 
   async function moveToMailbox(mailboxId: number) {
     if (!message) return;
-    const previousMailboxes = mailboxes;
+    if (mailboxId === message.mailboxId) return;
+    const operation = ++moveOperation.current;
+    const viewMailboxId = activeMailboxId;
+    const previousUnreadCounts = new Map(
+      mailboxes.map((mailbox) => [mailbox.id, mailbox.unreadCount]),
+    );
+    const previousIndex = messages.findIndex(
+      (summary) => summary.id === message.id,
+    );
     setMailboxes(moveCounts(mailboxes, message, mailboxId));
     setMessages(
       messages.filter((summary) => summary.id !== message.id),
@@ -263,9 +404,61 @@ export function MessageReader() {
     try {
       await api.moveMessageToMailbox(message.accountId, message.id, mailboxId);
     } catch (cause) {
-      setMailboxes(previousMailboxes);
-      setMessages(messages, messageCursor, hasMoreMessages);
-      selectMessage(message);
+      const current = useAppStore.getState();
+      if (
+        operation !== moveOperation.current ||
+        current.activeAccountId !== message.accountId ||
+        current.activeMailboxId !== viewMailboxId ||
+        current.activeLocalView
+      )
+        return;
+      const expectedMessages = messages.filter(
+        (summary) => summary.id !== message.id,
+      );
+      const listStillOptimistic =
+        previousIndex >= 0 &&
+        !current.messages.some((summary) => summary.id === message.id) &&
+        current.messages.length === expectedMessages.length &&
+        current.messages.every(
+          (summary, index) => summary.id === expectedMessages[index]?.id,
+        );
+      if (listStillOptimistic) {
+        const restoredMessages = [...messages];
+        restoredMessages.splice(
+          Math.min(
+            previousIndex < 0 ? restoredMessages.length : previousIndex,
+            restoredMessages.length,
+          ),
+          0,
+          message,
+        );
+        setMessages(
+          restoredMessages,
+          current.messageCursor,
+          current.hasMoreMessages,
+        );
+      }
+      setMailboxes(
+        current.mailboxes.map((mailbox) => {
+          const previousUnreadCount = previousUnreadCounts.get(mailbox.id);
+          if (previousUnreadCount === undefined) return mailbox;
+          const delta =
+            mailbox.id === message.mailboxId
+              ? message.isRead
+                ? 0
+                : -1
+              : mailbox.id === mailboxId
+                ? message.isRead
+                  ? 0
+                  : 1
+                : 0;
+          return mailbox.unreadCount === previousUnreadCount + delta
+            ? { ...mailbox, unreadCount: previousUnreadCount }
+            : mailbox;
+        }),
+      );
+      if (listStillOptimistic && !current.selectedMessage)
+        selectMessage(message);
       setError(String(cause));
     }
   }
@@ -286,21 +479,37 @@ export function MessageReader() {
 
   async function forwardMessage() {
     if (!message || preparingForward) return;
+    const operation = ++forwardOperation.current;
+    const messageId = message.id;
+    const accountId = message.accountId;
     setPreparingForward(true);
     try {
       const attachments = await api.prepareForwardAttachments(
-        message.accountId,
-        message.id,
+        accountId,
+        messageId,
       );
+      const current = useAppStore.getState();
+      if (
+        operation !== forwardOperation.current ||
+        current.activeAccountId !== accountId ||
+        current.selectedMessage?.id !== messageId
+      )
+        return;
       openComposer({
         sourceMessage: message,
         composeMode: "forward",
         prefill: { attachments },
       });
     } catch (cause) {
-      setError(String(cause));
+      const current = useAppStore.getState();
+      if (
+        operation === forwardOperation.current &&
+        current.activeAccountId === accountId &&
+        current.selectedMessage?.id === messageId
+      )
+        setError(String(cause));
     } finally {
-      setPreparingForward(false);
+      if (operation === forwardOperation.current) setPreparingForward(false);
     }
   }
 

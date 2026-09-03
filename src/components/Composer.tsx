@@ -164,6 +164,12 @@ export function Composer({ accountId }: Props) {
   );
   const restoredInlineImages = useRef(false);
   const isDiscarding = useRef(false);
+  const draftRevision = useRef(0);
+  const saveInFlight = useRef(false);
+  const markUnsaved = useCallback(() => {
+    draftRevision.current += 1;
+    setSaveState("unsaved");
+  }, []);
   const dialogRef = useDialogFocus(requestClose);
 
   const editor = useEditor({
@@ -192,7 +198,7 @@ export function Composer({ accountId }: Props) {
       },
       transformPastedHTML: (html) => sanitizeReceivedHtml(html).html,
     },
-    onUpdate: () => setSaveState("unsaved"),
+    onUpdate: markUnsaved,
   });
 
   const canSend = useMemo(
@@ -200,12 +206,13 @@ export function Composer({ accountId }: Props) {
       Boolean(
         editor &&
         !sending &&
+        saveState !== "saving" &&
         [...splitAddresses(to), ...splitAddresses(cc), ...splitAddresses(bcc)]
           .length > 0 &&
         validateRecipientFields(to, cc, bcc) === undefined &&
         validateSubject(subject) === undefined,
       ),
-    [bcc, cc, editor, sending, subject, to],
+    [bcc, cc, editor, saveState, sending, subject, to],
   );
 
   useEffect(() => {
@@ -283,23 +290,33 @@ export function Composer({ accountId }: Props) {
         !sending &&
         !isDiscarding.current &&
         saveState === "unsaved" &&
+        !saveInFlight.current &&
         hasDraftContent(draft, editor.getText())
       ) {
+        const revision = draftRevision.current;
+        saveInFlight.current = true;
         setSaveState("saving");
         void api
           .saveDraft(draft)
           .then((outcome) => {
             if (isDiscarding.current) return;
             setDraftId(outcome.id);
-            setSaveState("saved");
-            setDraftSyncState(outcome.syncState);
-            setDraftSyncDetail(undefined);
+            if (draftRevision.current === revision) {
+              setSaveState("saved");
+              setDraftSyncState(outcome.syncState);
+              setDraftSyncDetail(undefined);
+            } else {
+              setSaveState("unsaved");
+            }
             announceLocalMailChanged(accountId);
           })
           .catch((cause) => {
             if (isDiscarding.current) return;
             setSaveState("unsaved");
             setError(String(cause));
+          })
+          .finally(() => {
+            saveInFlight.current = false;
           });
       }
     }, 30_000);
@@ -308,37 +325,52 @@ export function Composer({ accountId }: Props) {
 
   const saveDraft = useCallback(
     async (showStatus = true) => {
-      if (sending || isDiscarding.current) return;
+      if (sending || isDiscarding.current || saveInFlight.current) return;
       const draft = buildDraft();
       if (!hasDraftContent(draft, editor?.getText() ?? "")) {
         if (showStatus) close();
         return;
       }
+      const revision = draftRevision.current;
+      saveInFlight.current = true;
       setSaveState("saving");
       try {
         const outcome = await api.saveDraft(draft);
         if (isDiscarding.current) return;
         setDraftId(outcome.id);
-        setSaveState("saved");
-        setDraftSyncState(outcome.syncState);
-        setDraftSyncDetail(undefined);
+        if (draftRevision.current === revision) {
+          setSaveState("saved");
+          setDraftSyncState(outcome.syncState);
+          setDraftSyncDetail(undefined);
+        } else {
+          setSaveState("unsaved");
+        }
         announceLocalMailChanged(accountId);
-        if (showStatus) close();
+        if (showStatus && draftRevision.current === revision) close();
       } catch (cause) {
         if (isDiscarding.current) return;
         setSaveState("unsaved");
         setError(String(cause));
+      } finally {
+        saveInFlight.current = false;
       }
     },
     [accountId, buildDraft, close, editor, sending, setError],
   );
 
   function requestClose() {
-    if (sending || isDiscarding.current) return;
+    if (sending || isDiscarding.current || saveInFlight.current) return;
     const draft = buildDraft();
+    if (!hasDraftContent(draft, editor?.getText() ?? "")) {
+      close();
+      return;
+    }
+    if (saveState === "saved") {
+      close();
+      return;
+    }
     if (
       saveState === "unsaved" &&
-      hasDraftContent(draft, editor?.getText() ?? "") &&
       !window.confirm(strings.composer.saveCloseQuestion)
     )
       return;
@@ -346,7 +378,7 @@ export function Composer({ accountId }: Props) {
   }
 
   async function discardDraft() {
-    if (sending || isDiscarding.current) return;
+    if (sending || isDiscarding.current || saveInFlight.current) return;
     if (
       hasDraftContent(buildDraft(), editor?.getText() ?? "") &&
       !window.confirm(strings.composer.discardQuestion)
@@ -412,18 +444,25 @@ export function Composer({ accountId }: Props) {
     try {
       const selected = await api.chooseAttachments(accountId, false);
       setAttachments((items) => [...items, ...selected]);
-      if (selected.length) setSaveState("unsaved");
+      if (selected.length) markUnsaved();
     } catch (cause) {
       setError(String(cause));
     }
   }
 
   async function addInlineImage() {
+    let selectedToken: string | undefined;
     try {
       const [selected] = await api.chooseAttachments(accountId, true);
       if (!selected) return;
+      selectedToken = selected.token;
       const dataUrl = await api.readComposeImage(accountId, selected.token);
       const contentId = `postal-${crypto.randomUUID()}@inline`;
+      editor
+        ?.chain()
+        .focus()
+        .setImage({ src: dataUrl, alt: strings.composer.inlineImage })
+        .run();
       setInlineImages((items) =>
         new Map(items).set(selected.token, { dataUrl, contentId }),
       );
@@ -431,13 +470,12 @@ export function Composer({ accountId }: Props) {
         ...items,
         { ...selected, inline: true, contentId },
       ]);
-      setSaveState("unsaved");
-      editor
-        ?.chain()
-        .focus()
-        .setImage({ src: dataUrl, alt: strings.composer.inlineImage })
-        .run();
+      markUnsaved();
     } catch (cause) {
+      if (selectedToken)
+        void api
+          .releaseComposeAttachments(accountId, [selectedToken])
+          .catch(() => undefined);
       setError(String(cause));
     }
   }
@@ -487,7 +525,7 @@ export function Composer({ accountId }: Props) {
       });
     }
     setAttachments((all) => all.filter((_, itemIndex) => itemIndex !== index));
-    setSaveState("unsaved");
+    markUnsaved();
     if (item)
       void api
         .releaseComposeAttachments(accountId, [item.token])
@@ -505,7 +543,7 @@ export function Composer({ accountId }: Props) {
         className="modal-backdrop"
         type="button"
         onClick={requestClose}
-        disabled={sending}
+        disabled={sending || saveState === "saving"}
         aria-label={strings.composer.saveClose}
       />
       <section className="composer-window" ref={dialogRef}>
@@ -524,7 +562,7 @@ export function Composer({ accountId }: Props) {
             className="icon-button"
             type="button"
             onClick={requestClose}
-            disabled={sending}
+            disabled={sending || saveState === "saving"}
             aria-label={strings.composer.saveClose}
           >
             <X />
@@ -567,7 +605,7 @@ export function Composer({ accountId }: Props) {
               value={to}
               onChange={(event) => {
                 setTo(event.target.value);
-                setSaveState("unsaved");
+                markUnsaved();
               }}
               onBlur={() =>
                 setRecipientError(validateRecipientFields(to, cc, bcc))
@@ -595,7 +633,7 @@ export function Composer({ accountId }: Props) {
                   value={cc}
                   onChange={(event) => {
                     setCc(event.target.value);
-                    setSaveState("unsaved");
+                    markUnsaved();
                   }}
                   onBlur={() =>
                     setRecipientError(validateRecipientFields(to, cc, bcc))
@@ -609,7 +647,7 @@ export function Composer({ accountId }: Props) {
                   value={bcc}
                   onChange={(event) => {
                     setBcc(event.target.value);
-                    setSaveState("unsaved");
+                    markUnsaved();
                   }}
                   onBlur={() =>
                     setRecipientError(validateRecipientFields(to, cc, bcc))
@@ -630,7 +668,7 @@ export function Composer({ accountId }: Props) {
               value={subject}
               onChange={(event) => {
                 setSubject(event.target.value);
-                setSaveState("unsaved");
+                markUnsaved();
               }}
               onBlur={() => setSubjectError(validateSubject(subject))}
               maxLength={998}
@@ -867,7 +905,7 @@ export function Composer({ accountId }: Props) {
                 <button
                   type="button"
                   onClick={() => removeAttachment(index)}
-                  disabled={sending}
+                  disabled={sending || saveState === "saving"}
                   aria-label={strings.composer.removeAttachment(item.filename)}
                 >
                   ×
@@ -916,7 +954,7 @@ export function Composer({ accountId }: Props) {
             className="discard-button"
             type="button"
             onClick={() => void discardDraft()}
-            disabled={sending}
+            disabled={sending || saveState === "saving"}
           >
             {strings.composer.discard}
           </button>

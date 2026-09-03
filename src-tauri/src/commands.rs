@@ -690,20 +690,26 @@ async fn ensure_message_content(
     message_id: i64,
     state: &AppState,
 ) -> Result<(), String> {
+    let (owner_id, ..) = state.db.message_fetch_location(message_id)?;
+    if owner_id != account_id {
+        return Err("Message does not belong to this account.".into());
+    }
+    if state.db.message_content_cached(message_id, account_id)? {
+        return Ok(());
+    }
+    let _guard = state.lock_account(account_id).await?;
     let (owner_id, mailbox_id, mailbox, uid, size) = state.db.message_fetch_location(message_id)?;
     if owner_id != account_id {
         return Err("Message does not belong to this account.".into());
     }
-    if state.db.message_content_cached(message_id)? {
+    if state.db.message_content_cached(message_id, account_id)? {
         return Ok(());
     }
-    let _guard = state.lock_account(account_id).await?;
-    if state.db.message_content_cached(message_id)? {
-        return Ok(());
-    }
+    let uid_validity = state.db.mailbox_uid_validity(account_id, &mailbox)?;
     let account = state.db.account(account_id)?;
     let password = credentials::load(account_id)?;
-    let message = mail::download_message(&account, &password, &mailbox, uid, size).await?;
+    let message =
+        mail::download_message(&account, &password, &mailbox, uid, size, uid_validity).await?;
     state.db.upsert_message(account_id, mailbox_id, &message)
 }
 
@@ -714,7 +720,7 @@ pub async fn get_message(
     state: State<'_, AppState>,
 ) -> CommandResult<MessageDetail> {
     ensure_message_content(&account_id, message_id, &state).await?;
-    command_result(state.db.message_detail(message_id))
+    command_result(state.db.message_detail(message_id, &account_id))
 }
 
 #[derive(Deserialize, Serialize)]
@@ -738,26 +744,35 @@ pub async fn set_message_flags(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<()> {
+    let _guard = state.lock_account(&account_id).await?;
     let (owner_id, mailbox, uid) = state.db.message_location(message_id)?;
     if owner_id != account_id {
         return Err("Message does not belong to this account.".into());
     }
     state.db.set_flags(message_id, is_read, is_starred)?;
+    let uid_validity = state.db.mailbox_uid_validity(&account_id, &mailbox)?;
     let operation = FlagOperation {
         message_id,
         uid,
         mailbox: mailbox.clone(),
-        uid_validity: state.db.mailbox_uid_validity(&account_id, &mailbox)?,
+        uid_validity,
         is_read,
         is_starred,
     };
-    let remote_result = async {
-        let _guard = state.lock_account(&account_id).await?;
+    let remote_result = {
         let account = state.db.account(&account_id)?;
         let password = credentials::load(&account_id)?;
-        mail::set_remote_flags(&account, &password, &mailbox, uid, is_read, is_starred).await
-    }
-    .await;
+        mail::set_remote_flags(
+            &account,
+            &password,
+            &mailbox,
+            uid,
+            uid_validity,
+            is_read,
+            is_starred,
+        )
+        .await
+    };
     if remote_result.is_err() {
         let dedupe_key = format!(
             "flags:{message_id}:{}:{}",
@@ -795,6 +810,7 @@ pub async fn move_message(
     if !matches!(role.as_str(), "archive" | "trash" | "junk") {
         return Err("Unsupported destination.".into());
     }
+    let _guard = state.lock_account(&account_id).await?;
     let (owner_id, source, uid) = state.db.message_location(message_id)?;
     if owner_id != account_id {
         return Err("Message does not belong to this account.".into());
@@ -803,6 +819,9 @@ pub async fn move_message(
         .db
         .mailbox_for_role(&account_id, &role)?
         .ok_or_else(|| format!("This account does not have a {role} mailbox."))?;
+    if source == destination {
+        return Ok(());
+    }
     command_result(
         move_message_inner(
             message_id,
@@ -826,6 +845,7 @@ pub async fn move_message_to_mailbox(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<()> {
+    let _guard = state.lock_account(&account_id).await?;
     let (owner_id, source, uid) = state.db.message_location(message_id)?;
     if owner_id != account_id {
         return Err("Message does not belong to this account.".into());
@@ -870,13 +890,19 @@ async fn move_message_inner(
         destination: destination.clone(),
         uid_validity: state.db.mailbox_uid_validity(&account_id, &source)?,
     };
-    let remote_result = async {
-        let _guard = state.lock_account(&account_id).await?;
+    let remote_result = {
         let account = state.db.account(&account_id)?;
         let password = credentials::load(&account_id)?;
-        mail::move_remote(&account, &password, &source, &destination, uid).await
-    }
-    .await;
+        mail::move_remote(
+            &account,
+            &password,
+            &source,
+            &destination,
+            uid,
+            operation.uid_validity,
+        )
+        .await
+    };
     if remote_result.is_err() {
         let dedupe_key = format!("move:{message_id}");
         state
@@ -1353,7 +1379,7 @@ pub async fn save_attachment(
         .into_path()
         .map_err(|_| "Choose a valid save location.".to_string())?;
     ensure_message_content(&account_id, message_id, &state).await?;
-    let raw = state.db.raw_message(message_id)?;
+    let raw = state.db.raw_message(message_id, &account_id)?;
     let (_, bytes) = mail::extract_attachment(&raw, &attachment_id)?;
     tokio::fs::write(destination, bytes)
         .await
@@ -1367,8 +1393,8 @@ pub async fn prepare_forward_attachments(
     state: State<'_, AppState>,
 ) -> CommandResult<Vec<ComposeAttachment>> {
     ensure_message_content(&account_id, message_id, &state).await?;
-    let detail = state.db.message_detail(message_id)?;
-    let raw = state.db.raw_message(message_id)?;
+    let detail = state.db.message_detail(message_id, &account_id)?;
+    let raw = state.db.raw_message(message_id, &account_id)?;
     let account_dir = managed_account_dir(&state.attachment_dir, &account_id)?;
     tokio::fs::create_dir_all(&account_dir)
         .await
@@ -1510,7 +1536,7 @@ pub async fn read_message_inline_image(
     state: State<'_, AppState>,
 ) -> CommandResult<String> {
     ensure_message_content(&account_id, message_id, &state).await?;
-    let detail = state.db.message_detail(message_id)?;
+    let detail = state.db.message_detail(message_id, &account_id)?;
     let attachment = detail
         .attachments
         .iter()
@@ -1525,7 +1551,7 @@ pub async fn read_message_inline_image(
     if attachment.size > 20 * 1024 * 1024 {
         return Err("This inline image is too large.".into());
     }
-    let raw = state.db.raw_message(message_id)?;
+    let raw = state.db.raw_message(message_id, &account_id)?;
     let (_, bytes) = mail::extract_attachment(&raw, &attachment_id)?;
     if bytes.len() > 20 * 1024 * 1024 {
         return Err("This inline image is too large.".into());
@@ -1784,6 +1810,7 @@ async fn replay_offline_operations(
                             password,
                             &operation.mailbox,
                             operation.uid,
+                            operation.uid_validity,
                             operation.is_read,
                             operation.is_starred,
                         )
@@ -1819,6 +1846,11 @@ async fn replay_offline_operations(
                         db.remove_operation(id)?;
                         continue;
                     }
+                    if operation.source == operation.destination {
+                        let _ = db.clear_pending_move(operation.message_id);
+                        db.remove_operation(id)?;
+                        continue;
+                    }
                     db.apply_pending_move_overlay(operation.message_id)?;
                     if operation.uid_validity.is_some()
                         && db.mailbox_uid_validity(&account.summary.id, &operation.source)?
@@ -1835,6 +1867,7 @@ async fn replay_offline_operations(
                             &operation.source,
                             &operation.destination,
                             operation.uid,
+                            operation.uid_validity,
                         )
                         .await
                     } else {

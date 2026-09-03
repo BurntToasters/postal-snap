@@ -215,8 +215,9 @@ impl Database {
         server_unread: Option<u32>,
         server_total: u32,
     ) -> Result<i64, String> {
-        let conn = self.conn()?;
-        let previous_validity: Option<u32> = conn
+        let mut conn = self.conn()?;
+        let transaction = conn.transaction().map_err(db_error)?;
+        let previous_validity: Option<u32> = transaction
             .query_row(
                 "SELECT uid_validity FROM mailboxes WHERE account_id = ?1 AND name = ?2",
                 params![account_id, name],
@@ -225,7 +226,7 @@ impl Database {
             .optional()
             .map_err(db_error)?
             .flatten();
-        conn.execute(
+        transaction.execute(
             "INSERT INTO mailboxes (account_id, name, display_name, role, uid_validity, uid_next, server_unread, server_total, counts_updated_at)
              VALUES (?1, ?2, ?2, ?3, ?4, ?5, ?6, ?7, CURRENT_TIMESTAMP)
              ON CONFLICT(account_id, name) DO UPDATE SET role=excluded.role, uid_validity=excluded.uid_validity,
@@ -233,7 +234,7 @@ impl Database {
              counts_updated_at=CURRENT_TIMESTAMP, local_total_delta=0, local_unread_delta=0",
             params![account_id, name, role.as_str(), uid_validity, uid_next, server_unread, server_total],
         ).map_err(db_error)?;
-        let id: i64 = conn
+        let id: i64 = transaction
             .query_row(
                 "SELECT id FROM mailboxes WHERE account_id = ?1 AND name = ?2",
                 params![account_id, name],
@@ -244,11 +245,14 @@ impl Database {
             && uid_validity.is_some()
             && previous_validity != uid_validity
         {
-            conn.execute("DELETE FROM messages WHERE mailbox_id = ?1", [id])
+            transaction
+                .execute("DELETE FROM messages WHERE mailbox_id = ?1", [id])
                 .map_err(db_error)?;
-            conn.execute("UPDATE mailboxes SET backfill_uid=NULL WHERE id=?1", [id])
+            transaction
+                .execute("UPDATE mailboxes SET backfill_uid=NULL WHERE id=?1", [id])
                 .map_err(db_error)?;
         }
+        transaction.commit().map_err(db_error)?;
         Ok(id)
     }
 
@@ -601,37 +605,44 @@ impl Database {
         ).optional().map_err(db_error)
     }
 
-    pub fn message_detail(&self, id: i64) -> Result<MessageDetail, String> {
+    pub fn message_detail(&self, id: i64, account_id: &str) -> Result<MessageDetail, String> {
         let conn = self.conn()?;
         conn.execute(
-            "UPDATE messages SET accessed_at = CURRENT_TIMESTAMP WHERE id = ?1",
-            [id],
+            "UPDATE messages SET accessed_at = CURRENT_TIMESTAMP WHERE id = ?1 AND account_id = ?2",
+            params![id, account_id],
         )
         .map_err(db_error)?;
         conn.query_row(
-            &format!("{}, to_json, cc_json, reply_to, text_body, html_body, attachments_json FROM messages WHERE id = ?1", MESSAGE_SUMMARY_SELECT),
-            [id],
+            &format!(
+                "{} WHERE m.id = ?1 AND m.account_id = ?2",
+                MESSAGE_DETAIL_SELECT
+            ),
+            params![id, account_id],
             |row| {
-                let html_body: Option<String> = row.get(20)?;
+                let html_body: Option<String> = row.get(19)?;
                 Ok(MessageDetail {
                     summary: map_message_summary(row)?,
-                    to: json_or_default(row.get::<_, String>(16)?),
-                    cc: json_or_default(row.get::<_, String>(17)?),
-                    reply_to: row.get(18)?, text_body: row.get(19)?,
+                    to: json_or_default(row.get::<_, String>(15)?),
+                    cc: json_or_default(row.get::<_, String>(16)?),
+                    reply_to: row.get(17)?,
+                    text_body: row.get(18)?,
                     remote_images_blocked: html_body.as_deref().is_some_and(has_remote_images),
                     html_body,
-                    attachments: json_or_default(row.get::<_, String>(21)?),
+                    attachments: json_or_default(row.get::<_, String>(20)?),
                 })
             },
-        ).optional().map_err(db_error)?.ok_or_else(|| "Message not found in the local cache.".into())
+        )
+        .optional()
+        .map_err(db_error)?
+        .ok_or_else(|| "Message not found in the local cache.".into())
     }
 
-    pub fn raw_message(&self, id: i64) -> Result<Vec<u8>, String> {
+    pub fn raw_message(&self, id: i64, account_id: &str) -> Result<Vec<u8>, String> {
         let raw: Vec<u8> = self
             .conn()?
             .query_row(
-                "SELECT raw_message FROM messages WHERE id=?1",
-                [id],
+                "SELECT raw_message FROM messages WHERE id=?1 AND account_id=?2",
+                params![id, account_id],
                 |row| row.get(0),
             )
             .optional()
@@ -644,11 +655,11 @@ impl Database {
         }
     }
 
-    pub fn message_content_cached(&self, id: i64) -> Result<bool, String> {
+    pub fn message_content_cached(&self, id: i64, account_id: &str) -> Result<bool, String> {
         self.conn()?
             .query_row(
-                "SELECT LENGTH(raw_message) > 0 FROM messages WHERE id=?1",
-                [id],
+                "SELECT LENGTH(raw_message) > 0 FROM messages WHERE id=?1 AND account_id=?2",
+                params![id, account_id],
                 |row| row.get(0),
             )
             .optional()
@@ -1714,6 +1725,7 @@ impl Database {
 }
 
 const MESSAGE_SUMMARY_SELECT: &str = "SELECT m.id,m.account_id,m.mailbox_id,m.uid,m.message_id,m.subject,m.sender_name,m.sender_address,m.recipients,m.received_at,m.preview,m.is_read,m.is_starred,m.has_attachments,m.size FROM messages m";
+const MESSAGE_DETAIL_SELECT: &str = "SELECT m.id,m.account_id,m.mailbox_id,m.uid,m.message_id,m.subject,m.sender_name,m.sender_address,m.recipients,m.received_at,m.preview,m.is_read,m.is_starred,m.has_attachments,m.size,m.to_json,m.cc_json,m.reply_to,m.text_body,m.html_body,m.attachments_json FROM messages m";
 
 fn map_message_summary(row: &Row<'_>) -> rusqlite::Result<MessageSummary> {
     Ok(MessageSummary {
@@ -2333,7 +2345,9 @@ mod tests {
         db.evict_to_policy(&CachePolicy::default()).unwrap();
         let messages = db.list_messages(mailbox, None, 10).unwrap();
         assert_eq!(messages.items.len(), 1);
-        assert!(!db.message_content_cached(messages.items[0].id).unwrap());
+        assert!(!db
+            .message_content_cached(messages.items[0].id, &account.summary.id)
+            .unwrap());
     }
 
     #[test]
@@ -2351,7 +2365,7 @@ mod tests {
         let id = db.list_messages(mailbox, None, 10).unwrap().items[0].id;
         db.clear_downloaded_mail().unwrap();
         assert_eq!(db.list_messages(mailbox, None, 10).unwrap().items.len(), 1);
-        assert!(!db.message_content_cached(id).unwrap());
+        assert!(!db.message_content_cached(id, &account.summary.id).unwrap());
         assert_eq!(
             db.search(&SearchQuery {
                 account_id: account.summary.id,
@@ -2364,6 +2378,40 @@ mod tests {
             .len(),
             1
         );
+    }
+
+    #[test]
+    fn message_detail_reads_payload_columns_and_scopes_account() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let mailbox = mailbox(&db, &account.summary.id, "INBOX", &MailboxRole::Inbox);
+        let mut cached = message(1, "2026-08-18T12:00:00Z");
+        cached.cc = vec!["family@example.com".into()];
+        cached.reply_to = Some("reply@example.com".into());
+        cached.html_body =
+            Some(r#"<p>Bring sandwiches</p><img src="https://images.example.com/pic.png">"#.into());
+        cached.attachments = vec![Attachment {
+            id: "part-1".into(),
+            filename: "pic.png".into(),
+            content_type: "image/png".into(),
+            size: 12,
+            content_id: None,
+            inline: false,
+        }];
+        db.upsert_message(&account.summary.id, mailbox, &cached)
+            .unwrap();
+        let id = db.list_messages(mailbox, None, 10).unwrap().items[0].id;
+
+        let detail = db.message_detail(id, &account.summary.id).unwrap();
+        assert_eq!(detail.to, vec!["sam@example.com"]);
+        assert_eq!(detail.cc, vec!["family@example.com"]);
+        assert_eq!(detail.reply_to.as_deref(), Some("reply@example.com"));
+        assert_eq!(detail.html_body.as_deref(), cached.html_body.as_deref());
+        assert!(detail.remote_images_blocked);
+        assert_eq!(detail.attachments.len(), 1);
+        assert_eq!(detail.attachments[0].id, "part-1");
+        assert!(db.message_detail(id, "other-account").is_err());
     }
 
     #[test]
