@@ -391,7 +391,7 @@ export function SettingsDialog({
             onClick={onClose}
             aria-label={strings.common.close}
           >
-            <X />
+            <X aria-hidden="true" />
           </button>
         </header>
         <div className="settings-layout">
@@ -414,7 +414,7 @@ export function SettingsDialog({
                 onClick={() => setTab(id)}
                 onKeyDown={(event) => moveTab(event, index)}
               >
-                <Icon />
+                <Icon aria-hidden="true" />
                 <span>{label}</span>
               </button>
             ))}
@@ -480,7 +480,8 @@ export function SettingsDialog({
                       onClick={() => void exportSettings()}
                       disabled={dataBusy}
                     >
-                      <Upload /> {strings.settings.exportSettings}
+                      <Upload aria-hidden="true" />{" "}
+                      {strings.settings.exportSettings}
                     </button>
                     <button
                       className="secondary-button"
@@ -488,7 +489,8 @@ export function SettingsDialog({
                       onClick={() => void importSettings()}
                       disabled={dataBusy}
                     >
-                      <DownloadCloud /> {strings.settings.importSettings}
+                      <DownloadCloud aria-hidden="true" />{" "}
+                      {strings.settings.importSettings}
                     </button>
                     <button
                       className="danger-button"
@@ -496,7 +498,8 @@ export function SettingsDialog({
                       onClick={() => void resetSettings()}
                       disabled={dataBusy}
                     >
-                      <RotateCcw /> {strings.settings.resetSettings}
+                      <RotateCcw aria-hidden="true" />{" "}
+                      {strings.settings.resetSettings}
                     </button>
                   </div>
                   {dataStatus ? (
@@ -921,7 +924,7 @@ export function SettingsDialog({
                 {updateReady ? (
                   <div className="update-ready-card">
                     <div className="update-ready-icon">
-                      <DownloadCloud />
+                      <DownloadCloud aria-hidden="true" />
                     </div>
                     <div className="update-ready-body">
                       <strong>{strings.settings.updateReadyCardTitle}</strong>
@@ -937,7 +940,7 @@ export function SettingsDialog({
                   </div>
                 ) : null}
                 <div className="storage-card">
-                  <DownloadCloud />
+                  <DownloadCloud aria-hidden="true" />
                   <span>
                     <strong>
                       {distribution?.updatesManagedBy === "store"

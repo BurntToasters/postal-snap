@@ -44,6 +44,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../api";
+import { shortcutMod } from "../format";
 import { strings } from "../i18n";
 import { htmlToPlainText, sanitizeReceivedHtml } from "../security";
 import { useAppStore, type ComposerSeed } from "../store";
@@ -177,6 +178,11 @@ export function Composer({ accountId }: Props) {
 
   const [minimized, setMinimized] = useState(false);
   const [maximized, setMaximized] = useState(false);
+  const [prevSeed, setPrevSeed] = useState(seed);
+  if (seed !== prevSeed) {
+    setPrevSeed(seed);
+    setMinimized(false);
+  }
   const close = useAppStore((state) => state.closeComposer);
   const setError = useAppStore((state) => state.setError);
   const [to, setTo] = useState(seedRecipients(seed, "to", accountEmail));
@@ -476,6 +482,7 @@ export function Composer({ accountId }: Props) {
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
+      if (minimized) return;
       if (!(event.metaKey || event.ctrlKey)) return;
       if (event.key === "Enter") {
         event.preventDefault();
@@ -487,7 +494,7 @@ export function Composer({ accountId }: Props) {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [saveDraft, sendMessage]);
+  }, [minimized, saveDraft, sendMessage]);
 
   async function addAttachments() {
     try {
@@ -592,7 +599,7 @@ export function Composer({ accountId }: Props) {
           type="button"
           className="docked-pill-restore"
           onClick={() => setMinimized(false)}
-          aria-label={strings.composer.restore}
+          aria-label={`${strings.composer.restore}: ${subject.trim() || strings.common.noSubject}`}
         >
           <span className="docked-pill-title">
             {subject.trim() || strings.common.noSubject}
@@ -610,8 +617,8 @@ export function Composer({ accountId }: Props) {
             className="icon-button"
             type="button"
             onClick={() => setMinimized(false)}
-            aria-label={strings.composer.restore}
-            title={strings.composer.restore}
+            aria-label={strings.composer.maximize}
+            title={strings.composer.maximize}
           >
             <Maximize2 size={16} />
           </button>
@@ -1095,13 +1102,13 @@ export function Composer({ accountId }: Props) {
             aria-label={
               sending ? strings.composer.sending : strings.composer.send
             }
-            title={`${sending ? strings.composer.sending : strings.composer.send} (${strings.composer.sendShortcut})`}
+            title={`${sending ? strings.composer.sending : strings.composer.send} (${shortcutMod()}↵)`}
           >
             <Send />
             <span>
               {sending ? strings.composer.sending : strings.composer.send}
             </span>
-            <kbd className="send-kbd-hint">{strings.composer.sendShortcut}</kbd>
+            <kbd className="send-kbd-hint">{`${shortcutMod()}↵`}</kbd>
           </button>
           <button
             className="toolbar-button"

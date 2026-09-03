@@ -112,6 +112,9 @@ async fn validate_public_url(raw_url: &str) -> Result<(Url, String, Vec<SocketAd
     let port = url
         .port_or_known_default()
         .ok_or_else(|| "Invalid image address.".to_string())?;
+    if !matches!(port, 80 | 443 | 8080 | 8443) {
+        return Err("Images may only be loaded from standard web ports.".into());
+    }
     let resolved = lookup_host((host.as_str(), port))
         .await
         .map_err(|_| "Could not resolve the image server.".to_string())?;
@@ -158,6 +161,36 @@ fn is_public_v6(ip: Ipv6Addr) -> bool {
         return is_public_v4(mapped);
     }
     let segments = ip.segments();
+    // NAT64 Well-Known Prefix 64:ff9b::/96
+    if segments[0] == 0x0064
+        && segments[1] == 0xff9b
+        && segments[2] == 0
+        && segments[3] == 0
+        && segments[4] == 0
+        && segments[5] == 0
+    {
+        let v4 = Ipv4Addr::new(
+            (segments[6] >> 8) as u8,
+            (segments[6] & 0xff) as u8,
+            (segments[7] >> 8) as u8,
+            (segments[7] & 0xff) as u8,
+        );
+        return is_public_v4(v4);
+    }
+    // 6to4 prefix 2002::/16
+    if segments[0] == 0x2002 {
+        let v4 = Ipv4Addr::new(
+            (segments[1] >> 8) as u8,
+            (segments[1] & 0xff) as u8,
+            (segments[2] >> 8) as u8,
+            (segments[2] & 0xff) as u8,
+        );
+        return is_public_v4(v4);
+    }
+    // Teredo 2001:0000::/32
+    if segments[0] == 0x2001 && segments[1] == 0x0000 {
+        return false;
+    }
     !(ip.is_loopback()
         || ip.is_unspecified()
         || ip.is_multicast()
@@ -175,13 +208,50 @@ pub fn safe_filename(value: &str) -> String {
     let cleaned: String = value
         .chars()
         .filter(|character| {
-            !character.is_control() && !matches!(character, '/' | '\\' | ':' | '\0')
+            !character.is_control()
+                && !matches!(
+                    character,
+                    '/' | '\\' | ':' | '\0' | '<' | '>' | '"' | '|' | '?' | '*'
+                )
         })
         .take(180)
         .collect();
     let cleaned = cleaned.trim().trim_matches('.');
-    if cleaned.is_empty() {
-        "attachment".into()
+    let upper = cleaned.to_ascii_uppercase();
+    let is_dos_reserved = matches!(
+        upper.as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    ) || upper.starts_with("CON.")
+        || upper.starts_with("PRN.")
+        || upper.starts_with("AUX.")
+        || upper.starts_with("NUL.");
+    if cleaned.is_empty() || is_dos_reserved {
+        if is_dos_reserved {
+            format!("attachment_{cleaned}")
+        } else {
+            "attachment".into()
+        }
     } else {
         cleaned.into()
     }
@@ -208,6 +278,11 @@ mod tests {
         assert!(!is_public_ip("192.0.2.1".parse().unwrap()));
         assert!(!is_public_ip("198.51.100.1".parse().unwrap()));
         assert!(!is_public_ip("203.0.113.1".parse().unwrap()));
+        assert!(!is_public_ip("64:ff9b::192.0.2.1".parse().unwrap()));
+        assert!(!is_public_ip("2002:c000:201::1".parse().unwrap()));
+        assert!(!is_public_ip(
+            "2001:0:4136:e378:8000:63bf:3fff:fdd2".parse().unwrap()
+        ));
         assert!(is_public_ip("1.1.1.1".parse().unwrap()));
         assert!(is_public_ip("2606:4700:4700::1111".parse().unwrap()));
     }
@@ -216,6 +291,13 @@ mod tests {
     fn removes_path_components_from_names() {
         assert_eq!(safe_filename("../../secret.txt"), "secret.txt");
         assert_eq!(safe_filename("a/b\\c.txt"), "abc.txt");
+        assert_eq!(
+            safe_filename("bad<file>name:\"test\"|?.pdf"),
+            "badfilenametest.pdf"
+        );
+        assert_eq!(safe_filename("CON"), "attachment_CON");
+        assert_eq!(safe_filename("nul.txt"), "attachment_nul.txt");
+        assert_eq!(safe_filename("AUX.tar.gz"), "attachment_AUX.tar.gz");
     }
 
     #[test]

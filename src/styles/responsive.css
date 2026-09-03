@@ -283,6 +283,11 @@
     border: 2px solid Highlight;
   }
 
+  .composer-window .tiptap:focus-visible {
+    outline: 2px solid Highlight !important;
+    outline-offset: -2px;
+  }
+
   .unread-dot,
   .sync-indicator > span:first-child {
     forced-color-adjust: none;

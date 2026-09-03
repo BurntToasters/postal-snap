@@ -5,7 +5,7 @@
   grid-template-columns:
     var(--folder-pane-width, 248px) 5px
     var(--message-pane-width, 390px) 5px minmax(360px, 1fr);
-  grid-template-rows: 58px minmax(0, 1fr);
+  grid-template-rows: minmax(58px, auto) minmax(0, 1fr);
   grid-template-areas:
     "toolbar toolbar toolbar toolbar toolbar"
     "folders folder-splitter messages reader-splitter reader";
@@ -15,7 +15,7 @@
 .mail-shell.pane-bottom {
   grid-template-columns: var(--folder-pane-width, 248px) 5px minmax(560px, 1fr);
   grid-template-rows:
-    58px minmax(220px, 1fr) 5px
+    minmax(58px, auto) minmax(220px, 1fr) 5px
     var(--reader-pane-height, 360px);
   grid-template-areas:
     "toolbar toolbar toolbar"
@@ -26,6 +26,7 @@
 
 .mail-shell.pane-hidden {
   grid-template-columns: var(--folder-pane-width, 248px) 5px minmax(420px, 1fr);
+  grid-template-rows: minmax(58px, auto) minmax(0, 1fr);
   grid-template-areas:
     "toolbar toolbar toolbar"
     "folders folder-splitter messages";
@@ -158,8 +159,8 @@
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  min-height: 36px;
-  padding: 4px 14px;
+  min-height: 44px;
+  padding: 6px 14px;
   border: 1px solid var(--accent);
   border-radius: 9999px;
   background: var(--accent-soft);
@@ -589,4 +590,19 @@
   border: 1px solid var(--border);
   border-radius: 7px;
   background: var(--surface);
+}
+
+.draft-sync-state {
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.draft-sync-state.conflict {
+  color: var(--warning);
+  font-weight: 600;
+}
+
+.draft-sync-state.pending {
+  color: var(--accent);
 }

@@ -109,4 +109,40 @@ describe("settings IPC serialization", () => {
       "save_settings",
     ]);
   });
+
+  it("dispatches multi-account management commands", async () => {
+    mockedInvoke.mockResolvedValue(undefined);
+    await api.updateAccountDisplayName("acc-1", "Work Mail");
+    expect(mockedInvoke).toHaveBeenCalledWith("update_account_display_name", {
+      accountId: "acc-1",
+      displayName: "Work Mail",
+    });
+
+    mockedInvoke.mockResolvedValue([
+      { accountId: "acc-1", unreadCount: 2, totalCount: 10 },
+    ]);
+    const counts = await api.getAccountInboxCounts();
+    expect(counts).toEqual([
+      { accountId: "acc-1", unreadCount: 2, totalCount: 10 },
+    ]);
+    expect(mockedInvoke).toHaveBeenCalledWith("get_account_inbox_counts", {});
+
+    mockedInvoke.mockResolvedValue([]);
+    const mailboxes = await api.listAllMailboxes();
+    expect(mailboxes).toEqual([]);
+    expect(mockedInvoke).toHaveBeenCalledWith("list_all_mailboxes", {});
+
+    mockedInvoke.mockResolvedValue(["acc-1", "acc-2"]);
+    const synced = await api.syncAllAccounts();
+    expect(synced).toEqual(["acc-1", "acc-2"]);
+    expect(mockedInvoke).toHaveBeenCalledWith("sync_all_accounts", {});
+
+    mockedInvoke.mockResolvedValue([]);
+    const searchRes = await api.searchAllCached("invoice", 25);
+    expect(searchRes).toEqual([]);
+    expect(mockedInvoke).toHaveBeenCalledWith("search_all_cached_messages", {
+      query: "invoice",
+      limit: 25,
+    });
+  });
 });

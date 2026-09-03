@@ -7,10 +7,7 @@ export interface SanitizedMail {
   blockedImages: number;
 }
 
-export function sanitizeReceivedHtml(
-  input: string,
-  loadRemoteImages = false,
-): SanitizedMail {
+export function sanitizeReceivedHtml(input: string): SanitizedMail {
   const doc = new DOMParser().parseFromString(input, "text/html");
   let blockedImages = 0;
 
@@ -25,6 +22,12 @@ export function sanitizeReceivedHtml(
       if (/^on/i.test(attribute.name)) element.removeAttribute(attribute.name);
       if (attribute.name === "background")
         element.removeAttribute(attribute.name);
+      if (
+        attribute.name === "data-remote-src" ||
+        attribute.name === "data-inline-cid"
+      ) {
+        element.removeAttribute(attribute.name);
+      }
       if (attribute.name === "src" && element.tagName.toLowerCase() !== "img")
         element.removeAttribute(attribute.name);
       if (
@@ -40,7 +43,7 @@ export function sanitizeReceivedHtml(
 
   for (const image of doc.querySelectorAll<HTMLImageElement>("img")) {
     const src = image.getAttribute("src")?.trim() ?? "";
-    if (REMOTE_IMAGE.test(src) && !loadRemoteImages) {
+    if (REMOTE_IMAGE.test(src)) {
       image.dataset.remoteSrc = src.startsWith("//") ? `https:${src}` : src;
       image.removeAttribute("src");
       image.alt = image.alt || "Remote image blocked";
