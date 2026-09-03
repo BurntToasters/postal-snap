@@ -333,14 +333,22 @@ export function Composer({ accountId }: Props) {
     to,
   ]);
 
+  const buildDraftRef = useRef(buildDraft);
+  const saveStateRef = useRef(saveState);
+
+  useEffect(() => {
+    buildDraftRef.current = buildDraft;
+    saveStateRef.current = saveState;
+  }, [buildDraft, saveState]);
+
   useEffect(() => {
     if (!editor) return;
     const saveTimer = window.setInterval(() => {
-      const draft = buildDraft();
+      const draft = buildDraftRef.current();
       if (
         !sending &&
         !isDiscarding.current &&
-        saveState === "unsaved" &&
+        saveStateRef.current === "unsaved" &&
         !saveInFlight.current &&
         hasDraftContent(draft, editor.getText())
       ) {
@@ -372,7 +380,7 @@ export function Composer({ accountId }: Props) {
       }
     }, 30_000);
     return () => window.clearInterval(saveTimer);
-  }, [accountId, buildDraft, editor, saveState, sending, setError]);
+  }, [accountId, editor, sending, setError]);
 
   const saveDraft = useCallback(
     async (showStatus = true) => {
@@ -646,9 +654,10 @@ export function Composer({ accountId }: Props) {
       <button
         className="modal-backdrop"
         type="button"
+        tabIndex={-1}
+        aria-hidden="true"
         onClick={() => void requestClose()}
         disabled={sending || saveState === "saving"}
-        aria-label={strings.composer.saveClose}
       />
       <section
         className={`composer-window${maximized ? " composer-maximized" : ""}`}
@@ -934,6 +943,7 @@ export function Composer({ accountId }: Props) {
             <label className="color-control" title={strings.composer.textColor}>
               <input
                 type="color"
+                aria-label={strings.composer.textColor}
                 defaultValue="#20252b"
                 onChange={(event) =>
                   editor?.chain().focus().setColor(event.target.value).run()
@@ -1143,10 +1153,25 @@ export function Composer({ accountId }: Props) {
 }
 
 function splitAddresses(value: string): string[] {
-  return value
-    .split(/[;,]/)
-    .map((item) => item.trim())
-    .filter(Boolean);
+  const result: string[] = [];
+  let current = "";
+  let inQuotes = false;
+  for (let i = 0; i < value.length; i++) {
+    const char = value[i];
+    if (char === '"' && (i === 0 || value[i - 1] !== "\\")) {
+      inQuotes = !inQuotes;
+      current += char;
+    } else if ((char === "," || char === ";") && !inQuotes) {
+      const trimmed = current.trim();
+      if (trimmed) result.push(trimmed);
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  const last = current.trim();
+  if (last) result.push(last);
+  return result;
 }
 
 function validateRecipientFields(

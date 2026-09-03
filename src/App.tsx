@@ -12,7 +12,11 @@ import { MailShell } from "./components/MailShell";
 import { SettingsDialog, type SettingsTab } from "./components/SettingsDialog";
 import { useAppStore } from "./store";
 import { applySettings } from "./settings";
-import { checkUpdateInteractive, runUpdateSingleFlight } from "./update";
+import {
+  checkUpdateInteractive,
+  runUpdateSingleFlight,
+  startPeriodicUpdateCheck,
+} from "./update";
 
 const Composer = lazy(() =>
   import("./components/Composer").then((module) => ({
@@ -34,19 +38,14 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
   const [settingsRouteRequest, setSettingsRouteRequest] = useState(0);
-  const [checkUpdatesRequest, setCheckUpdatesRequest] = useState(0);
   const [startupError, setStartupError] = useState<string>();
   const [ready, setReady] = useState(!inTauri());
 
-  const openSettings = useCallback(
-    (tab: SettingsTab = "general", checkUpdates = false) => {
-      setSettingsTab(tab);
-      if (!checkUpdates) setSettingsRouteRequest((value) => value + 1);
-      if (checkUpdates) setCheckUpdatesRequest((value) => value + 1);
-      setSettingsOpen(true);
-    },
-    [],
-  );
+  const openSettings = useCallback((tab: SettingsTab = "general") => {
+    setSettingsTab(tab);
+    setSettingsRouteRequest((value) => value + 1);
+    setSettingsOpen(true);
+  }, []);
 
   const loadAccounts = useCallback(async () => {
     try {
@@ -88,6 +87,7 @@ export default function App() {
       .then(() => {
         void runUpdateSingleFlight().catch(() => undefined);
       });
+    const cancelPeriodicCheck = startPeriodicUpdateCheck();
     let active = true;
     const unsubscribers: Array<() => void> = [];
     void api.onSyncState(setSync).then((fn) => {
@@ -105,7 +105,6 @@ export default function App() {
           return;
         }
         if (action === "check-for-updates") {
-          openSettings("updates", true);
           void checkUpdateInteractive();
           return;
         }
@@ -132,15 +131,28 @@ export default function App() {
     });
     return () => {
       active = false;
+      cancelPeriodicCheck();
       unsubscribers.forEach((fn) => fn());
     };
   }, [loadAccounts, openComposer, openSettings, setError, setSync]);
 
   useEffect(() => {
     const keyboard = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key === ",") {
-        event.preventDefault();
-        openSettings();
+      if (event.metaKey || event.ctrlKey) {
+        if (event.key === ",") {
+          event.preventDefault();
+          openSettings();
+        } else if (event.key === "=" || event.key === "+") {
+          event.preventDefault();
+          window.dispatchEvent(
+            new CustomEvent("postal:menu-action", { detail: "text-larger" }),
+          );
+        } else if (event.key === "-") {
+          event.preventDefault();
+          window.dispatchEvent(
+            new CustomEvent("postal:menu-action", { detail: "text-smaller" }),
+          );
+        }
       }
     };
     window.addEventListener("keydown", keyboard);
@@ -219,9 +231,8 @@ export default function App() {
       ) : null}
       {settingsOpen ? (
         <SettingsDialog
-          key={`${settingsTab}:${settingsRouteRequest}:${checkUpdatesRequest}`}
+          key={`${settingsTab}:${settingsRouteRequest}`}
           initialTab={settingsTab}
-          checkUpdatesRequest={checkUpdatesRequest}
           onClose={() => setSettingsOpen(false)}
         />
       ) : null}

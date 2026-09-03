@@ -83,7 +83,7 @@
 .setup-progress span.active,
 .setup-progress span.done {
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-contrast, #fff);
   background: var(--accent);
 }
 
@@ -368,5 +368,5 @@ legend {
 
 .connection-status .text-button {
   width: fit-content;
-  min-height: 40px;
+  min-height: 44px;
 }

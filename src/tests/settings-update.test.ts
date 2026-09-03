@@ -7,17 +7,36 @@ vi.mock("@tauri-apps/plugin-process", () => ({
   relaunch: vi.fn(),
 }));
 
+vi.mock("../api", () => ({
+  api: {
+    showNativeConfirm: vi.fn().mockResolvedValue(true),
+    showNativeMessage: vi.fn().mockResolvedValue(undefined),
+    relaunch: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { removeUpdateFoundListener, runUpdateSingleFlight } from "../update";
+import { api } from "../api";
+import {
+  checkUpdateInteractive,
+  removeUpdateFoundListener,
+  resetUpdateStateForTesting,
+  runUpdateSingleFlight,
+} from "../update";
 
 const mockedCheck = vi.mocked(check);
 const mockedRelaunch = vi.mocked(relaunch);
+const mockedConfirm = vi.mocked(api.showNativeConfirm);
+const mockedMessage = vi.mocked(api.showNativeMessage);
 
 describe("update checks", () => {
   beforeEach(() => {
+    resetUpdateStateForTesting();
     mockedCheck.mockReset();
     mockedRelaunch.mockReset();
+    mockedConfirm.mockReset();
+    mockedMessage.mockReset();
   });
 
   it("shares one in-flight check across Settings dialog instances", async () => {
@@ -100,5 +119,45 @@ describe("update checks", () => {
 
     finishDownload();
     await task;
+  });
+
+  it("shows up-to-date message when no update is available", async () => {
+    mockedCheck.mockResolvedValue(null);
+    await checkUpdateInteractive();
+    expect(mockedMessage).toHaveBeenCalledWith(
+      "Postal Snap",
+      "You're up to date! Postal Snap is currently running the latest version.",
+    );
+    expect(mockedConfirm).not.toHaveBeenCalled();
+  });
+
+  it("prompts to download and then restart when update is found", async () => {
+    const downloadAndInstall = vi.fn().mockResolvedValue(undefined);
+    mockedCheck.mockResolvedValue({
+      version: "0.1.4",
+      downloadAndInstall,
+    } as never);
+    mockedConfirm.mockResolvedValue(true);
+
+    await checkUpdateInteractive();
+
+    expect(mockedConfirm).toHaveBeenCalledTimes(2);
+    expect(downloadAndInstall).toHaveBeenCalledTimes(1);
+    expect(api.relaunch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not download if user declines the download prompt", async () => {
+    const downloadAndInstall = vi.fn().mockResolvedValue(undefined);
+    mockedCheck.mockResolvedValue({
+      version: "0.1.4",
+      downloadAndInstall,
+    } as never);
+    mockedConfirm.mockResolvedValue(false);
+
+    await checkUpdateInteractive();
+
+    expect(mockedConfirm).toHaveBeenCalledTimes(1);
+    expect(downloadAndInstall).not.toHaveBeenCalled();
+    expect(mockedRelaunch).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,5 @@
 import { api } from "./api";
+import { strings } from "./i18n";
 import { useAppStore } from "./store";
 
 export interface UpdateCheckResult {
@@ -18,13 +19,27 @@ export function removeUpdateFoundListener(listener: UpdateFoundListener): void {
   updateFoundListeners.delete(listener);
 }
 
+export function resetUpdateStateForTesting(): void {
+  updateInFlight = undefined;
+  updateFoundListeners.clear();
+  updateFound = false;
+  updateVersion = undefined;
+  updateReadyVersion = undefined;
+  useAppStore.getState().setUpdateReady(null);
+}
+
 export function getUpdateReadyVersion(): string | undefined {
-  return updateReadyVersion;
+  return updateReadyVersion ?? useAppStore.getState().updateReady ?? undefined;
 }
 
 export function runUpdateSingleFlight(
   onUpdateFound?: UpdateFoundListener,
 ): Promise<UpdateCheckResult> {
+  const alreadyReady = getUpdateReadyVersion();
+  if (alreadyReady) {
+    return Promise.resolve({ available: true, version: alreadyReady });
+  }
+
   if (onUpdateFound) {
     updateFoundListeners.add(onUpdateFound);
     if (updateInFlight && updateFound) {
@@ -55,35 +70,25 @@ export function runUpdateSingleFlight(
     return { available: true, version: update.version };
   })();
   updateInFlight = task;
-  void task.then(
-    () => {
-      if (updateInFlight === task) {
-        updateInFlight = undefined;
-        updateFound = false;
-        updateVersion = undefined;
-        updateFoundListeners.clear();
-      }
-    },
-    () => {
-      if (updateInFlight === task) {
-        updateInFlight = undefined;
-        updateFound = false;
-        updateVersion = undefined;
-        updateFoundListeners.clear();
-      }
-    },
-  );
+  const cleanup = () => {
+    if (updateInFlight === task) {
+      updateInFlight = undefined;
+      updateFound = false;
+      updateVersion = undefined;
+      updateFoundListeners.clear();
+    }
+  };
+  void task.then(cleanup, cleanup);
   return task;
 }
 
 export async function promptToRestartForUpdate(
   version?: string,
 ): Promise<void> {
-  const ver =
-    version ?? updateReadyVersion ?? useAppStore.getState().updateReady;
+  const ver = version ?? getUpdateReadyVersion();
   const confirmed = await api.showNativeConfirm(
-    "Update Ready",
-    `Postal Snap ${ver ? `version ${ver}` : "update"} has been downloaded. Would you like to restart now to complete the update?`,
+    strings.update.readyTitle,
+    strings.update.readyPrompt(ver ?? ""),
   );
   if (confirmed) {
     await api.relaunch();
@@ -91,26 +96,77 @@ export async function promptToRestartForUpdate(
 }
 
 export async function checkUpdateInteractive(): Promise<void> {
-  const ready = updateReadyVersion ?? useAppStore.getState().updateReady;
+  const ready = getUpdateReadyVersion();
   if (ready) {
     await promptToRestartForUpdate(ready);
     return;
   }
 
-  try {
-    const result = await runUpdateSingleFlight();
-    if (result.available && result.version) {
-      await promptToRestartForUpdate(result.version);
-    } else {
+  if (updateInFlight) {
+    try {
+      const result = await updateInFlight;
+      if (result.available && result.version) {
+        await promptToRestartForUpdate(result.version);
+      } else {
+        await api.showNativeMessage(
+          strings.update.upToDateTitle,
+          strings.update.upToDateMessage,
+        );
+      }
+    } catch {
       await api.showNativeMessage(
-        "Postal Snap",
-        "You're up to date! Postal Snap is currently running the latest version.",
+        strings.update.checkErrorTitle,
+        strings.update.checkErrorMessage,
       );
     }
+    return;
+  }
+
+  try {
+    const { check } = await import("@tauri-apps/plugin-updater");
+    const update = await check();
+    if (!update) {
+      await api.showNativeMessage(
+        strings.update.upToDateTitle,
+        strings.update.upToDateMessage,
+      );
+      return;
+    }
+
+    const shouldDownload = await api.showNativeConfirm(
+      strings.update.availableTitle,
+      strings.update.availablePrompt(update.version),
+    );
+    if (!shouldDownload) return;
+
+    try {
+      await update.downloadAndInstall();
+      updateReadyVersion = update.version;
+      useAppStore.getState().setUpdateReady(update.version);
+    } catch {
+      await api.showNativeMessage(
+        strings.update.downloadErrorTitle,
+        strings.update.downloadErrorMessage,
+      );
+      return;
+    }
+
+    await promptToRestartForUpdate(update.version);
   } catch {
     await api.showNativeMessage(
-      "Check for Updates",
-      "Postal Snap could not connect to the update service. Please check your internet connection and try again.",
+      strings.update.checkErrorTitle,
+      strings.update.checkErrorMessage,
     );
   }
+}
+
+export function startPeriodicUpdateCheck(
+  intervalMs = 4 * 60 * 60 * 1000,
+): () => void {
+  const timer = window.setInterval(() => {
+    if (!getUpdateReadyVersion()) {
+      void runUpdateSingleFlight().catch(() => undefined);
+    }
+  }, intervalMs);
+  return () => window.clearInterval(timer);
 }

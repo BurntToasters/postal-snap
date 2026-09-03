@@ -147,7 +147,7 @@
   gap: 5px;
   padding-right: 10px;
   color: var(--text-muted);
-  font-size: 0.76rem;
+  font-size: 0.84rem;
 }
 
 .search-scope input {
@@ -158,48 +158,54 @@
 .update-ready-badge {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   min-height: 44px;
-  padding: 6px 14px;
+  padding: 6px 16px;
   border: 1px solid var(--accent);
   border-radius: 9999px;
   background: var(--accent-soft);
   color: var(--accent);
-  font-size: 0.84rem;
+  font-size: 0.92rem;
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
   transition:
     background-color 0.15s ease,
+    color 0.15s ease,
     transform 0.1s ease;
 }
 
 .update-ready-badge:hover {
   background: var(--accent);
-  color: #ffffff;
+  color: var(--accent-contrast, #ffffff);
 }
 
 .update-ready-badge .badge-dot {
-  width: 8px;
-  height: 8px;
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
-  background: #10b981;
-  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.25);
-  animation: pulse-badge 2s infinite;
+  background: var(--success, #18794e);
+  box-shadow: 0 0 0 2px rgba(24, 121, 78, 0.25);
+  animation: pulse-badge 2.5s infinite;
+}
+
+:root[data-theme="dark"] .update-ready-badge .badge-dot {
+  background: var(--success, #6bd6a6);
+  box-shadow: 0 0 0 2px rgba(107, 214, 166, 0.25);
 }
 
 @keyframes pulse-badge {
   0% {
     transform: scale(0.95);
-    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.6);
+    box-shadow: 0 0 0 0 rgba(24, 121, 78, 0.5);
   }
   70% {
     transform: scale(1.05);
-    box-shadow: 0 0 0 5px rgba(16, 185, 129, 0);
+    box-shadow: 0 0 0 6px rgba(24, 121, 78, 0);
   }
   100% {
     transform: scale(0.95);
-    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+    box-shadow: 0 0 0 0 rgba(24, 121, 78, 0);
   }
 }
 
@@ -225,7 +231,7 @@
   gap: 5px;
   padding: 0 5px 8px;
   color: var(--text-muted);
-  font-size: 0.72rem;
+  font-size: 0.8rem;
   font-weight: 750;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -270,7 +276,7 @@
 .sidebar-section-title {
   margin: 13px 10px 4px;
   color: var(--text-muted);
-  font-size: 0.7rem;
+  font-size: 0.78rem;
   font-weight: 750;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -313,9 +319,10 @@
   padding: 2px 6px;
   text-align: center;
   border-radius: 12px;
-  color: #fff;
+  color: var(--accent-contrast, #fff);
   background: var(--accent);
-  font-size: 0.72rem;
+  font-size: 0.78rem;
+  font-weight: 700;
 }
 
 .sync-indicator {
@@ -325,7 +332,7 @@
   margin-top: auto;
   padding: 11px 6px 2px;
   color: var(--text-muted);
-  font-size: 0.75rem;
+  font-size: 0.82rem;
 }
 
 .sync-indicator > span:first-child {
@@ -459,7 +466,7 @@
 .message-date {
   grid-area: date;
   color: var(--text-muted);
-  font-size: 0.76rem;
+  font-size: 0.82rem;
   font-variant-numeric: tabular-nums;
 }
 
