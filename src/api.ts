@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { normalizeIpcError } from "./errors";
 import type {
   AccountChangeEvent,
+  AccountInboxCount,
   AccountRemovalOutcome,
   AccountSetupRequest,
   AccountSummary,
@@ -78,9 +79,15 @@ export const api = {
     call<AccountSummary>("add_account", { request }),
   removeAccount: (accountId: string) =>
     call<AccountRemovalOutcome>("remove_account", { accountId }),
+  updateAccountDisplayName: (accountId: string, displayName: string) =>
+    call<void>("update_account_display_name", { accountId, displayName }),
+  getAccountInboxCounts: () =>
+    call<AccountInboxCount[]>("get_account_inbox_counts"),
   listMailboxes: (accountId: string) =>
     call<MailboxSummary[]>("list_mailboxes", { accountId }),
+  listAllMailboxes: () => call<MailboxSummary[]>("list_all_mailboxes"),
   syncAccount: (accountId: string) => call<void>("sync_account", { accountId }),
+  syncAllAccounts: () => call<string[]>("sync_all_accounts"),
   listMessages: (
     accountId: string,
     mailboxId: number,
@@ -116,6 +123,8 @@ export const api = {
     }),
   searchCached: (query: SearchQuery) =>
     call<MessageSummary[]>("search_cached_messages", { query }),
+  searchAllCached: (query: string, limit?: number) =>
+    call<MessageSummary[]>("search_all_cached_messages", { query, limit }),
   searchServer: (query: SearchQuery) =>
     call<MessageSummary[]>("search_server_messages", { query }),
   saveDraft: (draft: ComposeDraft) =>
@@ -243,6 +252,29 @@ export const api = {
   async onAppWarning(handler: (warning: string) => void): Promise<UnlistenFn> {
     if (!inTauri()) return () => undefined;
     return listen<string>("app-warning", ({ payload }) => handler(payload));
+  },
+  discoverAccountAliases: (accountId: string) =>
+    call<AccountSummary>("discover_account_aliases", { accountId }),
+  updateAccountAliases: (accountId: string, aliases: string[]) =>
+    call<AccountSummary>("update_account_aliases", { accountId, aliases }),
+  showNativeConfirm: (title: string, message: string) => {
+    if (!inTauri())
+      return Promise.resolve(window.confirm(`${title}\n\n${message}`));
+    return call<boolean>("show_native_confirm", { title, message });
+  },
+  showNativeMessage: (title: string, message: string) => {
+    if (!inTauri()) {
+      window.alert(`${title}\n\n${message}`);
+      return Promise.resolve();
+    }
+    return call<void>("show_native_message", { title, message });
+  },
+  relaunch: () => {
+    if (!inTauri()) {
+      window.location.reload();
+      return Promise.resolve();
+    }
+    return call<void>("relaunch_app");
   },
 };
 

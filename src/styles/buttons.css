@@ -1,0 +1,73 @@
+.primary-button,
+.secondary-button,
+.toolbar-button,
+.icon-button,
+.add-account-button,
+.danger-button {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 8px 13px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.primary-button {
+  border-color: var(--accent);
+  color: #fff;
+  background: var(--accent);
+  font-weight: 700;
+}
+
+.primary-button:hover {
+  background: var(--accent-hover);
+}
+
+.secondary-button:hover,
+.toolbar-button:hover,
+.icon-button:hover,
+.add-account-button:hover {
+  background: var(--surface-hover);
+}
+
+.icon-button {
+  width: 44px;
+  padding: 8px;
+}
+
+.primary-button svg,
+.secondary-button svg,
+.toolbar-button svg,
+.icon-button svg,
+.add-account-button svg {
+  width: 19px;
+  height: 19px;
+}
+
+.danger-button {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+  color: var(--danger);
+  background: transparent;
+}
+
+.text-button,
+.back-button,
+.discard-button,
+.cc-toggle {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  color: var(--accent);
+  background: transparent;
+}
+
+.full-button {
+  width: 100%;
+  min-height: 50px;
+}

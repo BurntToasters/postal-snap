@@ -1,0 +1,419 @@
+/* Dialogs and composer */
+.modal-layer {
+  position: fixed;
+  z-index: 30;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+}
+
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+  background: rgb(15 25 33 / 52%);
+}
+
+.setup-modal .setup-page {
+  position: relative;
+  z-index: 1;
+  width: min(820px, 100%);
+  max-height: 94vh;
+  min-height: auto;
+  padding: 0;
+  background: transparent;
+}
+
+.setup-dialog {
+  position: relative;
+  z-index: 1;
+  width: min(820px, 100%);
+  max-height: 94vh;
+}
+
+.setup-modal .setup-card {
+  max-height: 92vh;
+  overflow: auto;
+}
+
+.composer-window {
+  position: relative;
+  z-index: 1;
+  width: min(940px, 96vw);
+  max-height: 94vh;
+  height: min(780px, 94vh);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.composer-layer-maximized {
+  padding: 0;
+}
+
+.composer-window.composer-maximized {
+  width: 100vw;
+  height: 100vh;
+  max-height: 100vh;
+  border-radius: 0;
+  border: none;
+}
+
+.composer-window-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.composer-docked-pill {
+  position: fixed;
+  z-index: 1000;
+  bottom: 24px;
+  right: 28px;
+  display: flex;
+  align-items: center;
+  max-width: 380px;
+  min-height: 48px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.18);
+  overflow: hidden;
+  animation: slide-up 0.2s ease-out;
+}
+
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.docked-pill-restore {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 8px 14px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  min-width: 180px;
+  max-width: 260px;
+}
+
+.docked-pill-restore:hover {
+  background: var(--surface-hover);
+}
+
+.docked-pill-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.docked-pill-status {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.docked-pill-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 8px;
+}
+
+.composer-window > header {
+  display: flex;
+  min-height: 58px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px 8px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.composer-window > header > span {
+  display: grid;
+}
+
+.composer-window h1 {
+  margin: 0;
+  font-size: 1.18rem;
+}
+
+.composer-window header small {
+  color: var(--text-muted);
+}
+
+.address-fields {
+  position: relative;
+  display: grid;
+  padding: 5px 16px;
+}
+
+.address-fields label {
+  position: relative;
+  display: grid;
+  min-height: 44px;
+  grid-template-columns: 70px 1fr;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+}
+
+.address-fields label span {
+  font-weight: 700;
+}
+
+.address-fields input {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.address-fields .from-field input {
+  color: var(--text-muted);
+}
+
+.composer-from-select {
+  border: 0;
+  background: transparent;
+  font-weight: 500;
+  color: var(--text);
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  max-width: calc(100% - 20px);
+}
+
+.composer-from-select:hover,
+.composer-from-select:focus-visible {
+  background: var(--surface-hover);
+}
+
+.address-fields .to-field input {
+  padding-right: 64px;
+}
+
+.cc-toggle {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%);
+  font-size: 0.82rem;
+}
+
+.format-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  overflow-x: visible;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-muted);
+}
+
+.toolbar-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.toolbar-group > button {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  padding: 0;
+}
+
+.toolbar-group > button:hover,
+.toolbar-group > button.active {
+  border-color: var(--border);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.toolbar-group button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.toolbar-group select {
+  width: auto;
+  min-height: 32px;
+  padding: 2px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  font-size: 0.85rem;
+}
+
+.toolbar-group select:hover {
+  background: var(--surface-hover);
+}
+
+.toolbar-group .color-control {
+  width: 32px;
+  height: 32px;
+}
+
+.send-kbd-hint {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 5px;
+  font-size: 0.74rem;
+  opacity: 0.8;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.color-control {
+  position: relative;
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+}
+
+.color-control input {
+  position: absolute;
+  inset: 0;
+  min-height: 44px;
+  opacity: 0;
+}
+
+.color-control span {
+  font-weight: 800;
+  text-decoration: underline 3px;
+}
+
+.composer-window > div:has(.composer-editor) {
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+.composer-window .tiptap {
+  height: 100%;
+  padding: 18px 21px;
+  overflow: auto;
+  outline: none;
+  line-height: 1.5;
+}
+
+.composer-window .tiptap:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--focus);
+}
+
+.tiptap p:first-child {
+  margin-top: 0;
+}
+
+.composer-editor table {
+  border-collapse: collapse;
+}
+
+.composer-editor td,
+.composer-editor th {
+  min-width: 80px;
+  padding: 6px;
+  border: 1px solid #999;
+}
+
+.compose-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 7px 15px;
+  border-top: 1px solid var(--border);
+}
+
+.compose-attachments span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding-left: 10px;
+  border-radius: 18px;
+  background: var(--surface-muted);
+}
+
+.compose-attachments button {
+  min-width: 44px;
+  min-height: 44px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+}
+
+.draft-sync-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.7rem;
+  padding: 0.7rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--warning) 10%, var(--surface));
+  color: var(--text);
+}
+
+.draft-sync-banner > svg {
+  width: 1.25rem;
+  flex: 0 0 auto;
+  color: var(--warning);
+}
+
+.draft-sync-banner span {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.draft-sync-banner small {
+  color: var(--text-muted);
+}
+
+.composer-window footer {
+  display: flex;
+  gap: 7px;
+  padding: 9px 15px;
+  border-top: 1px solid var(--border);
+}
+
+.composer-window .discard-button {
+  margin-left: auto;
+  color: var(--danger);
+}
+
+.field-error {
+  margin: 4px 0 6px 15px;
+  color: var(--danger);
+  font-size: 0.84rem;
+  font-weight: 600;
+  line-height: 1.3;
+}

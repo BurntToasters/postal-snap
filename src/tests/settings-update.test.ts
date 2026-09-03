@@ -38,7 +38,7 @@ describe("update checks", () => {
     await expect(first).resolves.toEqual({ available: false });
   });
 
-  it("reports the version before downloading and relaunching", async () => {
+  it("reports the version and downloads without auto-relaunching", async () => {
     const downloadAndInstall = vi.fn().mockResolvedValue(undefined);
     mockedCheck.mockResolvedValue({
       version: "0.1.2",
@@ -53,7 +53,7 @@ describe("update checks", () => {
     });
     expect(onUpdateFound).toHaveBeenCalledWith("0.1.2");
     expect(downloadAndInstall).toHaveBeenCalledTimes(1);
-    expect(mockedRelaunch).toHaveBeenCalledTimes(1);
+    expect(mockedRelaunch).not.toHaveBeenCalled();
   });
 
   it("allows an unmounted settings view to unsubscribe", async () => {

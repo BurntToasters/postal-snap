@@ -2,8 +2,8 @@
 
 | <img height="20" src="https://raw.githubusercontent.com/BurntToasters/bcls/main/media/windows.png" /> Windows                                                                                                                                                                                      | <img height="20" src="https://raw.githubusercontent.com/BurntToasters/bcls/main/media/mac.png" /> macOS                           | <img height="20" src="https://raw.githubusercontent.com/BurntToasters/bcls/main/media/linux.png" /> Linux                                                                                                                                                                       |
 | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | :-------------------------------------------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **EXE:** [x64](https://github.com/BurntToasters/postal-snap/releases/download/v0.1.2/Postal-Snap-Windows-x64.exe) / [arm64](https://github.com/BurntToasters/postal-snap/releases/download/v0.1.2/Postal-Snap-Windows-arm64.exe)                                                                   | **[Universal DMG](https://github.com/BurntToasters/postal-snap/releases/download/v0.1.2/Postal-Snap-macOS.dmg)**                  | **AppImage:** [x64](https://github.com/BurntToasters/postal-snap/releases/download/v0.1.2/Postal-Snap-Linux-x64.AppImage) / [arm64](https://github.com/BurntToasters/postal-snap/releases/download/v0.1.2/Postal-Snap-Linux-arm64.AppImage)                                    |
-| <!-- <div align="center"><a href="https://apps.microsoft.com/detail/<MS_STORE_ID>?referrer=appbadge&mode=full"><img src="https://get.microsoft.com/images/en-us%20light.svg" width="150"/></a></div> -->                                                                                           | **[Universal ZIP](https://github.com/BurntToasters/postal-snap/releases/download/v0.1.2/Postal-Snap-macOS.zip)**                  | **Flatpak:** [x64](https://github.com/BurntToasters/postal-snap/releases/download/v0.1.2/Postal-Snap-Linux-x64.flatpak) / [arm64](https://github.com/BurntToasters/postal-snap/releases/download/v0.1.2/Postal-Snap-Linux-arm64.flatpak)                                        |
+| **EXE:** [x64](https://github.com/BurntToasters/postal-snap/releases/download/v0.1.3/Postal-Snap-Windows-x64.exe) / [arm64](https://github.com/BurntToasters/postal-snap/releases/download/v0.1.3/Postal-Snap-Windows-arm64.exe)                                                                   | **[Universal DMG](https://github.com/BurntToasters/postal-snap/releases/download/v0.1.3/Postal-Snap-macOS.dmg)**                  | **AppImage:** [x64](https://github.com/BurntToasters/postal-snap/releases/download/v0.1.3/Postal-Snap-Linux-x64.AppImage) / [arm64](https://github.com/BurntToasters/postal-snap/releases/download/v0.1.3/Postal-Snap-Linux-arm64.AppImage)                                    |
+| <!-- <div align="center"><a href="https://apps.microsoft.com/detail/<MS_STORE_ID>?referrer=appbadge&mode=full"><img src="https://get.microsoft.com/images/en-us%20light.svg" width="150"/></a></div> -->                                                                                           | **[Universal ZIP](https://github.com/BurntToasters/postal-snap/releases/download/v0.1.3/Postal-Snap-macOS.zip)**                  | **Flatpak:** [x64](https://github.com/BurntToasters/postal-snap/releases/download/v0.1.3/Postal-Snap-Linux-x64.flatpak) / [arm64](https://github.com/BurntToasters/postal-snap/releases/download/v0.1.3/Postal-Snap-Linux-arm64.flatpak)                                        |
 
 > [!IMPORTANT]
 > The `.sig` files in this repo are NOT normal gpg signatures — they are for Tauri V2's
@@ -16,6 +16,17 @@
 ### ℹ️ Enjoying Postal Snap? Consider [❤️ Supporting Me! ❤️](https://rosie.run/support)
 
 Postal Snap is a calm, accessible desktop email client. Mail stays on your computer. There is no Postal Snap cloud, telemetry, or account of mine to log into.
+
+## Changes in `v0.1.3:`
+
+- **NEW - iCloud Aliases & Custom Domains:** Discover and manage iCloud email aliases and custom domains via CalDAV, with support for sending from any alias.
+- **NEW - Auto-download newest messages:** Automatically prefetch message bodies for recent incoming messages during sync.
+- **NEW - Full Sync / Download All:** Added "All messages (Download all)" storage option that automatically configures cache limits to unlimited.
+- **NEW - Update Ready Badge & Native Dialog:** Non-intrusive toolbar badge when a signed update is downloaded and ready, with native OS dialog confirmation to restart.
+- **NEW - Native OS Dialogs:** Native modal dialogs across macOS, Windows, and Linux for confirmations and alerts.
+- **UI:** Overhauled rich composer with docked minimize pill mode, full-screen maximize toggle, keyboard shortcut sending (`⌘↵` / `Ctrl+Enter`), and clean grouped toolbar without horizontal scrollbars.
+- **UI:** Modernized Settings dialog with card-based section layout and dedicated alias management.
+- **PKG:** Updated packages.
 
 ## Changes in `v0.1.2:`
 

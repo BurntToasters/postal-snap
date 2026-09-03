@@ -252,11 +252,18 @@ fn parse_and_validate(raw: &str) -> Result<AppSettings, String> {
 }
 
 fn validate(settings: &AppSettings) -> Result<(), String> {
+    let valid_cache_max_bytes = settings.cache_policy.max_bytes == 0
+        || (100 * 1024 * 1024..=100 * 1024 * 1024 * 1024)
+            .contains(&settings.cache_policy.max_bytes);
+    let valid_cache_days = if settings.cache_policy.mode == "full" {
+        true
+    } else {
+        (1..=3650).contains(&settings.cache_policy.days)
+    };
     if settings.schema_version != 2
         || !(0.85..=2.0).contains(&settings.text_scale)
-        || settings.cache_policy.max_bytes < 100 * 1024 * 1024
-        || settings.cache_policy.max_bytes > 100 * 1024 * 1024 * 1024
-        || !(1..=3650).contains(&settings.cache_policy.days)
+        || !valid_cache_max_bytes
+        || !valid_cache_days
         || !matches!(
             settings.reading_pane.as_str(),
             "right" | "bottom" | "hidden"
@@ -613,5 +620,25 @@ mod tests {
         assert_eq!(reset.density, "comfortable");
         assert_eq!(reset.last_account_id, Some(account_id));
         assert_eq!(reset.last_mailbox_id, Some(42));
+    }
+
+    #[test]
+    fn unlimited_storage_and_full_mode_pass_validation() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let store = SettingsStore::load(path, &Database::memory()).unwrap();
+        let settings = AppSettings {
+            cache_policy: CachePolicy {
+                mode: "full".into(),
+                days: 0,
+                max_bytes: 0,
+            },
+            ..AppSettings::default()
+        };
+        store.save(settings).unwrap();
+        let loaded = store.get().unwrap();
+        assert_eq!(loaded.cache_policy.mode, "full");
+        assert_eq!(loaded.cache_policy.max_bytes, 0);
+        assert!(loaded.cache_policy.is_unlimited());
     }
 }

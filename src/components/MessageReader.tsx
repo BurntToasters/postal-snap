@@ -60,23 +60,44 @@ export function MessageReader() {
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [message, selectMessage, settings.readingPane]);
 
+  const menuHandlersRef = useRef({
+    message,
+    openComposer,
+    forwardMessage,
+    move,
+    setRead,
+    setStarred,
+  });
+
   useEffect(() => {
-    if (!message) return;
+    menuHandlersRef.current = {
+      message,
+      openComposer,
+      forwardMessage,
+      move,
+      setRead,
+      setStarred,
+    };
+  });
+
+  useEffect(() => {
     const menuAction = (event: Event) => {
+      const h = menuHandlersRef.current;
+      if (!h.message) return;
       const action = (event as CustomEvent<string>).detail;
       if (action === "reply")
-        openComposer({ sourceMessage: message, composeMode: "reply" });
+        h.openComposer({ sourceMessage: h.message, composeMode: "reply" });
       if (action === "reply-all")
-        openComposer({ sourceMessage: message, composeMode: "replyAll" });
-      if (action === "forward") void forwardMessage();
-      if (action === "archive") void move("archive");
-      if (action === "trash") void move("trash");
-      if (action === "toggle-read") void setRead();
-      if (action === "toggle-star") void setStarred();
+        h.openComposer({ sourceMessage: h.message, composeMode: "replyAll" });
+      if (action === "forward") void h.forwardMessage();
+      if (action === "archive") void h.move("archive");
+      if (action === "trash") void h.move("trash");
+      if (action === "toggle-read") void h.setRead();
+      if (action === "toggle-star") void h.setStarred();
     };
     window.addEventListener("postal:menu-action", menuAction);
     return () => window.removeEventListener("postal:menu-action", menuAction);
-  });
+  }, []);
 
   const htmlBody = message?.htmlBody;
   const attachments = message?.attachments;
@@ -84,6 +105,15 @@ export function MessageReader() {
     () => (htmlBody ? sanitizeReceivedHtml(htmlBody) : undefined),
     [htmlBody],
   );
+  const currentLoadedHtml =
+    loadedHtml && loadedHtml.messageId === message?.id
+      ? loadedHtml.html
+      : undefined;
+  const remainingBlockedImages = useMemo(() => {
+    if (!sanitized) return 0;
+    if (!currentLoadedHtml) return sanitized.blockedImages;
+    return (currentLoadedHtml.match(/data-remote-src=/g) || []).length;
+  }, [sanitized, currentLoadedHtml]);
   const inlineAttachments = useMemo(
     () => attachments?.filter((attachment) => attachment.inline) ?? [],
     [attachments],
@@ -91,10 +121,6 @@ export function MessageReader() {
   const messageId = message?.id;
   const messageAccountId = message?.accountId;
   const loadingImages = loadingImagesFor === messageId;
-  const currentLoadedHtml =
-    loadedHtml && loadedHtml.messageId === message?.id
-      ? loadedHtml.html
-      : undefined;
   const frameHtml = messageFrameDocument(
     currentLoadedHtml ?? sanitized?.html ?? "",
     settings.textScale,
@@ -127,15 +153,22 @@ export function MessageReader() {
   function wireFrameLinks() {
     const body = frame.current?.contentDocument?.body;
     if (!body) return;
-    const handleLink = (event: MouseEvent) => {
+    const handleLink = async (event: MouseEvent) => {
       const target = (event.target as HTMLElement).closest<HTMLAnchorElement>(
         "a[href]",
       );
       if (!target) return;
       event.preventDefault();
       const url = target.href;
-      if (/^https?:/i.test(url) && window.confirm(strings.reader.openLink(url)))
-        void openUrl(url);
+      if (/^https?:/i.test(url)) {
+        const confirmed = await api.showNativeConfirm(
+          strings.appName,
+          strings.reader.openLink(url),
+        );
+        if (confirmed) {
+          void openUrl(url);
+        }
+      }
       if (/^mailto:/i.test(url)) openComposer({ prefill: parseMailto(url) });
     };
     body.addEventListener("click", handleLink);
@@ -153,20 +186,25 @@ export function MessageReader() {
       );
       const images = [
         ...doc.querySelectorAll<HTMLImageElement>("img[data-remote-src]"),
-      ];
-      await Promise.all(
-        images.map(async (image) => {
-          const url = image.dataset.remoteSrc;
-          if (!url) return;
-          try {
-            image.src = await api.fetchRemoteImage(url);
-            image.removeAttribute("data-remote-src");
-            image.classList.remove("remote-image-blocked");
-          } catch {
-            // Keep placeholder on individual image error without blocking other images
-          }
-        }),
-      );
+      ].slice(0, 60);
+      const batchSize = 4;
+      for (let i = 0; i < images.length; i += batchSize) {
+        if (contentOperation.current !== operation) break;
+        const batch = images.slice(i, i + batchSize);
+        await Promise.all(
+          batch.map(async (image) => {
+            const url = image.dataset.remoteSrc;
+            if (!url) return;
+            try {
+              image.src = await api.fetchRemoteImage(url);
+              image.removeAttribute("data-remote-src");
+              image.classList.remove("remote-image-blocked");
+            } catch {
+              // Keep placeholder on individual image error without blocking other images
+            }
+          }),
+        );
+      }
       if (message && contentOperation.current === operation)
         await hydrateInlineImages(
           doc,
@@ -536,7 +574,7 @@ export function MessageReader() {
           onClick={() => selectMessage(undefined)}
           aria-label={strings.reader.backToList}
         >
-          <ArrowLeft />
+          <ArrowLeft aria-hidden="true" />
           {strings.common.back}
         </button>
         {settings.readingPane === "hidden" ? (
@@ -546,7 +584,7 @@ export function MessageReader() {
             onClick={() => selectMessage(undefined)}
             aria-label={strings.reader.closeMessage}
           >
-            <X />
+            <X aria-hidden="true" />
           </button>
         ) : null}
         <button
@@ -711,16 +749,20 @@ export function MessageReader() {
           }).format(new Date(message.receivedAt))}
         </time>
       </header>
-      {sanitized && sanitized.blockedImages > 0 && !currentLoadedHtml ? (
+      {sanitized && remainingBlockedImages > 0 ? (
         <div className="remote-content-banner">
-          <Image />
-          <span>{strings.reader.blockedImages(sanitized.blockedImages)}</span>
+          <Image aria-hidden="true" />
+          <span>{strings.reader.blockedImages(remainingBlockedImages)}</span>
           <button
             type="button"
             onClick={() => void loadImages()}
             disabled={loadingImages}
           >
-            {loadingImages ? strings.common.loading : strings.reader.loadImages}
+            {loadingImages
+              ? strings.common.loading
+              : currentLoadedHtml
+                ? "Retry loading images"
+                : strings.reader.loadImages}
           </button>
         </div>
       ) : null}
@@ -753,7 +795,7 @@ export function MessageReader() {
                   void download(attachment.id, attachment.filename)
                 }
               >
-                <Download />
+                <Download aria-hidden="true" />
                 <span>
                   <strong>{attachment.filename}</strong>
                   <small>{formatBytes(attachment.size)}</small>
