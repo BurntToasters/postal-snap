@@ -152,7 +152,8 @@
   }
 
   .reader-actions {
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
+    gap: 4px;
     padding-inline: 8px;
   }
 
@@ -279,7 +280,24 @@
   .folder.active,
   .message-row.selected,
   .primary-button,
-  .settings-nav button.active {
+  .settings-nav button.active,
+  .update-ready-badge {
+    border: 2px solid Highlight;
+  }
+
+  .settings-window,
+  .composer-window,
+  .setup-card {
+    border: 2px solid CanvasText;
+  }
+
+  .pane-splitter:hover::after,
+  .pane-splitter:focus-visible::after {
+    background: Highlight;
+    outline: 2px solid Highlight;
+  }
+
+  .toolbar-group > button.active {
     border: 2px solid Highlight;
   }
 
@@ -289,7 +307,8 @@
   }
 
   .unread-dot,
-  .sync-indicator > span:first-child {
+  .sync-indicator > span:first-child,
+  .update-ready-badge .badge-dot {
     forced-color-adjust: none;
   }
 }

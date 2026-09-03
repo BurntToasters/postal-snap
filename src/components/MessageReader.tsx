@@ -2,6 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
   ArrowLeft,
+  Check,
+  ChevronDown,
+  ChevronUp,
+  Copy,
   Download,
   FolderInput,
   Forward,
@@ -12,12 +16,14 @@ import {
   Reply,
   ReplyAll,
   ShieldAlert,
+  ShieldCheck,
   Star,
   Trash2,
   X,
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "../api";
+import { formatBytes, formatFullMessageDate } from "../format";
 import { strings } from "../i18n";
 import { parseMailto } from "../mailto";
 import { messageFrameDocument, sanitizeReceivedHtml } from "../security";
@@ -37,6 +43,7 @@ export function MessageReader() {
   const openComposer = useAppStore((state) => state.openComposer);
   const settings = useAppStore((state) => state.settings);
   const setError = useAppStore((state) => state.setError);
+  const accounts = useAppStore((state) => state.accounts);
   const frame = useRef<HTMLIFrameElement>(null);
   const contentOperation = useRef(0);
   const starredOperation = useRef(0);
@@ -50,6 +57,23 @@ export function MessageReader() {
   const [loadingImagesFor, setLoadingImagesFor] = useState<number>();
   const [preparingForward, setPreparingForward] = useState(false);
   const [showDetailsFor, setShowDetailsFor] = useState<number>();
+
+  const account = accounts.find((a) => a.id === message?.accountId);
+  const currentMailbox = mailboxes.find((m) => m.id === message?.mailboxId);
+  const isArchiveMailbox = currentMailbox?.role === "archive";
+  const isTrashMailbox = currentMailbox?.role === "trash";
+  const isJunkMailbox = currentMailbox?.role === "junk";
+
+  async function handleExternalLink(url: string) {
+    if (!/^https?:/i.test(url)) return;
+    const confirmed = await api.showNativeConfirm(
+      strings.appName,
+      strings.reader.openLink(url),
+    );
+    if (confirmed) {
+      await openUrl(url);
+    }
+  }
 
   useEffect(() => {
     if (settings.readingPane !== "hidden" || !message) return;
@@ -154,6 +178,7 @@ export function MessageReader() {
     const body = frame.current?.contentDocument?.body;
     if (!body) return;
     const handleLink = async (event: MouseEvent) => {
+      if (event.button > 1) return;
       const target = (event.target as HTMLElement).closest<HTMLAnchorElement>(
         "a[href]",
       );
@@ -660,6 +685,7 @@ export function MessageReader() {
         <button
           type="button"
           onClick={() => void move("archive")}
+          disabled={isArchiveMailbox}
           aria-label={strings.reader.archive}
           title={strings.reader.archive}
         >
@@ -668,6 +694,7 @@ export function MessageReader() {
         <button
           type="button"
           onClick={() => void move("junk")}
+          disabled={isJunkMailbox}
           aria-label={strings.reader.junk}
           title={strings.reader.junk}
         >
@@ -676,6 +703,7 @@ export function MessageReader() {
         <button
           type="button"
           onClick={() => void move("trash")}
+          disabled={isTrashMailbox}
           aria-label={strings.reader.trash}
           title={strings.reader.trash}
         >
@@ -693,7 +721,11 @@ export function MessageReader() {
           >
             <option value="">{strings.reader.move}</option>
             {mailboxes
-              .filter((mailbox) => mailbox.id !== message.mailboxId)
+              .filter(
+                (mailbox) =>
+                  mailbox.accountId === message.accountId &&
+                  mailbox.id !== message.mailboxId,
+              )
               .map((mailbox) => (
                 <option key={mailbox.id} value={mailbox.id}>
                   {mailbox.displayName}
@@ -712,21 +744,25 @@ export function MessageReader() {
             .toUpperCase()}
         </div>
         <div className="sender-details">
-          <strong>{message.senderName || message.senderAddress}</strong>
-          <span>{message.senderAddress}</span>
-          <span>
-            {strings.reader.to} {message.to.join(", ")}
-          </span>
-          {showDetails && message.cc && message.cc.length > 0 ? (
-            <span>
-              {strings.reader.cc} {message.cc.join(", ")}
+          <div className="sender-primary-line">
+            <strong className="sender-name">
+              {message.senderName || message.senderAddress}
+            </strong>
+            {message.senderName &&
+            message.senderName !== message.senderAddress ? (
+              <span className="sender-address-muted">
+                &lt;{message.senderAddress}&gt;
+              </span>
+            ) : null}
+          </div>
+          <div className="recipient-summary">
+            <span className="recipient-label">{strings.reader.to}</span>
+            <span className="recipient-preview">
+              {message.to.length > 0
+                ? message.to.join(", ")
+                : strings.reader.noRecipients}
             </span>
-          ) : null}
-          {showDetails && message.replyTo ? (
-            <span>
-              {strings.reader.replyTo} {message.replyTo}
-            </span>
-          ) : null}
+          </div>
           <button
             type="button"
             className="details-toggle"
@@ -736,10 +772,24 @@ export function MessageReader() {
               )
             }
             aria-expanded={showDetails}
+            aria-controls="message-details-panel"
+            aria-label={
+              showDetails
+                ? strings.reader.hideDetails
+                : strings.reader.showDetails
+            }
           >
-            {showDetails
-              ? strings.reader.hideDetails
-              : strings.reader.showDetails}
+            {showDetails ? (
+              <>
+                <ChevronUp size={15} aria-hidden="true" />
+                {strings.reader.hideDetails}
+              </>
+            ) : (
+              <>
+                <ChevronDown size={15} aria-hidden="true" />
+                {strings.reader.showDetails}
+              </>
+            )}
           </button>
         </div>
         <time dateTime={message.receivedAt}>
@@ -748,11 +798,108 @@ export function MessageReader() {
             timeStyle: "short",
           }).format(new Date(message.receivedAt))}
         </time>
+        {showDetails ? (
+          <div
+            id="message-details-panel"
+            className="message-details-panel"
+            role="region"
+            aria-label={strings.reader.showDetails}
+          >
+            <dl className="details-grid">
+              <dt>{strings.reader.from}</dt>
+              <dd className="address-row">
+                <span className="address-chip">
+                  <strong>{message.senderName || message.senderAddress}</strong>
+                  {message.senderName &&
+                  message.senderName !== message.senderAddress ? (
+                    <span className="address-spec">
+                      &lt;{message.senderAddress}&gt;
+                    </span>
+                  ) : null}
+                </span>
+                <CopyButton
+                  text={message.senderAddress}
+                  title={strings.reader.copyAddress}
+                />
+              </dd>
+              {message.replyTo && message.replyTo !== message.senderAddress ? (
+                <>
+                  <dt>{strings.reader.replyTo}</dt>
+                  <dd className="address-row reply-to-highlight">
+                    <span className="address-chip">{message.replyTo}</span>
+                    <CopyButton
+                      text={message.replyTo}
+                      title={strings.reader.copyAddress}
+                    />
+                  </dd>
+                </>
+              ) : null}
+              <dt>{strings.reader.to}</dt>
+              <dd className="recipients-list">
+                {message.to.length > 0 ? (
+                  message.to.map((addr) => (
+                    <span key={addr} className="address-chip">
+                      {addr}
+                    </span>
+                  ))
+                ) : (
+                  <span>{strings.reader.noRecipients}</span>
+                )}
+              </dd>
+              {message.cc && message.cc.length > 0 ? (
+                <>
+                  <dt>{strings.reader.cc}</dt>
+                  <dd className="recipients-list">
+                    {message.cc.map((addr) => (
+                      <span key={addr} className="address-chip">
+                        {addr}
+                      </span>
+                    ))}
+                  </dd>
+                </>
+              ) : null}
+              <dt>{strings.reader.date}</dt>
+              <dd>{formatFullMessageDate(message.receivedAt)}</dd>
+              <dt>{strings.reader.subject}</dt>
+              <dd>{message.subject || strings.common.noSubject}</dd>
+              <dt>{strings.reader.folder}</dt>
+              <dd>
+                {account ? `${account.displayName || account.email} › ` : ""}
+                {currentMailbox?.displayName || "Mailbox"}
+              </dd>
+              <dt>{strings.reader.security}</dt>
+              <dd className="security-badge">
+                <ShieldCheck size={16} aria-hidden="true" />
+                <span>
+                  <strong>{strings.reader.securityTls}</strong> —{" "}
+                  {strings.reader.securityTlsDetail}
+                </span>
+              </dd>
+              {message.messageId ? (
+                <>
+                  <dt>{strings.reader.messageId}</dt>
+                  <dd className="message-id-row">
+                    <code>{message.messageId}</code>
+                    <CopyButton
+                      text={message.messageId}
+                      title={strings.reader.copyMessageId}
+                    />
+                  </dd>
+                </>
+              ) : null}
+              <dt>{strings.reader.size}</dt>
+              <dd>{formatBytes(message.size)}</dd>
+            </dl>
+          </div>
+        ) : null}
       </header>
       {sanitized && remainingBlockedImages > 0 ? (
-        <div className="remote-content-banner">
+        <div className="remote-content-banner" role="status" aria-live="polite">
           <Image aria-hidden="true" />
-          <span>{strings.reader.blockedImages(remainingBlockedImages)}</span>
+          <span>
+            {strings.reader.blockedImages(remainingBlockedImages)}{" "}
+            {strings.reader.blockedImagesDetail}
+          </span>
           <button
             type="button"
             onClick={() => void loadImages()}
@@ -776,18 +923,27 @@ export function MessageReader() {
             onLoad={wireFrameLinks}
           />
         ) : (
-          <pre>{message.textBody}</pre>
+          <PlainTextContent
+            text={message.textBody}
+            onOpenLink={(url) => void handleExternalLink(url)}
+            onOpenMailto={(url) => openComposer({ prefill: parseMailto(url) })}
+          />
         )}
       </div>
-      {message.attachments.length > 0 ? (
-        <section
-          className="attachment-list"
-          aria-label={strings.reader.attachments}
-        >
-          <h2>{strings.reader.attachments}</h2>
-          {message.attachments
-            .filter((item) => !item.inline)
-            .map((attachment) => (
+      {(() => {
+        const regularAttachments = message.attachments.filter(
+          (item) => !item.inline,
+        );
+        if (regularAttachments.length === 0) return null;
+        return (
+          <section
+            className="attachment-list"
+            aria-label={strings.reader.attachments}
+          >
+            <h2>
+              {strings.reader.attachments} ({regularAttachments.length})
+            </h2>
+            {regularAttachments.map((attachment) => (
               <button
                 type="button"
                 key={attachment.id}
@@ -802,8 +958,9 @@ export function MessageReader() {
                 </span>
               </button>
             ))}
-        </section>
-      ) : null}
+          </section>
+        );
+      })()}
     </article>
   );
 }
@@ -868,8 +1025,123 @@ function normalizeContentId(value: string): string {
   return value.trim().replace(/^cid:/i, "").replace(/^<|>$/g, "");
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+function CopyButton({ text, title }: { text: string; title: string }) {
+  const [copied, setCopied] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, []);
+
+  return (
+    <button
+      type="button"
+      className="copy-mini-btn"
+      onClick={async (e) => {
+        e.stopPropagation();
+        try {
+          await navigator.clipboard.writeText(text);
+          setCopied(true);
+          if (timerRef.current) clearTimeout(timerRef.current);
+          timerRef.current = setTimeout(() => setCopied(false), 2000);
+        } catch {
+          // Safe fallback if clipboard write fails
+        }
+      }}
+      title={copied ? strings.reader.copied : title}
+      aria-label={copied ? strings.reader.copied : title}
+    >
+      {copied ? (
+        <>
+          <Check size={12} aria-hidden="true" />
+          <span>{strings.reader.copied}</span>
+        </>
+      ) : (
+        <>
+          <Copy size={12} aria-hidden="true" />
+          <span>{title}</span>
+        </>
+      )}
+    </button>
+  );
+}
+
+function PlainTextContent({
+  text,
+  onOpenLink,
+  onOpenMailto,
+}: {
+  text: string;
+  onOpenLink: (url: string) => void;
+  onOpenMailto: (mailto: string) => void;
+}) {
+  const parts = useMemo(() => {
+    const urlOrEmailRegex =
+      /(https?:\/\/[^\s<>"'()]+|mailto:[^\s<>"'()]+|[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g;
+    const elements: Array<{
+      type: "text" | "link" | "mailto";
+      content: string;
+    }> = [];
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = urlOrEmailRegex.exec(text)) !== null) {
+      if (match.index > lastIndex) {
+        elements.push({
+          type: "text",
+          content: text.slice(lastIndex, match.index),
+        });
+      }
+      const matched = match[0];
+      if (matched.startsWith("http://") || matched.startsWith("https://")) {
+        elements.push({ type: "link", content: matched });
+      } else if (matched.startsWith("mailto:")) {
+        elements.push({ type: "mailto", content: matched });
+      } else {
+        elements.push({ type: "mailto", content: `mailto:${matched}` });
+      }
+      lastIndex = match.index + matched.length;
+    }
+    if (lastIndex < text.length) {
+      elements.push({ type: "text", content: text.slice(lastIndex) });
+    }
+    return elements;
+  }, [text]);
+
+  return (
+    <div className="plain-text-body">
+      {parts.map((part, idx) => {
+        if (part.type === "text") {
+          return <span key={idx}>{part.content}</span>;
+        }
+        if (part.type === "link") {
+          return (
+            <a
+              key={idx}
+              href={part.content}
+              onClick={(e) => {
+                e.preventDefault();
+                onOpenLink(part.content);
+              }}
+            >
+              {part.content}
+            </a>
+          );
+        }
+        return (
+          <a
+            key={idx}
+            href={part.content}
+            onClick={(e) => {
+              e.preventDefault();
+              onOpenMailto(part.content);
+            }}
+          >
+            {part.content.replace(/^mailto:/i, "")}
+          </a>
+        );
+      })}
+    </div>
+  );
 }

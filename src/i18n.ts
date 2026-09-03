@@ -79,12 +79,14 @@ export const strings = {
       "Stop trying to save a Sent copy? The message was already sent.",
     dismissWarning: "Dismiss warning",
     yesterday: "Yesterday",
-    updateReadyBadge: "Update ready · Restart",
+    updateReadyBadge: "Update Ready · Click to Restart",
     updateReadyTooltip: (version: string) =>
       `Version ${version} is downloaded and ready to install. Click to restart.`,
     itemCount: (count: number) => (count === 1 ? "1 item" : `${count} items`),
     partialSearch: (detail: string) =>
       `Server search unavailable. Showing cached results. ${detail}`,
+    noSearchResults: (query: string) =>
+      `No messages matching "${query}". Check your spelling or try All Folders.`,
   },
   reader: {
     backToList: "Back to message list",
@@ -103,9 +105,24 @@ export const strings = {
     moveFolder: "Move to folder",
     move: "Move…",
     print: "Print message",
+    from: "From:",
     to: "To:",
     cc: "Cc:",
+    bcc: "Bcc:",
     replyTo: "Reply-To:",
+    subject: "Subject:",
+    date: "Date:",
+    folder: "Folder:",
+    security: "Security:",
+    securityTls: "Verified TLS connection",
+    securityTlsDetail:
+      "Encrypted directly between your device and mail server.",
+    messageId: "Message-ID:",
+    size: "Size:",
+    copyAddress: "Copy address",
+    copyMessageId: "Copy Message-ID",
+    copied: "Copied!",
+    noRecipients: "No recipients",
     showDetails: "Details",
     hideDetails: "Hide details",
     loadImages: "Load images",
@@ -114,6 +131,25 @@ export const strings = {
     openLink: (url: string) => `Open this link in your browser?\n\n${url}`,
     blockedImages: (count: number) =>
       `${count} remote image${count === 1 ? "" : "s"} blocked for privacy.`,
+    blockedImagesDetail:
+      "Pictures from the internet are blocked to protect your privacy.",
+  },
+  update: {
+    availableTitle: "Update Available",
+    availablePrompt: (version: string) =>
+      `An update to Postal Snap (version ${version}) is available. Would you like to download and install it now?`,
+    readyTitle: "Update Ready",
+    readyPrompt: (version: string) =>
+      `Postal Snap ${version ? `version ${version}` : "update"} has been downloaded. Would you like to restart now to complete the update?`,
+    upToDateTitle: "Postal Snap",
+    upToDateMessage:
+      "You're up to date! Postal Snap is currently running the latest version.",
+    checkErrorTitle: "Check for Updates",
+    checkErrorMessage:
+      "Postal Snap could not connect to the update service. Please check your internet connection and try again.",
+    downloadErrorTitle: "Update Failed",
+    downloadErrorMessage:
+      "Failed to download the update. Please check your internet connection and try again.",
   },
   composer: {
     newMessage: "New message",

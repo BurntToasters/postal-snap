@@ -68,7 +68,7 @@
 }
 
 .settings-nav button.active {
-  color: #ffffff;
+  color: var(--accent-contrast, #fff);
   background: var(--accent);
   font-weight: 600;
 }
@@ -311,15 +311,16 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 32px;
-  min-height: 32px;
+  min-width: 44px;
+  min-height: 44px;
   border: none;
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
   padding: 0 4px;
-  font-size: 1rem;
+  font-size: 1.15rem;
   line-height: 1;
+  border-radius: 4px;
 }
 
 .alias-chip button:hover {
