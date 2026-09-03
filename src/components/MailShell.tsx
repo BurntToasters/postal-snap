@@ -31,6 +31,7 @@ import { formatMessageDate } from "../format";
 import { applySettings } from "../settings";
 import { useAppStore } from "../store";
 import type { MailboxRole, MessageSummary } from "../types";
+import { promptToRestartForUpdate } from "../update";
 import { AppMark } from "./AppMark";
 import { MessageReader } from "./MessageReader";
 import { SetupWizard } from "./SetupWizard";
@@ -98,6 +99,7 @@ export function MailShell({ onOpenSettings }: Props) {
   const sync = useAppStore((state) =>
     activeAccountId ? state.sync[activeAccountId] : undefined,
   );
+  const updateReady = useAppStore((state) => state.updateReady);
   const [query, setQuery] = useState("");
   const [allFolders, setAllFolders] = useState(false);
   const [addAccountOpen, setAddAccountOpen] = useState(false);
@@ -622,7 +624,11 @@ export function MailShell({ onOpenSettings }: Props) {
 
   async function retryQueued(id: string) {
     if (!activeAccountId) return;
-    if (!window.confirm(strings.mail.retryWarning)) return;
+    const confirmed = await api.showNativeConfirm(
+      strings.mail.retrySending,
+      strings.mail.retryWarning,
+    );
+    if (!confirmed) return;
     try {
       await api.retryOutbox(id, activeAccountId);
       await loadAccountData();
@@ -648,14 +654,15 @@ export function MailShell({ onOpenSettings }: Props) {
     state: ReturnType<typeof useAppStore.getState>["outbox"][number]["state"],
   ) {
     if (!activeAccountId) return;
-    if (
-      !window.confirm(
-        state === "sent_copy_pending"
-          ? strings.mail.dismissSentCopy
-          : strings.mail.discardQueued,
-      )
-    )
-      return;
+    const question =
+      state === "sent_copy_pending"
+        ? strings.mail.dismissSentCopy
+        : strings.mail.discardQueued;
+    const confirmed = await api.showNativeConfirm(
+      strings.composer.discard,
+      question,
+    );
+    if (!confirmed) return;
     try {
       await api.deleteOutbox(id, activeAccountId);
       await loadAccountData();
@@ -761,6 +768,18 @@ export function MailShell({ onOpenSettings }: Props) {
             </label>
           ) : null}
         </form>
+        {updateReady ? (
+          <button
+            type="button"
+            className="update-ready-badge"
+            onClick={() => void promptToRestartForUpdate(updateReady)}
+            title={strings.mail.updateReadyTooltip(updateReady)}
+            aria-label={strings.mail.updateReadyBadge}
+          >
+            <span className="badge-dot" aria-hidden="true" />
+            <span>{strings.mail.updateReadyBadge}</span>
+          </button>
+        ) : null}
         <button
           className="icon-button"
           type="button"

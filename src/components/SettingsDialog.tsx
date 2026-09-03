@@ -85,6 +85,13 @@ export function SettingsDialog({
   const handledCheckRequest = useRef<number | undefined>(undefined);
   const [testingAccountId, setTestingAccountId] = useState<string>();
   const [testedHealthy, setTestedHealthy] = useState<string>();
+  const updateReady = useAppStore((state) => state.updateReady);
+  const [detectingAliasesAccountId, setDetectingAliasesAccountId] =
+    useState<string>();
+  const [newAliasInputs, setNewAliasInputs] = useState<Record<string, string>>(
+    {},
+  );
+  const [aliasStatus, setAliasStatus] = useState<Record<string, string>>({});
   const dialogRef = useDialogFocus(onClose);
 
   const handleUpdateFound = useCallback<UpdateFoundListener>((version) => {
@@ -128,7 +135,11 @@ export function SettingsDialog({
   }
 
   async function clearCache() {
-    if (!window.confirm(strings.settings.clearMailQuestion)) return;
+    const confirmed = await api.showNativeConfirm(
+      strings.settings.clearMail,
+      strings.settings.clearMailQuestion,
+    );
+    if (!confirmed) return;
     try {
       await api.clearCache();
       setUsage(await api.cacheUsage());
@@ -152,7 +163,12 @@ export function SettingsDialog({
   }
 
   async function importSettings() {
-    if (dataBusy || !window.confirm(strings.settings.importQuestion)) return;
+    if (dataBusy) return;
+    const confirmed = await api.showNativeConfirm(
+      strings.settings.importSettings,
+      strings.settings.importQuestion,
+    );
+    if (!confirmed) return;
     setDataBusy(true);
     setDataStatus(undefined);
     try {
@@ -170,7 +186,12 @@ export function SettingsDialog({
   }
 
   async function resetSettings() {
-    if (dataBusy || !window.confirm(strings.settings.resetQuestion)) return;
+    if (dataBusy) return;
+    const confirmed = await api.showNativeConfirm(
+      strings.settings.resetSettings,
+      strings.settings.resetQuestion,
+    );
+    if (!confirmed) return;
     setDataBusy(true);
     setDataStatus(undefined);
     try {
@@ -215,7 +236,11 @@ export function SettingsDialog({
   }, [checkForUpdates, checkUpdatesRequest, distribution]);
 
   async function removeAccount(id: string, name: string) {
-    if (!window.confirm(strings.settings.removeAccount(name))) return;
+    const confirmed = await api.showNativeConfirm(
+      strings.common.remove,
+      strings.settings.removeAccount(name),
+    );
+    if (!confirmed) return;
     try {
       const result = await api.removeAccount(id);
       const remaining = await api.listAccounts();
@@ -240,6 +265,70 @@ export function SettingsDialog({
       setError(String(cause));
     } finally {
       setTestingAccountId(undefined);
+    }
+  }
+
+  async function handleDetectAliases(accountId: string) {
+    if (detectingAliasesAccountId) return;
+    setDetectingAliasesAccountId(accountId);
+    try {
+      const updated = await api.discoverAccountAliases(accountId);
+      const remaining = await api.listAccounts();
+      setAccounts(remaining);
+      const count = updated.aliases?.length ?? 0;
+      setAliasStatus((prev) => ({
+        ...prev,
+        [accountId]: `Found ${count} alias${count === 1 ? "" : "es"}.`,
+      }));
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setDetectingAliasesAccountId(undefined);
+    }
+  }
+
+  async function handleAddAlias(accountId: string) {
+    const input = (newAliasInputs[accountId] ?? "").trim().toLowerCase();
+    if (!input || !/^[^\s@<>]+@[^\s@<>]+$/.test(input)) {
+      setError(strings.settings.aliasInvalid);
+      return;
+    }
+    const acc = accounts.find((a) => a.id === accountId);
+    if (!acc) return;
+    const current = acc.aliases ?? [];
+    if (current.includes(input) || acc.email.toLowerCase() === input) {
+      setNewAliasInputs((prev) => ({ ...prev, [accountId]: "" }));
+      return;
+    }
+    try {
+      await api.updateAccountAliases(accountId, [...current, input]);
+      const remaining = await api.listAccounts();
+      setAccounts(remaining);
+      setNewAliasInputs((prev) => ({ ...prev, [accountId]: "" }));
+      setAliasStatus((prev) => ({
+        ...prev,
+        [accountId]: `Added ${input}`,
+      }));
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }
+
+  async function handleRemoveAlias(accountId: string, alias: string) {
+    const confirmed = await api.showNativeConfirm(
+      strings.settings.aliasesTitle,
+      strings.settings.removeAliasConfirm(alias),
+    );
+    if (!confirmed) return;
+    const acc = accounts.find((a) => a.id === accountId);
+    if (!acc) return;
+    const remainingAliases = (acc.aliases ?? []).filter((a) => a !== alias);
+    try {
+      await api.updateAccountAliases(accountId, remainingAliases);
+      const remaining = await api.listAccounts();
+      setAccounts(remaining);
+    } catch (cause) {
+      setError(String(cause));
     }
   }
 
@@ -498,11 +587,15 @@ export function SettingsDialog({
                       {strings.settings.used}
                     </strong>
                     <small>
-                      {strings.settings.storageSummary(
-                        usage?.messageCount ?? 0,
-                        settings.cachePolicy.days,
-                        formatBytes(settings.cachePolicy.maxBytes),
-                      )}
+                      {settings.cachePolicy.mode === "full"
+                        ? `${usage?.messageCount ?? 0} downloaded messages · Full sync: All messages (Unlimited storage)`
+                        : strings.settings.storageSummary(
+                            usage?.messageCount ?? 0,
+                            settings.cachePolicy.days,
+                            settings.cachePolicy.maxBytes === 0
+                              ? strings.settings.cacheUnlimited
+                              : formatBytes(settings.cachePolicy.maxBytes),
+                          )}
                     </small>
                   </span>
                 </div>
@@ -513,14 +606,26 @@ export function SettingsDialog({
                   <select
                     aria-label={strings.settings.cacheMode}
                     value={settings.cachePolicy.mode}
-                    onChange={(event) =>
-                      void update({
-                        cachePolicy: {
-                          ...settings.cachePolicy,
-                          mode: event.target.value as "recent" | "full",
-                        },
-                      })
-                    }
+                    onChange={(event) => {
+                      const mode = event.target.value as "recent" | "full";
+                      if (mode === "full") {
+                        void update({
+                          cachePolicy: {
+                            mode: "full",
+                            days: 0,
+                            maxBytes: 0,
+                          },
+                        });
+                      } else {
+                        void update({
+                          cachePolicy: {
+                            mode: "recent",
+                            days: 90,
+                            maxBytes: 1_073_741_824,
+                          },
+                        });
+                      }
+                    }}
                   >
                     <option value="recent">
                       {strings.settings.cacheRecent}
@@ -528,36 +633,38 @@ export function SettingsDialog({
                     <option value="full">{strings.settings.cacheFull}</option>
                   </select>
                 </SettingRow>
-                <SettingRow
-                  title={strings.settings.cacheDays}
-                  help={strings.settings.cachePolicyHelp}
-                >
-                  <select
-                    aria-label={strings.settings.cacheDays}
-                    value={settings.cachePolicy.days}
-                    onChange={(event) =>
-                      void update({
-                        cachePolicy: {
-                          ...settings.cachePolicy,
-                          days: Number(event.target.value),
-                        },
-                      })
-                    }
+                {settings.cachePolicy.mode === "recent" ? (
+                  <SettingRow
+                    title={strings.settings.cacheDays}
+                    help={strings.settings.cachePolicyHelp}
                   >
-                    <option value={30}>
-                      {strings.settings.cacheDaysOption(30)}
-                    </option>
-                    <option value={90}>
-                      {strings.settings.cacheDaysOption(90)}
-                    </option>
-                    <option value={180}>
-                      {strings.settings.cacheDaysOption(180)}
-                    </option>
-                    <option value={365}>
-                      {strings.settings.cacheDaysOption(365)}
-                    </option>
-                  </select>
-                </SettingRow>
+                    <select
+                      aria-label={strings.settings.cacheDays}
+                      value={settings.cachePolicy.days}
+                      onChange={(event) =>
+                        void update({
+                          cachePolicy: {
+                            ...settings.cachePolicy,
+                            days: Number(event.target.value),
+                          },
+                        })
+                      }
+                    >
+                      <option value={30}>
+                        {strings.settings.cacheDaysOption(30)}
+                      </option>
+                      <option value={90}>
+                        {strings.settings.cacheDaysOption(90)}
+                      </option>
+                      <option value={180}>
+                        {strings.settings.cacheDaysOption(180)}
+                      </option>
+                      <option value={365}>
+                        {strings.settings.cacheDaysOption(365)}
+                      </option>
+                    </select>
+                  </SettingRow>
+                ) : null}
                 <SettingRow
                   title={strings.settings.cacheLimit}
                   help={strings.settings.cachePolicyHelp}
@@ -565,6 +672,7 @@ export function SettingsDialog({
                   <select
                     aria-label={strings.settings.cacheLimit}
                     value={settings.cachePolicy.maxBytes}
+                    disabled={settings.cachePolicy.mode === "full"}
                     onChange={(event) =>
                       void update({
                         cachePolicy: {
@@ -574,10 +682,21 @@ export function SettingsDialog({
                       })
                     }
                   >
-                    <option value={524_288_000}>500 MB</option>
-                    <option value={1_073_741_824}>1 GB</option>
-                    <option value={2_147_483_648}>2 GB</option>
-                    <option value={5_368_709_120}>5 GB</option>
+                    {settings.cachePolicy.mode === "full" ? (
+                      <option value={0}>
+                        {strings.settings.cacheUnlimited}
+                      </option>
+                    ) : (
+                      <>
+                        <option value={524_288_000}>500 MB</option>
+                        <option value={1_073_741_824}>1 GB</option>
+                        <option value={2_147_483_648}>2 GB</option>
+                        <option value={5_368_709_120}>5 GB</option>
+                        <option value={0}>
+                          {strings.settings.cacheUnlimited}
+                        </option>
+                      </>
+                    )}
                   </select>
                 </SettingRow>
                 <button
@@ -609,45 +728,132 @@ export function SettingsDialog({
                 ) : null}
                 <div className="account-settings-list">
                   {accounts.map((account) => (
-                    <div key={account.id}>
-                      <Mail />
-                      <span>
-                        <strong>{account.displayName || account.email}</strong>
-                        <small>
-                          {account.provider === "icloud"
-                            ? strings.setup.icloud
-                            : strings.setup.other}
-                          {" · "}
-                          {account.email}
-                        </small>
-                        {testedHealthy === account.id ? (
-                          <small style={{ color: "var(--success)" }}>
-                            ✓ {strings.settings.connectionHealthy}
+                    <div key={account.id} className="account-settings-card">
+                      <div className="account-card-header">
+                        <Mail />
+                        <span className="account-card-info">
+                          <strong>
+                            {account.displayName || account.email}
+                          </strong>
+                          <small>
+                            {account.provider === "icloud"
+                              ? strings.setup.icloud
+                              : strings.setup.other}
+                            {" · "}
+                            {account.email}
                           </small>
+                          {testedHealthy === account.id ? (
+                            <small style={{ color: "var(--success)" }}>
+                              ✓ {strings.settings.connectionHealthy}
+                            </small>
+                          ) : null}
+                        </span>
+                        <div className="account-card-actions">
+                          <button
+                            type="button"
+                            className="secondary-button"
+                            onClick={() => void testAccount(account.id)}
+                            disabled={testingAccountId === account.id}
+                          >
+                            {testingAccountId === account.id
+                              ? strings.settings.testingConnection
+                              : strings.settings.testConnection}
+                          </button>
+                          <button
+                            type="button"
+                            className="danger-button"
+                            onClick={() =>
+                              void removeAccount(
+                                account.id,
+                                account.displayName || account.email,
+                              )
+                            }
+                          >
+                            {strings.common.remove}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="account-aliases-section">
+                        <div className="aliases-header">
+                          <div>
+                            <strong>{strings.settings.aliasesTitle}</strong>
+                            <p className="settings-note">
+                              {strings.settings.aliasesHelp}
+                            </p>
+                          </div>
+                          {account.provider === "icloud" ? (
+                            <button
+                              type="button"
+                              className="secondary-button detect-aliases-button"
+                              onClick={() =>
+                                void handleDetectAliases(account.id)
+                              }
+                              disabled={
+                                detectingAliasesAccountId === account.id
+                              }
+                            >
+                              {detectingAliasesAccountId === account.id
+                                ? strings.settings.detectingAliases
+                                : strings.settings.detectIcloudAliases}
+                            </button>
+                          ) : null}
+                        </div>
+
+                        {aliasStatus[account.id] ? (
+                          <div className="alias-status-message">
+                            {aliasStatus[account.id]}
+                          </div>
                         ) : null}
-                      </span>
-                      <button
-                        type="button"
-                        className="secondary-button"
-                        onClick={() => void testAccount(account.id)}
-                        disabled={testingAccountId === account.id}
-                      >
-                        {testingAccountId === account.id
-                          ? strings.settings.testingConnection
-                          : strings.settings.testConnection}
-                      </button>
-                      <button
-                        type="button"
-                        className="danger-button"
-                        onClick={() =>
-                          void removeAccount(
-                            account.id,
-                            account.displayName || account.email,
-                          )
-                        }
-                      >
-                        {strings.common.remove}
-                      </button>
+
+                        <div className="aliases-list">
+                          <div className="alias-chip primary">
+                            <span>{account.email}</span>
+                            <span className="alias-badge">Primary</span>
+                          </div>
+                          {(account.aliases ?? []).map((alias) => (
+                            <div key={alias} className="alias-chip">
+                              <span>{alias}</span>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void handleRemoveAlias(account.id, alias)
+                                }
+                                aria-label={strings.common.remove}
+                              >
+                                ×
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+
+                        <div className="add-alias-form">
+                          <input
+                            type="email"
+                            placeholder={strings.settings.aliasPlaceholder}
+                            value={newAliasInputs[account.id] ?? ""}
+                            onChange={(e) =>
+                              setNewAliasInputs((prev) => ({
+                                ...prev,
+                                [account.id]: e.target.value,
+                              }))
+                            }
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.preventDefault();
+                                void handleAddAlias(account.id);
+                              }
+                            }}
+                          />
+                          <button
+                            type="button"
+                            className="secondary-button"
+                            onClick={() => void handleAddAlias(account.id)}
+                          >
+                            {strings.settings.addAlias}
+                          </button>
+                        </div>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -712,6 +918,24 @@ export function SettingsDialog({
             ) : null}
             {tab === "updates" ? (
               <SettingsPanel id="updates" title={strings.settings.updates}>
+                {updateReady ? (
+                  <div className="update-ready-card">
+                    <div className="update-ready-icon">
+                      <DownloadCloud />
+                    </div>
+                    <div className="update-ready-body">
+                      <strong>{strings.settings.updateReadyCardTitle}</strong>
+                      <p>{strings.settings.updateReadyCardHelp(updateReady)}</p>
+                      <button
+                        type="button"
+                        className="primary-button"
+                        onClick={() => void api.relaunch()}
+                      >
+                        {strings.settings.restartNow}
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
                 <div className="storage-card">
                   <DownloadCloud />
                   <span>

@@ -157,6 +157,11 @@ fn main() {
             commands::get_cache_usage,
             commands::clear_downloaded_mail,
             commands::get_distribution_channel,
+            commands::discover_account_aliases,
+            commands::update_account_aliases,
+            commands::show_native_confirm,
+            commands::show_native_message,
+            commands::relaunch_app,
         ])
         .build(tauri::generate_context!())
         .expect("Postal Snap failed to start");

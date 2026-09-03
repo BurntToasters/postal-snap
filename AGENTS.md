@@ -35,7 +35,7 @@ Important files:
 - `src/components/MessageReader.tsx`: safe received-mail reader.
 - `src/components/Composer.tsx`: rich composer and draft behavior.
 - `src/components/SetupWizard.tsx`: iCloud/manual account setup.
-- `src/styles.css`: responsive accessible design system.
+- `src/root.css`: responsive accessible design system (modularized in `src/styles/`).
 - `src-tauri/src/commands.rs`: typed IPC boundary and account serialization.
 - `src-tauri/src/mail.rs`: IMAP, SMTP, MIME, sync, and server search.
 - `src-tauri/src/db.rs`: SQLite, FTS, offline queue, drafts, and outbox.

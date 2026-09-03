@@ -59,6 +59,8 @@ interface AppState {
   composeSeed?: ComposerSeed;
   busy: boolean;
   error?: string;
+  updateReady: string | null;
+  setUpdateReady: (version: string | null) => void;
   setAccounts: (accounts: AccountSummary[]) => void;
   selectAccount: (id: string) => void;
   setMailboxes: (mailboxes: MailboxSummary[]) => void;
@@ -96,6 +98,8 @@ export const useAppStore = create<AppState>((set) => ({
   settings: defaultSettings,
   composerOpen: false,
   busy: false,
+  updateReady: null,
+  setUpdateReady: (updateReady) => set({ updateReady }),
   setAccounts: (accounts) =>
     set((state) => {
       const accountIds = new Set(accounts.map((account) => account.id));

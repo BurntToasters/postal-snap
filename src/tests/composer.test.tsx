@@ -10,6 +10,7 @@ vi.mock("../api", () => ({
     deleteDraft: vi.fn(),
     releaseComposeAttachments: vi.fn(),
     readComposeImage: vi.fn(),
+    showNativeConfirm: vi.fn().mockResolvedValue(true),
   },
 }));
 

@@ -29,6 +29,7 @@ export interface AccountSummary {
   displayName: string;
   syncState: SyncPhase;
   error?: string | null;
+  aliases?: string[];
 }
 
 export interface AccountRemovalOutcome {
@@ -105,6 +106,7 @@ export interface ComposeAttachment {
 export interface ComposeDraft {
   id?: string;
   accountId: string;
+  from?: string;
   to: string[];
   cc: string[];
   bcc: string[];

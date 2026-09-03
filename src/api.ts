@@ -244,6 +244,29 @@ export const api = {
     if (!inTauri()) return () => undefined;
     return listen<string>("app-warning", ({ payload }) => handler(payload));
   },
+  discoverAccountAliases: (accountId: string) =>
+    call<AccountSummary>("discover_account_aliases", { accountId }),
+  updateAccountAliases: (accountId: string, aliases: string[]) =>
+    call<AccountSummary>("update_account_aliases", { accountId, aliases }),
+  showNativeConfirm: (title: string, message: string) => {
+    if (!inTauri())
+      return Promise.resolve(window.confirm(`${title}\n\n${message}`));
+    return call<boolean>("show_native_confirm", { title, message });
+  },
+  showNativeMessage: (title: string, message: string) => {
+    if (!inTauri()) {
+      window.alert(`${title}\n\n${message}`);
+      return Promise.resolve();
+    }
+    return call<void>("show_native_message", { title, message });
+  },
+  relaunch: () => {
+    if (!inTauri()) {
+      window.location.reload();
+      return Promise.resolve();
+    }
+    return call<void>("relaunch_app");
+  },
 };
 
 export { inTauri };

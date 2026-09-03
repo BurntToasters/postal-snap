@@ -1,0 +1,250 @@
+/* Reader */
+.reader-pane {
+  grid-area: reader;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.pane-hidden .reader-pane.reader-hidden,
+.pane-hidden .reader-pane.empty-reader {
+  display: none;
+}
+
+.pane-hidden .reader-pane:not(.reader-hidden):not(.empty-reader) {
+  position: fixed;
+  z-index: 12;
+  inset: 74px clamp(18px, 5vw, 72px) 18px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+}
+
+.reader-actions {
+  display: flex;
+  min-height: 58px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 14px;
+  overflow: auto;
+  border-bottom: 1px solid var(--border);
+}
+
+.reader-actions button {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 9px;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+}
+
+.reader-actions button:hover {
+  border-color: var(--border);
+  background: var(--surface-hover);
+}
+
+.reader-actions svg {
+  width: 18px;
+}
+
+.mobile-reader-back {
+  display: none !important;
+}
+
+.action-spacer {
+  flex: 1;
+}
+
+.move-control {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  padding-left: 8px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+}
+
+.move-control:hover {
+  border-color: var(--border);
+}
+
+.move-control svg {
+  width: 18px;
+}
+
+.move-control select {
+  width: 84px;
+  min-height: 40px;
+  border: 0;
+  background: transparent;
+}
+
+.message-header {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  gap: 8px 11px;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.message-header h1 {
+  grid-column: 1 / -1;
+  margin: 0 0 7px;
+  font-size: clamp(1.25rem, 2.1vw, 1.75rem);
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+}
+
+.sender-avatar {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  background: var(--accent);
+  font-weight: 750;
+}
+
+.sender-details {
+  display: grid;
+  min-width: 0;
+}
+
+.sender-details span,
+.message-header time {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 0.79rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-header time {
+  text-align: right;
+}
+
+.details-toggle {
+  display: inline-flex;
+  width: fit-content;
+  min-height: 28px;
+  align-items: center;
+  padding: 2px 8px;
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-muted);
+  background: transparent;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.details-toggle:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.remote-content-banner {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 18px;
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 12%, var(--surface));
+}
+
+.remote-content-banner svg {
+  width: 18px;
+}
+
+.remote-content-banner span {
+  flex: 1;
+}
+
+.remote-content-banner button {
+  min-height: 44px;
+  border: 1px solid currentColor;
+  border-radius: 7px;
+  color: inherit;
+  background: transparent;
+}
+
+.message-body {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+}
+
+.message-body iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #fff;
+}
+
+.message-body pre {
+  margin: 0;
+  padding: 22px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  line-height: 1.55;
+}
+
+.empty-reader {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  color: var(--text-muted);
+}
+
+.brand-watermark {
+  display: grid;
+  width: 60px;
+  height: 60px;
+  place-items: center;
+  border-radius: 15px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  font-size: 1.8rem;
+}
+
+.attachment-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 9px 18px;
+  border-top: 1px solid var(--border);
+}
+
+.attachment-list h2 {
+  width: 100%;
+  margin: 0;
+  font-size: 0.86rem;
+}
+
+.attachment-list button {
+  display: flex;
+  min-height: 46px;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-muted);
+}
+
+.attachment-list button span {
+  display: grid;
+}
+
+.attachment-list small {
+  color: var(--text-muted);
+}

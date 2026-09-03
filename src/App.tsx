@@ -12,6 +12,7 @@ import { MailShell } from "./components/MailShell";
 import { SettingsDialog, type SettingsTab } from "./components/SettingsDialog";
 import { useAppStore } from "./store";
 import { applySettings } from "./settings";
+import { checkUpdateInteractive, runUpdateSingleFlight } from "./update";
 
 const Composer = lazy(() =>
   import("./components/Composer").then((module) => ({
@@ -82,7 +83,11 @@ export default function App() {
 
   useEffect(() => {
     if (!inTauri()) return;
-    void Promise.resolve().then(() => loadAccounts());
+    void Promise.resolve()
+      .then(() => loadAccounts())
+      .then(() => {
+        void runUpdateSingleFlight().catch(() => undefined);
+      });
     const unsubscribers: Array<() => void> = [];
     void api.onSyncState(setSync).then((fn) => unsubscribers.push(fn));
     void api.onAppWarning(setError).then((fn) => unsubscribers.push(fn));
@@ -94,6 +99,7 @@ export default function App() {
         }
         if (action === "check-for-updates") {
           openSettings("updates", true);
+          void checkUpdateInteractive();
           return;
         }
         window.dispatchEvent(
