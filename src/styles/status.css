@@ -1,0 +1,59 @@
+/* App state and alerts */
+.preview-notice,
+.startup-recovery,
+.splash {
+  display: grid;
+  height: 100%;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  padding: 24px;
+  text-align: center;
+}
+
+.brand-mark {
+  display: grid;
+  width: 64px;
+  height: 64px;
+  place-items: center;
+  border-radius: 15px;
+  color: #fff;
+  background: var(--accent);
+  font-size: 2rem;
+}
+
+.overlay-splash {
+  position: fixed;
+  z-index: 35;
+  inset: 0;
+  background: color-mix(in srgb, var(--canvas) 88%, transparent);
+}
+
+.toast {
+  position: fixed;
+  z-index: 60;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  max-width: min(520px, calc(100vw - 32px));
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
+  border-radius: 9px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
+  box-shadow: var(--shadow);
+}
+
+.toast span {
+  flex: 1;
+}
+
+.toast button {
+  min-width: 44px;
+  min-height: 44px;
+  border: 0;
+  background: transparent;
+  font-size: 1.35rem;
+}

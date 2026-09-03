@@ -127,15 +127,22 @@ export function MessageReader() {
   function wireFrameLinks() {
     const body = frame.current?.contentDocument?.body;
     if (!body) return;
-    const handleLink = (event: MouseEvent) => {
+    const handleLink = async (event: MouseEvent) => {
       const target = (event.target as HTMLElement).closest<HTMLAnchorElement>(
         "a[href]",
       );
       if (!target) return;
       event.preventDefault();
       const url = target.href;
-      if (/^https?:/i.test(url) && window.confirm(strings.reader.openLink(url)))
-        void openUrl(url);
+      if (/^https?:/i.test(url)) {
+        const confirmed = await api.showNativeConfirm(
+          strings.appName,
+          strings.reader.openLink(url),
+        );
+        if (confirmed) {
+          void openUrl(url);
+        }
+      }
       if (/^mailto:/i.test(url)) openComposer({ prefill: parseMailto(url) });
     };
     body.addEventListener("click", handleLink);

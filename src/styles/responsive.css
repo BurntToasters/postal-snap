@@ -1,0 +1,349 @@
+@media (max-width: 1049px) {
+  .mail-shell,
+  .mail-shell.pane-bottom,
+  .mail-shell.pane-hidden {
+    grid-template-columns: var(--message-pane-width, 390px) 5px minmax(
+        360px,
+        1fr
+      );
+    grid-template-rows: 58px minmax(0, 1fr);
+    grid-template-areas:
+      "toolbar toolbar toolbar"
+      "messages reader-splitter reader";
+  }
+
+  .mail-shell.pane-bottom {
+    grid-template-columns: 1fr;
+    grid-template-rows:
+      58px minmax(220px, 1fr) 5px
+      var(--reader-pane-height, 360px);
+    grid-template-areas: "toolbar" "messages" "reader-bottom-splitter" "reader";
+  }
+
+  .mail-shell.pane-hidden {
+    grid-template-columns: 1fr;
+    grid-template-areas: "toolbar" "messages";
+  }
+
+  .folder-splitter {
+    display: none;
+  }
+
+  .sidebar-toggle {
+    display: inline-flex;
+  }
+
+  .app-brand {
+    min-width: 128px;
+  }
+
+  .folder-pane {
+    position: fixed;
+    z-index: 22;
+    inset: 58px auto 0 0;
+    width: min(290px, 88vw);
+    transform: translateX(-105%);
+    box-shadow: var(--shadow);
+    transition: transform 150ms ease;
+  }
+
+  .sidebar-open .folder-pane {
+    transform: translateX(0);
+  }
+
+  .sidebar-scrim {
+    position: fixed;
+    z-index: 21;
+    inset: 58px 0 0;
+    width: 100%;
+    height: auto;
+    border: 0;
+    border-radius: 0;
+    background: rgb(15 25 33 / 38%);
+  }
+
+  .sidebar-open .sidebar-scrim {
+    display: block;
+  }
+
+  .sidebar-mobile-header {
+    display: flex;
+    min-height: 48px;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 4px 8px 9px;
+  }
+}
+
+@media (max-width: 760px) {
+  .mail-shell,
+  .mail-shell.pane-bottom,
+  .mail-shell.pane-hidden {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 58px minmax(0, 1fr);
+    grid-template-areas: "toolbar" "messages";
+  }
+
+  .app-brand strong,
+  .get-mail-button span,
+  .search-scope {
+    display: none;
+  }
+
+  .app-brand {
+    min-width: 32px;
+  }
+
+  .compose-button {
+    width: 44px;
+    padding: 8px;
+  }
+
+  .compose-button span {
+    display: none;
+  }
+
+  .app-toolbar {
+    gap: 6px;
+    padding-inline: 7px;
+  }
+
+  .search-box {
+    margin-inline: 0;
+  }
+
+  .reader-pane,
+  .pane-hidden .reader-pane:not(.reader-hidden):not(.empty-reader) {
+    position: fixed;
+    z-index: 15;
+    inset: 58px 0 0;
+    display: flex;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .reader-splitter,
+  .reader-bottom-splitter {
+    display: none;
+  }
+
+  .reader-pane.empty-reader,
+  .reader-pane.reader-hidden {
+    display: none;
+  }
+
+  .mobile-reader-back {
+    display: inline-flex !important;
+  }
+
+  .desktop-reader-close {
+    display: none !important;
+  }
+
+  .message-header {
+    grid-template-columns: 38px minmax(0, 1fr);
+    padding: 14px;
+  }
+
+  .message-header time {
+    grid-column: 2;
+    text-align: left;
+  }
+
+  .reader-actions {
+    flex-wrap: nowrap;
+    padding-inline: 8px;
+  }
+
+  .action-spacer {
+    flex: 0;
+  }
+
+  .modal-layer {
+    padding: 0;
+  }
+
+  .composer-window,
+  .settings-window {
+    width: 100%;
+    height: 100%;
+    max-height: none;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .settings-layout {
+    min-height: 0;
+    flex: 1;
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .settings-window {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .settings-nav {
+    display: flex;
+    padding: 7px;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .settings-nav button {
+    flex: 0 0 auto;
+  }
+
+  .settings-content {
+    max-height: none;
+    padding: 19px;
+  }
+
+  .format-toolbar {
+    flex: 0 0 auto;
+  }
+
+  .composer-window footer {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 560px) {
+  .form-grid.two-columns,
+  .server-settings,
+  .server-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .server-grid label {
+    grid-column: 1 !important;
+  }
+
+  .setup-page {
+    align-items: start;
+    padding: 0;
+  }
+
+  .setup-card,
+  .setup-card.account-form {
+    min-height: 100%;
+    padding: 22px 18px;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .setup-progress small {
+    font-size: 0.7rem;
+  }
+
+  .settings-row,
+  .switch-row {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .settings-row select {
+    width: 100%;
+  }
+
+  .settings-nav button span {
+    display: none;
+  }
+
+  .address-fields label {
+    grid-template-columns: 58px 1fr;
+  }
+
+  .toolbar-button {
+    padding-inline: 10px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition: none !important;
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .folder.active,
+  .message-row.selected,
+  .primary-button,
+  .settings-nav button.active {
+    border: 2px solid Highlight;
+  }
+
+  .unread-dot,
+  .sync-indicator > span:first-child {
+    forced-color-adjust: none;
+  }
+}
+
+@media print {
+  body,
+  #root,
+  .mail-shell {
+    width: 100% !important;
+    height: auto !important;
+    overflow: visible !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+
+  .app-toolbar,
+  .folder-pane,
+  .folder-splitter,
+  .message-pane,
+  .reader-splitter,
+  .reader-bottom-splitter,
+  .reader-actions,
+  .remote-content-banner,
+  .details-toggle,
+  .sidebar-toggle,
+  .sidebar-scrim,
+  .modal-layer,
+  .toast,
+  .pane-splitter {
+    display: none !important;
+  }
+
+  .mail-shell {
+    display: block !important;
+  }
+
+  .reader-pane {
+    display: block !important;
+    width: 100% !important;
+    height: auto !important;
+    padding: 0 !important;
+    border: 0 !important;
+    background: #ffffff !important;
+    overflow: visible !important;
+  }
+
+  .message-header {
+    border-bottom: 2px solid #000000 !important;
+    padding-bottom: 16px !important;
+    margin-bottom: 24px !important;
+  }
+
+  .message-body {
+    overflow: visible !important;
+  }
+
+  .message-body iframe {
+    height: auto !important;
+    min-height: 500px !important;
+    border: 0 !important;
+  }
+}

@@ -1,0 +1,372 @@
+/* First-run setup */
+.app-loading,
+.setup-page {
+  display: grid;
+  min-height: 100%;
+  place-items: center;
+  padding: 28px;
+}
+
+.setup-host {
+  width: 100%;
+  height: 100%;
+}
+
+.setup-page {
+  overflow: auto;
+  background: var(--canvas);
+}
+
+.setup-card {
+  width: min(640px, 100%);
+  padding: clamp(24px, 5vw, 42px);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--surface);
+  box-shadow: 0 10px 38px rgb(28 43 54 / 12%);
+}
+
+.setup-card.account-form {
+  width: min(780px, 100%);
+}
+
+.setup-brand {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.setup-brand p,
+.setup-brand h1,
+.account-form h1 {
+  margin: 0;
+}
+
+.setup-brand p {
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.setup-brand h1,
+.account-form h1 {
+  font-size: clamp(1.65rem, 4vw, 2.1rem);
+  letter-spacing: -0.025em;
+}
+
+.setup-intro {
+  margin: 9px 0 0;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.setup-progress {
+  display: grid;
+  grid-template-columns: 30px 1fr 30px;
+  align-items: center;
+  margin: 28px 0 24px;
+  color: var(--text-muted);
+}
+
+.setup-progress span {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface);
+  font-size: 0.83rem;
+  font-weight: 800;
+}
+
+.setup-progress span.active,
+.setup-progress span.done {
+  border-color: var(--accent);
+  color: #fff;
+  background: var(--accent);
+}
+
+.setup-progress span svg {
+  width: 15px;
+}
+
+.setup-progress i {
+  height: 1px;
+  background: var(--border);
+}
+
+.setup-progress small {
+  padding-top: 7px;
+  text-align: center;
+  font-size: 0.76rem;
+}
+
+.setup-progress small:last-child {
+  grid-column: 3;
+}
+
+.setup-progress.compact {
+  width: 180px;
+  margin: 0;
+}
+
+.setup-progress.compact small {
+  display: none;
+}
+
+.setup-form-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.provider-list {
+  display: grid;
+  gap: 10px;
+}
+
+.provider-button {
+  display: grid;
+  width: 100%;
+  min-height: 82px;
+  grid-template-columns: 50px 1fr auto;
+  align-items: center;
+  gap: 14px;
+  padding: 14px;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.provider-button:hover,
+.provider-button.provider-primary:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.provider-button.provider-primary {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.provider-symbol {
+  display: grid;
+  width: 50px;
+  height: 50px;
+  place-items: center;
+  border-radius: 12px;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.provider-symbol svg {
+  width: 26px;
+}
+
+.provider-button > span:nth-child(2) {
+  display: grid;
+  gap: 3px;
+}
+
+.provider-button strong {
+  font-size: 1.04rem;
+}
+
+.provider-button small,
+.privacy-note {
+  color: var(--text-muted);
+}
+
+.provider-arrow {
+  color: var(--accent);
+  font-size: 1.35rem;
+}
+
+.privacy-note {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 24px;
+  font-size: 0.88rem;
+}
+
+.privacy-note svg {
+  width: 20px;
+  color: var(--success);
+}
+
+.setup-settings-button {
+  margin-top: 16px;
+}
+
+.setup-form-header .setup-settings-button {
+  margin-top: 0;
+}
+
+.account-form {
+  display: grid;
+  gap: 18px;
+}
+
+.account-form label,
+.form-grid label,
+.server-grid label,
+.field-label {
+  display: grid;
+  gap: 6px;
+  font-weight: 650;
+}
+
+.form-grid.two-columns,
+.server-settings {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.password-field {
+  display: grid;
+  grid-template-columns: 1fr 48px;
+}
+
+.password-field input {
+  border-radius: 8px 0 0 8px;
+}
+
+.password-field button {
+  border: 1px solid var(--border);
+  border-left: 0;
+  border-radius: 0 8px 8px 0;
+  background: var(--surface-muted);
+}
+
+.password-field svg {
+  width: 19px;
+}
+
+.setup-help {
+  padding: 13px 15px;
+  border-left: 4px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent-soft);
+}
+
+.setup-help > span {
+  display: block;
+}
+
+.setup-help .text-button {
+  min-height: 44px;
+}
+
+.setup-field-hint {
+  margin: -8px 0 0;
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.server-summary {
+  display: grid;
+  gap: 10px;
+  padding: 13px 15px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-muted);
+}
+
+.server-summary > p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.86rem;
+}
+
+.server-summary dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.server-summary div {
+  display: grid;
+  gap: 2px;
+}
+
+.server-summary dt {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.server-summary dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+legend {
+  padding: 0 5px;
+  font-weight: 700;
+}
+
+.server-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 10px;
+}
+
+.server-grid label:nth-child(3),
+.server-grid label:nth-child(4) {
+  grid-column: 1 / -1;
+}
+
+.connection-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 11px 13px;
+  border-radius: 8px;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.connection-status.error {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, var(--surface));
+}
+
+.connection-status.success {
+  color: var(--success);
+}
+
+.connection-status svg {
+  width: 19px;
+}
+
+.connection-status span {
+  display: grid;
+  gap: 4px;
+}
+
+.connection-status small {
+  color: inherit;
+  font-size: 0.86rem;
+  line-height: 1.45;
+  opacity: 0.92;
+}
+
+.connection-status .text-button {
+  width: fit-content;
+  min-height: 40px;
+}

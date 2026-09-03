@@ -396,6 +396,25 @@ async function installMockIpc(page: Page) {
             case "read_message_inline_image":
               state.inlineReads += 1;
               return "data:image/png;base64,iVBORw0KGgo=";
+            case "show_native_confirm":
+              return window.confirm(
+                `${String(args.title)}\n\n${String(args.message)}`,
+              );
+            case "show_native_message":
+              window.alert(`${String(args.title)}\n\n${String(args.message)}`);
+              return undefined;
+            case "discover_account_aliases":
+              (account as { aliases?: string[] }).aliases = [
+                "alias1@icloud.com",
+                "custom@mydomain.com",
+              ];
+              return { ...account };
+            case "update_account_aliases":
+              (account as { aliases?: string[] }).aliases =
+                args.aliases as string[];
+              return { ...account };
+            case "relaunch_app":
+              return undefined;
             default:
               return undefined;
           }
@@ -890,4 +909,40 @@ test("mail shell has no detectable serious accessibility violations", async ({
       ["serious", "critical"].includes(violation.impact ?? ""),
     ),
   ).toEqual([]);
+});
+
+test("supports full sync download all option with unlimited storage limit", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("tab", { name: "Storage" }).click();
+
+  const cacheModeSelect = page.getByLabel("Mail to keep");
+  await cacheModeSelect.selectOption("full");
+
+  const cacheLimitSelect = page.getByLabel("Maximum cache size");
+  await expect(cacheLimitSelect).toBeDisabled();
+  await expect(cacheLimitSelect).toHaveValue("0");
+  await expect(page.locator(".storage-card")).toContainText("Full sync");
+});
+
+test("detects and manages account aliases and presents From selector in composer", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("tab", { name: "Accounts" }).click();
+
+  await page.getByRole("button", { name: "Detect from iCloud" }).click();
+  await expect(page.locator(".aliases-list")).toContainText(
+    "custom@mydomain.com",
+  );
+
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Write", exact: true }).click();
+  await expect(page.getByLabel("From address")).toBeVisible();
+  await expect(page.getByLabel("From address")).toContainText(
+    "custom@mydomain.com",
+  );
 });

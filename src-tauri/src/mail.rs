@@ -21,7 +21,7 @@ use crate::{
     db::{CachedMessage, Database},
     models::{
         mailbox_role, AccountRecord, AccountSetupRequest, Attachment, CachePolicy, ComposeDraft,
-        MessageSummary, ProviderKind, SearchQuery, ServerConfig, TlsMode,
+        MailboxRole, MessageSummary, ProviderKind, SearchQuery, ServerConfig, TlsMode,
     },
     security::{redact_error, safe_filename},
 };
@@ -263,6 +263,13 @@ pub async fn sync_account(
                 })
                 .collect::<Vec<_>>();
             db.reconcile_flags(mailbox_id, &seen, &requested)?;
+        }
+        let should_download_bodies = role == MailboxRole::Inbox || policy.mode == "full";
+        if should_download_bodies {
+            let limit = if policy.mode == "full" { 50 } else { 25 };
+            let _ =
+                download_uncached_bodies(&mut session, db, &account.summary.id, mailbox_id, limit)
+                    .await;
         }
     }
     db.reconcile_mailboxes(&account.summary.id, &server_mailboxes)?;
@@ -518,6 +525,197 @@ pub async fn download_message(
     let parsed = parse_message(uid, raw, flags.contains("seen"), flags.contains("flagged"))?;
     let _ = session.logout().await;
     Ok(parsed)
+}
+
+async fn download_uncached_bodies(
+    session: &mut ImapSession,
+    db: &Database,
+    account_id: &str,
+    mailbox_id: i64,
+    limit: u32,
+) -> Result<(), String> {
+    let uncached = db.uncached_message_uids(mailbox_id, limit, MAX_MESSAGE_BYTES as u64)?;
+    if uncached.is_empty() {
+        return Ok(());
+    }
+    let range = uncached
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let fetch_result = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
+        session
+            .uid_fetch(range, "(UID FLAGS RFC822.SIZE BODY.PEEK[])")
+            .await
+            .map_err(|error| redact_error(&error, "Message prefetch"))?
+            .try_collect::<Vec<_>>()
+            .await
+            .map_err(|error| redact_error(&error, "Message prefetch"))
+    })
+    .await;
+
+    let rows = match fetch_result {
+        Ok(Ok(rows)) => rows,
+        _ => return Ok(()),
+    };
+
+    for item in rows {
+        let (Some(uid), Some(raw)) = (item.uid, item.body()) else {
+            continue;
+        };
+        if raw.len() > MAX_MESSAGE_BYTES {
+            continue;
+        }
+        let flags = item
+            .flags()
+            .map(|flag| format!("{flag:?}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_ascii_lowercase();
+        if let Ok(parsed) =
+            parse_message(uid, raw, flags.contains("seen"), flags.contains("flagged"))
+        {
+            let _ = db.upsert_message(account_id, mailbox_id, &parsed);
+        }
+    }
+    Ok(())
+}
+
+pub async fn discover_icloud_aliases(email: &str, password: &str) -> Result<Vec<String>, String> {
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(6))
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|error| format!("Failed to create HTTP client: {error}"))?;
+
+    let auth = format!(
+        "Basic {}",
+        base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            format!("{email}:{password}")
+        )
+    );
+
+    let propfind_principal = r#"<?xml version="1.0" encoding="utf-8" ?>
+<D:propfind xmlns:D="DAV:">
+  <D:prop>
+    <D:current-user-principal/>
+  </D:prop>
+</D:propfind>"#;
+
+    let response = client
+        .request(
+            reqwest::Method::from_bytes(b"PROPFIND").unwrap(),
+            "https://caldav.icloud.com/",
+        )
+        .header("Authorization", &auth)
+        .header("Depth", "0")
+        .header("Content-Type", "application/xml; charset=utf-8")
+        .body(propfind_principal)
+        .send()
+        .await
+        .map_err(|error| format!("CalDAV error: {error}"))?;
+
+    let final_url = response.url().clone();
+    let text = response
+        .text()
+        .await
+        .map_err(|error| format!("CalDAV read error: {error}"))?;
+
+    let principal_href = extract_tag_value(&text, "current-user-principal")
+        .and_then(|tag| extract_tag_value(&tag, "href"))
+        .or_else(|| extract_tag_value(&text, "href"));
+
+    let Some(href) = principal_href else {
+        return Ok(Vec::new());
+    };
+
+    let principal_url = if href.starts_with("http") {
+        href
+    } else {
+        let base = format!(
+            "{}://{}",
+            final_url.scheme(),
+            final_url.host_str().unwrap_or("caldav.icloud.com")
+        );
+        format!(
+            "{base}{}",
+            if href.starts_with('/') {
+                href
+            } else {
+                format!("/{href}")
+            }
+        )
+    };
+
+    let address_set_prop = r#"<?xml version="1.0" encoding="utf-8" ?>
+<D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+  <D:prop>
+    <C:calendar-user-address-set/>
+  </D:prop>
+</D:propfind>"#;
+
+    let address_res = client
+        .request(
+            reqwest::Method::from_bytes(b"PROPFIND").unwrap(),
+            &principal_url,
+        )
+        .header("Authorization", &auth)
+        .header("Depth", "0")
+        .header("Content-Type", "application/xml; charset=utf-8")
+        .body(address_set_prop)
+        .send()
+        .await
+        .map_err(|error| format!("CalDAV address-set error: {error}"))?;
+
+    let address_xml = address_res
+        .text()
+        .await
+        .map_err(|error| format!("CalDAV address read error: {error}"))?;
+
+    let mut aliases = Vec::new();
+    let primary_lower = email.trim().to_lowercase();
+
+    for part in address_xml.split("mailto:") {
+        if let Some(end) = part.find(['<', '"', ' ', '\n', '\r', '\t', '&']) {
+            let addr = part[..end].trim().to_lowercase();
+            if addr.contains('@')
+                && !addr.contains('/')
+                && addr != primary_lower
+                && !aliases.contains(&addr)
+            {
+                aliases.push(addr);
+            }
+        }
+    }
+
+    Ok(aliases)
+}
+
+fn extract_tag_value(xml: &str, tag_name: &str) -> Option<String> {
+    let open_pat = format!("<{tag_name}");
+    let close_pat = format!("</{tag_name}>");
+    let (_, after) = if let Some(idx) = xml.find(&open_pat) {
+        let rest = &xml[idx + open_pat.len()..];
+        let gt = rest.find('>')?;
+        (idx, &rest[gt + 1..])
+    } else {
+        let colon = format!(":{tag_name}");
+        let colon_idx = xml.find(&colon)?;
+        let rest = &xml[colon_idx + colon.len()..];
+        let gt = rest.find('>')?;
+        (colon_idx, &rest[gt + 1..])
+    };
+
+    if let Some(close_idx) = after.find(&close_pat) {
+        return Some(after[..close_idx].trim().to_string());
+    }
+    let colon_close = format!(":{tag_name}>");
+    if let Some(colon_idx) = after.find(&colon_close) {
+        let slash = after[..colon_idx].rfind("</")?;
+        return Some(after[..slash].trim().to_string());
+    }
+    None
 }
 
 pub async fn set_remote_flags(
@@ -1138,13 +1336,16 @@ async fn build_message_with_id(
         return Err("This message has too many attachments.".into());
     }
 
-    let from: Mailbox = format!(
-        "{} <{}>",
-        account.summary.display_name, account.summary.email
-    )
-    .parse()
-    .or_else(|_| account.summary.email.parse())
-    .map_err(|_| "The sender address is invalid.".to_string())?;
+    let sender_email = draft
+        .from
+        .as_deref()
+        .map(str::trim)
+        .filter(|addr| !addr.is_empty())
+        .unwrap_or(&account.summary.email);
+    let from: Mailbox = format!("{} <{}>", account.summary.display_name, sender_email)
+        .parse()
+        .or_else(|_| sender_email.parse())
+        .map_err(|_| "The sender address is invalid.".to_string())?;
     let mut builder = Message::builder()
         .from(from)
         .subject(draft.subject.clone())
@@ -1232,9 +1433,13 @@ async fn build_message_with_id(
 }
 
 fn message_envelope(account: &AccountRecord, draft: &ComposeDraft) -> Result<Envelope, String> {
-    let from = account
-        .summary
-        .email
+    let sender_email = draft
+        .from
+        .as_deref()
+        .map(str::trim)
+        .filter(|addr| !addr.is_empty())
+        .unwrap_or(&account.summary.email);
+    let from = sender_email
         .parse()
         .map_err(|_| "The sender address is invalid.".to_string())?;
     let recipients = draft
@@ -1544,6 +1749,7 @@ mod tests {
                 display_name: "Sam".into(),
                 sync_state: "idle".into(),
                 error: None,
+                aliases: vec![],
             },
             imap: ServerConfig {
                 host: "imap.example.com".into(),
@@ -1561,6 +1767,7 @@ mod tests {
         let draft = ComposeDraft {
             id: None,
             account_id: account.summary.id.clone(),
+            from: None,
             to: vec!["jane@example.com".into()],
             cc: vec![],
             bcc: vec![],
@@ -1616,6 +1823,7 @@ mod tests {
                 display_name: "Sam".into(),
                 sync_state: "idle".into(),
                 error: None,
+                aliases: vec![],
             },
             imap: ServerConfig {
                 host: "imap.example.com".into(),
@@ -1633,6 +1841,7 @@ mod tests {
         let draft = ComposeDraft {
             id: None,
             account_id: account.summary.id.clone(),
+            from: None,
             to: vec!["jane@example.com".into()],
             cc: vec![],
             bcc: vec![],
@@ -1661,6 +1870,7 @@ mod tests {
                 display_name: "Sam".into(),
                 sync_state: "idle".into(),
                 error: None,
+                aliases: vec![],
             },
             imap: ServerConfig {
                 host: "imap.example.com".into(),
@@ -1678,6 +1888,7 @@ mod tests {
         let draft = ComposeDraft {
             id: None,
             account_id: account.summary.id.clone(),
+            from: None,
             to: vec!["jane@example.com".into()],
             cc: vec![],
             bcc: vec!["hidden@example.com".into()],
@@ -1715,6 +1926,7 @@ mod tests {
                 display_name: "Postal Snap Test".into(),
                 sync_state: "idle".into(),
                 error: None,
+                aliases: vec![],
             },
             imap: ServerConfig {
                 host: "localhost".into(),
@@ -1754,6 +1966,7 @@ mod tests {
         let draft = ComposeDraft {
             id: None,
             account_id: account.summary.id.clone(),
+            from: None,
             to: vec![account.summary.email.clone()],
             cc: vec![],
             bcc: vec![],

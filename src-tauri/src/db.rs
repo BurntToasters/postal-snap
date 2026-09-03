@@ -8,7 +8,7 @@ use crate::models::{
     MessageSummary, OutboxSummary, ProviderKind, SearchQuery, ServerConfig, TlsMode,
 };
 
-const CURRENT_SCHEMA_VERSION: u32 = 3;
+const CURRENT_SCHEMA_VERSION: u32 = 4;
 
 pub struct Database {
     connection: Mutex<Connection>,
@@ -90,10 +90,12 @@ impl Database {
     pub fn list_accounts(&self) -> Result<Vec<AccountSummary>, String> {
         let conn = self.conn()?;
         let mut statement = conn.prepare(
-            "SELECT id, provider, email, display_name, sync_state, error FROM accounts ORDER BY created_at",
+            "SELECT id, provider, email, display_name, sync_state, error, aliases_json FROM accounts ORDER BY created_at",
         ).map_err(db_error)?;
         let rows = statement
             .query_map([], |row| {
+                let aliases_json: String = row.get(6).unwrap_or_else(|_| "[]".into());
+                let aliases: Vec<String> = serde_json::from_str(&aliases_json).unwrap_or_default();
                 Ok(AccountSummary {
                     id: row.get(0)?,
                     provider: parse_provider(&row.get::<_, String>(1)?),
@@ -101,6 +103,7 @@ impl Database {
                     display_name: row.get(3)?,
                     sync_state: row.get(4)?,
                     error: row.get(5)?,
+                    aliases,
                 })
             })
             .map_err(db_error)?;
@@ -112,10 +115,13 @@ impl Database {
         conn.query_row(
             "SELECT id, provider, email, display_name, sync_state, error,
                     imap_host, imap_port, imap_tls, imap_username,
-                    smtp_host, smtp_port, smtp_tls, smtp_username
+                    smtp_host, smtp_port, smtp_tls, smtp_username,
+                    aliases_json
              FROM accounts WHERE id = ?1",
             [id],
             |row| {
+                let aliases_json: String = row.get(14).unwrap_or_else(|_| "[]".into());
+                let aliases: Vec<String> = serde_json::from_str(&aliases_json).unwrap_or_default();
                 Ok(AccountRecord {
                     summary: AccountSummary {
                         id: row.get(0)?,
@@ -124,6 +130,7 @@ impl Database {
                         display_name: row.get(3)?,
                         sync_state: row.get(4)?,
                         error: row.get(5)?,
+                        aliases,
                     },
                     imap: ServerConfig {
                         host: row.get(6)?,
@@ -147,12 +154,15 @@ impl Database {
 
     pub fn insert_account(&self, account: &AccountRecord) -> Result<(), String> {
         let conn = self.conn()?;
+        let aliases_json =
+            serde_json::to_string(&account.summary.aliases).unwrap_or_else(|_| "[]".into());
         conn.execute(
             "INSERT INTO accounts (
                 id, provider, email, display_name, sync_state,
                 imap_host, imap_port, imap_tls, imap_username,
-                smtp_host, smtp_port, smtp_tls, smtp_username
-             ) VALUES (?1, ?2, ?3, ?4, 'idle', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                smtp_host, smtp_port, smtp_tls, smtp_username,
+                aliases_json
+             ) VALUES (?1, ?2, ?3, ?4, 'idle', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 account.summary.id,
                 account.summary.provider.as_str(),
@@ -166,10 +176,30 @@ impl Database {
                 account.smtp.port,
                 account.smtp.tls_mode.as_str(),
                 account.smtp.username,
+                aliases_json,
             ],
         )
         .map_err(db_error)?;
         Ok(())
+    }
+
+    pub fn update_account_aliases(
+        &self,
+        id: &str,
+        aliases: &[String],
+    ) -> Result<AccountSummary, String> {
+        let aliases_json = serde_json::to_string(aliases)
+            .map_err(|_| "Failed to serialize aliases.".to_string())?;
+        {
+            let conn = self.conn()?;
+            conn.execute(
+                "UPDATE accounts SET aliases_json = ?2 WHERE id = ?1",
+                params![id, aliases_json],
+            )
+            .map_err(db_error)?;
+        }
+        let record = self.account(id)?;
+        Ok(record.summary)
     }
 
     pub fn remove_account(&self, id: &str) -> Result<(), String> {
@@ -389,6 +419,27 @@ impl Database {
             .map_err(db_error)?;
         let rows = statement
             .query_map([mailbox_id], |row| row.get(0))
+            .map_err(db_error)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+    }
+
+    pub fn uncached_message_uids(
+        &self,
+        mailbox_id: i64,
+        limit: u32,
+        max_size: u64,
+    ) -> Result<Vec<u32>, String> {
+        let conn = self.conn()?;
+        let mut statement = conn
+            .prepare(
+                "SELECT uid FROM messages
+                 WHERE mailbox_id = ?1 AND LENGTH(raw_message) = 0 AND size <= ?2
+                 ORDER BY received_at DESC, uid DESC
+                 LIMIT ?3",
+            )
+            .map_err(db_error)?;
+        let rows = statement
+            .query_map(params![mailbox_id, max_size, limit], |row| row.get(0))
             .map_err(db_error)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
     }
@@ -1654,7 +1705,7 @@ impl Database {
     }
 
     pub fn evict_to_policy(&self, policy: &CachePolicy) -> Result<(), String> {
-        if policy.mode == "full" {
+        if policy.is_unlimited() {
             return Ok(());
         }
         let mut conn = self.conn()?;
@@ -2011,6 +2062,20 @@ fn migrate_schema(connection: &mut Connection) -> Result<(), String> {
             "ALTER TABLE mailboxes ADD COLUMN local_unread_delta INTEGER NOT NULL DEFAULT 0",
         )?;
     }
+    if version < 4 {
+        ensure_column(
+            &transaction,
+            "accounts",
+            "aliases_json",
+            "ALTER TABLE accounts ADD COLUMN aliases_json TEXT NOT NULL DEFAULT '[]'",
+        )?;
+        ensure_column(
+            &transaction,
+            "drafts",
+            "sender_email",
+            "ALTER TABLE drafts ADD COLUMN sender_email TEXT",
+        )?;
+    }
     transaction
         .pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)
         .map_err(db_error)?;
@@ -2138,6 +2203,7 @@ mod tests {
                 display_name: "Sam".into(),
                 sync_state: "idle".into(),
                 error: None,
+                aliases: vec![],
             },
             imap: ServerConfig {
                 host: "imap.example.com".into(),
@@ -2191,6 +2257,7 @@ mod tests {
         ComposeDraft {
             id: None,
             account_id: account_id.into(),
+            from: None,
             to: vec!["jane@example.com".into()],
             cc: vec![],
             bcc: vec![],
@@ -2857,5 +2924,58 @@ mod tests {
         .unwrap();
         assert!(db.resolve_file("opaque-token", &first.summary.id).is_ok());
         assert!(db.resolve_file("opaque-token", &second.summary.id).is_err());
+    }
+
+    #[test]
+    fn uncached_message_uids_returns_newest_empty_bodies() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let mailbox_id = mailbox(&db, &account.summary.id, "INBOX", &MailboxRole::Inbox);
+
+        for uid in 1..=4 {
+            let mut msg = message(uid, &format!("2026-08-1{uid}T12:00:00Z"));
+            if uid == 2 {
+                msg.raw_message = b"cached body".to_vec();
+            } else {
+                msg.raw_message = vec![];
+            }
+            db.upsert_message(&account.summary.id, mailbox_id, &msg)
+                .unwrap();
+        }
+
+        let uncached = db.uncached_message_uids(mailbox_id, 10, 1000).unwrap();
+        assert_eq!(uncached, vec![4, 3, 1]);
+    }
+
+    #[test]
+    fn account_aliases_persist_and_update() {
+        let db = Database::memory();
+        let mut account = account();
+        account.summary.aliases = vec![
+            "alias1@example.com".into(),
+            "alias2@customdomain.com".into(),
+        ];
+        db.insert_account(&account).unwrap();
+
+        let loaded = db.account(&account.summary.id).unwrap();
+        assert_eq!(
+            loaded.summary.aliases,
+            vec!["alias1@example.com", "alias2@customdomain.com"]
+        );
+
+        let listed = db.list_accounts().unwrap();
+        assert_eq!(
+            listed[0].aliases,
+            vec!["alias1@example.com", "alias2@customdomain.com"]
+        );
+
+        let updated = db
+            .update_account_aliases(&account.summary.id, &["new@customdomain.com".into()])
+            .unwrap();
+        assert_eq!(updated.aliases, vec!["new@customdomain.com"]);
+
+        let reloaded = db.account(&account.summary.id).unwrap();
+        assert_eq!(reloaded.summary.aliases, vec!["new@customdomain.com"]);
     }
 }

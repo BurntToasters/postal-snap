@@ -1,0 +1,402 @@
+/* Settings */
+.settings-window {
+  position: relative;
+  z-index: 1;
+  width: min(840px, 96vw);
+  max-height: 94vh;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.2);
+}
+
+.settings-window > header {
+  display: flex;
+  min-height: 58px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px 8px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-window > header > span {
+  display: grid;
+}
+
+.settings-window h1 {
+  margin: 0;
+  font-size: 1.18rem;
+}
+
+.settings-window header small {
+  color: var(--text-muted);
+}
+
+.settings-layout {
+  display: grid;
+  min-height: 500px;
+  grid-template-columns: 200px minmax(0, 1fr);
+}
+
+.settings-nav {
+  display: grid;
+  align-content: start;
+  gap: 3px;
+  padding: 16px 10px;
+  border-right: 1px solid var(--border);
+  background: var(--surface-muted);
+}
+
+.settings-nav button {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  font-size: 0.92rem;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+}
+
+.settings-nav button:hover {
+  background: var(--surface-hover);
+}
+
+.settings-nav button.active {
+  color: #ffffff;
+  background: var(--accent);
+  font-weight: 600;
+}
+
+.settings-nav svg {
+  width: 19px;
+}
+
+.settings-content {
+  max-height: 70vh;
+  padding: 24px 28px;
+  overflow-y: auto;
+}
+
+.settings-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.settings-panel h2 {
+  margin: 0 0 4px;
+  font-size: 1.25rem;
+}
+
+.settings-row,
+.switch-row {
+  display: flex;
+  min-height: 52px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.settings-row > span,
+.switch-row > span,
+.security-summary > span,
+.storage-card > span,
+.account-settings-list span {
+  display: grid;
+  gap: 3px;
+}
+
+.settings-row select {
+  width: min(220px, 48%);
+}
+
+.settings-panel small,
+.settings-note {
+  color: var(--text-muted);
+}
+
+.switch-row input {
+  width: 22px;
+  min-height: 22px;
+}
+
+.security-summary,
+.storage-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-muted);
+}
+
+.security-summary svg {
+  color: var(--success);
+}
+
+.settings-data-card {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-muted);
+}
+
+.settings-data-card > div:first-child,
+.settings-empty-state {
+  display: grid;
+  gap: 4px;
+}
+
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-actions svg,
+.settings-empty-state > svg {
+  width: 17px;
+  height: 17px;
+}
+
+.settings-data-status {
+  color: var(--success) !important;
+  font-weight: 700;
+}
+
+.settings-empty-state {
+  place-items: center;
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.settings-empty-state > svg {
+  width: 30px;
+  height: 30px;
+}
+
+.settings-empty-state p {
+  margin: 0;
+}
+
+.storage-card span {
+  flex: 1;
+}
+
+.settings-note {
+  margin: -8px 0 0;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+/* Account settings card and aliases */
+.account-settings-list {
+  display: grid;
+  gap: 14px;
+}
+
+.account-settings-card {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.account-card-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.account-card-info {
+  display: grid;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.account-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.account-aliases-section {
+  display: grid;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.aliases-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.aliases-header strong {
+  font-size: 0.92rem;
+}
+
+.detect-aliases-button {
+  font-size: 0.84rem;
+  padding: 4px 12px;
+  white-space: nowrap;
+}
+
+.alias-status-message {
+  font-size: 0.84rem;
+  color: var(--success);
+  font-weight: 500;
+}
+
+.aliases-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.alias-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  font-size: 0.86rem;
+}
+
+.alias-chip.primary {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.alias-badge {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  opacity: 0.85;
+}
+
+.alias-chip button {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.alias-chip button:hover {
+  color: var(--danger);
+}
+
+.add-alias-form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.add-alias-form input {
+  flex: 1;
+  min-height: 38px;
+  padding: 6px 12px;
+  font-size: 0.88rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.add-alias-form button {
+  min-height: 38px;
+  padding: 6px 14px;
+  font-size: 0.88rem;
+}
+
+/* Update ready card */
+.update-ready-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 20px;
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  background: var(--accent-soft);
+  margin-bottom: 16px;
+}
+
+.update-ready-icon svg {
+  width: 32px;
+  height: 32px;
+  color: var(--accent);
+}
+
+.update-ready-body {
+  display: grid;
+  gap: 4px;
+  flex: 1;
+}
+
+.update-ready-body p {
+  margin: 0 0 8px;
+  font-size: 0.88rem;
+  color: var(--text);
+}
+
+.shortcuts-list {
+  display: grid;
+  gap: 8px;
+}
+
+.shortcut-row {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.shortcut-row kbd {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}

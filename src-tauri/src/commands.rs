@@ -22,7 +22,7 @@ use crate::{
         AccountSetupRequest, AccountSummary, AppSettings, CacheUsage, ComposeAttachment,
         ComposeDraft, DistributionChannel, DraftSaveOutcome, DraftSummary, IpcError,
         MailboxSummary, MessageCursor, MessageDetail, MessagePage, MessageSummary, OutboxSummary,
-        SearchQuery, SendOutcome, SyncState,
+        ProviderKind, SearchQuery, SendOutcome, SyncState,
     },
     security,
     settings::SettingsStore,
@@ -212,6 +212,12 @@ pub async fn add_account(
     let (imap, smtp, password) = take_validated_setup(&mut request)?;
     let password = Zeroizing::new(password);
     let (imap, smtp) = mail::test_account(&request, &imap, &smtp, &password).await?;
+    let mut aliases = Vec::new();
+    if request.provider == ProviderKind::Icloud {
+        if let Ok(found) = mail::discover_icloud_aliases(&request.email, &password).await {
+            aliases = found;
+        }
+    }
     let id = uuid::Uuid::new_v4().to_string();
     let summary = AccountSummary {
         id: id.clone(),
@@ -220,6 +226,7 @@ pub async fn add_account(
         display_name: request.display_name.trim().to_string(),
         sync_state: "idle".into(),
         error: None,
+        aliases,
     };
     let account = AccountRecord {
         summary: summary.clone(),
@@ -286,6 +293,55 @@ pub async fn remove_account(
     drop(guard);
     state.retire_actor(&account_id);
     Ok(AccountRemovalOutcome { cleanup_pending })
+}
+
+#[tauri::command]
+pub async fn discover_account_aliases(
+    account_id: String,
+    state: State<'_, AppState>,
+) -> CommandResult<AccountSummary> {
+    let account = state.db.account(&account_id)?;
+    if account.summary.provider != ProviderKind::Icloud {
+        return Ok(account.summary);
+    }
+    let password = credentials::load(&account_id)?;
+    let discovered = mail::discover_icloud_aliases(&account.summary.email, &password).await?;
+    let mut updated_aliases = account.summary.aliases.clone();
+    for alias in discovered {
+        if !updated_aliases.contains(&alias) {
+            updated_aliases.push(alias);
+        }
+    }
+    let updated = state
+        .db
+        .update_account_aliases(&account_id, &updated_aliases)?;
+    Ok(updated)
+}
+
+#[tauri::command]
+pub fn update_account_aliases(
+    account_id: String,
+    aliases: Vec<String>,
+    state: State<'_, AppState>,
+) -> CommandResult<AccountSummary> {
+    state.db.account(&account_id)?;
+    let mut clean_aliases = Vec::new();
+    for alias in aliases {
+        let trimmed = alias.trim().to_lowercase();
+        if trimmed.is_empty() || trimmed.len() > 320 || trimmed.contains(char::is_control) {
+            continue;
+        }
+        if trimmed.parse::<lettre::message::Mailbox>().is_err() {
+            return Err("One of the alias addresses is invalid.".into());
+        }
+        if !clean_aliases.contains(&trimmed) {
+            clean_aliases.push(trimmed);
+        }
+    }
+    let updated = state
+        .db
+        .update_account_aliases(&account_id, &clean_aliases)?;
+    Ok(updated)
 }
 
 #[tauri::command]
@@ -600,6 +656,7 @@ async fn import_remote_drafts_locked(
         let draft = ComposeDraft {
             id: Some(id.clone()),
             account_id: account_id.clone(),
+            from: None,
             to: remote.to,
             cc: remote.cc,
             bcc: remote.bcc,
@@ -1705,6 +1762,33 @@ pub fn get_distribution_channel() -> DistributionChannel {
             updates_managed_by: "postalSnap".into(),
         }
     }
+}
+
+#[tauri::command]
+pub fn show_native_confirm(app: AppHandle, title: String, message: String) -> CommandResult<bool> {
+    let confirmed = app
+        .dialog()
+        .message(message)
+        .title(title)
+        .kind(tauri_plugin_dialog::MessageDialogKind::Info)
+        .buttons(tauri_plugin_dialog::MessageDialogButtons::OkCancel)
+        .blocking_show();
+    Ok(confirmed)
+}
+
+#[tauri::command]
+pub fn show_native_message(app: AppHandle, title: String, message: String) -> CommandResult<()> {
+    app.dialog()
+        .message(message)
+        .title(title)
+        .kind(tauri_plugin_dialog::MessageDialogKind::Info)
+        .blocking_show();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn relaunch_app(app: AppHandle) -> CommandResult<()> {
+    app.restart();
 }
 
 fn emit_sync(
