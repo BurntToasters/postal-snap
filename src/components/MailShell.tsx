@@ -290,7 +290,7 @@ export function MailShell({ onOpenSettings }: Props) {
           search.allFolders,
         )
       )
-        setMessages(server, undefined, false);
+        setMessages(mergeSearchResults(cached, server), undefined, false);
     } catch (cause) {
       if (
         searchStillCurrent(
@@ -517,11 +517,7 @@ export function MailShell({ onOpenSettings }: Props) {
       }
       if (isEditing) return;
 
-      if (
-        event.key === "Delete" ||
-        event.key === "Backspace" ||
-        (mod && event.key === "Backspace")
-      ) {
+      if (event.key === "Delete" || (mod && event.key === "Backspace")) {
         const state = useAppStore.getState();
         const currentMsg = state.selectedMessage;
         if (currentMsg) {
@@ -983,6 +979,12 @@ export function MailShell({ onOpenSettings }: Props) {
             onChoose={chooseMessage}
             hasMore={hasMoreMessages}
             onLoadMore={loadMoreMessages}
+            searchQuery={query.trim()}
+            onClearSearch={() => {
+              queryRef.current = "";
+              setQuery("");
+              void loadMessages();
+            }}
           />
         )}
       </section>
@@ -1131,6 +1133,19 @@ function FolderButton({
   );
 }
 
+function mergeSearchResults(
+  localItems: MessageSummary[],
+  serverItems: MessageSummary[],
+): MessageSummary[] {
+  const map = new Map<number, MessageSummary>();
+  for (const item of localItems) map.set(item.id, item);
+  for (const item of serverItems) map.set(item.id, item);
+  return Array.from(map.values()).sort(
+    (a, b) =>
+      new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime(),
+  );
+}
+
 function MessageList({
   messages,
   selectedId,
@@ -1139,6 +1154,8 @@ function MessageList({
   onChoose,
   hasMore,
   onLoadMore,
+  searchQuery,
+  onClearSearch,
 }: {
   messages: MessageSummary[];
   selectedId?: number;
@@ -1147,6 +1164,8 @@ function MessageList({
   onChoose: (message: MessageSummary) => Promise<void>;
   hasMore: boolean;
   onLoadMore: () => Promise<void>;
+  searchQuery?: string;
+  onClearSearch?: () => void;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -1165,8 +1184,29 @@ function MessageList({
         {strings.mail.loadingMessages}
       </div>
     );
-  if (messages.length === 0)
-    return <div className="list-state">{strings.mail.emptyMailbox}</div>;
+  if (messages.length === 0) {
+    if (searchQuery) {
+      return (
+        <div className="list-state" role="status">
+          <p>{strings.mail.noSearchResults(searchQuery)}</p>
+          {onClearSearch ? (
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={onClearSearch}
+            >
+              {strings.mail.clearSearch}
+            </button>
+          ) : null}
+        </div>
+      );
+    }
+    return (
+      <div className="list-state" role="status" aria-live="polite">
+        {strings.mail.emptyMailbox}
+      </div>
+    );
+  }
   return (
     <div className="message-list">
       <div
@@ -1297,7 +1337,11 @@ function DraftList({
   onOpen: (id: string) => Promise<void>;
 }) {
   if (drafts.length === 0)
-    return <div className="list-state">{strings.mail.noDrafts}</div>;
+    return (
+      <div className="list-state" role="status" aria-live="polite">
+        {strings.mail.noDrafts}
+      </div>
+    );
   return (
     <div className="local-mail-list">
       {drafts.map((draft) => (
@@ -1348,7 +1392,11 @@ function OutboxList({
   ) => Promise<void>;
 }) {
   if (items.length === 0)
-    return <div className="list-state">{strings.mail.noQueued}</div>;
+    return (
+      <div className="list-state" role="status" aria-live="polite">
+        {strings.mail.noQueued}
+      </div>
+    );
   return (
     <div className="local-mail-list">
       {items.map((item) => (

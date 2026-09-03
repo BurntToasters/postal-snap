@@ -218,14 +218,20 @@ impl Database {
     }
 
     pub fn remove_account(&self, id: &str) -> Result<(), String> {
-        let conn = self.conn()?;
-        let removed = conn
+        let mut conn = self.conn()?;
+        let tx = conn.transaction().map_err(db_error)?;
+        tx.execute(
+            "DELETE FROM message_fts WHERE message_id IN (SELECT id FROM messages WHERE account_id=?1)",
+            [id],
+        )
+        .map_err(db_error)?;
+        let removed = tx
             .execute("DELETE FROM accounts WHERE id = ?1", [id])
             .map_err(db_error)?;
         if removed != 1 {
             return Err("Account not found.".into());
         }
-        Ok(())
+        tx.commit().map_err(db_error)
     }
 
     pub fn account_count(&self) -> Result<usize, String> {
@@ -414,6 +420,12 @@ impl Database {
         };
         let transaction = conn.transaction().map_err(db_error)?;
         for id in stale_ids {
+            transaction
+                .execute(
+                    "DELETE FROM message_fts WHERE message_id IN (SELECT id FROM messages WHERE mailbox_id=?1)",
+                    [id],
+                )
+                .map_err(db_error)?;
             transaction
                 .execute(
                     "DELETE FROM mailboxes WHERE id=?1 AND account_id=?2",
@@ -1934,7 +1946,10 @@ fn fts_query(value: &str) -> String {
     value
         .split_whitespace()
         .map(|term| {
-            term.trim_matches(|c: char| !c.is_alphanumeric() && c != '@' && c != '.' && c != '_')
+            let cleaned = term.replace('*', "");
+            cleaned
+                .trim_matches(|c: char| !c.is_alphanumeric() && c != '@' && c != '.' && c != '_')
+                .to_string()
         })
         .filter(|term| term.chars().any(|c| c.is_alphanumeric()))
         .take(12)
@@ -2401,8 +2416,9 @@ mod tests {
     fn fts_terms_are_quoted_and_bounded() {
         assert_eq!(fts_query("hello world"), "\"hello\"* AND \"world\"*");
         assert!(fts_query("").is_empty());
-        assert!(fts_query("::: ... ???").is_empty());
+        assert_eq!(fts_query("::: ... ???"), "");
         assert_eq!(fts_query("user@example.com"), "\"user@example.com\"*");
+        assert_eq!(fts_query("foo*bar a**b"), "\"foobar\"* AND \"ab\"*");
     }
 
     #[test]

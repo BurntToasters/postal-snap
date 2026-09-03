@@ -80,7 +80,7 @@
 
 .move-control select {
   width: 84px;
-  min-height: 40px;
+  min-height: 44px;
   border: 0;
   background: transparent;
 }
@@ -107,27 +107,56 @@
   height: 42px;
   place-items: center;
   border-radius: 50%;
-  color: #fff;
+  color: var(--accent-contrast, #fff);
   background: var(--accent);
   font-weight: 750;
 }
 
 .sender-details {
-  display: grid;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   min-width: 0;
 }
 
-.sender-details span,
-.message-header time {
-  overflow: hidden;
+.sender-primary-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sender-name {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.sender-address-muted {
+  font-size: 0.85rem;
   color: var(--text-muted);
-  font-size: 0.79rem;
+}
+
+.recipient-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 0.84rem;
+  color: var(--text-muted);
+  min-width: 0;
+}
+
+.recipient-preview {
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .message-header time {
+  color: var(--text-muted);
+  font-size: 0.82rem;
   text-align: right;
+  white-space: nowrap;
 }
 
 .details-toggle {
@@ -135,18 +164,134 @@
   width: fit-content;
   min-height: 44px;
   align-items: center;
-  padding: 6px 12px;
+  gap: 6px;
+  padding: 6px 14px;
   margin-top: 4px;
   border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text-muted);
-  background: transparent;
-  font-size: 0.82rem;
+  border-radius: 7px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  font-size: 0.85rem;
+  font-weight: 600;
   cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
 }
 
 .details-toggle:hover {
+  background: var(--accent);
+  color: var(--accent-contrast, #fff);
+}
+
+.message-details-panel {
+  grid-column: 1 / -1;
+  margin-top: 10px;
+  padding: 14px 18px;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.details-grid {
+  display: grid;
+  grid-template-columns: 90px 1fr;
+  gap: 8px 14px;
+  margin: 0;
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.details-grid dt {
+  color: var(--text-muted);
+  font-weight: 600;
+  text-align: right;
+  padding-top: 2px;
+}
+
+.details-grid dd {
+  margin: 0;
   color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.address-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.recipients-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.address-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.84rem;
+}
+
+.address-spec {
+  color: var(--text-muted);
+}
+
+.reply-to-highlight {
+  color: var(--warning);
+  font-weight: 600;
+}
+
+.security-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--success);
+}
+
+.security-badge strong {
+  font-weight: 650;
+}
+
+.message-id-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.message-id-row code {
+  font-size: 0.8rem;
+  background: var(--surface);
+  padding: 2px 7px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+}
+
+.copy-mini-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 44px;
+  padding: 6px 12px;
+  font-size: 0.82rem;
+  font-weight: 550;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.copy-mini-btn:hover {
+  color: var(--text);
+  border-color: var(--accent);
   background: var(--surface-hover);
 }
 
@@ -182,19 +327,31 @@
 }
 
 .message-body iframe {
+  display: block;
   width: 100%;
   height: 100%;
   border: 0;
   background: #fff;
 }
 
-.message-body pre {
+.message-body pre,
+.plain-text-body {
   margin: 0;
   padding: 22px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font: inherit;
   line-height: 1.55;
+}
+
+.plain-text-body a {
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.plain-text-body a:hover {
+  color: var(--accent-hover);
 }
 
 .empty-reader {
