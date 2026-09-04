@@ -61,11 +61,11 @@ export function formatFullMessageDate(value: string, now = new Date()): string {
   const diffDays = Math.floor(diffHours / 24);
 
   let relative = "";
-  if (diffMinutes < 1) relative = "just now";
-  else if (diffMinutes < 60) relative = `${diffMinutes}m ago`;
-  else if (diffHours < 24) relative = `${diffHours}h ago`;
+  if (diffMinutes < 1) relative = strings.mail.justNow;
+  else if (diffMinutes < 60) relative = strings.mail.minutesAgo(diffMinutes);
+  else if (diffHours < 24) relative = strings.mail.hoursAgo(diffHours);
   else if (diffDays === 1) relative = strings.mail.yesterday.toLowerCase();
-  else if (diffDays < 30) relative = `${diffDays}d ago`;
+  else if (diffDays < 30) relative = strings.mail.daysAgo(diffDays);
 
   return relative ? `${fullDate} (${relative})` : fullDate;
 }

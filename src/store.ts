@@ -9,6 +9,7 @@ import type {
   MessageCursor,
   MessageSummary,
   OutboxSummary,
+  SnoozedSummary,
   SyncState,
 } from "./types";
 
@@ -35,9 +36,11 @@ export const defaultSettings: AppSettings = {
   cachePolicy: { mode: "recent", days: 90, maxBytes: 1_073_741_824 },
   lastAccountId: null,
   lastMailboxId: null,
-  folderPaneWidth: 248,
-  messagePaneWidth: 390,
+  folderPaneWidth: 264,
+  messagePaneWidth: 400,
   readerPaneHeight: 360,
+  windowEffects: false,
+  undoSendSeconds: 10,
 };
 
 interface AppState {
@@ -45,18 +48,20 @@ interface AppState {
   activeAccountId?: string;
   mailboxes: MailboxSummary[];
   activeMailboxId?: number;
-  activeLocalView?: "drafts" | "outbox";
+  activeLocalView?: "drafts" | "outbox" | "snoozed";
   messages: MessageSummary[];
   messageCursor?: MessageCursor;
   hasMoreMessages: boolean;
   drafts: DraftSummary[];
   outbox: OutboxSummary[];
+  snoozed: SnoozedSummary[];
   selectedMessage?: MessageDetail;
   sync: Record<string, SyncState>;
   settings: AppSettings;
   composerOpen: boolean;
   composerAccountId?: string;
   composeSeed?: ComposerSeed;
+  composeNonce: number;
   busy: boolean;
   error?: string;
   updateReady: string | null;
@@ -65,7 +70,7 @@ interface AppState {
   selectAccount: (id: string) => void;
   setMailboxes: (mailboxes: MailboxSummary[]) => void;
   selectMailbox: (id: number) => void;
-  selectLocalView: (view: "drafts" | "outbox") => void;
+  selectLocalView: (view: "drafts" | "outbox" | "snoozed") => void;
   setMessages: (
     messages: MessageSummary[],
     cursor?: MessageCursor,
@@ -78,6 +83,7 @@ interface AppState {
   ) => void;
   setDrafts: (drafts: DraftSummary[]) => void;
   setOutbox: (outbox: OutboxSummary[]) => void;
+  setSnoozed: (snoozed: SnoozedSummary[]) => void;
   selectMessage: (message?: MessageDetail) => void;
   setSync: (sync: SyncState) => void;
   setSettings: (settings: AppSettings) => void;
@@ -94,9 +100,11 @@ export const useAppStore = create<AppState>((set) => ({
   hasMoreMessages: false,
   drafts: [],
   outbox: [],
+  snoozed: [],
   sync: {},
   settings: defaultSettings,
   composerOpen: false,
+  composeNonce: 0,
   busy: false,
   updateReady: null,
   setUpdateReady: (updateReady) => set({ updateReady }),
@@ -133,6 +141,7 @@ export const useAppStore = create<AppState>((set) => ({
               hasMoreMessages: false,
               drafts: [],
               outbox: [],
+              snoozed: [],
               selectedMessage: undefined,
               busy: false,
             }
@@ -157,6 +166,7 @@ export const useAppStore = create<AppState>((set) => ({
       hasMoreMessages: false,
       drafts: [],
       outbox: [],
+      snoozed: [],
       selectedMessage: undefined,
     }),
   setMailboxes: (mailboxes) =>
@@ -213,6 +223,7 @@ export const useAppStore = create<AppState>((set) => ({
     })),
   setDrafts: (drafts) => set({ drafts }),
   setOutbox: (outbox) => set({ outbox }),
+  setSnoozed: (snoozed) => set({ snoozed }),
   selectMessage: (selectedMessage) => set({ selectedMessage }),
   setSync: (sync) =>
     set((state) => ({ sync: { ...state.sync, [sync.accountId]: sync } })),
@@ -225,11 +236,17 @@ export const useAppStore = create<AppState>((set) => ({
           ?.id,
     })),
   openComposer: (composeSeed) =>
-    set((state) => ({
-      composerOpen: true,
-      composerAccountId: composeSeed?.draft?.accountId ?? state.activeAccountId,
-      composeSeed,
-    })),
+    set((state) => {
+      const composerAccountId =
+        composeSeed?.draft?.accountId ?? state.activeAccountId;
+      if (!composerAccountId) return state;
+      return {
+        composerOpen: true,
+        composerAccountId,
+        composeSeed,
+        composeNonce: state.composeNonce + 1,
+      };
+    }),
   closeComposer: () =>
     set({
       composerOpen: false,

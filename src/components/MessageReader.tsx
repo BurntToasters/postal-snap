@@ -5,8 +5,10 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
+  Clock,
   Copy,
   Download,
+  Eye,
   FolderInput,
   Forward,
   Image,
@@ -28,7 +30,7 @@ import { strings } from "../i18n";
 import { parseMailto } from "../mailto";
 import { messageFrameDocument, sanitizeReceivedHtml } from "../security";
 import { useAppStore } from "../store";
-import type { Attachment } from "../types";
+import type { Attachment, AttachmentPreview } from "../types";
 import { moveToolbarFocus } from "./toolbarNav";
 import { useDialogFocus } from "./useDialogFocus";
 
@@ -58,7 +60,57 @@ export function MessageReader() {
   }>();
   const [loadingImagesFor, setLoadingImagesFor] = useState<number>();
   const [preparingForward, setPreparingForward] = useState(false);
+  const [downloadingAttachmentId, setDownloadingAttachmentId] =
+    useState<string>();
+  const [preview, setPreview] = useState<{
+    messageId: number;
+    preview: AttachmentPreview;
+  } | null>(null);
+  const [previewAttachmentId, setPreviewAttachmentId] = useState<string>();
+
+  function isPreviewable(attachment: Attachment): boolean {
+    if (attachment.inline || attachment.size > 10 * 1024 * 1024) return false;
+    const contentType = attachment.contentType.toLowerCase();
+    return (
+      contentType === "text/plain" ||
+      ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(
+        contentType,
+      )
+    );
+  }
+
+  async function previewFile(attachmentId: string) {
+    if (!message || previewAttachmentId !== undefined) return;
+    const targetMessageId = message.id;
+    setPreviewAttachmentId(attachmentId);
+    try {
+      const loaded = await api.previewAttachment(
+        message.accountId,
+        message.id,
+        attachmentId,
+      );
+      if (targetMessageId !== useAppStore.getState().selectedMessage?.id)
+        return;
+      setPreview({ messageId: targetMessageId, preview: loaded });
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setPreviewAttachmentId(undefined);
+    }
+  }
   const [showDetailsFor, setShowDetailsFor] = useState<number>();
+  const [snoozeOpen, setSnoozeOpen] = useState(false);
+
+  async function snoozeCurrentMessage(untilIso: string) {
+    if (!message) return;
+    try {
+      await api.snoozeMessage(message.accountId, message.id, untilIso);
+      setSnoozeOpen(false);
+      selectMessage(undefined);
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }
   const isOverlay = settings.readingPane === "hidden" && message !== undefined;
   const dialogRef = useDialogFocus(() => selectMessage(undefined));
   const titleRef = useRef<HTMLHeadingElement>(null);
@@ -85,12 +137,21 @@ export function MessageReader() {
 
   async function handleExternalLink(url: string) {
     if (!/^https?:/i.test(url)) return;
+    let display: string;
+    try {
+      const parsed = new URL(url);
+      // Never hand credentials to the browser or show a misleading host.
+      if (parsed.username || parsed.password) return;
+      display = parsed.href;
+    } catch {
+      return;
+    }
     const confirmed = await api.showNativeConfirm(
       strings.appName,
-      strings.reader.openLink(url),
+      strings.reader.openLink(display),
     );
     if (confirmed) {
-      await openUrl(url);
+      await openUrl(display);
     }
   }
 
@@ -222,6 +283,7 @@ export function MessageReader() {
   async function loadImages() {
     if (!sanitized || loadingImages || !messageId) return;
     setLoadingImagesFor(messageId);
+    const targetId = messageId;
     const operation = ++contentOperation.current;
     try {
       const doc = new DOMParser().parseFromString(
@@ -261,8 +323,9 @@ export function MessageReader() {
     } catch (cause) {
       if (contentOperation.current === operation) setError(String(cause));
     } finally {
-      if (contentOperation.current === operation)
-        setLoadingImagesFor(undefined);
+      setLoadingImagesFor((current) =>
+        current === targetId ? undefined : current,
+      );
     }
   }
 
@@ -546,7 +609,8 @@ export function MessageReader() {
   }
 
   async function download(attachmentId: string, filename: string) {
-    if (!message) return;
+    if (!message || downloadingAttachmentId !== undefined) return;
+    setDownloadingAttachmentId(attachmentId);
     try {
       await api.saveAttachment(
         message.accountId,
@@ -556,6 +620,8 @@ export function MessageReader() {
       );
     } catch (cause) {
       setError(String(cause));
+    } finally {
+      setDownloadingAttachmentId(undefined);
     }
   }
 
@@ -626,7 +692,7 @@ export function MessageReader() {
       <div
         className="reader-actions"
         role="toolbar"
-        aria-label="Message actions"
+        aria-label={strings.reader.actions}
         onKeyDown={moveToolbarFocus}
       >
         <button
@@ -654,7 +720,7 @@ export function MessageReader() {
             openComposer({ sourceMessage: message, composeMode: "reply" })
           }
         >
-          <Reply />
+          <Reply aria-hidden="true" />
           {strings.reader.reply}
         </button>
         <button
@@ -663,7 +729,7 @@ export function MessageReader() {
             openComposer({ sourceMessage: message, composeMode: "replyAll" })
           }
         >
-          <ReplyAll />
+          <ReplyAll aria-hidden="true" />
           {strings.reader.replyAll}
         </button>
         <button
@@ -671,7 +737,7 @@ export function MessageReader() {
           onClick={() => void forwardMessage()}
           disabled={preparingForward}
         >
-          <Forward />
+          <Forward aria-hidden="true" />
           {preparingForward ? strings.reader.preparing : strings.reader.forward}
         </button>
         <button
@@ -687,7 +753,7 @@ export function MessageReader() {
           aria-label={strings.reader.print}
           title={strings.reader.print}
         >
-          <Printer />
+          <Printer aria-hidden="true" />
         </button>
         <span className="action-spacer" />
         <button
@@ -700,7 +766,11 @@ export function MessageReader() {
             message.isRead ? strings.reader.markUnread : strings.reader.markRead
           }
         >
-          {message.isRead ? <Mail /> : <MailOpen />}
+          {message.isRead ? (
+            <Mail aria-hidden="true" />
+          ) : (
+            <MailOpen aria-hidden="true" />
+          )}
         </button>
         <button
           type="button"
@@ -716,7 +786,10 @@ export function MessageReader() {
               : strings.reader.addStar
           }
         >
-          <Star fill={message.isStarred ? "currentColor" : "none"} />
+          <Star
+            aria-hidden="true"
+            fill={message.isStarred ? "currentColor" : "none"}
+          />
         </button>
         <button
           type="button"
@@ -725,7 +798,7 @@ export function MessageReader() {
           aria-label={strings.reader.archive}
           title={strings.reader.archive}
         >
-          <Archive />
+          <Archive aria-hidden="true" />
         </button>
         <button
           type="button"
@@ -734,7 +807,7 @@ export function MessageReader() {
           aria-label={strings.reader.junk}
           title={strings.reader.junk}
         >
-          <ShieldAlert />
+          <ShieldAlert aria-hidden="true" />
         </button>
         <button
           type="button"
@@ -743,7 +816,16 @@ export function MessageReader() {
           aria-label={strings.reader.trash}
           title={strings.reader.trash}
         >
-          <Trash2 />
+          <Trash2 aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          onClick={() => setSnoozeOpen((value) => !value)}
+          aria-expanded={snoozeOpen}
+          aria-label={strings.reader.snooze}
+          title={strings.reader.snooze}
+        >
+          <Clock aria-hidden="true" />
         </button>
         <label className="move-control" title={strings.reader.moveFolder}>
           <FolderInput aria-hidden="true" />
@@ -770,6 +852,12 @@ export function MessageReader() {
           </select>
         </label>
       </div>
+      {snoozeOpen ? (
+        <SnoozePanel
+          onSnooze={(untilIso) => void snoozeCurrentMessage(untilIso)}
+          onClose={() => setSnoozeOpen(false)}
+        />
+      ) : null}
       <header className="message-header">
         <h1
           id="message-title"
@@ -948,17 +1036,17 @@ export function MessageReader() {
             {loadingImages
               ? strings.common.loading
               : currentLoadedHtml
-                ? "Retry loading images"
+                ? strings.reader.retryImages
                 : strings.reader.loadImages}
           </button>
         </div>
       ) : null}
       <div className="message-body">
-        {!message.htmlBody &&
-        !message.textBody &&
-        message.size > 50 * 1024 * 1024 ? (
+        {!message.htmlBody && !message.textBody ? (
           <p className="plain-text-body" role="note">
-            {strings.mail.messageTooLarge}
+            {message.size > 50 * 1024 * 1024
+              ? strings.mail.messageTooLarge
+              : strings.mail.emptyBody}
           </p>
         ) : message.htmlBody ? (
           <iframe
@@ -990,24 +1078,120 @@ export function MessageReader() {
               {strings.reader.attachments} ({regularAttachments.length})
             </h2>
             {regularAttachments.map((attachment) => (
-              <button
-                type="button"
-                key={attachment.id}
-                onClick={() =>
-                  void download(attachment.id, attachment.filename)
-                }
-              >
-                <Download aria-hidden="true" />
-                <span>
-                  <strong>{attachment.filename}</strong>
-                  <small>{formatBytes(attachment.size)}</small>
-                </span>
-              </button>
+              <div key={attachment.id} className="attachment-row">
+                {isPreviewable(attachment) ? (
+                  <button
+                    type="button"
+                    className="attachment-preview-button"
+                    disabled={
+                      downloadingAttachmentId !== undefined ||
+                      previewAttachmentId !== undefined
+                    }
+                    onClick={() => void previewFile(attachment.id)}
+                    aria-label={`${strings.reader.preview}: ${attachment.filename}`}
+                  >
+                    <Eye aria-hidden="true" />
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="attachment-download-button"
+                  disabled={downloadingAttachmentId !== undefined}
+                  onClick={() =>
+                    void download(attachment.id, attachment.filename)
+                  }
+                  aria-label={`${strings.reader.downloadFile}: ${attachment.filename}`}
+                >
+                  <Download aria-hidden="true" />
+                  <span>
+                    <strong>{attachment.filename}</strong>
+                    <small>{formatBytes(attachment.size)}</small>
+                  </span>
+                </button>
+              </div>
             ))}
           </section>
         );
       })()}
+      {preview && message && preview.messageId === message.id ? (
+        <AttachmentPreviewDialog
+          preview={preview.preview}
+          onDownload={() => {
+            const current = message.attachments.find(
+              (item) =>
+                item.filename === preview.preview.filename && !item.inline,
+            );
+            if (current) void download(current.id, current.filename);
+          }}
+          onClose={() => setPreview(null)}
+        />
+      ) : null}
     </article>
+  );
+}
+
+function AttachmentPreviewDialog({
+  preview,
+  onDownload,
+  onClose,
+}: {
+  preview: AttachmentPreview;
+  onDownload: () => void;
+  onClose: () => void;
+}) {
+  const dialogRef = useDialogFocus(onClose);
+  return (
+    <div className="modal-layer attachment-preview-layer">
+      <button
+        type="button"
+        className="modal-backdrop"
+        aria-label={strings.common.close}
+        onClick={onClose}
+      />
+      <section
+        className="attachment-preview-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label={strings.reader.previewTitle(preview.filename)}
+        ref={dialogRef}
+      >
+        <header>
+          <div>
+            <h2>{preview.filename}</h2>
+            <small>
+              {preview.contentType} · {formatBytes(preview.size)}
+            </small>
+          </div>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={onClose}
+            aria-label={strings.common.close}
+          >
+            <X aria-hidden="true" />
+          </button>
+        </header>
+        <div className="attachment-preview-body">
+          {preview.imageDataUrl ? (
+            <img src={preview.imageDataUrl} alt={preview.filename} />
+          ) : (
+            <pre>{preview.text ?? ""}</pre>
+          )}
+        </div>
+        <footer>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => {
+              onDownload();
+              onClose();
+            }}
+          >
+            <Download aria-hidden="true" /> {strings.reader.downloadFile}
+          </button>
+        </footer>
+      </section>
+    </div>
   );
 }
 
@@ -1114,6 +1298,65 @@ function CopyButton({ text, title }: { text: string; title: string }) {
   );
 }
 
+function SnoozePanel({
+  onSnooze,
+  onClose,
+}: {
+  onSnooze: (untilIso: string) => void;
+  onClose: () => void;
+}) {
+  const [custom, setCustom] = useState("");
+  function atMorning(date: Date): string {
+    date.setHours(8, 0, 0, 0);
+    return date.toISOString();
+  }
+  function tomorrowMorning(): string {
+    const date = new Date();
+    date.setDate(date.getDate() + 1);
+    return atMorning(date);
+  }
+  function nextMonday(): string {
+    const date = new Date();
+    date.setDate(date.getDate() + ((8 - date.getDay()) % 7 || 7));
+    return atMorning(date);
+  }
+  return (
+    <div
+      className="snooze-panel"
+      role="group"
+      aria-label={strings.reader.snooze}
+    >
+      <button type="button" onClick={() => onSnooze(tomorrowMorning())}>
+        {strings.reader.snoozeTomorrow}
+      </button>
+      <button type="button" onClick={() => onSnooze(nextMonday())}>
+        {strings.reader.snoozeNextWeek}
+      </button>
+      <label>
+        <span className="visually-hidden">{strings.reader.snoozeCustom}</span>
+        <input
+          type="datetime-local"
+          value={custom}
+          onChange={(event) => setCustom(event.target.value)}
+        />
+      </label>
+      <button
+        type="button"
+        disabled={!custom}
+        onClick={() => {
+          const parsed = new Date(custom);
+          if (Number.isFinite(parsed.getTime())) onSnooze(parsed.toISOString());
+        }}
+      >
+        {strings.reader.snoozeUntil}
+      </button>
+      <button type="button" className="toolbar-button" onClick={onClose}>
+        {strings.common.cancel}
+      </button>
+    </div>
+  );
+}
+
 function PlainTextContent({
   text,
   onOpenLink,
@@ -1140,12 +1383,18 @@ function PlainTextContent({
         });
       }
       const matched = match[0];
-      if (matched.startsWith("http://") || matched.startsWith("https://")) {
-        elements.push({ type: "link", content: matched });
-      } else if (matched.startsWith("mailto:")) {
-        elements.push({ type: "mailto", content: matched });
+      // Trailing sentence punctuation is prose, not address.
+      const trimmed = matched.replace(/[.,!?;:]+$/, "");
+      const trailing = matched.slice(trimmed.length);
+      if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+        elements.push({ type: "link", content: trimmed });
+      } else if (trimmed.startsWith("mailto:")) {
+        elements.push({ type: "mailto", content: trimmed });
       } else {
-        elements.push({ type: "mailto", content: `mailto:${matched}` });
+        elements.push({ type: "mailto", content: `mailto:${trimmed}` });
+      }
+      if (trailing) {
+        elements.push({ type: "text", content: trailing });
       }
       lastIndex = match.index + matched.length;
     }

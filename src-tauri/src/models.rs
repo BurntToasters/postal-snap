@@ -17,6 +17,14 @@ impl ProviderKind {
     }
 }
 
+fn default_auth_method() -> String {
+    "password".to_string()
+}
+
+fn default_undo_send_seconds() -> u32 {
+    10
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum TlsMode {
@@ -77,6 +85,10 @@ pub struct AccountSummary {
     pub error: Option<String>,
     #[serde(default)]
     pub aliases: Vec<String>,
+    #[serde(default = "default_auth_method")]
+    pub auth_method: String,
+    #[serde(default)]
+    pub signature: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -156,6 +168,8 @@ pub struct MessageSummary {
     pub is_starred: bool,
     pub has_attachments: bool,
     pub size: u64,
+    #[serde(default)]
+    pub thread_root: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -256,6 +270,8 @@ pub struct OutboxSummary {
     pub state: String,
     pub detail: Option<String>,
     pub created_at: String,
+    #[serde(default)]
+    pub send_at: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -324,10 +340,14 @@ pub struct AppSettings {
     pub folder_pane_width: u32,
     pub message_pane_width: u32,
     pub reader_pane_height: u32,
+    #[serde(default)]
+    pub window_effects: bool,
+    #[serde(default = "default_undo_send_seconds")]
+    pub undo_send_seconds: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct PortableCachePolicy {
     pub mode: String,
     pub days: u32,
@@ -335,7 +355,7 @@ pub struct PortableCachePolicy {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct PortableSettings {
     pub reading_pane: String,
     pub text_scale: f64,
@@ -346,10 +366,14 @@ pub struct PortableSettings {
     pub folder_pane_width: u32,
     pub message_pane_width: u32,
     pub reader_pane_height: u32,
+    #[serde(default)]
+    pub window_effects: bool,
+    #[serde(default = "default_undo_send_seconds")]
+    pub undo_send_seconds: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct PortableSettingsFile {
     pub application: String,
     pub format_version: u32,
@@ -368,9 +392,11 @@ impl Default for AppSettings {
             cache_policy: CachePolicy::default(),
             last_account_id: None,
             last_mailbox_id: None,
-            folder_pane_width: 248,
-            message_pane_width: 390,
+            folder_pane_width: 264,
+            message_pane_width: 400,
             reader_pane_height: 360,
+            window_effects: false,
+            undo_send_seconds: default_undo_send_seconds(),
         }
     }
 }
@@ -381,6 +407,76 @@ pub struct CacheUsage {
     pub bytes: u64,
     pub max_bytes: u64,
     pub message_count: u64,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RecipientSuggestion {
+    pub address: String,
+    pub name: String,
+    pub use_count: u32,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentPreview {
+    pub filename: String,
+    pub content_type: String,
+    pub size: u64,
+    pub text: Option<String>,
+    pub image_data_url: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnoozedSummary {
+    pub message: MessageSummary,
+    pub snoozed_until: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FilterRule {
+    pub id: String,
+    pub account_id: String,
+    pub name: String,
+    pub field: String,
+    pub contains: String,
+    pub action: String,
+    pub target_mailbox: Option<String>,
+    pub enabled: bool,
+}
+
+pub fn validate_filter_rule(rule: &FilterRule, account_id: &str) -> Result<(), String> {
+    if rule.account_id != account_id {
+        return Err("Rule does not belong to this account.".into());
+    }
+    let name = rule.name.trim();
+    if name.is_empty() || name.len() > 80 || name.contains(char::is_control) {
+        return Err("Name the rule in up to 80 characters.".into());
+    }
+    if !matches!(rule.field.as_str(), "from" | "subject") {
+        return Err("Rules can match sender or subject.".into());
+    }
+    let needle = rule.contains.trim();
+    if needle.is_empty() || needle.len() > 200 || needle.contains(char::is_control) {
+        return Err("Match text must be 1 to 200 characters.".into());
+    }
+    if !matches!(
+        rule.action.as_str(),
+        "mark_read" | "move_archive" | "move_trash" | "move_junk" | "move_mailbox"
+    ) {
+        return Err("That rule action is not supported.".into());
+    }
+    if rule.action == "move_mailbox"
+        && rule
+            .target_mailbox
+            .as_deref()
+            .is_none_or(|target| target.is_empty())
+    {
+        return Err("Choose the folder to move matching mail into.".into());
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -570,11 +666,24 @@ pub fn take_validated_setup(
 }
 
 fn validate_server(server: &ServerConfig) -> Result<(), String> {
-    if server.host.trim().is_empty()
-        || server.host.len() > 253
-        || server.host.contains('/')
-        || server.host.contains(char::is_whitespace)
-    {
+    let host = server.host.trim();
+    let host_ok = !host.is_empty()
+        && host.len() <= 253
+        && !host.contains(char::is_whitespace)
+        && !host.contains(char::is_control)
+        && (host.parse::<std::net::IpAddr>().is_ok() || {
+            !host.contains(['/', '\\', '@', ':', '?', '#', '[', ']'])
+                && host.split('.').all(|label| {
+                    !label.is_empty()
+                        && label.len() <= 63
+                        && label
+                            .chars()
+                            .all(|character| character.is_alphanumeric() || character == '-')
+                })
+                && !host.starts_with('-')
+                && !host.ends_with('-')
+        });
+    if !host_ok {
         return Err("Enter a valid mail server name.".into());
     }
     if server.port == 0
@@ -633,6 +742,27 @@ pub fn validate_compose_draft(draft: &ComposeDraft) -> Result<(), String> {
         return Err("The attachment list is too large or invalid.".into());
     }
     Ok(())
+}
+
+pub fn validate_folder_name(name: &str) -> Result<String, String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() || trimmed.len() > 128 || trimmed.contains(char::is_control) {
+        return Err("Enter a folder name up to 128 characters.".into());
+    }
+    if trimmed != name {
+        return Err("Remove spaces at the start or end of the folder name.".into());
+    }
+    if trimmed.eq_ignore_ascii_case("inbox") {
+        return Err("That name is reserved for the inbox.".into());
+    }
+    // Hierarchy separators, LIST wildcards, and quoting characters reach the
+    // IMAP session raw; keep names to plain printable text instead.
+    if trimmed.contains(['/', '*', '%', '"', '\\'])
+        || trimmed.chars().all(|character| character == '.')
+    {
+        return Err("Folder names cannot contain / * % \" or \\.".into());
+    }
+    Ok(trimmed.to_string())
 }
 
 pub fn mailbox_role(name: &str, attributes: &[String]) -> MailboxRole {
@@ -731,6 +861,30 @@ mod tests {
             }),
         };
         assert!(validated_setup(&request).is_err());
+    }
+
+    #[test]
+    fn server_names_reject_credentials_ports_and_paths() {
+        let valid = |host: &str| {
+            validate_server(&ServerConfig {
+                host: host.into(),
+                port: 993,
+                tls_mode: TlsMode::Tls,
+                username: "sam".into(),
+            })
+            .is_ok()
+        };
+        assert!(valid("imap.example.com"));
+        assert!(valid("mail"));
+        assert!(valid("192.0.2.10"));
+        assert!(valid("::1"));
+        assert!(!valid("user@imap.example.com"));
+        assert!(!valid("imap.example.com:993"));
+        assert!(!valid("http://imap.example.com"));
+        assert!(!valid("imap.example.com/path"));
+        assert!(!valid("imap example.com"));
+        assert!(!valid("-imap.example.com"));
+        assert!(!valid(""));
     }
 
     #[test]
@@ -911,5 +1065,55 @@ mod tests {
         assert_eq!(mailbox_role("Gesendet", &[]), MailboxRole::Sent);
         assert_eq!(mailbox_role("Entwürfe", &[]), MailboxRole::Drafts);
         assert_eq!(mailbox_role("Papierkorb", &[]), MailboxRole::Trash);
+    }
+
+    #[test]
+    fn folder_names_reject_blanks_reserved_and_control_chars() {
+        assert_eq!(validate_folder_name("Receipts").unwrap(), "Receipts");
+        assert_eq!(validate_folder_name("Bills 2026").unwrap(), "Bills 2026");
+        assert!(validate_folder_name("").is_err());
+        assert!(validate_folder_name("   ").is_err());
+        assert!(validate_folder_name("INBOX").is_err());
+        assert!(validate_folder_name("inbox").is_err());
+        assert!(validate_folder_name(" Receipts").is_err());
+        assert!(validate_folder_name("Receipts ").is_err());
+        assert!(validate_folder_name("a\nb").is_err());
+        assert!(validate_folder_name(&"a".repeat(129)).is_err());
+        assert!(validate_folder_name("a/b").is_err());
+        assert!(validate_folder_name("a*b").is_err());
+        assert!(validate_folder_name("a%b").is_err());
+        assert!(validate_folder_name("a\"b").is_err());
+    }
+
+    fn valid_rule() -> FilterRule {
+        FilterRule {
+            id: String::new(),
+            account_id: "account-1".into(),
+            name: "Bills".into(),
+            field: "from".into(),
+            contains: "power".into(),
+            action: "move_archive".into(),
+            target_mailbox: None,
+            enabled: true,
+        }
+    }
+
+    #[test]
+    fn filter_rules_validate_fields_actions_and_ownership() {
+        assert!(validate_filter_rule(&valid_rule(), "account-1").is_ok());
+        assert!(validate_filter_rule(&valid_rule(), "other").is_err());
+        let mut rule = valid_rule();
+        rule.field = "body".into();
+        assert!(validate_filter_rule(&rule, "account-1").is_err());
+        rule = valid_rule();
+        rule.action = "move_mailbox".into();
+        assert!(validate_filter_rule(&rule, "account-1").is_err());
+        rule.target_mailbox = Some("".into());
+        assert!(validate_filter_rule(&rule, "account-1").is_err());
+        rule.target_mailbox = Some("7".into());
+        assert!(validate_filter_rule(&rule, "account-1").is_ok());
+        rule = valid_rule();
+        rule.contains = "   ".into();
+        assert!(validate_filter_rule(&rule, "account-1").is_err());
     }
 }

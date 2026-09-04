@@ -63,8 +63,18 @@
   gap: 6px;
   padding: 0;
   border: 0;
+  border-radius: 6px;
   color: var(--accent);
   background: transparent;
+}
+
+.text-button:focus-visible,
+.back-button:focus-visible,
+.discard-button:focus-visible,
+.cc-toggle:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+  background: var(--accent-soft);
 }
 
 .full-button {

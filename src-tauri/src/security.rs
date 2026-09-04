@@ -15,7 +15,7 @@ pub async fn fetch_public_image(raw_url: &str) -> Result<String, String> {
 }
 
 async fn fetch_public_image_inner(raw_url: &str) -> Result<String, String> {
-    let mut target = validate_public_url(raw_url).await?;
+    let mut target = validate_public_url(raw_url, None).await?;
     for _ in 0..5 {
         let (url, host, addresses) = target;
         // Pin this request to the public addresses we validated. Otherwise a
@@ -46,7 +46,7 @@ async fn fetch_public_image_inner(raw_url: &str) -> Result<String, String> {
             let redirected = url
                 .join(location)
                 .map_err(|_| "The image server returned an unsafe redirect.".to_string())?;
-            target = validate_public_url(redirected.as_str()).await?;
+            target = validate_public_url(redirected.as_str(), Some(url.scheme())).await?;
             continue;
         }
         if !response.status().is_success() {
@@ -98,13 +98,19 @@ async fn fetch_public_image_inner(raw_url: &str) -> Result<String, String> {
     Err("The image server redirected too many times.".into())
 }
 
-async fn validate_public_url(raw_url: &str) -> Result<(Url, String, Vec<SocketAddr>), String> {
+async fn validate_public_url(
+    raw_url: &str,
+    previous_scheme: Option<&str>,
+) -> Result<(Url, String, Vec<SocketAddr>), String> {
     let url = Url::parse(raw_url).map_err(|_| "Invalid image address.".to_string())?;
     if !matches!(url.scheme(), "http" | "https")
         || !url.username().is_empty()
         || url.password().is_some()
     {
         return Err("Only public HTTP(S) images can be loaded.".into());
+    }
+    if previous_scheme == Some("https") && url.scheme() != "https" {
+        return Err("The image server returned an unsafe redirect.".into());
     }
     let host = url
         .host_str()
@@ -116,7 +122,7 @@ async fn validate_public_url(raw_url: &str) -> Result<(Url, String, Vec<SocketAd
     let port = url
         .port_or_known_default()
         .ok_or_else(|| "Invalid image address.".to_string())?;
-    if !matches!(port, 80 | 443 | 8080 | 8443) {
+    if !matches!(port, 80 | 443) {
         return Err("Images may only be loaded from standard web ports.".into());
     }
     let resolved = lookup_host((host.as_str(), port))

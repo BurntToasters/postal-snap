@@ -15,10 +15,24 @@ export function useDialogFocus(onClose: () => void) {
     const previous = document.activeElement as HTMLElement | null;
     const dialog = ref.current;
     if (dialog) {
+      // React applies autoFocus without leaving an attribute or property
+      // behind, so detect it by position: if focus already landed inside
+      // the dialog, leave it alone instead of yanking it to the first
+      // button (which also clears pending input work like debounces).
+      const controls = [...dialog.querySelectorAll<HTMLElement>(focusable)];
       const first =
-        dialog.querySelector<HTMLElement>("[autofocus]") ??
-        dialog.querySelector<HTMLElement>(focusable);
-      window.setTimeout(() => first?.focus(), 0);
+        controls.find((element) => element.hasAttribute("autofocus")) ??
+        controls[0];
+      window.setTimeout(() => {
+        if (
+          document.activeElement &&
+          document.activeElement !== document.body &&
+          dialog.contains(document.activeElement)
+        ) {
+          return;
+        }
+        first?.focus();
+      }, 0);
     }
 
     function onKeyDown(event: KeyboardEvent) {

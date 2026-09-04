@@ -26,6 +26,8 @@ const settings = (theme: AppSettings["theme"]): AppSettings => ({
   folderPaneWidth: 248,
   messagePaneWidth: 390,
   readerPaneHeight: 360,
+  windowEffects: false,
+  undoSendSeconds: 10,
 });
 
 describe("settings IPC serialization", () => {
