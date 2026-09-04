@@ -10,6 +10,7 @@ export interface UpdateCheckResult {
 export type UpdateFoundListener = (version?: string) => void;
 
 let updateInFlight: Promise<UpdateCheckResult> | undefined;
+let interactiveInFlight: Promise<void> | undefined;
 const updateFoundListeners = new Set<UpdateFoundListener>();
 let updateFound = false;
 let updateVersion: string | undefined;
@@ -21,6 +22,7 @@ export function removeUpdateFoundListener(listener: UpdateFoundListener): void {
 
 export function resetUpdateStateForTesting(): void {
   updateInFlight = undefined;
+  interactiveInFlight = undefined;
   updateFoundListeners.clear();
   updateFound = false;
   updateVersion = undefined;
@@ -122,41 +124,55 @@ export async function checkUpdateInteractive(): Promise<void> {
     return;
   }
 
-  try {
-    const { check } = await import("@tauri-apps/plugin-updater");
-    const update = await check();
-    if (!update) {
-      await api.showNativeMessage(
-        strings.update.upToDateTitle,
-        strings.update.upToDateMessage,
-      );
-      return;
-    }
-
-    const shouldDownload = await api.showNativeConfirm(
-      strings.update.availableTitle,
-      strings.update.availablePrompt(update.version),
-    );
-    if (!shouldDownload) return;
-
+  // Serialize with the background check: a periodic run starting now joins
+  // this interactive run instead of downloading twice.
+  if (interactiveInFlight) {
+    await interactiveInFlight.catch(() => undefined);
+    return checkUpdateInteractive();
+  }
+  const task = (async (): Promise<void> => {
     try {
-      await update.downloadAndInstall();
-      updateReadyVersion = update.version;
-      useAppStore.getState().setUpdateReady(update.version);
+      const { check } = await import("@tauri-apps/plugin-updater");
+      const update = await check();
+      if (!update) {
+        await api.showNativeMessage(
+          strings.update.upToDateTitle,
+          strings.update.upToDateMessage,
+        );
+        return;
+      }
+
+      const shouldDownload = await api.showNativeConfirm(
+        strings.update.availableTitle,
+        strings.update.availablePrompt(update.version),
+      );
+      if (!shouldDownload) return;
+
+      try {
+        await update.downloadAndInstall();
+        updateReadyVersion = update.version;
+        useAppStore.getState().setUpdateReady(update.version);
+      } catch {
+        await api.showNativeMessage(
+          strings.update.downloadErrorTitle,
+          strings.update.downloadErrorMessage,
+        );
+        return;
+      }
+
+      await promptToRestartForUpdate(update.version);
     } catch {
       await api.showNativeMessage(
-        strings.update.downloadErrorTitle,
-        strings.update.downloadErrorMessage,
+        strings.update.checkErrorTitle,
+        strings.update.checkErrorMessage,
       );
-      return;
     }
-
-    await promptToRestartForUpdate(update.version);
-  } catch {
-    await api.showNativeMessage(
-      strings.update.checkErrorTitle,
-      strings.update.checkErrorMessage,
-    );
+  })();
+  interactiveInFlight = task;
+  try {
+    await task;
+  } finally {
+    if (interactiveInFlight === task) interactiveInFlight = undefined;
   }
 }
 
@@ -164,7 +180,7 @@ export function startPeriodicUpdateCheck(
   intervalMs = 4 * 60 * 60 * 1000,
 ): () => void {
   const timer = window.setInterval(() => {
-    if (!getUpdateReadyVersion()) {
+    if (!getUpdateReadyVersion() && !interactiveInFlight && !updateInFlight) {
       void runUpdateSingleFlight().catch(() => undefined);
     }
   }, intervalMs);

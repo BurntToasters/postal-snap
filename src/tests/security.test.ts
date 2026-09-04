@@ -33,6 +33,7 @@ describe("received mail isolation", () => {
     expect(document).toContain("form-action 'none'");
     expect(document).not.toContain("allow-scripts");
     expect(document).toContain("font:24px");
+    expect(document).toContain('name="viewport"');
   });
 
   it("turns CID images into inert opaque references", () => {

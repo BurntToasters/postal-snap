@@ -1,7 +1,6 @@
-// FUTURE IMPLEMENTATION: Native window blur / vibrancy (macOS vibrancy / Windows Mica·Acrylic).
+// Native window blur / vibrancy (macOS vibrancy / Windows Mica / Acrylic).
 // Everything but the rendered email will have it.
 // Linux is intentionally a no-op; stays fully opaque there.
-// Mirrored from Zinnia (parent directory).
 
 import { invoke } from "@tauri-apps/api/core";
 

@@ -15,14 +15,26 @@ vi.mock("../api", () => ({
     listMailboxes: vi.fn(),
     listDrafts: vi.fn(),
     listOutbox: vi.fn(),
+    listSnoozed: vi.fn().mockResolvedValue([]),
+    snoozeMessage: vi.fn(),
+    unsnoozeMessage: vi.fn(),
+    retryOutbox: vi.fn(),
+    retrySentCopy: vi.fn(),
+    sendScheduledOutbox: vi.fn(),
+    deleteOutbox: vi.fn(),
     listMessages: vi.fn(),
     getMessage: vi.fn(),
     setMessageFlags: vi.fn(),
+    setMessagesFlags: vi.fn(),
+    moveMessagesToMailbox: vi.fn(),
+    markMailboxRead: vi.fn(),
     searchCached: vi.fn(),
     searchServer: vi.fn(),
     saveSettings: vi.fn(),
     onFolderCountsChanged: vi.fn(),
     onMessageChanged: vi.fn(),
+    onDraftSyncChanged: vi.fn().mockResolvedValue(() => undefined),
+    onOutboxChanged: vi.fn().mockResolvedValue(() => undefined),
   },
 }));
 
@@ -46,6 +58,16 @@ const inbox: MailboxSummary = {
   role: "inbox",
   unreadCount: 2,
   totalCount: 2,
+};
+
+const trash: MailboxSummary = {
+  id: 3,
+  accountId: account.id,
+  name: "Trash",
+  displayName: "Trash",
+  role: "trash",
+  unreadCount: 0,
+  totalCount: 0,
 };
 
 const firstMessage: MessageSummary = {
@@ -80,9 +102,14 @@ const messages = [firstMessage, secondMessage];
 const mockedListMailboxes = vi.mocked(api.listMailboxes);
 const mockedListDrafts = vi.mocked(api.listDrafts);
 const mockedListOutbox = vi.mocked(api.listOutbox);
+const mockedListSnoozed = vi.mocked(api.listSnoozed);
+const mockedUnsnoozeMessage = vi.mocked(api.unsnoozeMessage);
 const mockedListMessages = vi.mocked(api.listMessages);
 const mockedGetMessage = vi.mocked(api.getMessage);
 const mockedSetMessageFlags = vi.mocked(api.setMessageFlags);
+const mockedSetMessagesFlags = vi.mocked(api.setMessagesFlags);
+const mockedMoveMessagesToMailbox = vi.mocked(api.moveMessagesToMailbox);
+const mockedMarkMailboxRead = vi.mocked(api.markMailboxRead);
 const mockedSearchCached = vi.mocked(api.searchCached);
 const mockedSearchServer = vi.mocked(api.searchServer);
 const mockedSaveSettings = vi.mocked(api.saveSettings);
@@ -106,7 +133,7 @@ function resetStore() {
   useAppStore.setState({
     accounts: [account],
     activeAccountId: account.id,
-    mailboxes: [inbox],
+    mailboxes: [inbox, trash],
     activeMailboxId: inbox.id,
     activeLocalView: undefined,
     messages: [],
@@ -114,6 +141,7 @@ function resetStore() {
     hasMoreMessages: false,
     drafts: [],
     outbox: [],
+    snoozed: [],
     selectedMessage: undefined,
     sync: {},
     settings: defaultSettings,
@@ -133,9 +161,10 @@ describe("mail shell", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetStore();
-    mockedListMailboxes.mockResolvedValue([inbox]);
+    mockedListMailboxes.mockResolvedValue([inbox, trash]);
     mockedListDrafts.mockResolvedValue([]);
     mockedListOutbox.mockResolvedValue([]);
+    mockedListSnoozed.mockResolvedValue([]);
     mockedListMessages.mockResolvedValue({
       items: messages,
       nextCursor: null,
@@ -255,5 +284,146 @@ describe("mail shell", () => {
     expect(
       await screen.findByRole("heading", { name: "First message" }),
     ).toBeVisible();
+  });
+
+  it("marks selected messages read in bulk", async () => {
+    mockedSetMessagesFlags.mockResolvedValue({
+      updated: 2,
+      queued: 0,
+      failed: 0,
+    });
+    renderShell();
+
+    await screen.findByRole("option", { name: /First message/i });
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /First message/i }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /Second message/i }));
+    expect(screen.getByRole("toolbar", { name: "2 selected" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Mark read" }));
+
+    await waitFor(() =>
+      expect(mockedSetMessagesFlags).toHaveBeenCalledWith(
+        "account-1",
+        [1, 2],
+        true,
+        undefined,
+      ),
+    );
+  });
+
+  it("marks the whole mailbox read at once", async () => {
+    mockedMarkMailboxRead.mockResolvedValue({
+      updated: 2,
+      queued: 0,
+      failed: 0,
+    });
+    renderShell();
+
+    await screen.findByRole("option", { name: /First message/i });
+    fireEvent.click(screen.getByRole("button", { name: "Mark all read" }));
+
+    await waitFor(() =>
+      expect(mockedMarkMailboxRead).toHaveBeenCalledWith("account-1", 1),
+    );
+  });
+
+  it("moves selected messages to trash in bulk", async () => {
+    mockedMoveMessagesToMailbox.mockResolvedValue({
+      updated: 1,
+      queued: 0,
+      failed: 0,
+    });
+    renderShell();
+
+    await screen.findByRole("option", { name: /First message/i });
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /First message/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Move to trash" }));
+
+    await waitFor(() =>
+      expect(mockedMoveMessagesToMailbox).toHaveBeenCalledWith(
+        "account-1",
+        [1],
+        3,
+      ),
+    );
+  });
+
+  it("sends a held message early on request", async () => {
+    const sendNow = vi.mocked(api.sendScheduledOutbox);
+    sendNow.mockResolvedValue({ id: "outbox-1", state: "sent", detail: null });
+    const held = {
+      id: "outbox-1",
+      accountId: account.id,
+      recipients: "lee@example.com",
+      subject: "Held note",
+      state: "scheduled",
+      detail: "Held for review.",
+      createdAt: "2026-08-18T11:00:00Z",
+      sendAt: new Date(Date.now() + 60_000).toISOString(),
+    } as const;
+    mockedListOutbox.mockResolvedValue([held]);
+    useAppStore.setState({
+      activeLocalView: "outbox",
+      outbox: [held],
+    });
+    renderShell();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Send now" }));
+    await waitFor(() =>
+      expect(sendNow).toHaveBeenCalledWith("outbox-1", "account-1"),
+    );
+  });
+
+  it("collapses threads until expanded", async () => {
+    const threaded = [firstMessage, secondMessage].map((message) => ({
+      ...message,
+      threadRoot: "<thread@example.test>",
+    }));
+    mockedListMessages.mockResolvedValue({
+      items: threaded,
+      nextCursor: null,
+      hasMore: false,
+    });
+    renderShell();
+
+    const header = await screen.findByRole("button", {
+      name: /Conversation.*2 messages/i,
+    });
+    expect(screen.queryByRole("option", { name: /First message/i })).toBeNull();
+    fireEvent.click(header);
+    expect(
+      await screen.findByRole("option", { name: /First message/i }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("option", { name: /Second message/i }),
+    ).toBeVisible();
+  });
+
+  it("lists snoozed mail separately with a way back", async () => {
+    mockedListSnoozed.mockResolvedValue([
+      {
+        message: firstMessage,
+        snoozedUntil: "2026-09-01T08:00:00+00:00",
+      },
+    ]);
+    mockedUnsnoozeMessage.mockResolvedValue(undefined);
+    renderShell();
+
+    fireEvent.click(screen.getByRole("button", { name: /^Snoozed/ }));
+    expect(
+      await screen.findByRole("heading", { name: "Snoozed" }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", {
+        name: /^Unread, Jane, First message, Snoozed until/,
+      }),
+    ).toBeVisible();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Bring back: First message" }),
+    );
+    await waitFor(() =>
+      expect(mockedUnsnoozeMessage).toHaveBeenCalledWith("account-1", 1),
+    );
   });
 });

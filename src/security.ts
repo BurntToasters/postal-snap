@@ -109,7 +109,7 @@ export function messageFrameDocument(html: string, textScale = 1): string {
     "object-src 'none'",
     "base-uri 'none'",
   ].join("; ");
-  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${policy}"><style>body{font:${fontSize}px/1.55 system-ui,sans-serif;color:#20252b;background:transparent;margin:16px;overflow-wrap:anywhere}img{max-width:100%;height:auto}.remote-image-blocked{display:inline-block;min-width:120px;min-height:40px;background:#eef2f6;border:1px solid #c8d2dc}a{color:#1264a3}</style></head><body>${html}</body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${policy}"><style>body{font:${fontSize}px/1.55 system-ui,sans-serif;color:#20252b;background:transparent;margin:16px;overflow-wrap:anywhere}img{max-width:100%;height:auto}.remote-image-blocked{display:inline-block;min-width:120px;min-height:40px;background:#eef2f6;border:1px solid #c8d2dc}a{color:#1264a3}</style></head><body>${html}</body></html>`;
 }
 
 export function htmlToPlainText(html: string): string {

@@ -65,6 +65,17 @@ function preparePassword(provider: ProviderKind, password: string): string {
   return provider === "icloud" ? trimmed.replace(/\s+/g, "") : trimmed;
 }
 
+function trimServer(server: ServerConfig): ServerConfig {
+  return {
+    ...server,
+    host: server.host.trim(),
+    username: server.username.trim(),
+    port: Number.isFinite(server.port)
+      ? Math.max(1, Math.min(65535, Math.trunc(server.port)))
+      : server.port,
+  };
+}
+
 export function SetupWizard({ onComplete, onOpenSettings }: Props) {
   const [provider, setProvider] = useState<ProviderKind>();
   const [displayName, setDisplayName] = useState("");
@@ -95,8 +106,8 @@ export function SetupWizard({ onComplete, onOpenSettings }: Props) {
       displayName: displayName.trim(),
       email: normalizedEmail,
       password: preparePassword(provider ?? "icloud", password),
-      imap: provider === "manual" ? imap : undefined,
-      smtp: provider === "manual" ? smtp : undefined,
+      imap: provider === "manual" ? trimServer(imap) : undefined,
+      smtp: provider === "manual" ? trimServer(smtp) : undefined,
     }),
     [displayName, imap, normalizedEmail, password, provider, smtp],
   );

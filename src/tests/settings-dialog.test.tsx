@@ -1,15 +1,27 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import { SettingsDialog } from "../components/SettingsDialog";
 import { defaultSettings, useAppStore } from "../store";
+import type { FilterRule } from "../types";
+
+vi.mock("../window-fx", () => ({
+  supportsWorkspaceWindowFx: vi.fn().mockResolvedValue(true),
+  syncWorkspaceWindowFx: vi.fn().mockResolvedValue(undefined),
+}));
 
 vi.mock("../api", () => ({
   api: {
     saveSettings: vi.fn(),
     listAccounts: vi.fn(),
+    updateAccountPassword: vi.fn(),
+    updateAccountSignature: vi.fn(),
     updateAccountAliases: vi.fn(),
     discoverAccountAliases: vi.fn(),
+    listFilterRules: vi.fn(),
+    createFilterRule: vi.fn(),
+    updateFilterRule: vi.fn(),
+    deleteFilterRule: vi.fn(),
     syncAccount: vi.fn(),
     removeAccount: vi.fn(),
     relaunch: vi.fn(),
@@ -48,6 +60,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(api.saveSettings).mockImplementation(async (s) => s);
   vi.mocked(api.listAccounts).mockResolvedValue([account]);
+  vi.mocked(api.listFilterRules).mockResolvedValue([]);
   vi.mocked(api.updateAccountAliases).mockResolvedValue(account);
   vi.mocked(api.discoverAccountAliases).mockResolvedValue({
     ...account,
@@ -148,5 +161,160 @@ describe("SettingsDialog component", () => {
         },
       }),
     );
+  });
+
+  it("offers the translucent window toggle when supported", async () => {
+    const onClose = vi.fn();
+    render(<SettingsDialog initialTab="general" onClose={onClose} />);
+
+    const toggle = await screen.findByRole("checkbox", {
+      name: /Translucent window background/,
+    });
+    expect(toggle).toBeDefined();
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+
+    expect(api.saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ windowEffects: true }),
+    );
+  });
+
+  it("surfaces sign-in errors with a password update form", async () => {
+    vi.mocked(api.updateAccountPassword).mockResolvedValue(account);
+    useAppStore.setState({
+      accounts: [
+        {
+          ...account,
+          error: "Sign-in failed. Update the account password.",
+        },
+      ],
+    });
+    const onClose = vi.fn();
+    render(<SettingsDialog initialTab="accounts" onClose={onClose} />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Sign-in failed");
+    const input = screen.getByLabelText("Update password");
+    fireEvent.change(input, { target: { value: "new-app-password" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Update password" }));
+    });
+
+    expect(api.updateAccountPassword).toHaveBeenCalledWith(
+      "account-1",
+      "new-app-password",
+    );
+    expect(await screen.findByText(/Password updated/)).toBeDefined();
+  });
+
+  it("saves per-account signatures", async () => {
+    vi.mocked(api.updateAccountSignature).mockResolvedValue({
+      ...account,
+      signature: "Best,\nSam",
+    });
+    const onClose = vi.fn();
+    render(<SettingsDialog initialTab="accounts" onClose={onClose} />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const input = screen.getByLabelText("Email signature");
+    fireEvent.change(input, { target: { value: "Best,\nSam" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    });
+
+    expect(api.updateAccountSignature).toHaveBeenCalledWith(
+      "account-1",
+      "Best,\nSam",
+    );
+    expect(await screen.findByText(/Signature saved/)).toBeDefined();
+  });
+
+  it("changes the undo send window", async () => {
+    const onClose = vi.fn();
+    render(<SettingsDialog initialTab="general" onClose={onClose} />);
+
+    const select = await screen.findByLabelText("Undo send window");
+    await act(async () => {
+      fireEvent.change(select, { target: { value: "30" } });
+    });
+
+    expect(api.saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ undoSendSeconds: 30 }),
+    );
+  });
+
+  it("lists, creates, toggles, and deletes filter rules", async () => {
+    const existing: FilterRule = {
+      id: "rule-1",
+      accountId: account.id,
+      name: "Bills",
+      field: "from",
+      contains: "power.example.com",
+      action: "move_archive",
+      targetMailbox: null,
+      enabled: true,
+    };
+    vi.mocked(api.listFilterRules).mockResolvedValue([existing]);
+    vi.mocked(api.createFilterRule).mockResolvedValue({
+      ...existing,
+      id: "rule-2",
+      name: "Picnics",
+      field: "subject",
+      contains: "picnic",
+      action: "mark_read",
+    });
+    vi.mocked(api.updateFilterRule).mockResolvedValue({
+      ...existing,
+      enabled: false,
+    });
+    const onClose = vi.fn();
+    render(<SettingsDialog initialTab="accounts" onClose={onClose} />);
+
+    await screen.findByText("Bills");
+    const toggle = screen.getByRole("button", { name: /Bills/ });
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+    expect(api.updateFilterRule).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "rule-1", enabled: false }),
+    );
+
+    fireEvent.change(screen.getByLabelText("Rule name"), {
+      target: { value: "Picnics" },
+    });
+    fireEvent.change(screen.getByLabelText("Text to match"), {
+      target: { value: "picnic" },
+    });
+    const field = screen.getByLabelText("Match by");
+    fireEvent.change(field, { target: { value: "subject" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
+    });
+    expect(api.createFilterRule).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "Picnics",
+        field: "subject",
+        contains: "picnic",
+        action: "mark_read",
+      }),
+    );
+    expect(await screen.findByText(/Rule saved/)).toBeDefined();
+
+    const billsRow = screen.getByText("Bills").closest("li") as HTMLElement;
+    await act(async () => {
+      fireEvent.click(
+        within(billsRow).getByRole("button", { name: /^Remove$/ }),
+      );
+    });
+    expect(api.showNativeConfirm).toHaveBeenCalled();
+    expect(api.deleteFilterRule).toHaveBeenCalledWith(account.id, "rule-1");
+    expect(await screen.findByText(/Rule removed/)).toBeDefined();
   });
 });

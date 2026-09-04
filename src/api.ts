@@ -18,11 +18,16 @@ import type {
   MailboxSummary,
   MessageDetail,
   MessageCursor,
+  AttachmentPreview,
+  BulkOutcome,
+  RecipientSuggestion,
   MessageChangeEvent,
   MessagePage,
   MessageSummary,
   OutboxSummary,
   OutboxChangeEvent,
+  SnoozedSummary,
+  FilterRule,
   SearchQuery,
   SyncState,
   SendOutcome,
@@ -75,12 +80,16 @@ export const api = {
   listAccounts: () => call<AccountSummary[]>("list_accounts"),
   testAccount: (request: AccountSetupRequest) =>
     call<void>("test_account", { request }),
+  updateAccountPassword: (accountId: string, password: string) =>
+    call<AccountSummary>("update_account_password", { accountId, password }),
   addAccount: (request: AccountSetupRequest) =>
     call<AccountSummary>("add_account", { request }),
   removeAccount: (accountId: string) =>
     call<AccountRemovalOutcome>("remove_account", { accountId }),
   updateAccountDisplayName: (accountId: string, displayName: string) =>
     call<void>("update_account_display_name", { accountId, displayName }),
+  updateAccountSignature: (accountId: string, signature: string) =>
+    call<AccountSummary>("update_account_signature", { accountId, signature }),
   getAccountInboxCounts: () =>
     call<AccountInboxCount[]>("get_account_inbox_counts"),
   listMailboxes: (accountId: string) =>
@@ -121,6 +130,43 @@ export const api = {
       messageId,
       destinationMailboxId,
     }),
+  setMessagesFlags: (
+    accountId: string,
+    messageIds: number[],
+    isRead?: boolean,
+    isStarred?: boolean,
+  ) =>
+    call<BulkOutcome>("set_messages_flags", {
+      accountId,
+      messageIds,
+      isRead,
+      isStarred,
+    }),
+  moveMessagesToMailbox: (
+    accountId: string,
+    messageIds: number[],
+    destinationMailboxId: number,
+  ) =>
+    call<BulkOutcome>("move_messages_to_mailbox", {
+      accountId,
+      messageIds,
+      destinationMailboxId,
+    }),
+  markMailboxRead: (accountId: string, mailboxId: number) =>
+    call<BulkOutcome>("mark_mailbox_read", { accountId, mailboxId }),
+  suggestRecipients: (accountId: string, prefix: string, limit?: number) =>
+    call<RecipientSuggestion[]>("suggest_recipients", {
+      accountId,
+      prefix,
+      limit,
+    }),
+  createFolder: (accountId: string, name: string) =>
+    call<void>("create_folder", { accountId, name }),
+  renameFolder: (accountId: string, mailboxId: number, name: string) =>
+    call<void>("rename_folder", { accountId, mailboxId, name }),
+  deleteFolder: (accountId: string, mailboxId: number) =>
+    call<void>("delete_folder", { accountId, mailboxId }),
+  emptyTrash: (accountId: string) => call<void>("empty_trash", { accountId }),
   searchCached: (query: SearchQuery) =>
     call<MessageSummary[]>("search_cached_messages", { query }),
   searchAllCached: (query: string, limit?: number) =>
@@ -145,6 +191,22 @@ export const api = {
     call<SendOutcome>("retry_outbox", { outboxId, accountId }),
   retrySentCopy: (outboxId: string, accountId: string) =>
     call<SendOutcome>("retry_sent_copy", { outboxId, accountId }),
+  sendScheduledOutbox: (outboxId: string, accountId: string) =>
+    call<SendOutcome>("send_scheduled_outbox", { outboxId, accountId }),
+  snoozeMessage: (accountId: string, messageId: number, untilIso: string) =>
+    call<void>("snooze_message", { accountId, messageId, untilIso }),
+  unsnoozeMessage: (accountId: string, messageId: number) =>
+    call<void>("unsnooze_message", { accountId, messageId }),
+  listSnoozed: (accountId: string) =>
+    call<SnoozedSummary[]>("list_snoozed", { accountId }),
+  listFilterRules: (accountId: string) =>
+    call<FilterRule[]>("list_filter_rules", { accountId }),
+  createFilterRule: (rule: FilterRule) =>
+    call<FilterRule>("create_filter_rule", { rule }),
+  updateFilterRule: (rule: FilterRule) =>
+    call<FilterRule>("update_filter_rule", { rule }),
+  deleteFilterRule: (accountId: string, ruleId: string) =>
+    call<void>("delete_filter_rule", { accountId, ruleId }),
   deleteOutbox: (outboxId: string, accountId: string) =>
     call<void>("delete_outbox", { outboxId, accountId }),
   saveAttachment: (
@@ -158,6 +220,16 @@ export const api = {
       accountId,
       attachmentId,
       suggestedFilename,
+    }),
+  previewAttachment: (
+    accountId: string,
+    messageId: number,
+    attachmentId: string,
+  ) =>
+    call<AttachmentPreview>("preview_attachment", {
+      accountId,
+      messageId,
+      attachmentId,
     }),
   prepareForwardAttachments: (accountId: string, messageId: number) =>
     call<ComposeAttachment[]>("prepare_forward_attachments", {

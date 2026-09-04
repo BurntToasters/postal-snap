@@ -24,7 +24,13 @@ import { strings } from "../i18n";
 import { shortcutMod, shortcutShiftMod } from "../format";
 import { applySettings } from "../settings";
 import { useAppStore } from "../store";
-import type { AppSettings, CacheUsage, DistributionChannel } from "../types";
+import { supportsWorkspaceWindowFx } from "../window-fx";
+import type {
+  AppSettings,
+  CacheUsage,
+  DistributionChannel,
+  FilterRule,
+} from "../types";
 import {
   checkUpdateInteractive,
   removeUpdateFoundListener,
@@ -63,12 +69,14 @@ const tabs: Array<{
 export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
   const settings = useAppStore((state) => state.settings);
   const accounts = useAppStore((state) => state.accounts);
+  const mailboxes = useAppStore((state) => state.mailboxes);
   const setAccounts = useAppStore((state) => state.setAccounts);
   const setSettings = useAppStore((state) => state.setSettings);
   const setError = useAppStore((state) => state.setError);
   const [tab, setTab] = useState<SettingsTab>(initialTab);
   const [usage, setUsage] = useState<CacheUsage>();
   const [distribution, setDistribution] = useState<DistributionChannel>();
+  const [windowFxSupported, setWindowFxSupported] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<string>(
     strings.settings.checkUpdates,
   );
@@ -85,6 +93,36 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
     {},
   );
   const [aliasStatus, setAliasStatus] = useState<Record<string, string>>({});
+  const [passwordInputs, setPasswordInputs] = useState<Record<string, string>>(
+    {},
+  );
+  const [passwordStatus, setPasswordStatus] = useState<Record<string, string>>(
+    {},
+  );
+  const [updatingPasswordId, setUpdatingPasswordId] = useState<string>();
+  const [signatureInputs, setSignatureInputs] = useState<
+    Record<string, string>
+  >({});
+  const [signatureStatus, setSignatureStatus] = useState<
+    Record<string, string>
+  >({});
+  const [savingSignatureId, setSavingSignatureId] = useState<string>();
+  const [filterRules, setFilterRules] = useState<Record<string, FilterRule[]>>(
+    {},
+  );
+  const [newRuleInputs, setNewRuleInputs] = useState<
+    Record<
+      string,
+      {
+        name: string;
+        field: string;
+        contains: string;
+        action: string;
+        target: string;
+      }
+    >
+  >({});
+  const [ruleStatus, setRuleStatus] = useState<Record<string, string>>({});
   const dialogRef = useDialogFocus(onClose);
 
   const handleUpdateFound = useCallback<UpdateFoundListener>((version) => {
@@ -96,6 +134,34 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
     [handleUpdateFound],
   );
 
+  useEffect(() => {
+    if (tab !== "accounts") return;
+    let active = true;
+    void (async () => {
+      for (const account of accounts) {
+        try {
+          const rules = (await api.listFilterRules(account.id)) ?? [];
+          if (active) {
+            setFilterRules((prev) => {
+              const existing = prev[account.id] ?? [];
+              const merged = [...existing];
+              for (const rule of rules) {
+                if (!merged.some((item) => item.id === rule.id)) {
+                  merged.push(rule);
+                }
+              }
+              return { ...prev, [account.id]: merged };
+            });
+          }
+        } catch {
+          // Rules stay empty; the form below still works.
+        }
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [tab, accounts]);
   useEffect(() => {
     let active = true;
     void api
@@ -110,6 +176,9 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
         if (active) setDistribution(d);
       })
       .catch(() => undefined);
+    void supportsWorkspaceWindowFx().then((supported) => {
+      if (active) setWindowFxSupported(supported);
+    });
     return () => {
       active = false;
     };
@@ -265,7 +334,7 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
       const count = updated.aliases?.length ?? 0;
       setAliasStatus((prev) => ({
         ...prev,
-        [accountId]: `Found ${count} alias${count === 1 ? "" : "es"}.`,
+        [accountId]: strings.settings.aliasesFound(count),
       }));
     } catch (cause) {
       setError(String(cause));
@@ -294,7 +363,7 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
       setNewAliasInputs((prev) => ({ ...prev, [accountId]: "" }));
       setAliasStatus((prev) => ({
         ...prev,
-        [accountId]: `Added ${input}`,
+        [accountId]: strings.settings.aliasAdded(input),
       }));
     } catch (cause) {
       setError(String(cause));
@@ -314,6 +383,163 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
       await api.updateAccountAliases(accountId, remainingAliases);
       const remaining = await api.listAccounts();
       setAccounts(remaining);
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }
+
+  async function handleUpdatePassword(accountId: string) {
+    if (updatingPasswordId) return;
+    const password = passwordInputs[accountId] ?? "";
+    if (!password) return;
+    setUpdatingPasswordId(accountId);
+    try {
+      await api.updateAccountPassword(accountId, password);
+      const remaining = await api.listAccounts();
+      setAccounts(remaining);
+      setPasswordInputs((prev) => ({ ...prev, [accountId]: "" }));
+      setPasswordStatus((prev) => ({
+        ...prev,
+        [accountId]: strings.settings.passwordUpdated,
+      }));
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setUpdatingPasswordId(undefined);
+    }
+  }
+
+  async function handleSaveSignature(accountId: string, fallback: string) {
+    if (savingSignatureId) return;
+    setSavingSignatureId(accountId);
+    try {
+      const value = signatureInputs[accountId] ?? fallback;
+      const updated = await api.updateAccountSignature(accountId, value);
+      setAccounts(
+        accounts.map((item) => (item.id === accountId ? updated : item)),
+      );
+      setSignatureInputs((prev) => ({
+        ...prev,
+        [accountId]: updated.signature ?? "",
+      }));
+      setSignatureStatus((prev) => ({
+        ...prev,
+        [accountId]: strings.settings.signatureSaved,
+      }));
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setSavingSignatureId(undefined);
+    }
+  }
+
+  function ruleInput(accountId: string): {
+    name: string;
+    field: string;
+    contains: string;
+    action: string;
+    target: string;
+  } {
+    return (
+      newRuleInputs[accountId] ?? {
+        name: "",
+        field: "from",
+        contains: "",
+        action: "mark_read",
+        target: "",
+      }
+    );
+  }
+
+  function setRuleField(accountId: string, patch: Record<string, string>) {
+    setNewRuleInputs((prev) => ({
+      ...prev,
+      [accountId]: { ...ruleInput(accountId), ...patch },
+    }));
+  }
+
+  async function handleAddRule(accountId: string) {
+    const input = ruleInput(accountId);
+    const name = input.name.trim() || input.contains.trim();
+    if (!name) {
+      setError(strings.settings.ruleNameRequired);
+      return;
+    }
+    if (!input.contains.trim()) {
+      setError(strings.settings.ruleMatchRequired);
+      return;
+    }
+    try {
+      const created = await api.createFilterRule({
+        id: "",
+        accountId,
+        name,
+        field: input.field as FilterRule["field"],
+        contains: input.contains,
+        action: input.action as FilterRule["action"],
+        targetMailbox:
+          input.action === "move_mailbox" ? (input.target ?? "") : null,
+        enabled: true,
+      });
+      setFilterRules((prev) => {
+        const existing = prev[accountId] ?? [];
+        if (existing.some((item) => item.id === created.id)) return prev;
+        return { ...prev, [accountId]: [...existing, created] };
+      });
+      setNewRuleInputs((prev) => ({
+        ...prev,
+        [accountId]: {
+          name: "",
+          field: "from",
+          contains: "",
+          action: "mark_read",
+          target: "",
+        },
+      }));
+      setRuleStatus((prev) => ({
+        ...prev,
+        [accountId]: strings.settings.ruleSaved,
+      }));
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }
+
+  async function handleToggleRule(accountId: string, rule: FilterRule) {
+    try {
+      const updated = await api.updateFilterRule({
+        ...rule,
+        enabled: !rule.enabled,
+      });
+      setFilterRules((prev) => ({
+        ...prev,
+        [accountId]: (prev[accountId] ?? []).map((item) =>
+          item.id === rule.id ? updated : item,
+        ),
+      }));
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }
+
+  async function handleDeleteRule(accountId: string, rule: FilterRule) {
+    const confirmed = await api.showNativeConfirm(
+      strings.settings.rulesTitle,
+      strings.settings.removeRuleConfirm(rule.name),
+    );
+    if (!confirmed) return;
+    try {
+      await api.deleteFilterRule(accountId, rule.id);
+      setFilterRules((prev) => ({
+        ...prev,
+        [accountId]: (prev[accountId] ?? []).filter(
+          (item) => item.id !== rule.id,
+        ),
+      }));
+      setRuleStatus((prev) => ({
+        ...prev,
+        [accountId]: strings.settings.ruleRemoved,
+      }));
     } catch (cause) {
       setError(String(cause));
     }
@@ -449,6 +675,42 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
                     <option value="compact">{strings.settings.compact}</option>
                   </select>
                 </SettingRow>
+                {windowFxSupported ? (
+                  <label className="switch-row">
+                    <span>
+                      <strong>{strings.settings.windowEffects}</strong>
+                      <small>{strings.settings.windowEffectsHelp}</small>
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={settings.windowEffects}
+                      onChange={(event) =>
+                        void update({ windowEffects: event.target.checked })
+                      }
+                    />
+                  </label>
+                ) : null}
+                <SettingRow
+                  title={strings.mail.undoSendWindow}
+                  help={strings.mail.undoSendHelp}
+                >
+                  <select
+                    aria-label={strings.mail.undoSendWindow}
+                    value={settings.undoSendSeconds ?? 10}
+                    onChange={(event) =>
+                      void update({
+                        undoSendSeconds: Number(event.target.value),
+                      })
+                    }
+                  >
+                    <option value={0}>{strings.mail.undoSendOff}</option>
+                    {[5, 10, 20, 30].map((seconds) => (
+                      <option key={seconds} value={seconds}>
+                        {strings.mail.undoSendSeconds(seconds)}
+                      </option>
+                    ))}
+                  </select>
+                </SettingRow>
                 <div className="security-summary">
                   <ShieldCheck />
                   <span>
@@ -579,7 +841,9 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
                     </strong>
                     <small>
                       {settings.cachePolicy.mode === "full"
-                        ? `${usage?.messageCount ?? 0} downloaded messages · Full sync: All messages (Unlimited storage)`
+                        ? strings.settings.storageSummaryFull(
+                            usage?.messageCount ?? 0,
+                          )
                         : strings.settings.storageSummary(
                             usage?.messageCount ?? 0,
                             settings.cachePolicy.days,
@@ -765,6 +1029,297 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
                         </div>
                       </div>
 
+                      {account.error ? (
+                        <p className="account-error" role="alert">
+                          {account.error}
+                        </p>
+                      ) : null}
+                      {(account.authMethod ?? "password") === "password" ? (
+                        <div className="account-password-section">
+                          <label htmlFor={`account-password-${account.id}`}>
+                            {strings.settings.updatePassword}
+                          </label>
+                          <form
+                            className="add-alias-form"
+                            onSubmit={(event) => {
+                              event.preventDefault();
+                              void handleUpdatePassword(account.id);
+                            }}
+                          >
+                            <input
+                              id={`account-password-${account.id}`}
+                              type="password"
+                              autoComplete="new-password"
+                              spellCheck={false}
+                              placeholder={
+                                account.provider === "icloud"
+                                  ? (strings.setup.appPasswordPlaceholder ??
+                                    strings.settings.newPassword)
+                                  : strings.settings.newPassword
+                              }
+                              value={passwordInputs[account.id] ?? ""}
+                              onChange={(event) =>
+                                setPasswordInputs((prev) => ({
+                                  ...prev,
+                                  [account.id]: event.target.value,
+                                }))
+                              }
+                            />
+                            <button
+                              type="submit"
+                              className="secondary-button"
+                              disabled={
+                                updatingPasswordId === account.id ||
+                                !(passwordInputs[account.id] ?? "").trim()
+                              }
+                            >
+                              {updatingPasswordId === account.id
+                                ? strings.settings.testingConnection
+                                : strings.settings.updatePassword}
+                            </button>
+                          </form>
+                        </div>
+                      ) : null}
+                      {passwordStatus[account.id] ? (
+                        <div
+                          className="alias-status-message"
+                          role="status"
+                          aria-live="polite"
+                        >
+                          {passwordStatus[account.id]}
+                        </div>
+                      ) : null}
+                      <div className="account-password-section">
+                        <label htmlFor={`account-signature-${account.id}`}>
+                          {strings.settings.signature}
+                        </label>
+                        <p className="settings-note">
+                          {strings.settings.signatureHelp}
+                        </p>
+                        <div className="add-alias-form signature-form">
+                          <textarea
+                            id={`account-signature-${account.id}`}
+                            rows={3}
+                            maxLength={2000}
+                            placeholder={strings.settings.signaturePlaceholder}
+                            value={
+                              signatureInputs[account.id] ??
+                              account.signature ??
+                              ""
+                            }
+                            onChange={(event) =>
+                              setSignatureInputs((prev) => ({
+                                ...prev,
+                                [account.id]: event.target.value,
+                              }))
+                            }
+                          />
+                          <button
+                            type="button"
+                            className="secondary-button"
+                            disabled={savingSignatureId === account.id}
+                            onClick={() =>
+                              void handleSaveSignature(
+                                account.id,
+                                account.signature ?? "",
+                              )
+                            }
+                          >
+                            {strings.common.save}
+                          </button>
+                        </div>
+                        {signatureStatus[account.id] ? (
+                          <div
+                            className="alias-status-message"
+                            role="status"
+                            aria-live="polite"
+                          >
+                            {signatureStatus[account.id]}
+                          </div>
+                        ) : null}
+                      </div>
+
+                      <div className="account-rules-section">
+                        <div className="aliases-header">
+                          <div>
+                            <strong>{strings.settings.rulesTitle}</strong>
+                            <p className="settings-note">
+                              {strings.settings.rulesHelp}
+                            </p>
+                          </div>
+                        </div>
+                        {ruleStatus[account.id] ? (
+                          <div
+                            className="alias-status-message"
+                            role="status"
+                            aria-live="polite"
+                          >
+                            {ruleStatus[account.id]}
+                          </div>
+                        ) : null}
+                        {(filterRules[account.id] ?? []).length > 0 ? (
+                          <ul className="rule-list">
+                            {(filterRules[account.id] ?? []).map((rule) => (
+                              <li className="rule-item" key={rule.id}>
+                                <div className="rule-item-text">
+                                  <strong>{rule.name}</strong>
+                                  <span>
+                                    {strings.settings.describeRule(
+                                      rule.field === "from"
+                                        ? strings.settings.matchFrom
+                                        : strings.settings.matchSubject,
+                                      rule.contains,
+                                      rule.action,
+                                    )}
+                                  </span>
+                                </div>
+                                <button
+                                  type="button"
+                                  className="rule-toggle"
+                                  aria-pressed={rule.enabled}
+                                  aria-label={`${rule.name}: ${
+                                    rule.enabled
+                                      ? strings.common.on
+                                      : strings.common.off
+                                  }`}
+                                  onClick={() =>
+                                    void handleToggleRule(account.id, rule)
+                                  }
+                                >
+                                  {rule.enabled
+                                    ? strings.common.on
+                                    : strings.common.off}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="secondary-button rule-delete"
+                                  onClick={() =>
+                                    void handleDeleteRule(account.id, rule)
+                                  }
+                                >
+                                  {strings.common.remove}
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : null}
+                        <div className="rule-form">
+                          <label htmlFor={`rule-name-${account.id}`}>
+                            {strings.settings.ruleName}
+                          </label>
+                          <input
+                            id={`rule-name-${account.id}`}
+                            value={ruleInput(account.id).name}
+                            placeholder={strings.settings.ruleNamePlaceholder}
+                            onChange={(event) =>
+                              setRuleField(account.id, {
+                                name: event.target.value,
+                              })
+                            }
+                          />
+                          <label htmlFor={`rule-field-${account.id}`}>
+                            {strings.settings.matchBy}
+                          </label>
+                          <select
+                            id={`rule-field-${account.id}`}
+                            value={ruleInput(account.id).field}
+                            onChange={(event) =>
+                              setRuleField(account.id, {
+                                field: event.target.value,
+                              })
+                            }
+                          >
+                            <option value="from">
+                              {strings.settings.matchFrom}
+                            </option>
+                            <option value="subject">
+                              {strings.settings.matchSubject}
+                            </option>
+                          </select>
+                          <label htmlFor={`rule-contains-${account.id}`}>
+                            {strings.settings.ruleContains}
+                          </label>
+                          <input
+                            id={`rule-contains-${account.id}`}
+                            value={ruleInput(account.id).contains}
+                            placeholder={strings.settings.ruleMatchPlaceholder}
+                            onChange={(event) =>
+                              setRuleField(account.id, {
+                                contains: event.target.value,
+                              })
+                            }
+                          />
+                          <label htmlFor={`rule-action-${account.id}`}>
+                            {strings.settings.ruleAction}
+                          </label>
+                          <select
+                            id={`rule-action-${account.id}`}
+                            value={ruleInput(account.id).action}
+                            onChange={(event) =>
+                              setRuleField(account.id, {
+                                action: event.target.value,
+                              })
+                            }
+                          >
+                            <option value="mark_read">
+                              {strings.settings.actionMarkRead}
+                            </option>
+                            <option value="move_archive">
+                              {strings.settings.actionArchive}
+                            </option>
+                            <option value="move_trash">
+                              {strings.settings.actionTrash}
+                            </option>
+                            <option value="move_junk">
+                              {strings.settings.actionJunk}
+                            </option>
+                            <option value="move_mailbox">
+                              {strings.settings.actionFolder}
+                            </option>
+                          </select>
+                          {ruleInput(account.id).action === "move_mailbox" ? (
+                            <>
+                              <label htmlFor={`rule-target-${account.id}`}>
+                                {strings.settings.actionFolder}
+                              </label>
+                              <select
+                                id={`rule-target-${account.id}`}
+                                value={ruleInput(account.id).target}
+                                onChange={(event) =>
+                                  setRuleField(account.id, {
+                                    target: event.target.value,
+                                  })
+                                }
+                              >
+                                <option value="">
+                                  {strings.settings.chooseFolder}
+                                </option>
+                                {mailboxes
+                                  .filter(
+                                    (box) =>
+                                      box.accountId === account.id &&
+                                      box.role !== "trash" &&
+                                      box.role !== "junk" &&
+                                      box.role !== "inbox",
+                                  )
+                                  .map((box) => (
+                                    <option key={box.id} value={box.id}>
+                                      {box.name}
+                                    </option>
+                                  ))}
+                              </select>
+                            </>
+                          ) : null}
+                          <button
+                            type="button"
+                            className="primary-button add-rule-button"
+                            onClick={() => void handleAddRule(account.id)}
+                          >
+                            {strings.settings.addRule}
+                          </button>
+                        </div>
+                      </div>
+
                       <div className="account-aliases-section">
                         <div className="aliases-header">
                           <div>
@@ -804,7 +1359,9 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
                         <div className="aliases-list">
                           <div className="alias-chip primary">
                             <span>{account.email}</span>
-                            <span className="alias-badge">Primary</span>
+                            <span className="alias-badge">
+                              {strings.settings.primaryAddress}
+                            </span>
                           </div>
                           {(account.aliases ?? []).map((alias) => (
                             <div key={alias} className="alias-chip">
@@ -821,6 +1378,11 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
                             </div>
                           ))}
                         </div>
+                        {(account.aliases ?? []).length === 0 ? (
+                          <p className="settings-note">
+                            {strings.settings.noAliasesConfigured}
+                          </p>
+                        ) : null}
 
                         <div className="add-alias-form">
                           <input

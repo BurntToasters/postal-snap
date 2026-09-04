@@ -11,18 +11,20 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_notification::NotificationExt;
 use tokio::sync::{Mutex as AsyncMutex, Notify, OwnedMutexGuard};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::{
     credentials,
     db::Database,
     mail,
     models::{
-        take_validated_setup, validate_compose_draft, AccountInboxCount, AccountRecord,
-        AccountRemovalOutcome, AccountSetupRequest, AccountSummary, AppSettings, CacheUsage,
-        ComposeAttachment, ComposeDraft, DistributionChannel, DraftSaveOutcome, DraftSummary,
-        IpcError, MailboxSummary, MessageCursor, MessageDetail, MessagePage, MessageSummary,
-        OutboxSummary, ProviderKind, SearchQuery, SendOutcome, SyncState,
+        take_validated_setup, validate_compose_draft, validate_filter_rule, validate_folder_name,
+        AccountInboxCount, AccountRecord, AccountRemovalOutcome, AccountSetupRequest,
+        AccountSummary, AppSettings, AttachmentPreview, CacheUsage, ComposeAttachment,
+        ComposeDraft, DistributionChannel, DraftSaveOutcome, DraftSummary, FilterRule, IpcError,
+        MailboxRole, MailboxSummary, MessageCursor, MessageDetail, MessagePage, MessageSummary,
+        OutboxSummary, ProviderKind, RecipientSuggestion, SearchQuery, SendOutcome, SnoozedSummary,
+        SyncState,
     },
     security,
     settings::SettingsStore,
@@ -77,6 +79,9 @@ impl AppState {
     }
 
     fn actor(&self, account_id: &str) -> Result<Arc<AccountActor>, String> {
+        // Validate before touching the map so arbitrary IDs cannot grow it.
+        uuid::Uuid::parse_str(account_id).map_err(|_| "Account not found.".to_string())?;
+        self.db.account(account_id)?;
         let actor = self
             .account_actors
             .lock()
@@ -204,6 +209,55 @@ pub async fn test_account(mut request: AccountSetupRequest) -> CommandResult<()>
 }
 
 #[tauri::command]
+pub async fn update_account_password(
+    account_id: String,
+    password: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<AccountSummary> {
+    use crate::models::normalize_setup_password;
+    let _guard = state.lock_account(&account_id).await?;
+    let account = state.db.account(&account_id)?;
+    if account.summary.auth_method != "password" {
+        return Err("This account signs in without a password. Reconnect it instead.".into());
+    }
+    let mut password = Zeroizing::new(password);
+    let normalized = Zeroizing::new(normalize_setup_password(
+        &account.summary.provider,
+        &password,
+    ));
+    password.zeroize();
+    if normalized.is_empty() || normalized.len() > 4096 {
+        return Err("Enter the app-specific or email password.".into());
+    }
+    mail::test_account(
+        &AccountSetupRequest {
+            provider: account.summary.provider.clone(),
+            email: account.summary.email.clone(),
+            display_name: account.summary.display_name.clone(),
+            password: String::new(),
+            imap: None,
+            smtp: None,
+        },
+        &account.imap,
+        &account.smtp,
+        &password,
+    )
+    .await?;
+    credentials::store(&account_id, &password)?;
+    state.db.set_account_state(&account_id, "idle", None)?;
+    drop(_guard);
+    let _ = sync_one(&account_id, &app, &state).await;
+    let summary = state
+        .db
+        .list_accounts()?
+        .into_iter()
+        .find(|summary| summary.id == account_id)
+        .ok_or_else(|| "Account not found.".to_string())?;
+    Ok(summary)
+}
+
+#[tauri::command]
 pub async fn add_account(
     mut request: AccountSetupRequest,
     app: AppHandle,
@@ -227,6 +281,8 @@ pub async fn add_account(
         sync_state: "idle".into(),
         error: None,
         aliases,
+        auth_method: "password".into(),
+        signature: String::new(),
     };
     let account = AccountRecord {
         summary: summary.clone(),
@@ -359,6 +415,15 @@ pub fn update_account_display_name(
 }
 
 #[tauri::command]
+pub fn update_account_signature(
+    account_id: String,
+    signature: String,
+    state: State<'_, AppState>,
+) -> CommandResult<AccountSummary> {
+    command_result(state.db.update_account_signature(&account_id, &signature))
+}
+
+#[tauri::command]
 pub fn get_account_inbox_counts(
     state: State<'_, AppState>,
 ) -> CommandResult<Vec<AccountInboxCount>> {
@@ -440,6 +505,7 @@ async fn sync_one_locked(
     let settings = state.settings.get()?;
     match mail::sync_account(&state.db, &account, &password, &settings.cache_policy).await {
         Ok(()) => {
+            apply_filter_rules(&state.db, &account);
             let pending_changes = replay_offline_operations(&state.db, &account, &password).await?;
             sync_drafts_locked(state, &account, &password).await;
             replay_outbox_locked(account_id, app, state).await;
@@ -463,19 +529,116 @@ async fn sync_one_locked(
             Ok(())
         }
         Err(error) => {
-            state.db.set_account_state(
-                account_id,
-                "offline",
-                Some("Mail sync is temporarily unavailable."),
-            )?;
+            // Sign-in failures (expired app password, revoked access) need a
+            // different message than a dead connection: the fix is a new
+            // password, not waiting for retry.
+            let auth_failed = IpcError::from(error.as_str()).code == "authenticationFailed";
+            let detail = if auth_failed {
+                "Sign-in failed. Update the account password in Settings > Accounts."
+            } else {
+                "Mail sync is temporarily unavailable."
+            };
+            state
+                .db
+                .set_account_state(account_id, "offline", Some(detail))?;
             emit_sync(
                 app,
                 account_id,
                 "offline",
-                Some("Will try again automatically"),
+                Some(if auth_failed {
+                    "Sign-in failed"
+                } else {
+                    "Will try again automatically"
+                }),
                 None,
             );
             Err(error)
+        }
+    }
+}
+
+/// File newly synced inbox mail through enabled filter rules. Actions
+/// reuse the offline queue (local apply + queued op), so the replay later
+/// in this sync delivers them and failures stay queued, never half-applied.
+fn apply_filter_rules(db: &Database, account: &AccountRecord) {
+    let account_id = &account.summary.id;
+    let Ok(rules) = db.list_filter_rules(account_id) else {
+        return;
+    };
+    for rule in rules.iter().filter(|rule| rule.enabled) {
+        if validate_filter_rule(rule, account_id).is_err() {
+            continue;
+        }
+        let destination: Option<(i64, String)> = match rule.action.as_str() {
+            "mark_read" => None,
+            "move_archive" | "move_trash" | "move_junk" => {
+                let role = rule.action.strip_prefix("move_").unwrap_or("archive");
+                db.mailbox_for_role(account_id, role).ok().flatten()
+            }
+            _ => rule
+                .target_mailbox
+                .as_deref()
+                .and_then(|id| id.parse::<i64>().ok())
+                .and_then(|id| {
+                    db.mailbox(id)
+                        .ok()
+                        .filter(|(owner, _)| owner == account_id)
+                        .map(|(_, name)| (id, name))
+                }),
+        };
+        if rule.action != "mark_read" && destination.is_none() {
+            continue;
+        }
+        let Ok(matches) = db.find_rule_matches(account_id, rule) else {
+            continue;
+        };
+        if rule.action == "mark_read" {
+            let ids: Vec<i64> = matches.iter().map(|(id, _, _, _)| *id).collect();
+            if db.set_flags_bulk(&ids, Some(true), None).is_err() {
+                continue;
+            }
+            for (id, uid, mailbox, _) in &matches {
+                let Ok(validity) = db.mailbox_uid_validity(account_id, mailbox) else {
+                    continue;
+                };
+                let operation = FlagOperation {
+                    message_id: *id,
+                    uid: *uid,
+                    mailbox: mailbox.clone(),
+                    uid_validity: validity,
+                    is_read: Some(true),
+                    is_starred: None,
+                };
+                let dedupe_key = format!("flags:{id}:true:false");
+                let _ = db.queue_operation(account_id, "flags", &operation, Some(&dedupe_key));
+            }
+            continue;
+        }
+        let Some((destination_id, destination)) = destination else {
+            continue;
+        };
+        for (id, uid, source, _) in &matches {
+            if source == &destination {
+                continue;
+            }
+            let Ok(validity) = db.mailbox_uid_validity(account_id, source) else {
+                continue;
+            };
+            let operation = MoveOperation {
+                message_id: *id,
+                uid: *uid,
+                source: source.clone(),
+                destination: destination.clone(),
+                uid_validity: validity,
+            };
+            let dedupe_key = format!("move:{id}");
+            if db
+                .queue_operation(account_id, "move", &operation, Some(&dedupe_key))
+                .is_err()
+            {
+                continue;
+            }
+            let _ = db.mark_pending_move(*id, destination_id);
         }
     }
 }
@@ -790,6 +953,12 @@ async fn replay_outbox_locked(account_id: &str, app: &AppHandle, state: &AppStat
             let _ = deliver_outbox_locked(&id, account_id, app, state).await;
         }
     }
+    let now = chrono::Utc::now().to_rfc3339();
+    if let Ok(ids) = state.db.scheduled_due_outbox_ids(account_id, &now) {
+        for id in ids {
+            let _ = deliver_outbox_locked(&id, account_id, app, state).await;
+        }
+    }
 }
 
 #[tauri::command]
@@ -807,7 +976,7 @@ pub fn list_messages(
     command_result(
         state
             .db
-            .list_messages(mailbox_id, cursor.as_ref(), limit.clamp(1, 500)),
+            .list_messages(mailbox_id, cursor.as_ref(), limit.clamp(1, 200)),
     )
 }
 
@@ -836,7 +1005,13 @@ async fn ensure_message_content(
     let password = credentials::load(account_id)?;
     let message =
         mail::download_message(&account, &password, &mailbox, uid, size, uid_validity).await?;
-    state.db.upsert_message(account_id, mailbox_id, &message)
+    state.db.upsert_message(account_id, mailbox_id, &message)?;
+    let id = message
+        .message_id
+        .clone()
+        .unwrap_or_else(|| crate::db::synthetic_thread_id(mailbox_id, message.uid));
+    let _ = state.db.repair_thread_roots(account_id, &[id]);
+    Ok(())
 }
 
 #[tauri::command]
@@ -1046,11 +1221,352 @@ async fn move_message_inner(
     Ok(())
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkOutcome {
+    pub updated: usize,
+    pub queued: usize,
+    pub failed: usize,
+}
+
+/// Apply flag changes to many messages with one IMAP round trip per mailbox.
+/// Stale rows are skipped; only messages that fail locally count as failed.
+async fn bulk_apply_flags(
+    state: &AppState,
+    account_id: &str,
+    items: &[(i64, String, u32)],
+    is_read: Option<bool>,
+    is_starred: Option<bool>,
+) -> Result<BulkOutcome, String> {
+    let mut groups: std::collections::HashMap<String, Vec<(i64, u32)>> =
+        std::collections::HashMap::new();
+    for (id, mailbox, uid) in items {
+        groups.entry(mailbox.clone()).or_default().push((*id, *uid));
+    }
+    let mut mailboxes: Vec<_> = groups.into_iter().collect();
+    mailboxes.sort_by(|left, right| left.0.cmp(&right.0));
+    let account = state.db.account(account_id)?;
+    let password = credentials::load(account_id)?;
+    let mut updated = 0usize;
+    let mut queued = 0usize;
+    let mut failed = 0usize;
+    for (mailbox, entries) in mailboxes {
+        let ids: Vec<i64> = entries.iter().map(|(id, _)| *id).collect();
+        let uids: Vec<u32> = entries.iter().map(|(_, uid)| *uid).collect();
+        let validity = state.db.mailbox_uid_validity(account_id, &mailbox)?;
+        if state.db.set_flags_bulk(&ids, is_read, is_starred).is_err() {
+            failed += ids.len();
+            continue;
+        }
+        let remote = mail::set_remote_uid_flags(
+            &account, &password, &mailbox, &uids, validity, is_read, is_starred,
+        )
+        .await;
+        if remote.is_err() {
+            for (id, uid) in &entries {
+                let operation = FlagOperation {
+                    message_id: *id,
+                    uid: *uid,
+                    mailbox: mailbox.clone(),
+                    uid_validity: validity,
+                    is_read,
+                    is_starred,
+                };
+                let dedupe_key =
+                    format!("flags:{id}:{}:{}", is_read.is_some(), is_starred.is_some());
+                let _ =
+                    state
+                        .db
+                        .queue_operation(account_id, "flags", &operation, Some(&dedupe_key));
+            }
+            queued += ids.len();
+        } else {
+            updated += ids.len();
+        }
+    }
+    Ok(BulkOutcome {
+        updated,
+        queued,
+        failed,
+    })
+}
+
+#[tauri::command]
+pub async fn set_messages_flags(
+    account_id: String,
+    message_ids: Vec<i64>,
+    is_read: Option<bool>,
+    is_starred: Option<bool>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<BulkOutcome> {
+    if message_ids.len() > 200 {
+        return Err("Select up to 200 messages at a time.".into());
+    }
+    let _guard = state.lock_account(&account_id).await?;
+    let mut items = Vec::new();
+    for id in message_ids {
+        let Ok((owner, mailbox, uid)) = state.db.message_location(id) else {
+            continue;
+        };
+        if owner != account_id {
+            return Err("Message does not belong to this account.".into());
+        }
+        items.push((id, mailbox, uid));
+    }
+    let outcome = bulk_apply_flags(&state, &account_id, &items, is_read, is_starred).await?;
+    emit_message_change(&app, &account_id, None, "flags");
+    emit_folder_counts(&app, &account_id);
+    Ok(outcome)
+}
+
+#[tauri::command]
+pub async fn move_messages_to_mailbox(
+    account_id: String,
+    message_ids: Vec<i64>,
+    destination_mailbox_id: i64,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<BulkOutcome> {
+    if message_ids.len() > 200 {
+        return Err("Select up to 200 messages at a time.".into());
+    }
+    let _guard = state.lock_account(&account_id).await?;
+    // Resolve the destination inside the lock so a concurrent folder rename
+    // cannot send the IMAP move at a stale name.
+    let (destination_account_id, destination) = state.db.mailbox(destination_mailbox_id)?;
+    if destination_account_id != account_id {
+        return Err("Messages cannot be moved between accounts.".into());
+    }
+    let mut groups: std::collections::HashMap<String, Vec<(i64, u32)>> =
+        std::collections::HashMap::new();
+    for id in message_ids {
+        let Ok((owner, source, uid)) = state.db.message_location(id) else {
+            continue;
+        };
+        if owner != account_id {
+            return Err("Message does not belong to this account.".into());
+        }
+        if source == destination {
+            continue;
+        }
+        groups.entry(source).or_default().push((id, uid));
+    }
+    let mut sources: Vec<_> = groups.into_iter().collect();
+    sources.sort_by(|left, right| left.0.cmp(&right.0));
+    let account = state.db.account(&account_id)?;
+    let password = credentials::load(&account_id)?;
+    let mut updated = 0usize;
+    let mut queued = 0usize;
+    let failed = 0usize;
+    for (source, entries) in sources {
+        let validity = state.db.mailbox_uid_validity(&account_id, &source)?;
+        let uids: Vec<u32> = entries.iter().map(|(_, uid)| *uid).collect();
+        let remote =
+            mail::move_remote_uids(&account, &password, &source, &destination, &uids, validity)
+                .await;
+        if remote.is_ok() {
+            for (id, _) in &entries {
+                let _ = state.db.mark_pending_move(*id, destination_mailbox_id);
+                let _ = state.db.remove_message(*id);
+            }
+            updated += entries.len();
+        } else {
+            for (id, uid) in &entries {
+                let operation = MoveOperation {
+                    message_id: *id,
+                    uid: *uid,
+                    source: source.clone(),
+                    destination: destination.clone(),
+                    uid_validity: validity,
+                };
+                let dedupe_key = format!("move:{id}");
+                let _ =
+                    state
+                        .db
+                        .queue_operation(&account_id, "move", &operation, Some(&dedupe_key));
+                let _ = state.db.mark_pending_move(*id, destination_mailbox_id);
+            }
+            queued += entries.len();
+        }
+    }
+    emit_message_change(&app, &account_id, None, "moved");
+    emit_folder_counts(&app, &account_id);
+    Ok(BulkOutcome {
+        updated,
+        queued,
+        failed,
+    })
+}
+
+#[tauri::command]
+pub async fn mark_mailbox_read(
+    account_id: String,
+    mailbox_id: i64,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<BulkOutcome> {
+    let (owner, _) = state.db.mailbox(mailbox_id)?;
+    if owner != account_id {
+        return Err("Mailbox does not belong to this account.".into());
+    }
+    let _guard = state.lock_account(&account_id).await?;
+    let unread = state.db.unread_message_ids(mailbox_id)?;
+    let items: Vec<(i64, String, u32)> = {
+        let (_, name) = state.db.mailbox(mailbox_id)?;
+        unread
+            .into_iter()
+            .take(200)
+            .map(|(id, uid)| (id, name.clone(), uid))
+            .collect()
+    };
+    let outcome = bulk_apply_flags(&state, &account_id, &items, Some(true), None).await?;
+    emit_message_change(&app, &account_id, None, "flags");
+    emit_folder_counts(&app, &account_id);
+    Ok(outcome)
+}
+
+#[tauri::command]
+pub fn suggest_recipients(
+    account_id: String,
+    prefix: String,
+    limit: Option<u32>,
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<RecipientSuggestion>> {
+    state.db.account(&account_id)?;
+    command_result(
+        state
+            .db
+            .suggest_recipients(&account_id, &prefix, limit.unwrap_or(8)),
+    )
+}
+
+fn folder_role(state: &AppState, account_id: &str, mailbox_id: i64) -> Result<MailboxRole, String> {
+    let (owner, _) = state.db.mailbox(mailbox_id)?;
+    if owner != account_id {
+        return Err("Folder does not belong to this account.".into());
+    }
+    let role = state
+        .db
+        .list_mailboxes(account_id)?
+        .into_iter()
+        .find(|mailbox| mailbox.id == mailbox_id)
+        .map(|mailbox| mailbox.role)
+        .ok_or_else(|| "That folder is no longer available.".to_string())?;
+    Ok(role)
+}
+
+#[tauri::command]
+pub async fn create_folder(
+    account_id: String,
+    name: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<()> {
+    let name = validate_folder_name(&name)?;
+    let _guard = state.lock_account(&account_id).await?;
+    let account = state.db.account(&account_id)?;
+    let password = credentials::load(&account_id)?;
+    let result = mail::create_folder(&account, &password, &name).await;
+    drop(_guard);
+    command_result(result)?;
+    let _ = sync_one(&account_id, &app, &state).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn rename_folder(
+    account_id: String,
+    mailbox_id: i64,
+    name: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<()> {
+    let name = validate_folder_name(&name)?;
+    if state.db.mailbox(mailbox_id)?.0 != account_id {
+        return Err("Folder does not belong to this account.".into());
+    }
+    if folder_role(&state, &account_id, mailbox_id)? != MailboxRole::Other {
+        return Err("Only personal folders can be renamed.".into());
+    }
+    let _guard = state.lock_account(&account_id).await?;
+    let (_, old_name) = state.db.mailbox(mailbox_id)?;
+    if old_name.eq_ignore_ascii_case(&name) {
+        return Ok(());
+    }
+    let account = state.db.account(&account_id)?;
+    let password = credentials::load(&account_id)?;
+    let result = mail::rename_folder(&account, &password, &old_name, &name).await;
+    if result.is_ok() {
+        state
+            .db
+            .rename_mailbox_local(&account_id, &old_name, &name)?;
+    }
+    drop(_guard);
+    command_result(result)?;
+    let _ = sync_one(&account_id, &app, &state).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_folder(
+    account_id: String,
+    mailbox_id: i64,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<()> {
+    if state.db.mailbox(mailbox_id)?.0 != account_id {
+        return Err("Folder does not belong to this account.".into());
+    }
+    if folder_role(&state, &account_id, mailbox_id)? != MailboxRole::Other {
+        return Err("Only personal folders can be deleted.".into());
+    }
+    let _guard = state.lock_account(&account_id).await?;
+    let (_, name) = state.db.mailbox(mailbox_id)?;
+    let account = state.db.account(&account_id)?;
+    let password = credentials::load(&account_id)?;
+    let result = mail::delete_folder(&account, &password, &name).await;
+    drop(_guard);
+    command_result(result)?;
+    let _ = sync_one(&account_id, &app, &state).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn empty_trash(
+    account_id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<()> {
+    let (trash_id, trash) = state
+        .db
+        .mailbox_for_role(&account_id, "trash")?
+        .ok_or_else(|| "This account does not have a trash mailbox.".to_string())?;
+    let _guard = state.lock_account(&account_id).await?;
+    let account = state.db.account(&account_id)?;
+    let password = credentials::load(&account_id)?;
+    let validity = state.db.mailbox_uid_validity(&account_id, &trash)?;
+    let protected = state.db.pending_move_uids(trash_id).unwrap_or_default();
+    let result = mail::empty_folder(&account, &password, &trash, validity, &protected).await;
+    drop(_guard);
+    command_result(result)?;
+    let _ = sync_one(&account_id, &app, &state).await;
+    Ok(())
+}
+
 #[tauri::command]
 pub fn search_cached_messages(
     query: SearchQuery,
     state: State<'_, AppState>,
 ) -> CommandResult<Vec<MessageSummary>> {
+    if let Some(mailbox_id) = query.mailbox_id {
+        let (owner, _) = state.db.mailbox(mailbox_id)?;
+        if owner != query.account_id {
+            return Err("Mailbox does not belong to this account.".into());
+        }
+    } else {
+        state.db.account(&query.account_id)?;
+    }
     command_result(state.db.search(&query))
 }
 
@@ -1167,11 +1683,38 @@ pub async fn send_message(
     state: State<'_, AppState>,
 ) -> CommandResult<SendOutcome> {
     let account = state.db.account(&draft.account_id)?;
+    let draft = mail::apply_signature(draft, &account.summary.signature);
     validate_compose_draft(&draft)?;
     let resolved_draft = resolve_draft_files(&state.db, &draft)?;
     let prepared = mail::prepare_message(&account, &resolved_draft).await?;
+    let settings = state.settings.get()?;
+    let delay = settings.undo_send_seconds.min(30);
     let offline = account.summary.sync_state == "offline";
     let initial_detail = offline.then_some("Waiting for a secure mail connection.");
+    if delay > 0 {
+        let send_at =
+            (chrono::Utc::now() + chrono::Duration::seconds(i64::from(delay))).to_rfc3339();
+        let detail = if offline {
+            "Waiting for a secure mail connection."
+        } else {
+            "Held for review. Undo anytime before it sends."
+        };
+        let outbox_id = state.db.queue_outbox(
+            &draft,
+            "scheduled",
+            Some(detail),
+            &prepared.message_id,
+            &prepared.bytes,
+            Some(&send_at),
+        )?;
+        state.actor(&draft.account_id)?.wake.notify_one();
+        emit_outbox_change(&app, &draft.account_id, Some(&outbox_id), Some("scheduled"));
+        return Ok(SendOutcome {
+            id: outbox_id,
+            state: "scheduled".into(),
+            detail: Some(detail.into()),
+        });
+    }
     if offline {
         let outbox_id = state.db.queue_outbox(
             &draft,
@@ -1179,6 +1722,7 @@ pub async fn send_message(
             initial_detail,
             &prepared.message_id,
             &prepared.bytes,
+            None,
         )?;
         state.actor(&draft.account_id)?.wake.notify_one();
         emit_outbox_change(&app, &draft.account_id, Some(&outbox_id), Some("queued"));
@@ -1195,8 +1739,134 @@ pub async fn send_message(
         initial_detail,
         &prepared.message_id,
         &prepared.bytes,
+        None,
     )?;
     command_result(deliver_outbox_locked(&outbox_id, &draft.account_id, &app, &state).await)
+}
+
+#[tauri::command]
+pub async fn send_scheduled_outbox(
+    outbox_id: String,
+    account_id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<SendOutcome> {
+    let (_, outbox_state) = state.db.outbox(&outbox_id, &account_id)?;
+    if outbox_state != "scheduled" {
+        return Err("Only a held message can be sent early.".into());
+    }
+    state.db.set_outbox_state(&outbox_id, "sending", None)?;
+    command_result(deliver_outbox(&outbox_id, &account_id, &app, &state).await)
+}
+
+#[tauri::command]
+pub async fn snooze_message(
+    account_id: String,
+    message_id: i64,
+    until_iso: String,
+    state: State<'_, AppState>,
+) -> CommandResult<()> {
+    use chrono::{DateTime, Utc};
+    state.db.account(&account_id)?;
+    let until = DateTime::parse_from_rfc3339(&until_iso)
+        .map_err(|_| "Pick a valid date and time.".to_string())?
+        .with_timezone(&Utc);
+    let now = Utc::now();
+    if until <= now - chrono::Duration::minutes(1) {
+        return Err("Pick a future date and time.".into());
+    }
+    if until > now + chrono::Duration::days(365) {
+        return Err("Snooze up to a year ahead.".into());
+    }
+    command_result(
+        state
+            .db
+            .snooze_message(&account_id, message_id, &until.to_rfc3339()),
+    )
+}
+
+#[tauri::command]
+pub fn unsnooze_message(
+    account_id: String,
+    message_id: i64,
+    state: State<'_, AppState>,
+) -> CommandResult<()> {
+    command_result(state.db.unsnooze_message(&account_id, message_id))
+}
+
+#[tauri::command]
+pub fn list_filter_rules(
+    account_id: String,
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<FilterRule>> {
+    state.db.account(&account_id)?;
+    command_result(state.db.list_filter_rules(&account_id))
+}
+
+#[tauri::command]
+pub fn create_filter_rule(
+    rule: FilterRule,
+    state: State<'_, AppState>,
+) -> CommandResult<FilterRule> {
+    state.db.account(&rule.account_id)?;
+    validate_filter_rule(&rule, &rule.account_id.clone())?;
+    if rule.action == "move_mailbox" {
+        if let Some(target) = rule.target_mailbox.as_deref() {
+            let target_id: i64 = target
+                .parse()
+                .map_err(|_| "Choose the folder to move matching mail into.".to_string())?;
+            let (owner, _) = state.db.mailbox(target_id)?;
+            if owner != rule.account_id {
+                return Err("Folder does not belong to this account.".into());
+            }
+        } else {
+            return Err("Choose the folder to move matching mail into.".into());
+        }
+    }
+    command_result(state.db.create_filter_rule(&rule))
+}
+
+#[tauri::command]
+pub fn update_filter_rule(
+    rule: FilterRule,
+    state: State<'_, AppState>,
+) -> CommandResult<FilterRule> {
+    state.db.account(&rule.account_id)?;
+    validate_filter_rule(&rule, &rule.account_id.clone())?;
+    if rule.action == "move_mailbox" {
+        if let Some(target) = rule.target_mailbox.as_deref() {
+            let target_id: i64 = target
+                .parse()
+                .map_err(|_| "Choose the folder to move matching mail into.".to_string())?;
+            let (owner, _) = state.db.mailbox(target_id)?;
+            if owner != rule.account_id {
+                return Err("Folder does not belong to this account.".into());
+            }
+        } else {
+            return Err("Choose the folder to move matching mail into.".into());
+        }
+    }
+    command_result(state.db.update_filter_rule(&rule))
+}
+
+#[tauri::command]
+pub fn delete_filter_rule(
+    account_id: String,
+    rule_id: String,
+    state: State<'_, AppState>,
+) -> CommandResult<()> {
+    state.db.account(&account_id)?;
+    command_result(state.db.delete_filter_rule(&account_id, &rule_id))
+}
+
+#[tauri::command]
+pub fn list_snoozed(
+    account_id: String,
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<SnoozedSummary>> {
+    state.db.account(&account_id)?;
+    let now = chrono::Utc::now().to_rfc3339();
+    command_result(state.db.list_snoozed(&account_id, &now))
 }
 
 #[tauri::command]
@@ -1357,9 +2027,21 @@ async fn deliver_outbox_locked(
     );
     match mail::send_prepared(&account, &password, &draft, &mime_bytes).await {
         Ok(()) => {
-            if let Some(draft_id) = draft.id.as_deref() {
-                let _ = state.db.remove_draft(draft_id, account_id);
-            }
+            let history: Vec<(String, String)> = draft
+                .to
+                .iter()
+                .chain(&draft.cc)
+                .chain(&draft.bcc)
+                .filter_map(|raw| {
+                    raw.trim()
+                        .parse::<lettre::message::Mailbox>()
+                        .ok()
+                        .map(|mailbox| {
+                            (mailbox.email.to_string(), mailbox.name.unwrap_or_default())
+                        })
+                })
+                .collect();
+            let _ = state.db.record_recipients(account_id, &history);
             let sent_mailbox = state.db.mailbox_for_role(account_id, "sent")?;
             let copy_result = match sent_mailbox {
                 Some((_, mailbox)) => {
@@ -1374,6 +2056,13 @@ async fn deliver_outbox_locked(
                 state
                     .db
                     .set_outbox_state(outbox_id, "sent_copy_pending", Some(DETAIL))?;
+                if let Some(draft_id) = draft.id.as_deref() {
+                    let _ = state.db.set_one_draft_sync_warning(
+                        draft_id,
+                        account_id,
+                        "Message sent. This draft removes itself once the Sent copy is saved.",
+                    );
+                }
                 let _ = app.emit(
                     "send-result",
                     serde_json::json!({ "id": outbox_id, "accountId": account_id, "ok": true, "phase": "sentCopyPending", "detail": DETAIL }),
@@ -1386,6 +2075,9 @@ async fn deliver_outbox_locked(
                 });
             }
             state.db.remove_outbox(outbox_id)?;
+            if let Some(draft_id) = draft.id.as_deref() {
+                let _ = state.db.remove_draft(draft_id, account_id);
+            }
             release_attachment_tokens(
                 state,
                 account_id,
@@ -1511,6 +2203,76 @@ pub async fn save_attachment(
     tokio::fs::write(destination, bytes)
         .await
         .map_err(|_| "Could not save the attachment at that location.".into())
+}
+
+const MAX_PREVIEW_BYTES: usize = 10 * 1024 * 1024;
+
+fn preview_text(bytes: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(bytes);
+    if text
+        .chars()
+        .any(|c| c.is_control() && c != '\n' && c != '\r' && c != '\t')
+    {
+        return None;
+    }
+    Some(text.into_owned())
+}
+
+#[tauri::command]
+pub async fn preview_attachment(
+    account_id: String,
+    message_id: i64,
+    attachment_id: String,
+    state: State<'_, AppState>,
+) -> CommandResult<AttachmentPreview> {
+    ensure_message_content(&account_id, message_id, &state).await?;
+    let detail = state.db.message_detail(message_id, &account_id)?;
+    let attachment = detail
+        .attachments
+        .iter()
+        .find(|item| item.id == attachment_id && !item.inline)
+        .ok_or_else(|| "Attachment not found.".to_string())?;
+    if attachment.size > MAX_PREVIEW_BYTES as u64 {
+        return Err("This attachment is too large to preview.".into());
+    }
+    let raw = state.db.raw_message(message_id, &account_id)?;
+    let (filename, bytes) = mail::extract_attachment(&raw, &attachment_id)?;
+    if bytes.len() > MAX_PREVIEW_BYTES {
+        return Err("This attachment is too large to preview.".into());
+    }
+    let content_type = attachment.content_type.as_str();
+    if matches!(
+        content_type,
+        "image/png" | "image/jpeg" | "image/gif" | "image/webp"
+    ) {
+        // Declared type alone is not trusted: sniff the bytes too.
+        if detect_image_mime(&bytes) != Some(content_type) {
+            return Err("This image format is not supported.".into());
+        }
+        return Ok(AttachmentPreview {
+            filename,
+            content_type: content_type.to_string(),
+            size: bytes.len() as u64,
+            text: None,
+            image_data_url: Some(format!(
+                "data:{content_type};base64,{}",
+                STANDARD.encode(&bytes)
+            )),
+        });
+    }
+    if content_type == "text/plain" {
+        let Some(text) = preview_text(&bytes) else {
+            return Err("This text file cannot be previewed.".into());
+        };
+        return Ok(AttachmentPreview {
+            filename,
+            content_type: content_type.to_string(),
+            size: bytes.len() as u64,
+            text: Some(text.chars().take(200_000).collect()),
+            image_data_url: None,
+        });
+    }
+    Err("Only images and plain-text files can be previewed.".into())
 }
 
 #[tauri::command]
@@ -1849,8 +2611,16 @@ pub fn get_distribution_channel() -> DistributionChannel {
     }
 }
 
+fn check_native_dialog_text(title: &str, message: &str) -> Result<(), String> {
+    if title.len() > 120 || message.len() > 2000 {
+        return Err("Dialog text is too long.".into());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn show_native_confirm(app: AppHandle, title: String, message: String) -> CommandResult<bool> {
+    check_native_dialog_text(&title, &message)?;
     let confirmed = app
         .dialog()
         .message(message)
@@ -1863,6 +2633,7 @@ pub fn show_native_confirm(app: AppHandle, title: String, message: String) -> Co
 
 #[tauri::command]
 pub fn show_native_message(app: AppHandle, title: String, message: String) -> CommandResult<()> {
+    check_native_dialog_text(&title, &message)?;
     app.dialog()
         .message(message)
         .title(title)
@@ -2045,6 +2816,9 @@ async fn replay_offline_operations(
                             db.remove_operation(id)?;
                             continue;
                         }
+                        // Transient failure: keep the queued op and the
+                        // pending-move hiding so a later sync retries it.
+                        continue;
                     }
                 }
                 Err(_) => {
@@ -2215,7 +2989,137 @@ fn notify_new_mail(
 
 #[cfg(test)]
 mod tests {
-    use super::cleanup_orphaned_account_dirs;
+    use super::{apply_filter_rules, cleanup_orphaned_account_dirs, preview_text};
+    use crate::db::{CachedMessage, Database};
+    use crate::models::{
+        AccountRecord, AccountSummary, FilterRule, MailboxRole, ProviderKind, ServerConfig, TlsMode,
+    };
+
+    fn rule_account() -> AccountRecord {
+        AccountRecord {
+            summary: AccountSummary {
+                id: "account-1".into(),
+                provider: ProviderKind::Manual,
+                email: "sam@example.com".into(),
+                display_name: "Sam".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+            },
+            imap: ServerConfig {
+                host: "imap.example.com".into(),
+                port: 993,
+                tls_mode: TlsMode::Tls,
+                username: "sam@example.com".into(),
+            },
+            smtp: ServerConfig {
+                host: "smtp.example.com".into(),
+                port: 587,
+                tls_mode: TlsMode::StartTls,
+                username: "sam@example.com".into(),
+            },
+        }
+    }
+
+    fn rule_mailbox(db: &Database, account_id: &str, name: &str, role: &MailboxRole) -> i64 {
+        db.upsert_mailbox(account_id, name, role, Some(1), Some(2), Some(0), 0)
+            .unwrap()
+    }
+
+    fn bill(db: &Database, account_id: &str, inbox: i64, uid: u32) -> i64 {
+        let mut message = CachedMessage {
+            uid,
+            message_id: Some(format!("<{uid}@bills.example.com>")),
+            subject: "Power bill".into(),
+            sender_name: "Power Co".into(),
+            sender_address: "bills@power.example.com".into(),
+            recipients: "sam@example.com".into(),
+            received_at: "2026-08-18T12:00:00Z".into(),
+            preview: "Pay by Friday".into(),
+            is_read: false,
+            is_starred: false,
+            size: 32,
+            to: vec!["sam@example.com".into()],
+            cc: vec![],
+            reply_to: None,
+            thread_parent: None,
+            text_body: "Pay by Friday".into(),
+            html_body: None,
+            attachments: vec![],
+            raw_message: b"Subject: Power bill\r\n\r\nPay by Friday".to_vec(),
+        };
+        message.sender_address = "bills@power.example.com".into();
+        db.upsert_message(account_id, inbox, &message).unwrap();
+        db.list_messages(inbox, None, 10).unwrap().items[0].id
+    }
+
+    fn enabled_rule(account_id: &str, action: &str) -> FilterRule {
+        FilterRule {
+            id: String::new(),
+            account_id: account_id.into(),
+            name: "Bills".into(),
+            field: "from".into(),
+            contains: "power.example.com".into(),
+            action: action.into(),
+            target_mailbox: None,
+            enabled: true,
+        }
+    }
+
+    #[test]
+    fn filter_rules_apply_locally_and_queue_for_replay() {
+        let db = Database::memory();
+        let account = rule_account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = rule_mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        let archive = rule_mailbox(&db, account_id, "Archive", &MailboxRole::Archive);
+        let id = bill(&db, account_id, inbox, 1);
+
+        // Read rule: applied locally, flag queued exactly once (deduped).
+        let mut read_rule = db
+            .create_filter_rule(&enabled_rule(account_id, "mark_read"))
+            .unwrap();
+        apply_filter_rules(&db, &account);
+        assert!(db
+            .unread_message_ids(inbox)
+            .unwrap()
+            .iter()
+            .all(|(unread_id, _)| unread_id != &id));
+        let flag_ops: Vec<String> = db
+            .queued_operations(account_id)
+            .unwrap()
+            .iter()
+            .filter(|(_, kind, _)| kind == "flags")
+            .map(|(_, _, payload)| payload.clone())
+            .collect();
+        assert_eq!(flag_ops.len(), 1);
+        assert!(flag_ops[0].contains("isRead"));
+        assert!(flag_ops[0].contains("\"uid\":1"));
+
+        // Unread a second message; move rule queues a move with pending flag.
+        bill(&db, account_id, inbox, 2);
+        db.set_flags(id, Some(false), None).unwrap();
+        read_rule.enabled = false;
+        db.update_filter_rule(&read_rule).unwrap();
+        db.create_filter_rule(&enabled_rule(account_id, "move_archive"))
+            .unwrap();
+        apply_filter_rules(&db, &account);
+        let move_ops: Vec<String> = db
+            .queued_operations(account_id)
+            .unwrap()
+            .iter()
+            .filter(|(_, kind, _)| kind == "move")
+            .map(|(_, _, payload)| payload.clone())
+            .collect();
+        assert_eq!(move_ops.len(), 2);
+        assert!(move_ops[0].contains("\"uid\":2") || move_ops[1].contains("\"uid\":2"));
+        assert!(move_ops[0].contains("\"uid\":1") || move_ops[1].contains("\"uid\":1"));
+        assert_eq!(db.pending_move_uids(inbox).unwrap(), vec![2, 1]);
+        assert_eq!(db.pending_move_uids(archive).unwrap(), Vec::<u32>::new());
+    }
 
     #[tokio::test]
     async fn startup_cleanup_removes_only_orphaned_uuid_directories() {
@@ -2232,5 +3136,15 @@ mod tests {
         assert!(root.path().join(active).is_dir());
         assert!(!root.path().join(orphaned).exists());
         assert!(root.path().join(unrelated).is_dir());
+    }
+
+    #[test]
+    fn preview_text_rejects_binary_content() {
+        assert_eq!(
+            preview_text(b"Hello\nworld\t!").as_deref(),
+            Some("Hello\nworld\t!")
+        );
+        assert!(preview_text(b"\x00\x01\x02binary").is_none());
+        assert!(preview_text("héllo wörld".as_bytes()).is_some());
     }
 }

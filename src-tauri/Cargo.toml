@@ -1,6 +1,6 @@
 [package]
 name = "postal-snap"
-version = "0.1.5"
+version = "0.1.6"
 description = "A calm, accessible desktop email client."
 authors = ["BurntToasters <code@rosie.run>"]
 edition = "2021"

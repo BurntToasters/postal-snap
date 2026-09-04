@@ -32,5 +32,8 @@ pub fn remove(account_id: &str) -> Result<(), String> {
 }
 
 fn entry(account_id: &str) -> Result<Entry, String> {
-    Entry::new(SERVICE, account_id).map_err(|_| "The system password vault is unavailable.".into())
+    let id = uuid::Uuid::parse_str(account_id)
+        .map_err(|_| "The account password store is invalid.".to_string())?;
+    Entry::new(SERVICE, &id.hyphenated().to_string())
+        .map_err(|_| "The system password vault is unavailable.".into())
 }

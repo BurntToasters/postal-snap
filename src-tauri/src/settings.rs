@@ -181,6 +181,8 @@ impl From<&AppSettings> for PortableSettings {
             folder_pane_width: settings.folder_pane_width,
             message_pane_width: settings.message_pane_width,
             reader_pane_height: settings.reader_pane_height,
+            undo_send_seconds: settings.undo_send_seconds,
+            window_effects: settings.window_effects,
         }
     }
 }
@@ -200,6 +202,8 @@ impl PortableSettings {
             folder_pane_width: self.folder_pane_width,
             message_pane_width: self.message_pane_width,
             reader_pane_height: self.reader_pane_height,
+            undo_send_seconds: self.undo_send_seconds,
+            window_effects: self.window_effects,
         }
     }
 }
@@ -274,6 +278,7 @@ fn validate(settings: &AppSettings) -> Result<(), String> {
         || !(210..=420).contains(&settings.folder_pane_width)
         || !(300..=720).contains(&settings.message_pane_width)
         || !(240..=800).contains(&settings.reader_pane_height)
+        || settings.undo_send_seconds > 30
         || settings
             .last_account_id
             .as_ref()
@@ -317,7 +322,8 @@ fn backup_invalid(path: &Path) -> Result<(), String> {
     match fs::symlink_metadata(path) {
         Ok(_) => {
             let stamp = chrono::Utc::now().format("%Y%m%d%H%M%S");
-            let backup = path.with_file_name(format!("settings.json.corrupt-{stamp}"));
+            let unique = format!("settings.json.corrupt-{stamp}-{}", uuid::Uuid::new_v4());
+            let backup = path.with_file_name(unique);
             fs::rename(path, backup)
                 .map_err(|_| "Could not preserve damaged application settings.".to_string())
         }
@@ -392,6 +398,17 @@ mod tests {
             ..AppSettings::default()
         };
         assert!(validate(&settings).is_err());
+
+        let undo = AppSettings {
+            undo_send_seconds: 31,
+            ..AppSettings::default()
+        };
+        assert!(validate(&undo).is_err());
+        let undo_ok = AppSettings {
+            undo_send_seconds: 30,
+            ..AppSettings::default()
+        };
+        assert!(validate(&undo_ok).is_ok());
 
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.json");
@@ -620,6 +637,36 @@ mod tests {
         assert_eq!(reset.density, "comfortable");
         assert_eq!(reset.last_account_id, Some(account_id));
         assert_eq!(reset.last_mailbox_id, Some(42));
+    }
+
+    #[test]
+    fn window_effects_default_off_and_survive_portable_round_trip() {
+        assert!(!AppSettings::default().window_effects);
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let export_path = directory.path().join("export.json");
+        let store = SettingsStore::load(path, &Database::memory()).unwrap();
+        store
+            .save(AppSettings {
+                window_effects: true,
+                ..AppSettings::default()
+            })
+            .unwrap();
+        store.export_to(&export_path).unwrap();
+        let raw = fs::read_to_string(&export_path).unwrap();
+        assert!(raw.contains("windowEffects"));
+        store.save(AppSettings::default()).unwrap();
+        let imported = store.import_from(&export_path).unwrap();
+        assert!(imported.window_effects);
+        // Files written before the toggle existed still load.
+        let legacy = "{\"schemaVersion\":2,\"readingPane\":\"right\",\"textScale\":1,\"privateNotifications\":false,\"theme\":\"system\",\"density\":\"comfortable\",\"cachePolicy\":{\"mode\":\"recent\",\"days\":90,\"maxBytes\":1073741824},\"lastAccountId\":null,\"lastMailboxId\":null,\"folderPaneWidth\":264,\"messagePaneWidth\":400,\"readerPaneHeight\":360}";
+        let parsed: AppSettings = serde_json::from_str(legacy).unwrap();
+        assert!(!parsed.window_effects);
+        // Exports from newer versions with unknown fields still import.
+        let future = "{\"application\":\"postal-snap\",\"formatVersion\":1,\"preferences\":{\"readingPane\":\"right\",\"textScale\":1,\"privateNotifications\":false,\"theme\":\"dark\",\"density\":\"comfortable\",\"cachePolicy\":{\"mode\":\"recent\",\"days\":90,\"maxBytes\":1073741824},\"folderPaneWidth\":264,\"messagePaneWidth\":400,\"readerPaneHeight\":360,\"windowEffects\":false,\"nextBigThing\":true}}";
+        let import_path = directory.path().join("future.json");
+        fs::write(&import_path, future).unwrap();
+        assert_eq!(store.import_from(&import_path).unwrap().theme, "dark");
     }
 
     #[test]
