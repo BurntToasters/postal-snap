@@ -5,6 +5,9 @@ mod credentials;
 mod db;
 mod mail;
 mod models;
+// Background OAuth groundwork (no UI yet): consumed by a future setup flow.
+#[allow(dead_code)]
+mod oauth;
 mod security;
 mod settings;
 // FUTURE IMPLEMENTATION: Native window blur / vibrancy (macOS vibrancy / Windows Mica·Acrylic, mirrored from Zinnia).
@@ -121,6 +124,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::list_accounts,
             commands::test_account,
+            commands::update_account_password,
             commands::add_account,
             commands::remove_account,
             commands::list_mailboxes,
@@ -128,8 +132,16 @@ fn main() {
             commands::list_messages,
             commands::get_message,
             commands::set_message_flags,
+            commands::set_messages_flags,
             commands::move_message,
             commands::move_message_to_mailbox,
+            commands::move_messages_to_mailbox,
+            commands::mark_mailbox_read,
+            commands::suggest_recipients,
+            commands::create_folder,
+            commands::rename_folder,
+            commands::delete_folder,
+            commands::empty_trash,
             commands::search_cached_messages,
             commands::search_server_messages,
             commands::save_draft,
@@ -141,8 +153,17 @@ fn main() {
             commands::get_outbox,
             commands::retry_outbox,
             commands::retry_sent_copy,
+            commands::send_scheduled_outbox,
+            commands::snooze_message,
+            commands::unsnooze_message,
+            commands::list_snoozed,
+            commands::list_filter_rules,
+            commands::create_filter_rule,
+            commands::update_filter_rule,
+            commands::delete_filter_rule,
             commands::delete_outbox,
             commands::save_attachment,
+            commands::preview_attachment,
             commands::prepare_forward_attachments,
             commands::choose_attachments,
             commands::fetch_remote_image,
@@ -162,6 +183,7 @@ fn main() {
             commands::discover_account_aliases,
             commands::update_account_aliases,
             commands::update_account_display_name,
+            commands::update_account_signature,
             commands::get_account_inbox_counts,
             commands::list_all_mailboxes,
             commands::sync_all_accounts,

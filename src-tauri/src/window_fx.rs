@@ -1,7 +1,6 @@
-//! FUTURE IMPLEMENTATION: Native window blur / vibrancy (macOS vibrancy / Windows Mica·Acrylic).
+//! Native window blur / vibrancy (macOS vibrancy / Windows Mica / Acrylic).
 //! Everything but the rendered email will have it.
 //! Linux is intentionally a no-op; stays fully opaque there.
-//! Mirrored from Zinnia (parent directory).
 
 use tauri::WebviewWindow;
 
@@ -118,7 +117,7 @@ pub fn clear_basic_window_fx(window: &WebviewWindow, dark: bool) -> Result<(), S
 }
 
 /// Enable or disable native background blur / glass on the calling window.
-/// FUTURE IMPLEMENTATION: Wired for background native blur support.
+/// Enable or disable native background blur / glass on the calling window.
 #[tauri::command]
 pub fn set_workspace_window_fx(
     window: WebviewWindow,

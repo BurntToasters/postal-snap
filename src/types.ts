@@ -30,6 +30,8 @@ export interface AccountSummary {
   syncState: SyncPhase;
   error?: string | null;
   aliases?: string[];
+  authMethod?: string;
+  signature?: string;
 }
 
 export interface AccountRemovalOutcome {
@@ -68,11 +70,24 @@ export interface MessageSummary {
   isStarred: boolean;
   hasAttachments: boolean;
   size: number;
+  threadRoot?: string | null;
 }
 
 export interface MessageCursor {
   receivedAt: string;
   uid: number;
+}
+
+export interface BulkOutcome {
+  updated: number;
+  queued: number;
+  failed: number;
+}
+
+export interface RecipientSuggestion {
+  address: string;
+  name: string;
+  useCount: number;
 }
 
 export interface MessagePage {
@@ -88,6 +103,14 @@ export interface Attachment {
   size: number;
   contentId?: string | null;
   inline: boolean;
+}
+
+export interface AttachmentPreview {
+  filename: string;
+  contentType: string;
+  size: number;
+  text?: string | null;
+  imageDataUrl?: string | null;
 }
 
 export interface MessageDetail extends MessageSummary {
@@ -144,14 +167,37 @@ export interface OutboxSummary {
   accountId: string;
   recipients: string;
   subject: string;
-  state: "queued" | "sending" | "sent_copy_pending" | "needs_attention";
+  state:
+    | "queued"
+    | "sending"
+    | "sent_copy_pending"
+    | "needs_attention"
+    | "scheduled";
   detail?: string | null;
   createdAt: string;
+  sendAt?: string | null;
+}
+
+export interface SnoozedSummary {
+  message: MessageSummary;
+  snoozedUntil: string;
+}
+
+export interface FilterRule {
+  id: string;
+  accountId: string;
+  name: string;
+  field: "from" | "subject";
+  contains: string;
+  action:
+    "mark_read" | "move_archive" | "move_trash" | "move_junk" | "move_mailbox";
+  targetMailbox?: string | null;
+  enabled: boolean;
 }
 
 export interface SendOutcome {
   id: string;
-  state: "queued" | "sent" | "sentCopyPending" | "needsAttention";
+  state: "queued" | "sent" | "sentCopyPending" | "needsAttention" | "scheduled";
   detail?: string | null;
 }
 
@@ -208,6 +254,8 @@ export interface AppSettings {
   folderPaneWidth: number;
   messagePaneWidth: number;
   readerPaneHeight: number;
+  windowEffects: boolean;
+  undoSendSeconds: number;
 }
 
 export interface DistributionChannel {

@@ -10,6 +10,7 @@ vi.mock("../api", () => ({
     deleteDraft: vi.fn(),
     releaseComposeAttachments: vi.fn(),
     readComposeImage: vi.fn(),
+    suggestRecipients: vi.fn().mockResolvedValue([]),
     showNativeConfirm: vi.fn().mockResolvedValue(true),
   },
 }));
@@ -78,7 +79,7 @@ describe("composer draft persistence", () => {
     });
   });
 
-  it("keeps draft unsaved when edits happen during a save", async () => {
+  it("promptly saves edits made during a save", async () => {
     let releaseSave: () => void = () => undefined;
     const pendingSave = new Promise<void>((resolve) => {
       releaseSave = resolve;
@@ -106,7 +107,8 @@ describe("composer draft persistence", () => {
       await Promise.resolve();
     });
 
-    expect(screen.queryByText("Draft saved")).toBeNull();
+    expect(mockedSaveDraft).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText("Draft saved")).not.toBeNull();
   });
 
   it("minimizes into docked pill and restores back to full composer", () => {
@@ -148,5 +150,25 @@ describe("composer draft persistence", () => {
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("suggests previous recipients and completes on Enter", async () => {
+    vi.mocked(api.suggestRecipients).mockResolvedValue([
+      { address: "jane@example.test", name: "Jane", useCount: 3 },
+    ]);
+    render(<Composer accountId={account.id} />);
+    const to = screen.getByPlaceholderText("name@example.com");
+    fireEvent.change(to, { target: { value: "jan" } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+
+    const option = screen.getByRole("option", {
+      name: /jane@example.test/i,
+    });
+    fireEvent.keyDown(to, { key: "ArrowDown" });
+    fireEvent.keyDown(to, { key: "Enter" });
+    expect((to as HTMLInputElement).value).toContain("jane@example.test");
+    expect(option).toBeDefined();
   });
 });

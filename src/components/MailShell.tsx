@@ -5,16 +5,22 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import {
   Archive,
   ChevronDown,
+  Clock,
   FileText,
+  FolderPlus,
   Inbox,
+  Mail,
+  MailOpen,
   MailPlus,
   Menu,
   PanelLeft,
   Paperclip,
+  Pencil,
   RefreshCw,
   Search,
   Send,
@@ -31,6 +37,7 @@ import { strings } from "../i18n";
 import { formatMessageDate } from "../format";
 import { applySettings } from "../settings";
 import { useAppStore } from "../store";
+import { groupThreads } from "../threads";
 import type { MailboxRole, MessageSummary } from "../types";
 import { promptToRestartForUpdate } from "../update";
 import { AppMark } from "./AppMark";
@@ -89,6 +96,8 @@ export function MailShell({ onOpenSettings }: Props) {
   const setDrafts = useAppStore((state) => state.setDrafts);
   const outbox = useAppStore((state) => state.outbox);
   const setOutbox = useAppStore((state) => state.setOutbox);
+  const snoozed = useAppStore((state) => state.snoozed);
+  const setSnoozed = useAppStore((state) => state.setSnoozed);
   const selectedMessage = useAppStore((state) => state.selectedMessage);
   const selectMessage = useAppStore((state) => state.selectMessage);
   const openComposer = useAppStore((state) => state.openComposer);
@@ -107,8 +116,43 @@ export function MailShell({ onOpenSettings }: Props) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [loadingMessageId, setLoadingMessageId] = useState<number>();
+  const [folderDialog, setFolderDialog] = useState<
+    null | { mode: "create" } | { mode: "rename"; id: number; name: string }
+  >(null);
+  const [folderName, setFolderName] = useState("");
+  const [folderBusy, setFolderBusy] = useState(false);
+  const [selecting, setSelecting] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const newFolderButtonRef = useRef<HTMLButtonElement>(null);
+  const lastFolderInvoker = useRef<HTMLElement | null>(null);
+
+  function openFolderDialog(
+    dialog: { mode: "create" } | { mode: "rename"; id: number; name: string },
+  ) {
+    lastFolderInvoker.current =
+      dialog.mode === "create"
+        ? newFolderButtonRef.current
+        : (document.activeElement as HTMLElement | null);
+    setFolderName(dialog.mode === "rename" ? dialog.name : "");
+    setFolderDialog(dialog);
+  }
+
+  function closeFolderDialog() {
+    setFolderDialog(null);
+    setFolderName("");
+    lastFolderInvoker.current?.focus();
+  }
+
+  function folderDialogKeyDown(event: ReactKeyboardEvent) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeFolderDialog();
+    }
+  }
   const mailboxRequest = useRef(0);
   const messageRequest = useRef(0);
+  const pagingRequest = useRef(0);
   const detailRequest = useRef(0);
   const searchRequest = useRef(0);
   const searchInput = useRef<HTMLInputElement>(null);
@@ -119,16 +163,22 @@ export function MailShell({ onOpenSettings }: Props) {
     allFoldersRef.current = allFolders;
   }, [allFolders, query]);
 
+  function resetListState() {
+    setSelectedIds([]);
+    setSelecting(false);
+  }
+
   const loadAccountData = useCallback(async () => {
     if (!activeAccountId) return;
     const accountId = activeAccountId;
     const request = ++mailboxRequest.current;
     try {
-      const [mailboxesResult, draftsResult, outboxResult] =
+      const [mailboxesResult, draftsResult, outboxResult, snoozedResult] =
         await Promise.allSettled([
           api.listMailboxes(accountId),
           api.listDrafts(accountId),
           api.listOutbox(accountId),
+          api.listSnoozed(accountId),
         ]);
       if (
         request !== mailboxRequest.current ||
@@ -139,14 +189,25 @@ export function MailShell({ onOpenSettings }: Props) {
         setMailboxes(mailboxesResult.value);
       if (draftsResult.status === "fulfilled") setDrafts(draftsResult.value);
       if (outboxResult.status === "fulfilled") setOutbox(outboxResult.value);
-      const failed = [mailboxesResult, draftsResult, outboxResult].find(
-        (result) => result.status === "rejected",
-      );
+      if (snoozedResult.status === "fulfilled") setSnoozed(snoozedResult.value);
+      const failed = [
+        mailboxesResult,
+        draftsResult,
+        outboxResult,
+        snoozedResult,
+      ].find((result) => result.status === "rejected");
       if (failed?.status === "rejected") setError(String(failed.reason));
     } catch (cause) {
       if (request === mailboxRequest.current) setError(String(cause));
     }
-  }, [activeAccountId, setDrafts, setError, setMailboxes, setOutbox]);
+  }, [
+    activeAccountId,
+    setDrafts,
+    setError,
+    setMailboxes,
+    setOutbox,
+    setSnoozed,
+  ]);
 
   const loadMessages = useCallback(async () => {
     if (
@@ -159,6 +220,7 @@ export function MailShell({ onOpenSettings }: Props) {
     const accountId = activeAccountId;
     const mailboxId = activeMailboxId;
     const request = ++messageRequest.current;
+    pagingRequest.current += 1;
     searchRequest.current += 1;
     setLoadingMessages(true);
     try {
@@ -191,13 +253,21 @@ export function MailShell({ onOpenSettings }: Props) {
     try {
       await api.syncAccount(activeAccountId);
       await loadAccountData();
-      await loadMessages();
+      await refreshList();
     } catch (cause) {
       setError(String(cause));
     } finally {
       setBusy(false);
     }
-  }, [activeAccountId, busy, loadAccountData, loadMessages, setBusy, setError]);
+  }, [
+    activeAccountId,
+    busy,
+    loadAccountData,
+    loadMessages,
+    refreshList,
+    setBusy,
+    setError,
+  ]);
 
   async function loadMoreMessages() {
     if (
@@ -210,13 +280,13 @@ export function MailShell({ onOpenSettings }: Props) {
       return;
     const accountId = activeAccountId;
     const mailboxId = activeMailboxId;
-    const request = messageRequest.current;
+    const request = ++pagingRequest.current;
     setLoadingMessages(true);
     try {
       const page = await api.listMessages(accountId, mailboxId, messageCursor);
       const current = useAppStore.getState();
       if (
-        request === messageRequest.current &&
+        request === pagingRequest.current &&
         current.activeAccountId === accountId &&
         current.activeMailboxId === mailboxId &&
         !current.activeLocalView &&
@@ -224,9 +294,9 @@ export function MailShell({ onOpenSettings }: Props) {
       )
         appendMessages(page.items, page.nextCursor ?? undefined, page.hasMore);
     } catch (cause) {
-      if (request === messageRequest.current) setError(String(cause));
+      if (request === pagingRequest.current) setError(String(cause));
     } finally {
-      if (request === messageRequest.current) setLoadingMessages(false);
+      if (request === pagingRequest.current) setLoadingMessages(false);
     }
   }
 
@@ -255,6 +325,7 @@ export function MailShell({ onOpenSettings }: Props) {
     const searchAllFolders = allFoldersRef.current;
     const request = ++searchRequest.current;
     messageRequest.current += 1;
+    pagingRequest.current += 1;
     if (!text) {
       await loadMessages();
       return;
@@ -314,6 +385,144 @@ export function MailShell({ onOpenSettings }: Props) {
     setError,
     setMessages,
   ]);
+
+  async function refreshList() {
+    if (queryRef.current.trim()) await runSearch();
+    else await loadMessages();
+  }
+
+  async function submitFolderDialog() {
+    if (!activeAccountId || folderBusy) return;
+    const name = folderName.trim();
+    if (!name) return;
+    setFolderBusy(true);
+    try {
+      if (folderDialog?.mode === "rename") {
+        await api.renameFolder(activeAccountId, folderDialog.id, name);
+      } else {
+        await api.createFolder(activeAccountId, name);
+      }
+      closeFolderDialog();
+      await loadAccountData();
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setFolderBusy(false);
+    }
+  }
+
+  async function deleteFolderById(id: number, label: string) {
+    if (!activeAccountId) return;
+    const confirmed = await api.showNativeConfirm(
+      strings.appName,
+      strings.mail.deleteFolderQuestion(label),
+    );
+    if (!confirmed) return;
+    try {
+      await api.deleteFolder(activeAccountId, id);
+      await loadAccountData();
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }
+
+  async function emptyTrashFolders() {
+    if (!activeAccountId) return;
+    const confirmed = await api.showNativeConfirm(
+      strings.appName,
+      strings.mail.emptyTrashQuestion,
+    );
+    if (!confirmed) return;
+    try {
+      await api.emptyTrash(activeAccountId);
+      await loadAccountData();
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }
+
+  function toggleSelectMessage(id: number) {
+    setSelectedIds((prev) => {
+      if (prev.includes(id)) return prev.filter((item) => item !== id);
+      if (prev.length >= 200) {
+        setError(strings.mail.bulkTooMany);
+        return prev;
+      }
+      return [...prev, id];
+    });
+  }
+
+  async function bulkFlags(isRead?: boolean, isStarred?: boolean) {
+    if (!activeAccountId || selectedIds.length === 0 || bulkBusy) return;
+    setBulkBusy(true);
+    try {
+      const outcome = await api.setMessagesFlags(
+        activeAccountId,
+        selectedIds,
+        isRead,
+        isStarred,
+      );
+      if (outcome.failed > 0)
+        setError(strings.mail.bulkPartial(outcome.failed));
+      setSelectedIds([]);
+      setSelecting(false);
+      await refreshList();
+      await loadAccountData();
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  async function bulkMove(role: "archive" | "trash" | "junk") {
+    if (!activeAccountId || selectedIds.length === 0 || bulkBusy) return;
+    const destination = mailboxes.find(
+      (mailbox) =>
+        mailbox.accountId === activeAccountId && mailbox.role === role,
+    );
+    if (!destination) {
+      setError(strings.mail.noTargetFolder);
+      return;
+    }
+    setBulkBusy(true);
+    try {
+      const outcome = await api.moveMessagesToMailbox(
+        activeAccountId,
+        selectedIds,
+        destination.id,
+      );
+      if (outcome.failed > 0)
+        setError(strings.mail.bulkPartial(outcome.failed));
+      setSelectedIds([]);
+      setSelecting(false);
+      await refreshList();
+      await loadAccountData();
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  async function markAllRead() {
+    if (!activeAccountId || !activeMailboxId || bulkBusy) return;
+    setBulkBusy(true);
+    try {
+      const outcome = await api.markMailboxRead(
+        activeAccountId,
+        activeMailboxId,
+      );
+      if (outcome.failed > 0)
+        setError(strings.mail.bulkPartial(outcome.failed));
+      await refreshList();
+      await loadAccountData();
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setBulkBusy(false);
+    }
+  }
 
   const chooseMessage = useCallback(
     async (summary: MessageSummary) => {
@@ -390,6 +599,51 @@ export function MailShell({ onOpenSettings }: Props) {
   }, [loadAccountData]);
 
   useEffect(() => {
+    const due = outbox
+      .filter((item) => item.state === "scheduled" && item.sendAt)
+      .map((item) => new Date(item.sendAt as string).getTime() - Date.now())
+      .filter((ms) => Number.isFinite(ms));
+    if (due.length === 0 || !activeAccountId) return;
+    const wait = Math.min(...due);
+    if (wait <= 0) {
+      const overdue = outbox.find(
+        (item) =>
+          item.state === "scheduled" &&
+          item.sendAt &&
+          new Date(item.sendAt).getTime() <= Date.now(),
+      );
+      if (overdue && activeAccountId) {
+        const id = overdue.id;
+        const account = activeAccountId;
+        void api
+          .sendScheduledOutbox(id, account)
+          .catch((cause) => setError(String(cause)))
+          .finally(() => void loadAccountData());
+      }
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      const current = useAppStore.getState();
+      const ready = current.outbox.find(
+        (item) =>
+          item.state === "scheduled" &&
+          item.accountId === current.activeAccountId &&
+          item.sendAt &&
+          new Date(item.sendAt).getTime() <= Date.now(),
+      );
+      if (ready && current.activeAccountId) {
+        void api
+          .sendScheduledOutbox(ready.id, current.activeAccountId)
+          .catch((cause) => setError(String(cause)))
+          .finally(() => void loadAccountData());
+      } else {
+        void loadAccountData();
+      }
+    }, wait);
+    return () => window.clearTimeout(timer);
+  }, [outbox, activeAccountId, loadAccountData, setError]);
+
+  useEffect(() => {
     const timer = window.setTimeout(() => void loadMessages(), 0);
     return () => window.clearTimeout(timer);
   }, [loadMessages]);
@@ -411,6 +665,24 @@ export function MailShell({ onOpenSettings }: Props) {
         if (accountId !== useAppStore.getState().activeAccountId) return;
         if (queryRef.current.trim()) void runSearch();
         else void loadMessages();
+      })
+      .then((fn) => {
+        if (active) unsubs.push(fn);
+        else fn();
+      });
+    void api
+      .onDraftSyncChanged(({ accountId }) => {
+        if (accountId === useAppStore.getState().activeAccountId)
+          void loadAccountData();
+      })
+      .then((fn) => {
+        if (active) unsubs.push(fn);
+        else fn();
+      });
+    void api
+      .onOutboxChanged(({ accountId }) => {
+        if (accountId === useAppStore.getState().activeAccountId)
+          void loadAccountData();
       })
       .then((fn) => {
         if (active) unsubs.push(fn);
@@ -678,6 +950,77 @@ export function MailShell({ onOpenSettings }: Props) {
     }
   }
 
+  async function unsnoozeById(id: number) {
+    if (!activeAccountId) return;
+    try {
+      await api.unsnoozeMessage(activeAccountId, id);
+      await loadAccountData();
+      await refreshList();
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }
+
+  const chooseSnoozed = useCallback(
+    async (summary: MessageSummary) => {
+      const accountId = activeAccountId;
+      if (!accountId) return;
+      const request = ++detailRequest.current;
+      setLoadingMessageId(summary.id);
+      try {
+        const detail = await api.getMessage(accountId, summary.id);
+        const current = useAppStore.getState();
+        if (
+          request !== detailRequest.current ||
+          current.activeAccountId !== accountId ||
+          current.activeLocalView !== "snoozed"
+        )
+          return;
+        selectMessage(detail);
+        if (!summary.isRead) {
+          await api.setMessageFlags(accountId, summary.id, true, undefined);
+          await loadAccountData();
+        }
+      } catch (cause) {
+        if (request !== detailRequest.current) return;
+        const detail = String(cause);
+        setError(detail);
+        if (isOversizeError(cause)) {
+          selectMessage({
+            ...summary,
+            to: [],
+            cc: [],
+            replyTo: null,
+            textBody: "",
+            htmlBody: null,
+            remoteImagesBlocked: false,
+            attachments: [],
+          });
+        }
+      } finally {
+        if (request === detailRequest.current) setLoadingMessageId(undefined);
+      }
+    },
+    [
+      activeAccountId,
+      loadAccountData,
+      selectMessage,
+      setError,
+      setLoadingMessageId,
+    ],
+  );
+
+  async function sendScheduledNow(id: string) {
+    if (!activeAccountId) return;
+    try {
+      await api.sendScheduledOutbox(id, activeAccountId);
+      await loadAccountData();
+    } catch (cause) {
+      setError(String(cause));
+      await loadAccountData();
+    }
+  }
+
   async function discardQueued(
     id: string,
     state: ReturnType<typeof useAppStore.getState>["outbox"][number]["state"],
@@ -686,7 +1029,9 @@ export function MailShell({ onOpenSettings }: Props) {
     const question =
       state === "sent_copy_pending"
         ? strings.mail.dismissSentCopy
-        : strings.mail.discardQueued;
+        : state === "scheduled"
+          ? strings.mail.undoSendQuestion
+          : strings.mail.discardQueued;
     const confirmed = await api.showNativeConfirm(
       strings.composer.discard,
       question,
@@ -707,12 +1052,16 @@ export function MailShell({ onOpenSettings }: Props) {
   const heading = activeLocalView
     ? activeLocalView === "drafts"
       ? strings.mail.drafts
-      : strings.mail.outbox
+      : activeLocalView === "snoozed"
+        ? strings.mail.snoozed
+        : strings.mail.outbox
     : (activeMailbox?.displayName ?? strings.mail.mail);
   const shownCount = activeLocalView
     ? activeLocalView === "drafts"
       ? drafts.length
-      : outbox.length
+      : activeLocalView === "snoozed"
+        ? snoozed.length
+        : outbox.length
     : messages.length;
   const shellClass = `mail-shell pane-${settings.readingPane} ${sidebarOpen ? "sidebar-open" : ""} ${selectedMessage ? "message-open" : ""}`;
 
@@ -857,6 +1206,7 @@ export function MailShell({ onOpenSettings }: Props) {
                 queryRef.current = "";
                 setQuery("");
                 setAllFolders(false);
+                resetListState();
                 selectAccount(event.target.value);
               }}
             >
@@ -888,6 +1238,7 @@ export function MailShell({ onOpenSettings }: Props) {
               searchRequest.current += 1;
               queryRef.current = "";
               setQuery("");
+              resetListState();
               selectLocalView("drafts");
               setSidebarOpen(false);
             }}
@@ -903,13 +1254,73 @@ export function MailShell({ onOpenSettings }: Props) {
               searchRequest.current += 1;
               queryRef.current = "";
               setQuery("");
+              resetListState();
               selectLocalView("outbox");
+              setSidebarOpen(false);
+            }}
+          />
+          <FolderButton
+            icon={Clock}
+            label={strings.mail.snoozed}
+            count={snoozed.length}
+            active={activeLocalView === "snoozed"}
+            onClick={() => {
+              messageRequest.current += 1;
+              searchRequest.current += 1;
+              queryRef.current = "";
+              setQuery("");
+              resetListState();
+              selectLocalView("snoozed");
               setSidebarOpen(false);
             }}
           />
           <p className="sidebar-section-title">{strings.mail.mailboxes}</p>
           {mailboxes.map((mailbox) => {
             const Icon = folderIcons[mailbox.role];
+            const personal = mailbox.role === "other";
+            if (
+              folderDialog?.mode === "rename" &&
+              folderDialog.id === mailbox.id
+            ) {
+              return (
+                <form
+                  key={mailbox.id}
+                  className="folder-dialog"
+                  onKeyDown={folderDialogKeyDown}
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void submitFolderDialog();
+                  }}
+                >
+                  <label>
+                    <span className="visually-hidden">
+                      {strings.mail.folderName}
+                    </span>
+                    <input
+                      autoFocus
+                      value={folderName}
+                      maxLength={128}
+                      onChange={(event) => setFolderName(event.target.value)}
+                      placeholder={strings.mail.folderName}
+                    />
+                  </label>
+                  <button
+                    type="submit"
+                    className="primary-button"
+                    disabled={folderBusy || !folderName.trim()}
+                  >
+                    {strings.mail.rename}
+                  </button>
+                  <button
+                    type="button"
+                    className="toolbar-button"
+                    onClick={() => closeFolderDialog()}
+                  >
+                    {strings.common.cancel}
+                  </button>
+                </form>
+              );
+            }
             return (
               <FolderButton
                 key={mailbox.id}
@@ -924,13 +1335,90 @@ export function MailShell({ onOpenSettings }: Props) {
                   searchRequest.current += 1;
                   queryRef.current = "";
                   setQuery("");
+                  resetListState();
                   selectMailbox(mailbox.id);
                   setSidebarOpen(false);
                   if (sameMailbox) void loadMessages();
                 }}
+                onRename={
+                  personal
+                    ? () => {
+                        openFolderDialog({
+                          mode: "rename",
+                          id: mailbox.id,
+                          name: mailbox.displayName,
+                        });
+                      }
+                    : undefined
+                }
+                onDelete={
+                  personal
+                    ? () =>
+                        void deleteFolderById(mailbox.id, mailbox.displayName)
+                    : undefined
+                }
               />
             );
           })}
+          {folderDialog?.mode === "create" ? (
+            <form
+              className="folder-dialog"
+              onKeyDown={folderDialogKeyDown}
+              onSubmit={(event) => {
+                event.preventDefault();
+                void submitFolderDialog();
+              }}
+            >
+              <label>
+                <span className="visually-hidden">
+                  {strings.mail.folderName}
+                </span>
+                <input
+                  autoFocus
+                  value={folderName}
+                  maxLength={128}
+                  onChange={(event) => setFolderName(event.target.value)}
+                  placeholder={strings.mail.folderName}
+                />
+              </label>
+              <button
+                type="submit"
+                className="primary-button"
+                disabled={folderBusy || !folderName.trim()}
+              >
+                {strings.mail.createFolder}
+              </button>
+              <button
+                type="button"
+                className="toolbar-button"
+                onClick={() => closeFolderDialog()}
+              >
+                {strings.common.cancel}
+              </button>
+            </form>
+          ) : (
+            <button
+              type="button"
+              className="add-account-button"
+              ref={newFolderButtonRef}
+              onClick={() => {
+                openFolderDialog({ mode: "create" });
+              }}
+            >
+              <FolderPlus aria-hidden="true" /> {strings.mail.newFolder}
+            </button>
+          )}
+          {mailboxes.some(
+            (mailbox) => mailbox.role === "trash" && mailbox.totalCount > 0,
+          ) ? (
+            <button
+              type="button"
+              className="add-account-button"
+              onClick={() => void emptyTrashFolders()}
+            >
+              <Trash2 aria-hidden="true" /> {strings.mail.emptyTrash}
+            </button>
+          ) : null}
         </nav>
         <div
           className={`sync-indicator ${sync?.phase ?? "idle"}`}
@@ -965,33 +1453,110 @@ export function MailShell({ onOpenSettings }: Props) {
             <h1>{heading}</h1>
             <small>{strings.mail.itemCount(shownCount)}</small>
           </span>
-          {query && !activeLocalView ? (
+          <div className="pane-heading-actions">
+            {!activeLocalView ? (
+              <>
+                <button
+                  type="button"
+                  className="toolbar-button"
+                  onClick={() => void markAllRead()}
+                  disabled={bulkBusy}
+                >
+                  <MailOpen aria-hidden="true" /> {strings.mail.markAllRead}
+                </button>
+                <button
+                  type="button"
+                  className="toolbar-button"
+                  aria-pressed={selecting}
+                  onClick={() => {
+                    setSelecting((value) => !value);
+                    setSelectedIds([]);
+                  }}
+                >
+                  {selecting ? strings.mail.doneSelecting : strings.mail.select}
+                </button>
+              </>
+            ) : null}
+            {query && !activeLocalView ? (
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => {
+                  messageRequest.current += 1;
+                  searchRequest.current += 1;
+                  queryRef.current = "";
+                  setQuery("");
+                  void loadMessages();
+                }}
+              >
+                {strings.mail.clearSearch}
+              </button>
+            ) : null}
+          </div>
+        </div>
+        {selecting && !activeLocalView ? (
+          <div
+            className="bulk-bar"
+            role="toolbar"
+            aria-label={strings.mail.selectedCount(selectedIds.length)}
+          >
+            <strong>{strings.mail.selectedCount(selectedIds.length)}</strong>
             <button
               type="button"
-              className="text-button"
-              onClick={() => {
-                messageRequest.current += 1;
-                searchRequest.current += 1;
-                queryRef.current = "";
-                setQuery("");
-                void loadMessages();
-              }}
+              disabled={selectedIds.length === 0 || bulkBusy}
+              onClick={() => void bulkFlags(true, undefined)}
             >
-              {strings.mail.clearSearch}
+              <MailOpen aria-hidden="true" /> {strings.reader.markRead}
             </button>
-          ) : null}
-        </div>
+            <button
+              type="button"
+              disabled={selectedIds.length === 0 || bulkBusy}
+              onClick={() => void bulkFlags(false, undefined)}
+            >
+              <Mail aria-hidden="true" /> {strings.reader.markUnread}
+            </button>
+            <button
+              type="button"
+              disabled={selectedIds.length === 0 || bulkBusy}
+              onClick={() => void bulkMove("archive")}
+            >
+              <Archive aria-hidden="true" /> {strings.reader.archive}
+            </button>
+            <button
+              type="button"
+              disabled={selectedIds.length === 0 || bulkBusy}
+              onClick={() => void bulkMove("junk")}
+            >
+              <ShieldAlert aria-hidden="true" /> {strings.reader.junk}
+            </button>
+            <button
+              type="button"
+              disabled={selectedIds.length === 0 || bulkBusy}
+              onClick={() => void bulkMove("trash")}
+            >
+              <Trash2 aria-hidden="true" /> {strings.reader.trash}
+            </button>
+          </div>
+        ) : null}
         {activeLocalView === "drafts" ? (
           <DraftList drafts={drafts} onOpen={openDraft} />
+        ) : activeLocalView === "snoozed" ? (
+          <SnoozedList
+            items={snoozed}
+            onOpen={chooseSnoozed}
+            onUnsnooze={unsnoozeById}
+          />
         ) : activeLocalView === "outbox" ? (
           <OutboxList
             items={outbox}
             onRetry={retryQueued}
             onRetryCopy={retrySentCopy}
+            onSendNow={sendScheduledNow}
             onDiscard={discardQueued}
           />
         ) : (
           <MessageList
+            key={`${activeAccountId}:${activeMailboxId ?? ""}:${activeLocalView ?? ""}:${query.trim()}`}
             messages={messages}
             selectedId={selectedMessage?.id}
             loading={loadingMessages}
@@ -1000,6 +1565,9 @@ export function MailShell({ onOpenSettings }: Props) {
             hasMore={hasMoreMessages}
             onLoadMore={loadMoreMessages}
             searchQuery={query.trim()}
+            selecting={selecting}
+            selectedIds={selectedIds}
+            onToggleSelect={toggleSelectMessage}
             onClearSearch={() => {
               queryRef.current = "";
               setQuery("");
@@ -1086,7 +1654,7 @@ function PaneSplitter({
       aria-valuenow={Math.round(value)}
       aria-valuemin={min}
       aria-valuemax={max}
-      aria-valuetext={`${Math.round(value)} pixels`}
+      aria-valuetext={strings.mail.paneSize(Math.round(value))}
       tabIndex={0}
       onKeyDown={(event) => {
         const decrement =
@@ -1159,6 +1727,8 @@ function FolderButton({
   active,
   tone,
   onClick,
+  onRename,
+  onDelete,
 }: {
   icon: typeof Inbox;
   label: string;
@@ -1166,18 +1736,44 @@ function FolderButton({
   active: boolean;
   tone?: "warning";
   onClick: () => void;
+  onRename?: () => void;
+  onDelete?: () => void;
 }) {
   return (
-    <button
-      type="button"
-      className={`folder ${active ? "active" : ""} ${tone ?? ""}`}
-      onClick={onClick}
-      aria-current={active ? "page" : undefined}
-    >
-      <Icon aria-hidden="true" />
-      <span>{label}</span>
-      {count > 0 ? <strong>{count > 999 ? "999+" : count}</strong> : null}
-    </button>
+    <div className="folder-row">
+      <button
+        type="button"
+        className={`folder ${active ? "active" : ""} ${tone ?? ""}`}
+        onClick={onClick}
+        aria-current={active ? "page" : undefined}
+      >
+        <Icon aria-hidden="true" />
+        <span>{label}</span>
+        {count > 0 ? <strong>{count > 999 ? "999+" : count}</strong> : null}
+      </button>
+      {onRename ? (
+        <button
+          type="button"
+          className="icon-button folder-action"
+          onClick={onRename}
+          aria-label={`${strings.mail.rename} ${label}`}
+          title={`${strings.mail.rename} ${label}`}
+        >
+          <Pencil aria-hidden="true" />
+        </button>
+      ) : null}
+      {onDelete ? (
+        <button
+          type="button"
+          className="icon-button folder-action"
+          onClick={onDelete}
+          aria-label={`${strings.mail.deleteFolder}: ${label}`}
+          title={`${strings.mail.deleteFolder}: ${label}`}
+        >
+          <Trash2 aria-hidden="true" />
+        </button>
+      ) : null}
+    </div>
   );
 }
 
@@ -1223,6 +1819,9 @@ function MessageList({
   onLoadMore,
   searchQuery,
   onClearSearch,
+  selecting,
+  selectedIds,
+  onToggleSelect,
 }: {
   messages: MessageSummary[];
   selectedId?: number;
@@ -1233,8 +1832,18 @@ function MessageList({
   onLoadMore: () => Promise<void>;
   searchQuery?: string;
   onClearSearch?: () => void;
+  selecting?: boolean;
+  selectedIds?: number[];
+  onToggleSelect?: (id: number) => void;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
+  const [expandedThreads, setExpandedThreads] = useState<string[]>([]);
+
+  function toggleThread(key: string) {
+    setExpandedThreads((prev) =>
+      prev.includes(key) ? prev.filter((item) => item !== key) : [...prev, key],
+    );
+  }
 
   useEffect(() => {
     const selected = listRef.current?.querySelector<HTMLElement>(
@@ -1244,6 +1853,20 @@ function MessageList({
     selected.scrollIntoView?.({ block: "nearest" });
     if (listRef.current?.contains(document.activeElement)) selected.focus();
   }, [selectedId]);
+
+  // The open message's thread stays expanded without storing it:
+  // deriving keeps render pure and survives list reloads.
+  const selectedThreadKey = selectedId
+    ? groupThreads(messages).find(
+        (group) =>
+          group.items.length > 1 &&
+          group.items.some((item) => item.id === selectedId),
+      )?.key
+    : undefined;
+  const effectiveExpanded =
+    selectedThreadKey && !expandedThreads.includes(selectedThreadKey)
+      ? [...expandedThreads, selectedThreadKey]
+      : expandedThreads;
 
   if (loading && messages.length === 0)
     return (
@@ -1274,6 +1897,107 @@ function MessageList({
       </div>
     );
   }
+  function renderRow(message: MessageSummary, index: number) {
+    const checked = selecting && (selectedIds ?? []).includes(message.id);
+    const rowLabel = [
+      message.isRead ? strings.mail.read : strings.mail.unread,
+      message.isStarred ? strings.mail.starred : null,
+      message.senderName || message.senderAddress,
+      message.subject || strings.common.noSubject,
+      formatMessageDate(message.receivedAt),
+      message.hasAttachments ? strings.mail.hasAttachments : null,
+    ]
+      .filter(Boolean)
+      .join(", ");
+    return (
+      <div key={message.id} className="message-row-wrap">
+        {selecting ? (
+          <input
+            type="checkbox"
+            className="message-select"
+            checked={checked}
+            onChange={() => onToggleSelect?.(message.id)}
+            aria-label={strings.mail.selectMessage(
+              message.subject || strings.common.noSubject,
+            )}
+          />
+        ) : null}
+        <button
+          type="button"
+          role="option"
+          aria-selected={selecting ? checked : selectedId === message.id}
+          tabIndex={
+            selecting
+              ? 0
+              : selectedId === message.id || (!selectedId && index === 0)
+                ? 0
+                : -1
+          }
+          aria-label={rowLabel}
+          className={`message-row ${message.isRead ? "read" : "unread"} ${!selecting && selectedId === message.id ? "selected" : ""} ${checked ? "checked" : ""}`}
+          onClick={() =>
+            selecting ? onToggleSelect?.(message.id) : void onChoose(message)
+          }
+          onKeyDown={(event) => {
+            if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key))
+              return;
+            event.preventDefault();
+            event.stopPropagation();
+            const nextIndex =
+              event.key === "Home"
+                ? 0
+                : event.key === "End"
+                  ? messages.length - 1
+                  : Math.max(
+                      0,
+                      Math.min(
+                        messages.length - 1,
+                        index + (event.key === "ArrowDown" ? 1 : -1),
+                      ),
+                    );
+            const next = messages[nextIndex];
+            if (!next || next.id === message.id) return;
+            if (selecting) {
+              const list = event.currentTarget.closest("[role='listbox']");
+              list
+                ?.querySelectorAll<HTMLElement>("[role='option']")
+                ?.[nextIndex]?.focus();
+              return;
+            }
+            void onChoose(next);
+          }}
+        >
+          <span
+            className="unread-dot"
+            aria-label={
+              message.isRead ? strings.mail.read : strings.mail.unread
+            }
+          />
+          <span className="message-sender">
+            {message.senderName || message.senderAddress}
+          </span>
+          <time className="message-date" dateTime={message.receivedAt}>
+            {formatMessageDate(message.receivedAt)}
+          </time>
+          <span className="message-subject">
+            {message.isStarred ? (
+              <Star fill="currentColor" aria-label={strings.mail.starred} />
+            ) : null}
+            <span>{message.subject || strings.common.noSubject}</span>
+            {message.hasAttachments ? (
+              <Paperclip aria-label={strings.mail.hasAttachments} />
+            ) : null}
+          </span>
+          <span className="message-preview">
+            {loadingMessageId === message.id
+              ? strings.mail.downloadingMessage
+              : message.preview || strings.mail.openToDownload}
+          </span>
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="message-list">
       <div
@@ -1282,76 +2006,65 @@ function MessageList({
         aria-label={strings.mail.messages}
         aria-busy={loading}
       >
-        {messages.map((message, index) => (
-          <button
-            key={message.id}
-            type="button"
-            role="option"
-            aria-selected={selectedId === message.id}
-            tabIndex={
-              selectedId === message.id || (!selectedId && index === 0) ? 0 : -1
-            }
-            aria-label={[
-              message.isRead ? strings.mail.read : strings.mail.unread,
-              message.isStarred ? strings.mail.starred : null,
-              message.senderName || message.senderAddress,
-              message.subject || strings.common.noSubject,
-              formatMessageDate(message.receivedAt),
-              message.hasAttachments ? strings.mail.hasAttachments : null,
-            ]
-              .filter(Boolean)
-              .join(", ")}
-            className={`message-row ${message.isRead ? "read" : "unread"} ${selectedId === message.id ? "selected" : ""}`}
-            onClick={() => void onChoose(message)}
-            onKeyDown={(event) => {
-              if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key))
-                return;
-              event.preventDefault();
-              event.stopPropagation();
-              const nextIndex =
-                event.key === "Home"
-                  ? 0
-                  : event.key === "End"
-                    ? messages.length - 1
-                    : Math.max(
-                        0,
-                        Math.min(
-                          messages.length - 1,
-                          index + (event.key === "ArrowDown" ? 1 : -1),
-                        ),
-                      );
-              const next = messages[nextIndex];
-              if (next && next.id !== message.id) void onChoose(next);
-            }}
-          >
-            <span
-              className="unread-dot"
-              aria-label={
-                message.isRead ? strings.mail.read : strings.mail.unread
+        {selecting
+          ? messages.map((message, index) => renderRow(message, index))
+          : groupThreads(messages).map((group) => {
+              if (group.items.length === 1) {
+                return renderRow(group.newest, messages.indexOf(group.newest));
               }
-            />
-            <span className="message-sender">
-              {message.senderName || message.senderAddress}
-            </span>
-            <time className="message-date" dateTime={message.receivedAt}>
-              {formatMessageDate(message.receivedAt)}
-            </time>
-            <span className="message-subject">
-              {message.isStarred ? (
-                <Star fill="currentColor" aria-label={strings.mail.starred} />
-              ) : null}
-              <span>{message.subject || strings.common.noSubject}</span>
-              {message.hasAttachments ? (
-                <Paperclip aria-label={strings.mail.hasAttachments} />
-              ) : null}
-            </span>
-            <span className="message-preview">
-              {loadingMessageId === message.id
-                ? strings.mail.downloadingMessage
-                : message.preview || strings.mail.openToDownload}
-            </span>
-          </button>
-        ))}
+              const expanded = effectiveExpanded.includes(group.key);
+              return (
+                <div key={group.key} className="thread-group">
+                  <button
+                    type="button"
+                    className={`message-row thread-header ${group.newest.id === selectedId ? "selected" : ""}`}
+                    aria-expanded={expanded}
+                    onClick={() => toggleThread(group.key)}
+                    aria-label={[
+                      strings.mail.conversation,
+                      group.newest.subject || strings.common.noSubject,
+                      strings.mail.threadMessages(group.items.length),
+                      group.unread > 0
+                        ? strings.mail.threadUnread(group.unread)
+                        : null,
+                    ]
+                      .filter(Boolean)
+                      .join(", ")}
+                  >
+                    <span
+                      className="unread-dot"
+                      aria-hidden="true"
+                      data-unread={group.unread > 0}
+                    />
+                    <span className="message-sender">
+                      {group.newest.senderName || group.newest.senderAddress}
+                    </span>
+                    <time
+                      className="message-date"
+                      dateTime={group.newest.receivedAt}
+                    >
+                      {formatMessageDate(group.newest.receivedAt)}
+                    </time>
+                    <span className="message-subject">
+                      <span>
+                        {group.newest.subject || strings.common.noSubject}
+                      </span>
+                      <strong className="thread-count">
+                        {group.items.length}
+                      </strong>
+                    </span>
+                    <span className="message-preview">
+                      {group.newest.preview || strings.mail.openToDownload}
+                    </span>
+                  </button>
+                  {expanded
+                    ? group.items.map((message) =>
+                        renderRow(message, messages.indexOf(message)),
+                      )
+                    : null}
+                </div>
+              );
+            })}
       </div>
       {hasMore ? (
         <button
@@ -1392,6 +2105,69 @@ function AddAccountDialog({
       >
         <SetupWizard onComplete={onComplete} />
       </section>
+    </div>
+  );
+}
+
+function SnoozedList({
+  items,
+  onOpen,
+  onUnsnooze,
+}: {
+  items: ReturnType<typeof useAppStore.getState>["snoozed"];
+  onOpen: (message: MessageSummary) => Promise<void>;
+  onUnsnooze: (id: number) => Promise<void>;
+}) {
+  if (items.length === 0)
+    return (
+      <div className="list-state" role="status" aria-live="polite">
+        {strings.mail.noSnoozed}
+      </div>
+    );
+  return (
+    <div className="local-mail-list">
+      {items.map((item) => (
+        <div key={item.message.id} className="message-row-wrap">
+          <button
+            type="button"
+            className="local-mail-row snoozed-row"
+            onClick={() => void onOpen(item.message)}
+            aria-label={[
+              item.message.isRead ? strings.mail.read : strings.mail.unread,
+              item.message.senderName || item.message.senderAddress,
+              item.message.subject || strings.common.noSubject,
+              strings.mail.snoozedUntil(formatMessageDate(item.snoozedUntil)),
+            ].join(", ")}
+          >
+            <Clock aria-hidden="true" />
+            <span>
+              <strong>
+                {item.message.subject || strings.common.noSubject}
+              </strong>
+              <small>
+                {item.message.senderName || item.message.senderAddress}
+              </small>
+              <small>
+                {strings.mail.snoozedUntil(
+                  formatMessageDate(item.snoozedUntil),
+                )}
+              </small>
+            </span>
+            <time dateTime={item.message.receivedAt}>
+              {formatMessageDate(item.message.receivedAt)}
+            </time>
+          </button>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={() => void onUnsnooze(item.message.id)}
+            aria-label={`${strings.mail.unsnooze}: ${item.message.subject || strings.common.noSubject}`}
+            title={strings.mail.unsnooze}
+          >
+            <X aria-hidden="true" />
+          </button>
+        </div>
+      ))}
     </div>
   );
 }
@@ -1453,16 +2229,25 @@ function OutboxList({
   items,
   onRetry,
   onRetryCopy,
+  onSendNow,
   onDiscard,
 }: {
   items: ReturnType<typeof useAppStore.getState>["outbox"];
   onRetry: (id: string) => Promise<void>;
   onRetryCopy: (id: string) => Promise<void>;
+  onSendNow: (id: string) => Promise<void>;
   onDiscard: (
     id: string,
     state: ReturnType<typeof useAppStore.getState>["outbox"][number]["state"],
   ) => Promise<void>;
 }) {
+  const hasScheduled = items.some((item) => item.state === "scheduled");
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!hasScheduled) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [hasScheduled]);
   if (items.length === 0)
     return (
       <div className="list-state" role="status" aria-live="polite">
@@ -1482,6 +2267,16 @@ function OutboxList({
             <strong>{item.subject || strings.common.noSubject}</strong>
             <small>{item.recipients || strings.mail.noRecipient}</small>
             <small>{item.detail}</small>
+            {item.state === "scheduled" && item.sendAt ? (
+              <small className="status-label">
+                {strings.mail.sendIn(
+                  Math.max(
+                    0,
+                    Math.round((new Date(item.sendAt).getTime() - now) / 1000),
+                  ),
+                )}
+              </small>
+            ) : null}
             <small className="status-label">
               {item.state === "queued"
                 ? strings.mail.waitingSend
@@ -1489,7 +2284,9 @@ function OutboxList({
                   ? strings.mail.sending
                   : item.state === "sent_copy_pending"
                     ? strings.mail.sentCopyPending
-                    : strings.mail.needsAttention}
+                    : item.state === "scheduled"
+                      ? strings.mail.scheduledWaiting
+                      : strings.mail.needsAttention}
             </small>
           </span>
           <div>
@@ -1501,6 +2298,10 @@ function OutboxList({
               <button type="button" onClick={() => void onRetryCopy(item.id)}>
                 {strings.mail.saveSentCopy}
               </button>
+            ) : item.state === "scheduled" ? (
+              <button type="button" onClick={() => void onSendNow(item.id)}>
+                {strings.mail.sendNow}
+              </button>
             ) : null}
             <button
               type="button"
@@ -1509,7 +2310,9 @@ function OutboxList({
             >
               {item.state === "sent_copy_pending"
                 ? strings.mail.dismissWarning
-                : strings.common.discard}
+                : item.state === "scheduled"
+                  ? strings.mail.undoSend
+                  : strings.common.discard}
             </button>
           </div>
         </article>

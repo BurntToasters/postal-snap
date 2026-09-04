@@ -9,7 +9,9 @@ async function installMockIpc(page: Page) {
       email: "sam@icloud.com",
       displayName: "Sam",
       syncState: "idle",
-      error: null,
+      error: location.search.includes("authError")
+        ? "Sign-in failed. Update the account password in Settings > Accounts."
+        : null,
     };
     const mailboxes = [
       {
@@ -30,6 +32,15 @@ async function installMockIpc(page: Page) {
         unreadCount: 0,
         totalCount: 0,
       },
+      {
+        id: 3,
+        accountId: account.id,
+        name: "Deleted Messages",
+        displayName: "Deleted Messages",
+        role: "trash",
+        unreadCount: 0,
+        totalCount: 2,
+      },
     ];
     const summary = {
       id: 10,
@@ -47,6 +58,7 @@ async function installMockIpc(page: Page) {
       isStarred: false,
       hasAttachments: false,
       size: 512,
+      threadRoot: null as string | null,
     };
     const olderSummary = {
       ...summary,
@@ -56,8 +68,14 @@ async function installMockIpc(page: Page) {
       subject: "Older family note",
       receivedAt: "2026-08-17T12:00:00Z",
     };
+    if (location.search.includes("threaded")) {
+      summary.threadRoot = "<weekend@example.com>";
+      olderSummary.threadRoot = "<weekend@example.com>";
+    }
     const state = {
       added: false,
+      discarded: false,
+      snoozed: false,
       sentDraft: undefined as unknown,
       setupRequest: undefined as unknown,
       remoteFetches: 0,
@@ -67,6 +85,7 @@ async function installMockIpc(page: Page) {
       exportedSettings: 0,
       importedSettings: 0,
       resetSettings: 0,
+      rules: [] as Array<Record<string, unknown>>,
       callbacks: new Map<number, (...args: unknown[]) => void>(),
       eventListeners: new Map<string, Set<number>>(),
       nextCallback: 1,
@@ -135,6 +154,39 @@ async function installMockIpc(page: Page) {
             case "test_account":
               state.setupRequest = args.request;
               return undefined;
+            case "update_account_password":
+              state.setupRequest = args.password;
+              account.error = null;
+              return { ...account };
+            case "update_account_signature":
+              (account as { signature?: string }).signature = String(
+                args.signature,
+              );
+              return { ...account };
+            case "list_filter_rules":
+              state.rules = state.rules ?? [];
+              return state.rules;
+            case "create_filter_rule": {
+              const rule = args.rule as Record<string, unknown>;
+              const created = {
+                ...rule,
+                id: `rule-${state.rules.length + 1}`,
+              };
+              state.rules.push(created);
+              return created;
+            }
+            case "update_filter_rule": {
+              const rule = args.rule as Record<string, unknown>;
+              state.rules = state.rules.map((item) =>
+                item.id === rule.id ? rule : item,
+              );
+              return rule;
+            }
+            case "delete_filter_rule":
+              state.rules = state.rules.filter(
+                (rule) => rule.id !== args.ruleId,
+              );
+              return undefined;
             case "add_account":
               if (location.search.includes("setupFail")) {
                 throw {
@@ -190,27 +242,35 @@ async function installMockIpc(page: Page) {
                   : [],
               };
             case "list_outbox":
-              return location.search.includes("localMail")
-                ? [
-                    {
-                      id: "outbox-1",
-                      accountId: account.id,
-                      recipients: "lee@example.com",
-                      subject: "Could not confirm",
-                      state: location.search.includes("sentCopy")
-                        ? "sent_copy_pending"
-                        : location.search.includes("queued")
-                          ? "queued"
-                          : "needs_attention",
-                      detail: location.search.includes("sentCopy")
-                        ? "Message sent. Its Sent-folder copy is waiting for a safe retry."
-                        : location.search.includes("queued")
-                          ? "Waiting for a secure mail connection."
-                          : "Delivery could not be confirmed.",
-                      createdAt: "2026-08-18T11:00:00Z",
-                    },
-                  ]
-                : [];
+              if (!location.search.includes("localMail") || state.discarded) {
+                return [];
+              }
+              return [
+                {
+                  id: "outbox-1",
+                  accountId: account.id,
+                  recipients: "lee@example.com",
+                  subject: "Could not confirm",
+                  state: location.search.includes("sentCopy")
+                    ? "sent_copy_pending"
+                    : location.search.includes("queued")
+                      ? "queued"
+                      : location.search.includes("scheduled")
+                        ? "scheduled"
+                        : "needs_attention",
+                  detail: location.search.includes("sentCopy")
+                    ? "Message sent. Its Sent-folder copy is waiting for a safe retry."
+                    : location.search.includes("queued")
+                      ? "Waiting for a secure mail connection."
+                      : location.search.includes("scheduled")
+                        ? "Held for review. Undo anytime before it sends."
+                        : "Delivery could not be confirmed.",
+                  createdAt: "2026-08-18T11:00:00Z",
+                  sendAt: location.search.includes("scheduled")
+                    ? new Date(Date.now() + 60_000).toISOString()
+                    : null,
+                },
+              ];
             case "get_outbox":
               return {
                 accountId: account.id,
@@ -228,6 +288,15 @@ async function installMockIpc(page: Page) {
             case "retry_sent_copy":
               return { id: "outbox-1", state: "sent", detail: null };
             case "delete_outbox":
+              state.discarded = true;
+              return undefined;
+            case "snooze_message":
+              state.snoozed = true;
+              return undefined;
+            case "unsnooze_message":
+              return undefined;
+            case "list_snoozed":
+              return [];
             case "delete_draft":
               return undefined;
             case "list_messages":
@@ -277,7 +346,18 @@ async function installMockIpc(page: Page) {
                         inline: true,
                       },
                     ]
-                  : [],
+                  : location.search.includes("previewable")
+                    ? [
+                        {
+                          id: "attach-1",
+                          filename: "family.png",
+                          contentType: "image/png",
+                          size: 128,
+                          contentId: null,
+                          inline: false,
+                        },
+                      ]
+                    : [],
               };
             case "set_message_flags":
               if (typeof args.isRead === "boolean") {
@@ -299,9 +379,65 @@ async function installMockIpc(page: Page) {
               mailboxes[1].totalCount = 1;
               mailboxes[1].unreadCount = summary.isRead ? 0 : 1;
               return undefined;
+            case "set_messages_flags": {
+              const ids = (args.messageIds ?? []) as number[];
+              if (args.isRead === true) summary.isRead = true;
+              return { updated: ids.length, queued: 0, failed: 0 };
+            }
+            case "move_messages_to_mailbox":
+              state.moved = true;
+              return {
+                updated: ((args.messageIds ?? []) as number[]).length,
+                queued: 0,
+                failed: 0,
+              };
+            case "mark_mailbox_read":
+              summary.isRead = true;
+              mailboxes[0].unreadCount = 0;
+              return { updated: 1, queued: 0, failed: 0 };
             case "sync_account":
             case "release_compose_attachments":
               return undefined;
+            case "create_folder": {
+              const name = String(args.name);
+              const id =
+                Math.max(...mailboxes.map((mailbox) => mailbox.id)) + 1;
+              mailboxes.push({
+                id,
+                accountId: account.id,
+                name,
+                displayName: name,
+                role: "other",
+                unreadCount: 0,
+                totalCount: 0,
+              });
+              return undefined;
+            }
+            case "rename_folder": {
+              const mailbox = mailboxes.find(
+                (entry) => entry.id === Number(args.mailboxId),
+              );
+              if (mailbox) {
+                mailbox.name = String(args.name);
+                mailbox.displayName = String(args.name);
+              }
+              return undefined;
+            }
+            case "delete_folder": {
+              const index = mailboxes.findIndex(
+                (entry) => entry.id === Number(args.mailboxId),
+              );
+              if (index >= 0) mailboxes.splice(index, 1);
+              return undefined;
+            }
+            case "empty_trash": {
+              const trash = mailboxes.find((entry) => entry.role === "trash");
+              if (trash) {
+                trash.totalCount = 0;
+                trash.unreadCount = 0;
+              }
+              return undefined;
+            }
             case "save_draft":
               return { id: "draft-1", syncState: "localPending" };
             case "send_message":
@@ -309,6 +445,22 @@ async function installMockIpc(page: Page) {
               return { id: "outbox-1", state: "sent", detail: null };
             case "choose_attachments":
               return [];
+            case "preview_attachment":
+              return {
+                filename: "family.png",
+                contentType: "image/png",
+                size: 128,
+                text: null,
+                imageDataUrl: "data:image/png;base64,iVBORw0KGgo=",
+              };
+            case "suggest_recipients":
+              return [
+                {
+                  address: "jane@example.com",
+                  name: "Jane",
+                  useCount: 3,
+                },
+              ];
             case "prepare_forward_attachments":
               return location.search.includes("forwardAttachment")
                 ? [
@@ -635,9 +787,9 @@ test("reads, replies, and sends through typed IPC", async ({ page }) => {
     page.getByRole("heading", { name: "Weekend plans" }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Reply", exact: true }).click();
-  await expect(page.getByRole("textbox", { name: "To" })).toHaveValue(
-    "jane@example.com",
-  );
+  await expect(
+    page.getByRole("combobox", { name: "To", exact: true }),
+  ).toHaveValue("jane@example.com");
   await expect(page.getByRole("textbox", { name: "From" })).toHaveValue(
     /Sam <sam@icloud.com>/,
   );
@@ -710,9 +862,9 @@ test("opens local drafts and makes uncertain sends explicit", async ({
   await page.getByRole("button", { name: /^Drafts/ }).click();
   await expect(page.getByRole("heading", { name: "Drafts" })).toBeVisible();
   await page.getByRole("button", { name: /Family update/i }).click();
-  await expect(page.getByRole("textbox", { name: "To" })).toHaveValue(
-    "pat@example.com",
-  );
+  await expect(
+    page.getByRole("combobox", { name: "To", exact: true }),
+  ).toHaveValue("pat@example.com");
   await page
     .locator(".composer-window")
     .getByRole("button", { name: "Save draft and close" })
@@ -818,7 +970,9 @@ test("loads older mail with cursor pagination", async ({ page }) => {
 test("validates recipients before sending", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Write" }).click();
-  await page.getByRole("textbox", { name: "To" }).fill("not-an-address");
+  await page
+    .getByRole("combobox", { name: "To", exact: true })
+    .fill("not-an-address");
   await page.getByRole("textbox", { name: "Subject" }).click();
   await expect(page.getByRole("alert")).toContainText(
     "Check each recipient address",
@@ -869,9 +1023,9 @@ test("replies from the Mail shortcut and shows a From address", async ({
     page.getByRole("heading", { name: "Weekend plans" }),
   ).toBeVisible();
   await page.keyboard.press("Meta+r");
-  await expect(page.getByRole("textbox", { name: "To" })).toHaveValue(
-    "jane@example.com",
-  );
+  await expect(
+    page.getByRole("combobox", { name: "To", exact: true }),
+  ).toHaveValue("jane@example.com");
   await expect(page.getByRole("textbox", { name: "From" })).toHaveValue(
     /Sam <sam@icloud.com>/,
   );
@@ -996,4 +1150,161 @@ test("announces failed sign-ins as alerts", async ({ page }) => {
   await page.getByLabel("App-specific password").fill("wrong-password");
   await page.getByRole("button", { name: "Connect securely" }).click();
   await expect(page.getByRole("alert")).toBeVisible();
+});
+
+test("creates, renames, and deletes personal folders", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "New folder" }).click();
+  await page.getByPlaceholder("Folder name").fill("Receipts");
+  await page.getByRole("button", { name: "Create folder" }).click();
+  await expect(page.getByRole("button", { name: /^Receipts/ })).toBeVisible();
+
+  await page.getByRole("button", { name: "Rename Receipts" }).click();
+  await page.getByPlaceholder("Folder name").fill("Bills");
+  await page.getByRole("button", { name: "Rename", exact: true }).click();
+  await expect(page.getByRole("button", { name: /^Bills/ })).toBeVisible();
+
+  page.once("dialog", (dialog) => void dialog.accept());
+  await page.getByRole("button", { name: "Delete folder: Bills" }).click();
+  await expect(page.getByRole("button", { name: /^Bills/ })).toHaveCount(0);
+});
+
+test("empties trash only after confirmation", async ({ page }) => {
+  await page.goto("/");
+  page.once("dialog", (dialog) => void dialog.accept());
+  await page.getByRole("button", { name: "Empty trash" }).click();
+  await expect(page.getByRole("button", { name: "Empty trash" })).toBeHidden();
+});
+
+test("recovers expired passwords without removing the account", async ({
+  page,
+}) => {
+  await page.goto("/?authError=1");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("tab", { name: "Accounts" }).click();
+  await expect(page.getByRole("alert")).toContainText("Sign-in failed");
+  await page.getByLabel("Update password").fill("new-app-password");
+  await page.getByRole("button", { name: "Update password" }).click();
+  await expect(page.getByText(/Password updated/)).toBeVisible();
+});
+
+test("triages several messages at once", async ({ page }) => {
+  await page.goto("/?pagination=1");
+  await expect(
+    page.getByRole("option", { name: /Weekend plans/i }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Select" }).click();
+  await page.getByRole("checkbox", { name: /Weekend plans/i }).check();
+  await expect(page.getByRole("toolbar", { name: "1 selected" })).toBeVisible();
+  await page.getByRole("button", { name: "Mark read", exact: true }).click();
+  await expect(page.getByRole("toolbar", { name: "1 selected" })).toBeHidden();
+
+  await page.getByRole("button", { name: "Mark all read" }).click();
+  await expect(page.getByRole("button", { name: /^Inbox/ })).not.toContainText(
+    "1",
+  );
+});
+
+test("completes recipients from send history", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Write", exact: true }).click();
+  await page.getByPlaceholder("name@example.com").fill("jan");
+  await expect(
+    page.getByRole("option", { name: /jane@example.com/i }),
+  ).toBeVisible();
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  await expect(page.getByPlaceholder("name@example.com")).toHaveValue(
+    /jane@example.com/,
+  );
+});
+
+test("previews image attachments without downloading", async ({ page }) => {
+  await page.goto("/?previewable=1");
+  await page.getByRole("option", { name: /Weekend plans/i }).click();
+  await page.getByRole("button", { name: "Preview: family.png" }).click();
+  const dialog = page.getByRole("dialog", { name: "Preview of family.png" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator("img")).toHaveAttribute(
+    "src",
+    /^data:image\/png;base64,/,
+  );
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+});
+
+test("groups threaded replies behind one row", async ({ page }) => {
+  await page.goto("/?threaded=1&pagination=1");
+  await expect(
+    page.getByRole("option", { name: /Weekend plans/i }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Load older mail" }).click();
+  const header = page.getByRole("button", {
+    name: /Conversation.*2 messages/i,
+  });
+  await expect(header).toBeVisible();
+  await expect(
+    page.getByRole("option", { name: /Weekend plans/i }),
+  ).toHaveCount(0);
+  await header.click();
+  await expect(
+    page.getByRole("option", { name: /Weekend plans/i }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("option", { name: /Older family note/i }),
+  ).toBeVisible();
+});
+
+test("saves a per-account signature", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("tab", { name: "Accounts" }).click();
+  await page.getByLabel("Email signature").fill("Best,\nSam");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByText(/Signature saved/)).toBeVisible();
+});
+
+test("creates, disables, and deletes a mail rule", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("tab", { name: "Accounts" }).click();
+  await page.getByLabel("Rule name").fill("Bills");
+  await page.getByLabel("Text to match").fill("power.example.com");
+  await page.getByRole("button", { name: "Add rule" }).click();
+  await expect(page.getByText(/Rule saved/)).toBeVisible();
+
+  const ruleRow = page.getByText("Bills").locator("xpath=ancestor::li");
+  await ruleRow.getByRole("button", { name: /^Bills: On$/ }).click();
+  page.once("dialog", (dialog) => void dialog.accept());
+  await ruleRow.getByRole("button", { name: "Remove" }).click();
+  await expect(page.getByText(/Rule removed/)).toBeVisible();
+  await expect(page.getByText("Bills")).toBeHidden();
+});
+
+test("undoes a held message before it sends", async ({ page }) => {
+  await page.goto("/?localMail=1&scheduled=1");
+  await page.getByRole("button", { name: /^Outbox/ }).click();
+  await expect(page.getByText("Held for review")).toBeVisible();
+  page.once("dialog", (dialog) => void dialog.accept());
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect(page.getByText("Held for review")).toBeHidden();
+});
+
+test("snoozes a message until tomorrow morning", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("option", { name: /Weekend plans/i }).click();
+  await page.getByRole("button", { name: "Snooze", exact: true }).click();
+  await page.getByRole("button", { name: "Tomorrow morning" }).click();
+  await expect(
+    page.getByRole("button", { name: "Tomorrow morning" }),
+  ).toBeHidden();
+  const snoozed = await page.evaluate(
+    () =>
+      (
+        window as typeof window & {
+          __POSTAL_SNAP_TEST__: { snoozed: boolean };
+        }
+      ).__POSTAL_SNAP_TEST__.snoozed,
+  );
+  expect(snoozed).toBe(true);
 });
