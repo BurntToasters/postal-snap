@@ -1,4 +1,11 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import {
   isPermissionGranted,
@@ -34,12 +41,14 @@ export default function App() {
   const composerOpen = useAppStore((state) => state.composerOpen);
   const composerAccountId = useAppStore((state) => state.composerAccountId);
   const composeSeed = useAppStore((state) => state.composeSeed);
+  const composeNonce = useAppStore((state) => state.composeNonce);
   const openComposer = useAppStore((state) => state.openComposer);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
   const [settingsRouteRequest, setSettingsRouteRequest] = useState(0);
   const [startupError, setStartupError] = useState<string>();
   const [ready, setReady] = useState(!inTauri());
+  const loadRequest = useRef(0);
 
   const openSettings = useCallback((tab: SettingsTab = "general") => {
     setSettingsTab(tab);
@@ -48,6 +57,7 @@ export default function App() {
   }, []);
 
   const loadAccounts = useCallback(async () => {
+    const request = ++loadRequest.current;
     try {
       const [
         loadedAccounts,
@@ -60,6 +70,7 @@ export default function App() {
         api.getStartupNotice(),
         api.getStartupError(),
       ]);
+      if (request !== loadRequest.current) return;
       if (nativeStartupError) {
         setStartupError(nativeStartupError);
         return;
@@ -74,7 +85,9 @@ export default function App() {
           .catch(() => undefined);
       }
     } catch {
-      setStartupError(strings.app.startupRecoveryHelp);
+      if (request === loadRequest.current) {
+        setStartupError(strings.app.startupRecoveryHelp);
+      }
     } finally {
       setReady(true);
     }
@@ -224,7 +237,7 @@ export default function App() {
           }
         >
           <Composer
-            key={`${composerAccountId}:${composeSeed?.draft?.id ?? composeSeed?.sourceMessage?.id ?? "new"}`}
+            key={`${composerAccountId}:${composeSeed?.draft?.id ?? composeSeed?.sourceMessage?.id ?? "new"}:${composeSeed?.composeMode ?? ""}:${composeNonce}`}
             accountId={composerAccountId}
           />
         </Suspense>

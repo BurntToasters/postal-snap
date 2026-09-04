@@ -2,7 +2,7 @@
   .mail-shell,
   .mail-shell.pane-bottom,
   .mail-shell.pane-hidden {
-    grid-template-columns: var(--message-pane-width, 390px) 5px minmax(
+    grid-template-columns: var(--message-pane-width, 400px) 5px minmax(
         360px,
         1fr
       );
@@ -339,10 +339,12 @@
     outline-offset: -2px;
   }
 
-  .unread-dot,
-  .sync-indicator > span:first-child,
   .update-ready-badge .badge-dot {
     forced-color-adjust: none;
+  }
+
+  .unread-dot {
+    border: 1px solid CanvasText;
   }
 }
 

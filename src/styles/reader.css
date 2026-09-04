@@ -23,11 +23,11 @@
 
 .reader-actions {
   display: flex;
-  min-height: 58px;
+  min-height: 64px;
   flex-wrap: wrap;
   align-items: center;
-  gap: 5px;
-  padding: 7px 14px;
+  gap: 8px;
+  padding: 10px 16px;
   overflow: auto;
   border-bottom: 1px solid var(--border);
 }
@@ -89,7 +89,7 @@
   display: grid;
   grid-template-columns: 42px minmax(0, 1fr) auto;
   gap: 8px 11px;
-  padding: 18px 20px 14px;
+  padding: 22px 24px 18px;
   border-bottom: 1px solid var(--border);
 }
 
@@ -345,6 +345,9 @@
   overflow-wrap: anywhere;
   font: inherit;
   line-height: 1.55;
+  /* The body stays white in both themes so sender content keeps its
+     contrast; pin the ink color to match the framed HTML document. */
+  color: #20252b;
 }
 
 .plain-text-body a {
@@ -407,4 +410,131 @@
 
 .attachment-list small {
   color: var(--text-muted);
+}
+
+.attachment-row {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.attachment-row .attachment-download-button {
+  flex: 1;
+  min-width: 0;
+}
+
+.attachment-row .attachment-preview-button {
+  flex: 0 0 auto;
+}
+
+.attachment-preview-layer {
+  z-index: 40;
+}
+
+.attachment-preview-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(720px, 94vw);
+  max-height: 88vh;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.attachment-preview-dialog header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.attachment-preview-dialog header > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.attachment-preview-dialog h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-preview-dialog header small {
+  color: var(--text-muted);
+}
+
+.attachment-preview-dialog footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+}
+
+.attachment-preview-body {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  padding: 18px;
+  display: grid;
+  place-items: center;
+  background: var(--surface-muted);
+}
+
+.attachment-preview-body img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+}
+
+.attachment-preview-body pre {
+  width: 100%;
+  margin: 0;
+  padding: 16px;
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  line-height: 1.55;
+  max-height: 60vh;
+  overflow: auto;
+}
+
+.snooze-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-muted);
+}
+
+.snooze-panel button {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  white-space: nowrap;
+}
+
+.snooze-panel button:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.snooze-panel input[type="datetime-local"] {
+  min-height: 44px;
+  width: auto;
 }

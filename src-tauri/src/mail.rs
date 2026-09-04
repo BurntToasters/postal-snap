@@ -329,12 +329,13 @@ async fn cache_uid_range(
 ) -> Result<FetchOutcome, String> {
     let mut fetched = tokio::time::timeout(
         IMAP_COMMAND_TIMEOUT,
-        session.uid_fetch(range, "(UID FLAGS RFC822.SIZE INTERNALDATE ENVELOPE)"),
+        session.uid_fetch(range, "(UID FLAGS RFC822.SIZE INTERNALDATE ENVELOPE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID IN-REPLY-TO REFERENCES)])"),
     )
     .await
     .map_err(|_| "Message list download timed out.".to_string())?
     .map_err(|error| redact_error(&error, "Message list download"))?;
     let mut age_marks: Vec<(u32, bool)> = Vec::new();
+    let mut threaded: Vec<String> = Vec::new();
     loop {
         let next = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, fetched.try_next())
             .await
@@ -366,7 +367,14 @@ async fn cache_uid_range(
             age_marks.push((uid, is_old));
         }
         db.upsert_envelope(account_id, mailbox_id, &parsed)?;
+        threaded.push(
+            parsed
+                .message_id
+                .clone()
+                .unwrap_or_else(|| crate::db::synthetic_thread_id(mailbox_id, parsed.uid)),
+        );
     }
+    let _ = db.repair_thread_roots(account_id, &threaded);
     age_marks.sort_unstable_by_key(|(uid, _)| *uid);
     let mut consecutive_old = 0u32;
     for (_, is_old) in age_marks {
@@ -472,6 +480,10 @@ pub async fn server_search(
             .map_err(|error| redact_error(&error, "Server search"))?;
         if let Some(expected_uid_validity) = db.mailbox_uid_validity(&account.summary.id, &name)? {
             if selected.uid_validity != Some(expected_uid_validity) {
+                // The cached generation is stale; caching new-generation UIDs
+                // against it would corrupt the mailbox. Purge and let the
+                // next sync repopulate instead.
+                let _ = db.purge_stale_mailbox(&account.summary.id, &name, mailbox_id);
                 continue;
             }
         }
@@ -499,7 +511,7 @@ pub async fn server_search(
         let fetched = tokio::time::timeout(
             IMAP_COMMAND_TIMEOUT,
             session
-                .uid_fetch(set, "(UID FLAGS RFC822.SIZE INTERNALDATE ENVELOPE)")
+                .uid_fetch(set, "(UID FLAGS RFC822.SIZE INTERNALDATE ENVELOPE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID IN-REPLY-TO REFERENCES)])")
                 .await
                 .map_err(|error| redact_error(&error, "Server search"))?
                 .try_collect::<Vec<_>>(),
@@ -524,6 +536,17 @@ pub async fn server_search(
                 results.push(summary);
             }
         }
+        let threaded: Vec<String> = results
+            .iter()
+            .filter(|summary| summary.mailbox_id == mailbox_id)
+            .map(|summary| {
+                summary
+                    .message_id
+                    .clone()
+                    .unwrap_or_else(|| crate::db::synthetic_thread_id(mailbox_id, summary.uid))
+            })
+            .collect();
+        let _ = db.repair_thread_roots(&account.summary.id, &threaded);
     }
     let _ = session.logout().await;
     results.sort_by(|left, right| {
@@ -637,6 +660,11 @@ async fn download_uncached_bodies(
             parse_message(uid, raw, flags.contains("seen"), flags.contains("flagged"))
         {
             let _ = db.upsert_message(account_id, mailbox_id, &parsed);
+            let id = parsed
+                .message_id
+                .clone()
+                .unwrap_or_else(|| crate::db::synthetic_thread_id(mailbox_id, parsed.uid));
+            let _ = db.repair_thread_roots(account_id, &[id]);
         }
     }
     Ok(())
@@ -842,6 +870,30 @@ pub async fn set_remote_flags(
     is_read: Option<bool>,
     is_starred: Option<bool>,
 ) -> Result<(), String> {
+    set_remote_uid_flags(
+        account,
+        password,
+        mailbox,
+        &[uid],
+        expected_uid_validity,
+        is_read,
+        is_starred,
+    )
+    .await
+}
+
+pub async fn set_remote_uid_flags(
+    account: &AccountRecord,
+    password: &str,
+    mailbox: &str,
+    uids: &[u32],
+    expected_uid_validity: Option<u32>,
+    is_read: Option<bool>,
+    is_starred: Option<bool>,
+) -> Result<(), String> {
+    if uids.is_empty() {
+        return Ok(());
+    }
     let mut session = connect_imap(&account.imap, password).await?;
     let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(mailbox))
         .await
@@ -850,6 +902,11 @@ pub async fn set_remote_flags(
     if expected_uid_validity.is_some() && selected.uid_validity != expected_uid_validity {
         return Err("This mailbox changed; refresh mail and try again.".into());
     }
+    let set = uids
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
     if let Some(value) = is_read {
         let operation = if value {
             "+FLAGS.SILENT (\\Seen)"
@@ -858,7 +915,7 @@ pub async fn set_remote_flags(
         };
         tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
             session
-                .uid_store(uid.to_string(), operation)
+                .uid_store(set.clone(), operation)
                 .await
                 .map_err(|error| redact_error(&error, "Message update"))?
                 .try_collect::<Vec<_>>()
@@ -876,7 +933,7 @@ pub async fn set_remote_flags(
         };
         tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
             session
-                .uid_store(uid.to_string(), operation)
+                .uid_store(set, operation)
                 .await
                 .map_err(|error| redact_error(&error, "Message update"))?
                 .try_collect::<Vec<_>>()
@@ -898,6 +955,28 @@ pub async fn move_remote(
     uid: u32,
     expected_uid_validity: Option<u32>,
 ) -> Result<(), String> {
+    move_remote_uids(
+        account,
+        password,
+        source,
+        destination,
+        &[uid],
+        expected_uid_validity,
+    )
+    .await
+}
+
+pub async fn move_remote_uids(
+    account: &AccountRecord,
+    password: &str,
+    source: &str,
+    destination: &str,
+    uids: &[u32],
+    expected_uid_validity: Option<u32>,
+) -> Result<(), String> {
+    if uids.is_empty() {
+        return Ok(());
+    }
     let mut session = connect_imap(&account.imap, password).await?;
     let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(source))
         .await
@@ -906,29 +985,31 @@ pub async fn move_remote(
     if expected_uid_validity.is_some() && selected.uid_validity != expected_uid_validity {
         return Err("This mailbox changed; refresh mail and try again.".into());
     }
+    let set = uids
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
     let capabilities = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.capabilities())
         .await
         .map_err(|_| "Move timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Move capability check"))?;
     if capabilities.has_str("MOVE") {
-        tokio::time::timeout(
-            IMAP_COMMAND_TIMEOUT,
-            session.uid_mv(uid.to_string(), destination),
-        )
-        .await
-        .map_err(|_| "Move timed out.".to_string())?
-        .map_err(|error| redact_error(&error, "Move"))?;
+        tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.uid_mv(set, destination))
+            .await
+            .map_err(|_| "Move timed out.".to_string())?
+            .map_err(|error| redact_error(&error, "Move"))?;
     } else if capabilities.has_str("UIDPLUS") {
         tokio::time::timeout(
             IMAP_COMMAND_TIMEOUT,
-            session.uid_copy(uid.to_string(), destination),
+            session.uid_copy(set.clone(), destination),
         )
         .await
         .map_err(|_| "Move timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Move"))?;
         tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
             session
-                .uid_store(uid.to_string(), "+FLAGS.SILENT (\\Deleted)")
+                .uid_store(set.clone(), "+FLAGS.SILENT (\\Deleted)")
                 .await
                 .map_err(|error| redact_error(&error, "Move"))?
                 .try_collect::<Vec<_>>()
@@ -939,7 +1020,7 @@ pub async fn move_remote(
         .map_err(|_| "Move timed out.".to_string())??;
         tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
             session
-                .uid_expunge(uid.to_string())
+                .uid_expunge(set)
                 .await
                 .map_err(|error| redact_error(&error, "Move"))?
                 .try_collect::<Vec<_>>()
@@ -951,6 +1032,129 @@ pub async fn move_remote(
     } else {
         return Err("This mail server cannot safely move messages.".into());
     }
+    let _ = session.logout().await;
+    Ok(())
+}
+
+pub async fn create_folder(
+    account: &AccountRecord,
+    password: &str,
+    name: &str,
+) -> Result<(), String> {
+    let mut session = connect_imap(&account.imap, password).await?;
+    let result = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.create(name))
+        .await
+        .map_err(|_| "Creating the folder timed out.".to_string())?
+        .map_err(|error| redact_error(&error, "Folder creation"));
+    let _ = session.logout().await;
+    result
+}
+
+pub async fn rename_folder(
+    account: &AccountRecord,
+    password: &str,
+    old_name: &str,
+    new_name: &str,
+) -> Result<(), String> {
+    let mut session = connect_imap(&account.imap, password).await?;
+    let result = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.rename(old_name, new_name))
+        .await
+        .map_err(|_| "Renaming the folder timed out.".to_string())?
+        .map_err(|error| redact_error(&error, "Folder rename"));
+    let _ = session.logout().await;
+    result
+}
+
+pub async fn delete_folder(
+    account: &AccountRecord,
+    password: &str,
+    name: &str,
+) -> Result<(), String> {
+    let mut session = connect_imap(&account.imap, password).await?;
+    let result = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.delete(name))
+        .await
+        .map_err(|_| "Deleting the folder timed out.".to_string())?
+        .map_err(|error| redact_error(&error, "Folder deletion"));
+    let _ = session.logout().await;
+    result
+}
+
+pub async fn empty_folder(
+    account: &AccountRecord,
+    password: &str,
+    name: &str,
+    expected_uid_validity: Option<u32>,
+    protected_uids: &[u32],
+) -> Result<(), String> {
+    let mut session = connect_imap(&account.imap, password).await?;
+    let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(name))
+        .await
+        .map_err(|_| "Emptying the folder timed out.".to_string())?
+        .map_err(|error| redact_error(&error, "Folder empty"))?;
+    if expected_uid_validity.is_some() && selected.uid_validity != expected_uid_validity {
+        return Err("This mailbox changed; refresh mail and try again.".into());
+    }
+    if selected.exists == 0 {
+        let _ = session.logout().await;
+        return Ok(());
+    }
+    let all_uids: Vec<u32> = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.uid_search("ALL"))
+        .await
+        .map_err(|_| "Emptying the folder timed out.".to_string())?
+        .map_err(|error| redact_error(&error, "Folder empty"))?
+        .into_iter()
+        .collect();
+    if all_uids.is_empty() {
+        let _ = session.logout().await;
+        return Ok(());
+    }
+    let set = all_uids
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
+        session
+            .uid_store(set.clone(), "+FLAGS.SILENT (\\Deleted)")
+            .await
+            .map_err(|error| redact_error(&error, "Folder empty"))?
+            .try_collect::<Vec<_>>()
+            .await
+            .map_err(|error| redact_error(&error, "Folder empty"))
+    })
+    .await
+    .map_err(|_| "Emptying the folder timed out.".to_string())??;
+    // Messages with queued moves hide in Trash; unflag them so the expunge
+    // below cannot destroy a move that has not replayed yet.
+    if !protected_uids.is_empty() {
+        let protected = protected_uids
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
+            session
+                .uid_store(protected, "-FLAGS.SILENT (\\Deleted)")
+                .await
+                .map_err(|error| redact_error(&error, "Folder empty"))?
+                .try_collect::<Vec<_>>()
+                .await
+                .map_err(|error| redact_error(&error, "Folder empty"))
+        })
+        .await
+        .map_err(|_| "Emptying the folder timed out.".to_string())??;
+    }
+    tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
+        session
+            .uid_expunge(set)
+            .await
+            .map_err(|error| redact_error(&error, "Folder empty"))?
+            .try_collect::<Vec<_>>()
+            .await
+            .map_err(|error| redact_error(&error, "Folder empty"))
+    })
+    .await
+    .map_err(|_| "Emptying the folder timed out.".to_string())??;
     let _ = session.logout().await;
     Ok(())
 }
@@ -1579,6 +1783,31 @@ fn safe_thread_header(value: &str) -> String {
         .collect()
 }
 
+fn escape_signature_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// Append the account signature once, with the conventional `-- ` marker.
+/// Retries reuse the queued draft, so the contains-check keeps it singular.
+pub fn apply_signature(mut draft: ComposeDraft, signature: &str) -> ComposeDraft {
+    let signature = signature.trim();
+    if signature.is_empty() || draft.text_body.contains(signature) {
+        return draft;
+    }
+    draft.text_body = format!("{}\n\n-- \n{signature}", draft.text_body.trim_end());
+    let html_lines = escape_signature_html(signature).replace('\n', "<br>");
+    if draft.html_body.trim().is_empty() {
+        draft.html_body = format!("<p>-- </p><p>{html_lines}</p>");
+    } else {
+        draft.html_body = format!("{}<br><br>-- <br>{html_lines}", draft.html_body);
+    }
+    draft
+}
+
 fn parse_mailbox(value: &str) -> Result<Mailbox, String> {
     value
         .parse()
@@ -1654,11 +1883,63 @@ fn parse_envelope(
         to,
         cc,
         reply_to,
+        thread_parent: thread_parent_from_fetch(fetch),
         text_body: String::new(),
         html_body: None,
         attachments: Vec::new(),
         raw_message: Vec::new(),
     })
+}
+
+/// Thread parent (normalized In-Reply-To, else last References id) from an
+/// IMAP ENVELOPE+HEADER.FIELDS fetch. Missing on servers that omit headers.
+fn thread_parent_from_fetch(fetch: &async_imap::types::Fetch) -> Option<String> {
+    let raw = fetch.header()?;
+    let text = std::str::from_utf8(raw).ok()?;
+    let mut unfolded = String::with_capacity(text.len());
+    for line in text.lines() {
+        if line.starts_with([' ', '\t']) {
+            unfolded.push(' ');
+            unfolded.push_str(line.trim());
+        } else {
+            unfolded.push('\n');
+            unfolded.push_str(line);
+        }
+    }
+    let mut in_reply_to = None;
+    let mut references = Vec::new();
+    for line in unfolded.lines() {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        match name.trim().to_ascii_lowercase().as_str() {
+            "in-reply-to" => {
+                if in_reply_to.is_none() {
+                    in_reply_to = message_ids_in(value).into_iter().next();
+                }
+            }
+            "references" => references.extend(message_ids_in(value)),
+            _ => {}
+        }
+    }
+    in_reply_to.or_else(|| references.into_iter().next_back())
+}
+
+fn message_ids_in(value: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    let mut rest = value;
+    while let Some(start) = rest.find('<') {
+        let after = &rest[start + 1..];
+        if let Some(end) = after.find('>') {
+            if let Some(normalized) = normalize_rfc_message_id(&after[..end]) {
+                ids.push(normalized);
+            }
+            rest = &after[end + 1..];
+        } else {
+            break;
+        }
+    }
+    ids
 }
 
 fn decode_imap_text(value: &[u8]) -> String {
@@ -1779,6 +2060,18 @@ fn parse_message(
         to,
         cc,
         reply_to,
+        thread_parent: message
+            .in_reply_to()
+            .as_text()
+            .and_then(|value| message_ids_in(value).into_iter().next())
+            .or_else(|| {
+                message.references().as_text_list().and_then(|values| {
+                    values
+                        .iter()
+                        .flat_map(|value| message_ids_in(value))
+                        .next_back()
+                })
+            }),
         text_body,
         html_body,
         attachments,
@@ -1848,7 +2141,7 @@ fn normalize_rfc_message_id(value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{AccountSummary, ComposeAttachment};
+    use crate::models::{AccountSummary, ComposeAttachment, ComposeDraft};
 
     #[test]
     fn parses_and_decodes_mime_message() {
@@ -1885,6 +2178,8 @@ mod tests {
                 sync_state: "idle".into(),
                 error: None,
                 aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
             },
             imap: ServerConfig {
                 host: "imap.example.com".into(),
@@ -1934,6 +2229,35 @@ mod tests {
         assert_ne!(first, attachment_id("photo.jpg", None, 2048, 0));
     }
 
+    fn blank_draft() -> ComposeDraft {
+        ComposeDraft {
+            id: None,
+            account_id: "account-1".into(),
+            from: None,
+            to: vec!["jane@example.com".into()],
+            cc: vec![],
+            bcc: vec![],
+            subject: "Hello".into(),
+            html_body: "<p>Hello</p>".into(),
+            text_body: "Hello".into(),
+            attachments: vec![],
+            in_reply_to: None,
+            references: None,
+        }
+    }
+
+    #[test]
+    fn signatures_append_once_with_escaping() {
+        let plain = apply_signature(blank_draft(), "");
+        assert_eq!(plain.text_body, "Hello");
+        let signed = apply_signature(blank_draft(), "Best,\nSam <sam>");
+        assert!(signed.text_body.ends_with("\n\n-- \nBest,\nSam <sam>"));
+        assert!(signed.html_body.contains("-- <br>Best,<br>Sam &lt;sam&gt;"));
+        let twice = apply_signature(signed.clone(), "Best,\nSam <sam>");
+        assert_eq!(twice.text_body, signed.text_body);
+        assert_eq!(twice.html_body, signed.html_body);
+    }
+
     #[test]
     fn preserves_inline_part_content_type_and_content_id() {
         let raw = b"From: Jane <jane@example.com>\r\nTo: Sam <sam@example.com>\r\nSubject: Photo\r\nContent-Type: multipart/related; boundary=postal\r\n\r\n--postal\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<p>Photo</p><img src=\"cid:family-photo@example.com\">\r\n--postal\r\nContent-Type: image/png\r\nContent-Disposition: inline; filename=\"family\"\r\nContent-ID: <family-photo@example.com>\r\nContent-Transfer-Encoding: base64\r\n\r\naGVsbG8=\r\n--postal--\r\n";
@@ -1966,6 +2290,8 @@ mod tests {
                 sync_state: "idle".into(),
                 error: None,
                 aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
             },
             imap: ServerConfig {
                 host: "imap.example.com".into(),
@@ -2013,6 +2339,8 @@ mod tests {
                 sync_state: "idle".into(),
                 error: None,
                 aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
             },
             imap: ServerConfig {
                 host: "imap.example.com".into(),
@@ -2069,6 +2397,8 @@ mod tests {
                 sync_state: "idle".into(),
                 error: None,
                 aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
             },
             imap: ServerConfig {
                 host: "localhost".into(),

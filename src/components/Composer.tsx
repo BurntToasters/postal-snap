@@ -48,7 +48,11 @@ import { shortcutMod } from "../format";
 import { strings } from "../i18n";
 import { htmlToPlainText, sanitizeReceivedHtml } from "../security";
 import { useAppStore, type ComposerSeed } from "../store";
-import type { ComposeAttachment, ComposeDraft } from "../types";
+import type {
+  ComposeAttachment,
+  ComposeDraft,
+  RecipientSuggestion,
+} from "../types";
 import { moveToolbarFocus } from "./toolbarNav";
 import { useDialogFocus } from "./useDialogFocus";
 
@@ -179,15 +183,14 @@ export function Composer({ accountId }: Props) {
 
   const [minimized, setMinimized] = useState(false);
   const [maximized, setMaximized] = useState(false);
-  const [prevSeed, setPrevSeed] = useState(seed);
-  if (seed !== prevSeed) {
-    setPrevSeed(seed);
-    setMinimized(false);
-  }
   const close = useAppStore((state) => state.closeComposer);
   const setError = useAppStore((state) => state.setError);
-  const [to, setTo] = useState(seedRecipients(seed, "to", accountEmail));
-  const [cc, setCc] = useState(seedRecipients(seed, "cc", accountEmail));
+  const [to, setTo] = useState(
+    seedRecipients(seed, "to", accountEmail, account?.aliases),
+  );
+  const [cc, setCc] = useState(
+    seedRecipients(seed, "cc", accountEmail, account?.aliases),
+  );
   const [bcc, setBcc] = useState(
     seed?.draft?.bcc.join(", ") ?? seed?.prefill?.bcc?.join(", ") ?? "",
   );
@@ -216,6 +219,10 @@ export function Composer({ accountId }: Props) {
   const isDiscarding = useRef(false);
   const draftRevision = useRef(0);
   const saveInFlight = useRef(false);
+  const pendingClose = useRef(false);
+  const saveDraftRef = useRef<(showStatus?: boolean) => Promise<void>>(() =>
+    Promise.resolve(),
+  );
   const markUnsaved = useCallback(() => {
     draftRevision.current += 1;
     setSaveState("unsaved");
@@ -377,6 +384,15 @@ export function Composer({ accountId }: Props) {
           })
           .finally(() => {
             saveInFlight.current = false;
+            if (pendingClose.current) {
+              pendingClose.current = false;
+              void saveDraftRef.current(true);
+            } else if (
+              !isDiscarding.current &&
+              draftRevision.current !== revision
+            ) {
+              void saveDraftRef.current(false);
+            }
           });
       }
     };
@@ -424,13 +440,30 @@ export function Composer({ accountId }: Props) {
         setError(String(cause));
       } finally {
         saveInFlight.current = false;
+        if (pendingClose.current) {
+          pendingClose.current = false;
+          void saveDraftRef.current(true);
+        } else if (
+          !isDiscarding.current &&
+          draftRevision.current !== revision
+        ) {
+          void saveDraftRef.current(false);
+        }
       }
     },
     [accountId, buildDraft, close, editor, sending, setError],
   );
 
+  useEffect(() => {
+    saveDraftRef.current = saveDraft;
+  }, [saveDraft]);
+
   async function requestClose() {
-    if (sending || isDiscarding.current || saveInFlight.current) return;
+    if (isDiscarding.current) return;
+    if (sending || saveInFlight.current) {
+      pendingClose.current = true;
+      return;
+    }
     const draft = buildDraft();
     if (!hasDraftContent(draft, editor?.getText() ?? "")) {
       close();
@@ -486,11 +519,15 @@ export function Composer({ accountId }: Props) {
     setRecipientError(validation);
     setSubjectError(subjectValidation);
     if (!canSend || validation || subjectValidation) return;
+    pendingClose.current = false;
     setSending(true);
     try {
       const outcome = await api.sendMessage(buildDraft());
       announceLocalMailChanged(accountId);
       if (outcome.detail) setError(outcome.detail);
+      if (outcome.state === "scheduled") {
+        useAppStore.getState().selectLocalView("outbox");
+      }
       close();
     } catch (cause) {
       announceLocalMailChanged(accountId);
@@ -558,12 +595,13 @@ export function Composer({ accountId }: Props) {
 
   function addLink() {
     const current = editor?.getAttributes("link").href as string | undefined;
-    const href = window.prompt(
+    const raw = window.prompt(
       strings.composer.webAddress,
       current ?? "https://",
     );
-    if (href === null) return;
-    if (!/^(https?|mailto):/i.test(href)) {
+    if (raw === null) return;
+    const href = raw.trim().slice(0, 2000);
+    if (!/^(https?|mailto):/i.test(href) || /\s/.test(href)) {
       setError(strings.composer.unsafeLink);
       return;
     }
@@ -612,7 +650,7 @@ export function Composer({ accountId }: Props) {
     return (
       <div
         className="composer-docked-pill"
-        role="dialog"
+        role="region"
         aria-label={composerTitle(seed)}
       >
         <button
@@ -771,22 +809,26 @@ export function Composer({ accountId }: Props) {
               <input readOnly value={fromValue} aria-readonly="true" />
             )}
           </label>
-          <label className="to-field">
-            <span>{strings.composer.to}</span>
-            <input
-              autoFocus
-              value={to}
-              onChange={(event) => {
-                setTo(event.target.value);
-                markUnsaved();
-              }}
-              onBlur={() =>
-                setRecipientError(validateRecipientFields(to, cc, bcc))
-              }
-              placeholder={strings.composer.addressPlaceholder}
-              aria-invalid={Boolean(recipientError)}
-              aria-describedby={recipientError ? "recipient-error" : undefined}
-            />
+          <div className="to-field-row">
+            <label className="to-field">
+              <span>{strings.composer.to}</span>
+              <RecipientField
+                id="composer-to"
+                accountId={accountId}
+                value={to}
+                onChange={(value) => {
+                  setTo(value);
+                  markUnsaved();
+                }}
+                onBlur={() =>
+                  setRecipientError(validateRecipientFields(to, cc, bcc))
+                }
+                placeholder={strings.composer.addressPlaceholder}
+                autoFocus
+                ariaInvalid={Boolean(recipientError)}
+                ariaDescribedBy={recipientError ? "recipient-error" : undefined}
+              />
+            </label>
             <button
               type="button"
               className="cc-toggle"
@@ -798,35 +840,39 @@ export function Composer({ accountId }: Props) {
             >
               {strings.composer.ccBcc}
             </button>
-          </label>
+          </div>
           {showCc ? (
             <>
               <label>
                 <span>{strings.composer.cc}</span>
-                <input
+                <RecipientField
+                  id="composer-cc"
+                  accountId={accountId}
                   value={cc}
-                  onChange={(event) => {
-                    setCc(event.target.value);
+                  onChange={(value) => {
+                    setCc(value);
                     markUnsaved();
                   }}
                   onBlur={() =>
                     setRecipientError(validateRecipientFields(to, cc, bcc))
                   }
-                  aria-invalid={Boolean(recipientError)}
+                  ariaInvalid={Boolean(recipientError)}
                 />
               </label>
               <label>
                 <span>{strings.composer.bcc}</span>
-                <input
+                <RecipientField
+                  id="composer-bcc"
+                  accountId={accountId}
                   value={bcc}
-                  onChange={(event) => {
-                    setBcc(event.target.value);
+                  onChange={(value) => {
+                    setBcc(value);
                     markUnsaved();
                   }}
                   onBlur={() =>
                     setRecipientError(validateRecipientFields(to, cc, bcc))
                   }
-                  aria-invalid={Boolean(recipientError)}
+                  ariaInvalid={Boolean(recipientError)}
                 />
               </label>
             </>
@@ -958,7 +1004,15 @@ export function Composer({ accountId }: Props) {
               <input
                 type="color"
                 aria-label={strings.composer.textColor}
-                defaultValue="#20252b"
+                defaultValue={
+                  typeof document !== "undefined" &&
+                  (document.documentElement.dataset.theme === "dark" ||
+                    (document.documentElement.dataset.theme !== "light" &&
+                      window.matchMedia?.("(prefers-color-scheme: dark)")
+                        ?.matches))
+                    ? "#e8eef3"
+                    : "#20252b"
+                }
                 onChange={(event) =>
                   editor?.chain().focus().setColor(event.target.value).run()
                 }
@@ -971,7 +1025,7 @@ export function Composer({ accountId }: Props) {
                 editor
                   ?.chain()
                   .focus()
-                  .toggleHighlight({ color: "#fff1a8" })
+                  .toggleHighlight({ color: highlightColor() })
                   .run()
               }
               aria-label={strings.composer.highlight}
@@ -1232,10 +1286,179 @@ function hasDraftContent(draft: ComposeDraft, editorText: string): boolean {
     draft.attachments.length,
   );
 }
+function tokenAtCaret(
+  value: string,
+  caret: number,
+): { token: string; start: number } {
+  let start = caret;
+  while (start > 0 && value[start - 1] !== "," && value[start - 1] !== ";") {
+    start -= 1;
+  }
+  let end = caret;
+  while (end < value.length && value[end] !== "," && value[end] !== ";") {
+    end += 1;
+  }
+  return { token: value.slice(start, end).trim(), start };
+}
+
+function RecipientField({
+  id,
+  accountId,
+  value,
+  onChange,
+  onBlur,
+  placeholder,
+  autoFocus,
+  ariaInvalid,
+  ariaDescribedBy,
+}: {
+  id: string;
+  accountId: string;
+  value: string;
+  onChange: (value: string) => void;
+  onBlur?: () => void;
+  placeholder?: string;
+  autoFocus?: boolean;
+  ariaInvalid?: boolean;
+  ariaDescribedBy?: string;
+}) {
+  const [suggestions, setSuggestions] = useState<RecipientSuggestion[]>([]);
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const fetchTimer = useRef(0);
+  const listId = `${id}-suggestions`;
+
+  useEffect(
+    () => () => {
+      window.clearTimeout(fetchTimer.current);
+    },
+    [],
+  );
+
+  function requestSuggestions(nextValue: string, caret: number | null) {
+    window.clearTimeout(fetchTimer.current);
+    const position = caret ?? nextValue.length;
+    const { token } = tokenAtCaret(
+      nextValue,
+      Math.min(position, nextValue.length),
+    );
+    if (token.length < 1) {
+      setOpen(false);
+      setSuggestions([]);
+      return;
+    }
+    fetchTimer.current = window.setTimeout(() => {
+      void api
+        .suggestRecipients(accountId, token, 8)
+        .then((results) => {
+          setSuggestions(results);
+          setActiveIndex(0);
+          setOpen(results.length > 0);
+        })
+        .catch(() => undefined);
+    }, 150);
+  }
+
+  function acceptSuggestion(suggestion: RecipientSuggestion) {
+    const input = inputRef.current;
+    const caret = input?.selectionStart ?? value.length;
+    const { start } = tokenAtCaret(value, Math.min(caret, value.length));
+    let end = start;
+    while (end < value.length && value[end] !== "," && value[end] !== ";") {
+      end += 1;
+    }
+    const separator = end < value.length ? value[end] : ",";
+    const nextValue = `${value.slice(0, start)}${suggestion.address}${separator} `;
+    const nextCaret = start + suggestion.address.length + 2;
+    onChange(nextValue);
+    setOpen(false);
+    window.setTimeout(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(nextCaret, nextCaret);
+    }, 0);
+  }
+
+  return (
+    <div className="recipient-combobox">
+      <input
+        id={id}
+        ref={inputRef}
+        role="combobox"
+        aria-expanded={open}
+        aria-controls={open ? listId : undefined}
+        aria-activedescendant={open ? `${listId}-${activeIndex}` : undefined}
+        aria-autocomplete="list"
+        autoFocus={autoFocus}
+        value={value}
+        placeholder={placeholder}
+        aria-invalid={ariaInvalid}
+        aria-describedby={ariaDescribedBy}
+        onChange={(event) => {
+          onChange(event.target.value);
+          requestSuggestions(event.target.value, event.target.selectionStart);
+        }}
+        onKeyDown={(event) => {
+          if (!open) return;
+          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            event.preventDefault();
+            setActiveIndex((index) => {
+              const delta = event.key === "ArrowDown" ? 1 : -1;
+              return (index + delta + suggestions.length) % suggestions.length;
+            });
+          } else if (event.key === "Enter" || event.key === "Tab") {
+            const suggestion = suggestions[activeIndex];
+            if (suggestion) {
+              event.preventDefault();
+              acceptSuggestion(suggestion);
+            }
+          } else if (event.key === "Escape") {
+            event.preventDefault();
+            setOpen(false);
+          }
+        }}
+        onBlur={() => {
+          window.clearTimeout(fetchTimer.current);
+          setOpen(false);
+          onBlur?.();
+        }}
+      />
+      {open ? (
+        <ul
+          id={listId}
+          role="listbox"
+          aria-label={strings.composer.suggestedRecipients}
+          className="recipient-suggestions"
+        >
+          {suggestions.map((suggestion, index) => (
+            <li
+              key={suggestion.address}
+              id={`${listId}-${index}`}
+              role="option"
+              aria-selected={index === activeIndex}
+              className={index === activeIndex ? "active" : ""}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => acceptSuggestion(suggestion)}
+            >
+              <span className="suggestion-name">
+                {suggestion.name || suggestion.address}
+              </span>
+              {suggestion.name ? (
+                <span className="suggestion-address">{suggestion.address}</span>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
 function seedRecipients(
   seed: ComposerSeed | undefined,
   field: "to" | "cc",
   accountEmail: string,
+  aliases: string[] = [],
 ): string {
   if (!seed) return "";
   if (seed.draft) return seed.draft[field].join(", ");
@@ -1245,11 +1468,12 @@ function seedRecipients(
   if (seed.composeMode === "forward") return "";
   const replyAddress = message.replyTo ?? message.senderAddress;
   if (field === "to") return replyAddress ?? message.to.join(", ");
+  const ownAddresses = [accountEmail, ...aliases];
   return seed.composeMode === "replyAll"
     ? [...message.to, ...message.cc]
         .filter(
           (address) =>
-            ![accountEmail, message.senderAddress, replyAddress].some(
+            ![...ownAddresses, message.senderAddress, replyAddress].some(
               (excluded) => excluded?.toLowerCase() === address.toLowerCase(),
             ),
         )
@@ -1263,8 +1487,13 @@ function seedSubject(seed?: ComposerSeed): string {
     seed?.sourceMessage?.subject;
   if (!subject) return "";
   if (!seed?.composeMode) return subject;
-  const prefix = seed.composeMode === "forward" ? "Fwd:" : "Re:";
-  return /^(re|fwd):/i.test(subject) ? subject : `${prefix} ${subject}`;
+  const prefix =
+    seed.composeMode === "forward"
+      ? strings.composer.forwardPrefix
+      : strings.composer.replyPrefix;
+  return new RegExp(`^(${prefix}|re|fwd):`, "i").test(subject)
+    ? subject
+    : `${prefix} ${subject}`;
 }
 function seedBody(seed?: ComposerSeed): string {
   const draftHtml = seed?.draft?.htmlBody ?? seed?.prefill?.htmlBody;
@@ -1286,7 +1515,7 @@ function seedBody(seed?: ComposerSeed): string {
             message.senderAddress ||
             strings.composer.sender,
         );
-  return `<p></p><p><br></p><blockquote><p><strong>${escapeHtml(intro)}</strong></p>${message.htmlBody ? sanitizeReceivedHtml(message.htmlBody).html : `<p>${escapeHtml(message.textBody)}</p>`}</blockquote>`;
+  return `<p></p><p><br></p><blockquote><p><strong>${escapeHtml(intro)}</strong></p>${message.htmlBody ? sanitizeReceivedHtml(message.htmlBody).html : `<p>${escapeHtml(message.textBody).replace(/\n/g, "<br>")}</p>`}</blockquote>`;
 }
 
 function composerTitle(seed?: ComposerSeed): string {
@@ -1296,6 +1525,16 @@ function composerTitle(seed?: ComposerSeed): string {
   if (seed?.composeMode === "forward") return strings.composer.forward;
   return strings.composer.newMessage;
 }
+function highlightColor(): string {
+  if (typeof document === "undefined") return "#fff1a8";
+  const theme = document.documentElement.dataset.theme;
+  const dark =
+    theme === "dark" ||
+    (theme !== "light" &&
+      window.matchMedia?.("(prefers-color-scheme: dark)")?.matches);
+  return dark ? "#7a6200" : "#fff1a8";
+}
+
 function escapeHtml(value: string): string {
   return value.replace(
     /[&<>"']/g,
