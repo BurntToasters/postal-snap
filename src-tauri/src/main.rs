@@ -10,7 +10,6 @@ mod models;
 mod oauth;
 mod security;
 mod settings;
-// FUTURE IMPLEMENTATION: Native window blur / vibrancy (macOS vibrancy / Windows Mica·Acrylic, mirrored from Zinnia).
 mod window_fx;
 
 use commands::AppState;
@@ -191,7 +190,6 @@ fn main() {
             commands::show_native_confirm,
             commands::show_native_message,
             commands::relaunch_app,
-            // FUTURE IMPLEMENTATION: Native window blur / vibrancy commands
             window_fx::set_workspace_window_fx,
             window_fx::supports_workspace_window_fx,
         ])

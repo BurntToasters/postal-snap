@@ -260,4 +260,20 @@ describe("account setup", () => {
     fireEvent.click(screen.getByRole("button", { name: /Connect securely/i }));
     expect(await screen.findByRole("alert")).toBeVisible();
   });
+
+  it("clears password when leaving a provider form", () => {
+    render(<SetupWizard onComplete={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /iCloud Mail/i }));
+    const password = screen.getByLabelText(
+      /App-specific password/i,
+    ) as HTMLInputElement;
+    fireEvent.change(password, { target: { value: "abcd efgh ijkl mnop" } });
+    expect(password.value).toBe("abcd efgh ijkl mnop");
+    fireEvent.click(screen.getByRole("button", { name: /Back/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Other email/i }));
+    const nextPassword = screen.getByLabelText(
+      /Email password/i,
+    ) as HTMLInputElement;
+    expect(nextPassword.value).toBe("");
+  });
 });

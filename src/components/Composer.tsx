@@ -32,6 +32,7 @@ import {
   Maximize2,
   Minimize2,
   Minus,
+  MoreHorizontal,
   Paperclip,
   Redo2,
   RemoveFormatting,
@@ -183,6 +184,7 @@ export function Composer({ accountId }: Props) {
 
   const [minimized, setMinimized] = useState(false);
   const [maximized, setMaximized] = useState(false);
+  const [moreFormattingOpen, setMoreFormattingOpen] = useState(false);
   const close = useAppStore((state) => state.closeComposer);
   const setError = useAppStore((state) => state.setError);
   const [to, setTo] = useState(
@@ -969,6 +971,7 @@ export function Composer({ accountId }: Props) {
               type="button"
               onClick={() => editor?.chain().focus().toggleBold().run()}
               aria-label={strings.composer.bold}
+              aria-pressed={Boolean(editor?.isActive("bold"))}
               title={strings.composer.bold}
             >
               <Bold />
@@ -978,6 +981,7 @@ export function Composer({ accountId }: Props) {
               type="button"
               onClick={() => editor?.chain().focus().toggleItalic().run()}
               aria-label={strings.composer.italic}
+              aria-pressed={Boolean(editor?.isActive("italic"))}
               title={strings.composer.italic}
             >
               <Italic />
@@ -987,6 +991,7 @@ export function Composer({ accountId }: Props) {
               type="button"
               onClick={() => editor?.chain().focus().toggleUnderline().run()}
               aria-label={strings.composer.underline}
+              aria-pressed={Boolean(editor?.isActive("underline"))}
               title={strings.composer.underline}
             >
               <UnderlineIcon />
@@ -996,6 +1001,7 @@ export function Composer({ accountId }: Props) {
               type="button"
               onClick={() => editor?.chain().focus().toggleStrike().run()}
               aria-label={strings.composer.strike}
+              aria-pressed={Boolean(editor?.isActive("strike"))}
               title={strings.composer.strike}
             >
               <Strikethrough />
@@ -1021,6 +1027,7 @@ export function Composer({ accountId }: Props) {
             </label>
             <button
               type="button"
+              className={editor?.isActive("highlight") ? "active" : ""}
               onClick={() =>
                 editor
                   ?.chain()
@@ -1029,119 +1036,166 @@ export function Composer({ accountId }: Props) {
                   .run()
               }
               aria-label={strings.composer.highlight}
+              aria-pressed={Boolean(editor?.isActive("highlight"))}
               title={strings.composer.highlight}
             >
               <Highlighter />
             </button>
           </div>
 
-          <div className="toolbar-group">
+          <div className="toolbar-group format-toolbar-more">
             <button
               type="button"
-              onClick={() => editor?.chain().focus().setTextAlign("left").run()}
-              aria-label={strings.composer.alignLeft}
-              title={strings.composer.alignLeft}
+              className={moreFormattingOpen ? "active" : ""}
+              aria-expanded={moreFormattingOpen}
+              aria-controls="composer-more-formatting"
+              aria-label={strings.composer.moreFormatting}
+              title={strings.composer.moreFormatting}
+              onClick={() => setMoreFormattingOpen((value) => !value)}
             >
-              <AlignLeft />
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                editor?.chain().focus().setTextAlign("center").run()
-              }
-              aria-label={strings.composer.alignCenter}
-              title={strings.composer.alignCenter}
-            >
-              <AlignCenter />
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                editor?.chain().focus().setTextAlign("right").run()
-              }
-              aria-label={strings.composer.alignRight}
-              title={strings.composer.alignRight}
-            >
-              <AlignRight />
+              <MoreHorizontal />
             </button>
           </div>
 
-          <div className="toolbar-group">
-            <button
-              type="button"
-              onClick={() => editor?.chain().focus().toggleBulletList().run()}
-              aria-label={strings.composer.bullets}
-              title={strings.composer.bullets}
-            >
-              <List />
-            </button>
-            <button
-              type="button"
-              onClick={() => editor?.chain().focus().toggleOrderedList().run()}
-              aria-label={strings.composer.numbers}
-              title={strings.composer.numbers}
-            >
-              <ListOrdered />
-            </button>
-            <button
-              type="button"
-              onClick={() => adjustIndent(-1)}
-              aria-label={strings.composer.indentLess}
-              title={strings.composer.indentLess}
-            >
-              <IndentDecrease />
-            </button>
-            <button
-              type="button"
-              onClick={() => adjustIndent(1)}
-              aria-label={strings.composer.indentMore}
-              title={strings.composer.indentMore}
-            >
-              <IndentIncrease />
-            </button>
-          </div>
+          <div
+            id="composer-more-formatting"
+            className={`format-toolbar-secondary ${moreFormattingOpen ? "open" : ""}`}
+            hidden={!moreFormattingOpen}
+          >
+            <div className="toolbar-group">
+              <button
+                type="button"
+                className={
+                  editor?.isActive({ textAlign: "left" }) ? "active" : ""
+                }
+                onClick={() =>
+                  editor?.chain().focus().setTextAlign("left").run()
+                }
+                aria-label={strings.composer.alignLeft}
+                aria-pressed={Boolean(editor?.isActive({ textAlign: "left" }))}
+                title={strings.composer.alignLeft}
+              >
+                <AlignLeft />
+              </button>
+              <button
+                type="button"
+                className={
+                  editor?.isActive({ textAlign: "center" }) ? "active" : ""
+                }
+                onClick={() =>
+                  editor?.chain().focus().setTextAlign("center").run()
+                }
+                aria-label={strings.composer.alignCenter}
+                aria-pressed={Boolean(
+                  editor?.isActive({ textAlign: "center" }),
+                )}
+                title={strings.composer.alignCenter}
+              >
+                <AlignCenter />
+              </button>
+              <button
+                type="button"
+                className={
+                  editor?.isActive({ textAlign: "right" }) ? "active" : ""
+                }
+                onClick={() =>
+                  editor?.chain().focus().setTextAlign("right").run()
+                }
+                aria-label={strings.composer.alignRight}
+                aria-pressed={Boolean(editor?.isActive({ textAlign: "right" }))}
+                title={strings.composer.alignRight}
+              >
+                <AlignRight />
+              </button>
+            </div>
 
-          <div className="toolbar-group">
-            <button
-              type="button"
-              onClick={addLink}
-              aria-label={strings.composer.insertLink}
-              title={strings.composer.insertLink}
-            >
-              <LinkIcon />
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                editor
-                  ?.chain()
-                  .focus()
-                  .insertTable({ rows: 3, cols: 3, withHeaderRow: true })
-                  .run()
-              }
-              aria-label={strings.composer.insertTable}
-              title={strings.composer.insertTable}
-            >
-              <Table2 />
-            </button>
-            <button
-              type="button"
-              onClick={() => editor?.chain().focus().setHorizontalRule().run()}
-              aria-label={strings.composer.insertRule}
-              title={strings.composer.insertRule}
-            >
-              <Minus />
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                editor?.chain().focus().clearNodes().unsetAllMarks().run()
-              }
-              aria-label={strings.composer.clearFormatting}
-              title={strings.composer.clearFormatting}
-            >
-              <RemoveFormatting />
-            </button>
+            <div className="toolbar-group">
+              <button
+                type="button"
+                className={editor?.isActive("bulletList") ? "active" : ""}
+                onClick={() => editor?.chain().focus().toggleBulletList().run()}
+                aria-label={strings.composer.bullets}
+                aria-pressed={Boolean(editor?.isActive("bulletList"))}
+                title={strings.composer.bullets}
+              >
+                <List />
+              </button>
+              <button
+                type="button"
+                className={editor?.isActive("orderedList") ? "active" : ""}
+                onClick={() =>
+                  editor?.chain().focus().toggleOrderedList().run()
+                }
+                aria-label={strings.composer.numbers}
+                aria-pressed={Boolean(editor?.isActive("orderedList"))}
+                title={strings.composer.numbers}
+              >
+                <ListOrdered />
+              </button>
+              <button
+                type="button"
+                onClick={() => adjustIndent(-1)}
+                aria-label={strings.composer.indentLess}
+                title={strings.composer.indentLess}
+              >
+                <IndentDecrease />
+              </button>
+              <button
+                type="button"
+                onClick={() => adjustIndent(1)}
+                aria-label={strings.composer.indentMore}
+                title={strings.composer.indentMore}
+              >
+                <IndentIncrease />
+              </button>
+            </div>
+
+            <div className="toolbar-group">
+              <button
+                type="button"
+                className={editor?.isActive("link") ? "active" : ""}
+                onClick={addLink}
+                aria-label={strings.composer.insertLink}
+                aria-pressed={Boolean(editor?.isActive("link"))}
+                title={strings.composer.insertLink}
+              >
+                <LinkIcon />
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  editor
+                    ?.chain()
+                    .focus()
+                    .insertTable({ rows: 3, cols: 3, withHeaderRow: true })
+                    .run()
+                }
+                aria-label={strings.composer.insertTable}
+                title={strings.composer.insertTable}
+              >
+                <Table2 />
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  editor?.chain().focus().setHorizontalRule().run()
+                }
+                aria-label={strings.composer.insertRule}
+                title={strings.composer.insertRule}
+              >
+                <Minus />
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  editor?.chain().focus().clearNodes().unsetAllMarks().run()
+                }
+                aria-label={strings.composer.clearFormatting}
+                title={strings.composer.clearFormatting}
+              >
+                <RemoveFormatting />
+              </button>
+            </div>
           </div>
         </div>
         <EditorContent editor={editor} />
@@ -1369,7 +1423,8 @@ function RecipientField({
       end += 1;
     }
     const separator = end < value.length ? value[end] : ",";
-    const nextValue = `${value.slice(0, start)}${suggestion.address}${separator} `;
+    const remainder = end < value.length ? value.slice(end + 1) : "";
+    const nextValue = `${value.slice(0, start)}${suggestion.address}${separator} ${remainder.trimStart()}`;
     const nextCaret = start + suggestion.address.length + 2;
     onChange(nextValue);
     setOpen(false);

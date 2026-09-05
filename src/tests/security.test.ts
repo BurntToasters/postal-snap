@@ -34,6 +34,8 @@ describe("received mail isolation", () => {
     expect(document).not.toContain("allow-scripts");
     expect(document).toContain("font:24px");
     expect(document).toContain('name="viewport"');
+    expect(document).toContain("background:#ffffff");
+    expect(document).not.toContain("background:transparent");
   });
 
   it("turns CID images into inert opaque references", () => {

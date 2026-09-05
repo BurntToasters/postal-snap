@@ -11,6 +11,7 @@
   },
   "app": {
     "withGlobalTauri": false,
+    "macOSPrivateApi": true,
     "windows": [
       {
         "label": "main",
@@ -21,8 +22,7 @@
         "minHeight": 540,
         "resizable": true,
         "decorations": true,
-        "transparent": true,
-        "backgroundColor": "#f4f7fa"
+        "transparent": true
       }
     ],
     "security": {

@@ -20,7 +20,7 @@
 
 ::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb);
-  border-radius: 99px;
+  border-radius: var(--radius-pill);
   border: 2px solid transparent;
   background-clip: content-box;
 }
@@ -43,6 +43,8 @@ body,
 body {
   color: var(--text);
   background: var(--canvas);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
 }
 
 button,
@@ -55,7 +57,7 @@ textarea {
 button,
 select,
 input {
-  min-height: 44px;
+  min-height: var(--control-height);
 }
 
 button {
@@ -82,13 +84,31 @@ svg {
 }
 
 input,
-select {
+select,
+textarea {
   width: 100%;
-  padding: 8px 11px;
+  padding: 8px 12px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   color: var(--text);
   background: var(--surface);
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+input:hover,
+select:hover,
+textarea:hover {
+  border-color: var(--border-strong);
+}
+
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 .spinning {

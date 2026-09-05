@@ -2,11 +2,10 @@
   .mail-shell,
   .mail-shell.pane-bottom,
   .mail-shell.pane-hidden {
-    grid-template-columns: var(--message-pane-width, 400px) 5px minmax(
-        360px,
-        1fr
-      );
-    grid-template-rows: 58px minmax(0, 1fr);
+    grid-template-columns:
+      minmax(240px, var(--message-pane-width, 360px))
+      5px minmax(280px, 1fr);
+    grid-template-rows: var(--toolbar-height, 60px) minmax(0, 1fr);
     grid-template-areas:
       "toolbar toolbar toolbar"
       "messages reader-splitter reader";
@@ -15,8 +14,8 @@
   .mail-shell.pane-bottom {
     grid-template-columns: 1fr;
     grid-template-rows:
-      58px minmax(220px, 1fr) 5px
-      var(--reader-pane-height, 360px);
+      var(--toolbar-height, 60px) minmax(180px, 1fr) 5px
+      minmax(200px, var(--reader-pane-height, 320px));
     grid-template-areas: "toolbar" "messages" "reader-bottom-splitter" "reader";
   }
 
@@ -40,7 +39,7 @@
   .folder-pane {
     position: fixed;
     z-index: 22;
-    inset: 58px auto 0 0;
+    inset: var(--toolbar-height, 60px) auto 0 0;
     width: min(290px, 88vw);
     transform: translateX(-105%);
     visibility: hidden;
@@ -58,7 +57,7 @@
   .sidebar-scrim {
     position: fixed;
     z-index: 21;
-    inset: 58px 0 0;
+    inset: var(--toolbar-height, 60px) 0 0;
     width: 100%;
     height: auto;
     border: 0;
@@ -79,12 +78,29 @@
   }
 }
 
+@media (max-height: 640px) {
+  .mail-shell.pane-bottom {
+    grid-template-rows:
+      var(--toolbar-height, 54px) minmax(140px, 1fr) 5px
+      minmax(160px, var(--reader-pane-height, 240px));
+  }
+
+  .pane-heading {
+    min-height: 56px;
+    padding-block: 10px;
+  }
+
+  .reader-actions {
+    min-height: 52px;
+  }
+}
+
 @media (max-width: 760px) {
   .mail-shell,
   .mail-shell.pane-bottom,
   .mail-shell.pane-hidden {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: 58px minmax(0, 1fr);
+    grid-template-rows: var(--toolbar-height, 60px) minmax(0, 1fr);
     grid-template-areas: "toolbar" "messages";
   }
 
@@ -120,7 +136,7 @@
   .pane-hidden .reader-pane:not(.reader-hidden):not(.empty-reader) {
     position: fixed;
     z-index: 15;
-    inset: 58px 0 0;
+    inset: var(--toolbar-height, 60px) 0 0;
     display: flex;
     border: 0;
     border-radius: 0;
@@ -159,6 +175,11 @@
     flex-wrap: wrap;
     gap: 4px;
     padding-inline: 8px;
+  }
+
+  .reader-more-menu {
+    right: 8px;
+    left: auto;
   }
 
   .action-spacer {
