@@ -23,6 +23,8 @@ export async function syncWorkspaceWindowFx(
   try {
     await invoke("set_workspace_window_fx", { enabled: active, dark: isDark });
   } catch {
-    // Graceful fallback: CSS continues to look crisp and accessible if OS effect is unavailable.
+    // Native effect unavailable: keep CSS and document state opaque so
+    // translucent chrome never claims glass without a working backend.
+    document.documentElement.dataset.windowFx = "opaque";
   }
 }

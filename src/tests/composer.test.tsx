@@ -171,4 +171,33 @@ describe("composer draft persistence", () => {
     expect((to as HTMLInputElement).value).toContain("jane@example.test");
     expect(option).toBeDefined();
   });
+
+  it("keeps later recipients when completing a middle address", async () => {
+    vi.mocked(api.suggestRecipients).mockResolvedValue([
+      { address: "jane@example.test", name: "Jane", useCount: 3 },
+    ]);
+    render(<Composer accountId={account.id} />);
+    const to = screen.getByPlaceholderText(
+      "name@example.com",
+    ) as HTMLInputElement;
+    fireEvent.change(to, {
+      target: { value: "jan, bob@example.test" },
+    });
+    to.setSelectionRange(3, 3);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    fireEvent.keyDown(to, { key: "ArrowDown" });
+    fireEvent.keyDown(to, { key: "Enter" });
+    expect(to.value).toContain("jane@example.test");
+    expect(to.value).toContain("bob@example.test");
+  });
+
+  it("exposes pressed state for active formatting controls", () => {
+    render(<Composer accountId={account.id} />);
+    const bold = screen.getByRole("button", { name: "Bold" });
+    expect(bold).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(bold);
+    expect(bold).toHaveAttribute("aria-pressed");
+  });
 });

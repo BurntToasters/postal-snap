@@ -99,6 +99,7 @@
   align-items: center;
   flex-wrap: wrap;
   gap: 10px;
+  min-height: var(--toolbar-height);
   padding: 10px 16px;
   border-bottom: 1px solid var(--border);
   background: var(--surface-muted);
@@ -113,8 +114,9 @@
 
 .app-brand strong {
   white-space: nowrap;
-  font-size: 0.95rem;
+  font-size: 0.98rem;
   letter-spacing: -0.02em;
+  font-weight: 720;
 }
 
 .app-brand > svg,
@@ -136,8 +138,9 @@
   align-items: center;
   margin-inline: auto;
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: var(--radius-pill);
   background: var(--surface);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 35%, transparent);
 }
 
 .search-box > svg {
@@ -247,9 +250,9 @@
   gap: 5px;
   padding: 0 5px 8px;
   color: var(--text-muted);
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   font-weight: 750;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
 }
 
@@ -308,8 +311,9 @@
   padding: 9px 12px;
   text-align: left;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: transparent;
+  transition: background-color 120ms ease;
 }
 
 .folder:hover {
@@ -407,8 +411,10 @@
   min-height: 72px;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   padding: 14px 20px;
   border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 92%, var(--surface-muted));
 }
 
 .pane-heading > span {
@@ -418,8 +424,9 @@
 
 .pane-heading h1 {
   margin: 0;
-  font-size: 1.24rem;
-  letter-spacing: -0.015em;
+  font-size: 1.28rem;
+  letter-spacing: -0.02em;
+  font-weight: 720;
 }
 
 .pane-heading small {
@@ -559,6 +566,7 @@
   border-bottom: 1px solid var(--border);
   border-radius: 0;
   background: var(--surface);
+  transition: background-color 120ms ease;
 }
 
 .message-row:hover {
@@ -571,7 +579,7 @@
 }
 
 .message-row.selected {
-  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
   box-shadow: inset 3px 0 var(--accent);
 }
 

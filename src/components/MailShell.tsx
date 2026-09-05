@@ -114,6 +114,8 @@ export function MailShell({ onOpenSettings }: Props) {
   const [allFolders, setAllFolders] = useState(false);
   const [addAccountOpen, setAddAccountOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const sidebarToggleRef = useRef<HTMLButtonElement>(null);
+  const folderPaneRef = useRef<HTMLElement>(null);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [loadingMessageId, setLoadingMessageId] = useState<number>();
   const [folderDialog, setFolderDialog] = useState<
@@ -736,7 +738,14 @@ export function MailShell({ onOpenSettings }: Props) {
       if (document.querySelector(".modal-layer")) return;
       const target = event.target as HTMLElement | null;
       const isEditing = Boolean(
-        target?.matches("input,textarea,select,[contenteditable='true']"),
+        target?.matches(
+          "input,textarea,select,[contenteditable='true'],[role='combobox'],[role='textbox']",
+        ),
+      );
+      const onChromeControl = Boolean(
+        target?.closest(
+          "button, a, [role='menuitem'], .reader-actions, .format-toolbar, .settings-nav, .bulk-bar",
+        ) && !target?.closest(".message-list, .local-mail-list"),
       );
       const mod = event.metaKey || event.ctrlKey;
       const key = event.key.toLowerCase();
@@ -802,7 +811,7 @@ export function MailShell({ onOpenSettings }: Props) {
         searchInput.current?.select();
         return;
       }
-      if (isEditing) return;
+      if (isEditing || onChromeControl) return;
 
       if (event.key === "Delete" || (mod && event.key === "Backspace")) {
         const state = useAppStore.getState();
@@ -887,8 +896,8 @@ export function MailShell({ onOpenSettings }: Props) {
   ) {
     const limits = {
       folderPaneWidth: [210, 420],
-      messagePaneWidth: [300, 720],
-      readerPaneHeight: [240, 800],
+      messagePaneWidth: [280, 560],
+      readerPaneHeight: [200, 800],
     } as const;
     const [minimum, maximum] = limits[key];
     const next = {
@@ -1045,6 +1054,54 @@ export function MailShell({ onOpenSettings }: Props) {
     }
   }
 
+  useEffect(() => {
+    if (!sidebarOpen) return;
+    const pane = folderPaneRef.current;
+    const toggle = sidebarToggleRef.current;
+    const previous = document.activeElement as HTMLElement | null;
+    const firstFocusable = pane?.querySelector<HTMLElement>(
+      "button:not([disabled]), select:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex='-1'])",
+    );
+    window.setTimeout(() => firstFocusable?.focus(), 0);
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setSidebarOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      if (previous && document.contains(previous)) previous.focus();
+      else toggle?.focus();
+    };
+  }, [sidebarOpen]);
+
+  useEffect(() => {
+    if (!sidebarOpen) return;
+    if (typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia("(max-width: 1049px)");
+    if (!media.matches) return;
+    const shell = document.querySelector(".mail-shell");
+    const inertTargets = shell
+      ? [...shell.children].filter(
+          (child) =>
+            child !== folderPaneRef.current &&
+            !child.classList.contains("sidebar-scrim") &&
+            !child.classList.contains("folder-pane"),
+        )
+      : [];
+    for (const target of inertTargets) {
+      target.setAttribute("inert", "");
+    }
+    return () => {
+      for (const target of inertTargets) {
+        target.removeAttribute("inert");
+      }
+    };
+  }, [sidebarOpen]);
+
   const activeMailbox = useMemo(
     () => mailboxes.find((box) => box.id === activeMailboxId),
     [activeMailboxId, mailboxes],
@@ -1075,6 +1132,7 @@ export function MailShell({ onOpenSettings }: Props) {
     <main className={shellClass} style={shellStyle}>
       <header className="app-toolbar">
         <button
+          ref={sidebarToggleRef}
           className="icon-button sidebar-toggle"
           type="button"
           onClick={() => setSidebarOpen((open) => !open)}
@@ -1179,6 +1237,7 @@ export function MailShell({ onOpenSettings }: Props) {
       />
       <aside
         id="folder-pane"
+        ref={folderPaneRef}
         className="folder-pane"
         aria-label={strings.mail.accountsAndMailboxes}
       >
@@ -2014,7 +2073,7 @@ function MessageList({
               }
               const expanded = effectiveExpanded.includes(group.key);
               return (
-                <div key={group.key} className="thread-group">
+                <div key={group.key} className="thread-group" role="group">
                   <button
                     type="button"
                     className={`message-row thread-header ${group.newest.id === selectedId ? "selected" : ""}`}

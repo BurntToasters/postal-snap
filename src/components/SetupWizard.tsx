@@ -115,6 +115,8 @@ export function SetupWizard({ onComplete, onOpenSettings }: Props) {
   function chooseProvider(next: ProviderKind) {
     const username = email.trim();
     setProvider(next);
+    setPassword("");
+    setShowPassword(false);
     setStatus(undefined);
     if (next === "manual") {
       setImap((current) =>
@@ -282,6 +284,8 @@ export function SetupWizard({ onComplete, onOpenSettings }: Props) {
             type="button"
             onClick={() => {
               setProvider(undefined);
+              setPassword("");
+              setShowPassword(false);
               setStatus(undefined);
             }}
           >

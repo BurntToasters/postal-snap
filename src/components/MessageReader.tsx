@@ -14,6 +14,7 @@ import {
   Image,
   Mail,
   MailOpen,
+  MoreHorizontal,
   Printer,
   Reply,
   ReplyAll,
@@ -100,6 +101,8 @@ export function MessageReader() {
   }
   const [showDetailsFor, setShowDetailsFor] = useState<number>();
   const [snoozeOpen, setSnoozeOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreMenuRef = useRef<HTMLDivElement>(null);
 
   async function snoozeCurrentMessage(untilIso: string) {
     if (!message) return;
@@ -112,22 +115,59 @@ export function MessageReader() {
     }
   }
   const isOverlay = settings.readingPane === "hidden" && message !== undefined;
+  const [narrowViewport, setNarrowViewport] = useState(() =>
+    typeof window.matchMedia === "function"
+      ? window.matchMedia("(max-width: 760px)").matches
+      : false,
+  );
+  const treatAsOverlay = isOverlay || (narrowViewport && message !== undefined);
   const dialogRef = useDialogFocus(() => selectMessage(undefined));
   const titleRef = useRef<HTMLHeadingElement>(null);
   const overlayMessageId = message?.id;
 
   useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia("(max-width: 760px)");
+    const update = () => setNarrowViewport(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+
+  useEffect(() => {
     if (overlayMessageId === undefined) return;
-    const narrow =
-      typeof window.matchMedia === "function" &&
-      window.matchMedia("(max-width: 760px)").matches;
-    if (!isOverlay && !narrow) return;
+    if (!treatAsOverlay) return;
     const previous = document.activeElement as HTMLElement | null;
     titleRef.current?.focus();
     return () => {
       previous?.focus();
     };
-  }, [isOverlay, overlayMessageId]);
+  }, [treatAsOverlay, overlayMessageId]);
+
+  useEffect(() => {
+    if (!moreOpen) return;
+    const close = (event: MouseEvent) => {
+      if (!moreMenuRef.current?.contains(event.target as Node)) {
+        setMoreOpen(false);
+      }
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMoreOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [moreOpen]);
+
+  const [menuMessageId, setMenuMessageId] = useState(message?.id);
+  if (message?.id !== menuMessageId) {
+    setMenuMessageId(message?.id);
+    if (moreOpen) setMoreOpen(false);
+    if (snoozeOpen) setSnoozeOpen(false);
+  }
 
   const account = accounts.find((a) => a.id === message?.accountId);
   const currentMailbox = mailboxes.find((m) => m.id === message?.mailboxId);
@@ -156,13 +196,13 @@ export function MessageReader() {
   }
 
   useEffect(() => {
-    if (settings.readingPane !== "hidden" || !message) return;
+    if (!treatAsOverlay || !message) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") selectMessage(undefined);
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [message, selectMessage, settings.readingPane]);
+  }, [message, selectMessage, treatAsOverlay]);
 
   const menuHandlersRef = useRef({
     message,
@@ -685,9 +725,9 @@ export function MessageReader() {
     <article
       className="reader-pane"
       aria-labelledby="message-title"
-      ref={isOverlay ? dialogRef : undefined}
-      role={isOverlay ? "dialog" : undefined}
-      aria-modal={isOverlay ? "true" : undefined}
+      ref={treatAsOverlay ? dialogRef : undefined}
+      role={treatAsOverlay ? "dialog" : undefined}
+      aria-modal={treatAsOverlay ? "true" : undefined}
     >
       <div
         className="reader-actions"
@@ -714,143 +754,175 @@ export function MessageReader() {
             <X aria-hidden="true" />
           </button>
         ) : null}
-        <button
-          type="button"
-          onClick={() =>
-            openComposer({ sourceMessage: message, composeMode: "reply" })
-          }
-        >
-          <Reply aria-hidden="true" />
-          {strings.reader.reply}
-        </button>
-        <button
-          type="button"
-          onClick={() =>
-            openComposer({ sourceMessage: message, composeMode: "replyAll" })
-          }
-        >
-          <ReplyAll aria-hidden="true" />
-          {strings.reader.replyAll}
-        </button>
-        <button
-          type="button"
-          onClick={() => void forwardMessage()}
-          disabled={preparingForward}
-        >
-          <Forward aria-hidden="true" />
-          {preparingForward ? strings.reader.preparing : strings.reader.forward}
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            if (frame.current?.contentWindow) {
-              frame.current.contentWindow.focus();
-              frame.current.contentWindow.print();
-            } else {
-              window.print();
+        <div className="reader-primary-actions">
+          <button
+            type="button"
+            onClick={() =>
+              openComposer({ sourceMessage: message, composeMode: "reply" })
             }
-          }}
-          aria-label={strings.reader.print}
-          title={strings.reader.print}
-        >
-          <Printer aria-hidden="true" />
-        </button>
-        <span className="action-spacer" />
-        <button
-          type="button"
-          onClick={() => void setRead()}
-          aria-label={
-            message.isRead ? strings.reader.markUnread : strings.reader.markRead
-          }
-          title={
-            message.isRead ? strings.reader.markUnread : strings.reader.markRead
-          }
-        >
-          {message.isRead ? (
-            <Mail aria-hidden="true" />
-          ) : (
-            <MailOpen aria-hidden="true" />
-          )}
-        </button>
-        <button
-          type="button"
-          onClick={() => void setStarred()}
-          aria-label={
-            message.isStarred
-              ? strings.reader.removeStar
-              : strings.reader.addStar
-          }
-          title={
-            message.isStarred
-              ? strings.reader.removeStar
-              : strings.reader.addStar
-          }
-        >
-          <Star
-            aria-hidden="true"
-            fill={message.isStarred ? "currentColor" : "none"}
-          />
-        </button>
-        <button
-          type="button"
-          onClick={() => void move("archive")}
-          disabled={isArchiveMailbox}
-          aria-label={strings.reader.archive}
-          title={strings.reader.archive}
-        >
-          <Archive aria-hidden="true" />
-        </button>
-        <button
-          type="button"
-          onClick={() => void move("junk")}
-          disabled={isJunkMailbox}
-          aria-label={strings.reader.junk}
-          title={strings.reader.junk}
-        >
-          <ShieldAlert aria-hidden="true" />
-        </button>
-        <button
-          type="button"
-          onClick={() => void move("trash")}
-          disabled={isTrashMailbox}
-          aria-label={strings.reader.trash}
-          title={strings.reader.trash}
-        >
-          <Trash2 aria-hidden="true" />
-        </button>
-        <button
-          type="button"
-          onClick={() => setSnoozeOpen((value) => !value)}
-          aria-expanded={snoozeOpen}
-          aria-label={strings.reader.snooze}
-          title={strings.reader.snooze}
-        >
-          <Clock aria-hidden="true" />
-        </button>
-        <label className="move-control" title={strings.reader.moveFolder}>
-          <FolderInput aria-hidden="true" />
-          <select
-            aria-label={strings.reader.moveFolder}
-            value=""
-            onChange={(event) => {
-              const mailboxId = Number(event.target.value);
-              if (mailboxId) void moveToMailbox(mailboxId);
-            }}
           >
-            <option value="">{strings.reader.move}</option>
-            {mailboxes
-              .filter(
-                (mailbox) =>
-                  mailbox.accountId === message.accountId &&
-                  mailbox.id !== message.mailboxId,
-              )
-              .map((mailbox) => (
-                <option key={mailbox.id} value={mailbox.id}>
-                  {mailbox.displayName}
-                </option>
-              ))}
-          </select>
-        </label>
+            <Reply aria-hidden="true" />
+            {strings.reader.reply}
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              openComposer({ sourceMessage: message, composeMode: "replyAll" })
+            }
+          >
+            <ReplyAll aria-hidden="true" />
+            {strings.reader.replyAll}
+          </button>
+          <button
+            type="button"
+            onClick={() => void forwardMessage()}
+            disabled={preparingForward}
+          >
+            <Forward aria-hidden="true" />
+            {preparingForward
+              ? strings.reader.preparing
+              : strings.reader.forward}
+          </button>
+        </div>
+        <span className="action-spacer" />
+        <div className="reader-secondary-actions">
+          <button
+            type="button"
+            onClick={() => void move("archive")}
+            disabled={isArchiveMailbox}
+            aria-label={strings.reader.archive}
+            title={strings.reader.archive}
+          >
+            <Archive aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            onClick={() => void move("trash")}
+            disabled={isTrashMailbox}
+            aria-label={strings.reader.trash}
+            title={strings.reader.trash}
+          >
+            <Trash2 aria-hidden="true" />
+          </button>
+          <div className="reader-more" ref={moreMenuRef}>
+            <button
+              type="button"
+              onClick={() => setMoreOpen((value) => !value)}
+              aria-expanded={moreOpen}
+              aria-haspopup="menu"
+              aria-label={strings.reader.moreActions}
+              title={strings.reader.moreActions}
+            >
+              <MoreHorizontal aria-hidden="true" />
+            </button>
+            {moreOpen ? (
+              <div className="reader-more-menu" role="menu">
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    if (frame.current?.contentWindow) {
+                      frame.current.contentWindow.focus();
+                      frame.current.contentWindow.print();
+                    } else {
+                      window.print();
+                    }
+                    setMoreOpen(false);
+                  }}
+                >
+                  <Printer aria-hidden="true" />
+                  {strings.reader.print}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    void setRead();
+                    setMoreOpen(false);
+                  }}
+                >
+                  {message.isRead ? (
+                    <Mail aria-hidden="true" />
+                  ) : (
+                    <MailOpen aria-hidden="true" />
+                  )}
+                  {message.isRead
+                    ? strings.reader.markUnread
+                    : strings.reader.markRead}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    void setStarred();
+                    setMoreOpen(false);
+                  }}
+                >
+                  <Star
+                    aria-hidden="true"
+                    fill={message.isStarred ? "currentColor" : "none"}
+                  />
+                  {message.isStarred
+                    ? strings.reader.removeStar
+                    : strings.reader.addStar}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={isJunkMailbox}
+                  onClick={() => {
+                    void move("junk");
+                    setMoreOpen(false);
+                  }}
+                >
+                  <ShieldAlert aria-hidden="true" />
+                  {strings.reader.junk}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setSnoozeOpen(true);
+                    setMoreOpen(false);
+                  }}
+                >
+                  <Clock aria-hidden="true" />
+                  {strings.reader.snooze}
+                </button>
+                <label
+                  className="move-control"
+                  title={strings.reader.moveFolder}
+                >
+                  <FolderInput aria-hidden="true" />
+                  <select
+                    aria-label={strings.reader.moveFolder}
+                    value=""
+                    onChange={(event) => {
+                      const mailboxId = Number(event.target.value);
+                      if (mailboxId) {
+                        void moveToMailbox(mailboxId);
+                        setMoreOpen(false);
+                      }
+                    }}
+                  >
+                    <option value="">{strings.reader.move}</option>
+                    {mailboxes
+                      .filter(
+                        (mailbox) =>
+                          mailbox.accountId === message.accountId &&
+                          mailbox.id !== message.mailboxId,
+                      )
+                      .map((mailbox) => (
+                        <option key={mailbox.id} value={mailbox.id}>
+                          {mailbox.displayName}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              </div>
+            ) : null}
+          </div>
+        </div>
       </div>
       {snoozeOpen ? (
         <SnoozePanel
@@ -862,7 +934,7 @@ export function MessageReader() {
         <h1
           id="message-title"
           ref={titleRef}
-          tabIndex={isOverlay ? -1 : undefined}
+          tabIndex={treatAsOverlay ? -1 : undefined}
         >
           {message.subject || strings.common.noSubject}
         </h1>

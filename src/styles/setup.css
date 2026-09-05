@@ -21,9 +21,9 @@
   width: min(640px, 100%);
   padding: clamp(24px, 5vw, 42px);
   border: 1px solid var(--border);
-  border-radius: 18px;
+  border-radius: var(--radius-lg);
   background: var(--surface);
-  box-shadow: 0 10px 38px rgb(28 43 54 / 12%);
+  box-shadow: var(--shadow-soft);
 }
 
 .setup-card.account-form {

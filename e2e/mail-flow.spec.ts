@@ -493,7 +493,13 @@ async function installMockIpc(page: Page) {
                 folderPaneWidth: 248,
                 messagePaneWidth: 390,
                 readerPaneHeight: 360,
+                windowEffects: false,
+                undoSendSeconds: 10,
               };
+            case "supports_workspace_window_fx":
+              return true;
+            case "set_workspace_window_fx":
+              return undefined;
             case "save_settings":
               return args.settings;
             case "export_settings":
@@ -816,7 +822,8 @@ test("updates unread and folder state immediately after mutations", async ({
     "1",
   );
 
-  await page.getByRole("button", { name: "Mark unread" }).click();
+  await page.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "Mark unread" }).click();
   await expect(page.getByRole("button", { name: /^Inbox/ })).toContainText("1");
 
   await page
@@ -1293,7 +1300,8 @@ test("undoes a held message before it sends", async ({ page }) => {
 test("snoozes a message until tomorrow morning", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("option", { name: /Weekend plans/i }).click();
-  await page.getByRole("button", { name: "Snooze", exact: true }).click();
+  await page.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "Snooze" }).click();
   await page.getByRole("button", { name: "Tomorrow morning" }).click();
   await expect(
     page.getByRole("button", { name: "Tomorrow morning" }),
@@ -1307,4 +1315,19 @@ test("snoozes a message until tomorrow morning", async ({ page }) => {
       ).__POSTAL_SNAP_TEST__.snoozed,
   );
   expect(snoozed).toBe(true);
+});
+
+test("keeps message body opaque when translucent window effects are enabled", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("tab", { name: "General" }).click();
+  await page.getByLabel("Translucent window background").check();
+  await page.getByRole("button", { name: "Close", exact: true }).click();
+  await page.getByRole("option", { name: /Weekend plans/i }).click();
+  const bodyBackground = await page
+    .locator(".message-body")
+    .evaluate((node) => getComputedStyle(node).backgroundColor);
+  expect(bodyBackground).toMatch(/rgb\(255,\s*255,\s*255\)|#fff/i);
 });
