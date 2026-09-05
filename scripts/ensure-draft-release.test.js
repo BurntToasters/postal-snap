@@ -133,7 +133,12 @@ test("create mode reuses a leftover draft and refreshes title plus notes", async
   assert.equal(calls[0].method, "GET");
   assert.ok(calls[0].endpoint.includes("page=1"));
   assert.equal(calls[1].method, "PATCH");
-  assert.deepEqual(calls[1].body, { name: "0.1.0", body: notes });
+  assert.deepEqual(calls[1].body, {
+    tag_name: tag,
+    name: "0.1.0",
+    body: notes,
+    draft: true,
+  });
   assert.ok(!calls.some((call) => call.method === "POST"));
 });
 
@@ -169,11 +174,70 @@ test("create mode PATCHes target_commitish when reusing a leftover draft", async
     "repos/BurntToasters/postal-snap/releases/11",
   );
   assert.deepEqual(calls[1].body, {
+    tag_name: tag,
     name: "0.1.0",
     body: notes,
+    draft: true,
     target_commitish: sessionCommit,
   });
   assert.ok(!calls.some((call) => call.method === "POST"));
+});
+
+test("create mode retags an untagged leftover draft for this version", async () => {
+  const leftover = {
+    id: 11,
+    tag_name: "untagged-ff961747ae9f0e6a3461",
+    draft: true,
+    name: "0.1.0",
+  };
+  const { calls, request } = recordingRequest(
+    async (method, _endpoint, body) => {
+      if (method === "GET") return [leftover];
+      if (method === "PATCH") return { ...leftover, ...body };
+      throw new Error("create mode must not POST when a draft already exists");
+    },
+  );
+  const reused = await ensureDraftRelease({
+    tag,
+    version: "0.1.0",
+    body: notes,
+    request,
+  });
+  assert.equal(reused.tag_name, tag);
+  assert.equal(calls[1].method, "PATCH");
+  assert.deepEqual(calls[1].body, {
+    tag_name: tag,
+    name: "0.1.0",
+    body: notes,
+    draft: true,
+  });
+  assert.ok(!calls.some((call) => call.method === "POST"));
+});
+
+test("create mode ignores an untagged draft for a different version", async () => {
+  const other = {
+    id: 11,
+    tag_name: "untagged-ff961747ae9f0e6a3461",
+    draft: true,
+    name: "0.1.5",
+  };
+  const { calls, request } = recordingRequest(
+    async (method, _endpoint, body) => {
+      if (method === "GET") return [other];
+      return { id: 21, tag_name: body.tag_name, draft: true, name: body.name };
+    },
+  );
+  const created = await ensureDraftRelease({
+    tag,
+    version: "0.1.0",
+    body: notes,
+    prerelease: false,
+    target: "a".repeat(40),
+    request,
+  });
+  assert.equal(created.id, 21);
+  assert.ok(calls.some((call) => call.method === "POST"));
+  assert.ok(!calls.some((call) => call.method === "PATCH"));
 });
 
 test("create mode creates a draft when none exists", async () => {
@@ -230,8 +294,10 @@ test("create mode refetches after a 422 instead of splitting drafts", async () =
   assert.equal(created.id, 11);
   assert.equal(calls.filter((call) => call.method === "POST").length, 1);
   assert.deepEqual(calls.find((call) => call.method === "PATCH")?.body, {
+    tag_name: tag,
     name: "0.1.0",
     body: notes,
+    draft: true,
   });
 });
 

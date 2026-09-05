@@ -46,15 +46,35 @@ export async function listAllGithubPages(fetchPage, { perPage = 100 } = {}) {
   return items;
 }
 
+export function releaseTitle(version) {
+  return String(version ?? "")
+    .trim()
+    .replace(/^v/i, "");
+}
+
+export function isUntaggedReleaseName(tagName) {
+  return /^untagged-/i.test(String(tagName ?? ""));
+}
+
 export function matchingReleases(releases, tag) {
-  return (Array.isArray(releases) ? releases : []).filter(
-    (release) => release?.tag_name === tag,
-  );
+  const items = Array.isArray(releases) ? releases : [];
+  const title = releaseTitle(tag);
+  return items.filter((release) => {
+    if (release?.tag_name === tag) return true;
+    return (
+      Boolean(release?.draft) &&
+      isUntaggedReleaseName(release?.tag_name) &&
+      releaseTitle(release?.name) === title
+    );
+  });
 }
 
 export function existingDraft(releases, tag) {
+  const candidates = matchingReleases(releases, tag);
   return (
-    matchingReleases(releases, tag).find((release) => release.draft) || null
+    candidates.find((release) => release.draft && release.tag_name === tag) ||
+    candidates.find((release) => release.draft) ||
+    null
   );
 }
 
@@ -68,7 +88,8 @@ export async function listMatchingReleases({
   request = githubApi,
 } = {}) {
   // Drafts are not returned by the get-release-by-tag endpoint, so list and
-  // match on tag_name.
+  // match on tag_name. GitHub also rewrites edited drafts to untagged-* if a
+  // PATCH omits tag_name; recover those by release title.
   const releases = await listAllGithubPages((page, perPage) =>
     request("GET", releasesListPath(repository, page, perPage)),
   );
@@ -79,12 +100,6 @@ function publishedReleaseError(tag, action) {
   return new Error(
     `Release ${tag} already exists as published. Refusing to ${action} a draft for the same tag.`,
   );
-}
-
-export function releaseTitle(version) {
-  return String(version ?? "")
-    .trim()
-    .replace(/^v/i, "");
 }
 
 export async function readChangelogReleaseBody(
@@ -110,13 +125,22 @@ export async function readChangelogReleaseBody(
 async function refreshDraft({
   repository,
   draft,
+  tag,
   target,
   name,
   body,
+  prerelease,
   request,
 }) {
-  const payload = { name, body };
+  // GitHub rewrites omitted tag_name to untagged-* on PATCH.
+  const payload = { tag_name: tag, name, body, draft: true };
+  if (typeof prerelease === "boolean") payload.prerelease = prerelease;
   if (target) payload.target_commitish = target;
+  if (draft?.tag_name && draft.tag_name !== tag) {
+    console.log(
+      `   Restoring GitHub tag ${tag} on untagged draft ${draft.id}.`,
+    );
+  }
   const updated = await request(
     "PATCH",
     `repos/${repository}/releases/${draft.id}`,
@@ -158,9 +182,11 @@ export async function ensureDraftRelease({
     return refreshDraft({
       repository,
       draft,
+      tag,
       target,
       name,
       body: notes,
+      prerelease,
       request,
     });
   }
@@ -199,9 +225,11 @@ export async function ensureDraftRelease({
         return refreshDraft({
           repository,
           draft: reused,
+          tag,
           target,
           name,
           body: notes,
+          prerelease,
           request,
         });
       }
