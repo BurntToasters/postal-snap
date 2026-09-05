@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { json, output, process, root, sha256 } from "./_utils.js";
-import { githubJson } from "./github-cli.js";
+import { githubApi, githubJson } from "./github-cli.js";
 import {
   existingDraft,
   hasPublishedRelease,
@@ -111,7 +111,7 @@ function publishedReleaseUploadError(tag) {
 export async function verifyDraftReleaseCommit(
   repository,
   session,
-  { listReleases = listMatchingReleases } = {},
+  { listReleases = listMatchingReleases, request = githubApi } = {},
 ) {
   const matching = await listReleases({
     repository,
@@ -126,4 +126,12 @@ export async function verifyDraftReleaseCommit(
       `No draft release found for ${session.tag}. Run "npm run release:draft" on the Windows machine first.`,
     );
   }
+  if (draft.tag_name === session.tag) return;
+  console.log(
+    `Restoring GitHub tag ${session.tag} on untagged draft ${draft.id}.`,
+  );
+  await request("PATCH", `repos/${repository}/releases/${draft.id}`, {
+    tag_name: session.tag,
+    draft: true,
+  });
 }

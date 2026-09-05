@@ -109,6 +109,31 @@ test("draft finalize refuses a published release for the same tag", async () => 
   );
 });
 
+test("draft finalize restores an untagged leftover draft tag", async () => {
+  const patches = [];
+  await verifyDraftReleaseCommit("owner/repo", releaseSession, {
+    listReleases: async () => [
+      {
+        id: 99,
+        tag_name: "untagged-ff961747ae9f0e6a3461",
+        draft: true,
+        name: "0.1.0",
+      },
+    ],
+    request: async (method, endpoint, body) => {
+      patches.push({ method, endpoint, body });
+      return { id: 99, tag_name: body.tag_name, draft: true };
+    },
+  });
+  assert.deepEqual(patches, [
+    {
+      method: "PATCH",
+      endpoint: "repos/owner/repo/releases/99",
+      body: { tag_name: "v0.1.0", draft: true },
+    },
+  ]);
+});
+
 test("draft finalize accepts a leftover draft with a different target_commitish", async () => {
   const otherCommit = "d".repeat(40);
   await verifyDraftReleaseCommit("owner/repo", releaseSession, {
