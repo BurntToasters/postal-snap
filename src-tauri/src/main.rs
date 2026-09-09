@@ -1,8 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod commands;
+mod content_blocking;
 mod credentials;
 mod db;
+mod html_sanitize;
 mod mail;
 mod models;
 // Background OAuth groundwork (no UI yet): consumed by a future setup flow.
@@ -10,6 +12,7 @@ mod models;
 mod oauth;
 mod security;
 mod settings;
+mod threat_blocking;
 mod window_fx;
 
 use commands::AppState;
@@ -74,6 +77,8 @@ fn main() {
             let settings = settings::SettingsStore::load(data_dir.join("settings.json"), &database)
                 .map_err(std::io::Error::other)?;
             app.manage(AppState::new(database, settings, attachment_dir));
+            tauri::async_runtime::spawn(content_blocking::warmup());
+            tauri::async_runtime::spawn(threat_blocking::warmup());
 
             let handle = app.handle().clone();
             let (accounts, startup_error) = match app
@@ -166,6 +171,9 @@ fn main() {
             commands::prepare_forward_attachments,
             commands::choose_attachments,
             commands::fetch_remote_image,
+            commands::inspect_external_url,
+            commands::open_external_url,
+            commands::open_help_url,
             commands::read_message_inline_image,
             commands::read_compose_image,
             commands::release_compose_attachments,

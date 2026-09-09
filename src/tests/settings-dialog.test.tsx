@@ -317,4 +317,150 @@ describe("SettingsDialog component", () => {
     expect(api.deleteFilterRule).toHaveBeenCalledWith(account.id, "rule-1");
     expect(await screen.findByText(/Rule removed/)).toBeDefined();
   });
+
+  it("opens Advanced from the General protection card", async () => {
+    render(<SettingsDialog initialTab="general" onClose={vi.fn()} />);
+
+    expect(screen.getByRole("heading", { name: "Appearance" })).toBeDefined();
+    expect(screen.getByRole("heading", { name: "Sending" })).toBeDefined();
+    expect(screen.getByRole("heading", { name: "Privacy" })).toBeDefined();
+    expect(screen.getByText("Mail protection is on")).toBeDefined();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Review Advanced" }));
+    });
+
+    expect(screen.getByRole("tab", { name: "Advanced" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(
+      screen.getByRole("checkbox", {
+        name: /Block advertising and tracking images/,
+      }),
+    ).toBeChecked();
+    expect(
+      screen.getByRole("checkbox", {
+        name: /Warn about reported dangerous addresses/,
+      }),
+    ).toBeChecked();
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+    });
+    expect(screen.getByRole("tab", { name: "Advanced" })).toHaveFocus();
+  });
+
+  it("asks before turning off advertising and tracking image checks", async () => {
+    vi.mocked(api.showNativeConfirm).mockResolvedValueOnce(false);
+    render(<SettingsDialog initialTab="advanced" onClose={vi.fn()} />);
+
+    const toggle = screen.getByRole("checkbox", {
+      name: /Block advertising and tracking images/,
+    });
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+
+    expect(api.showNativeConfirm).toHaveBeenCalledWith(
+      "Allow advertising and tracking images?",
+      expect.stringMatching(/advertising and tracking/),
+    );
+    expect(api.saveSettings).not.toHaveBeenCalled();
+    expect(toggle).toBeChecked();
+
+    vi.mocked(api.showNativeConfirm).mockResolvedValueOnce(true);
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+
+    expect(api.saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ blockAdvertisingAndTracking: false }),
+    );
+  });
+
+  it("requires typing CONFIRM before turning off reported-address warnings", async () => {
+    const onClose = vi.fn();
+    render(<SettingsDialog initialTab="advanced" onClose={onClose} />);
+
+    const toggle = screen.getByRole("checkbox", {
+      name: /Warn about reported dangerous addresses/,
+    });
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+
+    const dialog = screen.getByRole("alertdialog", {
+      name: "Turn off reported-address warnings?",
+    });
+    expect(api.saveSettings).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Disable" })).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText("Type CONFIRM"), {
+      target: { value: "confirm" },
+    });
+    expect(screen.getByRole("button", { name: "Disable" })).toBeDisabled();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Disable" }));
+    });
+    expect(api.saveSettings).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText("Type CONFIRM"), {
+      target: { value: "CONFIRM" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Disable" }));
+    });
+
+    expect(api.saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ blockReportedThreats: false }),
+    );
+    expect(dialog).not.toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("closes the threat-off confirm with Escape without closing Settings", async () => {
+    const onClose = vi.fn();
+    render(<SettingsDialog initialTab="advanced" onClose={onClose} />);
+
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("checkbox", {
+          name: /Warn about reported dangerous addresses/,
+        }),
+      );
+    });
+    expect(screen.getByRole("alertdialog")).toBeDefined();
+
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Escape" });
+    });
+
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(api.saveSettings).not.toHaveBeenCalled();
+  });
+
+  it("turns reported-address warnings back on without a confirm dialog", async () => {
+    useAppStore.setState({
+      settings: { ...defaultSettings, blockReportedThreats: false },
+    });
+    render(<SettingsDialog initialTab="advanced" onClose={vi.fn()} />);
+
+    expect(screen.getByRole("status")).toHaveTextContent(
+      /Reported-address warnings are off/,
+    );
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("checkbox", {
+          name: /Warn about reported dangerous addresses/,
+        }),
+      );
+    });
+
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(api.saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ blockReportedThreats: true }),
+    );
+  });
 });

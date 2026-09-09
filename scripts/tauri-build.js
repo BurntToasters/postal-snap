@@ -209,6 +209,7 @@ if (!noBundle) {
         artifactSigningPowershellArgs(signScript, ["-FilePath", artifact]),
       );
     }
+    await resignWindowsUpdaterZip(bundleOutputDir);
     await run(
       "powershell.exe",
       artifactSigningPowershellArgs(
@@ -273,6 +274,30 @@ if (!noBundle) {
       );
     }
   }
+  if (requireTauriSigning && process.platform === "win32") {
+    const required = [
+      `Postal-Snap-Windows-${arch}.nsis.zip`,
+      `Postal-Snap-Windows-${arch}.nsis.zip.sig`,
+    ];
+    const missing = required.filter((name) => !collected.has(name));
+    if (missing.length) {
+      throw new Error(
+        `Signed Windows build did not produce required updater artifacts: ${missing.join(", ")}`,
+      );
+    }
+  }
+  if (requireTauriSigning && process.platform === "linux") {
+    const required = [
+      `Postal-Snap-Linux-${arch}.AppImage.tar.gz`,
+      `Postal-Snap-Linux-${arch}.AppImage.tar.gz.sig`,
+    ];
+    const missing = required.filter((name) => !collected.has(name));
+    if (missing.length) {
+      throw new Error(
+        `Signed Linux build did not produce required updater artifacts: ${missing.join(", ")}`,
+      );
+    }
+  }
   if (requireMacosSigning && process.platform === "darwin") {
     const info = await newestMatching(bundleOutputDir, (path) =>
       path.endsWith("Postal Snap.app/Contents/Info.plist"),
@@ -293,4 +318,41 @@ if (!noBundle) {
     await run("hdiutil", ["verify", join(release, "Postal-Snap-macOS.dmg")]);
   }
   console.log(`Collected ${pkg.name} ${pkg.version} artifacts in release/`);
+}
+
+async function resignWindowsUpdaterZip(bundleDir) {
+  const zip = await newestMatching(bundleDir, (path) =>
+    path.endsWith(".nsis.zip"),
+  );
+  const exe = await newestMatching(bundleDir, (path) =>
+    path.endsWith("-setup.exe"),
+  );
+  if (!zip || !exe) {
+    throw new Error(
+      "Cannot rebuild the Windows updater zip: missing NSIS zip or setup exe.",
+    );
+  }
+  const temp = await mkdtemp(join(tmpdir(), "postal-snap-nsis-"));
+  try {
+    await run("powershell.exe", [
+      "-NoProfile",
+      "-Command",
+      `Expand-Archive -LiteralPath ${JSON.stringify(zip)} -DestinationPath ${JSON.stringify(temp)} -Force`,
+    ]);
+    const inner = await newestMatching(temp, (path) => path.endsWith(".exe"));
+    if (!inner) {
+      throw new Error("Updater zip did not contain an installer exe.");
+    }
+    await copyFile(exe, inner);
+    await rmRetry(zip);
+    await run("powershell.exe", [
+      "-NoProfile",
+      "-Command",
+      `Compress-Archive -Path ${JSON.stringify(join(temp, "*"))} -DestinationPath ${JSON.stringify(zip)} -Force`,
+    ]);
+    await rmRetry(`${zip}.sig`);
+    await run("npx", ["tauri", "signer", "sign", zip]);
+  } finally {
+    await rmRetry(temp, { recursive: true });
+  }
 }

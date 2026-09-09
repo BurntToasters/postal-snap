@@ -40,6 +40,13 @@ body,
   overflow: hidden;
 }
 
+html[data-text-scale="large"],
+html[data-text-scale="large"] body,
+html[data-text-scale="large"] #root {
+  overflow: auto;
+}
+}
+
 body {
   color: var(--text);
   background: var(--canvas);

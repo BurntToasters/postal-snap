@@ -11,13 +11,14 @@ const targets = [
   "darwin-x86_64",
   "darwin-aarch64",
   "linux-x86_64",
-  "linux-aarch64",
 ];
-for (const target of targets) {
+const optionalTargets = ["linux-aarch64"];
+for (const target of [...targets, ...optionalTargets]) {
   const url = `https://github.com/BurntToasters/postal-snap/releases/latest/download/latest-${target}.json`;
   const response = await fetch(url);
   if (!response.ok) {
-    if (shapeOnly && response.status === 404) continue;
+    if (response.status === 404 && (shapeOnly || optionalTargets.includes(target)))
+      continue;
     throw new Error(`${url} returned HTTP ${response.status}`);
   }
   const manifest = await response.json();

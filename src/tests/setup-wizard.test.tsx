@@ -7,11 +7,8 @@ import { PostalError } from "../errors";
 vi.mock("../api", () => ({
   api: {
     addAccount: vi.fn(),
+    openHelpUrl: vi.fn(),
   },
-}));
-
-vi.mock("@tauri-apps/plugin-opener", () => ({
-  openUrl: vi.fn(),
 }));
 
 const addAccount = vi.mocked(api.addAccount);

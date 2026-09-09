@@ -181,6 +181,12 @@ export const strings = {
     showDetails: "Details",
     hideDetails: "Hide details",
     loadImages: "Load images",
+    filteredImage: "Advertising or tracking image blocked",
+    filteredImages: (count: number) =>
+      `${count} advertising or tracking image${count === 1 ? "" : "s"} kept blocked for privacy.`,
+    threatImage: "Image from a reported potentially dangerous address",
+    threatImages: (count: number) =>
+      `${count} image${count === 1 ? "" : "s"} from a reported potentially dangerous address kept blocked.`,
     retryImages: "Retry loading images",
     messageContent: "Message content",
     attachments: "Attachments",
@@ -193,11 +199,17 @@ export const strings = {
     snoozeNextWeek: "Next week",
     snoozeCustom: "Custom date and time",
     snoozeUntil: "Snooze until",
-    openLink: (url: string) => `Open this link in your browser?\n\n${url}`,
+    openLink: (hostname: string, url: string) =>
+      `This link goes to:\n\n${hostname}\n\n${url}\n\nOpen it in your browser?`,
+    reportedThreatTitle: "This link may be dangerous",
+    reportedThreat: (hostname: string, url: string) =>
+      `This address was reported as potentially dangerous.\n\n${hostname}\n\n${url}\n\nIt is better not to open it. Choose Cancel unless you are sure you want to continue.`,
+    reportedThreatOpenAnyway:
+      "Open this reported address anyway? This can put your information at risk.",
     blockedImages: (count: number) =>
       `${count} remote image${count === 1 ? "" : "s"} blocked for privacy.`,
     blockedImagesDetail:
-      "Pictures from the internet are blocked to protect your privacy.",
+      "Pictures from the internet are blocked to protect your privacy. Known advertising and tracking images stay blocked when you load pictures. Other pictures may still reveal that you opened this message.",
   },
   update: {
     availableTitle: "Update Available",
@@ -365,17 +377,18 @@ export const strings = {
     autosave: "Changes save automatically",
     settingsData: "Settings data",
     settingsDataHelp:
-      "Export or import Postal Snap preferences. Accounts and passwords are never included.",
+      "Export or import Postal Snap preferences, including Advanced protection. Accounts and passwords are never included.",
     exportSettings: "Export settings",
     importSettings: "Import settings",
     resetSettings: "Reset settings",
     exportSaved: "Settings exported.",
-    importApplied: "Settings imported.",
+    importApplied:
+      "Settings imported. Reported-threat blocking stays on; use Advanced if you need to turn it off.",
     resetApplied: "Settings reset.",
     importQuestion:
       "Replace Postal Snap preferences with settings from this file? Accounts, passwords, and mail stay.",
     resetQuestion:
-      "Reset appearance, reading, notification, and storage preferences? Accounts, passwords, and mail stay.",
+      "Reset appearance, reading, notification, storage, and Advanced protection preferences? Accounts, passwords, and mail stay. Advanced protection returns to on.",
     noAccounts: "No email accounts configured yet.",
     returnToSetup: "Return to account setup",
     general: "General",
@@ -384,6 +397,10 @@ export const strings = {
     storage: "Storage",
     accounts: "Accounts",
     updates: "Updates",
+    advanced: "Advanced",
+    appearanceSection: "Appearance",
+    sendingSection: "Sending",
+    privacySection: "Privacy",
     appearance: "Appearance",
     appearanceHelp: "Use system appearance or choose a theme.",
     followSystem: "Follow system",
@@ -398,6 +415,36 @@ export const strings = {
       "Softly blurs the desktop behind Postal Snap. Email itself always stays solid and readable.",
     vaultTitle: "Passwords use your system vault.",
     vaultHelp: "Postal Snap never stores passwords in settings or logs.",
+    protectionOn: "Mail protection is on",
+    protectionOnHelp:
+      "Advertising, tracking, and reported-address checks are on. Review them in Advanced if you need to.",
+    protectionOff: "Some mail protection is off",
+    protectionOffHelp:
+      "Reported-address warnings are off. Turn them back on in Advanced unless you have a specific reason to leave them off.",
+    protectionAdsOffHelp:
+      "Advertising and tracking image checks are off. Reported-address warnings are still on.",
+    reviewAdvanced: "Review Advanced",
+    advancedHelp:
+      "These options change how Postal Snap checks images and links. Leave them on unless you have a specific reason to turn them off. Choosing Load images, private-network blocking, and other safety checks still apply.",
+    blockAds: "Block advertising and tracking images",
+    blockAdsHelp:
+      "After you choose Load images, Postal Snap still hides known advertising and tracking pictures. Turning this off can let those pictures load and tell senders more about you.",
+    disableAdblockTitle: "Allow advertising and tracking images?",
+    disableAdblockQuestion:
+      "Postal Snap will no longer hide known advertising and tracking pictures after you choose Load images. Image consent and private-network protections stay on.",
+    blockThreats: "Warn about reported dangerous addresses",
+    blockThreatsHelp:
+      "Postal Snap checks links and remote images against a local reported-threat list before they can load or open. Turning this off is dangerous. You can turn it back on at any time.",
+    threatOffWarning:
+      "Reported-address warnings are off. Postal Snap will not warn you about listed dangerous links or block those remote images. Turn this back on unless you have a specific reason to leave it off.",
+    threatDisableTitle: "Turn off reported-address warnings?",
+    threatDisableLead:
+      "This is not a good idea. Postal Snap will no longer warn you about addresses that have been reported as potentially dangerous, and it will not block those remote images. Private-network and image-consent protections stay on, but they do not replace this list.",
+    threatDisableHelp: "Type CONFIRM to continue.",
+    threatDisableToken: "CONFIRM",
+    threatDisableInput: "Type CONFIRM",
+    threatDisableConfirm: "Disable",
+    threatDisableCancel: "Keep protection on",
     readingPane: "Reading pane",
     readingPaneHelp: "Choose where opened messages appear.",
     paneRight: "On right",

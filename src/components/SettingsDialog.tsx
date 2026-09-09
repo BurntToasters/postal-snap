@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useRef,
   useState,
   type KeyboardEvent,
   type ReactNode,
@@ -14,6 +15,7 @@ import {
   Mail,
   Monitor,
   RotateCcw,
+  ShieldAlert,
   ShieldCheck,
   Upload,
   UserRound,
@@ -50,7 +52,8 @@ export type SettingsTab =
   | "storage"
   | "accounts"
   | "shortcuts"
-  | "updates";
+  | "updates"
+  | "advanced";
 
 const tabs: Array<{
   id: SettingsTab;
@@ -64,6 +67,7 @@ const tabs: Array<{
   { id: "accounts", label: strings.settings.accounts, icon: UserRound },
   { id: "shortcuts", label: strings.settings.shortcuts, icon: Keyboard },
   { id: "updates", label: strings.settings.updates, icon: DownloadCloud },
+  { id: "advanced", label: strings.settings.advanced, icon: ShieldAlert },
 ];
 
 export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
@@ -107,6 +111,9 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
     Record<string, string>
   >({});
   const [savingSignatureId, setSavingSignatureId] = useState<string>();
+  const [confirmThreatOff, setConfirmThreatOff] = useState(false);
+  const [confirmToken, setConfirmToken] = useState("");
+  const confirmInputRef = useRef<HTMLInputElement>(null);
   const [filterRules, setFilterRules] = useState<Record<string, FilterRule[]>>(
     {},
   );
@@ -123,7 +130,15 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
     >
   >({});
   const [ruleStatus, setRuleStatus] = useState<Record<string, string>>({});
-  const dialogRef = useDialogFocus(onClose);
+  const requestClose = useCallback(() => {
+    if (confirmThreatOff) {
+      setConfirmThreatOff(false);
+      setConfirmToken("");
+      return;
+    }
+    onClose();
+  }, [confirmThreatOff, onClose]);
+  const dialogRef = useDialogFocus(requestClose);
 
   const handleUpdateFound = useCallback<UpdateFoundListener>((version) => {
     setUpdateStatus(strings.settings.installing(version ?? ""));
@@ -184,6 +199,17 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
     };
   }, []);
 
+  useEffect(() => {
+    if (!confirmThreatOff) return;
+    const timer = window.setTimeout(() => confirmInputRef.current?.focus(), 0);
+    return () => window.clearTimeout(timer);
+  }, [confirmThreatOff]);
+
+  function cancelThreatOff() {
+    setConfirmThreatOff(false);
+    setConfirmToken("");
+  }
+
   async function update(patch: Partial<AppSettings>) {
     if (saving) return;
     const previous = settings;
@@ -202,6 +228,32 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
     } finally {
       setSaving(false);
     }
+  }
+
+  async function setAdvertisingBlocking(enabled: boolean) {
+    if (!enabled) {
+      const confirmed = await api.showNativeConfirm(
+        strings.settings.disableAdblockTitle,
+        strings.settings.disableAdblockQuestion,
+      );
+      if (!confirmed) return;
+    }
+    await update({ blockAdvertisingAndTracking: enabled });
+  }
+
+  async function setThreatBlocking(enabled: boolean) {
+    if (!enabled) {
+      setConfirmToken("");
+      setConfirmThreatOff(true);
+      return;
+    }
+    await update({ blockReportedThreats: true });
+  }
+
+  async function confirmDisableThreats() {
+    if (confirmToken !== strings.settings.threatDisableToken) return;
+    cancelThreatOff();
+    await update({ blockReportedThreats: false });
   }
 
   async function clearCache() {
@@ -577,6 +629,10 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
     );
   }
 
+  const advertisingOn = settings.blockAdvertisingAndTracking;
+  const threatsOn = settings.blockReportedThreats;
+  const protectionOn = advertisingOn && threatsOn;
+
   return (
     <div
       className="modal-layer"
@@ -589,10 +645,10 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
         type="button"
         tabIndex={-1}
         aria-hidden="true"
-        onClick={onClose}
+        onClick={requestClose}
       />
       <section className="settings-window" ref={dialogRef}>
-        <header>
+        <header inert={confirmThreatOff || undefined}>
           <span>
             <h1 id="settings-title">{strings.settings.title}</h1>
             <small>
@@ -602,13 +658,13 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
           <button
             className="icon-button"
             type="button"
-            onClick={onClose}
+            onClick={requestClose}
             aria-label={strings.common.close}
           >
             <X aria-hidden="true" />
           </button>
         </header>
-        <div className="settings-layout">
+        <div className="settings-layout" inert={confirmThreatOff || undefined}>
           <nav
             className="settings-nav"
             aria-label={strings.settings.sections}
@@ -636,128 +692,177 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
           <div className="settings-content">
             {tab === "general" ? (
               <SettingsPanel id="general" title={strings.settings.general}>
-                <SettingRow
-                  title={strings.settings.appearance}
-                  help={strings.settings.appearanceHelp}
-                >
-                  <select
-                    aria-label={strings.settings.appearance}
-                    value={settings.theme}
-                    onChange={(event) =>
-                      void update({
-                        theme: event.target.value as AppSettings["theme"],
-                      })
-                    }
+                <SettingsSection title={strings.settings.appearanceSection}>
+                  <SettingRow
+                    title={strings.settings.appearance}
+                    help={strings.settings.appearanceHelp}
                   >
-                    <option value="system">
-                      {strings.settings.followSystem}
-                    </option>
-                    <option value="light">{strings.settings.light}</option>
-                    <option value="dark">{strings.settings.dark}</option>
-                  </select>
-                </SettingRow>
-                <SettingRow
-                  title={strings.settings.spacing}
-                  help={strings.settings.spacingHelp}
-                >
-                  <select
-                    aria-label={strings.settings.spacing}
-                    value={settings.density}
-                    onChange={(event) =>
-                      void update({
-                        density: event.target.value as AppSettings["density"],
-                      })
-                    }
-                  >
-                    <option value="comfortable">
-                      {strings.settings.comfortable}
-                    </option>
-                    <option value="compact">{strings.settings.compact}</option>
-                  </select>
-                </SettingRow>
-                {windowFxSupported ? (
-                  <label className="switch-row">
-                    <span>
-                      <strong>{strings.settings.windowEffects}</strong>
-                      <small>{strings.settings.windowEffectsHelp}</small>
-                    </span>
-                    <input
-                      type="checkbox"
-                      checked={settings.windowEffects}
+                    <select
+                      aria-label={strings.settings.appearance}
+                      value={settings.theme}
                       onChange={(event) =>
-                        void update({ windowEffects: event.target.checked })
+                        void update({
+                          theme: event.target.value as AppSettings["theme"],
+                        })
                       }
-                    />
-                  </label>
-                ) : null}
-                <SettingRow
-                  title={strings.mail.undoSendWindow}
-                  help={strings.mail.undoSendHelp}
-                >
-                  <select
-                    aria-label={strings.mail.undoSendWindow}
-                    value={settings.undoSendSeconds ?? 10}
-                    onChange={(event) =>
-                      void update({
-                        undoSendSeconds: Number(event.target.value),
-                      })
+                    >
+                      <option value="system">
+                        {strings.settings.followSystem}
+                      </option>
+                      <option value="light">{strings.settings.light}</option>
+                      <option value="dark">{strings.settings.dark}</option>
+                    </select>
+                  </SettingRow>
+                  <SettingRow
+                    title={strings.settings.spacing}
+                    help={strings.settings.spacingHelp}
+                  >
+                    <select
+                      aria-label={strings.settings.spacing}
+                      value={settings.density}
+                      onChange={(event) =>
+                        void update({
+                          density: event.target.value as AppSettings["density"],
+                        })
+                      }
+                    >
+                      <option value="comfortable">
+                        {strings.settings.comfortable}
+                      </option>
+                      <option value="compact">
+                        {strings.settings.compact}
+                      </option>
+                    </select>
+                  </SettingRow>
+                  {windowFxSupported ? (
+                    <label className="switch-row">
+                      <span>
+                        <strong>{strings.settings.windowEffects}</strong>
+                        <small>{strings.settings.windowEffectsHelp}</small>
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={settings.windowEffects}
+                        onChange={(event) =>
+                          void update({ windowEffects: event.target.checked })
+                        }
+                      />
+                    </label>
+                  ) : null}
+                </SettingsSection>
+                <SettingsSection title={strings.settings.sendingSection}>
+                  <SettingRow
+                    title={strings.mail.undoSendWindow}
+                    help={strings.mail.undoSendHelp}
+                  >
+                    <select
+                      aria-label={strings.mail.undoSendWindow}
+                      value={settings.undoSendSeconds ?? 10}
+                      onChange={(event) =>
+                        void update({
+                          undoSendSeconds: Number(event.target.value),
+                        })
+                      }
+                    >
+                      <option value={0}>{strings.mail.undoSendOff}</option>
+                      {[5, 10, 20, 30].map((seconds) => (
+                        <option key={seconds} value={seconds}>
+                          {strings.mail.undoSendSeconds(seconds)}
+                        </option>
+                      ))}
+                    </select>
+                  </SettingRow>
+                </SettingsSection>
+                <SettingsSection title={strings.settings.privacySection}>
+                  <div className="security-summary">
+                    <ShieldCheck aria-hidden="true" />
+                    <span>
+                      <strong>{strings.settings.vaultTitle}</strong>
+                      <small>{strings.settings.vaultHelp}</small>
+                    </span>
+                  </div>
+                  <div
+                    className={
+                      protectionOn
+                        ? "security-summary"
+                        : "security-summary warning"
                     }
                   >
-                    <option value={0}>{strings.mail.undoSendOff}</option>
-                    {[5, 10, 20, 30].map((seconds) => (
-                      <option key={seconds} value={seconds}>
-                        {strings.mail.undoSendSeconds(seconds)}
-                      </option>
-                    ))}
-                  </select>
-                </SettingRow>
-                <div className="security-summary">
-                  <ShieldCheck />
-                  <span>
-                    <strong>{strings.settings.vaultTitle}</strong>
-                    <small>{strings.settings.vaultHelp}</small>
-                  </span>
-                </div>
-                <div className="settings-data-card">
-                  <div>
-                    <strong>{strings.settings.settingsData}</strong>
-                    <small>{strings.settings.settingsDataHelp}</small>
-                  </div>
-                  <div className="settings-actions">
+                    {protectionOn ? (
+                      <ShieldCheck aria-hidden="true" />
+                    ) : (
+                      <ShieldAlert aria-hidden="true" />
+                    )}
+                    <span>
+                      <strong>
+                        {protectionOn
+                          ? strings.settings.protectionOn
+                          : strings.settings.protectionOff}
+                      </strong>
+                      <small>
+                        {protectionOn
+                          ? strings.settings.protectionOnHelp
+                          : threatsOn
+                            ? strings.settings.protectionAdsOffHelp
+                            : strings.settings.protectionOffHelp}
+                      </small>
+                    </span>
                     <button
                       className="secondary-button"
                       type="button"
-                      onClick={() => void exportSettings()}
-                      disabled={dataBusy}
+                      onClick={() => {
+                        setTab("advanced");
+                        window.requestAnimationFrame(() => {
+                          document.getElementById("settings-tab-advanced")
+                            ?.focus();
+                        });
+                      }}
                     >
-                      <Upload aria-hidden="true" />{" "}
-                      {strings.settings.exportSettings}
-                    </button>
-                    <button
-                      className="secondary-button"
-                      type="button"
-                      onClick={() => void importSettings()}
-                      disabled={dataBusy}
-                    >
-                      <DownloadCloud aria-hidden="true" />{" "}
-                      {strings.settings.importSettings}
-                    </button>
-                    <button
-                      className="danger-button"
-                      type="button"
-                      onClick={() => void resetSettings()}
-                      disabled={dataBusy}
-                    >
-                      <RotateCcw aria-hidden="true" />{" "}
-                      {strings.settings.resetSettings}
+                      {strings.settings.reviewAdvanced}
                     </button>
                   </div>
-                  {dataStatus ? (
-                    <small className="settings-data-status" role="status">
-                      {dataStatus}
-                    </small>
-                  ) : null}
-                </div>
+                </SettingsSection>
+                <SettingsSection title={strings.settings.settingsData}>
+                  <div className="settings-data-card">
+                    <div>
+                      <small>{strings.settings.settingsDataHelp}</small>
+                    </div>
+                    <div className="settings-actions">
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        onClick={() => void exportSettings()}
+                        disabled={dataBusy}
+                      >
+                        <Upload aria-hidden="true" />{" "}
+                        {strings.settings.exportSettings}
+                      </button>
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        onClick={() => void importSettings()}
+                        disabled={dataBusy}
+                      >
+                        <DownloadCloud aria-hidden="true" />{" "}
+                        {strings.settings.importSettings}
+                      </button>
+                      <button
+                        className="danger-button"
+                        type="button"
+                        onClick={() => void resetSettings()}
+                        disabled={dataBusy}
+                      >
+                        <RotateCcw aria-hidden="true" />{" "}
+                        {strings.settings.resetSettings}
+                      </button>
+                    </div>
+                    {dataStatus ? (
+                      <small className="settings-data-status" role="status">
+                        {dataStatus}
+                      </small>
+                    ) : null}
+                  </div>
+                </SettingsSection>
               </SettingsPanel>
             ) : null}
             {tab === "reading" ? (
@@ -1521,8 +1626,102 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
                 ) : null}
               </SettingsPanel>
             ) : null}
+            {tab === "advanced" ? (
+              <SettingsPanel id="advanced" title={strings.settings.advanced}>
+                <p className="settings-lead">{strings.settings.advancedHelp}</p>
+                <label className="switch-row">
+                  <span>
+                    <strong>{strings.settings.blockAds}</strong>
+                    <small>{strings.settings.blockAdsHelp}</small>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={advertisingOn}
+                    onChange={(event) =>
+                      void setAdvertisingBlocking(event.target.checked)
+                    }
+                  />
+                </label>
+                <label className="switch-row">
+                  <span>
+                    <strong>{strings.settings.blockThreats}</strong>
+                    <small>{strings.settings.blockThreatsHelp}</small>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={threatsOn}
+                    onChange={(event) =>
+                      void setThreatBlocking(event.target.checked)
+                    }
+                  />
+                </label>
+                {threatsOn ? null : (
+                  <div className="settings-warning" role="status">
+                    {strings.settings.threatOffWarning}
+                  </div>
+                )}
+              </SettingsPanel>
+            ) : null}
           </div>
         </div>
+        {confirmThreatOff ? (
+          <div
+            className="settings-confirm-overlay"
+            onClick={(event) => {
+              if (event.target === event.currentTarget) cancelThreatOff();
+            }}
+          >
+            <form
+              className="settings-confirm-card"
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="settings-threat-off-title"
+              aria-describedby="settings-threat-off-lead"
+              onClick={(event) => event.stopPropagation()}
+              onSubmit={(event) => {
+                event.preventDefault();
+                void confirmDisableThreats();
+              }}
+            >
+              <h2 id="settings-threat-off-title">
+                {strings.settings.threatDisableTitle}
+              </h2>
+              <p id="settings-threat-off-lead">
+                {strings.settings.threatDisableLead}
+              </p>
+              <label className="settings-confirm-field">
+                <span>{strings.settings.threatDisableHelp}</span>
+                <input
+                  ref={confirmInputRef}
+                  type="text"
+                  autoComplete="off"
+                  spellCheck={false}
+                  aria-label={strings.settings.threatDisableInput}
+                  value={confirmToken}
+                  onChange={(event) => setConfirmToken(event.target.value)}
+                />
+              </label>
+              <div className="settings-confirm-actions">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={cancelThreatOff}
+                >
+                  {strings.settings.threatDisableCancel}
+                </button>
+                <button
+                  className="danger-button"
+                  type="submit"
+                  disabled={
+                    confirmToken !== strings.settings.threatDisableToken
+                  }
+                >
+                  {strings.settings.threatDisableConfirm}
+                </button>
+              </div>
+            </form>
+          </div>
+        ) : null}
       </section>
     </div>
   );
@@ -1547,6 +1746,21 @@ function SettingsPanel({
       <h2>{title}</h2>
       {children}
     </section>
+  );
+}
+
+function SettingsSection({
+  title,
+  children,
+}: {
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="settings-section">
+      <h3>{title}</h3>
+      {children}
+    </div>
   );
 }
 

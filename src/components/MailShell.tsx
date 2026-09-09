@@ -249,28 +249,6 @@ export function MailShell({ onOpenSettings }: Props) {
     setMessages,
   ]);
 
-  const refresh = useCallback(async () => {
-    if (!activeAccountId || busy) return;
-    setBusy(true);
-    try {
-      await api.syncAccount(activeAccountId);
-      await loadAccountData();
-      await refreshList();
-    } catch (cause) {
-      setError(String(cause));
-    } finally {
-      setBusy(false);
-    }
-  }, [
-    activeAccountId,
-    busy,
-    loadAccountData,
-    loadMessages,
-    refreshList,
-    setBusy,
-    setError,
-  ]);
-
   async function loadMoreMessages() {
     if (
       !activeAccountId ||
@@ -386,6 +364,29 @@ export function MailShell({ onOpenSettings }: Props) {
     loadMessages,
     setError,
     setMessages,
+  ]);
+
+  const refresh = useCallback(async () => {
+    if (!activeAccountId || busy) return;
+    setBusy(true);
+    try {
+      await api.syncAccount(activeAccountId);
+      await loadAccountData();
+      if (queryRef.current.trim()) await runSearch();
+      else await loadMessages();
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setBusy(false);
+    }
+  }, [
+    activeAccountId,
+    busy,
+    loadAccountData,
+    loadMessages,
+    runSearch,
+    setBusy,
+    setError,
   ]);
 
   async function refreshList() {
@@ -663,10 +664,18 @@ export function MailShell({ onOpenSettings }: Props) {
         else fn();
       });
     void api
-      .onMessageChanged(({ accountId }) => {
-        if (accountId !== useAppStore.getState().activeAccountId) return;
+      .onMessageChanged(({ accountId, messageId, kind }) => {
+        const store = useAppStore.getState();
+        if (accountId !== store.activeAccountId) return;
         if (queryRef.current.trim()) void runSearch();
         else void loadMessages();
+        if (
+          messageId &&
+          store.selectedMessage?.id === messageId &&
+          kind === "moved"
+        ) {
+          store.selectMessage(undefined);
+        }
       })
       .then((fn) => {
         if (active) unsubs.push(fn);
@@ -894,14 +903,15 @@ export function MailShell({ onOpenSettings }: Props) {
     value: number,
     persist: boolean,
   ) {
+    const previous = useAppStore.getState().settings;
     const limits = {
       folderPaneWidth: [210, 420],
-      messagePaneWidth: [280, 560],
-      readerPaneHeight: [200, 800],
+      messagePaneWidth: [300, 720],
+      readerPaneHeight: [240, 800],
     } as const;
     const [minimum, maximum] = limits[key];
     const next = {
-      ...useAppStore.getState().settings,
+      ...previous,
       [key]: Math.round(Math.min(maximum, Math.max(minimum, value))),
     };
     setSettings(next);
@@ -909,7 +919,10 @@ export function MailShell({ onOpenSettings }: Props) {
       void api
         .saveSettings(next)
         .then(setSettings)
-        .catch((cause) => setError(String(cause)));
+        .catch((cause) => {
+          setSettings(previous);
+          setError(String(cause));
+        });
   }
 
   async function openDraft(id: string) {
@@ -1065,10 +1078,9 @@ export function MailShell({ onOpenSettings }: Props) {
     window.setTimeout(() => firstFocusable?.focus(), 0);
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setSidebarOpen(false);
-      }
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      event.preventDefault();
+      setSidebarOpen(false);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => {
@@ -1101,6 +1113,40 @@ export function MailShell({ onOpenSettings }: Props) {
       }
     };
   }, [sidebarOpen]);
+
+  const [narrowViewport, setNarrowViewport] = useState(() =>
+    typeof window.matchMedia === "function"
+      ? window.matchMedia("(max-width: 760px)").matches
+      : false,
+  );
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia("(max-width: 760px)");
+    const update = () => setNarrowViewport(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+  const readerOverlay =
+    Boolean(selectedMessage) &&
+    (settings.readingPane === "hidden" || narrowViewport);
+
+  useEffect(() => {
+    if (!readerOverlay) return;
+    const shell = document.querySelector(".mail-shell");
+    if (!shell) return;
+    const inertTargets = [...shell.children].filter(
+      (child) => child.id !== "reader-pane",
+    );
+    for (const target of inertTargets) {
+      target.setAttribute("inert", "");
+    }
+    return () => {
+      for (const target of inertTargets) {
+        target.removeAttribute("inert");
+      }
+    };
+  }, [readerOverlay]);
 
   const activeMailbox = useMemo(
     () => mailboxes.find((box) => box.id === activeMailboxId),

@@ -24,7 +24,6 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "../api";
 import { formatBytes, formatFullMessageDate } from "../format";
 import { strings } from "../i18n";
@@ -121,7 +120,21 @@ export function MessageReader() {
       : false,
   );
   const treatAsOverlay = isOverlay || (narrowViewport && message !== undefined);
-  const dialogRef = useDialogFocus(() => selectMessage(undefined));
+  const dialogRef = useDialogFocus(() => {
+    if (preview) {
+      setPreview(null);
+      return;
+    }
+    if (snoozeOpen) {
+      setSnoozeOpen(false);
+      return;
+    }
+    if (moreOpen) {
+      setMoreOpen(false);
+      return;
+    }
+    selectMessage(undefined);
+  });
   const titleRef = useRef<HTMLHeadingElement>(null);
   const overlayMessageId = message?.id;
 
@@ -152,7 +165,13 @@ export function MessageReader() {
       }
     };
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMoreOpen(false);
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      if (snoozeOpen) {
+        setSnoozeOpen(false);
+        return;
+      }
+      setMoreOpen(false);
     };
     document.addEventListener("mousedown", close);
     document.addEventListener("keydown", onKey);
@@ -160,7 +179,7 @@ export function MessageReader() {
       document.removeEventListener("mousedown", close);
       document.removeEventListener("keydown", onKey);
     };
-  }, [moreOpen]);
+  }, [moreOpen, snoozeOpen]);
 
   const [menuMessageId, setMenuMessageId] = useState(message?.id);
   if (message?.id !== menuMessageId) {
@@ -176,33 +195,38 @@ export function MessageReader() {
   const isJunkMailbox = currentMailbox?.role === "junk";
 
   async function handleExternalLink(url: string) {
-    if (!/^https?:/i.test(url)) return;
-    let display: string;
+    let check;
     try {
-      const parsed = new URL(url);
-      // Never hand credentials to the browser or show a misleading host.
-      if (parsed.username || parsed.password) return;
-      display = parsed.href;
+      check = await api.inspectExternalUrl(url);
     } catch {
       return;
     }
-    const confirmed = await api.showNativeConfirm(
-      strings.appName,
-      strings.reader.openLink(display),
-    );
-    if (confirmed) {
-      await openUrl(display);
+    const shownUrl =
+      check.url.length > 1400 ? `${check.url.slice(0, 1400)}…` : check.url;
+    if (check.reportedThreat) {
+      const proceed = await api.showNativeConfirm(
+        strings.reader.reportedThreatTitle,
+        strings.reader.reportedThreat(check.hostname, shownUrl),
+      );
+      if (!proceed) return;
+      const anyway = await api.showNativeConfirm(
+        strings.reader.reportedThreatTitle,
+        strings.reader.reportedThreatOpenAnyway,
+      );
+      if (!anyway) return;
+    } else {
+      const confirmed = await api.showNativeConfirm(
+        strings.appName,
+        strings.reader.openLink(check.hostname, shownUrl),
+      );
+      if (!confirmed) return;
+    }
+    try {
+      await api.openExternalUrl(check.url, check.reportedThreat);
+    } catch {
+      // Opening failures stay in the generic native error; do not surface URLs.
     }
   }
-
-  useEffect(() => {
-    if (!treatAsOverlay || !message) return;
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") selectMessage(undefined);
-    };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [message, selectMessage, treatAsOverlay]);
 
   const menuHandlersRef = useRef({
     message,
@@ -253,11 +277,27 @@ export function MessageReader() {
     loadedHtml && loadedHtml.messageId === message?.id
       ? loadedHtml.html
       : undefined;
-  const remainingBlockedImages = useMemo(() => {
-    if (!sanitized) return 0;
-    if (!currentLoadedHtml) return sanitized.blockedImages;
-    return (currentLoadedHtml.match(/data-remote-src=/g) || []).length;
-  }, [sanitized, currentLoadedHtml]);
+  const { remainingBlockedImages, filteredImages, threatImages } =
+    useMemo(() => {
+      if (!currentLoadedHtml) {
+        return {
+          remainingBlockedImages: sanitized?.blockedImages ?? 0,
+          filteredImages: 0,
+          threatImages: 0,
+        };
+      }
+      const doc = new DOMParser().parseFromString(
+        currentLoadedHtml,
+        "text/html",
+      );
+      return {
+        remainingBlockedImages: doc.querySelectorAll("img[data-remote-src]")
+          .length,
+        filteredImages: doc.querySelectorAll("img[data-content-blocked]")
+          .length,
+        threatImages: doc.querySelectorAll("img[data-threat-blocked]").length,
+      };
+    }, [sanitized, currentLoadedHtml]);
   const inlineAttachments = useMemo(
     () => attachments?.filter((attachment) => attachment.inline) ?? [],
     [attachments],
@@ -294,10 +334,14 @@ export function MessageReader() {
     };
   }, [inlineAttachments, messageAccountId, messageId, sanitized]);
 
+  const frameLinkCleanup = useRef<(() => void) | undefined>(undefined);
+
   function wireFrameLinks() {
+    frameLinkCleanup.current?.();
+    frameLinkCleanup.current = undefined;
     const body = frame.current?.contentDocument?.body;
     if (!body) return;
-    const handleLink = async (event: MouseEvent) => {
+    const handleLink = (event: MouseEvent) => {
       if (event.button > 1) return;
       const target = (event.target as HTMLElement).closest<HTMLAnchorElement>(
         "a[href]",
@@ -306,19 +350,24 @@ export function MessageReader() {
       event.preventDefault();
       const url = target.href;
       if (/^https?:/i.test(url)) {
-        const confirmed = await api.showNativeConfirm(
-          strings.appName,
-          strings.reader.openLink(url),
-        );
-        if (confirmed) {
-          void openUrl(url);
-        }
+        void handleExternalLink(url);
       }
       if (/^mailto:/i.test(url)) openComposer({ prefill: parseMailto(url) });
     };
     body.addEventListener("click", handleLink);
     body.addEventListener("auxclick", handleLink);
+    frameLinkCleanup.current = () => {
+      body.removeEventListener("click", handleLink);
+      body.removeEventListener("auxclick", handleLink);
+    };
   }
+
+  useEffect(
+    () => () => {
+      frameLinkCleanup.current?.();
+    },
+    [],
+  );
 
   async function loadImages() {
     if (!sanitized || loadingImages || !messageId) return;
@@ -342,9 +391,18 @@ export function MessageReader() {
             const url = image.dataset.remoteSrc;
             if (!url) return;
             try {
-              image.src = await api.fetchRemoteImage(url);
+              const result = await api.fetchRemoteImage(url);
+              if (result.status === "blocked") {
+                image.dataset.contentBlocked = "true";
+                image.alt = strings.reader.filteredImage;
+              } else if (result.status === "reportedThreat") {
+                image.dataset.threatBlocked = "true";
+                image.alt = strings.reader.threatImage;
+              } else {
+                image.src = result.dataUrl;
+                image.classList.remove("remote-image-blocked");
+              }
               image.removeAttribute("data-remote-src");
-              image.classList.remove("remote-image-blocked");
             } catch {
               // Keep placeholder on individual image error without blocking other images
             }
@@ -724,6 +782,7 @@ export function MessageReader() {
   return (
     <article
       className="reader-pane"
+      id="reader-pane"
       aria-labelledby="message-title"
       ref={treatAsOverlay ? dialogRef : undefined}
       role={treatAsOverlay ? "dialog" : undefined}
@@ -1093,6 +1152,18 @@ export function MessageReader() {
           </div>
         ) : null}
       </header>
+      {filteredImages > 0 ? (
+        <div className="remote-content-banner" role="status" aria-live="polite">
+          <ShieldCheck aria-hidden="true" />
+          <span>{strings.reader.filteredImages(filteredImages)}</span>
+        </div>
+      ) : null}
+      {threatImages > 0 ? (
+        <div className="remote-content-banner" role="status" aria-live="polite">
+          <ShieldAlert aria-hidden="true" />
+          <span>{strings.reader.threatImages(threatImages)}</span>
+        </div>
+      ) : null}
       {sanitized && remainingBlockedImages > 0 ? (
         <div className="remote-content-banner" role="status" aria-live="polite">
           <Image aria-hidden="true" />
@@ -1124,6 +1195,7 @@ export function MessageReader() {
           <iframe
             ref={frame}
             title={strings.reader.messageContent}
+            tabIndex={treatAsOverlay ? 0 : undefined}
             sandbox="allow-same-origin"
             srcDoc={frameHtml}
             onLoad={wireFrameLinks}

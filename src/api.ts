@@ -21,6 +21,8 @@ import type {
   AttachmentPreview,
   BulkOutcome,
   RecipientSuggestion,
+  ExternalLinkCheck,
+  RemoteImageResult,
   MessageChangeEvent,
   MessagePage,
   MessageSummary,
@@ -239,7 +241,12 @@ export const api = {
   chooseAttachments: (accountId: string, inline: boolean) =>
     call<ComposeAttachment[]>("choose_attachments", { accountId, inline }),
   fetchRemoteImage: (url: string) =>
-    call<string>("fetch_remote_image", { url }),
+    call<RemoteImageResult>("fetch_remote_image", { url }),
+  inspectExternalUrl: (url: string) =>
+    call<ExternalLinkCheck>("inspect_external_url", { url }),
+  openExternalUrl: (url: string, openAnyway = false) =>
+    call<void>("open_external_url", { url, openAnyway }),
+  openHelpUrl: () => call<void>("open_help_url"),
   readMessageInlineImage: (
     accountId: string,
     messageId: number,

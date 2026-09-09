@@ -47,7 +47,7 @@ import {
 import { api } from "../api";
 import { shortcutMod } from "../format";
 import { strings } from "../i18n";
-import { htmlToPlainText, sanitizeReceivedHtml } from "../security";
+import { htmlToPlainText, sanitizeComposeHtml } from "../security";
 import { useAppStore, type ComposerSeed } from "../store";
 import type {
   ComposeAttachment,
@@ -205,6 +205,8 @@ export function Composer({ accountId }: Props) {
     new Map<string, { dataUrl: string; contentId: string }>(),
   );
   const [sending, setSending] = useState(false);
+  const [linkDialogOpen, setLinkDialogOpen] = useState(false);
+  const [linkValue, setLinkValue] = useState("https://");
   const [showCc, setShowCc] = useState(Boolean(cc));
   const [recipientError, setRecipientError] = useState<string>();
   const [subjectError, setSubjectError] = useState<string>();
@@ -229,13 +231,22 @@ export function Composer({ accountId }: Props) {
     draftRevision.current += 1;
     setSaveState("unsaved");
   }, []);
-  const dialogRef = useDialogFocus(requestClose);
+  const dialogRef = useDialogFocus(() => {
+    if (linkDialogOpen) {
+      setLinkDialogOpen(false);
+      return;
+    }
+    void requestClose();
+  });
 
   const editor = useEditor({
     extensions: [
       StarterKit.configure({ link: false, underline: false }),
       Underline,
-      Link.configure({ openOnClick: false }),
+      Link.configure({
+        openOnClick: false,
+        protocols: ["http", "https", "mailto"],
+      }),
       Image.configure({ allowBase64: true }),
       TextStyle,
       FontSize,
@@ -255,7 +266,7 @@ export function Composer({ accountId }: Props) {
         class: "composer-editor",
         "aria-label": strings.composer.messageBody,
       },
-      transformPastedHTML: (html) => sanitizeReceivedHtml(html).html,
+      transformPastedHTML: (html) => sanitizeComposeHtml(html),
     },
     onUpdate: markUnsaved,
   });
@@ -298,7 +309,9 @@ export function Composer({ accountId }: Props) {
           next.set(attachment.token, { dataUrl, contentId });
         }
         setInlineImages(next);
-        editor.commands.setContent(html, { emitUpdate: false });
+        editor.commands.setContent(sanitizeComposeHtml(html), {
+          emitUpdate: false,
+        });
       })
       .catch((cause) => setError(String(cause)));
     return () => {
@@ -526,7 +539,9 @@ export function Composer({ accountId }: Props) {
     try {
       const outcome = await api.sendMessage(buildDraft());
       announceLocalMailChanged(accountId);
-      if (outcome.detail) setError(outcome.detail);
+      if (outcome.state === "needs_attention" && outcome.detail) {
+        setError(outcome.detail);
+      }
       if (outcome.state === "scheduled") {
         useAppStore.getState().selectLocalView("outbox");
       }
@@ -542,6 +557,7 @@ export function Composer({ accountId }: Props) {
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (minimized) return;
+      if (document.querySelector(".settings-window")) return;
       if (!(event.metaKey || event.ctrlKey)) return;
       if (event.key === "Enter") {
         event.preventDefault();
@@ -597,17 +613,18 @@ export function Composer({ accountId }: Props) {
 
   function addLink() {
     const current = editor?.getAttributes("link").href as string | undefined;
-    const raw = window.prompt(
-      strings.composer.webAddress,
-      current ?? "https://",
-    );
-    if (raw === null) return;
-    const href = raw.trim().slice(0, 2000);
+    setLinkValue(current ?? "https://");
+    setLinkDialogOpen(true);
+  }
+
+  function applyLink() {
+    const href = linkValue.trim().slice(0, 2000);
     if (!/^(https?|mailto):/i.test(href) || /\s/.test(href)) {
       setError(strings.composer.unsafeLink);
       return;
     }
     editor?.chain().focus().extendMarkRange("link").setLink({ href }).run();
+    setLinkDialogOpen(false);
   }
 
   function adjustIndent(delta: number) {
@@ -1269,6 +1286,51 @@ export function Composer({ accountId }: Props) {
             {strings.composer.discard}
           </button>
         </footer>
+      {linkDialogOpen ? (
+        <div
+          className="settings-confirm-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="composer-link-title"
+        >
+          <form
+            className="settings-confirm-dialog"
+            onSubmit={(event) => {
+              event.preventDefault();
+              applyLink();
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== "Escape") return;
+              event.preventDefault();
+              event.stopPropagation();
+              setLinkDialogOpen(false);
+            }}
+          >
+            <h2 id="composer-link-title">{strings.composer.insertLink}</h2>
+            <label>
+              <span>{strings.composer.webAddress}</span>
+              <input
+                autoFocus
+                value={linkValue}
+                onChange={(event) => setLinkValue(event.target.value)}
+                placeholder="https://"
+              />
+            </label>
+            <div className="settings-confirm-actions">
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => setLinkDialogOpen(false)}
+              >
+                {strings.common.cancel}
+              </button>
+              <button className="primary-button" type="submit">
+                {strings.composer.insertLink}
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
       </section>
     </div>
   );
@@ -1555,10 +1617,9 @@ function seedBody(seed?: ComposerSeed): string {
   const draftText = seed?.draft?.textBody ?? seed?.prefill?.textBody;
   if (!seed?.sourceMessage) {
     if (!draftHtml && !draftText) return "<p></p>";
-    return (
-      draftHtml ??
-      `<p>${escapeHtml(draftText ?? "").replace(/\n/g, "<br>")}</p>`
-    );
+    return draftHtml
+      ? sanitizeComposeHtml(draftHtml)
+      : `<p>${escapeHtml(draftText ?? "").replace(/\n/g, "<br>")}</p>`;
   }
   const message = seed.sourceMessage;
   const intro =
@@ -1570,7 +1631,7 @@ function seedBody(seed?: ComposerSeed): string {
             message.senderAddress ||
             strings.composer.sender,
         );
-  return `<p></p><p><br></p><blockquote><p><strong>${escapeHtml(intro)}</strong></p>${message.htmlBody ? sanitizeReceivedHtml(message.htmlBody).html : `<p>${escapeHtml(message.textBody).replace(/\n/g, "<br>")}</p>`}</blockquote>`;
+  return `<p></p><p><br></p><blockquote><p><strong>${escapeHtml(intro)}</strong></p>${message.htmlBody ? sanitizeComposeHtml(message.htmlBody) : `<p>${escapeHtml(message.textBody).replace(/\n/g, "<br>")}</p>`}</blockquote>`;
 }
 
 function composerTitle(seed?: ComposerSeed): string {

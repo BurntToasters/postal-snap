@@ -25,6 +25,10 @@ fn default_undo_send_seconds() -> u32 {
     10
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum TlsMode {
@@ -344,6 +348,10 @@ pub struct AppSettings {
     pub window_effects: bool,
     #[serde(default = "default_undo_send_seconds")]
     pub undo_send_seconds: u32,
+    #[serde(default = "default_true")]
+    pub block_advertising_and_tracking: bool,
+    #[serde(default = "default_true")]
+    pub block_reported_threats: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -370,6 +378,10 @@ pub struct PortableSettings {
     pub window_effects: bool,
     #[serde(default = "default_undo_send_seconds")]
     pub undo_send_seconds: u32,
+    #[serde(default = "default_true")]
+    pub block_advertising_and_tracking: bool,
+    #[serde(default = "default_true")]
+    pub block_reported_threats: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -397,6 +409,8 @@ impl Default for AppSettings {
             reader_pane_height: 360,
             window_effects: false,
             undo_send_seconds: default_undo_send_seconds(),
+            block_advertising_and_tracking: true,
+            block_reported_threats: true,
         }
     }
 }
@@ -497,67 +511,7 @@ pub struct IpcError {
 impl From<String> for IpcError {
     fn from(message: String) -> Self {
         let lower = message.to_ascii_lowercase();
-        let (code, retryable) = if lower.contains("settings could not be migrated") {
-            ("settingsMigrationFailed", true)
-        } else if lower.contains("settings file was not found") {
-            ("settingsNotFound", false)
-        } else if lower.contains("settings file is too large")
-            || lower.contains("settings payload is too large")
-        {
-            ("settingsTooLarge", false)
-        } else if lower.contains("settings export is invalid")
-            || lower.contains("invalid application settings")
-            || lower.contains("settings path is invalid")
-        {
-            ("settingsInvalid", false)
-        } else if lower.contains("could not inspect application settings")
-            || lower.contains("could not open application settings")
-            || lower.contains("could not read application settings")
-            || lower.contains("settings path is not a regular file")
-            || lower.contains("choose a valid settings file")
-        {
-            ("settingsReadFailed", true)
-        } else if lower.contains("could not create application data directory") {
-            ("localStorageFailed", true)
-        } else if lower.contains("settings") {
-            ("settingsWriteFailed", true)
-        } else if lower.contains("does not belong")
-            || lower.contains("between accounts")
-            || lower.contains("permission has expired")
-        {
-            ("accessDenied", false)
-        } else if lower.contains("not found") {
-            ("notFound", false)
-        } else if lower.contains("too large")
-            || lower.contains("too many")
-            || lower.contains("exceeded safe")
-        {
-            ("limitExceeded", false)
-        } else if lower.contains("sign-in")
-            || lower.contains("password")
-            || lower.contains("credential")
-        {
-            ("authenticationFailed", true)
-        } else if lower.contains("timed out")
-            || lower.contains("connection")
-            || lower.contains("mail server")
-            || lower.contains("offline")
-        {
-            ("connectionFailed", true)
-        } else if lower.contains("invalid")
-            || lower.starts_with("enter ")
-            || lower.starts_with("choose ")
-            || lower.starts_with("add ")
-            || lower.contains("required")
-            || lower.contains("unsupported")
-            || lower.starts_with("only ")
-        {
-            ("invalidInput", false)
-        } else if lower.contains("database") {
-            ("localStorageFailed", true)
-        } else {
-            ("operationFailed", true)
-        };
+        let (code, retryable) = classify_ipc_message(&lower);
         let message = match code {
             "accessDenied" => "That item is not available for this account.",
             "notFound" => "That item is no longer available. Refresh mail and try again.",
@@ -595,6 +549,118 @@ impl From<String> for IpcError {
 impl From<&str> for IpcError {
     fn from(message: &str) -> Self {
         message.to_string().into()
+    }
+}
+
+fn classify_ipc_message(lower: &str) -> (&'static str, bool) {
+    if lower.contains("settings could not be migrated")
+        || lower.contains("saved application settings could not be migrated")
+    {
+        return ("settingsMigrationFailed", true);
+    }
+    if lower.contains("settings file was not found") {
+        return ("settingsNotFound", false);
+    }
+    if lower.contains("settings file is too large")
+        || lower.contains("settings payload is too large")
+    {
+        return ("settingsTooLarge", false);
+    }
+    if lower.contains("settings export is invalid")
+        || lower.contains("invalid application settings")
+        || lower.contains("settings path is invalid")
+        || lower.contains("settings json is invalid")
+    {
+        return ("settingsInvalid", false);
+    }
+    if lower.contains("could not inspect application settings")
+        || lower.contains("could not open application settings")
+        || lower.contains("could not read application settings")
+        || lower.contains("settings path is not a regular file")
+        || lower.contains("choose a valid settings file")
+    {
+        return ("settingsReadFailed", true);
+    }
+    if lower.contains("could not create application data directory") {
+        return ("localStorageFailed", true);
+    }
+    if lower.contains("could not replace application settings")
+        || lower.contains("could not save settings")
+        || lower.contains("could not write application settings")
+        || lower.contains("settings path has no parent directory")
+    {
+        return ("settingsWriteFailed", true);
+    }
+    if let Some(action) = redacted_mail_action(lower) {
+        return classify_mail_action(action);
+    }
+    if lower.contains("does not belong")
+        || lower.contains("between accounts")
+        || lower.contains("permission has expired")
+    {
+        return ("accessDenied", false);
+    }
+    if lower.contains("not found") {
+        return ("notFound", false);
+    }
+    if lower.contains("too large") || lower.contains("too many") || lower.contains("exceeded safe")
+    {
+        return ("limitExceeded", false);
+    }
+    if lower.contains("sign-in") || lower.contains("credential") || lower.contains("app-specific") {
+        return ("authenticationFailed", true);
+    }
+    if lower.contains("timed out")
+        || lower.contains("connection")
+        || lower.contains("mail server")
+        || lower.contains("offline")
+    {
+        return ("connectionFailed", true);
+    }
+    if lower.contains("invalid")
+        || lower.starts_with("enter ")
+        || lower.starts_with("choose ")
+        || lower.starts_with("add ")
+        || lower.contains("required")
+        || lower.contains("unsupported")
+        || lower.starts_with("only ")
+    {
+        return ("invalidInput", false);
+    }
+    if lower.contains("database") {
+        return ("localStorageFailed", true);
+    }
+    ("operationFailed", true)
+}
+
+fn redacted_mail_action(lower: &str) -> Option<&str> {
+    let (action, rest) = lower.split_once(" failed.")?;
+    if rest.contains("check the")
+        && (rest.contains("mail server")
+            || rest.contains("internet")
+            || rest.contains("password")
+            || rest.contains("server settings"))
+    {
+        Some(action)
+    } else {
+        None
+    }
+}
+
+fn classify_mail_action(action: &str) -> (&'static str, bool) {
+    if action.contains("sign-in") {
+        ("authenticationFailed", true)
+    } else if action.contains("certificate") {
+        ("invalidInput", false)
+    } else if action.contains("connection")
+        || action.contains("tls")
+        || action.contains("greeting")
+        || action.contains("starttls")
+        || action.contains("inbox monitoring")
+    {
+        ("connectionFailed", true)
+    } else {
+        ("operationFailed", true)
     }
 }
 
@@ -744,6 +810,32 @@ pub fn validate_compose_draft(draft: &ComposeDraft) -> Result<(), String> {
     Ok(())
 }
 
+pub fn validate_compose_sender(
+    from: Option<&str>,
+    account_email: &str,
+    aliases: &[String],
+) -> Result<(), String> {
+    let Some(from) = from.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(());
+    };
+    let mailbox: lettre::message::Mailbox = from
+        .parse()
+        .map_err(|_| "The sender address is invalid.".to_string())?;
+    let address = mailbox.email.to_string();
+    if sender_address_allowed(&address, account_email, aliases) {
+        Ok(())
+    } else {
+        Err("Choose a From address that belongs to this account.".into())
+    }
+}
+
+fn sender_address_allowed(address: &str, account_email: &str, aliases: &[String]) -> bool {
+    let lower = address.trim().to_ascii_lowercase();
+    std::iter::once(account_email)
+        .chain(aliases.iter().map(String::as_str))
+        .any(|item| item.trim().to_ascii_lowercase() == lower)
+}
+
 pub fn validate_folder_name(name: &str) -> Result<String, String> {
     let trimmed = name.trim();
     if trimmed.is_empty() || trimmed.len() > 128 || trimmed.contains(char::is_control) {
@@ -765,7 +857,23 @@ pub fn validate_folder_name(name: &str) -> Result<String, String> {
     Ok(trimmed.to_string())
 }
 
+pub const ROLE_SOURCE_SPECIAL_USE: &str = "specialUse";
+pub const ROLE_SOURCE_NAME: &str = "name";
+
+#[allow(dead_code)]
 pub fn mailbox_role(name: &str, attributes: &[String]) -> MailboxRole {
+    mailbox_role_assignment(name, attributes).0
+}
+
+pub fn mailbox_role_assignment(name: &str, attributes: &[String]) -> (MailboxRole, &'static str) {
+    let special_use = mailbox_role_from_attributes(attributes);
+    if special_use != MailboxRole::Other {
+        return (special_use, ROLE_SOURCE_SPECIAL_USE);
+    }
+    (mailbox_role_from_name(name), ROLE_SOURCE_NAME)
+}
+
+fn mailbox_role_from_attributes(attributes: &[String]) -> MailboxRole {
     let has = |expected: &str| {
         attributes.iter().any(|attribute| {
             attribute
@@ -792,6 +900,10 @@ pub fn mailbox_role(name: &str, attributes: &[String]) -> MailboxRole {
     if has("junk") || has("spam") {
         return MailboxRole::Junk;
     }
+    MailboxRole::Other
+}
+
+fn mailbox_role_from_name(name: &str) -> MailboxRole {
     let leaf = name
         .rsplit(['/', '.'])
         .next()
@@ -924,6 +1036,38 @@ mod tests {
         assert_eq!(auth.code, "authenticationFailed");
         assert!(auth.message.contains("password"));
         assert!(!auth.message.contains("app-specific"));
+        let redacted_auth = IpcError::from(
+            "Incoming sign-in failed. Check the server settings, password, and internet connection.",
+        );
+        assert_eq!(redacted_auth.code, "authenticationFailed");
+        let redacted_conn = IpcError::from(
+            "Incoming connection failed. Check the server settings, password, and internet connection.",
+        );
+        assert_eq!(redacted_conn.code, "connectionFailed");
+        let redacted_move = IpcError::from(
+            "Move failed. Check the server settings, password, and internet connection.",
+        );
+        assert_eq!(redacted_move.code, "operationFailed");
+        let redacted_plain = IpcError::from(crate::security::redact_error(
+            &"secret host",
+            "Incoming sign-in",
+        ));
+        assert_eq!(redacted_plain.code, "authenticationFailed");
+    }
+
+    #[test]
+    fn compose_from_must_belong_to_the_account() {
+        assert!(validate_compose_sender(None, "sam@example.com", &[]).is_ok());
+        assert!(validate_compose_sender(Some("sam@example.com"), "sam@example.com", &[]).is_ok());
+        assert!(validate_compose_sender(
+            Some("Sam <family@icloud.com>"),
+            "sam@example.com",
+            &["family@icloud.com".into()]
+        )
+        .is_ok());
+        assert!(
+            validate_compose_sender(Some("attacker@example.com"), "sam@example.com", &[]).is_err()
+        );
     }
 
     #[test]

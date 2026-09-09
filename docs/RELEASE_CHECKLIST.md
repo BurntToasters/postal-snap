@@ -38,7 +38,10 @@ Required for GitHub 0.1.1. The live iCloud smoke is a signing-host gate; do not 
 
 - [ ] Hostile-message fixtures cannot run scripts, submit forms, frame content, or load remote resources.
 - [ ] Remote images never load before consent; private, loopback, link-local, and redirect targets stay blocked.
-- [ ] External links require activation and open in the system browser.
+- [ ] Known advertising and tracking images stay blocked after Load images; fetch failures remain retryable.
+- [ ] Reported-threat images stay blocked after Load images and are not labeled Safe or confirmed.
+- [ ] `npm run filters:check` matches the committed official EasyList/EasyPrivacy and TweetFeed snapshots. Refresh TweetFeed alone with `npm run tweetfeed:update` when shipping a threat-list bump.
+- [ ] External links require activation, show the real hostname, warn on reported-threat matches, and open only through the Rust opener.
 - [ ] Passwords, addresses, subjects, bodies, attachment names, and server replies do not appear in logs.
 - [ ] Keyboard-only setup, mail reading, composing, settings, and account switching work.
 - [ ] Screen-reader labels, visible focus, reduced motion, forced colors, and 200% text pass.
@@ -47,11 +50,11 @@ Required for GitHub 0.1.1. The live iCloud smoke is a signing-host gate; do not 
 
 ## GitHub packages (required for 0.1.1)
 
-Windows creates the GitHub draft. Mac and Linux wait for that draft and never create a second one. Run `release:linux` once on each matching x64 and arm64 signing host; it dispatches by host architecture. Each continue path uploads only that host's artifacts; do not run complete-set verification until every architecture is present.
+Windows creates the GitHub draft. Mac and Linux wait for that draft and never create a second one. Run `release:linux` on the x64 signing host (required). An arm64 Linux host is optional. Each continue path uploads only that host's artifacts; do not run complete-set verification until the required architectures are present.
 
 - [ ] Windows x64 and arm64 NSIS installers have valid Azure Artifact Signing Authenticode signatures and updater signatures. Run `npm run setup:win:artifact-signing` once as Administrator on the VM before `release:win`.
 - [ ] `npm run validate:macos-entitlements` passes before compilation; the universal macOS app passes `codesign`, local app-ticket validation, and Gatekeeper; the DMG passes `hdiutil verify`; and the ZIP contains that same notarized, stapled app.
-- [ ] Linux x64 and arm64 AppImages launch; Flatpak bundles pass sandbox smoke tests.
+- [ ] Linux x64 AppImage launches; Flatpak bundle passes sandbox smoke tests. arm64 Linux is optional until a signing host ships it.
 - [ ] `mailto:` opens a prefilled Postal Snap composer on every platform.
 - [ ] Direct builds update from the correct signed stable or beta GitHub manifest.
 - [ ] Install, upgrade, and uninstall preserve or remove user data exactly as documented.
