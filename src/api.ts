@@ -89,6 +89,7 @@ export type NativeCommand =
   | "rename_folder"
   | "delete_folder"
   | "empty_trash"
+  | "empty_junk"
   | "search_cached_messages"
   | "search_all_cached_messages"
   | "search_server_messages"
@@ -247,6 +248,7 @@ export const api = {
   deleteFolder: (accountId: string, mailboxId: number) =>
     call<void>("delete_folder", { accountId, mailboxId }),
   emptyTrash: (accountId: string) => call<void>("empty_trash", { accountId }),
+  emptyJunk: (accountId: string) => call<void>("empty_junk", { accountId }),
   searchCached: (query: SearchQuery) =>
     call<MessageSummary[]>("search_cached_messages", { query }),
   searchAllCached: (query: string, limit?: number) =>

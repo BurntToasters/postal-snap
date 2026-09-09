@@ -206,6 +206,7 @@ test("direct and Store builds keep separate capabilities", async () => {
   assert.ok(directCapability.permissions.includes("process:allow-restart"));
   assert.ok(!directCapability.permissions.includes("process:default"));
   assert.ok(!directCapability.permissions.includes("notification:default"));
+  assert.ok(!directCapability.permissions.includes("deep-link:allow-register"));
   assert.ok(!storeCapability.permissions.includes("updater:default"));
   assert.ok(!storeCapability.permissions.includes("process:default"));
   assert.ok(!storeCapability.permissions.includes("process:allow-restart"));
@@ -380,7 +381,13 @@ test("Windows release signing uses Azure Artifact Signing, not a local PFX", asy
   assert.match(tauriBuild, /verify-windows-authenticode\.ps1/);
   assert.match(tauriBuild, /Postal-Snap-Windows-\$\{arch\}\.exe\.sig/);
   assert.doesNotMatch(tauriBuild, /Compress-Archive/);
+  assert.match(tauriBuild, /notarytool", "submit"/);
+  assert.match(
+    tauriBuild,
+    /DMG notarization requires APPLE_API_KEY \+ APPLE_API_ISSUER \+ APPLE_API_KEY_PATH/,
+  );
   assert.match(tauriBuild, /stapler", "staple"/);
+  assert.match(tauriBuild, /signer", "sign"/);
   assert.match(tauriBuild, /lipo/);
   assert.match(tauriBuild, /Hardened Runtime/);
   assert.match(setup, /Microsoft\.Azure\.ArtifactSigningClientTools/);
@@ -391,6 +398,7 @@ test("Windows release signing uses Azure Artifact Signing, not a local PFX", asy
   assert.doesNotMatch(sign, /WINDOWS_CERTIFICATE_/);
   assert.doesNotMatch(sign, /AllowSparseMsix/);
   assert.match(verify, /AZURE_ARTIFACT_SIGNING_PUBLISHER/);
+  assert.match(verify, /POSTAL_SNAP_INSTALLED_EXE/);
   assert.doesNotMatch(verify, /zinnia_shell|ZinniaContextMenu/);
 
   const ci = await readFile(join(root, ".github/workflows/ci.yml"), "utf8");
@@ -410,6 +418,7 @@ test("release verification covers generated manifests after finalization", async
     await readFile(join(root, "package.json"), "utf8"),
   );
   assert.ok(verifier.includes("latest-${platform}${channel}-${arch}.json"));
+  assert.ok(verifier.includes("verifyTauriSignatureFile"));
   assert.ok(verifier.includes("platformEntry.signature !== expectedSignature"));
   assert.match(
     packageJson.scripts["release:finalize:hard"],
@@ -420,6 +429,8 @@ test("release verification covers generated manifests after finalization", async
     "utf8",
   );
   assert.ok(finalizer.includes("verify-release-draft.js"));
+  assert.ok(finalizer.includes('"--pattern"'));
+  assert.match(finalizer, /latest-.+-beta-/);
   const remoteVerifier = await readFile(
     join(root, "scripts/verify-release-draft.js"),
     "utf8",

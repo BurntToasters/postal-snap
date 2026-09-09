@@ -25,13 +25,18 @@ import {
 import { api } from "../api";
 import { strings } from "../i18n";
 import { shortcutMod, shortcutShiftMod, shortcutAltMod } from "../format";
-import { applySettings } from "../settings";
+import {
+  applySettings,
+  applySettingsPatch,
+  mergeSettingsPatches,
+} from "../settings";
 import { useAppStore } from "../store";
 import { supportsWorkspaceWindowFx } from "../window-fx";
 import { version as appVersion } from "../../package.json";
 import type {
   AppSettings,
   CacheUsage,
+  SettingsPatch,
   DistributionChannel,
   FilterRule,
 } from "../types";
@@ -118,6 +123,9 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
   const [confirmThreatOff, setConfirmThreatOff] = useState(false);
   const [confirmToken, setConfirmToken] = useState("");
   const confirmInputRef = useRef<HTMLInputElement>(null);
+  const pendingSettingsPatch = useRef<SettingsPatch>({});
+  const pendingConfirmToken = useRef<string | undefined>(undefined);
+  const settingsSaveChain = useRef(Promise.resolve());
   const [filterRules, setFilterRules] = useState<Record<string, FilterRule[]>>(
     {},
   );
@@ -214,26 +222,42 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
     setConfirmToken("");
   }
 
-  async function update(patch: Partial<AppSettings>, confirmToken?: string) {
-    if (saving) return;
-    const previous = settings;
-    const next = { ...settings, ...patch };
-    setSaving(true);
-    setSettings(next);
-    applySettings(next);
-    try {
-      const saved = confirmToken
-        ? await api.saveSettings(next, confirmToken)
-        : await api.saveSettings(next);
-      setSettings(saved);
-      applySettings(saved);
-    } catch (cause) {
-      setSettings(previous);
-      applySettings(previous);
-      setError(String(cause));
-    } finally {
-      setSaving(false);
-    }
+  function update(patch: SettingsPatch, confirmToken?: string) {
+    pendingSettingsPatch.current = mergeSettingsPatches(
+      pendingSettingsPatch.current,
+      patch,
+    );
+    if (confirmToken) pendingConfirmToken.current = confirmToken;
+    const queued = settingsSaveChain.current.then(async () => {
+      const merged = pendingSettingsPatch.current;
+      const token = pendingConfirmToken.current;
+      pendingSettingsPatch.current = {};
+      pendingConfirmToken.current = undefined;
+      if (Object.keys(merged).length === 0 && !token) return;
+      const previous = useAppStore.getState().settings;
+      const next = applySettingsPatch(previous, merged);
+      setSaving(true);
+      setSettings(next);
+      applySettings(next);
+      try {
+        const saved = token
+          ? await api.saveSettings(next, token)
+          : await api.saveSettings(next);
+        setSettings(saved);
+        applySettings(saved);
+      } catch (cause) {
+        setSettings(previous);
+        applySettings(previous);
+        setError(String(cause));
+      } finally {
+        setSaving(false);
+      }
+    });
+    settingsSaveChain.current = queued.then(
+      () => undefined,
+      () => undefined,
+    );
+    return queued;
   }
 
   async function setAdvertisingBlocking(enabled: boolean) {
@@ -1039,10 +1063,7 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
                       value={settings.cachePolicy.days}
                       onChange={(event) =>
                         void update({
-                          cachePolicy: {
-                            ...settings.cachePolicy,
-                            days: Number(event.target.value),
-                          },
+                          cachePolicy: { days: Number(event.target.value) },
                         })
                       }
                     >
@@ -1071,10 +1092,7 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
                     disabled={settings.cachePolicy.mode === "full"}
                     onChange={(event) =>
                       void update({
-                        cachePolicy: {
-                          ...settings.cachePolicy,
-                          maxBytes: Number(event.target.value),
-                        },
+                        cachePolicy: { maxBytes: Number(event.target.value) },
                       })
                     }
                   >

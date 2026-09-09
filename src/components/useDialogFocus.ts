@@ -3,9 +3,13 @@ import { useEffect, useRef } from "react";
 const focusable =
   'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), iframe, [href], [tabindex]:not([tabindex="-1"])';
 
-export function useDialogFocus(onClose: () => void) {
+export function useDialogFocus(
+  onClose: () => void,
+  options?: { trapFocus?: boolean },
+) {
   const ref = useRef<HTMLElement>(null);
   const closeRef = useRef(onClose);
+  const trapFocus = options?.trapFocus ?? true;
 
   useEffect(() => {
     closeRef.current = onClose;
@@ -50,7 +54,7 @@ export function useDialogFocus(onClose: () => void) {
         closeRef.current();
         return;
       }
-      if (event.key !== "Tab") return;
+      if (event.key !== "Tab" || !trapFocus) return;
       const items = [
         ...currentDialog.querySelectorAll<HTMLElement>(focusable),
       ].filter(
@@ -86,7 +90,7 @@ export function useDialogFocus(onClose: () => void) {
       document.removeEventListener("keydown", onKeyDown);
       previous?.focus();
     };
-  }, []);
+  }, [trapFocus]);
 
   return ref;
 }

@@ -22,6 +22,8 @@ vi.mock("../api", () => ({
     retryOutbox: vi.fn(),
     retrySentCopy: vi.fn(),
     sendScheduledOutbox: vi.fn(),
+    emptyTrash: vi.fn(),
+    emptyJunk: vi.fn(),
     deleteOutbox: vi.fn(),
     restoreOutbox: vi.fn(),
     getOutbox: vi.fn(),
@@ -347,6 +349,35 @@ describe("mail shell", () => {
         3,
       ),
     );
+  });
+
+  it("does not auto-send a held message while live sync is offline", async () => {
+    const sendNow = vi.mocked(api.sendScheduledOutbox);
+    const held = {
+      id: "outbox-1",
+      accountId: account.id,
+      recipients: "lee@example.com",
+      subject: "Held note",
+      state: "scheduled",
+      detail: "Held for review.",
+      createdAt: "2026-08-18T11:00:00Z",
+      sendAt: new Date(Date.now() - 1000).toISOString(),
+    } as const;
+    mockedListOutbox.mockResolvedValue([held]);
+    useAppStore.setState({
+      activeLocalView: "outbox",
+      outbox: [held],
+      sync: {
+        [account.id]: {
+          accountId: account.id,
+          phase: "offline",
+          detail: "Connection lost.",
+        },
+      },
+    });
+    renderShell();
+    await screen.findByText("Held note");
+    await waitFor(() => expect(sendNow).not.toHaveBeenCalled());
   });
 
   it("sends a held message early on request", async () => {
