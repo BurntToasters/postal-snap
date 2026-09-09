@@ -635,6 +635,7 @@ pub async fn download_message(
     uid: u32,
     expected_size: u64,
     expected_uid_validity: Option<u32>,
+    cached_received_at: Option<&str>,
 ) -> Result<CachedMessage, String> {
     if expected_size > MAX_MESSAGE_BYTES as u64 {
         return Err("This message is too large to download safely.".into());
@@ -649,7 +650,10 @@ pub async fn download_message(
     }
     let mut rows = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
         session
-            .uid_fetch(uid.to_string(), "(UID FLAGS RFC822.SIZE BODY.PEEK[])")
+            .uid_fetch(
+                uid.to_string(),
+                "(UID FLAGS RFC822.SIZE INTERNALDATE BODY.PEEK[])",
+            )
             .await
             .map_err(|error| redact_error(&error, "Message download"))?
             .try_collect::<Vec<_>>()
@@ -673,9 +677,7 @@ pub async fn download_message(
         .collect::<Vec<_>>()
         .join(" ")
         .to_ascii_lowercase();
-    let fallback = item
-        .internal_date()
-        .map(|date| date.with_timezone(&Utc).to_rfc3339());
+    let fallback = received_at_fallback(&item, cached_received_at);
     let parsed = parse_message(
         uid,
         raw,
@@ -698,14 +700,18 @@ async fn download_uncached_bodies(
     if uncached.is_empty() {
         return Ok(());
     }
+    let cached_by_uid = uncached
+        .iter()
+        .cloned()
+        .collect::<std::collections::HashMap<_, _>>();
     let range = uncached
         .iter()
-        .map(ToString::to_string)
+        .map(|(uid, _)| uid.to_string())
         .collect::<Vec<_>>()
         .join(",");
     let fetch_result = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
         session
-            .uid_fetch(range, "(UID FLAGS RFC822.SIZE BODY.PEEK[])")
+            .uid_fetch(range, "(UID FLAGS RFC822.SIZE INTERNALDATE BODY.PEEK[])")
             .await
             .map_err(|error| redact_error(&error, "Message prefetch"))?
             .try_collect::<Vec<_>>()
@@ -733,9 +739,7 @@ async fn download_uncached_bodies(
             .collect::<Vec<_>>()
             .join(" ")
             .to_ascii_lowercase();
-        let fallback = item
-            .internal_date()
-            .map(|date| date.with_timezone(&Utc).to_rfc3339());
+        let fallback = received_at_fallback(&item, cached_by_uid.get(&uid).map(String::as_str));
         if let Ok(parsed) = parse_message(
             uid,
             raw,
@@ -1762,6 +1766,9 @@ async fn build_message_with_id(
     message_id: &str,
     keep_bcc: bool,
 ) -> Result<Message, String> {
+    let mut outgoing = draft.clone();
+    outgoing.html_body = crate::html_sanitize::sanitize_compose_html_for_send(&draft.html_body);
+    let draft = &outgoing;
     if !keep_bcc && draft.to.is_empty() && draft.cc.is_empty() && draft.bcc.is_empty() {
         return Err("Add at least one recipient.".into());
     }
@@ -2149,6 +2156,15 @@ fn imap_addresses(addresses: Option<&[async_imap::imap_proto::types::Address<'_>
         .flatten()
         .filter_map(imap_address)
         .collect()
+}
+
+fn received_at_fallback(
+    item: &async_imap::types::Fetch,
+    cached_received_at: Option<&str>,
+) -> Option<String> {
+    item.internal_date()
+        .map(|date| date.with_timezone(&Utc).to_rfc3339())
+        .or_else(|| cached_received_at.map(ToOwned::to_owned))
 }
 
 fn parse_message(
@@ -2695,6 +2711,7 @@ mod tests {
             summary.size,
             db.mailbox_uid_validity(&account.summary.id, "INBOX")
                 .unwrap(),
+            Some(summary.received_at.as_str()),
         )
         .await
         .unwrap();

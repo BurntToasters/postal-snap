@@ -8,11 +8,19 @@ pub struct SanitizedHtml {
 }
 
 pub fn sanitize_received_html(input: &str) -> SanitizedHtml {
-    sanitize_html(input, false)
+    sanitize_html(input, false, false)
 }
 
 pub fn sanitize_compose_html(input: &str) -> String {
-    let sanitized = sanitize_html(input, true);
+    compose_html(input, false)
+}
+
+pub fn sanitize_compose_html_for_send(input: &str) -> String {
+    compose_html(input, true)
+}
+
+fn compose_html(input: &str, restore_href: bool) -> String {
+    let sanitized = sanitize_html(input, true, restore_href);
     if sanitized.html.is_empty() {
         "<p></p>".into()
     } else {
@@ -20,7 +28,7 @@ pub fn sanitize_compose_html(input: &str) -> String {
     }
 }
 
-fn sanitize_html(input: &str, keep_cid_src: bool) -> SanitizedHtml {
+fn sanitize_html(input: &str, keep_cid_src: bool, restore_href: bool) -> SanitizedHtml {
     if input.is_empty() {
         return SanitizedHtml {
             html: String::new(),
@@ -30,7 +38,7 @@ fn sanitize_html(input: &str, keep_cid_src: bool) -> SanitizedHtml {
     let normalized = normalize_src_and_href(input);
     let cleaned = mail_builder().clean(&normalized).to_string();
     let (html, blocked_images) = rewrite_images(&cleaned, keep_cid_src);
-    let html = rewrite_links(&html, keep_cid_src);
+    let html = rewrite_links(&html, restore_href);
     SanitizedHtml {
         html,
         blocked_images,
@@ -656,7 +664,7 @@ mod tests {
     }
 
     #[test]
-    fn compose_restores_rewritten_http_links() {
+    fn compose_keeps_http_links_inert_until_send() {
         let received = sanitize_received_html(
             r#"<p><a href="https://library.example.test/hours">Hours</a></p>"#,
         );
@@ -664,8 +672,11 @@ mod tests {
             .html
             .contains("data-external-href=\"https://library.example.test/hours\""));
         let compose = sanitize_compose_html(&received.html);
-        assert!(compose.contains("href=\"https://library.example.test/hours\""));
-        assert!(!compose.contains("data-external-href"));
+        assert!(compose.contains("data-external-href=\"https://library.example.test/hours\""));
+        assert!(!compose.contains("<a href=\"https://"));
+        let outgoing = sanitize_compose_html_for_send(&compose);
+        assert!(outgoing.contains("href=\"https://library.example.test/hours\""));
+        assert!(!outgoing.contains("data-external-href"));
     }
 
     #[test]

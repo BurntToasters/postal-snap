@@ -214,6 +214,7 @@ if (!noBundle) {
       );
     }
     await keepEmittedWindowsUpdaterZip(bundleOutputDir);
+    await resignWindowsUpdaterSignatures(bundleOutputDir);
     await run(
       "powershell.exe",
       artifactSigningPowershellArgs(
@@ -338,6 +339,7 @@ if (!noBundle) {
     if (requireMacosNotarization) {
       await run("xcrun", ["stapler", "validate", app]);
       const dmg = join(release, "Postal-Snap-macOS.dmg");
+      await notarizeAppleArtifact(dmg);
       await run("xcrun", ["stapler", "staple", dmg]);
       await run("xcrun", ["stapler", "validate", dmg]);
       await run("spctl", ["--assess", "--type", "install", "--verbose=2", dmg]);
@@ -356,4 +358,62 @@ async function keepEmittedWindowsUpdaterZip(bundleDir) {
   console.log(
     `[tauri-build] Keeping Tauri NSIS updater zip as emitted: ${zip}`,
   );
+}
+
+async function resignWindowsUpdaterSignatures(bundleDir) {
+  const payloads = [];
+  const setup = await newestMatching(bundleDir, (path) =>
+    path.endsWith("-setup.exe"),
+  );
+  if (setup) payloads.push(setup);
+  const zip = await newestMatching(bundleDir, (path) =>
+    path.endsWith(".nsis.zip"),
+  );
+  if (zip) payloads.push(zip);
+  for (const payload of payloads) {
+    console.log(
+      `[tauri-build] Replacing updater signature after Authenticode: ${payload}`,
+    );
+    await run("npm", ["run", "tauri", "--", "signer", "sign", payload]);
+  }
+}
+
+async function notarizeAppleArtifact(path) {
+  const hasApiKey = Boolean(
+    process.env.APPLE_API_KEY &&
+    process.env.APPLE_API_ISSUER &&
+    process.env.APPLE_API_KEY_PATH,
+  );
+  const hasAppleId = Boolean(
+    process.env.APPLE_ID &&
+    process.env.APPLE_PASSWORD &&
+    process.env.APPLE_TEAM_ID,
+  );
+  if (!hasApiKey && !hasAppleId) {
+    throw new Error(
+      "DMG notarization requires APPLE_API_KEY + APPLE_API_ISSUER + APPLE_API_KEY_PATH, or APPLE_ID + APPLE_PASSWORD + APPLE_TEAM_ID.",
+    );
+  }
+  const args = ["notarytool", "submit", path, "--wait"];
+  if (hasApiKey) {
+    args.push(
+      "--key",
+      process.env.APPLE_API_KEY_PATH,
+      "--key-id",
+      process.env.APPLE_API_KEY,
+      "--issuer",
+      process.env.APPLE_API_ISSUER,
+    );
+  } else {
+    args.push(
+      "--apple-id",
+      process.env.APPLE_ID,
+      "--password",
+      process.env.APPLE_PASSWORD,
+      "--team-id",
+      process.env.APPLE_TEAM_ID,
+    );
+  }
+  console.log(`[tauri-build] Submitting ${path} to notarytool`);
+  await run("xcrun", args);
 }

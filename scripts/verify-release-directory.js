@@ -9,6 +9,10 @@ import {
   sha256,
 } from "./_utils.js";
 import { validateManifest } from "./validate-updater-manifest.js";
+import {
+  committedUpdaterPublicKey,
+  verifyTauriSignatureFile,
+} from "./verify-tauri-signature.js";
 
 const directory = process.argv[2]
   ? resolve(root, process.argv[2])
@@ -79,12 +83,13 @@ for (const name of [...artifacts, ...updaterPayloads]) {
   await run("gpg", ["--batch", "--verify", `${path}.asc`, path]);
 }
 
+const updaterPublicKey = await committedUpdaterPublicKey();
 for (const name of updaterPayloads) {
-  const signature = (
-    await readFile(join(directory, `${name}.sig`), "utf8")
-  ).trim();
-  if (signature.length < 64)
-    throw new Error(`Invalid embedded Tauri signature for ${name}`);
+  await verifyTauriSignatureFile(
+    join(directory, name),
+    join(directory, `${name}.sig`),
+    updaterPublicKey,
+  );
 }
 
 for (const { platform, arch, payload, name } of manifests) {

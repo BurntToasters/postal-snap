@@ -125,6 +125,9 @@ export const strings = {
     emptyTrash: "Empty trash",
     emptyTrashQuestion:
       "Permanently delete every message in Trash? This cannot be undone.",
+    emptyJunk: "Empty junk",
+    emptyJunkQuestion:
+      "Permanently delete every message in Junk? This cannot be undone.",
     select: "Select",
     doneSelecting: "Done",
     selectedCount: (count: number) =>
@@ -156,6 +159,7 @@ export const strings = {
     addStar: "Add star",
     archive: "Archive",
     junk: "Mark as junk",
+    notJunk: "Not junk",
     trash: "Move to trash",
     moveFolder: "Move to folder",
     move: "Move…",

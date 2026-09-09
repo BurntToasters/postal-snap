@@ -1,4 +1,11 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import { SettingsDialog } from "../components/SettingsDialog";
@@ -30,18 +37,13 @@ vi.mock("../api", () => ({
     resetSettings: vi.fn(),
     openExternalUrl: vi.fn(),
     cacheUsage: vi.fn().mockResolvedValue({
-      totalBytes: 1024,
-      databaseBytes: 512,
-      bodyBytes: 256,
-      attachmentBytes: 256,
-      cachedMessages: 5,
+      bytes: 1024,
+      maxBytes: 1_073_741_824,
+      messageCount: 5,
     }),
     distribution: vi.fn().mockResolvedValue({
-      kind: "direct-macos",
-      channel: "stable",
-      platform: "macos",
-      arch: "universal",
-      updatesManagedBy: "app",
+      kind: "direct",
+      updatesManagedBy: "postalSnap",
     }),
     showNativeConfirm: vi.fn().mockResolvedValue(true),
     showNativeMessage: vi.fn().mockResolvedValue(undefined),
@@ -178,6 +180,117 @@ describe("SettingsDialog component", () => {
 
     expect(api.saveSettings).toHaveBeenCalledWith(
       expect.objectContaining({ windowEffects: true }),
+    );
+  });
+
+  it("keeps overlapping preference saves instead of dropping the second", async () => {
+    let releaseFirst: () => void = () => undefined;
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let calls = 0;
+    vi.mocked(api.saveSettings).mockImplementation(async (next) => {
+      calls += 1;
+      if (calls === 1) await firstBlocked;
+      return next;
+    });
+    const onClose = vi.fn();
+    render(<SettingsDialog initialTab="general" onClose={onClose} />);
+    const windowFx = await screen.findByRole("checkbox", {
+      name: /Translucent window background/,
+    });
+    await act(async () => {
+      fireEvent.click(windowFx);
+    });
+    const density = screen.getByLabelText("Interface spacing");
+    await act(async () => {
+      fireEvent.change(density, { target: { value: "compact" } });
+    });
+    await act(async () => {
+      releaseFirst();
+    });
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(2));
+    expect(api.saveSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        windowEffects: true,
+        density: "compact",
+      }),
+    );
+  });
+
+  it("keeps both cache days and limit when those saves overlap", async () => {
+    let releaseFirst: () => void = () => undefined;
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let calls = 0;
+    vi.mocked(api.saveSettings).mockImplementation(async (next) => {
+      calls += 1;
+      if (calls === 1) await firstBlocked;
+      return next;
+    });
+    render(<SettingsDialog initialTab="storage" onClose={vi.fn()} />);
+    const days = await screen.findByLabelText("Keep mail for");
+    await act(async () => {
+      fireEvent.change(days, { target: { value: "30" } });
+    });
+    const limit = screen.getByLabelText("Maximum cache size");
+    await act(async () => {
+      fireEvent.change(limit, { target: { value: "524288000" } });
+    });
+    await act(async () => {
+      releaseFirst();
+    });
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(2));
+    expect(api.saveSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        cachePolicy: {
+          mode: "recent",
+          days: 30,
+          maxBytes: 524_288_000,
+        },
+      }),
+    );
+  });
+
+  it("still sends CONFIRM when a threat-off save overlaps another preference", async () => {
+    let releaseFirst: () => void = () => undefined;
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let calls = 0;
+    vi.mocked(api.saveSettings).mockImplementation(async (next) => {
+      calls += 1;
+      if (calls === 1) await firstBlocked;
+      return next;
+    });
+    render(<SettingsDialog initialTab="advanced" onClose={vi.fn()} />);
+    const adblock = await screen.findByRole("checkbox", {
+      name: /Block advertising and tracking images/,
+    });
+    await act(async () => {
+      fireEvent.click(adblock);
+    });
+    const threats = screen.getByRole("checkbox", {
+      name: /Warn about reported dangerous addresses/,
+    });
+    await act(async () => {
+      fireEvent.click(threats);
+    });
+    fireEvent.change(screen.getByLabelText("Type CONFIRM"), {
+      target: { value: "CONFIRM" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Disable" }));
+    });
+    await act(async () => {
+      releaseFirst();
+    });
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ blockReportedThreats: false }),
+        "CONFIRM",
+      ),
     );
   });
 

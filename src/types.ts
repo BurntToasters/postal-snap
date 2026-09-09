@@ -243,6 +243,10 @@ export interface CachePolicy {
   maxBytes: number;
 }
 
+export type SettingsPatch = Partial<Omit<AppSettings, "cachePolicy">> & {
+  cachePolicy?: Partial<CachePolicy>;
+};
+
 export interface AppSettings {
   schemaVersion: 2;
   readingPane: ReadingPane;

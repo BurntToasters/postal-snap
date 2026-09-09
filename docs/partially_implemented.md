@@ -5,7 +5,7 @@ Quick tracker for things wired into the app but not 100% yet. Full scope rules l
 ## Background groundwork (no UI yet)
 
 - **Gmail/Outlook OAuth** (`src-tauri/src/oauth.rs`): provider metadata, PKCE URL builder, token exchange/refresh, keyring vault, XOAUTH2 strings. Nothing calls it. Still needed: setup UI, deep-link callback handling, SASL wiring into IMAP/SMTP connect paths.
-- **OAuth deep-link callback**: `tauri.conf.json` schemes are `mailto` only. `oauth::redirect_uri` defaults to loopback (`http://127.0.0.1/`) and is parameterized. Do not register `run.rosie.snap://oauth/callback`. No listener routes codes to `oauth::exchange_code` yet. When a setup flow is wired, call `oauth::remove_tokens` from `remove_account`.
+- **OAuth deep-link callback**: `tauri.conf.json` schemes are `mailto` only. `oauth::redirect_uri` defaults to loopback (`http://127.0.0.1/`) and is parameterized. Do not register `run.rosie.snap://oauth/callback`. No listener routes codes to `oauth::exchange_code` yet. `remove_account` already calls `oauth::remove_tokens`.
 - **`auth_method` account column** (schema v5): migrated, defaults `password`. OAuth accounts will set it; `update_account_password` already refuses non-password accounts.
 
 ## Registered but unused IPC

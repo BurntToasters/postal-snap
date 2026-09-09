@@ -89,10 +89,10 @@ impl OAuthProvider {
         TlsMode::StartTls
     }
 
-    /// Redirect used only if a future setup flow wires OAuth. This is not
-    /// registered in `tauri.conf.json` schemes. Google desktop OAuth prefers
-    /// loopback; do not add `run.rosie.snap://oauth/callback` until that flow
-    /// exists and `redirect_uri` is parameterized at call sites.
+    /// Redirect used only if a future setup flow wires OAuth. Never register
+    /// `run.rosie.snap://oauth/callback`. Google and Microsoft desktop apps
+    /// use a loopback HTTP listener; pass a ported `http://127.0.0.1:<port>/`
+    /// URI from that flow.
     pub fn redirect_uri(custom: Option<&str>) -> &str {
         custom.unwrap_or("http://127.0.0.1/")
     }

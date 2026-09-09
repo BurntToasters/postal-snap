@@ -459,6 +459,14 @@ async function installMockIpc(page: Page) {
               }
               return undefined;
             }
+            case "empty_junk": {
+              const junk = mailboxes.find((entry) => entry.role === "junk");
+              if (junk) {
+                junk.totalCount = 0;
+                junk.unreadCount = 0;
+              }
+              return undefined;
+            }
             case "save_draft":
               return { id: "draft-1", syncState: "localPending" };
             case "send_message":

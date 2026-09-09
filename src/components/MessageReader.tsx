@@ -108,13 +108,43 @@ export function MessageReader() {
   const findInputRef = useRef<HTMLInputElement>(null);
 
   function printMessage() {
-    if (frame.current?.contentWindow) {
-      frame.current.contentWindow.focus();
-      frame.current.contentWindow.print();
-      return;
-    }
-    window.print();
+    if (!message) return;
+    const from = message.senderName
+      ? `${message.senderName} <${message.senderAddress}>`
+      : message.senderAddress;
+    const header = [
+      `<p><strong>${escapePrint(strings.reader.from)}</strong> ${escapePrint(from)}</p>`,
+      `<p><strong>${escapePrint(strings.reader.to)}</strong> ${escapePrint(message.to.join(", ") || strings.reader.noRecipients)}</p>`,
+      message.cc.length
+        ? `<p><strong>${escapePrint(strings.reader.cc)}</strong> ${escapePrint(message.cc.join(", "))}</p>`
+        : "",
+      `<p><strong>${escapePrint(strings.reader.subject)}</strong> ${escapePrint(message.subject || strings.common.noSubject)}</p>`,
+      `<p><strong>${escapePrint(strings.reader.date)}</strong> ${escapePrint(formatFullMessageDate(message.receivedAt))}</p>`,
+    ].join("");
+    const body =
+      loadedHtml?.messageId === message.id && loadedHtml.html
+        ? loadedHtml.html
+        : `<pre style="white-space:pre-wrap;font:inherit">${escapePrint(message.textBody)}</pre>`;
+    const html = messageFrameDocument(
+      `<section style="margin:0 0 16px;padding:0 0 12px;border-bottom:1px solid #c8d2dc">${header}</section>${body}`,
+      settings.textScale,
+    );
+    const printer = document.createElement("iframe");
+    printer.setAttribute("aria-hidden", "true");
+    printer.style.position = "fixed";
+    printer.style.width = "0";
+    printer.style.height = "0";
+    printer.style.border = "0";
+    printer.srcdoc = html;
+    printer.addEventListener("load", () => {
+      printer.contentWindow?.focus();
+      printer.contentWindow?.print();
+      window.setTimeout(() => printer.remove(), 1500);
+    });
+    document.body.appendChild(printer);
   }
+  const printMessageRef = useRef(printMessage);
+  printMessageRef.current = printMessage;
 
   function scrollMessage(direction: 1 | -1) {
     const amount = Math.round(window.innerHeight * 0.85) * direction;
@@ -316,7 +346,7 @@ export function MessageReader() {
       if (action === "toggle-read") void h.setRead();
       if (action === "toggle-star") void h.setStarred();
       if (action === "junk") void h.move("junk");
-      if (action === "print") {
+      if (action === "print" || action === "file-print") {
         window.dispatchEvent(new Event("postal:print-message"));
       }
       if (action === "find-in-message") {
@@ -328,7 +358,7 @@ export function MessageReader() {
   }, []);
 
   useEffect(() => {
-    const print = () => printMessage();
+    const print = () => printMessageRef.current();
     const find = () => {
       setFindOpen(true);
       window.setTimeout(() => findInputRef.current?.focus(), 0);
@@ -1019,18 +1049,34 @@ export function MessageReader() {
                     ? strings.reader.removeStar
                     : strings.reader.addStar}
                 </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  disabled={isJunkMailbox}
-                  onClick={() => {
-                    void move("junk");
-                    setMoreOpen(false);
-                  }}
-                >
-                  <ShieldAlert aria-hidden="true" />
-                  {strings.reader.junk}
-                </button>
+                {isJunkMailbox ? (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      const inbox = mailboxes.find(
+                        (box) => box.role === "inbox",
+                      );
+                      if (inbox) void moveToMailbox(inbox.id);
+                      setMoreOpen(false);
+                    }}
+                  >
+                    <ShieldCheck aria-hidden="true" />
+                    {strings.reader.notJunk}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      void move("junk");
+                      setMoreOpen(false);
+                    }}
+                  >
+                    <ShieldAlert aria-hidden="true" />
+                    {strings.reader.junk}
+                  </button>
+                )}
                 <button
                   type="button"
                   role="menuitem"
@@ -1514,6 +1560,14 @@ async function hydrateInlineImages(
       },
     ),
   );
+}
+
+function escapePrint(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 function normalizeContentId(value: string): string {

@@ -215,6 +215,11 @@ impl AppState {
                     Ok(()) => backoff = 2,
                     Err(_) => {
                         drop(_guard);
+                        let _ = state.db.set_account_state(
+                            &account_id,
+                            "offline",
+                            Some("Connection lost. Reconnecting…"),
+                        );
                         emit_sync(
                             &app,
                             &account_id,
@@ -377,6 +382,7 @@ pub async fn remove_account(
     // account deletion is treated as one user-visible transaction.
     let password = credentials::load_for_removal(&account_id)?;
     credentials::remove(&account_id)?;
+    let _ = crate::oauth::remove_tokens(&account_id);
     if let Err(error) = state.db.remove_account(&account_id) {
         if password
             .as_deref()
@@ -1056,8 +1062,17 @@ async fn ensure_message_content(
     let uid_validity = state.db.mailbox_uid_validity(account_id, &mailbox)?;
     let account = state.db.account(account_id)?;
     let password = credentials::load(account_id)?;
-    let message =
-        mail::download_message(&account, &password, &mailbox, uid, size, uid_validity).await?;
+    let cached_received_at = state.db.message_received_at(message_id).ok().flatten();
+    let message = mail::download_message(
+        &account,
+        &password,
+        &mailbox,
+        uid,
+        size,
+        uid_validity,
+        cached_received_at.as_deref(),
+    )
+    .await?;
     state.db.upsert_message(account_id, mailbox_id, &message)?;
     let id = message
         .message_id
@@ -1449,6 +1464,9 @@ pub async fn move_messages_to_mailbox(
             queued += entries.len();
         }
     }
+    if updated > 0 {
+        let _ = mail::refresh_mailbox_envelopes(&account, &password, &destination, &state.db).await;
+    }
     emit_message_change(&app, &account_id, None, "moved");
     emit_folder_counts(&app, &account_id);
     Ok(BulkOutcome {
@@ -1597,16 +1615,49 @@ pub async fn empty_trash(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<()> {
-    let (trash_id, trash) = state
+    empty_role_folder(
+        account_id,
+        "trash",
+        "This account does not have a trash mailbox.",
+        app,
+        state,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn empty_junk(
+    account_id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<()> {
+    empty_role_folder(
+        account_id,
+        "junk",
+        "This account does not have a junk mailbox.",
+        app,
+        state,
+    )
+    .await
+}
+
+async fn empty_role_folder(
+    account_id: String,
+    role: &str,
+    missing: &str,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<()> {
+    let (folder_id, name) = state
         .db
-        .mailbox_for_role(&account_id, "trash")?
-        .ok_or_else(|| "This account does not have a trash mailbox.".to_string())?;
+        .mailbox_for_role(&account_id, role)?
+        .ok_or_else(|| missing.to_string())?;
     let _guard = state.lock_account(&account_id).await?;
     let account = state.db.account(&account_id)?;
     let password = credentials::load(&account_id)?;
-    let validity = state.db.mailbox_uid_validity(&account_id, &trash)?;
-    let protected = state.db.pending_move_uids(trash_id).unwrap_or_default();
-    let result = mail::empty_folder(&account, &password, &trash, validity, &protected).await;
+    let validity = state.db.mailbox_uid_validity(&account_id, &name)?;
+    let protected = state.db.pending_move_uids(folder_id).unwrap_or_default();
+    let result = mail::empty_folder(&account, &password, &name, validity, &protected).await;
     drop(_guard);
     command_result(result)?;
     let _ = sync_one(&account_id, &app, &state).await;

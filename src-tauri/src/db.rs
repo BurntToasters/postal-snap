@@ -762,20 +762,33 @@ impl Database {
         mailbox_id: i64,
         limit: u32,
         max_size: u64,
-    ) -> Result<Vec<u32>, String> {
+    ) -> Result<Vec<(u32, String)>, String> {
         let conn = self.conn()?;
         let mut statement = conn
             .prepare(
-                "SELECT uid FROM messages
+                "SELECT uid, received_at FROM messages
                  WHERE mailbox_id = ?1 AND LENGTH(raw_message) = 0 AND size <= ?2
                  ORDER BY received_at DESC, uid DESC
                  LIMIT ?3",
             )
             .map_err(db_error)?;
         let rows = statement
-            .query_map(params![mailbox_id, max_size, limit], |row| row.get(0))
+            .query_map(params![mailbox_id, max_size, limit], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
             .map_err(db_error)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+    }
+
+    pub fn message_received_at(&self, id: i64) -> Result<Option<String>, String> {
+        self.conn()?
+            .query_row(
+                "SELECT received_at FROM messages WHERE id=?1",
+                [id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)
     }
 
     pub fn reconcile_flags(
@@ -2883,14 +2896,20 @@ fn references_from_raw(raw: &[u8]) -> Vec<String> {
             unfolded.push_str(line);
         }
     }
+    let mut references = header_message_ids(&unfolded, "references");
+    if references.is_empty() {
+        references = header_message_ids(&unfolded, "in-reply-to");
+    }
+    references
+}
+
+fn header_message_ids(headers: &str, field: &str) -> Vec<String> {
     let mut references = Vec::new();
-    for line in unfolded.lines() {
+    for line in headers.lines() {
         let Some((name, value)) = line.split_once(':') else {
             continue;
         };
-        if !name.trim().eq_ignore_ascii_case("references")
-            && !name.trim().eq_ignore_ascii_case("in-reply-to")
-        {
+        if !name.trim().eq_ignore_ascii_case(field) {
             continue;
         }
         for token in value.split_whitespace() {
@@ -4798,6 +4817,27 @@ mod tests {
     }
 
     #[test]
+    fn message_references_keep_references_header_order() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let mailbox_id = mailbox(&db, &account.summary.id, "INBOX", &MailboxRole::Inbox);
+        let mut msg = message(1, "2026-08-18T12:00:00Z");
+        msg.raw_message = b"In-Reply-To: <parent@example.test>\r\nReferences: <root@example.test> <parent@example.test>\r\n\r\nbody".to_vec();
+        msg.thread_parent = Some("<parent@example.test>".into());
+        db.upsert_message(&account.summary.id, mailbox_id, &msg)
+            .unwrap();
+        let id = db.list_messages(mailbox_id, None, 10).unwrap().items[0].id;
+        assert_eq!(
+            db.message_references(id, &account.summary.id).unwrap(),
+            vec![
+                "<root@example.test>".to_string(),
+                "<parent@example.test>".to_string()
+            ]
+        );
+    }
+
+    #[test]
     fn uncached_message_uids_returns_newest_empty_bodies() {
         let db = Database::memory();
         let account = account();
@@ -4816,7 +4856,10 @@ mod tests {
         }
 
         let uncached = db.uncached_message_uids(mailbox_id, 10, 1000).unwrap();
-        assert_eq!(uncached, vec![4, 3, 1]);
+        assert_eq!(
+            uncached.iter().map(|(uid, _)| *uid).collect::<Vec<_>>(),
+            vec![4, 3, 1]
+        );
     }
 
     #[test]

@@ -46,6 +46,10 @@ if (Test-Path -LiteralPath $bundleDir) {
   }
 }
 
+if (-not [string]::IsNullOrWhiteSpace($env:POSTAL_SNAP_INSTALLED_EXE)) {
+  $ExtraFiles += $env:POSTAL_SNAP_INSTALLED_EXE.Trim()
+}
+
 foreach ($extra in $ExtraFiles) {
   if ($extra -and (Test-Path -LiteralPath $extra)) {
     $files += Get-Item -LiteralPath $extra

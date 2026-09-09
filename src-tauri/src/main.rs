@@ -166,6 +166,7 @@ fn main() {
             commands::rename_folder,
             commands::delete_folder,
             commands::empty_trash,
+            commands::empty_junk,
             commands::search_cached_messages,
             commands::search_server_messages,
             commands::save_draft,
@@ -306,6 +307,9 @@ fn install_menu<R: Runtime>(app: &tauri::App<R>, has_accounts: bool) -> tauri::R
         .enabled(has_accounts)
         .accelerator("CmdOrCtrl+P")
         .build(handle)?;
+    let file_print = MenuItemBuilder::with_id("file-print", "Print…")
+        .enabled(has_accounts)
+        .build(handle)?;
     let find_in_message = MenuItemBuilder::with_id("find-in-message", "Find in Message")
         .enabled(has_accounts)
         .accelerator("Alt+CmdOrCtrl+F")
@@ -348,6 +352,8 @@ fn install_menu<R: Runtime>(app: &tauri::App<R>, has_accounts: bool) -> tauri::R
     let file_menu = SubmenuBuilder::with_id(handle, "file", "File")
         .item(&compose)
         .item(&get_mail)
+        .separator()
+        .item(&file_print)
         .separator()
         .close_window()
         .build()?;
@@ -436,7 +442,7 @@ pub fn set_mail_menu_enabled<R: Runtime>(
         return Err("Application menu is unavailable.".into());
     };
     for (submenu_id, item_ids) in [
-        ("file", &["compose", "get-mail"][..]),
+        ("file", &["compose", "get-mail", "file-print"][..]),
         (
             "message",
             &[
@@ -568,7 +574,7 @@ mod tests {
     fn assert_mail_items_enabled(app: &tauri::App<tauri::test::MockRuntime>, expected: bool) {
         let menu = app.menu().unwrap();
         for (submenu_id, item_ids) in [
-            ("file", &["compose", "get-mail"][..]),
+            ("file", &["compose", "get-mail", "file-print"][..]),
             (
                 "message",
                 &[

@@ -147,6 +147,14 @@ export function sanitizeComposeHtml(input: string): string {
     image.setAttribute("src", `cid:${cid}`);
     image.removeAttribute("data-inline-cid");
   }
+  return doc.body.innerHTML || "<p></p>";
+}
+
+export function restoreComposeHtmlLinks(input: string): string {
+  const doc = new DOMParser().parseFromString(
+    sanitizeComposeHtml(input),
+    "text/html",
+  );
   for (const link of doc.querySelectorAll<HTMLAnchorElement>(
     "a[data-external-href]",
   )) {

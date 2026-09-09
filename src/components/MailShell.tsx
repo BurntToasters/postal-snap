@@ -444,6 +444,21 @@ export function MailShell({ onOpenSettings }: Props) {
     }
   }
 
+  async function emptyJunkFolders() {
+    if (!activeAccountId) return;
+    const confirmed = await api.showNativeConfirm(
+      strings.appName,
+      strings.mail.emptyJunkQuestion,
+    );
+    if (!confirmed) return;
+    try {
+      await api.emptyJunk(activeAccountId);
+      await loadAccountData();
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }
+
   function toggleSelectMessage(id: number) {
     setSelectedIds((prev) => {
       if (prev.includes(id)) return prev.filter((item) => item !== id);
@@ -478,7 +493,7 @@ export function MailShell({ onOpenSettings }: Props) {
     }
   }
 
-  async function bulkMove(role: "archive" | "trash" | "junk") {
+  async function bulkMove(role: "archive" | "trash" | "junk" | "inbox") {
     if (!activeAccountId || selectedIds.length === 0 || bulkBusy) return;
     const destination = mailboxes.find(
       (mailbox) =>
@@ -603,7 +618,7 @@ export function MailShell({ onOpenSettings }: Props) {
 
   useEffect(() => {
     const account = accounts.find((item) => item.id === activeAccountId);
-    if (account?.syncState === "offline") return;
+    if (account?.syncState === "offline" || sync?.phase === "offline") return;
     const due = outbox
       .filter((item) => item.state === "scheduled" && item.sendAt)
       .map((item) => new Date(item.sendAt as string).getTime() - Date.now())
@@ -636,7 +651,16 @@ export function MailShell({ onOpenSettings }: Props) {
           item.sendAt &&
           new Date(item.sendAt).getTime() <= Date.now(),
       );
-      if (ready && current.activeAccountId) {
+      const livePhase = current.activeAccountId
+        ? current.sync[current.activeAccountId]?.phase
+        : undefined;
+      if (
+        ready &&
+        current.activeAccountId &&
+        livePhase !== "offline" &&
+        current.accounts.find((item) => item.id === current.activeAccountId)
+          ?.syncState !== "offline"
+      ) {
         void api
           .sendScheduledOutbox(ready.id, current.activeAccountId)
           .catch((cause) => setError(String(cause)))
@@ -646,7 +670,7 @@ export function MailShell({ onOpenSettings }: Props) {
       }
     }, wait);
     return () => window.clearTimeout(timer);
-  }, [accounts, outbox, activeAccountId, loadAccountData, setError]);
+  }, [accounts, outbox, activeAccountId, sync, loadAccountData, setError]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void loadMessages(), 0);
@@ -1580,6 +1604,17 @@ export function MailShell({ onOpenSettings }: Props) {
               <Trash2 aria-hidden="true" /> {strings.mail.emptyTrash}
             </button>
           ) : null}
+          {mailboxes.some(
+            (mailbox) => mailbox.role === "junk" && mailbox.totalCount > 0,
+          ) ? (
+            <button
+              type="button"
+              className="add-account-button"
+              onClick={() => void emptyJunkFolders()}
+            >
+              <ShieldAlert aria-hidden="true" /> {strings.mail.emptyJunk}
+            </button>
+          ) : null}
         </nav>
         <div
           className={`sync-indicator ${sync?.phase ?? "idle"}`}
@@ -1683,13 +1718,23 @@ export function MailShell({ onOpenSettings }: Props) {
             >
               <Archive aria-hidden="true" /> {strings.reader.archive}
             </button>
-            <button
-              type="button"
-              disabled={selectedIds.length === 0 || bulkBusy}
-              onClick={() => void bulkMove("junk")}
-            >
-              <ShieldAlert aria-hidden="true" /> {strings.reader.junk}
-            </button>
+            {activeMailbox?.role === "junk" ? (
+              <button
+                type="button"
+                disabled={selectedIds.length === 0 || bulkBusy}
+                onClick={() => void bulkMove("inbox")}
+              >
+                <Inbox aria-hidden="true" /> {strings.reader.notJunk}
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled={selectedIds.length === 0 || bulkBusy}
+                onClick={() => void bulkMove("junk")}
+              >
+                <ShieldAlert aria-hidden="true" /> {strings.reader.junk}
+              </button>
+            )}
             <button
               type="button"
               disabled={selectedIds.length === 0 || bulkBusy}

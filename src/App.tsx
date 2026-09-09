@@ -165,6 +165,15 @@ export default function App() {
           window.dispatchEvent(
             new CustomEvent("postal:menu-action", { detail: "text-smaller" }),
           );
+        } else if (event.key.toLowerCase() === "p") {
+          if (
+            document.querySelector(
+              ".composer-layer, .settings-window, .modal-layer",
+            )
+          )
+            return;
+          event.preventDefault();
+          window.dispatchEvent(new Event("postal:print-message"));
         }
       }
     };
@@ -176,8 +185,9 @@ export default function App() {
     const syncGuard = () => {
       const target = document.activeElement as HTMLElement | null;
       const guarded = Boolean(
-        document.querySelector(".composer-layer, .settings-window") ||
-        target?.closest("input, textarea, select, [contenteditable='true']"),
+        document.querySelector(
+          ".composer-layer, .settings-window, .modal-layer",
+        ) || target?.closest("[contenteditable='true']"),
       );
       void api.setMailShortcutGuard(guarded).catch(() => undefined);
     };

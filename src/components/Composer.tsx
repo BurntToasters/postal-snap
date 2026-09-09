@@ -66,6 +66,45 @@ declare module "@tiptap/core" {
   }
 }
 
+const SafeLink = Link.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      href: {
+        default: null,
+        parseHTML: (element) =>
+          element.getAttribute("data-external-href") ||
+          element.getAttribute("href"),
+        renderHTML: (attributes) => {
+          const href = String(attributes.href ?? "");
+          if (/^https?:/i.test(href)) {
+            return {
+              href: "#",
+              "data-external-href": href,
+              rel: "noopener noreferrer",
+            };
+          }
+          if (/^mailto:/i.test(href)) {
+            return { href, rel: "noopener noreferrer" };
+          }
+          return {};
+        },
+      },
+      target: {
+        default: null,
+        renderHTML: () => ({}),
+      },
+    };
+  },
+}).configure({
+  openOnClick: false,
+  protocols: ["http", "https", "mailto"],
+  HTMLAttributes: {
+    rel: "noopener noreferrer",
+    target: null,
+  },
+});
+
 const FontSize = Extension.create({
   name: "fontSize",
   addGlobalAttributes() {
@@ -221,6 +260,7 @@ export function Composer({ accountId }: Props) {
   );
   const restoredInlineImages = useRef(false);
   const isDiscarding = useRef(false);
+  const isSending = useRef(false);
   const draftRevision = useRef(0);
   const saveInFlight = useRef(false);
   const pendingClose = useRef(false);
@@ -231,22 +271,23 @@ export function Composer({ accountId }: Props) {
     draftRevision.current += 1;
     setSaveState("unsaved");
   }, []);
-  const dialogRef = useDialogFocus(() => {
-    if (linkDialogOpen) {
-      setLinkDialogOpen(false);
-      return;
-    }
-    void requestClose();
-  });
+  const keepSourceVisible = Boolean(seed?.composeMode && !maximized);
+  const dialogRef = useDialogFocus(
+    () => {
+      if (linkDialogOpen) {
+        setLinkDialogOpen(false);
+        return;
+      }
+      void requestClose();
+    },
+    { trapFocus: !keepSourceVisible },
+  );
 
   const editor = useEditor({
     extensions: [
       StarterKit.configure({ link: false, underline: false }),
       Underline,
-      Link.configure({
-        openOnClick: false,
-        protocols: ["http", "https", "mailto"],
-      }),
+      SafeLink,
       Image.configure({ allowBase64: true }),
       TextStyle,
       FontSize,
@@ -267,6 +308,25 @@ export function Composer({ accountId }: Props) {
         "aria-label": strings.composer.messageBody,
       },
       transformPastedHTML: (html) => sanitizeComposeHtml(html),
+      handleDOMEvents: {
+        contextmenu: (_view, event) => {
+          if ((event.target as HTMLElement | null)?.closest("a")) {
+            event.preventDefault();
+            return true;
+          }
+          return false;
+        },
+        auxclick: (_view, event) => {
+          if (
+            event.button === 1 &&
+            (event.target as HTMLElement | null)?.closest("a")
+          ) {
+            event.preventDefault();
+            return true;
+          }
+          return false;
+        },
+      },
     },
     immediatelyRender: false,
     onUpdate: markUnsaved,
@@ -530,8 +590,10 @@ export function Composer({ accountId }: Props) {
     const subjectValidation = validateSubject(subject);
     setRecipientError(validation);
     setSubjectError(subjectValidation);
-    if (!canSend || validation || subjectValidation) return;
+    if (!canSend || validation || subjectValidation || isSending.current)
+      return;
     pendingClose.current = false;
+    isSending.current = true;
     setSending(true);
     try {
       const outcome = await api.sendMessage(buildDraft());
@@ -547,6 +609,7 @@ export function Composer({ accountId }: Props) {
       announceLocalMailChanged(accountId);
       setError(String(cause));
     } finally {
+      isSending.current = false;
       setSending(false);
     }
   }, [accountId, bcc, buildDraft, canSend, cc, close, setError, subject, to]);
@@ -709,8 +772,6 @@ export function Composer({ accountId }: Props) {
       </div>
     );
   }
-
-  const keepSourceVisible = Boolean(seed?.composeMode && !maximized);
 
   return (
     <div

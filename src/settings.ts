@@ -1,5 +1,29 @@
-import type { AppSettings } from "./types";
+import type { AppSettings, SettingsPatch } from "./types";
 import { syncWorkspaceWindowFx } from "./window-fx";
+
+export function mergeSettingsPatches(
+  current: SettingsPatch,
+  patch: SettingsPatch,
+): SettingsPatch {
+  const merged: SettingsPatch = { ...current, ...patch };
+  if (current.cachePolicy && patch.cachePolicy) {
+    merged.cachePolicy = { ...current.cachePolicy, ...patch.cachePolicy };
+  }
+  return merged;
+}
+
+export function applySettingsPatch(
+  base: AppSettings,
+  patch: SettingsPatch,
+): AppSettings {
+  return {
+    ...base,
+    ...patch,
+    cachePolicy: patch.cachePolicy
+      ? { ...base.cachePolicy, ...patch.cachePolicy }
+      : base.cachePolicy,
+  };
+}
 
 export function applySettings(settings: AppSettings) {
   document.documentElement.dataset.theme = settings.theme;

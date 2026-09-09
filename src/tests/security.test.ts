@@ -3,6 +3,7 @@ import { strings } from "../i18n";
 import {
   htmlToPlainText,
   messageFrameDocument,
+  restoreComposeHtmlLinks,
   sanitizeComposeHtml,
   sanitizeReceivedHtml,
 } from "../security";
@@ -109,8 +110,13 @@ describe("received mail isolation", () => {
     );
     expect(result.html).not.toContain('<a href="https://');
     const compose = sanitizeComposeHtml(result.html);
-    expect(compose).toContain('href="https://library.example.test/hours"');
-    expect(compose).not.toContain("data-external-href");
+    expect(compose).toContain(
+      'data-external-href="https://library.example.test/hours"',
+    );
+    expect(compose).not.toContain('<a href="https://');
+    const outgoing = restoreComposeHtmlLinks(compose);
+    expect(outgoing).toContain('href="https://library.example.test/hours"');
+    expect(outgoing).not.toContain("data-external-href");
   });
 
   it("generates a readable text alternative", () => {
