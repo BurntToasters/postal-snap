@@ -6,10 +6,10 @@ use crate::models::{
     AccountInboxCount, AccountRecord, AccountSummary, AppSettings, Attachment, CachePolicy,
     CacheUsage, ComposeDraft, DraftSummary, FilterRule, MailboxRole, MailboxSummary, MessageCursor,
     MessageDetail, MessagePage, MessageSummary, OutboxSummary, ProviderKind, RecipientSuggestion,
-    SearchQuery, ServerConfig, SnoozedSummary, TlsMode,
+    SearchQuery, ServerConfig, SnoozedSummary, TlsMode, ROLE_SOURCE_NAME,
 };
 
-const CURRENT_SCHEMA_VERSION: u32 = 12;
+const CURRENT_SCHEMA_VERSION: u32 = 13;
 
 pub type MailboxSyncState = (Option<u32>, Option<u32>, u32, Option<u32>);
 
@@ -296,12 +296,36 @@ impl Database {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(dead_code, clippy::too_many_arguments)]
     pub fn upsert_mailbox(
         &self,
         account_id: &str,
         name: &str,
         role: &MailboxRole,
+        uid_validity: Option<u32>,
+        uid_next: Option<u32>,
+        server_unread: Option<u32>,
+        server_total: u32,
+    ) -> Result<i64, String> {
+        self.upsert_mailbox_with_source(
+            account_id,
+            name,
+            role,
+            ROLE_SOURCE_NAME,
+            uid_validity,
+            uid_next,
+            server_unread,
+            server_total,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_mailbox_with_source(
+        &self,
+        account_id: &str,
+        name: &str,
+        role: &MailboxRole,
+        role_source: &str,
         uid_validity: Option<u32>,
         uid_next: Option<u32>,
         server_unread: Option<u32>,
@@ -319,12 +343,12 @@ impl Database {
             .map_err(db_error)?
             .flatten();
         transaction.execute(
-            "INSERT INTO mailboxes (account_id, name, display_name, role, uid_validity, uid_next, server_unread, server_total, counts_updated_at)
-             VALUES (?1, ?2, ?2, ?3, ?4, ?5, ?6, ?7, CURRENT_TIMESTAMP)
-             ON CONFLICT(account_id, name) DO UPDATE SET role=excluded.role, uid_validity=excluded.uid_validity,
+            "INSERT INTO mailboxes (account_id, name, display_name, role, role_source, uid_validity, uid_next, server_unread, server_total, counts_updated_at)
+             VALUES (?1, ?2, ?2, ?3, ?4, ?5, ?6, ?7, ?8, CURRENT_TIMESTAMP)
+             ON CONFLICT(account_id, name) DO UPDATE SET role=excluded.role, role_source=excluded.role_source, uid_validity=excluded.uid_validity,
              uid_next=excluded.uid_next, server_unread=excluded.server_unread, server_total=excluded.server_total,
              counts_updated_at=CURRENT_TIMESTAMP, local_total_delta=0, local_unread_delta=0",
-            params![account_id, name, role.as_str(), uid_validity, uid_next, server_unread, server_total],
+            params![account_id, name, role.as_str(), role_source, uid_validity, uid_next, server_unread, server_total],
         ).map_err(db_error)?;
         let id: i64 = transaction
             .query_row(
@@ -439,7 +463,7 @@ impl Database {
     ) -> Result<Option<(i64, String)>, String> {
         self.conn()?
             .query_row(
-                "SELECT id, name FROM mailboxes WHERE account_id = ?1 AND role = ?2 LIMIT 1",
+                "SELECT id, name FROM mailboxes WHERE account_id = ?1 AND role = ?2 ORDER BY CASE COALESCE(role_source, 'name') WHEN 'specialUse' THEN 0 ELSE 1 END, id LIMIT 1",
                 params![account_id, role],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
@@ -1019,14 +1043,19 @@ impl Database {
             params![id, account_id],
             |row| {
                 let html_body: Option<String> = row.get(19)?;
+                let sanitized = html_body
+                    .as_deref()
+                    .map(crate::html_sanitize::sanitize_received_html);
                 Ok(MessageDetail {
                     summary: map_message_summary(row)?,
                     to: json_or_default(row.get::<_, String>(15)?),
                     cc: json_or_default(row.get::<_, String>(16)?),
                     reply_to: row.get(17)?,
                     text_body: row.get(18)?,
-                    remote_images_blocked: html_body.as_deref().is_some_and(has_remote_images),
-                    html_body,
+                    remote_images_blocked: sanitized.as_ref().is_some_and(|item| {
+                        item.blocked_images > 0 || has_remote_images(&item.html)
+                    }),
+                    html_body: sanitized.map(|item| item.html),
                     attachments: json_or_default(row.get::<_, String>(20)?),
                 })
             },
@@ -1408,6 +1437,40 @@ impl Database {
         Ok(value)
     }
 
+    pub fn mailbox_id_for_name(
+        &self,
+        account_id: &str,
+        mailbox: &str,
+    ) -> Result<Option<i64>, String> {
+        self.conn()?
+            .query_row(
+                "SELECT id FROM mailboxes WHERE account_id=?1 AND name=?2",
+                params![account_id, mailbox],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)
+    }
+
+    pub fn update_mailbox_status(
+        &self,
+        mailbox_id: i64,
+        uid_validity: Option<u32>,
+        uid_next: Option<u32>,
+        server_unread: Option<u32>,
+        server_total: u32,
+    ) -> Result<(), String> {
+        self.conn()?
+            .execute(
+                "UPDATE mailboxes SET uid_validity=?2, uid_next=?3, server_unread=?4, server_total=?5,
+                 counts_updated_at=CURRENT_TIMESTAMP, local_total_delta=0, local_unread_delta=0
+                 WHERE id=?1",
+                params![mailbox_id, uid_validity, uid_next, server_unread, server_total],
+            )
+            .map_err(db_error)?;
+        Ok(())
+    }
+
     pub fn message_fetch_location(
         &self,
         id: i64,
@@ -1492,6 +1555,7 @@ impl Database {
         {
             return Err("Draft does not belong to this account.".into());
         }
+        stored.html_body = crate::html_sanitize::sanitize_compose_html(&stored.html_body);
         let json =
             serde_json::to_string(&stored).map_err(|_| "Could not save draft.".to_string())?;
         let revision = existing.map_or(1, |value| value.1.saturating_add(1));
@@ -1565,7 +1629,10 @@ impl Database {
             .optional()
             .map_err(db_error)?
             .ok_or_else(|| "Draft not found.".to_string())?;
-        serde_json::from_str(&json).map_err(|_| "This saved draft could not be read.".into())
+        let mut draft: ComposeDraft = serde_json::from_str(&json)
+            .map_err(|_| "This saved draft could not be read.".to_string())?;
+        draft.html_body = crate::html_sanitize::sanitize_compose_html(&draft.html_body);
+        Ok(draft)
     }
 
     pub fn remove_draft(&self, id: &str, account_id: &str) -> Result<(), String> {
@@ -2688,7 +2755,8 @@ fn json_or_default<T: serde::de::DeserializeOwned + Default>(value: String) -> T
 }
 fn has_remote_images(html: &str) -> bool {
     let lower = html.to_ascii_lowercase();
-    lower.contains("src=\"http:")
+    lower.contains("data-remote-src")
+        || lower.contains("src=\"http:")
         || lower.contains("src='http:")
         || lower.contains("src=\"https:")
         || lower.contains("src='https:")
@@ -2976,7 +3044,7 @@ fn migrate_schema(connection: &mut Connection) -> Result<(), String> {
         }
         transaction
             .execute(
-                "UPDATE offline_ops SET dedupe_key='' WHERE dedupe_key IS NULL",
+                "UPDATE offline_ops SET dedupe_key='legacy:' || id WHERE dedupe_key IS NULL",
                 [],
             )
             .map_err(db_error)?;
@@ -3092,6 +3160,18 @@ fn migrate_schema(connection: &mut Connection) -> Result<(), String> {
                  );
                  CREATE INDEX IF NOT EXISTS filter_rules_account ON filter_rules(account_id,position);",
             )
+            .map_err(db_error)?;
+        version = 12;
+    }
+    if version < 13 {
+        ensure_column(
+            &transaction,
+            "mailboxes",
+            "role_source",
+            "ALTER TABLE mailboxes ADD COLUMN role_source TEXT NOT NULL DEFAULT 'name'",
+        )?;
+        transaction
+            .pragma_update(None, "user_version", 13)
             .map_err(db_error)?;
     }
     transaction
@@ -3758,7 +3838,16 @@ mod tests {
         assert_eq!(detail.to, vec!["sam@example.com"]);
         assert_eq!(detail.cc, vec!["family@example.com"]);
         assert_eq!(detail.reply_to.as_deref(), Some("reply@example.com"));
-        assert_eq!(detail.html_body.as_deref(), cached.html_body.as_deref());
+        assert!(detail
+            .html_body
+            .as_deref()
+            .unwrap_or_default()
+            .contains("data-remote-src=\"https://images.example.com/pic.png\""));
+        assert!(!detail
+            .html_body
+            .as_deref()
+            .unwrap_or_default()
+            .contains("<img src=\"https://"));
         assert!(detail.remote_images_blocked);
         assert_eq!(detail.attachments.len(), 1);
         assert_eq!(detail.attachments[0].id, "part-1");
@@ -3811,6 +3900,82 @@ mod tests {
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
         assert_eq!(version, CURRENT_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn migrates_v6_two_null_offline_ops_get_unique_keys() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("mail.sqlite3");
+        {
+            let db = Database::open(&path).unwrap();
+            let account = account();
+            db.insert_account(&account).unwrap();
+            db.conn()
+                .unwrap()
+                .execute_batch(
+                    "INSERT INTO offline_ops(account_id,kind,payload,dedupe_key) VALUES('account-1','flags','{}',NULL);
+                     INSERT INTO offline_ops(account_id,kind,payload,dedupe_key) VALUES('account-1','move','{}',NULL);
+                     PRAGMA user_version=5;",
+                )
+                .unwrap();
+        }
+
+        let migrated = Database::open(&path).unwrap();
+        let keys: Vec<String> = migrated
+            .conn()
+            .unwrap()
+            .prepare("SELECT dedupe_key FROM offline_ops WHERE account_id='account-1' ORDER BY id")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(keys.len(), 2);
+        assert!(keys[0].starts_with("legacy:"));
+        assert!(keys[1].starts_with("legacy:"));
+        assert_ne!(keys[0], keys[1]);
+        let version: u32 = migrated
+            .conn()
+            .unwrap()
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn mailbox_for_role_prefers_special_use_over_name() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        db.upsert_mailbox_with_source(
+            &account.summary.id,
+            "Sent",
+            &MailboxRole::Sent,
+            "name",
+            Some(1),
+            Some(2),
+            Some(0),
+            0,
+        )
+        .unwrap();
+        let special = db
+            .upsert_mailbox_with_source(
+                &account.summary.id,
+                "Sent Messages",
+                &MailboxRole::Sent,
+                "specialUse",
+                Some(1),
+                Some(2),
+                Some(0),
+                0,
+            )
+            .unwrap();
+        let chosen = db
+            .mailbox_for_role(&account.summary.id, "sent")
+            .unwrap()
+            .unwrap();
+        assert_eq!(chosen.0, special);
+        assert_eq!(chosen.1, "Sent Messages");
     }
 
     #[test]

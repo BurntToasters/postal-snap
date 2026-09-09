@@ -4,6 +4,8 @@ import { syncWorkspaceWindowFx } from "./window-fx";
 export function applySettings(settings: AppSettings) {
   document.documentElement.dataset.theme = settings.theme;
   document.documentElement.dataset.density = settings.density;
+  document.documentElement.dataset.textScale =
+    settings.textScale >= 1.5 ? "large" : "normal";
   document.documentElement.style.fontSize = `${settings.textScale * 100}%`;
 
   // Native window blur / vibrancy (macOS vibrancy, Windows Mica / Acrylic, mirrored from Zinnia).

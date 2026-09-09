@@ -28,6 +28,8 @@ const settings = (theme: AppSettings["theme"]): AppSettings => ({
   readerPaneHeight: 360,
   windowEffects: false,
   undoSendSeconds: 10,
+  blockAdvertisingAndTracking: true,
+  blockReportedThreats: true,
 });
 
 describe("settings IPC serialization", () => {

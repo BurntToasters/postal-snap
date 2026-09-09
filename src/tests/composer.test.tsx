@@ -7,6 +7,7 @@ import { defaultSettings, useAppStore } from "../store";
 vi.mock("../api", () => ({
   api: {
     saveDraft: vi.fn(),
+    sendMessage: vi.fn(),
     deleteDraft: vi.fn(),
     releaseComposeAttachments: vi.fn(),
     readComposeImage: vi.fn(),
@@ -39,6 +40,8 @@ beforeEach(() => {
     activeAccountId: account.id,
     settings: defaultSettings,
     error: undefined,
+    composeSeed: undefined,
+    composerOpen: false,
   });
 });
 
@@ -199,5 +202,87 @@ describe("composer draft persistence", () => {
     expect(bold).toHaveAttribute("aria-pressed", "false");
     fireEvent.click(bold);
     expect(bold).toHaveAttribute("aria-pressed");
+  });
+
+  it("closes recipient suggestions on Escape without closing the composer", async () => {
+    vi.mocked(api.suggestRecipients).mockResolvedValue([
+      { address: "jane@example.test", name: "Jane", useCount: 3 },
+    ]);
+    render(<Composer accountId={account.id} />);
+    const to = screen.getByPlaceholderText("name@example.com");
+    fireEvent.change(to, { target: { value: "jan" } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    expect(screen.getByRole("listbox")).toBeDefined();
+
+    fireEvent.keyDown(to, { key: "Escape" });
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(screen.getByRole("dialog", { name: /New message/i })).toBeDefined();
+  });
+
+  it("does not send while Settings is open", async () => {
+    const send = vi.mocked(api.sendMessage);
+    send.mockResolvedValue({ id: "outbox-1", state: "sent", detail: null });
+    render(<Composer accountId={account.id} />);
+    fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
+      target: { value: "jane@example.test" },
+    });
+
+    const settings = document.createElement("div");
+    settings.className = "settings-window";
+    document.body.append(settings);
+    fireEvent.keyDown(window, { key: "Enter", metaKey: true });
+    expect(send).not.toHaveBeenCalled();
+
+    settings.remove();
+    fireEvent.keyDown(window, { key: "Enter", metaKey: true });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks for a link in an in-app dialog", () => {
+    const prompt = vi.spyOn(window, "prompt");
+    render(<Composer accountId={account.id} />);
+    fireEvent.click(screen.getByRole("button", { name: "More formatting" }));
+    fireEvent.click(screen.getByRole("button", { name: "Insert link" }));
+    expect(prompt).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "Insert link" })).toBeDefined();
+    expect(screen.getByLabelText("Web address")).toBeDefined();
+    prompt.mockRestore();
+  });
+
+  it("sanitizes stored draft HTML before Tiptap", () => {
+    useAppStore.setState({
+      composeSeed: {
+        draft: {
+          id: "draft-1",
+          accountId: account.id,
+          to: ["jane@example.test"],
+          cc: [],
+          bcc: [],
+          subject: "Draft",
+          htmlBody:
+            '<p>Family note</p><img src=x onerror="steal()"><script>alert(1)</script>',
+          textBody: "Family note",
+          attachments: [],
+        },
+      },
+    });
+    render(<Composer accountId={account.id} />);
+    expect(document.body.innerHTML).toContain("Family note");
+    expect(document.body.innerHTML).not.toMatch(/onerror|steal\(|<script/i);
+  });
+
+  it("does not close an inert composer on Escape", () => {
+    render(
+      <div inert>
+        <Composer accountId={account.id} />
+      </div>,
+    );
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.getByRole("dialog", { name: /New message/i })).toBeDefined();
   });
 });

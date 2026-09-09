@@ -6,6 +6,7 @@ import { defaultSettings, useAppStore } from "../store";
 import type {
   AccountSummary,
   MailboxSummary,
+  MessageChangeEvent,
   MessageDetail,
   MessageSummary,
 } from "../types";
@@ -36,10 +37,6 @@ vi.mock("../api", () => ({
     onDraftSyncChanged: vi.fn().mockResolvedValue(() => undefined),
     onOutboxChanged: vi.fn().mockResolvedValue(() => undefined),
   },
-}));
-
-vi.mock("@tauri-apps/plugin-opener", () => ({
-  openUrl: vi.fn(),
 }));
 
 const account: AccountSummary = {
@@ -424,6 +421,63 @@ describe("mail shell", () => {
     );
     await waitFor(() =>
       expect(mockedUnsnoozeMessage).toHaveBeenCalledWith("account-1", 1),
+    );
+  });
+
+  it("inerts the mailbox chrome when the reader is an overlay", async () => {
+    useAppStore.setState({
+      settings: { ...defaultSettings, readingPane: "hidden" },
+    });
+    mockedGetMessage.mockResolvedValue({
+      ...detail(firstMessage),
+      htmlBody: "<p>Hello from the overlay.</p>",
+    });
+    renderShell();
+    await screen.findByRole("option", { name: /First message/i });
+    fireEvent.click(screen.getByRole("option", { name: /First message/i }));
+    await screen.findByRole("heading", { name: "First message" });
+
+    expect(document.getElementById("message-pane")).toHaveAttribute("inert");
+    expect(document.querySelector(".app-toolbar")).toHaveAttribute("inert");
+    expect(document.getElementById("reader-pane")).not.toHaveAttribute("inert");
+    expect(screen.getByTitle("Message content")).toHaveAttribute(
+      "tabindex",
+      "0",
+    );
+  });
+
+  it("rolls pane width back when saving the new size fails", async () => {
+    mockedSaveSettings.mockRejectedValueOnce(new Error("disk full"));
+    renderShell();
+    await screen.findByRole("option", { name: /First message/i });
+
+    fireEvent.keyDown(
+      screen.getByRole("separator", { name: "Resize message list" }),
+      { key: "Home" },
+    );
+
+    await waitFor(() =>
+      expect(useAppStore.getState().settings.messagePaneWidth).toBe(400),
+    );
+    expect(useAppStore.getState().error).toMatch(/disk full/i);
+  });
+
+  it("clears the open message after it moves", async () => {
+    let onChanged: ((event: MessageChangeEvent) => void) | undefined;
+    mockedOnMessageChanged.mockImplementation(async (handler) => {
+      onChanged = handler;
+      return () => undefined;
+    });
+
+    renderShell();
+    await screen.findByRole("option", { name: /First message/i });
+    fireEvent.click(screen.getByRole("option", { name: /First message/i }));
+    await screen.findByRole("heading", { name: "First message" });
+    await waitFor(() => expect(onChanged).toBeTypeOf("function"));
+
+    onChanged?.({ accountId: account.id, messageId: firstMessage.id, kind: "moved" });
+    await waitFor(() =>
+      expect(useAppStore.getState().selectedMessage).toBeUndefined(),
     );
   });
 });

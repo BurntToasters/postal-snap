@@ -118,7 +118,7 @@ export default function App() {
           return;
         }
         if (action === "check-for-updates") {
-          void checkUpdateInteractive();
+          void checkUpdateInteractive().catch(() => undefined);
           return;
         }
         window.dispatchEvent(
@@ -227,21 +227,23 @@ export default function App() {
 
   return (
     <>
-      {mainContent}
-      {composerOpen && composerAccountId ? (
-        <Suspense
-          fallback={
-            <div className="splash overlay-splash" role="status">
-              {strings.app.openingEditor}
-            </div>
-          }
-        >
-          <Composer
-            key={`${composerAccountId}:${composeSeed?.draft?.id ?? composeSeed?.sourceMessage?.id ?? "new"}:${composeSeed?.composeMode ?? ""}:${composeNonce}`}
-            accountId={composerAccountId}
-          />
-        </Suspense>
-      ) : null}
+      <div inert={settingsOpen || undefined}>
+        {mainContent}
+        {composerOpen && composerAccountId ? (
+          <Suspense
+            fallback={
+              <div className="splash overlay-splash" role="status">
+                {strings.app.openingEditor}
+              </div>
+            }
+          >
+            <Composer
+              key={`${composerAccountId}:${composeSeed?.draft?.id ?? composeSeed?.sourceMessage?.id ?? "new"}:${composeSeed?.composeMode ?? ""}:${composeNonce}`}
+              accountId={composerAccountId}
+            />
+          </Suspense>
+        ) : null}
+      </div>
       {settingsOpen ? (
         <SettingsDialog
           key={`${settingsTab}:${settingsRouteRequest}`}

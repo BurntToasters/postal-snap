@@ -35,14 +35,14 @@
   --radius-md: 12px;
   --radius-lg: 16px;
   --radius-pill: 999px;
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 20px;
-  --space-6: 24px;
-  --control-height: 44px;
-  --toolbar-height: 60px;
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --control-height: 2.75rem;
+  --toolbar-height: 3.75rem;
   --glass-opacity: 0.62;
 }
 
@@ -108,10 +108,10 @@
 }
 
 :root[data-density="compact"] {
-  --control-height: 40px;
-  --toolbar-height: 54px;
-  --space-3: 10px;
-  --space-4: 12px;
-  --space-5: 16px;
-  --space-6: 18px;
+  --control-height: 2.5rem;
+  --toolbar-height: 3.375rem;
+  --space-3: 0.625rem;
+  --space-4: 0.75rem;
+  --space-5: 1rem;
+  --space-6: 1.125rem;
 }

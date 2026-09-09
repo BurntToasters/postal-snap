@@ -30,10 +30,14 @@ const required = [
   "Postal-Snap-macOS.dmg",
   "Postal-Snap-macOS.zip",
   "Postal-Snap-Linux-x64.AppImage",
-  "Postal-Snap-Linux-arm64.AppImage",
   "Postal-Snap-Linux-x64.flatpak",
-  "Postal-Snap-Linux-arm64.flatpak",
 ];
+if (assets.includes("Postal-Snap-Linux-arm64.AppImage")) {
+  required.push(
+    "Postal-Snap-Linux-arm64.AppImage",
+    "Postal-Snap-Linux-arm64.flatpak",
+  );
+}
 for (const artifact of [...required]) {
   required.push(`${artifact}.sha256`, `${artifact}.asc`);
 }
@@ -42,7 +46,9 @@ for (const payload of [
   "Postal-Snap-Windows-arm64.nsis.zip",
   "Postal-Snap-macOS.app.tar.gz",
   "Postal-Snap-Linux-x64.AppImage.tar.gz",
-  "Postal-Snap-Linux-arm64.AppImage.tar.gz",
+  ...(assets.includes("Postal-Snap-Linux-arm64.AppImage.tar.gz")
+    ? ["Postal-Snap-Linux-arm64.AppImage.tar.gz"]
+    : []),
 ]) {
   required.push(
     payload,
@@ -57,7 +63,9 @@ for (const [platform, arch] of [
   ["darwin", "x86_64"],
   ["darwin", "aarch64"],
   ["linux", "x86_64"],
-  ["linux", "aarch64"],
+  ...(assets.includes("Postal-Snap-Linux-arm64.AppImage.tar.gz")
+    ? [["linux", "aarch64"]]
+    : []),
 ]) {
   required.push(`latest-${platform}${channel}-${arch}.json`);
 }

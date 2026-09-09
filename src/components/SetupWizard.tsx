@@ -10,7 +10,6 @@ import {
   ShieldCheck,
   TriangleAlert,
 } from "lucide-react";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "../api";
 import { describeSetupError } from "../errors";
 import { strings } from "../i18n";
@@ -26,8 +25,6 @@ interface Props {
   onComplete: () => Promise<void>;
   onOpenSettings?: () => void;
 }
-
-const APPLE_APP_PASSWORD_GUIDE = "https://support.apple.com/102654";
 
 const iCloudImapSummary = {
   host: "imap.mail.me.com",
@@ -332,7 +329,7 @@ export function SetupWizard({ onComplete, onOpenSettings }: Props) {
             <button
               type="button"
               className="text-button"
-              onClick={() => void openUrl(APPLE_APP_PASSWORD_GUIDE)}
+              onClick={() => void api.openHelpUrl()}
             >
               {strings.setup.createAppPassword}{" "}
               <ExternalLink aria-hidden="true" />
@@ -485,7 +482,7 @@ export function SetupWizard({ onComplete, onOpenSettings }: Props) {
                 <button
                   type="button"
                   className="text-button"
-                  onClick={() => void openUrl(APPLE_APP_PASSWORD_GUIDE)}
+                  onClick={() => void api.openHelpUrl()}
                 >
                   {strings.setup.createAppPassword} <ExternalLink />
                 </button>

@@ -183,6 +183,8 @@ impl From<&AppSettings> for PortableSettings {
             reader_pane_height: settings.reader_pane_height,
             undo_send_seconds: settings.undo_send_seconds,
             window_effects: settings.window_effects,
+            block_advertising_and_tracking: settings.block_advertising_and_tracking,
+            block_reported_threats: settings.block_reported_threats,
         }
     }
 }
@@ -204,6 +206,8 @@ impl PortableSettings {
             reader_pane_height: self.reader_pane_height,
             undo_send_seconds: self.undo_send_seconds,
             window_effects: self.window_effects,
+            block_advertising_and_tracking: self.block_advertising_and_tracking,
+            block_reported_threats: true,
         }
     }
 }
@@ -662,11 +666,44 @@ mod tests {
         let legacy = "{\"schemaVersion\":2,\"readingPane\":\"right\",\"textScale\":1,\"privateNotifications\":false,\"theme\":\"system\",\"density\":\"comfortable\",\"cachePolicy\":{\"mode\":\"recent\",\"days\":90,\"maxBytes\":1073741824},\"lastAccountId\":null,\"lastMailboxId\":null,\"folderPaneWidth\":264,\"messagePaneWidth\":400,\"readerPaneHeight\":360}";
         let parsed: AppSettings = serde_json::from_str(legacy).unwrap();
         assert!(!parsed.window_effects);
+        assert!(parsed.block_advertising_and_tracking);
+        assert!(parsed.block_reported_threats);
         // Exports from newer versions with unknown fields still import.
         let future = "{\"application\":\"postal-snap\",\"formatVersion\":1,\"preferences\":{\"readingPane\":\"right\",\"textScale\":1,\"privateNotifications\":false,\"theme\":\"dark\",\"density\":\"comfortable\",\"cachePolicy\":{\"mode\":\"recent\",\"days\":90,\"maxBytes\":1073741824},\"folderPaneWidth\":264,\"messagePaneWidth\":400,\"readerPaneHeight\":360,\"windowEffects\":false,\"nextBigThing\":true}}";
         let import_path = directory.path().join("future.json");
         fs::write(&import_path, future).unwrap();
         assert_eq!(store.import_from(&import_path).unwrap().theme, "dark");
+    }
+
+    #[test]
+    fn protection_toggles_default_on_and_survive_portable_round_trip() {
+        assert!(AppSettings::default().block_advertising_and_tracking);
+        assert!(AppSettings::default().block_reported_threats);
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let export_path = directory.path().join("export.json");
+        let store = SettingsStore::load(path, &Database::memory()).unwrap();
+        store
+            .save(AppSettings {
+                block_advertising_and_tracking: false,
+                block_reported_threats: false,
+                ..AppSettings::default()
+            })
+            .unwrap();
+        store.export_to(&export_path).unwrap();
+        let raw = fs::read_to_string(&export_path).unwrap();
+        assert!(raw.contains("blockAdvertisingAndTracking"));
+        assert!(raw.contains("blockReportedThreats"));
+        store.save(AppSettings::default()).unwrap();
+        let imported = store.import_from(&export_path).unwrap();
+        assert!(!imported.block_advertising_and_tracking);
+        assert!(
+            imported.block_reported_threats,
+            "import cannot turn off reported-threat checks; Advanced CONFIRM is required"
+        );
+        let reset = store.reset_preferences().unwrap();
+        assert!(reset.block_advertising_and_tracking);
+        assert!(reset.block_reported_threats);
     }
 
     #[test]

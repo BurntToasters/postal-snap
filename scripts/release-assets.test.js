@@ -240,6 +240,14 @@ test("direct updater is GitHub-only and notices are bundled", async () => {
     config.bundle.resources["../THIRD_PARTY_NOTICES.cargo.txt"],
     "THIRD_PARTY_NOTICES.cargo.txt",
   );
+  assert.equal(
+    config.bundle.resources["filters/LICENSE-CC-BY-SA-3.0.txt"],
+    "LICENSE-CC-BY-SA-3.0.txt",
+  );
+  assert.equal(
+    config.bundle.resources["filters/LICENSE-CC0-1.0.txt"],
+    "LICENSE-CC0-1.0.txt",
+  );
 });
 
 test("release environment template covers every supported credential path", async () => {

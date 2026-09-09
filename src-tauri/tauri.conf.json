@@ -56,7 +56,9 @@
     "createUpdaterArtifacts": true,
     "resources": {
       "../THIRD_PARTY_NOTICES.npm.txt": "THIRD_PARTY_NOTICES.npm.txt",
-      "../THIRD_PARTY_NOTICES.cargo.txt": "THIRD_PARTY_NOTICES.cargo.txt"
+      "../THIRD_PARTY_NOTICES.cargo.txt": "THIRD_PARTY_NOTICES.cargo.txt",
+      "filters/LICENSE-CC-BY-SA-3.0.txt": "LICENSE-CC-BY-SA-3.0.txt",
+      "filters/LICENSE-CC0-1.0.txt": "LICENSE-CC0-1.0.txt"
     },
     "category": "Productivity",
     "shortDescription": "Easy, secure email without clutter.",

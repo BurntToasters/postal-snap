@@ -23,8 +23,8 @@ export function sanitizeReceivedHtml(input: string): SanitizedMail {
       if (attribute.name === "background")
         element.removeAttribute(attribute.name);
       if (
-        attribute.name === "data-remote-src" ||
-        attribute.name === "data-inline-cid"
+        attribute.name === "data-content-blocked" ||
+        attribute.name === "data-threat-blocked"
       ) {
         element.removeAttribute(attribute.name);
       }
@@ -43,6 +43,10 @@ export function sanitizeReceivedHtml(input: string): SanitizedMail {
 
   for (const image of doc.querySelectorAll<HTMLImageElement>("img")) {
     const src = image.getAttribute("src")?.trim() ?? "";
+    const markedRemote = image.getAttribute("data-remote-src")?.trim() ?? "";
+    const markedCid = image.getAttribute("data-inline-cid")?.trim() ?? "";
+    image.removeAttribute("data-remote-src");
+    image.removeAttribute("data-inline-cid");
     if (REMOTE_IMAGE.test(src)) {
       image.dataset.remoteSrc = src.startsWith("//") ? `https:${src}` : src;
       image.removeAttribute("src");
@@ -55,6 +59,18 @@ export function sanitizeReceivedHtml(input: string): SanitizedMail {
         .trim()
         .replace(/^<|>$/g, "")
         .slice(0, 512);
+      image.removeAttribute("src");
+      image.alt = image.alt || "Inline image";
+    } else if (REMOTE_IMAGE.test(markedRemote)) {
+      image.dataset.remoteSrc = markedRemote.startsWith("//")
+        ? `https:${markedRemote}`
+        : markedRemote;
+      image.removeAttribute("src");
+      image.alt = image.alt || "Remote image blocked";
+      image.classList.add("remote-image-blocked");
+      blockedImages += 1;
+    } else if (markedCid) {
+      image.dataset.inlineCid = markedCid.replace(/^<|>$/g, "").slice(0, 512);
       image.removeAttribute("src");
       image.alt = image.alt || "Inline image";
     } else if (
@@ -91,10 +107,25 @@ export function sanitizeReceivedHtml(input: string): SanitizedMail {
       "picture",
     ],
     FORBID_ATTR: ["srcset", "ping", "formaction", "background", "poster"],
-    ALLOW_DATA_ATTR: true,
+    ALLOW_DATA_ATTR: false,
+    ADD_ATTR: ["data-remote-src", "data-inline-cid", "class", "alt"],
   });
 
   return { html: clean, blockedImages };
+}
+
+export function sanitizeComposeHtml(input: string): string {
+  const { html } = sanitizeReceivedHtml(input);
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  for (const image of doc.querySelectorAll<HTMLImageElement>(
+    "img[data-inline-cid]",
+  )) {
+    const cid = image.getAttribute("data-inline-cid");
+    if (!cid) continue;
+    image.setAttribute("src", `cid:${cid}`);
+    image.removeAttribute("data-inline-cid");
+  }
+  return doc.body.innerHTML || "<p></p>";
 }
 
 export function messageFrameDocument(html: string, textScale = 1): string {

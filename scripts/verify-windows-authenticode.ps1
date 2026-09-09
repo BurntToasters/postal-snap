@@ -30,9 +30,20 @@ $files = @()
 $files += Get-ChildItem -LiteralPath $releaseDir -File -Filter '*.exe'
 
 $bundleDir = Join-Path $releaseDir 'bundle'
+$zipDir = $null
 if (Test-Path -LiteralPath $bundleDir) {
   $files += Get-ChildItem -LiteralPath $bundleDir -File -Recurse |
     Where-Object { $_.Extension.ToLowerInvariant() -in @('.exe', '.msi') }
+  $zip = Get-ChildItem -LiteralPath $bundleDir -File -Recurse |
+    Where-Object { $_.Name -like '*.nsis.zip' } |
+    Select-Object -First 1
+  if ($zip) {
+    $zipDir = Join-Path ([System.IO.Path]::GetTempPath()) ("postal-snap-nsis-" + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $zipDir | Out-Null
+    Expand-Archive -LiteralPath $zip.FullName -DestinationPath $zipDir -Force
+    $files += Get-ChildItem -LiteralPath $zipDir -File -Recurse |
+      Where-Object { $_.Extension.ToLowerInvariant() -eq '.exe' }
+  }
 }
 
 foreach ($extra in $ExtraFiles) {
@@ -83,3 +94,6 @@ foreach ($file in $files) {
 }
 
 Write-Host "Verified $($files.Count) timestamped Windows artifact(s) from '$expectedPublisher'."
+if ($zipDir -and (Test-Path -LiteralPath $zipDir)) {
+  Remove-Item -LiteralPath $zipDir -Recurse -Force
+}

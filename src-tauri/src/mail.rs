@@ -16,12 +16,14 @@ use sha2::{Digest, Sha256};
 use tokio::net::TcpStream;
 use tokio::sync::Notify;
 use tokio_native_tls::TlsStream;
+use zeroize::Zeroizing;
 
 use crate::{
     db::{CachedMessage, Database},
     models::{
-        mailbox_role, AccountRecord, AccountSetupRequest, Attachment, CachePolicy, ComposeDraft,
-        MailboxRole, MessageSummary, ProviderKind, SearchQuery, ServerConfig, TlsMode,
+        mailbox_role_assignment, validate_compose_sender, AccountRecord, AccountSetupRequest,
+        Attachment, CachePolicy, ComposeDraft, MailboxRole, MessageSummary, ProviderKind,
+        SearchQuery, ServerConfig, TlsMode,
     },
     security::{redact_error, safe_filename},
 };
@@ -156,7 +158,7 @@ pub async fn sync_account(
             continue;
         }
         server_mailboxes.insert(mailbox_name.clone());
-        let role = mailbox_role(&mailbox_name, &attributes);
+        let (role, role_source) = mailbox_role_assignment(&mailbox_name, &attributes);
         let previous_state = db.mailbox_sync_state(&account.summary.id, &mailbox_name)?;
         let status = tokio::time::timeout(
             IMAP_COMMAND_TIMEOUT,
@@ -175,10 +177,11 @@ pub async fn sync_account(
                 && total == status.exists
                 && unread == status.unseen
         });
-        let mailbox_id = db.upsert_mailbox(
+        let mailbox_id = db.upsert_mailbox_with_source(
             &account.summary.id,
             &mailbox_name,
             &role,
+            role_source,
             selected.uid_validity,
             selected.uid_next,
             status.unseen,
@@ -390,6 +393,74 @@ async fn cache_uid_range(
     Ok(FetchOutcome {
         older_than_cutoff: consecutive_old >= 3,
     })
+}
+
+pub async fn refresh_mailbox_envelopes(
+    account: &AccountRecord,
+    password: &str,
+    mailbox: &str,
+    db: &Database,
+) -> Result<(), String> {
+    let Some(mailbox_id) = db.mailbox_id_for_name(&account.summary.id, mailbox)? else {
+        return Ok(());
+    };
+    let mut session = connect_imap(&account.imap, password).await?;
+    let status = tokio::time::timeout(
+        IMAP_COMMAND_TIMEOUT,
+        session.status(mailbox, "(MESSAGES UNSEEN UIDNEXT UIDVALIDITY)"),
+    )
+    .await
+    .map_err(|_| "Mailbox status timed out.".to_string())
+    .and_then(|result| result.map_err(|error| redact_error(&error, "Mailbox status")));
+    let status = match status {
+        Ok(status) => status,
+        Err(error) => {
+            let _ = session.logout().await;
+            return Err(error);
+        }
+    };
+    let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.examine(mailbox))
+        .await
+        .map_err(|_| "Mailbox sync timed out.".to_string())
+        .and_then(|result| result.map_err(|error| redact_error(&error, "Mailbox sync")));
+    let selected = match selected {
+        Ok(selected) => selected,
+        Err(error) => {
+            let _ = session.logout().await;
+            return Err(error);
+        }
+    };
+    if let Err(error) = db.update_mailbox_status(
+        mailbox_id,
+        selected.uid_validity,
+        selected.uid_next,
+        status.unseen,
+        status.exists,
+    ) {
+        let _ = session.logout().await;
+        return Err(error);
+    }
+    let max_uid = db.max_uid(mailbox_id)?;
+    let start = max_uid.saturating_add(1).max(1);
+    let refresh = async {
+        if let Some(newest_uid) = newest_uid(&mut session, selected.exists).await? {
+            if newest_uid >= start {
+                cache_uid_range(
+                    &mut session,
+                    db,
+                    &account.summary.id,
+                    mailbox_id,
+                    &format!("{start}:*"),
+                    None,
+                )
+                .await?;
+            }
+        }
+        Ok::<(), String>(())
+    }
+    .await;
+    let _ = session.logout().await;
+    refresh
 }
 
 pub async fn idle_inbox(
@@ -673,17 +744,16 @@ async fn download_uncached_bodies(
 pub async fn discover_icloud_aliases(email: &str, password: &str) -> Result<Vec<String>, String> {
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
         .timeout(Duration::from_secs(15))
         .build()
         .map_err(|_| "Could not connect to iCloud alias service.".to_string())?;
 
-    let auth = format!(
+    let raw = Zeroizing::new(format!("{email}:{password}"));
+    let auth = Zeroizing::new(format!(
         "Basic {}",
-        base64::Engine::encode(
-            &base64::engine::general_purpose::STANDARD,
-            format!("{email}:{password}")
-        )
-    );
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, raw.as_bytes())
+    ));
 
     let propfind_principal = r#"<?xml version="1.0" encoding="utf-8" ?>
 <D:propfind xmlns:D="DAV:">
@@ -697,7 +767,7 @@ pub async fn discover_icloud_aliases(email: &str, password: &str) -> Result<Vec<
             reqwest::Method::from_bytes(b"PROPFIND").unwrap(),
             "https://caldav.icloud.com/",
         )
-        .header("Authorization", &auth)
+        .header("Authorization", auth.as_str())
         .header("Depth", "0")
         .header("Content-Type", "application/xml; charset=utf-8")
         .body(propfind_principal)
@@ -713,7 +783,6 @@ pub async fn discover_icloud_aliases(email: &str, password: &str) -> Result<Vec<
         return Ok(Vec::new());
     }
 
-    let final_url = response.url().clone();
     let text = response
         .text()
         .await
@@ -726,34 +795,9 @@ pub async fn discover_icloud_aliases(email: &str, password: &str) -> Result<Vec<
     let Some(href) = principal_href else {
         return Ok(Vec::new());
     };
-
-    let principal_url = if href.starts_with("http") {
-        href
-    } else {
-        let base = format!(
-            "{}://{}",
-            final_url.scheme(),
-            final_url.host_str().unwrap_or("caldav.icloud.com")
-        );
-        format!(
-            "{base}{}",
-            if href.starts_with('/') {
-                href
-            } else {
-                format!("/{href}")
-            }
-        )
-    };
-
-    let Ok(parsed_principal) = reqwest::Url::parse(&principal_url) else {
+    let Some(principal_url) = icloud_follow_up_url(&href) else {
         return Ok(Vec::new());
     };
-    let Some(principal_host) = parsed_principal.host_str() else {
-        return Ok(Vec::new());
-    };
-    if !is_allowed_icloud_principal_host(principal_host) {
-        return Ok(Vec::new());
-    }
 
     let address_set_prop = r#"<?xml version="1.0" encoding="utf-8" ?>
 <D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
@@ -767,7 +811,7 @@ pub async fn discover_icloud_aliases(email: &str, password: &str) -> Result<Vec<
             reqwest::Method::from_bytes(b"PROPFIND").unwrap(),
             &principal_url,
         )
-        .header("Authorization", &auth)
+        .header("Authorization", auth.as_str())
         .header("Depth", "0")
         .header("Content-Type", "application/xml; charset=utf-8")
         .body(address_set_prop)
@@ -810,12 +854,40 @@ pub async fn discover_icloud_aliases(email: &str, password: &str) -> Result<Vec<
     Ok(aliases)
 }
 
+pub fn icloud_follow_up_url(href: &str) -> Option<String> {
+    let href = href.trim();
+    if href.is_empty() || href.contains(char::is_control) {
+        return None;
+    }
+    if href.starts_with("http://") || (href.contains("://") && !href.starts_with("https://")) {
+        return None;
+    }
+    let candidate = if href.starts_with("https://") {
+        href.to_string()
+    } else {
+        let path = if href.starts_with('/') {
+            href.to_string()
+        } else {
+            format!("/{href}")
+        };
+        format!("https://caldav.icloud.com{path}")
+    };
+    let parsed = reqwest::Url::parse(&candidate).ok()?;
+    if parsed.scheme() != "https" || !parsed.username().is_empty() || parsed.password().is_some() {
+        return None;
+    }
+    let host = parsed.host_str()?;
+    if !is_allowed_icloud_principal_host(host) {
+        return None;
+    }
+    Some(parsed.as_str().to_string())
+}
+
 pub fn is_allowed_icloud_principal_host(host: &str) -> bool {
     let host = host.to_ascii_lowercase();
     host == "caldav.icloud.com"
-        || host.ends_with(".icloud.com")
         || host == "caldav.apple.com"
-        || host.ends_with(".apple.com")
+        || host.ends_with("-caldav.icloud.com")
 }
 
 pub fn extract_tag_value(xml: &str, tag_name: &str) -> Option<String> {
@@ -1459,10 +1531,12 @@ fn parse_remote_draft(uid: u32, raw: &[u8], updated_at: String) -> Result<Remote
         cc: parsed_addresses(message.cc()),
         bcc: parsed_addresses(message.bcc()),
         subject: message.subject().unwrap_or_default().to_string(),
-        html_body: message
-            .body_html(0)
-            .map(|body| body.into_owned())
-            .unwrap_or_default(),
+        html_body: crate::html_sanitize::sanitize_compose_html(
+            &message
+                .body_html(0)
+                .map(|body| body.into_owned())
+                .unwrap_or_default(),
+        ),
         text_body: message
             .body_text(0)
             .map(|body| body.into_owned())
@@ -1662,6 +1736,11 @@ async fn build_message_with_id(
         return Err("This message has too many attachments.".into());
     }
 
+    validate_compose_sender(
+        draft.from.as_deref(),
+        &account.summary.email,
+        &account.summary.aliases,
+    )?;
     let sender_email = draft
         .from
         .as_deref()
@@ -1710,7 +1789,10 @@ async fn build_message_with_id(
     let mut total_bytes = draft.html_body.len() + draft.text_body.len();
     for item in &draft.attachments {
         let path = Path::new(&item.token);
-        if !path.is_file() {
+        let metadata = tokio::fs::symlink_metadata(path)
+            .await
+            .map_err(|_| "An attachment file is no longer available.".to_string())?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
             return Err("An attachment file is no longer available.".into());
         }
         let bytes = tokio::fs::read(path)
@@ -1750,6 +1832,11 @@ async fn build_message_with_id(
 }
 
 fn message_envelope(account: &AccountRecord, draft: &ComposeDraft) -> Result<Envelope, String> {
+    validate_compose_sender(
+        draft.from.as_deref(),
+        &account.summary.email,
+        &account.summary.aliases,
+    )?;
     let sender_email = draft
         .from
         .as_deref()
@@ -2001,7 +2088,9 @@ fn parse_message(
         .body_text(0)
         .map(|body| body.into_owned())
         .unwrap_or_default();
-    let html_body = message.body_html(0).map(|body| body.into_owned());
+    let html_body = message
+        .body_html(0)
+        .map(|body| crate::html_sanitize::sanitize_received_html(&body).html);
     let preview = message
         .body_preview(180)
         .map(|body| body.split_whitespace().collect::<Vec<_>>().join(" "))
@@ -2262,6 +2351,16 @@ mod tests {
     fn preserves_inline_part_content_type_and_content_id() {
         let raw = b"From: Jane <jane@example.com>\r\nTo: Sam <sam@example.com>\r\nSubject: Photo\r\nContent-Type: multipart/related; boundary=postal\r\n\r\n--postal\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<p>Photo</p><img src=\"cid:family-photo@example.com\">\r\n--postal\r\nContent-Type: image/png\r\nContent-Disposition: inline; filename=\"family\"\r\nContent-ID: <family-photo@example.com>\r\nContent-Transfer-Encoding: base64\r\n\r\naGVsbG8=\r\n--postal--\r\n";
         let parsed = parse_message(8, raw, true, false).unwrap();
+        assert!(parsed
+            .html_body
+            .as_deref()
+            .unwrap_or_default()
+            .contains("data-inline-cid=\"family-photo@example.com\""));
+        assert!(!parsed
+            .html_body
+            .as_deref()
+            .unwrap_or_default()
+            .contains("<img src=\"cid:"));
         let inline = parsed.attachments.first().unwrap();
         assert_eq!(inline.content_type, "image/png");
         assert_eq!(
@@ -2676,10 +2775,23 @@ mod tests {
         assert!(is_allowed_icloud_principal_host("caldav.icloud.com"));
         assert!(is_allowed_icloud_principal_host("p123-caldav.icloud.com"));
         assert!(is_allowed_icloud_principal_host("caldav.apple.com"));
+        assert!(!is_allowed_icloud_principal_host("www.icloud.com"));
+        assert!(!is_allowed_icloud_principal_host("apple.com"));
         assert!(!is_allowed_icloud_principal_host("evil.example.com"));
         assert!(!is_allowed_icloud_principal_host(
             "icloud.com.evil.example.com"
         ));
         assert!(!is_allowed_icloud_principal_host(""));
+        assert_eq!(
+            icloud_follow_up_url("/12345/principal/").as_deref(),
+            Some("https://caldav.icloud.com/12345/principal/")
+        );
+        assert_eq!(
+            icloud_follow_up_url("https://p123-caldav.icloud.com/principal/").as_deref(),
+            Some("https://p123-caldav.icloud.com/principal/")
+        );
+        assert!(icloud_follow_up_url("http://caldav.icloud.com/principal/").is_none());
+        assert!(icloud_follow_up_url("https://www.icloud.com/principal/").is_none());
+        assert!(icloud_follow_up_url("https://user:pass@caldav.icloud.com/").is_none());
     }
 }

@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 
 const focusable =
-  'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])';
+  'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), iframe, [href], [tabindex]:not([tabindex="-1"])';
 
 export function useDialogFocus(onClose: () => void) {
   const ref = useRef<HTMLElement>(null);
@@ -38,7 +38,14 @@ export function useDialogFocus(onClose: () => void) {
     function onKeyDown(event: KeyboardEvent) {
       const currentDialog = ref.current;
       if (!currentDialog || !document.contains(currentDialog)) return;
+      if (
+        currentDialog.hasAttribute("inert") ||
+        currentDialog.closest("[inert]")
+      ) {
+        return;
+      }
       if (event.key === "Escape") {
+        if (event.defaultPrevented) return;
         event.preventDefault();
         closeRef.current();
         return;
@@ -49,6 +56,7 @@ export function useDialogFocus(onClose: () => void) {
       ].filter(
         (item) =>
           !item.hidden &&
+          !item.closest("[inert]") &&
           (typeof item.checkVisibility === "function"
             ? item.checkVisibility()
             : item.offsetParent !== null || item.getClientRects().length > 0),

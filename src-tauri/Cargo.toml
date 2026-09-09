@@ -4,7 +4,7 @@ version = "0.1.6"
 description = "A calm, accessible desktop email client."
 authors = ["BurntToasters <code@rosie.run>"]
 edition = "2021"
-license = "UNLICENSED"
+license = "MPL-2.0"
 
 [features]
 default = ["direct-updater"]
@@ -14,9 +14,14 @@ mas = []
 msstore = []
 
 [build-dependencies]
+serde_json = "1"
+sha2 = "0.10"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+addr = { version = "0.15", default-features = false, features = ["psl"] }
+adblock = { version = "=0.13.3", default-features = false, features = ["embedded-domain-resolver", "full-regex-handling"] }
+ammonia = "4.1.4"
 async-imap = { version = "0.11.3", default-features = false, features = ["runtime-tokio"] }
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }

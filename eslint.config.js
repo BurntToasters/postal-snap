@@ -15,6 +15,9 @@ export default tseslint.config(
       globals: {
         console: "readonly",
         fetch: "readonly",
+        Response: "readonly",
+        AbortSignal: "readonly",
+        TextDecoder: "readonly",
         setTimeout: "readonly",
         clearTimeout: "readonly",
         setInterval: "readonly",
