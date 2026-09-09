@@ -11,6 +11,7 @@ finish-args:
   - --share=ipc
   - --device=dri
   - --talk-name=org.freedesktop.secrets
+  - --talk-name=org.freedesktop.Notifications
 modules:
   - name: postal-snap
     buildsystem: simple
@@ -20,6 +21,9 @@ modules:
       - install -Dm644 icon.png /app/share/icons/hicolor/512x512/apps/run.rosie.snap.png
       - install -Dm644 THIRD_PARTY_NOTICES.npm.txt /app/share/doc/run.rosie.snap/THIRD_PARTY_NOTICES.npm.txt
       - install -Dm644 THIRD_PARTY_NOTICES.cargo.txt /app/share/doc/run.rosie.snap/THIRD_PARTY_NOTICES.cargo.txt
+      - install -Dm644 LICENSE /app/share/doc/run.rosie.snap/LICENSE
+      - install -Dm644 LICENSE-CC-BY-SA-3.0.txt /app/share/doc/run.rosie.snap/LICENSE-CC-BY-SA-3.0.txt
+      - install -Dm644 LICENSE-CC0-1.0.txt /app/share/doc/run.rosie.snap/LICENSE-CC0-1.0.txt
     sources:
       - type: file
         path: ../../src-tauri/target/release/postal-snap
@@ -31,3 +35,9 @@ modules:
         path: ../../THIRD_PARTY_NOTICES.npm.txt
       - type: file
         path: ../../THIRD_PARTY_NOTICES.cargo.txt
+      - type: file
+        path: ../../LICENSE
+      - type: file
+        path: ../../src-tauri/filters/LICENSE-CC-BY-SA-3.0.txt
+      - type: file
+        path: ../../src-tauri/filters/LICENSE-CC0-1.0.txt

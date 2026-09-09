@@ -5,14 +5,19 @@
 .add-account-button,
 .danger-button {
   display: inline-flex;
-  min-height: 44px;
+  min-height: var(--control-height);
   align-items: center;
   justify-content: center;
   gap: 7px;
-  padding: 8px 13px;
+  padding: 8px 14px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--surface);
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease,
+    box-shadow 120ms ease;
 }
 
 .primary-button {
@@ -20,6 +25,7 @@
   color: var(--accent-contrast, #fff);
   background: var(--accent);
   font-weight: 700;
+  box-shadow: 0 1px 0 color-mix(in srgb, #000 8%, transparent);
 }
 
 .primary-button:hover {
@@ -30,11 +36,12 @@
 .toolbar-button:hover,
 .icon-button:hover,
 .add-account-button:hover {
+  border-color: var(--border-strong);
   background: var(--surface-hover);
 }
 
 .icon-button {
-  width: 44px;
+  width: var(--control-height);
   padding: 8px;
 }
 
@@ -50,7 +57,11 @@
 .danger-button {
   border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
   color: var(--danger);
-  background: transparent;
+  background: color-mix(in srgb, var(--danger-soft) 70%, transparent);
+}
+
+.danger-button:hover {
+  background: var(--danger-soft);
 }
 
 .text-button,
@@ -58,14 +69,21 @@
 .discard-button,
 .cc-toggle {
   display: inline-flex;
-  min-height: 44px;
+  min-height: var(--control-height);
   align-items: center;
   gap: 6px;
-  padding: 0;
+  padding: 0 6px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   color: var(--accent);
   background: transparent;
+}
+
+.text-button:hover,
+.back-button:hover,
+.discard-button:hover,
+.cc-toggle:hover {
+  background: var(--accent-soft);
 }
 
 .text-button:focus-visible,

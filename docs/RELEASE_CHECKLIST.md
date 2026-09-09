@@ -1,6 +1,6 @@
 # Postal Snap 0.1 release checklist
 
-Record the build commit, tester, date, operating-system version, and result for every manual item. A GitHub 0.1.1 release is blocked by any unchecked **required** item. Store items are listed separately and are not a 0.1.1 go/no-go.
+Record the build commit, tester, date, operating-system version, and result for every manual item. A GitHub 0.1.x release is blocked by any unchecked **required** item. Store items are listed separately and are not a GitHub-train go/no-go.
 
 Mocked frontend, Playwright, and unit tests do not by themselves mean the release is ready.
 
@@ -13,13 +13,13 @@ Mocked frontend, Playwright, and unit tests do not by themselves mean the releas
 - [ ] CI on the release commit is green, including `npm run test:e2e`.
 - [ ] `npm run test:mail-integration` passes against pinned GreenMail 2.1.11 TLS services.
 - [ ] A copy of the oldest supported v1 database opens, migrates transactionally, and preserves referenced draft/outbox attachments.
-- [ ] Direct feature builds compile. Store (`mas` / `msstore`) compile checks are optional for GitHub-only 0.1.1.
+- [ ] Direct feature builds compile. Store (`mas` / `msstore`) compile checks are optional for GitHub-only 0.1.x.
 - [ ] Generated npm and Cargo notices are present in every package.
 - [ ] `src-tauri/tauri.conf.json` updater pubkey is a real minisign key. `TAURI_UPDATER_PUBLIC_KEY` is not required in `.env`; if it is set, it matches the committed key.
 
 ## Mail behavior
 
-Required for GitHub 0.1.1. The live iCloud smoke is a signing-host gate; do not treat it as done because CI passed.
+Required for GitHub 0.1.x. The live iCloud smoke is a signing-host gate; do not treat it as done because CI passed.
 
 - [ ] `npm run test:icloud` passes on a signing host with a dedicated iCloud account and app-specific password.
 - [ ] IMAP local-part fallback and full-address fallback both have coverage.
@@ -38,7 +38,10 @@ Required for GitHub 0.1.1. The live iCloud smoke is a signing-host gate; do not 
 
 - [ ] Hostile-message fixtures cannot run scripts, submit forms, frame content, or load remote resources.
 - [ ] Remote images never load before consent; private, loopback, link-local, and redirect targets stay blocked.
-- [ ] External links require activation and open in the system browser.
+- [ ] Known advertising and tracking images stay blocked after Load images; fetch failures remain retryable.
+- [ ] Reported-threat images stay blocked after Load images and are not labeled Safe or confirmed.
+- [ ] `npm run filters:check` matches the committed official EasyList/EasyPrivacy and TweetFeed snapshots. Refresh TweetFeed alone with `npm run tweetfeed:update` when shipping a threat-list bump.
+- [ ] External links require activation, show the real hostname, warn on reported-threat matches, and open only through the Rust opener.
 - [ ] Passwords, addresses, subjects, bodies, attachment names, and server replies do not appear in logs.
 - [ ] Keyboard-only setup, mail reading, composing, settings, and account switching work.
 - [ ] Screen-reader labels, visible focus, reduced motion, forced colors, and 200% text pass.
@@ -47,12 +50,13 @@ Required for GitHub 0.1.1. The live iCloud smoke is a signing-host gate; do not 
 
 ## GitHub packages (required for 0.1.1)
 
-Windows creates the GitHub draft. Mac and Linux wait for that draft and never create a second one. Run `release:linux` once on each matching x64 and arm64 signing host; it dispatches by host architecture. Each continue path uploads only that host's artifacts; do not run complete-set verification until every architecture is present.
+Windows creates the GitHub draft. Mac and Linux wait for that draft and never create a second one. Run `release:linux` on the x64 signing host (required). An arm64 Linux host is optional. Each continue path uploads only that host's artifacts; do not run complete-set verification until the required architectures are present.
 
-- [ ] Windows x64 and arm64 NSIS installers have valid Azure Artifact Signing Authenticode signatures and updater signatures. Run `npm run setup:win:artifact-signing` once as Administrator on the VM before `release:win`.
-- [ ] `npm run validate:macos-entitlements` passes before compilation; the universal macOS app passes `codesign`, local app-ticket validation, and Gatekeeper; the DMG passes `hdiutil verify`; and the ZIP contains that same notarized, stapled app.
-- [ ] Linux x64 and arm64 AppImages launch; Flatpak bundles pass sandbox smoke tests.
-- [ ] `mailto:` opens a prefilled Postal Snap composer on every platform.
+- [ ] Windows x64 and arm64 NSIS installers have valid Azure Artifact Signing Authenticode signatures and updater signatures. Prove `Get-AuthenticodeSignature` on the installed `Postal Snap.exe`, not only setup.exe. Pass that path as `POSTAL_SNAP_INSTALLED_EXE` when running `scripts/verify-windows-authenticode.ps1`. Run `npm run setup:win:artifact-signing` once as Administrator on the VM before `release:win`.
+- [ ] `npm run validate:macos-entitlements` passes before compilation; the universal macOS app passes `codesign` with Hardened Runtime and Developer ID Application, `lipo -archs` shows x86_64 and arm64, local app-ticket validation, and Gatekeeper; the DMG is notarized, stapled, and `spctl --assess --type install`; and the ZIP contains that same notarized, stapled app.
+- [ ] Linux x64 AppImage launches and `register_all` can claim mailto on a direct/AppImage host; Flatpak bundle passes sandbox smoke tests, including notifications via `org.freedesktop.Notifications`. Confirm the host-linked ELF starts inside bwrap. arm64 Linux is optional until a signing host ships it.
+- [ ] `mailto:` opens a prefilled Postal Snap composer on every platform. AppImage registration is runtime-only; do not register inside Flatpak.
+- [ ] A machine without WebView2, or with go.microsoft.com blocked, still gets a usable first-run installer (embedded bootstrapper). Do not ship `webviewInstallMode: skip`.
 - [ ] Direct builds update from the correct signed stable or beta GitHub manifest.
 - [ ] Install, upgrade, and uninstall preserve or remove user data exactly as documented.
 
@@ -69,5 +73,5 @@ Windows creates the GitHub draft. Mac and Linux wait for that draft and never cr
 - [ ] Normalized artifacts, SHA-256 files, GPG signatures, updater payloads, and embedded updater signatures all verify.
 - [ ] Stable and beta manifest names route to the intended release.
 - [ ] After every architecture is uploaded, `npm run release:verify:local` and/or `npm run release:verify-draft` pass on the complete set. `release:finalize:hard` is the publish step; it also verifies the remote draft.
-- [ ] The assembled `v0.1.1` GitHub release remains an unpublished draft until every required GitHub-only manual gate is checked.
+- [ ] The assembled GitHub release remains an unpublished draft until every required GitHub-only manual gate is checked.
 - [ ] A recovery copy of signing and updater keys exists outside the build host.

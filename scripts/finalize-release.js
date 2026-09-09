@@ -1,4 +1,5 @@
-import { readdir } from "node:fs/promises";
+import { mkdtemp, readdir } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   artifactArch,
@@ -7,6 +8,7 @@ import {
   ensureReleaseDir,
   json,
   process,
+  rmRetry,
   root,
   run,
   writeJson,
@@ -47,23 +49,62 @@ if (process.argv.includes("--sync-beta-manifests")) {
       "Beta updater manifests require an existing stable release. Publish the initial stable release first.",
     );
   }
-  const betaFiles = (await readdir(directory))
-    .filter((name) => /^latest-.+-beta-(x86_64|aarch64)\.json$/.test(name))
-    .map((name) => join(directory, name));
-  if (!betaFiles.length)
-    throw new Error("No beta updater manifests are staged.");
-  console.log("[1/1] Uploading beta manifests to the latest stable release...");
-  runGitHub([
+  const remoteNames = githubOutput([
     "release",
-    "upload",
-    stableTag,
-    ...betaFiles,
+    "view",
+    tag,
     "--repo",
     repository,
-    "--clobber",
-  ]);
-  for (const filePath of betaFiles) {
-    console.log(`  ~ synced ${basename(filePath)} to latest stable release`);
+    "--json",
+    "assets",
+    "--jq",
+    '[.assets[].name | select(test("^latest-.+-beta-(x86_64|aarch64)\\\\.json$"))] | .[]',
+  ])
+    .split("\n")
+    .map((name) => name.trim())
+    .filter(Boolean);
+  if (!remoteNames.length)
+    throw new Error(
+      "No beta updater manifests are on the published beta release.",
+    );
+  const staging = await mkdtemp(join(tmpdir(), "postal-snap-beta-manifests-"));
+  try {
+    for (const name of remoteNames) {
+      runGitHub([
+        "release",
+        "download",
+        tag,
+        "--repo",
+        repository,
+        "--pattern",
+        name,
+        "--dir",
+        staging,
+        "--clobber",
+      ]);
+    }
+    const betaFiles = (await readdir(staging))
+      .filter((name) => /^latest-.+-beta-(x86_64|aarch64)\.json$/.test(name))
+      .map((name) => join(staging, name));
+    if (!betaFiles.length)
+      throw new Error("Downloaded beta updater manifests were empty.");
+    console.log(
+      "[1/1] Uploading beta manifests to the latest stable release...",
+    );
+    runGitHub([
+      "release",
+      "upload",
+      stableTag,
+      ...betaFiles,
+      "--repo",
+      repository,
+      "--clobber",
+    ]);
+    for (const filePath of betaFiles) {
+      console.log(`  ~ synced ${basename(filePath)} to latest stable release`);
+    }
+  } finally {
+    await rmRetry(staging, { recursive: true });
   }
   console.log("Done: beta manifests synced to latest stable release.\n");
   process.exit(0);
@@ -76,8 +117,11 @@ await verifyDraftReleaseCommit(repository, session);
 
 console.log("[2/3] Generating updater manifests...");
 const artifacts = await readdir(directory);
-const updaterPayloads = artifacts.filter((name) =>
-  /\.(nsis\.zip|app\.tar\.gz|AppImage\.tar\.gz)$/.test(name),
+const updaterPayloads = artifacts.filter(
+  (name) =>
+    /\.(app\.tar\.gz|AppImage\.tar\.gz)$/.test(name) ||
+    (/^Postal-Snap-Windows-(x64|arm64)\.exe$/.test(name) &&
+      artifacts.includes(`${name}.sig`)),
 );
 for (const payload of updaterPayloads) {
   const signaturePath = join(directory, `${payload}.sig`);

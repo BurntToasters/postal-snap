@@ -34,7 +34,7 @@ First releases are GitHub-only. Microsoft Store and Mac App Store builds come la
 - Account passwords live only in the operating-system credential vault. They cross into the app once at setup and are never logged or returned.
 - Mail data stays in a local database on the device. No telemetry, analytics, accounts, or cloud backend.
 - Verified TLS only (implicit TLS or required STARTTLS). No plaintext, no POP.
-- Received mail renders sanitized in a scriptless, networkless box. Remote images load only after you allow them, fetched through a proxy that blocks private-network targets.
+- Received mail renders sanitized in a scriptless, networkless box. Remote images load only after you allow them, fetched through a proxy that blocks private-network targets. Known advertising and tracking images stay blocked.
 - Links open in the system browser after confirmation. Attachments save only where you choose.
 
 ## Development

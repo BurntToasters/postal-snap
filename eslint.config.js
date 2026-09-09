@@ -15,6 +15,9 @@ export default tseslint.config(
       globals: {
         console: "readonly",
         fetch: "readonly",
+        Response: "readonly",
+        AbortSignal: "readonly",
+        TextDecoder: "readonly",
         setTimeout: "readonly",
         clearTimeout: "readonly",
         setInterval: "readonly",
@@ -35,7 +38,7 @@ export default tseslint.config(
         "warn",
         { allowConstantExport: true },
       ],
-      "@typescript-eslint/no-explicit-any": "off",
+      "@typescript-eslint/no-explicit-any": "error",
     },
   },
 );

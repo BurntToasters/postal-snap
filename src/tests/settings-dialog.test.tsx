@@ -1,4 +1,11 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import { SettingsDialog } from "../components/SettingsDialog";
@@ -28,19 +35,15 @@ vi.mock("../api", () => ({
     exportSettings: vi.fn(),
     importSettings: vi.fn(),
     resetSettings: vi.fn(),
+    openExternalUrl: vi.fn(),
     cacheUsage: vi.fn().mockResolvedValue({
-      totalBytes: 1024,
-      databaseBytes: 512,
-      bodyBytes: 256,
-      attachmentBytes: 256,
-      cachedMessages: 5,
+      bytes: 1024,
+      maxBytes: 1_073_741_824,
+      messageCount: 5,
     }),
     distribution: vi.fn().mockResolvedValue({
-      kind: "direct-macos",
-      channel: "stable",
-      platform: "macos",
-      arch: "universal",
-      updatesManagedBy: "app",
+      kind: "direct",
+      updatesManagedBy: "postalSnap",
     }),
     showNativeConfirm: vi.fn().mockResolvedValue(true),
     showNativeMessage: vi.fn().mockResolvedValue(undefined),
@@ -180,6 +183,117 @@ describe("SettingsDialog component", () => {
     );
   });
 
+  it("keeps overlapping preference saves instead of dropping the second", async () => {
+    let releaseFirst: () => void = () => undefined;
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let calls = 0;
+    vi.mocked(api.saveSettings).mockImplementation(async (next) => {
+      calls += 1;
+      if (calls === 1) await firstBlocked;
+      return next;
+    });
+    const onClose = vi.fn();
+    render(<SettingsDialog initialTab="general" onClose={onClose} />);
+    const windowFx = await screen.findByRole("checkbox", {
+      name: /Translucent window background/,
+    });
+    await act(async () => {
+      fireEvent.click(windowFx);
+    });
+    const density = screen.getByLabelText("Interface spacing");
+    await act(async () => {
+      fireEvent.change(density, { target: { value: "compact" } });
+    });
+    await act(async () => {
+      releaseFirst();
+    });
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(2));
+    expect(api.saveSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        windowEffects: true,
+        density: "compact",
+      }),
+    );
+  });
+
+  it("keeps both cache days and limit when those saves overlap", async () => {
+    let releaseFirst: () => void = () => undefined;
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let calls = 0;
+    vi.mocked(api.saveSettings).mockImplementation(async (next) => {
+      calls += 1;
+      if (calls === 1) await firstBlocked;
+      return next;
+    });
+    render(<SettingsDialog initialTab="storage" onClose={vi.fn()} />);
+    const days = await screen.findByLabelText("Keep mail for");
+    await act(async () => {
+      fireEvent.change(days, { target: { value: "30" } });
+    });
+    const limit = screen.getByLabelText("Maximum cache size");
+    await act(async () => {
+      fireEvent.change(limit, { target: { value: "524288000" } });
+    });
+    await act(async () => {
+      releaseFirst();
+    });
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(2));
+    expect(api.saveSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        cachePolicy: {
+          mode: "recent",
+          days: 30,
+          maxBytes: 524_288_000,
+        },
+      }),
+    );
+  });
+
+  it("still sends CONFIRM when a threat-off save overlaps another preference", async () => {
+    let releaseFirst: () => void = () => undefined;
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let calls = 0;
+    vi.mocked(api.saveSettings).mockImplementation(async (next) => {
+      calls += 1;
+      if (calls === 1) await firstBlocked;
+      return next;
+    });
+    render(<SettingsDialog initialTab="advanced" onClose={vi.fn()} />);
+    const adblock = await screen.findByRole("checkbox", {
+      name: /Block advertising and tracking images/,
+    });
+    await act(async () => {
+      fireEvent.click(adblock);
+    });
+    const threats = screen.getByRole("checkbox", {
+      name: /Warn about reported dangerous addresses/,
+    });
+    await act(async () => {
+      fireEvent.click(threats);
+    });
+    fireEvent.change(screen.getByLabelText("Type CONFIRM"), {
+      target: { value: "CONFIRM" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Disable" }));
+    });
+    await act(async () => {
+      releaseFirst();
+    });
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ blockReportedThreats: false }),
+        "CONFIRM",
+      ),
+    );
+  });
+
   it("surfaces sign-in errors with a password update form", async () => {
     vi.mocked(api.updateAccountPassword).mockResolvedValue(account);
     useAppStore.setState({
@@ -316,5 +430,152 @@ describe("SettingsDialog component", () => {
     expect(api.showNativeConfirm).toHaveBeenCalled();
     expect(api.deleteFilterRule).toHaveBeenCalledWith(account.id, "rule-1");
     expect(await screen.findByText(/Rule removed/)).toBeDefined();
+  });
+
+  it("opens Advanced from the General protection card", async () => {
+    render(<SettingsDialog initialTab="general" onClose={vi.fn()} />);
+
+    expect(screen.getByRole("heading", { name: "Appearance" })).toBeDefined();
+    expect(screen.getByRole("heading", { name: "Sending" })).toBeDefined();
+    expect(screen.getByRole("heading", { name: "Privacy" })).toBeDefined();
+    expect(screen.getByText("Mail protection is on")).toBeDefined();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Review Advanced" }));
+    });
+
+    expect(screen.getByRole("tab", { name: "Advanced" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(
+      screen.getByRole("checkbox", {
+        name: /Block advertising and tracking images/,
+      }),
+    ).toBeChecked();
+    expect(
+      screen.getByRole("checkbox", {
+        name: /Warn about reported dangerous addresses/,
+      }),
+    ).toBeChecked();
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+    });
+    expect(screen.getByRole("tab", { name: "Advanced" })).toHaveFocus();
+  });
+
+  it("asks before turning off advertising and tracking image checks", async () => {
+    vi.mocked(api.showNativeConfirm).mockResolvedValueOnce(false);
+    render(<SettingsDialog initialTab="advanced" onClose={vi.fn()} />);
+
+    const toggle = screen.getByRole("checkbox", {
+      name: /Block advertising and tracking images/,
+    });
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+
+    expect(api.showNativeConfirm).toHaveBeenCalledWith(
+      "Allow advertising and tracking images?",
+      expect.stringMatching(/advertising and tracking/),
+    );
+    expect(api.saveSettings).not.toHaveBeenCalled();
+    expect(toggle).toBeChecked();
+
+    vi.mocked(api.showNativeConfirm).mockResolvedValueOnce(true);
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+
+    expect(api.saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ blockAdvertisingAndTracking: false }),
+    );
+  });
+
+  it("requires typing CONFIRM before turning off reported-address warnings", async () => {
+    const onClose = vi.fn();
+    render(<SettingsDialog initialTab="advanced" onClose={onClose} />);
+
+    const toggle = screen.getByRole("checkbox", {
+      name: /Warn about reported dangerous addresses/,
+    });
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+
+    const dialog = screen.getByRole("alertdialog", {
+      name: "Turn off reported-address warnings?",
+    });
+    expect(api.saveSettings).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Disable" })).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText("Type CONFIRM"), {
+      target: { value: "confirm" },
+    });
+    expect(screen.getByRole("button", { name: "Disable" })).toBeDisabled();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Disable" }));
+    });
+    expect(api.saveSettings).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText("Type CONFIRM"), {
+      target: { value: "CONFIRM" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Disable" }));
+    });
+
+    expect(api.saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ blockReportedThreats: false }),
+      "CONFIRM",
+    );
+    expect(dialog).not.toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("closes the threat-off confirm with Escape without closing Settings", async () => {
+    const onClose = vi.fn();
+    render(<SettingsDialog initialTab="advanced" onClose={onClose} />);
+
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("checkbox", {
+          name: /Warn about reported dangerous addresses/,
+        }),
+      );
+    });
+    expect(screen.getByRole("alertdialog")).toBeDefined();
+
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Escape" });
+    });
+
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(api.saveSettings).not.toHaveBeenCalled();
+  });
+
+  it("turns reported-address warnings back on without a confirm dialog", async () => {
+    useAppStore.setState({
+      settings: { ...defaultSettings, blockReportedThreats: false },
+    });
+    render(<SettingsDialog initialTab="advanced" onClose={vi.fn()} />);
+
+    expect(screen.getByRole("status")).toHaveTextContent(
+      /Reported-address warnings are off/,
+    );
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("checkbox", {
+          name: /Warn about reported dangerous addresses/,
+        }),
+      );
+    });
+
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(api.saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ blockReportedThreats: true }),
+    );
   });
 });

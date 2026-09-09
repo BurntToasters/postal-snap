@@ -118,7 +118,7 @@ export default function App() {
           return;
         }
         if (action === "check-for-updates") {
-          void checkUpdateInteractive();
+          void checkUpdateInteractive().catch(() => undefined);
           return;
         }
         window.dispatchEvent(
@@ -165,12 +165,41 @@ export default function App() {
           window.dispatchEvent(
             new CustomEvent("postal:menu-action", { detail: "text-smaller" }),
           );
+        } else if (event.key.toLowerCase() === "p") {
+          if (
+            document.querySelector(
+              ".composer-layer, .settings-window, .modal-layer",
+            )
+          )
+            return;
+          event.preventDefault();
+          window.dispatchEvent(new Event("postal:print-message"));
         }
       }
     };
     window.addEventListener("keydown", keyboard);
     return () => window.removeEventListener("keydown", keyboard);
   }, [openSettings]);
+
+  useEffect(() => {
+    const syncGuard = () => {
+      const target = document.activeElement as HTMLElement | null;
+      const guarded = Boolean(
+        document.querySelector(
+          ".composer-layer, .settings-window, .modal-layer",
+        ) || target?.closest("[contenteditable='true']"),
+      );
+      void api.setMailShortcutGuard(guarded).catch(() => undefined);
+    };
+    document.addEventListener("focusin", syncGuard);
+    document.addEventListener("focusout", syncGuard);
+    syncGuard();
+    return () => {
+      document.removeEventListener("focusin", syncGuard);
+      document.removeEventListener("focusout", syncGuard);
+      void api.setMailShortcutGuard(false).catch(() => undefined);
+    };
+  }, [composerOpen, settingsOpen]);
 
   useEffect(() => {
     document.documentElement.dataset.platform = /Mac/i.test(navigator.userAgent)
@@ -227,21 +256,23 @@ export default function App() {
 
   return (
     <>
-      {mainContent}
-      {composerOpen && composerAccountId ? (
-        <Suspense
-          fallback={
-            <div className="splash overlay-splash" role="status">
-              {strings.app.openingEditor}
-            </div>
-          }
-        >
-          <Composer
-            key={`${composerAccountId}:${composeSeed?.draft?.id ?? composeSeed?.sourceMessage?.id ?? "new"}:${composeSeed?.composeMode ?? ""}:${composeNonce}`}
-            accountId={composerAccountId}
-          />
-        </Suspense>
-      ) : null}
+      <div inert={settingsOpen || undefined}>
+        {mainContent}
+        {composerOpen && composerAccountId ? (
+          <Suspense
+            fallback={
+              <div className="splash overlay-splash" role="status">
+                {strings.app.openingEditor}
+              </div>
+            }
+          >
+            <Composer
+              key={`${composerAccountId}:${composeSeed?.draft?.id ?? composeSeed?.sourceMessage?.id ?? "new"}:${composeSeed?.composeMode ?? ""}:${composeNonce}`}
+              accountId={composerAccountId}
+            />
+          </Suspense>
+        ) : null}
+      </div>
       {settingsOpen ? (
         <SettingsDialog
           key={`${settingsTab}:${settingsRouteRequest}`}

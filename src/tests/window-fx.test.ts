@@ -53,4 +53,17 @@ describe("window-fx", () => {
       dark: false,
     });
   });
+
+  it("reverts to opaque when native set_workspace_window_fx fails", async () => {
+    mockedInvoke.mockImplementation(async (cmd) => {
+      if (cmd === "supports_workspace_window_fx") return true;
+      if (cmd === "set_workspace_window_fx") {
+        throw new Error("vibrancy unavailable");
+      }
+      return undefined;
+    });
+
+    await syncWorkspaceWindowFx(true, true);
+    expect(document.documentElement.dataset.windowFx).toBe("opaque");
+  });
 });

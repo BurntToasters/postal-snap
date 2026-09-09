@@ -9,5 +9,4 @@
 @import "./styles/settings.css";
 @import "./styles/status.css";
 @import "./styles/responsive.css";
-/* FUTURE IMPLEMENTATION: Native window blur / vibrancy styles */
 @import "./styles/window-fx.css";

@@ -7,7 +7,8 @@ use tauri::WebviewWindow;
 #[cfg(target_os = "macos")]
 fn apply_macos(window: &WebviewWindow) -> Result<(), String> {
     use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial};
-    apply_vibrancy(window, NSVisualEffectMaterial::HudWindow, None, None).map_err(|e| e.to_string())
+    apply_vibrancy(window, NSVisualEffectMaterial::HudWindow, None, None)
+        .map_err(|_| "Could not apply window glass.".to_string())
 }
 
 #[cfg(target_os = "macos")]
@@ -15,7 +16,7 @@ fn clear_macos(window: &WebviewWindow) -> Result<(), String> {
     use window_vibrancy::clear_vibrancy;
     clear_vibrancy(window)
         .map(|_| ())
-        .map_err(|e| e.to_string())
+        .map_err(|_| "Could not clear window glass.".to_string())
 }
 
 #[cfg(target_os = "windows")]
@@ -32,11 +33,8 @@ fn apply_windows(window: &WebviewWindow, dark: bool) -> Result<(), String> {
     use window_vibrancy::{apply_acrylic, apply_mica};
     match apply_mica(window, Some(dark)) {
         Ok(()) => Ok(()),
-        Err(mica_error) => {
-            apply_acrylic(window, Some(acrylic_tint(dark))).map_err(|acrylic_error| {
-                format!("Mica unavailable ({mica_error}); Acrylic failed: {acrylic_error}")
-            })
-        }
+        Err(_) => apply_acrylic(window, Some(acrylic_tint(dark)))
+            .map_err(|_| "Could not apply window glass.".to_string()),
     }
 }
 
@@ -48,9 +46,7 @@ fn clear_windows(window: &WebviewWindow) -> Result<(), String> {
     if mica.is_ok() || acrylic.is_ok() {
         Ok(())
     } else {
-        Err(format!(
-            "Could not clear window effects: mica={mica:?}, acrylic={acrylic:?}"
-        ))
+        Err("Could not clear window glass.".to_string())
     }
 }
 
@@ -116,7 +112,6 @@ pub fn clear_basic_window_fx(window: &WebviewWindow, dark: bool) -> Result<(), S
     }
 }
 
-/// Enable or disable native background blur / glass on the calling window.
 /// Enable or disable native background blur / glass on the calling window.
 #[tauri::command]
 pub fn set_workspace_window_fx(

@@ -28,6 +28,10 @@ const settings = (theme: AppSettings["theme"]): AppSettings => ({
   readerPaneHeight: 360,
   windowEffects: false,
   undoSendSeconds: 10,
+  blockAdvertisingAndTracking: true,
+  blockReportedThreats: true,
+  groupThreads: true,
+  notifyNewMail: true,
 });
 
 describe("settings IPC serialization", () => {
@@ -145,6 +149,28 @@ describe("settings IPC serialization", () => {
     expect(mockedInvoke).toHaveBeenCalledWith("search_all_cached_messages", {
       query: "invoice",
       limit: 25,
+    });
+  });
+
+  it("omits confirmToken unless turning reported threats off", async () => {
+    mockedInvoke.mockResolvedValue(settings("dark"));
+    await api.saveSettings(settings("dark"));
+    expect(mockedInvoke).toHaveBeenCalledWith("save_settings", {
+      settings: settings("dark"),
+    });
+
+    mockedInvoke.mockClear();
+    mockedInvoke.mockResolvedValue({
+      ...settings("dark"),
+      blockReportedThreats: false,
+    });
+    await api.saveSettings(
+      { ...settings("dark"), blockReportedThreats: false },
+      "CONFIRM",
+    );
+    expect(mockedInvoke).toHaveBeenCalledWith("save_settings", {
+      settings: { ...settings("dark"), blockReportedThreats: false },
+      confirmToken: "CONFIRM",
     });
   });
 });

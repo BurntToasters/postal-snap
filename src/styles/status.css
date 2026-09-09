@@ -16,10 +16,11 @@
   width: 64px;
   height: 64px;
   place-items: center;
-  border-radius: 15px;
+  border-radius: var(--radius-lg);
   color: var(--accent-contrast, #fff);
   background: var(--accent);
   font-size: 2rem;
+  box-shadow: var(--shadow-soft);
 }
 
 .overlay-splash {
@@ -40,9 +41,9 @@
   gap: 12px;
   padding: 12px 14px;
   border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
-  border-radius: 9px;
+  border-radius: var(--radius-md);
   color: var(--danger);
-  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
+  background: color-mix(in srgb, var(--danger-soft) 85%, var(--surface));
   box-shadow: var(--shadow);
 }
 

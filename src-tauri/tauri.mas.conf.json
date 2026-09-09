@@ -1,6 +1,23 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "app": { "security": { "capabilities": ["store"] } },
+  "app": {
+    "macOSPrivateApi": false,
+    "security": { "capabilities": ["store"] },
+    "windows": [
+      {
+        "label": "main",
+        "title": "Postal Snap",
+        "width": 1240,
+        "height": 820,
+        "minWidth": 620,
+        "minHeight": 540,
+        "resizable": true,
+        "decorations": true,
+        "transparent": false,
+        "create": false
+      }
+    ]
+  },
   "bundle": {
     "targets": ["app"],
     "createUpdaterArtifacts": false,

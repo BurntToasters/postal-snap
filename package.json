@@ -1,9 +1,9 @@
 {
   "name": "postal-snap",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "private": true,
   "packageManager": "npm@12.0.2",
-  "license": "UNLICENSED",
+  "license": "MPL-2.0",
   "type": "module",
   "engines": {
     "node": "^22.22.2 || ^24.15.0 || >=26.0.0",
@@ -17,7 +17,7 @@
     "preview": "vite preview",
     "start": "npm run tauri:dev",
     "tauri": "tauri",
-    "tauri:dev": "npm run sync-version && tauri dev",
+    "tauri:dev": "npm run sync-version && tauri dev --config src-tauri/tauri.direct.conf.json",
     "tauri:build": "npm run sync-version && npm run licenses && node scripts/tauri-build.js --require-tauri-signing",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -54,11 +54,15 @@
     "licenses": "npm run licenses:npm && npm run licenses:cargo",
     "licenses:npm": "node scripts/generate-npm-licenses.js",
     "licenses:cargo": "node scripts/generate-cargo-licenses.js",
+    "filters:check": "node scripts/content-filters.js --check",
+    "filters:update": "node scripts/content-filters.js --update",
+    "tweetfeed:update": "node scripts/content-filters.js --update-tweetfeed",
     "sync-version": "node scripts/sync-version.js",
     "icons:normalize": "node scripts/normalize-icons.js",
     "validate:updater": "node scripts/validate-updater-manifest.js",
     "validate:macos-entitlements": "node scripts/validate-macos-entitlements.js",
-    "validate:updater:live": "node scripts/validate-updater-live.js --shape-only",
+    "validate:updater:live": "node scripts/validate-updater-live.js",
+    "validate:updater:live:shape": "node scripts/validate-updater-live.js --shape-only",
     "release:verify:published": "node scripts/validate-updater-live.js --expected-version=current",
     "dist:clean": "node scripts/dist-tools.js clean",
     "dist:clean-release": "node scripts/dist-tools.js clean-release",
@@ -158,7 +162,6 @@
     "@tauri-apps/api": "^2.11.0",
     "@tauri-apps/plugin-deep-link": "^2.4.0",
     "@tauri-apps/plugin-notification": "^2.3.3",
-    "@tauri-apps/plugin-opener": "^2.5.0",
     "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-updater": "^2.10.0",
     "@tiptap/core": "^3.30.5",
@@ -206,6 +209,9 @@
     "typescript-eslint": "^8.53.0",
     "vite": "^8.0.2",
     "vitest": "^4.0.16"
+  },
+  "overrides": {
+    "prosemirror-view": ">=1.42.3"
   },
   "allowScripts": {
     "esbuild@0.28.2": true

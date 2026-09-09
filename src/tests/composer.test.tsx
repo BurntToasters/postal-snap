@@ -7,6 +7,7 @@ import { defaultSettings, useAppStore } from "../store";
 vi.mock("../api", () => ({
   api: {
     saveDraft: vi.fn(),
+    sendMessage: vi.fn(),
     deleteDraft: vi.fn(),
     releaseComposeAttachments: vi.fn(),
     readComposeImage: vi.fn(),
@@ -39,6 +40,8 @@ beforeEach(() => {
     activeAccountId: account.id,
     settings: defaultSettings,
     error: undefined,
+    composeSeed: undefined,
+    composerOpen: false,
   });
 });
 
@@ -170,5 +173,201 @@ describe("composer draft persistence", () => {
     fireEvent.keyDown(to, { key: "Enter" });
     expect((to as HTMLInputElement).value).toContain("jane@example.test");
     expect(option).toBeDefined();
+  });
+
+  it("keeps later recipients when completing a middle address", async () => {
+    vi.mocked(api.suggestRecipients).mockResolvedValue([
+      { address: "jane@example.test", name: "Jane", useCount: 3 },
+    ]);
+    render(<Composer accountId={account.id} />);
+    const to = screen.getByPlaceholderText(
+      "name@example.com",
+    ) as HTMLInputElement;
+    fireEvent.change(to, {
+      target: { value: "jan, bob@example.test" },
+    });
+    to.setSelectionRange(3, 3);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    fireEvent.keyDown(to, { key: "ArrowDown" });
+    fireEvent.keyDown(to, { key: "Enter" });
+    expect(to.value).toContain("jane@example.test");
+    expect(to.value).toContain("bob@example.test");
+  });
+
+  it("exposes pressed state for active formatting controls", () => {
+    render(<Composer accountId={account.id} />);
+    const bold = screen.getByRole("button", { name: "Bold" });
+    expect(bold).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(bold);
+    expect(bold).toHaveAttribute("aria-pressed");
+  });
+
+  it("closes recipient suggestions on Escape without closing the composer", async () => {
+    vi.mocked(api.suggestRecipients).mockResolvedValue([
+      { address: "jane@example.test", name: "Jane", useCount: 3 },
+    ]);
+    render(<Composer accountId={account.id} />);
+    const to = screen.getByPlaceholderText("name@example.com");
+    fireEvent.change(to, { target: { value: "jan" } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    expect(screen.getByRole("listbox")).toBeDefined();
+
+    fireEvent.keyDown(to, { key: "Escape" });
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(screen.getByRole("dialog", { name: /New message/i })).toBeDefined();
+  });
+
+  it("does not send while Settings is open", async () => {
+    const send = vi.mocked(api.sendMessage);
+    send.mockResolvedValue({ id: "outbox-1", state: "sent", detail: null });
+    render(<Composer accountId={account.id} />);
+    fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
+      target: { value: "jane@example.test" },
+    });
+
+    const settings = document.createElement("div");
+    settings.className = "settings-window";
+    document.body.append(settings);
+    fireEvent.keyDown(window, { key: "Enter", metaKey: true });
+    expect(send).not.toHaveBeenCalled();
+
+    settings.remove();
+    fireEvent.keyDown(window, { key: "Enter", metaKey: true });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks for a link in an in-app dialog", () => {
+    const prompt = vi.spyOn(window, "prompt");
+    render(<Composer accountId={account.id} />);
+    fireEvent.click(screen.getByRole("button", { name: "More formatting" }));
+    fireEvent.click(screen.getByRole("button", { name: "Insert link" }));
+    expect(prompt).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "Insert link" })).toBeDefined();
+    expect(screen.getByLabelText("Web address")).toBeDefined();
+    prompt.mockRestore();
+  });
+
+  it("sanitizes stored draft HTML before Tiptap", () => {
+    useAppStore.setState({
+      composeSeed: {
+        draft: {
+          id: "draft-1",
+          accountId: account.id,
+          to: ["jane@example.test"],
+          cc: [],
+          bcc: [],
+          subject: "Draft",
+          htmlBody:
+            '<p>Family note</p><img src=x onerror="steal()"><script>alert(1)</script>',
+          textBody: "Family note",
+          attachments: [],
+        },
+      },
+    });
+    render(<Composer accountId={account.id} />);
+    expect(document.body.innerHTML).toContain("Family note");
+    expect(document.body.innerHTML).not.toMatch(/onerror|steal\(|<script/i);
+  });
+
+  it("does not close an inert composer on Escape", () => {
+    render(
+      <div inert>
+        <Composer accountId={account.id} />
+      </div>,
+    );
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.getByRole("dialog", { name: /New message/i })).toBeDefined();
+  });
+
+  it("keeps the original message readable for reply and forward", () => {
+    useAppStore.setState({
+      composeSeed: {
+        composeMode: "reply",
+        sourceMessage: {
+          id: 1,
+          accountId: account.id,
+          mailboxId: 1,
+          uid: 1,
+          messageId: "<parent@example.test>",
+          subject: "Family picnic",
+          senderName: "Jane",
+          senderAddress: "jane@example.test",
+          recipients: account.email,
+          receivedAt: "2026-08-18T12:00:00Z",
+          preview: "Bring sandwiches",
+          isRead: true,
+          isStarred: false,
+          hasAttachments: false,
+          size: 100,
+          to: [account.email],
+          cc: [],
+          replyTo: null,
+          textBody: "Bring sandwiches",
+          htmlBody: null,
+          remoteImagesBlocked: false,
+          attachments: [],
+          references: ["<root@example.test>"],
+        },
+      },
+    });
+    const { container } = render(<Composer accountId={account.id} />);
+    const dialog = screen.getByRole("dialog", { name: /Reply/i });
+    expect(dialog.getAttribute("aria-modal")).toBe("false");
+    expect(container.firstElementChild?.className).toContain(
+      "composer-layer-followup",
+    );
+  });
+
+  it("appends the parent Message-ID onto existing References", async () => {
+    useAppStore.setState({
+      composeSeed: {
+        composeMode: "reply",
+        sourceMessage: {
+          id: 1,
+          accountId: account.id,
+          mailboxId: 1,
+          uid: 1,
+          messageId: "<parent@example.test>",
+          subject: "Family picnic",
+          senderName: "Jane",
+          senderAddress: "jane@example.test",
+          recipients: account.email,
+          receivedAt: "2026-08-18T12:00:00Z",
+          preview: "Bring sandwiches",
+          isRead: true,
+          isStarred: false,
+          hasAttachments: false,
+          size: 100,
+          to: [account.email],
+          cc: [],
+          replyTo: null,
+          textBody: "Bring sandwiches",
+          htmlBody: null,
+          remoteImagesBlocked: false,
+          attachments: [],
+          references: ["<root@example.test>"],
+        },
+      },
+    });
+    render(<Composer accountId={account.id} />);
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Save draft and close" }).at(-1)!,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(mockedSaveDraft).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inReplyTo: "<parent@example.test>",
+        references: ["<root@example.test>", "<parent@example.test>"],
+      }),
+    );
   });
 });

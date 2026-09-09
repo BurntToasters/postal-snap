@@ -121,6 +121,7 @@ export interface MessageDetail extends MessageSummary {
   htmlBody?: string | null;
   remoteImagesBlocked: boolean;
   attachments: Attachment[];
+  references?: string[];
 }
 
 export interface ComposeAttachment {
@@ -197,7 +198,8 @@ export interface FilterRule {
 
 export interface SendOutcome {
   id: string;
-  state: "queued" | "sent" | "sentCopyPending" | "needsAttention" | "scheduled";
+  state:
+    "queued" | "sent" | "sent_copy_pending" | "needs_attention" | "scheduled";
   detail?: string | null;
 }
 
@@ -241,6 +243,10 @@ export interface CachePolicy {
   maxBytes: number;
 }
 
+export type SettingsPatch = Partial<Omit<AppSettings, "cachePolicy">> & {
+  cachePolicy?: Partial<CachePolicy>;
+};
+
 export interface AppSettings {
   schemaVersion: 2;
   readingPane: ReadingPane;
@@ -256,6 +262,10 @@ export interface AppSettings {
   readerPaneHeight: number;
   windowEffects: boolean;
   undoSendSeconds: number;
+  blockAdvertisingAndTracking: boolean;
+  blockReportedThreats: boolean;
+  groupThreads: boolean;
+  notifyNewMail: boolean;
 }
 
 export interface DistributionChannel {
@@ -289,4 +299,14 @@ export interface CacheUsage {
   bytes: number;
   maxBytes: number;
   messageCount: number;
+}
+export type RemoteImageResult =
+  | { status: "loaded"; dataUrl: string }
+  | { status: "blocked" }
+  | { status: "reportedThreat" };
+
+export interface ExternalLinkCheck {
+  url: string;
+  hostname: string;
+  reportedThreat: boolean;
 }

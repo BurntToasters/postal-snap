@@ -12,6 +12,7 @@ vi.mock("../api", () => ({
     showNativeConfirm: vi.fn().mockResolvedValue(true),
     showNativeMessage: vi.fn().mockResolvedValue(undefined),
     relaunch: vi.fn().mockResolvedValue(undefined),
+    distribution: vi.fn().mockResolvedValue({ updatesManagedBy: "postalSnap" }),
   },
 }));
 
@@ -37,6 +38,9 @@ describe("update checks", () => {
     mockedRelaunch.mockReset();
     mockedConfirm.mockReset();
     mockedMessage.mockReset();
+    vi.mocked(api.distribution).mockResolvedValue({
+      updatesManagedBy: "postalSnap",
+    } as never);
   });
 
   it("shares one in-flight check across Settings dialog instances", async () => {
@@ -55,6 +59,16 @@ describe("update checks", () => {
     await vi.waitFor(() => expect(mockedCheck).toHaveBeenCalledTimes(1));
     resolveCheck(null);
     await expect(first).resolves.toEqual({ available: false });
+  });
+
+  it("does not load the updater plugin for store-managed builds", async () => {
+    vi.mocked(api.distribution).mockResolvedValueOnce({
+      updatesManagedBy: "store",
+    } as never);
+    await expect(runUpdateSingleFlight()).resolves.toEqual({
+      available: false,
+    });
+    expect(mockedCheck).not.toHaveBeenCalled();
   });
 
   it("reports the version and downloads without auto-relaunching", async () => {

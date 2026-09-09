@@ -79,6 +79,7 @@ async function installMockIpc(page: Page) {
       sentDraft: undefined as unknown,
       setupRequest: undefined as unknown,
       remoteFetches: 0,
+      openedUrls: [] as string[],
       inlineReads: 0,
       retried: false,
       moved: false,
@@ -290,6 +291,20 @@ async function installMockIpc(page: Page) {
             case "delete_outbox":
               state.discarded = true;
               return undefined;
+            case "restore_outbox":
+              state.discarded = true;
+              return {
+                accountId: "acc-1",
+                to: ["sam@example.test"],
+                cc: [],
+                bcc: [],
+                subject: "Queued",
+                htmlBody: "<p>Queued</p>",
+                textBody: "Queued",
+                attachments: [],
+              };
+            case "set_mail_shortcut_guard":
+              return undefined;
             case "snooze_message":
               state.snoozed = true;
               return undefined;
@@ -329,11 +344,17 @@ async function installMockIpc(page: Page) {
                 cc: [],
                 replyTo: null,
                 textBody: "Are we still meeting on Saturday?",
-                htmlBody: location.search.includes("remote")
-                  ? '<p>Are we still meeting?</p><img src="https://images.example.test/pixel.png">'
-                  : location.search.includes("inline")
-                    ? '<p>Photo:</p><img src="cid:family-photo@example.test">'
-                    : "<p>Are we still meeting on Saturday?</p>",
+                htmlBody: location.search.includes("threatLink")
+                  ? '<p><a href="https://phish.example.test/login">Open site</a></p>'
+                  : location.search.includes("webLink")
+                    ? '<p><a href="https://library.example.test/hours">Open site</a></p>'
+                    : location.search.includes("credentialLink")
+                      ? '<p><a href="https://trusted.example@phish.example.test/login">Open site</a></p>'
+                      : location.search.includes("remote")
+                        ? '<p>Are we still meeting?</p><img src="https://images.example.test/pixel.png">'
+                        : location.search.includes("inline")
+                          ? '<p>Photo:</p><img src="cid:family-photo@example.test">'
+                          : "<p>Are we still meeting on Saturday?</p>",
                 remoteImagesBlocked: false,
                 attachments: location.search.includes("inline")
                   ? [
@@ -438,6 +459,14 @@ async function installMockIpc(page: Page) {
               }
               return undefined;
             }
+            case "empty_junk": {
+              const junk = mailboxes.find((entry) => entry.role === "junk");
+              if (junk) {
+                junk.totalCount = 0;
+                junk.unreadCount = 0;
+              }
+              return undefined;
+            }
             case "save_draft":
               return { id: "draft-1", syncState: "localPending" };
             case "send_message":
@@ -493,7 +522,17 @@ async function installMockIpc(page: Page) {
                 folderPaneWidth: 248,
                 messagePaneWidth: 390,
                 readerPaneHeight: 360,
+                windowEffects: false,
+                undoSendSeconds: 10,
+                blockAdvertisingAndTracking: true,
+                blockReportedThreats: true,
+                groupThreads: true,
+                notifyNewMail: true,
               };
+            case "supports_workspace_window_fx":
+              return true;
+            case "set_workspace_window_fx":
+              return undefined;
             case "save_settings":
               return args.settings;
             case "export_settings":
@@ -518,6 +557,10 @@ async function installMockIpc(page: Page) {
                 folderPaneWidth: 248,
                 messagePaneWidth: 390,
                 readerPaneHeight: 360,
+                blockAdvertisingAndTracking: true,
+                blockReportedThreats: true,
+                groupThreads: true,
+                notifyNewMail: true,
               };
             case "reset_settings":
               state.resetSettings += 1;
@@ -538,6 +581,10 @@ async function installMockIpc(page: Page) {
                 folderPaneWidth: 248,
                 messagePaneWidth: 390,
                 readerPaneHeight: 360,
+                blockAdvertisingAndTracking: true,
+                blockReportedThreats: true,
+                groupThreads: true,
+                notifyNewMail: true,
               };
             case "get_startup_notice":
               return null;
@@ -551,7 +598,44 @@ async function installMockIpc(page: Page) {
               return { kind: "direct", updatesManagedBy: "postalSnap" };
             case "fetch_remote_image":
               state.remoteFetches += 1;
-              return "data:image/png;base64,iVBORw0KGgo=";
+              if (location.search.includes("filterBlocked"))
+                return { status: "blocked" };
+              if (location.search.includes("threatBlocked"))
+                return { status: "reportedThreat" };
+              if (location.search.includes("imageFailed"))
+                throw new Error("Image unavailable.");
+              return {
+                status: "loaded",
+                dataUrl: "data:image/png;base64,iVBORw0KGgo=",
+              };
+            case "inspect_external_url": {
+              const raw = String(args.url);
+              let parsed: URL;
+              try {
+                parsed = new URL(raw);
+              } catch {
+                throw new Error("That link is not a valid web address.");
+              }
+              if (
+                parsed.username ||
+                parsed.password ||
+                !/^https?:$/.test(parsed.protocol)
+              ) {
+                throw new Error(
+                  "Postal Snap can only open ordinary web links.",
+                );
+              }
+              return {
+                url: parsed.href,
+                hostname: parsed.hostname,
+                reportedThreat: location.search.includes("threatLink"),
+              };
+            }
+            case "open_external_url":
+              state.openedUrls.push(String(args.url));
+              return undefined;
+            case "open_help_url":
+              return undefined;
             case "read_message_inline_image":
               state.inlineReads += 1;
               return "data:image/png;base64,iVBORw0KGgo=";
@@ -695,6 +779,8 @@ test("keeps settings tab names accessible in a narrow window", async ({
       "Accounts",
       "Shortcuts",
       "Updates",
+      "Advanced",
+      "About",
     ]);
 });
 
@@ -816,7 +902,8 @@ test("updates unread and folder state immediately after mutations", async ({
     "1",
   );
 
-  await page.getByRole("button", { name: "Mark unread" }).click();
+  await page.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "Mark unread" }).click();
   await expect(page.getByRole("button", { name: /^Inbox/ })).toContainText("1");
 
   await page
@@ -916,6 +1003,172 @@ test("never fetches remote images before consent", async ({ page }) => {
       ),
     )
     .toBe(1);
+});
+
+test("keeps filtered images blocked after consent without offering endless retries", async ({
+  page,
+}) => {
+  await page.goto("/?remote=1&filterBlocked=1");
+  await page.getByRole("option", { name: /Weekend plans/i }).click();
+  await page.getByRole("button", { name: "Load images" }).click();
+  await expect(
+    page.getByText("1 advertising or tracking image kept blocked for privacy."),
+  ).toBeVisible();
+  const image = page
+    .frameLocator('iframe[title="Message content"]')
+    .locator("img");
+  await expect(image).toHaveAttribute("data-content-blocked", "true");
+  await expect(image).not.toHaveAttribute("src");
+  await expect(
+    page.getByRole("button", { name: "Retry loading images" }),
+  ).toHaveCount(0);
+});
+
+test("keeps reported-threat images blocked after consent without a Safe label", async ({
+  page,
+}) => {
+  await page.goto("/?remote=1&threatBlocked=1");
+  await page.getByRole("option", { name: /Weekend plans/i }).click();
+  await page.getByRole("button", { name: "Load images" }).click();
+  await expect(
+    page.getByText(
+      "1 image from a reported potentially dangerous address kept blocked.",
+    ),
+  ).toBeVisible();
+  await expect(page.getByText(/\bSafe\b|confirmed/i)).toHaveCount(0);
+  const image = page
+    .frameLocator('iframe[title="Message content"]')
+    .locator("img");
+  await expect(image).toHaveAttribute("data-threat-blocked", "true");
+  await expect(image).not.toHaveAttribute("src");
+  await expect(
+    page.getByRole("button", { name: "Retry loading images" }),
+  ).toHaveCount(0);
+});
+
+test("asks to confirm ordinary links with the real hostname first", async ({
+  page,
+}) => {
+  await page.goto("/?webLink=1");
+  await page.getByRole("option", { name: /Weekend plans/i }).click();
+  page.once("dialog", async (dialog) => {
+    const text = dialog.message();
+    expect(text.indexOf("library.example.test")).toBeGreaterThan(-1);
+    expect(text.indexOf("library.example.test")).toBeLessThan(
+      text.indexOf("https://library.example.test/hours"),
+    );
+    expect(text).not.toMatch(/\bSafe\b/);
+    await dialog.accept();
+  });
+  await page
+    .frameLocator('iframe[title="Message content"]')
+    .getByRole("link", { name: "Open site" })
+    .click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as typeof window & {
+              __POSTAL_SNAP_TEST__: { openedUrls: string[] };
+            }
+          ).__POSTAL_SNAP_TEST__.openedUrls,
+      ),
+    )
+    .toEqual(["https://library.example.test/hours"]);
+});
+
+test("keeps reported links closed unless the user opens them anyway", async ({
+  page,
+}) => {
+  await page.goto("/?threatLink=1");
+  await page.getByRole("option", { name: /Weekend plans/i }).click();
+  const link = page
+    .frameLocator('iframe[title="Message content"]')
+    .getByRole("link", { name: "Open site" });
+  page.once("dialog", async (dialog) => {
+    expect(dialog.message()).toMatch(/phish\.example\.test/);
+    expect(dialog.message()).toMatch(/potentially dangerous/i);
+    expect(dialog.message()).not.toMatch(/confirmed/i);
+    expect(dialog.message()).not.toMatch(/\bSafe\b/);
+    await dialog.dismiss();
+  });
+  await link.click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as typeof window & {
+              __POSTAL_SNAP_TEST__: { openedUrls: string[] };
+            }
+          ).__POSTAL_SNAP_TEST__.openedUrls.length,
+      ),
+    )
+    .toBe(0);
+
+  const messages: string[] = [];
+  const acceptBoth = async (dialog: {
+    message: () => string;
+    accept: () => Promise<void>;
+  }) => {
+    messages.push(dialog.message());
+    await dialog.accept();
+  };
+  page.on("dialog", acceptBoth);
+  await link.click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as typeof window & {
+              __POSTAL_SNAP_TEST__: { openedUrls: string[] };
+            }
+          ).__POSTAL_SNAP_TEST__.openedUrls,
+      ),
+    )
+    .toEqual(["https://phish.example.test/login"]);
+  expect(messages[1]).toMatch(/Open this reported address anyway/);
+  page.off("dialog", acceptBoth);
+});
+
+test("rejects credentialed HTML links before opening them", async ({
+  page,
+}) => {
+  await page.goto("/?credentialLink=1");
+  await page.getByRole("option", { name: /Weekend plans/i }).click();
+  page.once("dialog", () => {
+    throw new Error("Credentialed links must not show an open prompt");
+  });
+  await page
+    .frameLocator('iframe[title="Message content"]')
+    .getByRole("link", { name: "Open site" })
+    .click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as typeof window & {
+              __POSTAL_SNAP_TEST__: { openedUrls: string[] };
+            }
+          ).__POSTAL_SNAP_TEST__.openedUrls.length,
+      ),
+    )
+    .toBe(0);
+});
+
+test("image fetch failures remain retryable and are not labeled tracker blocks", async ({
+  page,
+}) => {
+  await page.goto("/?remote=1&imageFailed=1");
+  await page.getByRole("option", { name: /Weekend plans/i }).click();
+  await page.getByRole("button", { name: "Load images" }).click();
+  await expect(
+    page.getByRole("button", { name: "Retry loading images" }),
+  ).toBeVisible();
+  await expect(page.getByText(/kept blocked for privacy/)).toHaveCount(0);
 });
 
 test("renders received CID images without remote network access", async ({
@@ -1053,7 +1306,7 @@ test("lists Mail-like shortcuts instead of using R for Get Mail", async ({
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("tab", { name: "Shortcuts" }).click();
   const getMail = page.locator(".shortcut-row").filter({ hasText: "Get Mail" });
-  await expect(getMail.locator("kbd")).toContainText("M");
+  await expect(getMail.locator("kbd")).toContainText("N");
   await expect(getMail.locator("kbd")).not.toContainText("R");
   await expect(
     page
@@ -1293,7 +1546,8 @@ test("undoes a held message before it sends", async ({ page }) => {
 test("snoozes a message until tomorrow morning", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("option", { name: /Weekend plans/i }).click();
-  await page.getByRole("button", { name: "Snooze", exact: true }).click();
+  await page.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "Snooze" }).click();
   await page.getByRole("button", { name: "Tomorrow morning" }).click();
   await expect(
     page.getByRole("button", { name: "Tomorrow morning" }),
@@ -1307,4 +1561,19 @@ test("snoozes a message until tomorrow morning", async ({ page }) => {
       ).__POSTAL_SNAP_TEST__.snoozed,
   );
   expect(snoozed).toBe(true);
+});
+
+test("keeps message body opaque when translucent window effects are enabled", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("tab", { name: "General" }).click();
+  await page.getByLabel("Translucent window background").check();
+  await page.getByRole("button", { name: "Close", exact: true }).click();
+  await page.getByRole("option", { name: /Weekend plans/i }).click();
+  const bodyBackground = await page
+    .locator(".message-body")
+    .evaluate((node) => getComputedStyle(node).backgroundColor);
+  expect(bodyBackground).toMatch(/rgb\(255,\s*255,\s*255\)|#fff/i);
 });

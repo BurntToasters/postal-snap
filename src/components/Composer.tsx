@@ -32,6 +32,7 @@ import {
   Maximize2,
   Minimize2,
   Minus,
+  MoreHorizontal,
   Paperclip,
   Redo2,
   RemoveFormatting,
@@ -46,7 +47,7 @@ import {
 import { api } from "../api";
 import { shortcutMod } from "../format";
 import { strings } from "../i18n";
-import { htmlToPlainText, sanitizeReceivedHtml } from "../security";
+import { htmlToPlainText, sanitizeComposeHtml } from "../security";
 import { useAppStore, type ComposerSeed } from "../store";
 import type {
   ComposeAttachment,
@@ -64,6 +65,45 @@ declare module "@tiptap/core" {
     };
   }
 }
+
+const SafeLink = Link.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      href: {
+        default: null,
+        parseHTML: (element) =>
+          element.getAttribute("data-external-href") ||
+          element.getAttribute("href"),
+        renderHTML: (attributes) => {
+          const href = String(attributes.href ?? "");
+          if (/^https?:/i.test(href)) {
+            return {
+              href: "#",
+              "data-external-href": href,
+              rel: "noopener noreferrer",
+            };
+          }
+          if (/^mailto:/i.test(href)) {
+            return { href, rel: "noopener noreferrer" };
+          }
+          return {};
+        },
+      },
+      target: {
+        default: null,
+        renderHTML: () => ({}),
+      },
+    };
+  },
+}).configure({
+  openOnClick: false,
+  protocols: ["http", "https", "mailto"],
+  HTMLAttributes: {
+    rel: "noopener noreferrer",
+    target: null,
+  },
+});
 
 const FontSize = Extension.create({
   name: "fontSize",
@@ -183,6 +223,7 @@ export function Composer({ accountId }: Props) {
 
   const [minimized, setMinimized] = useState(false);
   const [maximized, setMaximized] = useState(false);
+  const [moreFormattingOpen, setMoreFormattingOpen] = useState(false);
   const close = useAppStore((state) => state.closeComposer);
   const setError = useAppStore((state) => state.setError);
   const [to, setTo] = useState(
@@ -203,6 +244,8 @@ export function Composer({ accountId }: Props) {
     new Map<string, { dataUrl: string; contentId: string }>(),
   );
   const [sending, setSending] = useState(false);
+  const [linkDialogOpen, setLinkDialogOpen] = useState(false);
+  const [linkValue, setLinkValue] = useState("https://");
   const [showCc, setShowCc] = useState(Boolean(cc));
   const [recipientError, setRecipientError] = useState<string>();
   const [subjectError, setSubjectError] = useState<string>();
@@ -217,6 +260,7 @@ export function Composer({ accountId }: Props) {
   );
   const restoredInlineImages = useRef(false);
   const isDiscarding = useRef(false);
+  const isSending = useRef(false);
   const draftRevision = useRef(0);
   const saveInFlight = useRef(false);
   const pendingClose = useRef(false);
@@ -227,13 +271,23 @@ export function Composer({ accountId }: Props) {
     draftRevision.current += 1;
     setSaveState("unsaved");
   }, []);
-  const dialogRef = useDialogFocus(requestClose);
+  const keepSourceVisible = Boolean(seed?.composeMode && !maximized);
+  const dialogRef = useDialogFocus(
+    () => {
+      if (linkDialogOpen) {
+        setLinkDialogOpen(false);
+        return;
+      }
+      void requestClose();
+    },
+    { trapFocus: !keepSourceVisible },
+  );
 
   const editor = useEditor({
     extensions: [
       StarterKit.configure({ link: false, underline: false }),
       Underline,
-      Link.configure({ openOnClick: false }),
+      SafeLink,
       Image.configure({ allowBase64: true }),
       TextStyle,
       FontSize,
@@ -253,8 +307,28 @@ export function Composer({ accountId }: Props) {
         class: "composer-editor",
         "aria-label": strings.composer.messageBody,
       },
-      transformPastedHTML: (html) => sanitizeReceivedHtml(html).html,
+      transformPastedHTML: (html) => sanitizeComposeHtml(html),
+      handleDOMEvents: {
+        contextmenu: (_view, event) => {
+          if ((event.target as HTMLElement | null)?.closest("a")) {
+            event.preventDefault();
+            return true;
+          }
+          return false;
+        },
+        auxclick: (_view, event) => {
+          if (
+            event.button === 1 &&
+            (event.target as HTMLElement | null)?.closest("a")
+          ) {
+            event.preventDefault();
+            return true;
+          }
+          return false;
+        },
+      },
     },
+    immediatelyRender: false,
     onUpdate: markUnsaved,
   });
 
@@ -296,7 +370,9 @@ export function Composer({ accountId }: Props) {
           next.set(attachment.token, { dataUrl, contentId });
         }
         setInlineImages(next);
-        editor.commands.setContent(html, { emitUpdate: false });
+        editor.commands.setContent(sanitizeComposeHtml(html), {
+          emitUpdate: false,
+        });
       })
       .catch((cause) => setError(String(cause)));
     return () => {
@@ -321,11 +397,7 @@ export function Composer({ accountId }: Props) {
       attachments,
       inReplyTo:
         seed?.draft?.inReplyTo ?? seed?.sourceMessage?.messageId ?? undefined,
-      references:
-        seed?.draft?.references ??
-        (seed?.sourceMessage?.messageId
-          ? [seed.sourceMessage.messageId]
-          : undefined),
+      references: seedReferences(seed),
     };
   }, [
     accountId,
@@ -518,13 +590,17 @@ export function Composer({ accountId }: Props) {
     const subjectValidation = validateSubject(subject);
     setRecipientError(validation);
     setSubjectError(subjectValidation);
-    if (!canSend || validation || subjectValidation) return;
+    if (!canSend || validation || subjectValidation || isSending.current)
+      return;
     pendingClose.current = false;
+    isSending.current = true;
     setSending(true);
     try {
       const outcome = await api.sendMessage(buildDraft());
       announceLocalMailChanged(accountId);
-      if (outcome.detail) setError(outcome.detail);
+      if (outcome.state === "needs_attention" && outcome.detail) {
+        setError(outcome.detail);
+      }
       if (outcome.state === "scheduled") {
         useAppStore.getState().selectLocalView("outbox");
       }
@@ -533,6 +609,7 @@ export function Composer({ accountId }: Props) {
       announceLocalMailChanged(accountId);
       setError(String(cause));
     } finally {
+      isSending.current = false;
       setSending(false);
     }
   }, [accountId, bcc, buildDraft, canSend, cc, close, setError, subject, to]);
@@ -540,6 +617,7 @@ export function Composer({ accountId }: Props) {
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (minimized) return;
+      if (document.querySelector(".settings-window")) return;
       if (!(event.metaKey || event.ctrlKey)) return;
       if (event.key === "Enter") {
         event.preventDefault();
@@ -595,17 +673,18 @@ export function Composer({ accountId }: Props) {
 
   function addLink() {
     const current = editor?.getAttributes("link").href as string | undefined;
-    const raw = window.prompt(
-      strings.composer.webAddress,
-      current ?? "https://",
-    );
-    if (raw === null) return;
-    const href = raw.trim().slice(0, 2000);
+    setLinkValue(current ?? "https://");
+    setLinkDialogOpen(true);
+  }
+
+  function applyLink() {
+    const href = linkValue.trim().slice(0, 2000);
     if (!/^(https?|mailto):/i.test(href) || /\s/.test(href)) {
       setError(strings.composer.unsafeLink);
       return;
     }
     editor?.chain().focus().extendMarkRange("link").setLink({ href }).run();
+    setLinkDialogOpen(false);
   }
 
   function adjustIndent(delta: number) {
@@ -696,19 +775,21 @@ export function Composer({ accountId }: Props) {
 
   return (
     <div
-      className={`modal-layer composer-layer${maximized ? " composer-layer-maximized" : ""}`}
+      className={`modal-layer composer-layer${maximized ? " composer-layer-maximized" : ""}${keepSourceVisible ? " composer-layer-followup" : ""}`}
       role="dialog"
-      aria-modal="true"
+      aria-modal={keepSourceVisible ? "false" : "true"}
       aria-labelledby="composer-title"
     >
-      <button
-        className="modal-backdrop"
-        type="button"
-        tabIndex={-1}
-        aria-hidden="true"
-        onClick={() => void requestClose()}
-        disabled={sending || saveState === "saving"}
-      />
+      {keepSourceVisible ? null : (
+        <button
+          className="modal-backdrop"
+          type="button"
+          tabIndex={-1}
+          aria-hidden="true"
+          onClick={() => void requestClose()}
+          disabled={sending || saveState === "saving"}
+        />
+      )}
       <section
         className={`composer-window${maximized ? " composer-maximized" : ""}`}
         ref={dialogRef}
@@ -969,6 +1050,7 @@ export function Composer({ accountId }: Props) {
               type="button"
               onClick={() => editor?.chain().focus().toggleBold().run()}
               aria-label={strings.composer.bold}
+              aria-pressed={Boolean(editor?.isActive("bold"))}
               title={strings.composer.bold}
             >
               <Bold />
@@ -978,6 +1060,7 @@ export function Composer({ accountId }: Props) {
               type="button"
               onClick={() => editor?.chain().focus().toggleItalic().run()}
               aria-label={strings.composer.italic}
+              aria-pressed={Boolean(editor?.isActive("italic"))}
               title={strings.composer.italic}
             >
               <Italic />
@@ -987,6 +1070,7 @@ export function Composer({ accountId }: Props) {
               type="button"
               onClick={() => editor?.chain().focus().toggleUnderline().run()}
               aria-label={strings.composer.underline}
+              aria-pressed={Boolean(editor?.isActive("underline"))}
               title={strings.composer.underline}
             >
               <UnderlineIcon />
@@ -996,6 +1080,7 @@ export function Composer({ accountId }: Props) {
               type="button"
               onClick={() => editor?.chain().focus().toggleStrike().run()}
               aria-label={strings.composer.strike}
+              aria-pressed={Boolean(editor?.isActive("strike"))}
               title={strings.composer.strike}
             >
               <Strikethrough />
@@ -1021,6 +1106,7 @@ export function Composer({ accountId }: Props) {
             </label>
             <button
               type="button"
+              className={editor?.isActive("highlight") ? "active" : ""}
               onClick={() =>
                 editor
                   ?.chain()
@@ -1029,122 +1115,175 @@ export function Composer({ accountId }: Props) {
                   .run()
               }
               aria-label={strings.composer.highlight}
+              aria-pressed={Boolean(editor?.isActive("highlight"))}
               title={strings.composer.highlight}
             >
               <Highlighter />
             </button>
           </div>
 
-          <div className="toolbar-group">
+          <div className="toolbar-group format-toolbar-more">
             <button
               type="button"
-              onClick={() => editor?.chain().focus().setTextAlign("left").run()}
-              aria-label={strings.composer.alignLeft}
-              title={strings.composer.alignLeft}
+              className={moreFormattingOpen ? "active" : ""}
+              aria-expanded={moreFormattingOpen}
+              aria-controls="composer-more-formatting"
+              aria-label={strings.composer.moreFormatting}
+              title={strings.composer.moreFormatting}
+              onClick={() => setMoreFormattingOpen((value) => !value)}
             >
-              <AlignLeft />
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                editor?.chain().focus().setTextAlign("center").run()
-              }
-              aria-label={strings.composer.alignCenter}
-              title={strings.composer.alignCenter}
-            >
-              <AlignCenter />
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                editor?.chain().focus().setTextAlign("right").run()
-              }
-              aria-label={strings.composer.alignRight}
-              title={strings.composer.alignRight}
-            >
-              <AlignRight />
+              <MoreHorizontal />
             </button>
           </div>
 
-          <div className="toolbar-group">
-            <button
-              type="button"
-              onClick={() => editor?.chain().focus().toggleBulletList().run()}
-              aria-label={strings.composer.bullets}
-              title={strings.composer.bullets}
-            >
-              <List />
-            </button>
-            <button
-              type="button"
-              onClick={() => editor?.chain().focus().toggleOrderedList().run()}
-              aria-label={strings.composer.numbers}
-              title={strings.composer.numbers}
-            >
-              <ListOrdered />
-            </button>
-            <button
-              type="button"
-              onClick={() => adjustIndent(-1)}
-              aria-label={strings.composer.indentLess}
-              title={strings.composer.indentLess}
-            >
-              <IndentDecrease />
-            </button>
-            <button
-              type="button"
-              onClick={() => adjustIndent(1)}
-              aria-label={strings.composer.indentMore}
-              title={strings.composer.indentMore}
-            >
-              <IndentIncrease />
-            </button>
-          </div>
+          <div
+            id="composer-more-formatting"
+            className={`format-toolbar-secondary ${moreFormattingOpen ? "open" : ""}`}
+            hidden={!moreFormattingOpen}
+          >
+            <div className="toolbar-group">
+              <button
+                type="button"
+                className={
+                  editor?.isActive({ textAlign: "left" }) ? "active" : ""
+                }
+                onClick={() =>
+                  editor?.chain().focus().setTextAlign("left").run()
+                }
+                aria-label={strings.composer.alignLeft}
+                aria-pressed={Boolean(editor?.isActive({ textAlign: "left" }))}
+                title={strings.composer.alignLeft}
+              >
+                <AlignLeft />
+              </button>
+              <button
+                type="button"
+                className={
+                  editor?.isActive({ textAlign: "center" }) ? "active" : ""
+                }
+                onClick={() =>
+                  editor?.chain().focus().setTextAlign("center").run()
+                }
+                aria-label={strings.composer.alignCenter}
+                aria-pressed={Boolean(
+                  editor?.isActive({ textAlign: "center" }),
+                )}
+                title={strings.composer.alignCenter}
+              >
+                <AlignCenter />
+              </button>
+              <button
+                type="button"
+                className={
+                  editor?.isActive({ textAlign: "right" }) ? "active" : ""
+                }
+                onClick={() =>
+                  editor?.chain().focus().setTextAlign("right").run()
+                }
+                aria-label={strings.composer.alignRight}
+                aria-pressed={Boolean(editor?.isActive({ textAlign: "right" }))}
+                title={strings.composer.alignRight}
+              >
+                <AlignRight />
+              </button>
+            </div>
 
-          <div className="toolbar-group">
-            <button
-              type="button"
-              onClick={addLink}
-              aria-label={strings.composer.insertLink}
-              title={strings.composer.insertLink}
-            >
-              <LinkIcon />
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                editor
-                  ?.chain()
-                  .focus()
-                  .insertTable({ rows: 3, cols: 3, withHeaderRow: true })
-                  .run()
-              }
-              aria-label={strings.composer.insertTable}
-              title={strings.composer.insertTable}
-            >
-              <Table2 />
-            </button>
-            <button
-              type="button"
-              onClick={() => editor?.chain().focus().setHorizontalRule().run()}
-              aria-label={strings.composer.insertRule}
-              title={strings.composer.insertRule}
-            >
-              <Minus />
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                editor?.chain().focus().clearNodes().unsetAllMarks().run()
-              }
-              aria-label={strings.composer.clearFormatting}
-              title={strings.composer.clearFormatting}
-            >
-              <RemoveFormatting />
-            </button>
+            <div className="toolbar-group">
+              <button
+                type="button"
+                className={editor?.isActive("bulletList") ? "active" : ""}
+                onClick={() => editor?.chain().focus().toggleBulletList().run()}
+                aria-label={strings.composer.bullets}
+                aria-pressed={Boolean(editor?.isActive("bulletList"))}
+                title={strings.composer.bullets}
+              >
+                <List />
+              </button>
+              <button
+                type="button"
+                className={editor?.isActive("orderedList") ? "active" : ""}
+                onClick={() =>
+                  editor?.chain().focus().toggleOrderedList().run()
+                }
+                aria-label={strings.composer.numbers}
+                aria-pressed={Boolean(editor?.isActive("orderedList"))}
+                title={strings.composer.numbers}
+              >
+                <ListOrdered />
+              </button>
+              <button
+                type="button"
+                onClick={() => adjustIndent(-1)}
+                aria-label={strings.composer.indentLess}
+                title={strings.composer.indentLess}
+              >
+                <IndentDecrease />
+              </button>
+              <button
+                type="button"
+                onClick={() => adjustIndent(1)}
+                aria-label={strings.composer.indentMore}
+                title={strings.composer.indentMore}
+              >
+                <IndentIncrease />
+              </button>
+            </div>
+
+            <div className="toolbar-group">
+              <button
+                type="button"
+                className={editor?.isActive("link") ? "active" : ""}
+                onClick={addLink}
+                aria-label={strings.composer.insertLink}
+                aria-pressed={Boolean(editor?.isActive("link"))}
+                title={strings.composer.insertLink}
+              >
+                <LinkIcon />
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  editor
+                    ?.chain()
+                    .focus()
+                    .insertTable({ rows: 3, cols: 3, withHeaderRow: true })
+                    .run()
+                }
+                aria-label={strings.composer.insertTable}
+                title={strings.composer.insertTable}
+              >
+                <Table2 />
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  editor?.chain().focus().setHorizontalRule().run()
+                }
+                aria-label={strings.composer.insertRule}
+                title={strings.composer.insertRule}
+              >
+                <Minus />
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  editor?.chain().focus().clearNodes().unsetAllMarks().run()
+                }
+                aria-label={strings.composer.clearFormatting}
+                title={strings.composer.clearFormatting}
+              >
+                <RemoveFormatting />
+              </button>
+            </div>
           </div>
         </div>
         <EditorContent editor={editor} />
+        {account?.signature && !seed?.draft ? (
+          <aside className="composer-signature-preview">
+            <strong>{strings.composer.signaturePreview}</strong>
+            <pre>{account.signature}</pre>
+          </aside>
+        ) : null}
         {attachments.length > 0 ? (
           <div className="compose-attachments">
             {attachments.map((item, index) => (
@@ -1215,6 +1354,51 @@ export function Composer({ accountId }: Props) {
             {strings.composer.discard}
           </button>
         </footer>
+        {linkDialogOpen ? (
+          <div
+            className="settings-confirm-overlay"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="composer-link-title"
+          >
+            <form
+              className="settings-confirm-dialog"
+              onSubmit={(event) => {
+                event.preventDefault();
+                applyLink();
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== "Escape") return;
+                event.preventDefault();
+                event.stopPropagation();
+                setLinkDialogOpen(false);
+              }}
+            >
+              <h2 id="composer-link-title">{strings.composer.insertLink}</h2>
+              <label>
+                <span>{strings.composer.webAddress}</span>
+                <input
+                  autoFocus
+                  value={linkValue}
+                  onChange={(event) => setLinkValue(event.target.value)}
+                  placeholder="https://"
+                />
+              </label>
+              <div className="settings-confirm-actions">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => setLinkDialogOpen(false)}
+                >
+                  {strings.common.cancel}
+                </button>
+                <button className="primary-button" type="submit">
+                  {strings.composer.insertLink}
+                </button>
+              </div>
+            </form>
+          </div>
+        ) : null}
       </section>
     </div>
   );
@@ -1369,7 +1553,8 @@ function RecipientField({
       end += 1;
     }
     const separator = end < value.length ? value[end] : ",";
-    const nextValue = `${value.slice(0, start)}${suggestion.address}${separator} `;
+    const remainder = end < value.length ? value.slice(end + 1) : "";
+    const nextValue = `${value.slice(0, start)}${suggestion.address}${separator} ${remainder.trimStart()}`;
     const nextCaret = start + suggestion.address.length + 2;
     onChange(nextValue);
     setOpen(false);
@@ -1500,10 +1685,9 @@ function seedBody(seed?: ComposerSeed): string {
   const draftText = seed?.draft?.textBody ?? seed?.prefill?.textBody;
   if (!seed?.sourceMessage) {
     if (!draftHtml && !draftText) return "<p></p>";
-    return (
-      draftHtml ??
-      `<p>${escapeHtml(draftText ?? "").replace(/\n/g, "<br>")}</p>`
-    );
+    return draftHtml
+      ? sanitizeComposeHtml(draftHtml)
+      : `<p>${escapeHtml(draftText ?? "").replace(/\n/g, "<br>")}</p>`;
   }
   const message = seed.sourceMessage;
   const intro =
@@ -1515,7 +1699,15 @@ function seedBody(seed?: ComposerSeed): string {
             message.senderAddress ||
             strings.composer.sender,
         );
-  return `<p></p><p><br></p><blockquote><p><strong>${escapeHtml(intro)}</strong></p>${message.htmlBody ? sanitizeReceivedHtml(message.htmlBody).html : `<p>${escapeHtml(message.textBody).replace(/\n/g, "<br>")}</p>`}</blockquote>`;
+  return `<p></p><p><br></p><blockquote><p><strong>${escapeHtml(intro)}</strong></p>${message.htmlBody ? sanitizeComposeHtml(message.htmlBody) : `<p>${escapeHtml(message.textBody).replace(/\n/g, "<br>")}</p>`}</blockquote>`;
+}
+
+function seedReferences(seed?: ComposerSeed): string[] | undefined {
+  if (seed?.draft?.references?.length) return seed.draft.references;
+  const parentId = seed?.sourceMessage?.messageId;
+  if (!parentId) return seed?.draft?.references;
+  const prior = seed?.sourceMessage?.references?.filter(Boolean) ?? [];
+  return [...prior, parentId];
 }
 
 function composerTitle(seed?: ComposerSeed): string {

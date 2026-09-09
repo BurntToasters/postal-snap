@@ -1,7 +1,10 @@
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::Duration,
 };
 
@@ -10,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_notification::NotificationExt;
+use tauri_plugin_opener::OpenerExt;
 use tokio::sync::{Mutex as AsyncMutex, Notify, OwnedMutexGuard};
 use zeroize::{Zeroize, Zeroizing};
 
@@ -18,13 +22,13 @@ use crate::{
     db::Database,
     mail,
     models::{
-        take_validated_setup, validate_compose_draft, validate_filter_rule, validate_folder_name,
-        AccountInboxCount, AccountRecord, AccountRemovalOutcome, AccountSetupRequest,
-        AccountSummary, AppSettings, AttachmentPreview, CacheUsage, ComposeAttachment,
-        ComposeDraft, DistributionChannel, DraftSaveOutcome, DraftSummary, FilterRule, IpcError,
-        MailboxRole, MailboxSummary, MessageCursor, MessageDetail, MessagePage, MessageSummary,
-        OutboxSummary, ProviderKind, RecipientSuggestion, SearchQuery, SendOutcome, SnoozedSummary,
-        SyncState,
+        normalize_setup_password, take_validated_setup, validate_compose_draft,
+        validate_compose_sender, validate_filter_rule, validate_folder_name, AccountInboxCount,
+        AccountRecord, AccountRemovalOutcome, AccountSetupRequest, AccountSummary, AppSettings,
+        AttachmentPreview, CacheUsage, ComposeAttachment, ComposeDraft, DistributionChannel,
+        DraftSaveOutcome, DraftSummary, FilterRule, IpcError, MailboxRole, MailboxSummary,
+        MessageCursor, MessageDetail, MessagePage, MessageSummary, OutboxSummary, ProviderKind,
+        RecipientSuggestion, SearchQuery, SendOutcome, SnoozedSummary, SyncState,
     },
     security,
     settings::SettingsStore,
@@ -36,6 +40,45 @@ fn command_result<T>(result: Result<T, String>) -> CommandResult<T> {
     result.map_err(Into::into)
 }
 
+fn refresh_mail_menu(app: &AppHandle, state: &AppState) {
+    let count = state.db.account_count().unwrap_or(0);
+    crate::update_mail_menu_or_warn(
+        app,
+        crate::mail_actions_enabled(count) && !state.mail_shortcut_guarded(),
+    );
+}
+
+fn take_normalized_account_password(
+    provider: &crate::models::ProviderKind,
+    password: String,
+) -> Result<Zeroizing<String>, IpcError> {
+    let mut password = Zeroizing::new(password);
+    let normalized = Zeroizing::new(normalize_setup_password(provider, &password));
+    password.zeroize();
+    if normalized.is_empty() || normalized.len() > 4096 {
+        return Err("Enter the app-specific or email password.".into());
+    }
+    Ok(normalized)
+}
+
+fn validate_owned_compose(draft: &ComposeDraft, account: &AccountRecord) -> Result<(), String> {
+    validate_compose_draft(draft)?;
+    validate_compose_sender(
+        draft.from.as_deref(),
+        &account.summary.email,
+        &account.summary.aliases,
+    )
+}
+
+fn prepare_owned_compose(
+    mut draft: ComposeDraft,
+    account: &AccountRecord,
+) -> Result<ComposeDraft, String> {
+    draft.html_body = crate::html_sanitize::sanitize_compose_html(&draft.html_body);
+    validate_owned_compose(&draft, account)?;
+    Ok(draft)
+}
+
 pub struct AppState {
     pub db: Database,
     pub settings: SettingsStore,
@@ -43,6 +86,7 @@ pub struct AppState {
     account_actors: Mutex<HashMap<String, Arc<AccountActor>>>,
     watchers: Mutex<HashSet<String>>,
     startup_error: Mutex<Option<String>>,
+    mail_shortcut_guard: AtomicBool,
 }
 
 struct AccountActor {
@@ -59,6 +103,7 @@ impl AppState {
             account_actors: Mutex::new(HashMap::new()),
             watchers: Mutex::new(HashSet::new()),
             startup_error: Mutex::new(None),
+            mail_shortcut_guard: AtomicBool::new(false),
         }
     }
 
@@ -76,6 +121,14 @@ impl AppState {
             .lock()
             .map_err(|_| "Application startup status is unavailable.".to_string())?;
         Ok(error.take())
+    }
+
+    pub fn set_mail_shortcut_guard(&self, guarded: bool) {
+        self.mail_shortcut_guard.store(guarded, Ordering::Relaxed);
+    }
+
+    pub fn mail_shortcut_guarded(&self) -> bool {
+        self.mail_shortcut_guard.load(Ordering::Relaxed)
     }
 
     fn actor(&self, account_id: &str) -> Result<Arc<AccountActor>, String> {
@@ -162,6 +215,11 @@ impl AppState {
                     Ok(()) => backoff = 2,
                     Err(_) => {
                         drop(_guard);
+                        let _ = state.db.set_account_state(
+                            &account_id,
+                            "offline",
+                            Some("Connection lost. Reconnecting…"),
+                        );
                         emit_sync(
                             &app,
                             &account_id,
@@ -215,22 +273,15 @@ pub async fn update_account_password(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<AccountSummary> {
-    use crate::models::normalize_setup_password;
     let _guard = state.lock_account(&account_id).await?;
+    let password = Zeroizing::new(password);
     let account = state.db.account(&account_id)?;
     if account.summary.auth_method != "password" {
         return Err("This account signs in without a password. Reconnect it instead.".into());
     }
-    let mut password = Zeroizing::new(password);
-    let normalized = Zeroizing::new(normalize_setup_password(
-        &account.summary.provider,
-        &password,
-    ));
-    password.zeroize();
-    if normalized.is_empty() || normalized.len() > 4096 {
-        return Err("Enter the app-specific or email password.".into());
-    }
-    mail::test_account(
+    let normalized =
+        take_normalized_account_password(&account.summary.provider, password.to_string())?;
+    let (imap, smtp) = mail::test_account(
         &AccountSetupRequest {
             provider: account.summary.provider.clone(),
             email: account.summary.email.clone(),
@@ -241,10 +292,11 @@ pub async fn update_account_password(
         },
         &account.imap,
         &account.smtp,
-        &password,
+        &normalized,
     )
     .await?;
-    credentials::store(&account_id, &password)?;
+    state.db.update_account_servers(&account_id, &imap, &smtp)?;
+    credentials::store(&account_id, &normalized)?;
     state.db.set_account_state(&account_id, "idle", None)?;
     drop(_guard);
     let _ = sync_one(&account_id, &app, &state).await;
@@ -284,6 +336,9 @@ pub async fn add_account(
         auth_method: "password".into(),
         signature: String::new(),
     };
+    if state.db.email_taken(&summary.email)? {
+        return Err("An account with this email address is already set up.".into());
+    }
     let account = AccountRecord {
         summary: summary.clone(),
         imap,
@@ -294,7 +349,7 @@ pub async fn add_account(
         let _ = credentials::remove(&id);
         return Err(error.into());
     }
-    crate::update_mail_menu_or_warn(&app, true);
+    refresh_mail_menu(&app, &state);
     // The account is already durably saved. A transient watcher setup failure
     // must not make setup look unsuccessful or roll back the account.
     if state.ensure_watcher(id.clone(), app.clone()).is_err() {
@@ -327,6 +382,7 @@ pub async fn remove_account(
     // account deletion is treated as one user-visible transaction.
     let password = credentials::load_for_removal(&account_id)?;
     credentials::remove(&account_id)?;
+    let _ = crate::oauth::remove_tokens(&account_id);
     if let Err(error) = state.db.remove_account(&account_id) {
         if password
             .as_deref()
@@ -342,8 +398,7 @@ pub async fn remove_account(
     // Removal has committed; a count failure must not turn it into a reported
     // command failure. Disable mail actions rather than allowing commands with
     // unknown ownership.
-    let account_count = state.db.account_count().unwrap_or(0);
-    crate::update_mail_menu_or_warn(&app, crate::mail_actions_enabled(account_count));
+    refresh_mail_menu(&app, &state);
     let cleanup_pending =
         attachment_dir.exists() && tokio::fs::remove_dir_all(attachment_dir).await.is_err();
     drop(guard);
@@ -385,7 +440,7 @@ pub fn update_account_aliases(
     for alias in aliases {
         let trimmed = alias.trim().to_lowercase();
         if trimmed.is_empty() || trimmed.len() > 320 || trimmed.contains(char::is_control) {
-            continue;
+            return Err("One of the alias addresses is invalid.".into());
         }
         if trimmed.parse::<lettre::message::Mailbox>().is_err() {
             return Err("One of the alias addresses is invalid.".into());
@@ -565,6 +620,7 @@ fn apply_filter_rules(db: &Database, account: &AccountRecord) {
     let Ok(rules) = db.list_filter_rules(account_id) else {
         return;
     };
+    let mut planned = Vec::new();
     for rule in rules.iter().filter(|rule| rule.enabled) {
         if validate_filter_rule(rule, account_id).is_err() {
             continue;
@@ -592,6 +648,9 @@ fn apply_filter_rules(db: &Database, account: &AccountRecord) {
         let Ok(matches) = db.find_rule_matches(account_id, rule) else {
             continue;
         };
+        planned.push((rule, destination, matches));
+    }
+    for (rule, destination, matches) in planned {
         if rule.action == "mark_read" {
             let ids: Vec<i64> = matches.iter().map(|(id, _, _, _)| *id).collect();
             if db.set_flags_bulk(&ids, Some(true), None).is_err() {
@@ -889,7 +948,7 @@ async fn import_remote_drafts_locked(
             cc: remote.cc,
             bcc: remote.bcc,
             subject: remote.subject,
-            html_body: remote.html_body,
+            html_body: crate::html_sanitize::sanitize_compose_html(&remote.html_body),
             text_body: remote.text_body,
             attachments,
             in_reply_to: remote.in_reply_to,
@@ -1003,8 +1062,17 @@ async fn ensure_message_content(
     let uid_validity = state.db.mailbox_uid_validity(account_id, &mailbox)?;
     let account = state.db.account(account_id)?;
     let password = credentials::load(account_id)?;
-    let message =
-        mail::download_message(&account, &password, &mailbox, uid, size, uid_validity).await?;
+    let cached_received_at = state.db.message_received_at(message_id).ok().flatten();
+    let message = mail::download_message(
+        &account,
+        &password,
+        &mailbox,
+        uid,
+        size,
+        uid_validity,
+        cached_received_at.as_deref(),
+    )
+    .await?;
     state.db.upsert_message(account_id, mailbox_id, &message)?;
     let id = message
         .message_id
@@ -1021,7 +1089,14 @@ pub async fn get_message(
     state: State<'_, AppState>,
 ) -> CommandResult<MessageDetail> {
     ensure_message_content(&account_id, message_id, &state).await?;
-    command_result(state.db.message_detail(message_id, &account_id))
+    let db = state.db.clone();
+    let account_id_for_detail = account_id.clone();
+    let mut detail =
+        tokio::task::spawn_blocking(move || db.message_detail(message_id, &account_id_for_detail))
+            .await
+            .map_err(|_| "Postal Snap could not read this message.".to_string())??;
+    detail.references = state.db.message_references(message_id, &account_id)?;
+    Ok(detail)
 }
 
 #[derive(Deserialize, Serialize)]
@@ -1191,19 +1266,17 @@ async fn move_message_inner(
         destination: destination.clone(),
         uid_validity: state.db.mailbox_uid_validity(&account_id, &source)?,
     };
-    let remote_result = {
-        let account = state.db.account(&account_id)?;
-        let password = credentials::load(&account_id)?;
-        mail::move_remote(
-            &account,
-            &password,
-            &source,
-            &destination,
-            uid,
-            operation.uid_validity,
-        )
-        .await
-    };
+    let account = state.db.account(&account_id)?;
+    let password = credentials::load(&account_id)?;
+    let remote_result = mail::move_remote(
+        &account,
+        &password,
+        &source,
+        &destination,
+        uid,
+        operation.uid_validity,
+    )
+    .await;
     if remote_result.is_err() {
         let dedupe_key = format!("move:{message_id}");
         state
@@ -1211,10 +1284,11 @@ async fn move_message_inner(
             .queue_operation(&account_id, "move", &operation, Some(&dedupe_key))?;
         state.db.mark_pending_move(message_id, destination_id)?;
     } else {
-        // UIDs are scoped to a mailbox. Remove the old cached row and let the
-        // destination mailbox sync discover the server-assigned UID.
+        // UIDs are scoped to a mailbox. Remove the old cached row, then fetch
+        // dest envelopes so archive/trash is not empty until the next IDLE.
         state.db.mark_pending_move(message_id, destination_id)?;
         state.db.remove_message(message_id)?;
+        let _ = mail::refresh_mailbox_envelopes(&account, &password, &destination, &state.db).await;
     }
     emit_message_change(app, &account_id, Some(message_id), "moved");
     emit_folder_counts(app, &account_id);
@@ -1390,6 +1464,9 @@ pub async fn move_messages_to_mailbox(
             queued += entries.len();
         }
     }
+    if updated > 0 {
+        let _ = mail::refresh_mailbox_envelopes(&account, &password, &destination, &state.db).await;
+    }
     emit_message_change(&app, &account_id, None, "moved");
     emit_folder_counts(&app, &account_id);
     Ok(BulkOutcome {
@@ -1538,16 +1615,49 @@ pub async fn empty_trash(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<()> {
-    let (trash_id, trash) = state
+    empty_role_folder(
+        account_id,
+        "trash",
+        "This account does not have a trash mailbox.",
+        app,
+        state,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn empty_junk(
+    account_id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<()> {
+    empty_role_folder(
+        account_id,
+        "junk",
+        "This account does not have a junk mailbox.",
+        app,
+        state,
+    )
+    .await
+}
+
+async fn empty_role_folder(
+    account_id: String,
+    role: &str,
+    missing: &str,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<()> {
+    let (folder_id, name) = state
         .db
-        .mailbox_for_role(&account_id, "trash")?
-        .ok_or_else(|| "This account does not have a trash mailbox.".to_string())?;
+        .mailbox_for_role(&account_id, role)?
+        .ok_or_else(|| missing.to_string())?;
     let _guard = state.lock_account(&account_id).await?;
     let account = state.db.account(&account_id)?;
     let password = credentials::load(&account_id)?;
-    let validity = state.db.mailbox_uid_validity(&account_id, &trash)?;
-    let protected = state.db.pending_move_uids(trash_id).unwrap_or_default();
-    let result = mail::empty_folder(&account, &password, &trash, validity, &protected).await;
+    let validity = state.db.mailbox_uid_validity(&account_id, &name)?;
+    let protected = state.db.pending_move_uids(folder_id).unwrap_or_default();
+    let result = mail::empty_folder(&account, &password, &name, validity, &protected).await;
     drop(_guard);
     command_result(result)?;
     let _ = sync_one(&account_id, &app, &state).await;
@@ -1625,8 +1735,8 @@ pub async fn save_draft(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<DraftSaveOutcome> {
-    state.db.account(&draft.account_id)?;
-    validate_compose_draft(&draft)?;
+    let account = state.db.account(&draft.account_id)?;
+    let draft = prepare_owned_compose(draft, &account)?;
     let id = state.db.save_draft(&draft)?;
     cleanup_unreferenced_attachments(&state, &draft.account_id).await;
     state.actor(&draft.account_id)?.wake.notify_one();
@@ -1684,7 +1794,7 @@ pub async fn send_message(
 ) -> CommandResult<SendOutcome> {
     let account = state.db.account(&draft.account_id)?;
     let draft = mail::apply_signature(draft, &account.summary.signature);
-    validate_compose_draft(&draft)?;
+    let draft = prepare_owned_compose(draft, &account)?;
     let resolved_draft = resolve_draft_files(&state.db, &draft)?;
     let prepared = mail::prepare_message(&account, &resolved_draft).await?;
     let settings = state.settings.get()?;
@@ -1755,7 +1865,14 @@ pub async fn send_scheduled_outbox(
     if outbox_state != "scheduled" {
         return Err("Only a held message can be sent early.".into());
     }
-    state.db.set_outbox_state(&outbox_id, "sending", None)?;
+    let account = state.db.account(&account_id)?;
+    if account.summary.sync_state == "offline" {
+        return Ok(SendOutcome {
+            id: outbox_id,
+            state: "scheduled".into(),
+            detail: Some("Waiting for a secure mail connection.".into()),
+        });
+    }
     command_result(deliver_outbox(&outbox_id, &account_id, &app, &state).await)
 }
 
@@ -1899,7 +2016,11 @@ pub async fn delete_outbox(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<()> {
-    let (draft, _outbox_state) = state.db.outbox(&outbox_id, &account_id)?;
+    let _guard = state.lock_account(&account_id).await?;
+    let (draft, outbox_state) = state.db.outbox(&outbox_id, &account_id)?;
+    if outbox_state == "sending" {
+        return Err("This message is already sending and cannot be stopped.".into());
+    }
     state
         .db
         .remove_outbox_for_account(&outbox_id, &account_id)?;
@@ -1914,18 +2035,44 @@ pub async fn delete_outbox(
 }
 
 #[tauri::command]
+pub async fn restore_outbox(
+    outbox_id: String,
+    account_id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<ComposeDraft> {
+    let _guard = state.lock_account(&account_id).await?;
+    let (draft, outbox_state) = state.db.outbox(&outbox_id, &account_id)?;
+    if outbox_state == "sending" {
+        return Err("This message is already sending and cannot be stopped.".into());
+    }
+    if !matches!(
+        outbox_state.as_str(),
+        "scheduled" | "queued" | "needs_attention"
+    ) {
+        return Err("This message cannot be restored.".into());
+    }
+    state
+        .db
+        .remove_outbox_for_account(&outbox_id, &account_id)?;
+    emit_outbox_change(&app, &account_id, Some(&outbox_id), Some("removed"));
+    Ok(draft)
+}
+
+#[tauri::command]
 pub async fn retry_outbox(
     outbox_id: String,
     account_id: String,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<SendOutcome> {
-    let (draft, outbox_state) = state.db.outbox(&outbox_id, &account_id)?;
-    validate_compose_draft(&draft)?;
+    let (mut draft, outbox_state) = state.db.outbox(&outbox_id, &account_id)?;
+    let account = state.db.account(&account_id)?;
+    draft.html_body = crate::html_sanitize::sanitize_compose_html(&draft.html_body);
+    validate_owned_compose(&draft, &account)?;
     if outbox_state != "needs_attention" {
         return Err("Only messages needing attention can be retried.".into());
     }
-    state.db.set_outbox_state(&outbox_id, "sending", None)?;
     command_result(deliver_outbox(&outbox_id, &draft.account_id, &app, &state).await)
 }
 
@@ -1965,13 +2112,14 @@ async fn deliver_outbox_locked(
     app: &AppHandle,
     state: &AppState,
 ) -> Result<SendOutcome, String> {
-    let (draft, _state_name, mut message_id, mut mime_bytes) =
+    let (mut draft, _state_name, mut message_id, mut mime_bytes) =
         match state.db.outbox_delivery(outbox_id, account_id) {
             Ok(value) => value,
             Err(error) => {
                 return outbox_preparation_failed(outbox_id, account_id, app, state, error);
             }
         };
+    draft.html_body = crate::html_sanitize::sanitize_compose_html(&draft.html_body);
     if let Err(error) = validate_compose_draft(&draft) {
         return outbox_preparation_failed(outbox_id, account_id, app, state, error);
     }
@@ -1990,6 +2138,9 @@ async fn deliver_outbox_locked(
             return outbox_preparation_failed(outbox_id, account_id, app, state, error);
         }
     };
+    if let Err(error) = validate_owned_compose(&draft, &account) {
+        return outbox_preparation_failed(outbox_id, account_id, app, state, error);
+    }
     if message_id.is_empty() || mime_bytes.is_empty() {
         let resolved = match resolve_draft_files(&state.db, &draft) {
             Ok(draft) => draft,
@@ -2020,11 +2171,9 @@ async fn deliver_outbox_locked(
             return outbox_preparation_failed(outbox_id, account_id, app, state, error);
         }
     };
-    state.db.mark_outbox_attempt_started(outbox_id)?;
-    let _ = app.emit(
-        "send-progress",
-        serde_json::json!({ "id": outbox_id, "accountId": account_id, "phase": "sending" }),
-    );
+    if !state.db.claim_outbox_delivery(outbox_id, account_id)? {
+        return Err("This message is already sending.".into());
+    }
     match mail::send_prepared(&account, &password, &draft, &mime_bytes).await {
         Ok(()) => {
             let history: Vec<(String, String)> = draft
@@ -2063,14 +2212,10 @@ async fn deliver_outbox_locked(
                         "Message sent. This draft removes itself once the Sent copy is saved.",
                     );
                 }
-                let _ = app.emit(
-                    "send-result",
-                    serde_json::json!({ "id": outbox_id, "accountId": account_id, "ok": true, "phase": "sentCopyPending", "detail": DETAIL }),
-                );
-                emit_outbox_change(app, account_id, Some(outbox_id), Some("sentCopyPending"));
+                emit_outbox_change(app, account_id, Some(outbox_id), Some("sent_copy_pending"));
                 return Ok(SendOutcome {
                     id: outbox_id.to_string(),
-                    state: "sentCopyPending".into(),
+                    state: "sent_copy_pending".into(),
                     detail: Some(DETAIL.into()),
                 });
             }
@@ -2084,10 +2229,6 @@ async fn deliver_outbox_locked(
                 draft.attachments.iter().map(|item| item.token.as_str()),
             )
             .await;
-            let _ = app.emit(
-                "send-result",
-                serde_json::json!({ "id": outbox_id, "accountId": account_id, "ok": true, "phase": "sent" }),
-            );
             emit_outbox_change(app, account_id, Some(outbox_id), Some("sent"));
             Ok(SendOutcome {
                 id: outbox_id.to_string(),
@@ -2101,14 +2242,10 @@ async fn deliver_outbox_locked(
             state
                 .db
                 .set_outbox_state(outbox_id, "needs_attention", Some(DETAIL))?;
-            let _ = app.emit(
-                "send-result",
-                serde_json::json!({ "id": outbox_id, "accountId": account_id, "ok": false, "phase": "needsAttention", "detail": DETAIL }),
-            );
-            emit_outbox_change(app, account_id, Some(outbox_id), Some("needsAttention"));
+            emit_outbox_change(app, account_id, Some(outbox_id), Some("needs_attention"));
             Ok(SendOutcome {
                 id: outbox_id.to_string(),
-                state: "needsAttention".into(),
+                state: "needs_attention".into(),
                 detail: Some(DETAIL.into()),
             })
         }
@@ -2163,17 +2300,7 @@ fn outbox_preparation_failed(
     state
         .db
         .set_outbox_state(outbox_id, "needs_attention", Some(DETAIL))?;
-    let _ = app.emit(
-        "send-result",
-        serde_json::json!({
-            "id": outbox_id,
-            "accountId": account_id,
-            "ok": false,
-            "phase": "needsAttention",
-            "detail": DETAIL,
-        }),
-    );
-    emit_outbox_change(app, account_id, Some(outbox_id), Some("needsAttention"));
+    emit_outbox_change(app, account_id, Some(outbox_id), Some("needs_attention"));
     Err(error)
 }
 
@@ -2186,11 +2313,17 @@ pub async fn save_attachment(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<()> {
-    let destination = app
-        .dialog()
-        .file()
-        .set_file_name(security::safe_filename(&suggested_filename))
-        .blocking_save_file();
+    let suggested = security::safe_filename(&suggested_filename);
+    let picker = app.clone();
+    let destination = tokio::task::spawn_blocking(move || {
+        picker
+            .dialog()
+            .file()
+            .set_file_name(suggested)
+            .blocking_save_file()
+    })
+    .await
+    .map_err(|_| "Could not open the save dialog.".to_string())?;
     let Some(destination) = destination else {
         return Ok(());
     };
@@ -2246,7 +2379,7 @@ pub async fn preview_attachment(
         "image/png" | "image/jpeg" | "image/gif" | "image/webp"
     ) {
         // Declared type alone is not trusted: sniff the bytes too.
-        if detect_image_mime(&bytes) != Some(content_type) {
+        if security::detect_image_mime(&bytes) != Some(content_type) {
             return Err("This image format is not supported.".into());
         }
         return Ok(AttachmentPreview {
@@ -2331,16 +2464,21 @@ pub async fn choose_attachments(
     state: State<'_, AppState>,
 ) -> CommandResult<Vec<ComposeAttachment>> {
     state.db.account(&account_id)?;
-    let builder = app.dialog().file();
-    let selected = if inline {
-        builder
-            .add_filter("Images", &["png", "jpg", "jpeg", "gif", "webp"])
-            .blocking_pick_file()
-            .into_iter()
-            .collect()
-    } else {
-        builder.blocking_pick_files().unwrap_or_default()
-    };
+    let picker = app.clone();
+    let selected = tokio::task::spawn_blocking(move || {
+        let builder = picker.dialog().file();
+        if inline {
+            builder
+                .add_filter("Images", &["png", "jpg", "jpeg", "gif", "webp"])
+                .blocking_pick_file()
+                .into_iter()
+                .collect::<Vec<_>>()
+        } else {
+            builder.blocking_pick_files().unwrap_or_default()
+        }
+    })
+    .await
+    .map_err(|_| "Could not open the file dialog.".to_string())?;
     let account_dir = managed_account_dir(&state.attachment_dir, &account_id)?;
     tokio::fs::create_dir_all(&account_dir)
         .await
@@ -2412,9 +2550,56 @@ pub async fn choose_attachments(
     result
 }
 
+fn protection_policy(state: &AppState) -> Result<security::ProtectionPolicy, String> {
+    let settings = state.settings.get()?;
+    Ok(security::ProtectionPolicy {
+        block_advertising_and_tracking: settings.block_advertising_and_tracking,
+        block_reported_threats: settings.block_reported_threats,
+    })
+}
+
 #[tauri::command]
-pub async fn fetch_remote_image(url: String) -> CommandResult<String> {
-    command_result(security::fetch_public_image(&url).await)
+pub async fn fetch_remote_image(
+    url: String,
+    state: State<'_, AppState>,
+) -> CommandResult<security::RemoteImageResult> {
+    let policy = protection_policy(&state)?;
+    command_result(security::fetch_public_image(&url, policy).await)
+}
+
+const APPLE_APP_PASSWORD_GUIDE: &str = "https://support.apple.com/102654";
+
+#[tauri::command]
+pub fn inspect_external_url(
+    url: String,
+    state: State<'_, AppState>,
+) -> CommandResult<security::ExternalLinkCheck> {
+    let policy = protection_policy(&state)?;
+    command_result(security::inspect_external_link(&url, policy))
+}
+
+#[tauri::command]
+pub fn open_external_url(
+    app: AppHandle,
+    url: String,
+    open_anyway: Option<bool>,
+    state: State<'_, AppState>,
+) -> CommandResult<()> {
+    let policy = protection_policy(&state)?;
+    let inspected = security::inspect_external_link(&url, policy)?;
+    security::authorize_external_open(&inspected, open_anyway.unwrap_or(false))?;
+    app.opener()
+        .open_url(&inspected.url, None::<&str>)
+        .map_err(|_| "Postal Snap could not open that link.".to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn open_help_url(app: AppHandle) -> CommandResult<()> {
+    app.opener()
+        .open_url(APPLE_APP_PASSWORD_GUIDE, None::<&str>)
+        .map_err(|_| "Postal Snap could not open that help page.".to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -2445,25 +2630,12 @@ pub async fn read_message_inline_image(
     if bytes.len() > 20 * 1024 * 1024 {
         return Err("This inline image is too large.".into());
     }
-    Ok(format!(
-        "data:{};base64,{}",
-        attachment.content_type,
-        STANDARD.encode(bytes)
-    ))
-}
-
-fn detect_image_mime(bytes: &[u8]) -> Option<&'static str> {
-    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-        Some("image/png")
-    } else if bytes.starts_with(b"\xff\xd8\xff") {
-        Some("image/jpeg")
-    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
-        Some("image/gif")
-    } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
-        Some("image/webp")
-    } else {
-        None
+    let sniffed = security::detect_image_mime(&bytes)
+        .ok_or_else(|| "This inline image format is not supported.".to_string())?;
+    if sniffed != attachment.content_type {
+        return Err("This inline image format is not supported.".into());
     }
+    Ok(format!("data:{sniffed};base64,{}", STANDARD.encode(bytes)))
 }
 
 #[tauri::command]
@@ -2473,7 +2645,13 @@ pub async fn read_compose_image(
     state: State<'_, AppState>,
 ) -> CommandResult<String> {
     let path = state.db.resolve_file(&token, &account_id)?;
-    if !path.is_absolute() || !path.is_file() {
+    if !path.is_absolute() {
+        return Err("Choose a valid image file.".into());
+    }
+    let metadata = tokio::fs::symlink_metadata(&path)
+        .await
+        .map_err(|_| "Choose a valid image file.".to_string())?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err("Choose a valid image file.".into());
     }
     let bytes = tokio::fs::read(&path)
@@ -2482,17 +2660,7 @@ pub async fn read_compose_image(
     if bytes.len() > 20 * 1024 * 1024 {
         return Err("That image is too large.".into());
     }
-    let mime = detect_image_mime(&bytes)
-        .or_else(|| {
-            let guessed = mime_guess::from_path(&path).first_or_octet_stream();
-            match guessed.essence_str() {
-                "image/png" => Some("image/png"),
-                "image/jpeg" => Some("image/jpeg"),
-                "image/gif" => Some("image/gif"),
-                "image/webp" => Some("image/webp"),
-                _ => None,
-            }
-        })
+    let mime = security::detect_image_mime(&bytes)
         .ok_or_else(|| "Choose a PNG, JPEG, GIF, or WebP image.".to_string())?;
     Ok(format!("data:{mime};base64,{}", STANDARD.encode(bytes)))
 }
@@ -2516,9 +2684,23 @@ pub fn get_settings(state: State<'_, AppState>) -> CommandResult<AppSettings> {
 #[tauri::command]
 pub fn save_settings(
     settings: AppSettings,
+    confirm_token: Option<String>,
     state: State<'_, AppState>,
 ) -> CommandResult<AppSettings> {
+    let current = state.settings.get()?;
+    crate::settings::require_threat_off_confirm(&current, &settings, confirm_token.as_deref())?;
     command_result(state.settings.save(settings))
+}
+
+#[tauri::command]
+pub fn set_mail_shortcut_guard(
+    guarded: bool,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<()> {
+    state.set_mail_shortcut_guard(guarded);
+    refresh_mail_menu(&app, &state);
+    Ok(())
 }
 
 #[tauri::command]
@@ -2665,21 +2847,53 @@ fn emit_sync(
     );
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FolderCountsChanged {
+    account_id: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MessageChanged {
+    account_id: String,
+    message_id: Option<i64>,
+    kind: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DraftSyncChanged {
+    account_id: String,
+    draft_id: Option<String>,
+    sync_state: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OutboxChanged {
+    account_id: String,
+    outbox_id: Option<String>,
+    state: Option<String>,
+}
+
 fn emit_folder_counts(app: &AppHandle, account_id: &str) {
     let _ = app.emit(
         "folder-counts-changed",
-        serde_json::json!({ "accountId": account_id }),
+        FolderCountsChanged {
+            account_id: account_id.into(),
+        },
     );
 }
 
 fn emit_message_change(app: &AppHandle, account_id: &str, message_id: Option<i64>, kind: &str) {
     let _ = app.emit(
         "message-changed",
-        serde_json::json!({
-            "accountId": account_id,
-            "messageId": message_id,
-            "kind": kind,
-        }),
+        MessageChanged {
+            account_id: account_id.into(),
+            message_id,
+            kind: kind.into(),
+        },
     );
 }
 
@@ -2691,11 +2905,11 @@ fn emit_draft_change(
 ) {
     let _ = app.emit(
         "draft-sync-changed",
-        serde_json::json!({
-            "accountId": account_id,
-            "draftId": draft_id,
-            "syncState": sync_state,
-        }),
+        DraftSyncChanged {
+            account_id: account_id.into(),
+            draft_id: draft_id.map(Into::into),
+            sync_state: sync_state.map(Into::into),
+        },
     );
 }
 
@@ -2707,11 +2921,11 @@ fn emit_outbox_change(
 ) {
     let _ = app.emit(
         "outbox-changed",
-        serde_json::json!({
-            "accountId": account_id,
-            "outboxId": outbox_id,
-            "state": state,
-        }),
+        OutboxChanged {
+            account_id: account_id.into(),
+            outbox_id: outbox_id.map(Into::into),
+            state: state.map(Into::into),
+        },
     );
 }
 
@@ -2810,6 +3024,13 @@ async fn replay_offline_operations(
                     .await;
                     if result.is_ok() {
                         db.remove_message(operation.message_id)?;
+                        let _ = mail::refresh_mailbox_envelopes(
+                            account,
+                            password,
+                            &operation.destination,
+                            db,
+                        )
+                        .await;
                     } else if let Err(error) = &result {
                         if is_terminal_mailbox_error(error) {
                             let _ = db.clear_pending_move(operation.message_id);
@@ -2959,10 +3180,14 @@ fn notify_new_mail(
     if previous_message_id == Some(message.id) || message.is_read {
         return;
     }
-    let private = app
-        .state::<AppState>()
-        .settings
-        .get()
+    let settings = app.state::<AppState>().settings.get().ok();
+    if settings
+        .as_ref()
+        .is_some_and(|settings| !settings.notify_new_mail)
+    {
+        return;
+    }
+    let private = settings
         .map(|settings| settings.private_notifications)
         .unwrap_or(true);
     let (title, body) = if private {
@@ -2980,16 +3205,15 @@ fn notify_new_mail(
             message.subject.clone(),
         )
     };
-    let _ = app.emit(
-        "notification-candidate",
-        serde_json::json!({ "accountId": account_id, "messageId": message.id }),
-    );
     let _ = app.notification().builder().title(title).body(body).show();
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_filter_rules, cleanup_orphaned_account_dirs, preview_text};
+    use super::{
+        apply_filter_rules, cleanup_orphaned_account_dirs, preview_text,
+        take_normalized_account_password,
+    };
     use crate::db::{CachedMessage, Database};
     use crate::models::{
         AccountRecord, AccountSummary, FilterRule, MailboxRole, ProviderKind, ServerConfig, TlsMode,
@@ -3049,6 +3273,7 @@ mod tests {
             html_body: None,
             attachments: vec![],
             raw_message: b"Subject: Power bill\r\n\r\nPay by Friday".to_vec(),
+            has_attachments: false,
         };
         message.sender_address = "bills@power.example.com".into();
         db.upsert_message(account_id, inbox, &message).unwrap();
@@ -3119,6 +3344,40 @@ mod tests {
         assert!(move_ops[0].contains("\"uid\":1") || move_ops[1].contains("\"uid\":1"));
         assert_eq!(db.pending_move_uids(inbox).unwrap(), vec![2, 1]);
         assert_eq!(db.pending_move_uids(archive).unwrap(), Vec::<u32>::new());
+    }
+
+    #[test]
+    fn mark_read_and_move_rules_apply_to_the_same_unread_set() {
+        let db = Database::memory();
+        let account = rule_account();
+        let account_id = account.summary.id.clone();
+        db.insert_account(&account).unwrap();
+        let inbox = rule_mailbox(&db, &account_id, "INBOX", &MailboxRole::Inbox);
+        let archive = rule_mailbox(&db, &account_id, "Archive", &MailboxRole::Archive);
+        let _ = archive;
+        bill(&db, &account_id, inbox, 1);
+        db.create_filter_rule(&enabled_rule(&account_id, "mark_read"))
+            .unwrap();
+        db.create_filter_rule(&enabled_rule(&account_id, "move_archive"))
+            .unwrap();
+        apply_filter_rules(&db, &account);
+        let move_ops: Vec<String> = db
+            .queued_operations(&account_id)
+            .unwrap()
+            .iter()
+            .filter(|(_, kind, _)| kind == "move")
+            .map(|(_, _, payload)| payload.clone())
+            .collect();
+        assert_eq!(move_ops.len(), 1);
+        assert!(db.list_filter_rules(&account_id).is_ok());
+    }
+
+    #[test]
+    fn update_password_keeps_the_normalized_secret() {
+        let secret =
+            take_normalized_account_password(&ProviderKind::Icloud, "  family-secret  ".into())
+                .expect("normalized password");
+        assert_eq!(secret.as_str(), "family-secret");
     }
 
     #[tokio::test]

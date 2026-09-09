@@ -140,6 +140,43 @@ export function assertEntitlementsPlistEnvelope(source, path = "entitlements") {
   }
 }
 
+export function assertEntitlementsContentPolicy(source, path = "entitlements") {
+  const label = displayPath(resolve(path));
+  const keys = [...source.matchAll(/<key>([^<]+)<\/key>/g)].map(
+    (match) => match[1],
+  );
+  const mas =
+    /mas/i.test(label) || keys.includes("com.apple.security.app-sandbox");
+  if (!mas) {
+    if (keys.length) {
+      throw new Error(
+        `${label} must stay an empty entitlement dictionary for Developer ID.`,
+      );
+    }
+    return;
+  }
+  const allowed = new Set([
+    "com.apple.security.app-sandbox",
+    "com.apple.security.network.client",
+    "com.apple.security.files.user-selected.read-write",
+    "com.apple.security.print",
+    "com.apple.application-identifier",
+    "com.apple.developer.team-identifier",
+    "keychain-access-groups",
+  ]);
+  if (!keys.includes("com.apple.security.app-sandbox")) {
+    throw new Error(`${label} must enable the App Sandbox.`);
+  }
+  if (!keys.includes("com.apple.security.network.client")) {
+    throw new Error(`${label} must allow outbound network access.`);
+  }
+  for (const key of keys) {
+    if (!allowed.has(key)) {
+      throw new Error(`${label} grants unexpected entitlement ${key}.`);
+    }
+  }
+}
+
 export async function validateEntitlementsPlist(
   path,
   { platform = process.platform, lint = output } = {},
@@ -147,6 +184,7 @@ export async function validateEntitlementsPlist(
   const absolutePath = resolve(path);
   const source = await readFile(absolutePath, "utf8");
   assertEntitlementsPlistEnvelope(source, absolutePath);
+  assertEntitlementsContentPolicy(source, absolutePath);
 
   if (platform === "darwin") {
     try {
