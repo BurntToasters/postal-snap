@@ -1,4 +1,4 @@
-Research completed September 9, 2026. Code inspected at `6c873d3`, Postal Snap 0.1.6; Cargo.lock contains Tauri 2.11.5 and Wry 0.55.1. This document records feasibility research and a proposed design. It does not implement protection or establish detection accuracy.
+Research completed September 9, 2026. Code inspected at `6c873d3`, Postal Snap 0.1.6; Cargo.lock contains Tauri 2.11.5 and Wry 0.55.1. This note records feasibility research. EasyList/EasyPrivacy remote-image checks and TweetFeed reported-address checks are implemented; see [CONTENT_BLOCKING.md](CONTENT_BLOCKING.md) and [THREAT_BLOCKING.md](THREAT_BLOCKING.md).
 
 Adding tracker, ad-resource, and malicious-link protection is feasible within the existing architecture. Recommended direction: enforce image filtering in Rust, add a shared native link-opening policy, and maintain separately licensed threat data. Preserve the current default of blocking remote images until consent.
 

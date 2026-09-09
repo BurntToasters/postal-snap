@@ -102,6 +102,59 @@ export function MessageReader() {
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const moreMenuRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState("");
+  const findInputRef = useRef<HTMLInputElement>(null);
+
+  function printMessage() {
+    if (frame.current?.contentWindow) {
+      frame.current.contentWindow.focus();
+      frame.current.contentWindow.print();
+      return;
+    }
+    window.print();
+  }
+
+  function scrollMessage(direction: 1 | -1) {
+    const amount = Math.round(window.innerHeight * 0.85) * direction;
+    const frameWindow = frame.current?.contentWindow;
+    if (frameWindow) {
+      frameWindow.scrollBy(0, amount);
+      return;
+    }
+    bodyRef.current?.scrollBy({ top: amount, behavior: "auto" });
+  }
+
+  function findInMessage() {
+    const query = findQuery.trim();
+    if (!query) return;
+    const frameWindow = frame.current?.contentWindow as
+      (Window & { find?: (text: string) => boolean }) | null;
+    if (frameWindow?.find) {
+      frameWindow.find(query);
+      return;
+    }
+    const body = bodyRef.current;
+    if (!body) return;
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      const text = node.textContent ?? "";
+      const index = text.toLowerCase().indexOf(query.toLowerCase());
+      if (index < 0) continue;
+      const range = document.createRange();
+      range.setStart(node, index);
+      range.setEnd(node, index + query.length);
+      selection?.addRange(range);
+      (node.parentElement as HTMLElement | null)?.scrollIntoView({
+        block: "center",
+      });
+      break;
+    }
+  }
 
   async function snoozeCurrentMessage(untilIso: string) {
     if (!message) return;
@@ -262,9 +315,36 @@ export function MessageReader() {
       if (action === "trash") void h.move("trash");
       if (action === "toggle-read") void h.setRead();
       if (action === "toggle-star") void h.setStarred();
+      if (action === "junk") void h.move("junk");
+      if (action === "print") {
+        window.dispatchEvent(new Event("postal:print-message"));
+      }
+      if (action === "find-in-message") {
+        window.dispatchEvent(new Event("postal:find-in-message"));
+      }
     };
     window.addEventListener("postal:menu-action", menuAction);
     return () => window.removeEventListener("postal:menu-action", menuAction);
+  }, []);
+
+  useEffect(() => {
+    const print = () => printMessage();
+    const find = () => {
+      setFindOpen(true);
+      window.setTimeout(() => findInputRef.current?.focus(), 0);
+    };
+    const scroll = (event: Event) => {
+      const direction = (event as CustomEvent<1 | -1>).detail;
+      scrollMessage(direction);
+    };
+    window.addEventListener("postal:print-message", print);
+    window.addEventListener("postal:find-in-message", find);
+    window.addEventListener("postal:scroll-reader", scroll);
+    return () => {
+      window.removeEventListener("postal:print-message", print);
+      window.removeEventListener("postal:find-in-message", find);
+      window.removeEventListener("postal:scroll-reader", scroll);
+    };
   }, []);
 
   const htmlBody = message?.htmlBody;
@@ -344,21 +424,40 @@ export function MessageReader() {
     const handleLink = (event: MouseEvent) => {
       if (event.button > 1) return;
       const target = (event.target as HTMLElement).closest<HTMLAnchorElement>(
-        "a[href]",
+        "a[href], a[data-external-href]",
       );
       if (!target) return;
       event.preventDefault();
-      const url = target.href;
+      event.stopPropagation();
+      const marked = target.getAttribute("data-external-href")?.trim() ?? "";
+      const href = target.getAttribute("href")?.trim() ?? "";
+      const url = /^https?:/i.test(marked)
+        ? marked
+        : /^https?:/i.test(href)
+          ? href
+          : /^mailto:/i.test(href)
+            ? href
+            : "";
       if (/^https?:/i.test(url)) {
         void handleExternalLink(url);
+        return;
       }
       if (/^mailto:/i.test(url)) openComposer({ prefill: parseMailto(url) });
     };
+    const blockNativeOpen = (event: Event) => {
+      if (
+        (event.target as HTMLElement).closest("a[href], a[data-external-href]")
+      ) {
+        event.preventDefault();
+      }
+    };
     body.addEventListener("click", handleLink);
     body.addEventListener("auxclick", handleLink);
+    body.addEventListener("contextmenu", blockNativeOpen);
     frameLinkCleanup.current = () => {
       body.removeEventListener("click", handleLink);
       body.removeEventListener("auxclick", handleLink);
+      body.removeEventListener("contextmenu", blockNativeOpen);
     };
   }
 
@@ -880,12 +979,7 @@ export function MessageReader() {
                   type="button"
                   role="menuitem"
                   onClick={() => {
-                    if (frame.current?.contentWindow) {
-                      frame.current.contentWindow.focus();
-                      frame.current.contentWindow.print();
-                    } else {
-                      window.print();
-                    }
+                    printMessage();
                     setMoreOpen(false);
                   }}
                 >
@@ -1184,7 +1278,34 @@ export function MessageReader() {
           </button>
         </div>
       ) : null}
-      <div className="message-body">
+      {findOpen ? (
+        <form
+          className="message-find"
+          onSubmit={(event) => {
+            event.preventDefault();
+            findInMessage();
+          }}
+        >
+          <input
+            ref={findInputRef}
+            value={findQuery}
+            onChange={(event) => setFindQuery(event.target.value)}
+            placeholder={strings.reader.findInMessage}
+            aria-label={strings.reader.findInMessage}
+          />
+          <button type="submit">{strings.reader.findNext}</button>
+          <button
+            type="button"
+            onClick={() => {
+              setFindOpen(false);
+              setFindQuery("");
+            }}
+          >
+            {strings.common.close}
+          </button>
+        </form>
+      ) : null}
+      <div className="message-body" ref={bodyRef}>
         {!message.htmlBody && !message.textBody ? (
           <p className="plain-text-body" role="note">
             {message.size > 50 * 1024 * 1024
@@ -1195,8 +1316,8 @@ export function MessageReader() {
           <iframe
             ref={frame}
             title={strings.reader.messageContent}
-            tabIndex={treatAsOverlay ? 0 : undefined}
-            sandbox="allow-same-origin"
+            tabIndex={0}
+            sandbox="allow-same-origin allow-modals"
             srcDoc={frameHtml}
             onLoad={wireFrameLinks}
           />
@@ -1558,11 +1679,17 @@ function PlainTextContent({
           return (
             <a
               key={idx}
-              href={part.content}
+              href="#"
+              data-external-href={part.content}
               onClick={(e) => {
                 e.preventDefault();
                 onOpenLink(part.content);
               }}
+              onAuxClick={(e) => {
+                e.preventDefault();
+                onOpenLink(part.content);
+              }}
+              onContextMenu={(e) => e.preventDefault()}
             >
               {part.content}
             </a>
@@ -1571,11 +1698,16 @@ function PlainTextContent({
         return (
           <a
             key={idx}
-            href={part.content}
+            href="#"
             onClick={(e) => {
               e.preventDefault();
               onOpenMailto(part.content);
             }}
+            onAuxClick={(e) => {
+              e.preventDefault();
+              onOpenMailto(part.content);
+            }}
+            onContextMenu={(e) => e.preventDefault()}
           >
             {part.content.replace(/^mailto:/i, "")}
           </a>

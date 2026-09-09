@@ -121,6 +121,7 @@ export interface MessageDetail extends MessageSummary {
   htmlBody?: string | null;
   remoteImagesBlocked: boolean;
   attachments: Attachment[];
+  references?: string[];
 }
 
 export interface ComposeAttachment {
@@ -198,11 +199,7 @@ export interface FilterRule {
 export interface SendOutcome {
   id: string;
   state:
-    | "queued"
-    | "sent"
-    | "sent_copy_pending"
-    | "needs_attention"
-    | "scheduled";
+    "queued" | "sent" | "sent_copy_pending" | "needs_attention" | "scheduled";
   detail?: string | null;
 }
 
@@ -263,6 +260,8 @@ export interface AppSettings {
   undoSendSeconds: number;
   blockAdvertisingAndTracking: boolean;
   blockReportedThreats: boolean;
+  groupThreads: boolean;
+  notifyNewMail: boolean;
 }
 
 export interface DistributionChannel {

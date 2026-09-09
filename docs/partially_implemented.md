@@ -5,7 +5,7 @@ Quick tracker for things wired into the app but not 100% yet. Full scope rules l
 ## Background groundwork (no UI yet)
 
 - **Gmail/Outlook OAuth** (`src-tauri/src/oauth.rs`): provider metadata, PKCE URL builder, token exchange/refresh, keyring vault, XOAUTH2 strings. Nothing calls it. Still needed: setup UI, deep-link callback handling, SASL wiring into IMAP/SMTP connect paths.
-- **OAuth deep-link callback**: `deep-link` + `single-instance` plugins registered, redirect URI reserved (`run.rosie.snap://oauth/callback`). No listener routes codes to `oauth::exchange_code` yet.
+- **OAuth deep-link callback**: `tauri.conf.json` schemes are `mailto` only. `oauth::redirect_uri` defaults to loopback (`http://127.0.0.1/`) and is parameterized. Do not register `run.rosie.snap://oauth/callback`. No listener routes codes to `oauth::exchange_code` yet. When a setup flow is wired, call `oauth::remove_tokens` from `remove_account`.
 - **`auth_method` account column** (schema v5): migrated, defaults `password`. OAuth accounts will set it; `update_account_password` already refuses non-password accounts.
 
 ## Registered but unused IPC
@@ -24,7 +24,7 @@ Kept on purpose; each has a planned consumer. Remove if still unused after that 
 - **Send size**: 25 MiB shows a warning but sending stays enabled; providers differ, backend caps at 100 MiB. Deliberate.
 - **Setup inputs during testing**: editable while the connection test runs; the backend tests a request snapshot, so edits cannot corrupt the in-flight check.
 - **IDLE**: watches INBOX only; other folders refresh on the ~120s full-sync loop.
-- **Flag sync**: skips fully-unchanged mailboxes; no CONDSTORE/MODSEQ yet, so star-only changes from other clients wait for the next real change.
+- **Flag sync**: always FETCHes flags for the cached UID set; no CONDSTORE/MODSEQ yet.
 - **Mail rules**: applied only after successful syncs; server-side filter upload, rule reordering, and test-match preview are not implemented.
 - **Attachment IDs**: deterministic hash (name + CID + size + index) with legacy fallback. No per-message salt; distinct contents with identical metadata collide.
 - **Search ranking**: unweighted bm25 AND-of-prefix; body can drown subject/sender; CJK recall limited. Server body matches append by date.

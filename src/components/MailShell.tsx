@@ -38,7 +38,7 @@ import { formatMessageDate } from "../format";
 import { applySettings } from "../settings";
 import { useAppStore } from "../store";
 import { groupThreads } from "../threads";
-import type { MailboxRole, MessageSummary } from "../types";
+import type { MailboxRole, MessageSummary, ReadingPane } from "../types";
 import { promptToRestartForUpdate } from "../update";
 import { AppMark } from "./AppMark";
 import { MessageReader } from "./MessageReader";
@@ -602,6 +602,8 @@ export function MailShell({ onOpenSettings }: Props) {
   }, [loadAccountData]);
 
   useEffect(() => {
+    const account = accounts.find((item) => item.id === activeAccountId);
+    if (account?.syncState === "offline") return;
     const due = outbox
       .filter((item) => item.state === "scheduled" && item.sendAt)
       .map((item) => new Date(item.sendAt as string).getTime() - Date.now())
@@ -644,7 +646,7 @@ export function MailShell({ onOpenSettings }: Props) {
       }
     }, wait);
     return () => window.clearTimeout(timer);
-  }, [outbox, activeAccountId, loadAccountData, setError]);
+  }, [accounts, outbox, activeAccountId, loadAccountData, setError]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void loadMessages(), 0);
@@ -742,6 +744,26 @@ export function MailShell({ onOpenSettings }: Props) {
           })
           .catch((cause) => setError(String(cause)));
       }
+      if (
+        action === "reading-pane-right" ||
+        action === "reading-pane-bottom" ||
+        action === "reading-pane-hidden"
+      ) {
+        const readingPane: ReadingPane =
+          action === "reading-pane-right"
+            ? "right"
+            : action === "reading-pane-bottom"
+              ? "bottom"
+              : "hidden";
+        const next = { ...settings, readingPane };
+        void api
+          .saveSettings(next)
+          .then((saved) => {
+            setSettings(saved);
+            applySettings(saved);
+          })
+          .catch((cause) => setError(String(cause)));
+      }
     };
     const keyboard = (event: KeyboardEvent) => {
       if (document.querySelector(".modal-layer")) return;
@@ -764,7 +786,11 @@ export function MailShell({ onOpenSettings }: Props) {
         openComposer();
         return;
       }
-      if ((mod && event.shiftKey && key === "m") || event.key === "F5") {
+      if (
+        (mod && event.shiftKey && key === "m") ||
+        (mod && event.shiftKey && key === "n") ||
+        event.key === "F5"
+      ) {
         event.preventDefault();
         void refresh();
         return;
@@ -797,6 +823,13 @@ export function MailShell({ onOpenSettings }: Props) {
         );
         return;
       }
+      if (event.ctrlKey && event.metaKey && key === "a") {
+        event.preventDefault();
+        window.dispatchEvent(
+          new CustomEvent("postal:menu-action", { detail: "archive" }),
+        );
+        return;
+      }
       if (mod && event.shiftKey && key === "u") {
         event.preventDefault();
         window.dispatchEvent(
@@ -811,9 +844,14 @@ export function MailShell({ onOpenSettings }: Props) {
         );
         return;
       }
+      if (mod && event.altKey && key === "f") {
+        event.preventDefault();
+        window.dispatchEvent(new Event("postal:find-in-message"));
+        return;
+      }
       if (
         (event.key === "/" && !mod) ||
-        (mod && !event.shiftKey && key === "f")
+        (mod && !event.shiftKey && !event.altKey && key === "f")
       ) {
         event.preventDefault();
         searchInput.current?.focus();
@@ -859,6 +897,13 @@ export function MailShell({ onOpenSettings }: Props) {
           event.preventDefault();
           void chooseMessage(last);
         }
+      } else if (event.key === " " || event.code === "Space") {
+        event.preventDefault();
+        window.dispatchEvent(
+          new CustomEvent("postal:scroll-reader", {
+            detail: event.shiftKey ? -1 : 1,
+          }),
+        );
       }
     };
     window.addEventListener("postal:menu-action", menuAction);
@@ -1060,7 +1105,12 @@ export function MailShell({ onOpenSettings }: Props) {
     );
     if (!confirmed) return;
     try {
-      await api.deleteOutbox(id, activeAccountId);
+      if (state === "scheduled") {
+        const draft = await api.restoreOutbox(id, activeAccountId);
+        openComposer({ draft });
+      } else {
+        await api.deleteOutbox(id, activeAccountId);
+      }
       await loadAccountData();
     } catch (cause) {
       setError(String(cause));
@@ -1232,12 +1282,18 @@ export function MailShell({ onOpenSettings }: Props) {
               setQuery(event.target.value);
             }}
             placeholder={
-              activeLocalView
+              activeLocalView === "drafts" || activeLocalView === "outbox"
                 ? strings.mail.searchMailboxOnly
-                : strings.mail.search
+                : activeLocalView
+                  ? strings.mail.searchMailboxOnly
+                  : strings.mail.search
             }
             aria-label={strings.mail.search}
-            disabled={Boolean(activeLocalView)}
+            disabled={Boolean(
+              activeLocalView &&
+              activeLocalView !== "drafts" &&
+              activeLocalView !== "outbox",
+            )}
           />
           {!activeLocalView ? (
             <label className="search-scope">
@@ -1644,7 +1700,12 @@ export function MailShell({ onOpenSettings }: Props) {
           </div>
         ) : null}
         {activeLocalView === "drafts" ? (
-          <DraftList drafts={drafts} onOpen={openDraft} />
+          <DraftList
+            drafts={drafts.filter((draft) =>
+              matchesLocalQuery(`${draft.subject} ${draft.recipients}`, query),
+            )}
+            onOpen={openDraft}
+          />
         ) : activeLocalView === "snoozed" ? (
           <SnoozedList
             items={snoozed}
@@ -1653,7 +1714,9 @@ export function MailShell({ onOpenSettings }: Props) {
           />
         ) : activeLocalView === "outbox" ? (
           <OutboxList
-            items={outbox}
+            items={outbox.filter((item) =>
+              matchesLocalQuery(`${item.subject} ${item.recipients}`, query),
+            )}
             onRetry={retryQueued}
             onRetryCopy={retrySentCopy}
             onSendNow={sendScheduledNow}
@@ -1715,13 +1778,19 @@ export function MailShell({ onOpenSettings }: Props) {
         <AddAccountDialog
           onClose={() => setAddAccountOpen(false)}
           onComplete={async () => {
-            const previousIds = new Set(accounts.map((account) => account.id));
-            const loaded = await api.listAccounts();
-            setAccounts(loaded);
-            const added = loaded.find(
-              (account) => !previousIds.has(account.id),
-            );
-            if (added) selectAccount(added.id);
+            try {
+              const previousIds = new Set(
+                accounts.map((account) => account.id),
+              );
+              const loaded = await api.listAccounts();
+              setAccounts(loaded);
+              const added = loaded.find(
+                (account) => !previousIds.has(account.id),
+              );
+              if (added) selectAccount(added.id);
+            } catch {
+              // The account is already saved; listing is best-effort.
+            }
             setAddAccountOpen(false);
           }}
         />
@@ -1914,6 +1983,12 @@ function mergeSearchResults(
   return merged;
 }
 
+function matchesLocalQuery(value: string, query: string) {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return true;
+  return value.toLowerCase().includes(needle);
+}
+
 function MessageList({
   messages,
   selectedId,
@@ -1941,6 +2016,9 @@ function MessageList({
   selectedIds?: number[];
   onToggleSelect?: (id: number) => void;
 }) {
+  const groupConversations = useAppStore(
+    (state) => state.settings.groupThreads,
+  );
   const listRef = useRef<HTMLDivElement>(null);
   const [expandedThreads, setExpandedThreads] = useState<string[]>([]);
 
@@ -2111,7 +2189,7 @@ function MessageList({
         aria-label={strings.mail.messages}
         aria-busy={loading}
       >
-        {selecting
+        {selecting || !groupConversations
           ? messages.map((message, index) => renderRow(message, index))
           : groupThreads(messages).map((group) => {
               if (group.items.length === 1) {
@@ -2124,7 +2202,10 @@ function MessageList({
                     type="button"
                     className={`message-row thread-header ${group.newest.id === selectedId ? "selected" : ""}`}
                     aria-expanded={expanded}
-                    onClick={() => toggleThread(group.key)}
+                    onClick={() => {
+                      void onChoose(group.newest);
+                      toggleThread(group.key);
+                    }}
                     aria-label={[
                       strings.mail.conversation,
                       group.newest.subject || strings.common.noSubject,

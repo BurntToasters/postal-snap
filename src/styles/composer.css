@@ -55,8 +55,30 @@
   box-shadow: var(--shadow);
 }
 
-.composer-layer-maximized {
-  padding: 0;
+.composer-layer-followup:not(.composer-layer-maximized) {
+  place-items: end center;
+  padding: 12px 18px 18px;
+  pointer-events: none;
+  background: transparent;
+}
+
+.composer-layer-followup:not(.composer-layer-maximized) .composer-window {
+  pointer-events: auto;
+  height: min(460px, 52vh);
+}
+
+.composer-signature-preview {
+  margin: 0 16px 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-muted, var(--surface));
+}
+
+.composer-signature-preview pre {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  font: inherit;
 }
 
 .composer-window.composer-maximized {

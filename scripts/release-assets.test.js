@@ -203,9 +203,17 @@ test("direct and Store builds keep separate capabilities", async () => {
   assert.deepEqual(msstore.app.security.capabilities, ["store"]);
   assert.deepEqual(flatpak.app.security.capabilities, ["store"]);
   assert.ok(directCapability.permissions.includes("updater:default"));
-  assert.ok(directCapability.permissions.includes("process:default"));
+  assert.ok(directCapability.permissions.includes("process:allow-restart"));
+  assert.ok(!directCapability.permissions.includes("process:default"));
+  assert.ok(!directCapability.permissions.includes("notification:default"));
   assert.ok(!storeCapability.permissions.includes("updater:default"));
   assert.ok(!storeCapability.permissions.includes("process:default"));
+  assert.ok(!storeCapability.permissions.includes("process:allow-restart"));
+  assert.equal(mas.app.macOSPrivateApi, false);
+  assert.equal(mas.app.windows[0].transparent, false);
+  assert.equal(direct.app.macOSPrivateApi, false);
+  const directOverlay = await readJson("src-tauri/tauri.direct.conf.json");
+  assert.equal(directOverlay.app.macOSPrivateApi, true);
   assert.equal(mas.bundle.createUpdaterArtifacts, false);
   assert.equal(msstore.bundle.createUpdaterArtifacts, false);
   assert.equal(flatpak.bundle.createUpdaterArtifacts, false);
@@ -221,6 +229,7 @@ test("flatpak build-bundle uses the manifest branch, not a hardcoded mismatch", 
   );
   const script = await readFile(join(root, "scripts/build-flatpak.js"), "utf8");
   assert.match(manifest, /^branch:\s*stable\s*$/m);
+  assert.match(manifest, /org\.freedesktop\.Notifications/);
   assert.match(script, /manifest\.match\(\/\^branch:/);
   assert.doesNotMatch(script, /"run\.rosie\.snap",\s*"stable"/);
 });
@@ -240,6 +249,7 @@ test("direct updater is GitHub-only and notices are bundled", async () => {
     config.bundle.resources["../THIRD_PARTY_NOTICES.cargo.txt"],
     "THIRD_PARTY_NOTICES.cargo.txt",
   );
+  assert.equal(config.bundle.resources["../LICENSE"], "LICENSE");
   assert.equal(
     config.bundle.resources["filters/LICENSE-CC-BY-SA-3.0.txt"],
     "LICENSE-CC-BY-SA-3.0.txt",
@@ -248,6 +258,22 @@ test("direct updater is GitHub-only and notices are bundled", async () => {
     config.bundle.resources["filters/LICENSE-CC0-1.0.txt"],
     "LICENSE-CC0-1.0.txt",
   );
+  assert.equal(
+    config.bundle.windows.webviewInstallMode?.type,
+    "embedBootstrapper",
+  );
+  assert.notEqual(config.bundle.windows.webviewInstallMode?.type, "skip");
+  assert.match(config.bundle.windows.signCommand, /windows-artifact-sign\.ps1/);
+});
+
+test("secret scanning ignores only TweetFeed IOC snapshots", async () => {
+  const scanning = await readFile(
+    join(root, ".github/secret_scanning.yml"),
+    "utf8",
+  );
+  assert.match(scanning, /tweetfeed-urls\.txt/);
+  assert.match(scanning, /tweetfeed-domains\.txt/);
+  assert.doesNotMatch(scanning, /easylist|easyprivacy|settings\.json/);
 });
 
 test("release environment template covers every supported credential path", async () => {
@@ -342,6 +368,8 @@ test("Windows release signing uses Azure Artifact Signing, not a local PFX", asy
     packageJson.scripts["setup:win:artifact-signing"],
     "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/setup-windows-artifact-signing.ps1",
   );
+  assert.match(packageJson.scripts["tauri:dev"], /tauri\.direct\.conf\.json/);
+  assert.match(tauriBuild, /macOSPrivateApi: true/);
   assert.match(
     packageJson.scripts["build:win:x64:prepared"],
     /--require-windows-signing --target x86_64-pc-windows-msvc --bundles nsis/,
@@ -350,6 +378,11 @@ test("Windows release signing uses Azure Artifact Signing, not a local PFX", asy
   assert.doesNotMatch(tauriBuild, /certificateThumbprint/);
   assert.match(tauriBuild, /windows-artifact-sign\.ps1/);
   assert.match(tauriBuild, /verify-windows-authenticode\.ps1/);
+  assert.match(tauriBuild, /Postal-Snap-Windows-\$\{arch\}\.exe\.sig/);
+  assert.doesNotMatch(tauriBuild, /Compress-Archive/);
+  assert.match(tauriBuild, /stapler", "staple"/);
+  assert.match(tauriBuild, /lipo/);
+  assert.match(tauriBuild, /Hardened Runtime/);
   assert.match(setup, /Microsoft\.Azure\.ArtifactSigningClientTools/);
   assert.doesNotMatch(setup, /WINDOWS_CERTIFICATE_/);
   assert.doesNotMatch(setup, /Import-PfxCertificate/);

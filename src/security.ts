@@ -81,9 +81,25 @@ export function sanitizeReceivedHtml(input: string): SanitizedMail {
     }
   }
 
-  for (const link of doc.querySelectorAll<HTMLAnchorElement>("a[href]")) {
+  for (const link of doc.querySelectorAll<HTMLAnchorElement>("a")) {
     const href = link.getAttribute("href")?.trim() ?? "";
-    if (!/^(https?:|mailto:)/i.test(href)) link.removeAttribute("href");
+    const marked = link.getAttribute("data-external-href")?.trim() ?? "";
+    const http = REMOTE_IMAGE.test(href)
+      ? href.startsWith("//")
+        ? `https:${href}`
+        : href
+      : REMOTE_IMAGE.test(marked)
+        ? marked.startsWith("//")
+          ? `https:${marked}`
+          : marked
+        : "";
+    if (http) {
+      link.setAttribute("data-external-href", http);
+      link.setAttribute("href", "#");
+    } else if (!/^mailto:/i.test(href) && href !== "#") {
+      link.removeAttribute("href");
+      link.removeAttribute("data-external-href");
+    }
     link.setAttribute("rel", "noopener noreferrer");
   }
 
@@ -108,7 +124,13 @@ export function sanitizeReceivedHtml(input: string): SanitizedMail {
     ],
     FORBID_ATTR: ["srcset", "ping", "formaction", "background", "poster"],
     ALLOW_DATA_ATTR: false,
-    ADD_ATTR: ["data-remote-src", "data-inline-cid", "class", "alt"],
+    ADD_ATTR: [
+      "data-remote-src",
+      "data-inline-cid",
+      "data-external-href",
+      "class",
+      "alt",
+    ],
   });
 
   return { html: clean, blockedImages };
@@ -124,6 +146,13 @@ export function sanitizeComposeHtml(input: string): string {
     if (!cid) continue;
     image.setAttribute("src", `cid:${cid}`);
     image.removeAttribute("data-inline-cid");
+  }
+  for (const link of doc.querySelectorAll<HTMLAnchorElement>(
+    "a[data-external-href]",
+  )) {
+    const url = link.getAttribute("data-external-href")?.trim() ?? "";
+    if (/^https?:/i.test(url)) link.setAttribute("href", url);
+    link.removeAttribute("data-external-href");
   }
   return doc.body.innerHTML || "<p></p>";
 }

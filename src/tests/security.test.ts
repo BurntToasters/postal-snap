@@ -100,6 +100,19 @@ describe("received mail isolation", () => {
     expect(html).not.toMatch(/script|onerror|alert/i);
   });
 
+  it("keeps received http links off href so context menus cannot skip inspection", () => {
+    const result = sanitizeReceivedHtml(
+      '<p><a href="https://library.example.test/hours">Hours</a></p>',
+    );
+    expect(result.html).toContain(
+      'data-external-href="https://library.example.test/hours"',
+    );
+    expect(result.html).not.toContain('<a href="https://');
+    const compose = sanitizeComposeHtml(result.html);
+    expect(compose).toContain('href="https://library.example.test/hours"');
+    expect(compose).not.toContain("data-external-href");
+  });
+
   it("generates a readable text alternative", () => {
     expect(htmlToPlainText("<h1>Hello</h1><p>Postal Snap</p>")).toBe(
       "Hello\nPostal Snap",

@@ -96,10 +96,30 @@ fn main() {
             };
             let has_startup_error = startup_error.is_some();
             app.state::<AppState>().set_startup_error(startup_error)?;
+            let window_config = app
+                .config()
+                .app
+                .windows
+                .first()
+                .cloned()
+                .ok_or("Postal Snap window configuration is missing.")?;
+            tauri::WebviewWindowBuilder::from_config(app.handle(), &window_config)
+                .map_err(|error| error.to_string())?
+                .on_navigation(allowed_webview_navigation)
+                .build()
+                .map_err(|error| error.to_string())?;
             install_menu(
                 app,
                 !has_startup_error && mail_actions_enabled(accounts.len()),
             )?;
+            #[cfg(all(
+                target_os = "linux",
+                not(any(feature = "flatpak", feature = "mas", feature = "msstore"))
+            ))]
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let _ = app.deep_link().register_all();
+            }
             if !has_startup_error {
                 let account_ids = accounts
                     .iter()
@@ -166,6 +186,7 @@ fn main() {
             commands::update_filter_rule,
             commands::delete_filter_rule,
             commands::delete_outbox,
+            commands::restore_outbox,
             commands::save_attachment,
             commands::preview_attachment,
             commands::prepare_forward_attachments,
@@ -179,6 +200,7 @@ fn main() {
             commands::release_compose_attachments,
             commands::get_settings,
             commands::save_settings,
+            commands::set_mail_shortcut_guard,
             commands::export_settings,
             commands::import_settings,
             commands::reset_settings,
@@ -246,7 +268,7 @@ fn install_menu<R: Runtime>(app: &tauri::App<R>, has_accounts: bool) -> tauri::R
         .build(handle)?;
     let get_mail = MenuItemBuilder::with_id("get-mail", "Get Mail")
         .enabled(has_accounts)
-        .accelerator("CmdOrCtrl+Shift+M")
+        .accelerator("CmdOrCtrl+Shift+N")
         .build(handle)?;
     let reply = MenuItemBuilder::with_id("reply", "Reply")
         .enabled(has_accounts)
@@ -267,6 +289,35 @@ fn install_menu<R: Runtime>(app: &tauri::App<R>, has_accounts: bool) -> tauri::R
     let trash = MenuItemBuilder::with_id("trash", "Move to Trash")
         .enabled(has_accounts)
         .accelerator("CmdOrCtrl+Backspace")
+        .build(handle)?;
+    let flag = MenuItemBuilder::with_id("toggle-star", "Flag")
+        .enabled(has_accounts)
+        .accelerator("CmdOrCtrl+Shift+L")
+        .build(handle)?;
+    let junk = MenuItemBuilder::with_id("junk", "Move to Junk")
+        .enabled(has_accounts)
+        .accelerator("CmdOrCtrl+Shift+J")
+        .build(handle)?;
+    let toggle_read = MenuItemBuilder::with_id("toggle-read", "Mark as Read")
+        .enabled(has_accounts)
+        .accelerator("CmdOrCtrl+Shift+U")
+        .build(handle)?;
+    let print = MenuItemBuilder::with_id("print", "Print…")
+        .enabled(has_accounts)
+        .accelerator("CmdOrCtrl+P")
+        .build(handle)?;
+    let find_in_message = MenuItemBuilder::with_id("find-in-message", "Find in Message")
+        .enabled(has_accounts)
+        .accelerator("Alt+CmdOrCtrl+F")
+        .build(handle)?;
+    let pane_right = MenuItemBuilder::with_id("reading-pane-right", "Reading Pane on Right")
+        .accelerator("CmdOrCtrl+Alt+Right")
+        .build(handle)?;
+    let pane_bottom = MenuItemBuilder::with_id("reading-pane-bottom", "Reading Pane Below")
+        .accelerator("CmdOrCtrl+Alt+Down")
+        .build(handle)?;
+    let pane_hidden = MenuItemBuilder::with_id("reading-pane-hidden", "Hide Reading Pane")
+        .accelerator("CmdOrCtrl+Alt+Up")
         .build(handle)?;
     let text_larger = MenuItemBuilder::with_id("text-larger", "Make Text Larger")
         .accelerator("CmdOrCtrl+Plus")
@@ -308,6 +359,8 @@ fn install_menu<R: Runtime>(app: &tauri::App<R>, has_accounts: bool) -> tauri::R
         .copy()
         .paste()
         .select_all()
+        .separator()
+        .item(&find_in_message)
         .build()?;
     let message_menu = SubmenuBuilder::with_id(handle, "message", "Message")
         .item(&reply)
@@ -315,11 +368,21 @@ fn install_menu<R: Runtime>(app: &tauri::App<R>, has_accounts: bool) -> tauri::R
         .item(&forward)
         .separator()
         .item(&archive)
+        .item(&junk)
         .item(&trash)
+        .separator()
+        .item(&flag)
+        .item(&toggle_read)
+        .separator()
+        .item(&print)
         .build()?;
     let view_menu = SubmenuBuilder::with_id(handle, "view", "View")
         .item(&text_larger)
         .item(&text_smaller)
+        .separator()
+        .item(&pane_right)
+        .item(&pane_bottom)
+        .item(&pane_hidden)
         .separator()
         .fullscreen()
         .build()?;
@@ -376,8 +439,19 @@ pub fn set_mail_menu_enabled<R: Runtime>(
         ("file", &["compose", "get-mail"][..]),
         (
             "message",
-            &["reply", "reply-all", "forward", "archive", "trash"][..],
+            &[
+                "reply",
+                "reply-all",
+                "forward",
+                "archive",
+                "junk",
+                "trash",
+                "toggle-star",
+                "toggle-read",
+                "print",
+            ][..],
         ),
+        ("edit", &["find-in-message"][..]),
     ] {
         let Some(MenuItemKind::Submenu(submenu)) = menu.get(submenu_id) else {
             return Err("Application mail menu is unavailable.".into());
@@ -402,13 +476,43 @@ pub fn update_mail_menu_or_warn<R: Runtime>(app: &tauri::AppHandle<R>, enabled: 
     }
 }
 
+fn allowed_webview_navigation(url: &url::Url) -> bool {
+    match url.scheme() {
+        "tauri" | "ipc" | "asset" | "data" | "blob" => true,
+        "http" | "https" => matches!(
+            url.host_str(),
+            Some("localhost" | "127.0.0.1" | "tauri.localhost" | "ipc.localhost")
+        ),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::{allowed_webview_navigation, mail_actions_enabled, updater_menu_policy};
     #[cfg(not(target_os = "macos"))]
     use super::{install_menu, set_mail_menu_enabled};
-    use super::{mail_actions_enabled, updater_menu_policy};
     #[cfg(not(target_os = "macos"))]
     use tauri::menu::MenuItemKind;
+
+    #[test]
+    fn webview_navigation_stays_on_app_origins() {
+        assert!(allowed_webview_navigation(
+            &url::Url::parse("http://localhost:5173/").unwrap(),
+        ));
+        assert!(allowed_webview_navigation(
+            &url::Url::parse("https://tauri.localhost/").unwrap(),
+        ));
+        assert!(allowed_webview_navigation(
+            &url::Url::parse("tauri://localhost/").unwrap(),
+        ));
+        assert!(!allowed_webview_navigation(
+            &url::Url::parse("https://example.com/").unwrap(),
+        ));
+        assert!(!allowed_webview_navigation(
+            &url::Url::parse("https://evil.example/").unwrap(),
+        ));
+    }
 
     #[test]
     fn mail_actions_follow_account_lifecycle() {
@@ -467,8 +571,19 @@ mod tests {
             ("file", &["compose", "get-mail"][..]),
             (
                 "message",
-                &["reply", "reply-all", "forward", "archive", "trash"][..],
+                &[
+                    "reply",
+                    "reply-all",
+                    "forward",
+                    "archive",
+                    "junk",
+                    "trash",
+                    "toggle-star",
+                    "toggle-read",
+                    "print",
+                ][..],
             ),
+            ("edit", &["find-in-message"][..]),
         ] {
             let Some(MenuItemKind::Submenu(submenu)) = menu.get(submenu_id) else {
                 panic!("{submenu_id} menu missing");

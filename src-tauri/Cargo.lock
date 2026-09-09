@@ -3556,6 +3556,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "futures-util",
+ "imap-proto",
  "keyring",
  "lettre",
  "mail-parser",

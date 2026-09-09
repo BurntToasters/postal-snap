@@ -285,4 +285,89 @@ describe("composer draft persistence", () => {
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.getByRole("dialog", { name: /New message/i })).toBeDefined();
   });
+
+  it("keeps the original message readable for reply and forward", () => {
+    useAppStore.setState({
+      composeSeed: {
+        composeMode: "reply",
+        sourceMessage: {
+          id: 1,
+          accountId: account.id,
+          mailboxId: 1,
+          uid: 1,
+          messageId: "<parent@example.test>",
+          subject: "Family picnic",
+          senderName: "Jane",
+          senderAddress: "jane@example.test",
+          recipients: account.email,
+          receivedAt: "2026-08-18T12:00:00Z",
+          preview: "Bring sandwiches",
+          isRead: true,
+          isStarred: false,
+          hasAttachments: false,
+          size: 100,
+          to: [account.email],
+          cc: [],
+          replyTo: null,
+          textBody: "Bring sandwiches",
+          htmlBody: null,
+          remoteImagesBlocked: false,
+          attachments: [],
+          references: ["<root@example.test>"],
+        },
+      },
+    });
+    const { container } = render(<Composer accountId={account.id} />);
+    const dialog = screen.getByRole("dialog", { name: /Reply/i });
+    expect(dialog.getAttribute("aria-modal")).toBe("false");
+    expect(container.firstElementChild?.className).toContain(
+      "composer-layer-followup",
+    );
+  });
+
+  it("appends the parent Message-ID onto existing References", async () => {
+    useAppStore.setState({
+      composeSeed: {
+        composeMode: "reply",
+        sourceMessage: {
+          id: 1,
+          accountId: account.id,
+          mailboxId: 1,
+          uid: 1,
+          messageId: "<parent@example.test>",
+          subject: "Family picnic",
+          senderName: "Jane",
+          senderAddress: "jane@example.test",
+          recipients: account.email,
+          receivedAt: "2026-08-18T12:00:00Z",
+          preview: "Bring sandwiches",
+          isRead: true,
+          isStarred: false,
+          hasAttachments: false,
+          size: 100,
+          to: [account.email],
+          cc: [],
+          replyTo: null,
+          textBody: "Bring sandwiches",
+          htmlBody: null,
+          remoteImagesBlocked: false,
+          attachments: [],
+          references: ["<root@example.test>"],
+        },
+      },
+    });
+    render(<Composer accountId={account.id} />);
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Save draft and close" }).at(-1)!,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(mockedSaveDraft).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inReplyTo: "<parent@example.test>",
+        references: ["<root@example.test>", "<parent@example.test>"],
+      }),
+    );
+  });
 });

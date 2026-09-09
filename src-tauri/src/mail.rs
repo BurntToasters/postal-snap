@@ -159,7 +159,6 @@ pub async fn sync_account(
         }
         server_mailboxes.insert(mailbox_name.clone());
         let (role, role_source) = mailbox_role_assignment(&mailbox_name, &attributes);
-        let previous_state = db.mailbox_sync_state(&account.summary.id, &mailbox_name)?;
         let status = tokio::time::timeout(
             IMAP_COMMAND_TIMEOUT,
             session.status(&mailbox_name, "(MESSAGES UNSEEN UIDNEXT UIDVALIDITY)"),
@@ -171,12 +170,6 @@ pub async fn sync_account(
             .await
             .map_err(|_| "Mailbox sync timed out.".to_string())?
             .map_err(|error| redact_error(&error, "Mailbox sync"))?;
-        let unchanged = previous_state.is_some_and(|(validity, next, total, unread)| {
-            validity == selected.uid_validity
-                && next == selected.uid_next
-                && total == status.exists
-                && unread == status.unseen
-        });
         let mailbox_id = db.upsert_mailbox_with_source(
             &account.summary.id,
             &mailbox_name,
@@ -246,45 +239,41 @@ pub async fn sync_account(
             };
             db.set_backfill_cursor(mailbox_id, next_cursor)?;
         }
-        if !unchanged {
-            for chunk in db.cached_uids(mailbox_id)?.chunks(250) {
-                if chunk.is_empty() {
-                    continue;
-                }
-                let requested = chunk.to_vec();
-                let set = chunk
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(",");
-                let flag_stream = tokio::time::timeout(
-                    IMAP_COMMAND_TIMEOUT,
-                    session.uid_fetch(set, "(UID FLAGS)"),
-                )
-                .await
-                .map_err(|_| "Flag sync timed out.".to_string())?
-                .map_err(|error| redact_error(&error, "Flag sync"))?;
-                let flag_rows =
-                    tokio::time::timeout(IMAP_COMMAND_TIMEOUT, flag_stream.try_collect::<Vec<_>>())
-                        .await
-                        .map_err(|_| "Flag sync timed out.".to_string())?
-                        .map_err(|error| redact_error(&error, "Flag sync"))?;
-                let seen = flag_rows
-                    .into_iter()
-                    .filter_map(|item| {
-                        item.uid.map(|uid| {
-                            let flags = item
-                                .flags()
-                                .map(|flag| format!("{flag:?}"))
-                                .collect::<Vec<_>>()
-                                .join(" ")
-                                .to_ascii_lowercase();
-                            (uid, flags.contains("seen"), flags.contains("flagged"))
-                        })
-                    })
-                    .collect::<Vec<_>>();
-                db.reconcile_flags(mailbox_id, &seen, &requested)?;
+        for chunk in db.cached_uids(mailbox_id)?.chunks(250) {
+            if chunk.is_empty() {
+                continue;
             }
+            let requested = chunk.to_vec();
+            let set = chunk
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(",");
+            let flag_stream =
+                tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.uid_fetch(set, "(UID FLAGS)"))
+                    .await
+                    .map_err(|_| "Flag sync timed out.".to_string())?
+                    .map_err(|error| redact_error(&error, "Flag sync"))?;
+            let flag_rows =
+                tokio::time::timeout(IMAP_COMMAND_TIMEOUT, flag_stream.try_collect::<Vec<_>>())
+                    .await
+                    .map_err(|_| "Flag sync timed out.".to_string())?
+                    .map_err(|error| redact_error(&error, "Flag sync"))?;
+            let seen = flag_rows
+                .into_iter()
+                .filter_map(|item| {
+                    item.uid.map(|uid| {
+                        let flags = item
+                            .flags()
+                            .map(|flag| format!("{flag:?}"))
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                            .to_ascii_lowercase();
+                        (uid, flags.contains("seen"), flags.contains("flagged"))
+                    })
+                })
+                .collect::<Vec<_>>();
+            db.reconcile_flags(mailbox_id, &seen, &requested)?;
         }
         let should_download_bodies = role == MailboxRole::Inbox || policy.mode == "full";
         if should_download_bodies {
@@ -332,7 +321,7 @@ async fn cache_uid_range(
 ) -> Result<FetchOutcome, String> {
     let mut fetched = tokio::time::timeout(
         IMAP_COMMAND_TIMEOUT,
-        session.uid_fetch(range, "(UID FLAGS RFC822.SIZE INTERNALDATE ENVELOPE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID IN-REPLY-TO REFERENCES)])"),
+        session.uid_fetch(range, "(UID FLAGS RFC822.SIZE INTERNALDATE ENVELOPE BODYSTRUCTURE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID IN-REPLY-TO REFERENCES)])"),
     )
     .await
     .map_err(|_| "Message list download timed out.".to_string())?
@@ -430,6 +419,14 @@ pub async fn refresh_mailbox_envelopes(
             return Err(error);
         }
     };
+    if let Some((previous_validity, ..)) = db.mailbox_sync_state(&account.summary.id, mailbox)? {
+        if previous_validity.is_some()
+            && selected.uid_validity.is_some()
+            && previous_validity != selected.uid_validity
+        {
+            db.purge_stale_mailbox(&account.summary.id, mailbox, mailbox_id)?;
+        }
+    }
     if let Err(error) = db.update_mailbox_status(
         mailbox_id,
         selected.uid_validity,
@@ -676,7 +673,16 @@ pub async fn download_message(
         .collect::<Vec<_>>()
         .join(" ")
         .to_ascii_lowercase();
-    let parsed = parse_message(uid, raw, flags.contains("seen"), flags.contains("flagged"))?;
+    let fallback = item
+        .internal_date()
+        .map(|date| date.with_timezone(&Utc).to_rfc3339());
+    let parsed = parse_message(
+        uid,
+        raw,
+        flags.contains("seen"),
+        flags.contains("flagged"),
+        fallback.as_deref(),
+    )?;
     let _ = session.logout().await;
     Ok(parsed)
 }
@@ -727,9 +733,16 @@ async fn download_uncached_bodies(
             .collect::<Vec<_>>()
             .join(" ")
             .to_ascii_lowercase();
-        if let Ok(parsed) =
-            parse_message(uid, raw, flags.contains("seen"), flags.contains("flagged"))
-        {
+        let fallback = item
+            .internal_date()
+            .map(|date| date.with_timezone(&Utc).to_rfc3339());
+        if let Ok(parsed) = parse_message(
+            uid,
+            raw,
+            flags.contains("seen"),
+            flags.contains("flagged"),
+            fallback.as_deref(),
+        ) {
             let _ = db.upsert_message(account_id, mailbox_id, &parsed);
             let id = parsed
                 .message_id
@@ -1216,7 +1229,7 @@ pub async fn empty_folder(
         .await
         .map_err(|_| "Emptying the folder timed out.".to_string())??;
     }
-    tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
+    let uid_expunge = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
         session
             .uid_expunge(set)
             .await
@@ -1225,8 +1238,23 @@ pub async fn empty_folder(
             .await
             .map_err(|error| redact_error(&error, "Folder empty"))
     })
-    .await
-    .map_err(|_| "Emptying the folder timed out.".to_string())??;
+    .await;
+    match uid_expunge {
+        Ok(Ok(_)) => {}
+        _ => {
+            tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
+                session
+                    .expunge()
+                    .await
+                    .map_err(|error| redact_error(&error, "Folder empty"))?
+                    .try_collect::<Vec<_>>()
+                    .await
+                    .map_err(|error| redact_error(&error, "Folder empty"))
+            })
+            .await
+            .map_err(|_| "Emptying the folder timed out.".to_string())??;
+        }
+    }
     let _ = session.logout().await;
     Ok(())
 }
@@ -1260,7 +1288,8 @@ pub async fn send_prepared(
     bytes: &[u8],
 ) -> Result<(), String> {
     let envelope = message_envelope(account, draft)?;
-    let transport = smtp_transport(&account.smtp, password)?;
+    let password = Zeroizing::new(password.to_string());
+    let transport = smtp_transport(&account.smtp, &password)?;
     transport
         .send_raw(&envelope, bytes)
         .await
@@ -1659,7 +1688,8 @@ fn add_test_imap_root(
 }
 
 async fn test_smtp(server: &ServerConfig, email: &str, password: &str) -> Result<(), String> {
-    let transport = smtp_transport(server, password)?;
+    let password = Zeroizing::new(password.to_string());
+    let transport = smtp_transport(server, &password)?;
     let connected = tokio::time::timeout(CONNECT_TIMEOUT, transport.test_connection())
         .await
         .map_err(|_| "Outgoing server timed out.".to_string())?
@@ -1673,11 +1703,17 @@ async fn test_smtp(server: &ServerConfig, email: &str, password: &str) -> Result
     Ok(())
 }
 
+fn alternative_multipart(draft: &ComposeDraft) -> MultiPart {
+    MultiPart::alternative()
+        .singlepart(SinglePart::plain(draft.text_body.clone()))
+        .singlepart(SinglePart::html(draft.html_body.clone()))
+}
+
 fn smtp_transport(
     server: &ServerConfig,
-    password: &str,
+    password: &Zeroizing<String>,
 ) -> Result<AsyncSmtpTransport<Tokio1Executor>, String> {
-    let credentials = Credentials::new(server.username.clone(), password.to_string());
+    let credentials = Credentials::new(server.username.clone(), password.as_str().to_owned());
     #[cfg(test)]
     if let Ok(path) = std::env::var("POSTAL_SNAP_MAIL_TEST_CA_CERT") {
         use lettre::transport::smtp::client::{Certificate, Tls, TlsParameters};
@@ -1782,10 +1818,8 @@ async fn build_message_with_id(
         }
     }
 
-    let alternative = MultiPart::alternative()
-        .singlepart(SinglePart::plain(draft.text_body.clone()))
-        .singlepart(SinglePart::html(draft.html_body.clone()));
-    let mut mixed = MultiPart::mixed().multipart(alternative);
+    let mut inline_parts = Vec::new();
+    let mut file_parts = Vec::new();
     let mut total_bytes = draft.html_body.len() + draft.text_body.len();
     for item in &draft.attachments {
         let path = Path::new(&item.token);
@@ -1814,21 +1848,48 @@ async fn build_message_with_id(
             ContentType::parse("application/octet-stream").expect("static MIME type is valid")
         });
         let filename = safe_filename(&item.filename);
-        let part = if item.inline {
-            LettreAttachment::new_inline(
-                item.content_id
-                    .clone()
-                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
-            )
-            .body(bytes, content_type)
+        if item.inline {
+            inline_parts.push(
+                LettreAttachment::new_inline(
+                    item.content_id
+                        .clone()
+                        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+                )
+                .body(bytes, content_type),
+            );
         } else {
-            LettreAttachment::new(filename).body(bytes, content_type)
-        };
-        mixed = mixed.singlepart(part);
+            file_parts.push(LettreAttachment::new(filename).body(bytes, content_type));
+        }
     }
-    builder
-        .multipart(mixed)
-        .map_err(|error| redact_error(&error, "Message construction"))
+    let related = if inline_parts.is_empty() {
+        None
+    } else {
+        let mut related = MultiPart::related().multipart(alternative_multipart(draft));
+        for part in inline_parts {
+            related = related.singlepart(part);
+        }
+        Some(related)
+    };
+    match (related, file_parts.is_empty()) {
+        (None, true) => builder
+            .multipart(alternative_multipart(draft))
+            .map_err(|error| redact_error(&error, "Message construction")),
+        (Some(related), true) => builder
+            .multipart(related)
+            .map_err(|error| redact_error(&error, "Message construction")),
+        (related, false) => {
+            let mut mixed = match related {
+                Some(related) => MultiPart::mixed().multipart(related),
+                None => MultiPart::mixed().multipart(alternative_multipart(draft)),
+            };
+            for part in file_parts {
+                mixed = mixed.singlepart(part);
+            }
+            builder
+                .multipart(mixed)
+                .map_err(|error| redact_error(&error, "Message construction"))
+        }
+    }
 }
 
 fn message_envelope(account: &AccountRecord, draft: &ComposeDraft) -> Result<Envelope, String> {
@@ -1975,7 +2036,38 @@ fn parse_envelope(
         html_body: None,
         attachments: Vec::new(),
         raw_message: Vec::new(),
+        has_attachments: fetch
+            .bodystructure()
+            .is_some_and(bodystructure_has_attachments),
     })
+}
+
+fn part_is_inline(part: &mail_parser::MessagePart<'_>) -> bool {
+    let disposition = part.content_disposition().map(|value| value.ctype());
+    match disposition {
+        Some(value) if value.eq_ignore_ascii_case("attachment") => false,
+        Some(value) if value.eq_ignore_ascii_case("inline") => true,
+        _ => part.content_id().is_some(),
+    }
+}
+
+fn bodystructure_has_attachments(structure: &imap_proto::types::BodyStructure<'_>) -> bool {
+    use imap_proto::types::BodyStructure;
+    match structure {
+        BodyStructure::Basic { common, .. } => part_looks_like_file(common),
+        BodyStructure::Text { common, .. } => part_looks_like_file(common),
+        BodyStructure::Message { .. } => true,
+        BodyStructure::Multipart { bodies, .. } => bodies.iter().any(bodystructure_has_attachments),
+    }
+}
+
+fn part_looks_like_file(common: &imap_proto::types::BodyContentCommon<'_>) -> bool {
+    common
+        .disposition
+        .as_ref()
+        .is_some_and(|disposition| disposition.ty.eq_ignore_ascii_case("attachment"))
+        || (!common.ty.ty.eq_ignore_ascii_case("text")
+            && !common.ty.ty.eq_ignore_ascii_case("multipart"))
 }
 
 /// Thread parent (normalized In-Reply-To, else last References id) from an
@@ -2064,6 +2156,7 @@ fn parse_message(
     raw: &[u8],
     is_read: bool,
     is_starred: bool,
+    fallback_received_at: Option<&str>,
 ) -> Result<CachedMessage, String> {
     validate_mime_resource_shape(raw)?;
     let message = MessageParser::default()
@@ -2099,6 +2192,7 @@ fn parse_message(
         .date()
         .and_then(|date| DateTime::<Utc>::from_timestamp(date.to_timestamp(), 0))
         .map(|date| date.to_rfc3339())
+        .or_else(|| fallback_received_at.map(ToOwned::to_owned))
         .unwrap_or_else(|| Utc::now().to_rfc3339());
     let attachments = message
         .attachments()
@@ -2124,7 +2218,7 @@ fn parse_message(
                 content_type,
                 size: part.len() as u64,
                 content_id: part.content_id().map(ToOwned::to_owned),
-                inline: part.content_id().is_some(),
+                inline: part_is_inline(part),
             }
         })
         .collect::<Vec<_>>();
@@ -2163,6 +2257,7 @@ fn parse_message(
             }),
         text_body,
         html_body,
+        has_attachments: !attachments.is_empty(),
         attachments,
         raw_message: raw.to_vec(),
     })
@@ -2235,7 +2330,7 @@ mod tests {
     #[test]
     fn parses_and_decodes_mime_message() {
         let raw = b"From: Jane <jane@example.com>\r\nTo: Sam <sam@example.com>\r\nSubject: Hello\r\nMessage-ID: <one@example.com>\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello from Postal Snap";
-        let parsed = parse_message(7, raw, false, true).unwrap();
+        let parsed = parse_message(7, raw, false, true, None).unwrap();
         assert_eq!(parsed.uid, 7);
         assert_eq!(parsed.sender_address, "jane@example.com");
         assert_eq!(parsed.subject, "Hello");
@@ -2350,7 +2445,7 @@ mod tests {
     #[test]
     fn preserves_inline_part_content_type_and_content_id() {
         let raw = b"From: Jane <jane@example.com>\r\nTo: Sam <sam@example.com>\r\nSubject: Photo\r\nContent-Type: multipart/related; boundary=postal\r\n\r\n--postal\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<p>Photo</p><img src=\"cid:family-photo@example.com\">\r\n--postal\r\nContent-Type: image/png\r\nContent-Disposition: inline; filename=\"family\"\r\nContent-ID: <family-photo@example.com>\r\nContent-Transfer-Encoding: base64\r\n\r\naGVsbG8=\r\n--postal--\r\n";
-        let parsed = parse_message(8, raw, true, false).unwrap();
+        let parsed = parse_message(8, raw, true, false, None).unwrap();
         assert!(parsed
             .html_body
             .as_deref()
@@ -2370,6 +2465,15 @@ mod tests {
         assert!(inline.inline);
         let (_, bytes) = extract_attachment(raw, &inline.id).unwrap();
         assert_eq!(bytes, b"hello");
+    }
+
+    #[test]
+    fn content_disposition_attachment_is_not_inline() {
+        let raw = b"From: Jane <jane@example.com>\r\nTo: Sam <sam@example.com>\r\nSubject: File\r\nContent-Type: multipart/mixed; boundary=postal\r\n\r\n--postal\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nSee attached\r\n--postal\r\nContent-Type: image/png\r\nContent-Disposition: attachment; filename=\"photo.png\"\r\nContent-ID: <photo@example.com>\r\nContent-Transfer-Encoding: base64\r\n\r\naGVsbG8=\r\n--postal--\r\n";
+        let parsed = parse_message(9, raw, true, false, None).unwrap();
+        let part = parsed.attachments.first().unwrap();
+        assert_eq!(part.content_id.as_deref(), Some("photo@example.com"));
+        assert!(!part.inline);
     }
 
     #[test]

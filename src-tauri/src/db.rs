@@ -1,4 +1,8 @@
-use std::{path::Path, sync::Mutex};
+use std::{
+    path::Path,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
@@ -9,12 +13,13 @@ use crate::models::{
     SearchQuery, ServerConfig, SnoozedSummary, TlsMode, ROLE_SOURCE_NAME,
 };
 
-const CURRENT_SCHEMA_VERSION: u32 = 13;
+const CURRENT_SCHEMA_VERSION: u32 = 14;
 
 pub type MailboxSyncState = (Option<u32>, Option<u32>, u32, Option<u32>);
 
+#[derive(Clone)]
 pub struct Database {
-    connection: Mutex<Connection>,
+    connection: Arc<Mutex<Connection>>,
 }
 
 #[derive(Debug)]
@@ -38,6 +43,7 @@ pub struct CachedMessage {
     pub html_body: Option<String>,
     pub attachments: Vec<Attachment>,
     pub raw_message: Vec<u8>,
+    pub has_attachments: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -61,6 +67,9 @@ impl Database {
         connection
             .pragma_update(None, "foreign_keys", "ON")
             .map_err(db_error)?;
+        connection
+            .busy_timeout(Duration::from_secs(5))
+            .map_err(db_error)?;
         migrate_schema(&mut connection)?;
         connection
             .execute(
@@ -69,7 +78,7 @@ impl Database {
             )
             .map_err(db_error)?;
         Ok(Self {
-            connection: Mutex::new(connection),
+            connection: Arc::new(Mutex::new(connection)),
         })
     }
 
@@ -81,7 +90,7 @@ impl Database {
             .unwrap();
         migrate_schema(&mut connection).unwrap();
         Self {
-            connection: Mutex::new(connection),
+            connection: Arc::new(Mutex::new(connection)),
         }
     }
 
@@ -193,6 +202,49 @@ impl Database {
             ],
         )
         .map_err(db_error)?;
+        Ok(())
+    }
+
+    pub fn email_taken(&self, email: &str) -> Result<bool, String> {
+        let found: Option<i64> = self
+            .conn()?
+            .query_row(
+                "SELECT 1 FROM accounts WHERE email = ?1 LIMIT 1",
+                [email],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?;
+        Ok(found.is_some())
+    }
+
+    pub fn update_account_servers(
+        &self,
+        id: &str,
+        imap: &ServerConfig,
+        smtp: &ServerConfig,
+    ) -> Result<(), String> {
+        let updated = self
+            .conn()?
+            .execute(
+                "UPDATE accounts SET imap_host=?2, imap_port=?3, imap_tls=?4, imap_username=?5,
+                 smtp_host=?6, smtp_port=?7, smtp_tls=?8, smtp_username=?9 WHERE id=?1",
+                params![
+                    id,
+                    imap.host,
+                    imap.port,
+                    imap.tls_mode.as_str(),
+                    imap.username,
+                    smtp.host,
+                    smtp.port,
+                    smtp.tls_mode.as_str(),
+                    smtp.username,
+                ],
+            )
+            .map_err(db_error)?;
+        if updated != 1 {
+            return Err("Account not found.".into());
+        }
         Ok(())
     }
 
@@ -832,13 +884,14 @@ impl Database {
                 account_id, mailbox_id, uid, message_id, subject, sender_name, sender_address, recipients,
                 received_at, preview, is_read, is_starred, has_attachments, size, to_json, cc_json,
                 reply_to, thread_parent, thread_root, text_body, html_body, attachments_json, raw_message, accessed_at
-             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,'',?10,?11,0,?12,?13,?14,?15,?16,?17,'',NULL,'[]',X'',CURRENT_TIMESTAMP)
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,'',?10,?11,?12,?13,?14,?15,?16,?17,?18,'',NULL,'[]',X'',CURRENT_TIMESTAMP)
              ON CONFLICT(mailbox_id, uid) DO UPDATE SET
                 message_id=excluded.message_id, subject=excluded.subject, sender_name=excluded.sender_name,
                 sender_address=excluded.sender_address, recipients=excluded.recipients, received_at=excluded.received_at,
                 is_read=excluded.is_read, is_starred=excluded.is_starred, size=excluded.size,
                 to_json=excluded.to_json, cc_json=excluded.cc_json, reply_to=excluded.reply_to,
-                thread_parent=excluded.thread_parent, thread_root=excluded.thread_root",
+                thread_parent=excluded.thread_parent, thread_root=excluded.thread_root,
+                has_attachments=CASE WHEN excluded.has_attachments=1 THEN 1 ELSE has_attachments END",
             params![
                 account_id,
                 mailbox_id,
@@ -851,6 +904,7 @@ impl Database {
                 message.received_at,
                 message.is_read as i32,
                 message.is_starred as i32,
+                i32::from(message.has_attachments || !message.attachments.is_empty()),
                 message.size,
                 to_json,
                 cc_json,
@@ -1057,12 +1111,33 @@ impl Database {
                     }),
                     html_body: sanitized.map(|item| item.html),
                     attachments: json_or_default(row.get::<_, String>(20)?),
+                    references: Vec::new(),
                 })
             },
         )
         .optional()
         .map_err(db_error)?
         .ok_or_else(|| "Message not found in the local cache.".into())
+    }
+
+    pub fn message_references(&self, id: i64, account_id: &str) -> Result<Vec<String>, String> {
+        let (thread_parent, raw): (Option<String>, Vec<u8>) = self
+            .conn()?
+            .query_row(
+                "SELECT thread_parent, raw_message FROM messages WHERE id=?1 AND account_id=?2",
+                params![id, account_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(db_error)?
+            .ok_or_else(|| "Message not found in the local cache.".to_string())?;
+        let mut references = references_from_raw(&raw);
+        if references.is_empty() {
+            if let Some(parent) = thread_parent {
+                references.push(parent);
+            }
+        }
+        Ok(references)
     }
 
     pub fn raw_message(&self, id: i64, account_id: &str) -> Result<Vec<u8>, String> {
@@ -2387,14 +2462,16 @@ impl Database {
         Ok(rows)
     }
 
-    pub fn mark_outbox_attempt_started(&self, id: &str) -> Result<(), String> {
-        self.conn()?
+    pub fn claim_outbox_delivery(&self, id: &str, account_id: &str) -> Result<bool, String> {
+        let changed = self
+            .conn()?
             .execute(
-                "UPDATE outbox SET state='sending',attempt_started_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?1",
-                [id],
+                "UPDATE outbox SET state='sending',attempt_started_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP
+                 WHERE id=?1 AND account_id=?2 AND state IN ('queued','scheduled','needs_attention')",
+                params![id, account_id],
             )
             .map_err(db_error)?;
-        Ok(())
+        Ok(changed == 1)
     }
 
     pub fn prepare_queued_outbox(
@@ -2786,6 +2863,50 @@ fn db_error(error: rusqlite::Error) -> String {
     }
 }
 
+fn references_from_raw(raw: &[u8]) -> Vec<String> {
+    let text = match std::str::from_utf8(raw) {
+        Ok(text) => text,
+        Err(_) => return Vec::new(),
+    };
+    let header_end = text
+        .find("\r\n\r\n")
+        .or_else(|| text.find("\n\n"))
+        .unwrap_or(text.len());
+    let headers = &text[..header_end];
+    let mut unfolded = String::with_capacity(headers.len());
+    for line in headers.lines() {
+        if line.starts_with([' ', '\t']) {
+            unfolded.push(' ');
+            unfolded.push_str(line.trim());
+        } else {
+            unfolded.push('\n');
+            unfolded.push_str(line);
+        }
+    }
+    let mut references = Vec::new();
+    for line in unfolded.lines() {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if !name.trim().eq_ignore_ascii_case("references")
+            && !name.trim().eq_ignore_ascii_case("in-reply-to")
+        {
+            continue;
+        }
+        for token in value.split_whitespace() {
+            let trimmed = token.trim().trim_start_matches('<').trim_end_matches('>');
+            if trimmed.is_empty() || !trimmed.contains('@') {
+                continue;
+            }
+            let id = format!("<{trimmed}>");
+            if !references.contains(&id) {
+                references.push(id);
+            }
+        }
+    }
+    references
+}
+
 fn migrate_schema(connection: &mut Connection) -> Result<(), String> {
     let transaction = connection.transaction().map_err(db_error)?;
     let mut version: u32 = transaction
@@ -3173,6 +3294,17 @@ fn migrate_schema(connection: &mut Connection) -> Result<(), String> {
         transaction
             .pragma_update(None, "user_version", 13)
             .map_err(db_error)?;
+        version = 13;
+    }
+    if version < 14 {
+        transaction
+            .execute_batch(
+                "CREATE UNIQUE INDEX IF NOT EXISTS accounts_email_unique ON accounts(email);",
+            )
+            .map_err(db_error)?;
+        transaction
+            .pragma_update(None, "user_version", 14)
+            .map_err(db_error)?;
     }
     transaction
         .pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)
@@ -3325,6 +3457,7 @@ CREATE INDEX IF NOT EXISTS filter_rules_account ON filter_rules(account_id,posit
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS file_grants (token TEXT PRIMARY KEY, path TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE INDEX IF NOT EXISTS messages_mailbox_date ON messages(mailbox_id,received_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS accounts_email_unique ON accounts(email);
 CREATE INDEX IF NOT EXISTS messages_mailbox_date_uid ON messages(mailbox_id,received_at DESC,uid DESC);
 CREATE INDEX IF NOT EXISTS messages_thread ON messages(account_id,thread_root);
 CREATE INDEX IF NOT EXISTS messages_account ON messages(account_id);
@@ -3394,6 +3527,7 @@ mod tests {
             html_body: None,
             attachments: vec![],
             raw_message: b"Subject: Family picnic\r\n\r\nBring sandwiches".to_vec(),
+            has_attachments: false,
         }
     }
 

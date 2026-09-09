@@ -106,7 +106,7 @@ These are release blockers. Do not weaken them for convenience.
 - Direct Windows: signed x64/arm64 NSIS `.exe` plus signed updater payloads.
 - Direct macOS: universal Developer ID signed/notarized DMG and ZIP.
 - Linux: x64 AppImage and Flatpak are required. arm64 scripts exist (`build:linux:arm64`, Flatpak arm64) and are optional until an arm64 signing host ships them. No DEB/RPM.
-- First 0.1.0 shipment is GitHub-only. Microsoft Store and Mac App Store packaging scripts exist for a later train; they are not a 0.1.0 ship gate.
+- GitHub Releases remain the only current distribution. Microsoft Store and Mac App Store packaging scripts exist for a later train; they are not a GitHub-train ship gate.
 - Microsoft Store (later): x64/arm64 MSIX bundle, Store-managed updates, Windows 10 22H2 floor.
 - Mac App Store (later): universal sandboxed app and signed installer PKG, Store-managed updates.
 - Mac Store and direct Mac builds use separate configuration/entitlements.
@@ -154,7 +154,7 @@ The `b` and `r` package scripts intentionally perform destructive branch cleanup
 
 ## Release status and manual gates
 
-Automated frontend, Playwright, Rust, lint, clippy, type, config, and production-build gates are established. They do not make a release ready. Final GitHub 0.1.0 approval still requires external systems and real credentials:
+Automated frontend, Playwright, Rust, lint, clippy, type, config, and production-build gates are established. They do not make a release ready. Final GitHub 0.1.x approval still requires external systems and real credentials:
 
 - Online npm and RustSec audits.
 - Pinned GreenMail 2.1.11 TLS integration run (requires Docker and OpenSSL).
@@ -165,4 +165,4 @@ Automated frontend, Playwright, Rust, lint, clippy, type, config, and production
 
 Windows App Certification Kit, Mac App Store Connect, and store metadata are later store-train gates.
 
-Use `docs/RELEASE_CHECKLIST.md` as the authoritative final checklist. Prefer a signed GitHub release candidate before publishing stable `0.1.0`.
+Use `docs/RELEASE_CHECKLIST.md` as the authoritative final checklist. Prefer a signed GitHub release candidate before publishing the next stable tag.

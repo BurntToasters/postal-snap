@@ -6,8 +6,10 @@
   "permissions": [
     "core:default",
     "deep-link:default",
-    "notification:default",
-    "process:default",
+    "deep-link:allow-register",
+    "notification:allow-is-permission-granted",
+    "notification:allow-request-permission",
+    "process:allow-restart",
     "updater:default"
   ]
 }

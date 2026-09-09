@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { formatMessageDate, shortcutMod, shortcutShiftMod } from "../format";
+import {
+  formatMessageDate,
+  shortcutAltMod,
+  shortcutMod,
+  shortcutShiftMod,
+} from "../format";
 import { strings } from "../i18n";
 
 describe("formatMessageDate", () => {
@@ -47,11 +52,13 @@ describe("shortcut labels", () => {
     document.documentElement.dataset.platform = "macos";
     expect(shortcutMod()).toBe("⌘");
     expect(shortcutShiftMod()).toBe("⇧⌘");
+    expect(shortcutAltMod()).toBe("⌥⌘");
   });
 
   it("uses Ctrl labels on other platforms", () => {
     document.documentElement.dataset.platform = "linux";
     expect(shortcutMod()).toBe("Ctrl");
     expect(shortcutShiftMod()).toBe("Ctrl+Shift");
+    expect(shortcutAltMod()).toBe("Ctrl+Alt");
   });
 });

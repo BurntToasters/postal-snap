@@ -33,6 +33,12 @@ export function shortcutShiftMod(): string {
     : "Ctrl+Shift";
 }
 
+export function shortcutAltMod(): string {
+  return document.documentElement.dataset.platform === "macos"
+    ? "⌥⌘"
+    : "Ctrl+Alt";
+}
+
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   const kib = bytes / 1024;
