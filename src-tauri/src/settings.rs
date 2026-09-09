@@ -185,6 +185,8 @@ impl From<&AppSettings> for PortableSettings {
             window_effects: settings.window_effects,
             block_advertising_and_tracking: settings.block_advertising_and_tracking,
             block_reported_threats: settings.block_reported_threats,
+            group_threads: settings.group_threads,
+            notify_new_mail: settings.notify_new_mail,
         }
     }
 }
@@ -208,6 +210,8 @@ impl PortableSettings {
             window_effects: self.window_effects,
             block_advertising_and_tracking: self.block_advertising_and_tracking,
             block_reported_threats: true,
+            group_threads: self.group_threads,
+            notify_new_mail: self.notify_new_mail,
         }
     }
 }
@@ -289,6 +293,20 @@ fn validate(settings: &AppSettings) -> Result<(), String> {
             .is_some_and(|value| uuid::Uuid::parse_str(value).is_err())
     {
         return Err("Invalid application settings.".into());
+    }
+    Ok(())
+}
+
+pub fn require_threat_off_confirm(
+    current: &AppSettings,
+    next: &AppSettings,
+    confirm_token: Option<&str>,
+) -> Result<(), String> {
+    if current.block_reported_threats
+        && !next.block_reported_threats
+        && confirm_token != Some("CONFIRM")
+    {
+        return Err("Type CONFIRM to turn off reported-threat protection.".into());
     }
     Ok(())
 }
@@ -724,5 +742,18 @@ mod tests {
         assert_eq!(loaded.cache_policy.mode, "full");
         assert_eq!(loaded.cache_policy.max_bytes, 0);
         assert!(loaded.cache_policy.is_unlimited());
+    }
+
+    #[test]
+    fn turning_off_reported_threats_requires_confirm_token() {
+        let on = AppSettings::default();
+        let off = AppSettings {
+            block_reported_threats: false,
+            ..AppSettings::default()
+        };
+        assert!(require_threat_off_confirm(&on, &off, None).is_err());
+        assert!(require_threat_off_confirm(&on, &off, Some("nope")).is_err());
+        assert!(require_threat_off_confirm(&on, &off, Some("CONFIRM")).is_ok());
+        assert!(require_threat_off_confirm(&on, &on, None).is_ok());
     }
 }

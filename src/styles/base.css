@@ -45,7 +45,6 @@ html[data-text-scale="large"] body,
 html[data-text-scale="large"] #root {
   overflow: auto;
 }
-}
 
 body {
   color: var(--text);

@@ -28,7 +28,7 @@ export const strings = {
     compose: "Write",
     getMail: "Get Mail",
     search: "Search mail",
-    searchMailboxOnly: "Search available in mailboxes",
+    searchMailboxOnly: "Search this list",
     allFolders: "All folders",
     settings: "Settings",
     noMessage: "Choose a message to read it.",
@@ -160,6 +160,8 @@ export const strings = {
     moveFolder: "Move to folder",
     move: "Move…",
     print: "Print message",
+    findInMessage: "Find in message",
+    findNext: "Find next",
     from: "From:",
     to: "To:",
     cc: "Cc:",
@@ -237,6 +239,7 @@ export const strings = {
     replyPrefix: "Re:",
     forwardPrefix: "Fwd:",
     messageBody: "Message body",
+    signaturePreview: "Signature added when you send:",
     saveClose: "Save draft and close",
     saveCloseQuestion: "Save this draft and close?",
     discardQuestion: "Discard this draft and its attachments?",
@@ -450,6 +453,9 @@ export const strings = {
     paneRight: "On right",
     paneBottom: "Below messages",
     paneHidden: "Open over list",
+    groupThreads: "Group conversations",
+    groupThreadsHelp:
+      "Show related messages together. Turn this off to list every message on its own.",
     textSize: "Text size",
     textSizeHelp: "Changes Postal Snap controls and text.",
     small: "Small (85%)",
@@ -523,6 +529,17 @@ export const strings = {
       "No additional aliases configured. The primary address is used by default.",
     privateNotifications: "Private notifications",
     privateNotificationsHelp: "Hide sender and subject from desktop alerts.",
+    notifyNewMail: "Desktop alerts for new mail",
+    notifyNewMailHelp:
+      "Show a system notification when new mail arrives in Inbox. Turn this off to keep Postal Snap quiet.",
+    about: "About",
+    aboutLead:
+      "Postal Snap is free and open source under the Mozilla Public License 2.0.",
+    aboutSource: "Source code and license",
+    aboutLicense: "Mozilla Public License 2.0",
+    aboutFilters:
+      "Remote-image checks use official EasyList and EasyPrivacy network rules (CC BY-SA 3.0 / CC0) and a local TweetFeed reported-address snapshot (CC0).",
+    aboutVersion: (version: string) => `Version ${version}`,
     calculating: "Calculating…",
     used: "used",
     storageSummary: (messages: number, days: number, maximum: string) =>

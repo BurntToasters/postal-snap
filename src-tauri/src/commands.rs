@@ -1,7 +1,10 @@
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::Duration,
 };
 
@@ -35,6 +38,14 @@ type CommandResult<T> = Result<T, IpcError>;
 
 fn command_result<T>(result: Result<T, String>) -> CommandResult<T> {
     result.map_err(Into::into)
+}
+
+fn refresh_mail_menu(app: &AppHandle, state: &AppState) {
+    let count = state.db.account_count().unwrap_or(0);
+    crate::update_mail_menu_or_warn(
+        app,
+        crate::mail_actions_enabled(count) && !state.mail_shortcut_guarded(),
+    );
 }
 
 fn take_normalized_account_password(
@@ -75,6 +86,7 @@ pub struct AppState {
     account_actors: Mutex<HashMap<String, Arc<AccountActor>>>,
     watchers: Mutex<HashSet<String>>,
     startup_error: Mutex<Option<String>>,
+    mail_shortcut_guard: AtomicBool,
 }
 
 struct AccountActor {
@@ -91,6 +103,7 @@ impl AppState {
             account_actors: Mutex::new(HashMap::new()),
             watchers: Mutex::new(HashSet::new()),
             startup_error: Mutex::new(None),
+            mail_shortcut_guard: AtomicBool::new(false),
         }
     }
 
@@ -108,6 +121,14 @@ impl AppState {
             .lock()
             .map_err(|_| "Application startup status is unavailable.".to_string())?;
         Ok(error.take())
+    }
+
+    pub fn set_mail_shortcut_guard(&self, guarded: bool) {
+        self.mail_shortcut_guard.store(guarded, Ordering::Relaxed);
+    }
+
+    pub fn mail_shortcut_guarded(&self) -> bool {
+        self.mail_shortcut_guard.load(Ordering::Relaxed)
     }
 
     fn actor(&self, account_id: &str) -> Result<Arc<AccountActor>, String> {
@@ -248,12 +269,14 @@ pub async fn update_account_password(
     state: State<'_, AppState>,
 ) -> CommandResult<AccountSummary> {
     let _guard = state.lock_account(&account_id).await?;
+    let password = Zeroizing::new(password);
     let account = state.db.account(&account_id)?;
     if account.summary.auth_method != "password" {
         return Err("This account signs in without a password. Reconnect it instead.".into());
     }
-    let normalized = take_normalized_account_password(&account.summary.provider, password)?;
-    mail::test_account(
+    let normalized =
+        take_normalized_account_password(&account.summary.provider, password.to_string())?;
+    let (imap, smtp) = mail::test_account(
         &AccountSetupRequest {
             provider: account.summary.provider.clone(),
             email: account.summary.email.clone(),
@@ -267,6 +290,7 @@ pub async fn update_account_password(
         &normalized,
     )
     .await?;
+    state.db.update_account_servers(&account_id, &imap, &smtp)?;
     credentials::store(&account_id, &normalized)?;
     state.db.set_account_state(&account_id, "idle", None)?;
     drop(_guard);
@@ -307,6 +331,9 @@ pub async fn add_account(
         auth_method: "password".into(),
         signature: String::new(),
     };
+    if state.db.email_taken(&summary.email)? {
+        return Err("An account with this email address is already set up.".into());
+    }
     let account = AccountRecord {
         summary: summary.clone(),
         imap,
@@ -317,7 +344,7 @@ pub async fn add_account(
         let _ = credentials::remove(&id);
         return Err(error.into());
     }
-    crate::update_mail_menu_or_warn(&app, true);
+    refresh_mail_menu(&app, &state);
     // The account is already durably saved. A transient watcher setup failure
     // must not make setup look unsuccessful or roll back the account.
     if state.ensure_watcher(id.clone(), app.clone()).is_err() {
@@ -365,8 +392,7 @@ pub async fn remove_account(
     // Removal has committed; a count failure must not turn it into a reported
     // command failure. Disable mail actions rather than allowing commands with
     // unknown ownership.
-    let account_count = state.db.account_count().unwrap_or(0);
-    crate::update_mail_menu_or_warn(&app, crate::mail_actions_enabled(account_count));
+    refresh_mail_menu(&app, &state);
     let cleanup_pending =
         attachment_dir.exists() && tokio::fs::remove_dir_all(attachment_dir).await.is_err();
     drop(guard);
@@ -408,7 +434,7 @@ pub fn update_account_aliases(
     for alias in aliases {
         let trimmed = alias.trim().to_lowercase();
         if trimmed.is_empty() || trimmed.len() > 320 || trimmed.contains(char::is_control) {
-            continue;
+            return Err("One of the alias addresses is invalid.".into());
         }
         if trimmed.parse::<lettre::message::Mailbox>().is_err() {
             return Err("One of the alias addresses is invalid.".into());
@@ -1048,7 +1074,14 @@ pub async fn get_message(
     state: State<'_, AppState>,
 ) -> CommandResult<MessageDetail> {
     ensure_message_content(&account_id, message_id, &state).await?;
-    command_result(state.db.message_detail(message_id, &account_id))
+    let db = state.db.clone();
+    let account_id_for_detail = account_id.clone();
+    let mut detail =
+        tokio::task::spawn_blocking(move || db.message_detail(message_id, &account_id_for_detail))
+            .await
+            .map_err(|_| "Postal Snap could not read this message.".to_string())??;
+    detail.references = state.db.message_references(message_id, &account_id)?;
+    Ok(detail)
 }
 
 #[derive(Deserialize, Serialize)]
@@ -1781,7 +1814,14 @@ pub async fn send_scheduled_outbox(
     if outbox_state != "scheduled" {
         return Err("Only a held message can be sent early.".into());
     }
-    state.db.set_outbox_state(&outbox_id, "sending", None)?;
+    let account = state.db.account(&account_id)?;
+    if account.summary.sync_state == "offline" {
+        return Ok(SendOutcome {
+            id: outbox_id,
+            state: "scheduled".into(),
+            detail: Some("Waiting for a secure mail connection.".into()),
+        });
+    }
     command_result(deliver_outbox(&outbox_id, &account_id, &app, &state).await)
 }
 
@@ -1944,6 +1984,31 @@ pub async fn delete_outbox(
 }
 
 #[tauri::command]
+pub async fn restore_outbox(
+    outbox_id: String,
+    account_id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<ComposeDraft> {
+    let _guard = state.lock_account(&account_id).await?;
+    let (draft, outbox_state) = state.db.outbox(&outbox_id, &account_id)?;
+    if outbox_state == "sending" {
+        return Err("This message is already sending and cannot be stopped.".into());
+    }
+    if !matches!(
+        outbox_state.as_str(),
+        "scheduled" | "queued" | "needs_attention"
+    ) {
+        return Err("This message cannot be restored.".into());
+    }
+    state
+        .db
+        .remove_outbox_for_account(&outbox_id, &account_id)?;
+    emit_outbox_change(&app, &account_id, Some(&outbox_id), Some("removed"));
+    Ok(draft)
+}
+
+#[tauri::command]
 pub async fn retry_outbox(
     outbox_id: String,
     account_id: String,
@@ -1957,7 +2022,6 @@ pub async fn retry_outbox(
     if outbox_state != "needs_attention" {
         return Err("Only messages needing attention can be retried.".into());
     }
-    state.db.set_outbox_state(&outbox_id, "sending", None)?;
     command_result(deliver_outbox(&outbox_id, &draft.account_id, &app, &state).await)
 }
 
@@ -2056,7 +2120,9 @@ async fn deliver_outbox_locked(
             return outbox_preparation_failed(outbox_id, account_id, app, state, error);
         }
     };
-    state.db.mark_outbox_attempt_started(outbox_id)?;
+    if !state.db.claim_outbox_delivery(outbox_id, account_id)? {
+        return Err("This message is already sending.".into());
+    }
     match mail::send_prepared(&account, &password, &draft, &mime_bytes).await {
         Ok(()) => {
             let history: Vec<(String, String)> = draft
@@ -2196,11 +2262,17 @@ pub async fn save_attachment(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<()> {
-    let destination = app
-        .dialog()
-        .file()
-        .set_file_name(security::safe_filename(&suggested_filename))
-        .blocking_save_file();
+    let suggested = security::safe_filename(&suggested_filename);
+    let picker = app.clone();
+    let destination = tokio::task::spawn_blocking(move || {
+        picker
+            .dialog()
+            .file()
+            .set_file_name(suggested)
+            .blocking_save_file()
+    })
+    .await
+    .map_err(|_| "Could not open the save dialog.".to_string())?;
     let Some(destination) = destination else {
         return Ok(());
     };
@@ -2341,16 +2413,21 @@ pub async fn choose_attachments(
     state: State<'_, AppState>,
 ) -> CommandResult<Vec<ComposeAttachment>> {
     state.db.account(&account_id)?;
-    let builder = app.dialog().file();
-    let selected = if inline {
-        builder
-            .add_filter("Images", &["png", "jpg", "jpeg", "gif", "webp"])
-            .blocking_pick_file()
-            .into_iter()
-            .collect()
-    } else {
-        builder.blocking_pick_files().unwrap_or_default()
-    };
+    let picker = app.clone();
+    let selected = tokio::task::spawn_blocking(move || {
+        let builder = picker.dialog().file();
+        if inline {
+            builder
+                .add_filter("Images", &["png", "jpg", "jpeg", "gif", "webp"])
+                .blocking_pick_file()
+                .into_iter()
+                .collect::<Vec<_>>()
+        } else {
+            builder.blocking_pick_files().unwrap_or_default()
+        }
+    })
+    .await
+    .map_err(|_| "Could not open the file dialog.".to_string())?;
     let account_dir = managed_account_dir(&state.attachment_dir, &account_id)?;
     tokio::fs::create_dir_all(&account_dir)
         .await
@@ -2556,9 +2633,23 @@ pub fn get_settings(state: State<'_, AppState>) -> CommandResult<AppSettings> {
 #[tauri::command]
 pub fn save_settings(
     settings: AppSettings,
+    confirm_token: Option<String>,
     state: State<'_, AppState>,
 ) -> CommandResult<AppSettings> {
+    let current = state.settings.get()?;
+    crate::settings::require_threat_off_confirm(&current, &settings, confirm_token.as_deref())?;
     command_result(state.settings.save(settings))
+}
+
+#[tauri::command]
+pub fn set_mail_shortcut_guard(
+    guarded: bool,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<()> {
+    state.set_mail_shortcut_guard(guarded);
+    refresh_mail_menu(&app, &state);
+    Ok(())
 }
 
 #[tauri::command]
@@ -3038,10 +3129,14 @@ fn notify_new_mail(
     if previous_message_id == Some(message.id) || message.is_read {
         return;
     }
-    let private = app
-        .state::<AppState>()
-        .settings
-        .get()
+    let settings = app.state::<AppState>().settings.get().ok();
+    if settings
+        .as_ref()
+        .is_some_and(|settings| !settings.notify_new_mail)
+    {
+        return;
+    }
+    let private = settings
         .map(|settings| settings.private_notifications)
         .unwrap_or(true);
     let (title, body) = if private {
@@ -3127,6 +3222,7 @@ mod tests {
             html_body: None,
             attachments: vec![],
             raw_message: b"Subject: Power bill\r\n\r\nPay by Friday".to_vec(),
+            has_attachments: false,
         };
         message.sender_address = "bills@power.example.com".into();
         db.upsert_message(account_id, inbox, &message).unwrap();

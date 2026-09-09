@@ -23,8 +23,8 @@ const artifacts = [
   "Postal-Snap-Linux-x64.flatpak",
 ];
 const updaterPayloads = [
-  "Postal-Snap-Windows-x64.nsis.zip",
-  "Postal-Snap-Windows-arm64.nsis.zip",
+  "Postal-Snap-Windows-x64.exe",
+  "Postal-Snap-Windows-arm64.exe",
   "Postal-Snap-macOS.app.tar.gz",
   "Postal-Snap-Linux-x64.AppImage.tar.gz",
 ];
@@ -44,8 +44,8 @@ const pkg = await json(join(root, "package.json"));
 const tag = `v${pkg.version}`;
 const channel = pkg.version.includes("-") ? "-beta" : "";
 const manifests = [
-  ["windows", "x86_64", "Postal-Snap-Windows-x64.nsis.zip"],
-  ["windows", "aarch64", "Postal-Snap-Windows-arm64.nsis.zip"],
+  ["windows", "x86_64", "Postal-Snap-Windows-x64.exe"],
+  ["windows", "aarch64", "Postal-Snap-Windows-arm64.exe"],
   ["darwin", "x86_64", "Postal-Snap-macOS.app.tar.gz"],
   ["darwin", "aarch64", "Postal-Snap-macOS.app.tar.gz"],
   ["linux", "x86_64", "Postal-Snap-Linux-x64.AppImage.tar.gz"],

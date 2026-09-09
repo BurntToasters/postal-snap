@@ -42,8 +42,8 @@ for (const artifact of [...required]) {
   required.push(`${artifact}.sha256`, `${artifact}.asc`);
 }
 for (const payload of [
-  "Postal-Snap-Windows-x64.nsis.zip",
-  "Postal-Snap-Windows-arm64.nsis.zip",
+  "Postal-Snap-Windows-x64.exe",
+  "Postal-Snap-Windows-arm64.exe",
   "Postal-Snap-macOS.app.tar.gz",
   "Postal-Snap-Linux-x64.AppImage.tar.gz",
   ...(assets.includes("Postal-Snap-Linux-arm64.AppImage.tar.gz")

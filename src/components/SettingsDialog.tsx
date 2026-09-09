@@ -11,6 +11,7 @@ import {
   Database,
   DownloadCloud,
   Eye,
+  Info,
   Keyboard,
   Mail,
   Monitor,
@@ -23,10 +24,11 @@ import {
 } from "lucide-react";
 import { api } from "../api";
 import { strings } from "../i18n";
-import { shortcutMod, shortcutShiftMod } from "../format";
+import { shortcutMod, shortcutShiftMod, shortcutAltMod } from "../format";
 import { applySettings } from "../settings";
 import { useAppStore } from "../store";
 import { supportsWorkspaceWindowFx } from "../window-fx";
+import { version as appVersion } from "../../package.json";
 import type {
   AppSettings,
   CacheUsage,
@@ -53,7 +55,8 @@ export type SettingsTab =
   | "accounts"
   | "shortcuts"
   | "updates"
-  | "advanced";
+  | "advanced"
+  | "about";
 
 const tabs: Array<{
   id: SettingsTab;
@@ -68,6 +71,7 @@ const tabs: Array<{
   { id: "shortcuts", label: strings.settings.shortcuts, icon: Keyboard },
   { id: "updates", label: strings.settings.updates, icon: DownloadCloud },
   { id: "advanced", label: strings.settings.advanced, icon: ShieldAlert },
+  { id: "about", label: strings.settings.about, icon: Info },
 ];
 
 export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
@@ -210,7 +214,7 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
     setConfirmToken("");
   }
 
-  async function update(patch: Partial<AppSettings>) {
+  async function update(patch: Partial<AppSettings>, confirmToken?: string) {
     if (saving) return;
     const previous = settings;
     const next = { ...settings, ...patch };
@@ -218,7 +222,9 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
     setSettings(next);
     applySettings(next);
     try {
-      const saved = await api.saveSettings(next);
+      const saved = confirmToken
+        ? await api.saveSettings(next, confirmToken)
+        : await api.saveSettings(next);
       setSettings(saved);
       applySettings(saved);
     } catch (cause) {
@@ -253,7 +259,10 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
   async function confirmDisableThreats() {
     if (confirmToken !== strings.settings.threatDisableToken) return;
     cancelThreatOff();
-    await update({ blockReportedThreats: false });
+    await update(
+      { blockReportedThreats: false },
+      strings.settings.threatDisableToken,
+    );
   }
 
   async function clearCache() {
@@ -813,7 +822,8 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
                       onClick={() => {
                         setTab("advanced");
                         window.requestAnimationFrame(() => {
-                          document.getElementById("settings-tab-advanced")
+                          document
+                            .getElementById("settings-tab-advanced")
                             ?.focus();
                         });
                       }}
@@ -909,6 +919,19 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
                     <option value={2}>{strings.settings.largest}</option>
                   </select>
                 </SettingRow>
+                <label className="switch-row">
+                  <span>
+                    <strong>{strings.settings.groupThreads}</strong>
+                    <small>{strings.settings.groupThreadsHelp}</small>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={settings.groupThreads}
+                    onChange={(event) =>
+                      void update({ groupThreads: event.target.checked })
+                    }
+                  />
+                </label>
               </SettingsPanel>
             ) : null}
             {tab === "notifications" ? (
@@ -916,6 +939,19 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
                 id="notifications"
                 title={strings.settings.notifications}
               >
+                <label className="switch-row">
+                  <span>
+                    <strong>{strings.settings.notifyNewMail}</strong>
+                    <small>{strings.settings.notifyNewMailHelp}</small>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={settings.notifyNewMail}
+                    onChange={(event) =>
+                      void update({ notifyNewMail: event.target.checked })
+                    }
+                  />
+                </label>
                 <label className="switch-row">
                   <span>
                     <strong>{strings.settings.privateNotifications}</strong>
@@ -1534,7 +1570,7 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
                   </div>
                   <div className="shortcut-row">
                     <span>{strings.mail.getMail}</span>
-                    <kbd>{`${shortcutShiftMod()} M`}</kbd>
+                    <kbd>{`${shortcutShiftMod()} N`}</kbd>
                   </div>
                   <div className="shortcut-row">
                     <span>{strings.reader.reply}</span>
@@ -1559,6 +1595,10 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
                   <div className="shortcut-row">
                     <span>{strings.mail.search}</span>
                     <kbd>{`${shortcutMod()} F / /`}</kbd>
+                  </div>
+                  <div className="shortcut-row">
+                    <span>{strings.reader.findInMessage}</span>
+                    <kbd>{`${shortcutAltMod()} F`}</kbd>
                   </div>
                   <div className="shortcut-row">
                     <span>{strings.composer.send}</span>
@@ -1660,6 +1700,41 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
                     {strings.settings.threatOffWarning}
                   </div>
                 )}
+              </SettingsPanel>
+            ) : null}
+            {tab === "about" ? (
+              <SettingsPanel id="about" title={strings.settings.about}>
+                <p className="settings-lead">{strings.settings.aboutLead}</p>
+                <p>{strings.settings.aboutVersion(appVersion)}</p>
+                <p>
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() =>
+                      void api.openExternalUrl(
+                        "https://github.com/BurntToasters/postal-snap",
+                      )
+                    }
+                  >
+                    {strings.settings.aboutSource}
+                  </button>
+                </p>
+                <p>
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() =>
+                      void api.openExternalUrl(
+                        "https://www.mozilla.org/MPL/2.0/",
+                      )
+                    }
+                  >
+                    {strings.settings.aboutLicense}
+                  </button>
+                </p>
+                <p>
+                  <small>{strings.settings.aboutFilters}</small>
+                </p>
               </SettingsPanel>
             ) : null}
           </div>

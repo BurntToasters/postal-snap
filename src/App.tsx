@@ -173,6 +173,25 @@ export default function App() {
   }, [openSettings]);
 
   useEffect(() => {
+    const syncGuard = () => {
+      const target = document.activeElement as HTMLElement | null;
+      const guarded = Boolean(
+        document.querySelector(".composer-layer, .settings-window") ||
+        target?.closest("input, textarea, select, [contenteditable='true']"),
+      );
+      void api.setMailShortcutGuard(guarded).catch(() => undefined);
+    };
+    document.addEventListener("focusin", syncGuard);
+    document.addEventListener("focusout", syncGuard);
+    syncGuard();
+    return () => {
+      document.removeEventListener("focusin", syncGuard);
+      document.removeEventListener("focusout", syncGuard);
+      void api.setMailShortcutGuard(false).catch(() => undefined);
+    };
+  }, [composerOpen, settingsOpen]);
+
+  useEffect(() => {
     document.documentElement.dataset.platform = /Mac/i.test(navigator.userAgent)
       ? "macos"
       : /Windows/i.test(navigator.userAgent)

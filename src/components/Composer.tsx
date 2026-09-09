@@ -268,6 +268,7 @@ export function Composer({ accountId }: Props) {
       },
       transformPastedHTML: (html) => sanitizeComposeHtml(html),
     },
+    immediatelyRender: false,
     onUpdate: markUnsaved,
   });
 
@@ -336,11 +337,7 @@ export function Composer({ accountId }: Props) {
       attachments,
       inReplyTo:
         seed?.draft?.inReplyTo ?? seed?.sourceMessage?.messageId ?? undefined,
-      references:
-        seed?.draft?.references ??
-        (seed?.sourceMessage?.messageId
-          ? [seed.sourceMessage.messageId]
-          : undefined),
+      references: seedReferences(seed),
     };
   }, [
     accountId,
@@ -713,21 +710,25 @@ export function Composer({ accountId }: Props) {
     );
   }
 
+  const keepSourceVisible = Boolean(seed?.composeMode && !maximized);
+
   return (
     <div
-      className={`modal-layer composer-layer${maximized ? " composer-layer-maximized" : ""}`}
+      className={`modal-layer composer-layer${maximized ? " composer-layer-maximized" : ""}${keepSourceVisible ? " composer-layer-followup" : ""}`}
       role="dialog"
-      aria-modal="true"
+      aria-modal={keepSourceVisible ? "false" : "true"}
       aria-labelledby="composer-title"
     >
-      <button
-        className="modal-backdrop"
-        type="button"
-        tabIndex={-1}
-        aria-hidden="true"
-        onClick={() => void requestClose()}
-        disabled={sending || saveState === "saving"}
-      />
+      {keepSourceVisible ? null : (
+        <button
+          className="modal-backdrop"
+          type="button"
+          tabIndex={-1}
+          aria-hidden="true"
+          onClick={() => void requestClose()}
+          disabled={sending || saveState === "saving"}
+        />
+      )}
       <section
         className={`composer-window${maximized ? " composer-maximized" : ""}`}
         ref={dialogRef}
@@ -1216,6 +1217,12 @@ export function Composer({ accountId }: Props) {
           </div>
         </div>
         <EditorContent editor={editor} />
+        {account?.signature && !seed?.draft ? (
+          <aside className="composer-signature-preview">
+            <strong>{strings.composer.signaturePreview}</strong>
+            <pre>{account.signature}</pre>
+          </aside>
+        ) : null}
         {attachments.length > 0 ? (
           <div className="compose-attachments">
             {attachments.map((item, index) => (
@@ -1286,51 +1293,51 @@ export function Composer({ accountId }: Props) {
             {strings.composer.discard}
           </button>
         </footer>
-      {linkDialogOpen ? (
-        <div
-          className="settings-confirm-overlay"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="composer-link-title"
-        >
-          <form
-            className="settings-confirm-dialog"
-            onSubmit={(event) => {
-              event.preventDefault();
-              applyLink();
-            }}
-            onKeyDown={(event) => {
-              if (event.key !== "Escape") return;
-              event.preventDefault();
-              event.stopPropagation();
-              setLinkDialogOpen(false);
-            }}
+        {linkDialogOpen ? (
+          <div
+            className="settings-confirm-overlay"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="composer-link-title"
           >
-            <h2 id="composer-link-title">{strings.composer.insertLink}</h2>
-            <label>
-              <span>{strings.composer.webAddress}</span>
-              <input
-                autoFocus
-                value={linkValue}
-                onChange={(event) => setLinkValue(event.target.value)}
-                placeholder="https://"
-              />
-            </label>
-            <div className="settings-confirm-actions">
-              <button
-                className="secondary-button"
-                type="button"
-                onClick={() => setLinkDialogOpen(false)}
-              >
-                {strings.common.cancel}
-              </button>
-              <button className="primary-button" type="submit">
-                {strings.composer.insertLink}
-              </button>
-            </div>
-          </form>
-        </div>
-      ) : null}
+            <form
+              className="settings-confirm-dialog"
+              onSubmit={(event) => {
+                event.preventDefault();
+                applyLink();
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== "Escape") return;
+                event.preventDefault();
+                event.stopPropagation();
+                setLinkDialogOpen(false);
+              }}
+            >
+              <h2 id="composer-link-title">{strings.composer.insertLink}</h2>
+              <label>
+                <span>{strings.composer.webAddress}</span>
+                <input
+                  autoFocus
+                  value={linkValue}
+                  onChange={(event) => setLinkValue(event.target.value)}
+                  placeholder="https://"
+                />
+              </label>
+              <div className="settings-confirm-actions">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => setLinkDialogOpen(false)}
+                >
+                  {strings.common.cancel}
+                </button>
+                <button className="primary-button" type="submit">
+                  {strings.composer.insertLink}
+                </button>
+              </div>
+            </form>
+          </div>
+        ) : null}
       </section>
     </div>
   );
@@ -1632,6 +1639,14 @@ function seedBody(seed?: ComposerSeed): string {
             strings.composer.sender,
         );
   return `<p></p><p><br></p><blockquote><p><strong>${escapeHtml(intro)}</strong></p>${message.htmlBody ? sanitizeComposeHtml(message.htmlBody) : `<p>${escapeHtml(message.textBody).replace(/\n/g, "<br>")}</p>`}</blockquote>`;
+}
+
+function seedReferences(seed?: ComposerSeed): string[] | undefined {
+  if (seed?.draft?.references?.length) return seed.draft.references;
+  const parentId = seed?.sourceMessage?.messageId;
+  if (!parentId) return seed?.draft?.references;
+  const prior = seed?.sourceMessage?.references?.filter(Boolean) ?? [];
+  return [...prior, parentId];
 }
 
 function composerTitle(seed?: ComposerSeed): string {

@@ -43,6 +43,8 @@ export const defaultSettings: AppSettings = {
   undoSendSeconds: 10,
   blockAdvertisingAndTracking: true,
   blockReportedThreats: true,
+  groupThreads: true,
+  notifyNewMail: true,
 };
 
 interface AppState {

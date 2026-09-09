@@ -23,6 +23,8 @@ vi.mock("../api", () => ({
     retrySentCopy: vi.fn(),
     sendScheduledOutbox: vi.fn(),
     deleteOutbox: vi.fn(),
+    restoreOutbox: vi.fn(),
+    getOutbox: vi.fn(),
     listMessages: vi.fn(),
     getMessage: vi.fn(),
     setMessageFlags: vi.fn(),
@@ -36,6 +38,7 @@ vi.mock("../api", () => ({
     onMessageChanged: vi.fn(),
     onDraftSyncChanged: vi.fn().mockResolvedValue(() => undefined),
     onOutboxChanged: vi.fn().mockResolvedValue(() => undefined),
+    showNativeConfirm: vi.fn().mockResolvedValue(true),
   },
 }));
 
@@ -475,9 +478,96 @@ describe("mail shell", () => {
     await screen.findByRole("heading", { name: "First message" });
     await waitFor(() => expect(onChanged).toBeTypeOf("function"));
 
-    onChanged?.({ accountId: account.id, messageId: firstMessage.id, kind: "moved" });
+    onChanged?.({
+      accountId: account.id,
+      messageId: firstMessage.id,
+      kind: "moved",
+    });
     await waitFor(() =>
       expect(useAppStore.getState().selectedMessage).toBeUndefined(),
     );
+  });
+
+  it("lists messages separately when conversation grouping is off", async () => {
+    const threaded = [firstMessage, secondMessage].map((message) => ({
+      ...message,
+      threadRoot: "<thread@example.test>",
+    }));
+    mockedListMessages.mockResolvedValue({
+      items: threaded,
+      nextCursor: null,
+      hasMore: false,
+    });
+    useAppStore.setState({
+      settings: { ...defaultSettings, groupThreads: false },
+    });
+    renderShell();
+
+    expect(
+      await screen.findByRole("option", { name: /First message/i }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("option", { name: /Second message/i }),
+    ).toBeVisible();
+    expect(screen.queryByRole("button", { name: /Conversation/i })).toBeNull();
+  });
+
+  it("opens the newest message from a conversation header", async () => {
+    const threaded = [firstMessage, secondMessage].map((message) => ({
+      ...message,
+      threadRoot: "<thread@example.test>",
+    }));
+    mockedListMessages.mockResolvedValue({
+      items: threaded,
+      nextCursor: null,
+      hasMore: false,
+    });
+    renderShell();
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Conversation.*2 messages/i }),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Second message" }),
+    ).toBeVisible();
+  });
+
+  it("restores an undone send into the composer", async () => {
+    const draft = {
+      id: "draft-restored",
+      accountId: account.id,
+      to: ["lee@example.com"],
+      cc: [],
+      bcc: [],
+      subject: "Held note",
+      htmlBody: "<p>Hi</p>",
+      textBody: "Hi",
+      attachments: [],
+    };
+    vi.mocked(api.restoreOutbox).mockResolvedValue(draft);
+    const held = {
+      id: "outbox-1",
+      accountId: account.id,
+      recipients: "lee@example.com",
+      subject: "Held note",
+      state: "scheduled",
+      detail: "Held for review.",
+      createdAt: "2026-08-18T11:00:00Z",
+      sendAt: new Date(Date.now() + 60_000).toISOString(),
+    } as const;
+    mockedListOutbox.mockResolvedValue([held]);
+    useAppStore.setState({
+      activeLocalView: "outbox",
+      outbox: [held],
+    });
+    renderShell();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Undo" }));
+    await waitFor(() =>
+      expect(api.restoreOutbox).toHaveBeenCalledWith("outbox-1", "account-1"),
+    );
+    expect(api.deleteOutbox).not.toHaveBeenCalled();
+    expect(useAppStore.getState().composerOpen).toBe(true);
+    expect(useAppStore.getState().composeSeed?.draft).toEqual(draft);
   });
 });

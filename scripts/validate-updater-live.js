@@ -17,7 +17,10 @@ for (const target of [...targets, ...optionalTargets]) {
   const url = `https://github.com/BurntToasters/postal-snap/releases/latest/download/latest-${target}.json`;
   const response = await fetch(url);
   if (!response.ok) {
-    if (response.status === 404 && (shapeOnly || optionalTargets.includes(target)))
+    if (
+      response.status === 404 &&
+      (shapeOnly || optionalTargets.includes(target))
+    )
       continue;
     throw new Error(`${url} returned HTTP ${response.status}`);
   }

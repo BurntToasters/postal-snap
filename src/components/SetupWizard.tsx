@@ -174,7 +174,11 @@ export function SetupWizard({ onComplete, onOpenSettings }: Props) {
       await api.addAccount(request);
       setStatus({ kind: "success", text: strings.setup.connected });
       setPassword("");
-      await onComplete();
+      try {
+        await onComplete();
+      } catch {
+        // The account is already saved. Listing accounts is best-effort.
+      }
     } catch (cause) {
       const described = describeSetupError(cause, provider);
       setStatus({

@@ -291,6 +291,20 @@ async function installMockIpc(page: Page) {
             case "delete_outbox":
               state.discarded = true;
               return undefined;
+            case "restore_outbox":
+              state.discarded = true;
+              return {
+                accountId: "acc-1",
+                to: ["sam@example.test"],
+                cc: [],
+                bcc: [],
+                subject: "Queued",
+                htmlBody: "<p>Queued</p>",
+                textBody: "Queued",
+                attachments: [],
+              };
+            case "set_mail_shortcut_guard":
+              return undefined;
             case "snooze_message":
               state.snoozed = true;
               return undefined;
@@ -504,6 +518,8 @@ async function installMockIpc(page: Page) {
                 undoSendSeconds: 10,
                 blockAdvertisingAndTracking: true,
                 blockReportedThreats: true,
+                groupThreads: true,
+                notifyNewMail: true,
               };
             case "supports_workspace_window_fx":
               return true;
@@ -535,6 +551,8 @@ async function installMockIpc(page: Page) {
                 readerPaneHeight: 360,
                 blockAdvertisingAndTracking: true,
                 blockReportedThreats: true,
+                groupThreads: true,
+                notifyNewMail: true,
               };
             case "reset_settings":
               state.resetSettings += 1;
@@ -557,6 +575,8 @@ async function installMockIpc(page: Page) {
                 readerPaneHeight: 360,
                 blockAdvertisingAndTracking: true,
                 blockReportedThreats: true,
+                groupThreads: true,
+                notifyNewMail: true,
               };
             case "get_startup_notice":
               return null;
@@ -752,6 +772,7 @@ test("keeps settings tab names accessible in a narrow window", async ({
       "Shortcuts",
       "Updates",
       "Advanced",
+      "About",
     ]);
 });
 
@@ -1277,7 +1298,7 @@ test("lists Mail-like shortcuts instead of using R for Get Mail", async ({
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("tab", { name: "Shortcuts" }).click();
   const getMail = page.locator(".shortcut-row").filter({ hasText: "Get Mail" });
-  await expect(getMail.locator("kbd")).toContainText("M");
+  await expect(getMail.locator("kbd")).toContainText("N");
   await expect(getMail.locator("kbd")).not.toContainText("R");
   await expect(
     page

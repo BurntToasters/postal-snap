@@ -12,9 +12,7 @@ vi.mock("../api", () => ({
     showNativeConfirm: vi.fn().mockResolvedValue(true),
     showNativeMessage: vi.fn().mockResolvedValue(undefined),
     relaunch: vi.fn().mockResolvedValue(undefined),
-    distribution: vi
-      .fn()
-      .mockResolvedValue({ updatesManagedBy: "postalSnap" }),
+    distribution: vi.fn().mockResolvedValue({ updatesManagedBy: "postalSnap" }),
   },
 }));
 

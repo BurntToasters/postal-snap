@@ -30,6 +30,7 @@ fn sanitize_html(input: &str, keep_cid_src: bool) -> SanitizedHtml {
     let normalized = normalize_src_and_href(input);
     let cleaned = mail_builder().clean(&normalized).to_string();
     let (html, blocked_images) = rewrite_images(&cleaned, keep_cid_src);
+    let html = rewrite_links(&html, keep_cid_src);
     SanitizedHtml {
         html,
         blocked_images,
@@ -97,7 +98,7 @@ fn mail_builder() -> ammonia::Builder<'static> {
     ]));
     builder.generic_attributes(HashSet::from(["class", "dir", "lang", "title", "style"]));
     builder.tag_attributes(HashMap::from([
-        ("a", HashSet::from(["href"])),
+        ("a", HashSet::from(["href", "data-external-href"])),
         (
             "img",
             HashSet::from([
@@ -122,6 +123,13 @@ fn mail_builder() -> ammonia::Builder<'static> {
     builder.attribute_filter(|element, attribute, value| match (element, attribute) {
         ("a", "href") => {
             if is_safe_href(value) {
+                Some(Cow::Borrowed(value))
+            } else {
+                None
+            }
+        }
+        ("a", "data-external-href") => {
+            if is_http_url(value) && value.len() <= 16 * 1024 {
                 Some(Cow::Borrowed(value))
             } else {
                 None
@@ -205,7 +213,7 @@ fn is_http_url(value: &str) -> bool {
 
 fn is_safe_href(value: &str) -> bool {
     let value = value.trim();
-    value.len() <= 16 * 1024 && (is_http_url(value) || value.starts_with("mailto:"))
+    value.len() <= 16 * 1024 && (is_http_url(value) || value.starts_with("mailto:") || value == "#")
 }
 
 fn is_kept_image_src(value: &str) -> bool {
@@ -238,6 +246,102 @@ fn regex_like_dangerous_css(value: &str) -> bool {
         || lower.contains("http:")
         || lower.contains("//")
         || lower.contains("data:")
+}
+
+fn rewrite_links(html: &str, restore_href: bool) -> String {
+    let mut output = String::with_capacity(html.len());
+    let mut rest = html;
+    while let Some(start) = find_named_tag_start(rest, "a") {
+        output.push_str(&rest[..start]);
+        let Some(end) = find_tag_end(&rest[start..]) else {
+            output.push_str(&rest[start..]);
+            return output;
+        };
+        let tag = &rest[start..start + end];
+        if tag.as_bytes().get(1) == Some(&b'/') {
+            output.push_str(tag);
+        } else {
+            output.push_str(&rewrite_a_tag(tag, restore_href));
+        }
+        rest = &rest[start + end..];
+    }
+    output.push_str(rest);
+    output
+}
+
+fn rewrite_a_tag(tag: &str, restore_href: bool) -> String {
+    let self_closing = tag.trim_end().ends_with("/>") || tag.trim_end().ends_with("/ >");
+    let inside = tag
+        .trim()
+        .trim_start_matches('<')
+        .trim_start_matches("a")
+        .trim_start_matches("A")
+        .trim_end_matches('>')
+        .trim_end_matches('/')
+        .trim();
+    let mut attrs = parse_attrs(inside);
+    let href = take_attr(&mut attrs, "href");
+    let marked = take_attr(&mut attrs, "data-external-href");
+    attrs.retain(|(name, _)| name.as_str() != "href" && name.as_str() != "data-external-href");
+    let http = href
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| is_http_url(value))
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            marked
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| is_http_url(value))
+                .map(ToOwned::to_owned)
+        });
+    let mailto = href
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| value.starts_with("mailto:"))
+        .map(ToOwned::to_owned);
+    let mut extras = Vec::new();
+    if let Some(http) = http {
+        if restore_href {
+            extras.push(("href", http));
+        } else {
+            extras.push(("href", "#".into()));
+            extras.push(("data-external-href", http));
+        }
+    } else if let Some(mailto) = mailto {
+        extras.push(("href", mailto));
+    }
+
+    let mut out = String::from("<a");
+    for (name, value) in extras {
+        push_attr(&mut out, name, &value);
+    }
+    for (name, value) in attrs {
+        if let Some(value) = value {
+            push_attr(&mut out, &name, &value);
+        }
+    }
+    if self_closing {
+        out.push_str(" />");
+    } else {
+        out.push('>');
+    }
+    out
+}
+
+fn find_named_tag_start(html: &str, name: &str) -> Option<usize> {
+    let lower = html.to_ascii_lowercase();
+    let open = format!("<{name}");
+    let mut search = 0;
+    while let Some(rel) = lower[search..].find(&open) {
+        let idx = search + rel;
+        let next = html.as_bytes().get(idx + 1 + name.len())?;
+        if next.is_ascii_whitespace() || *next == b'>' || *next == b'/' {
+            return Some(idx);
+        }
+        search = idx + 1 + name.len();
+    }
+    None
 }
 
 fn rewrite_images(html: &str, keep_cid_src: bool) -> (String, u32) {
@@ -544,6 +648,24 @@ mod tests {
         assert_eq!(once.blocked_images, 1);
         assert_eq!(twice.blocked_images, 1);
         assert!(once.html.contains("rel=\"noopener noreferrer\""));
+        assert!(once
+            .html
+            .contains("data-external-href=\"https://library.example.test\""));
+        assert!(!once.html.contains("<a href=\"https://"));
+        assert!(!once.html.contains("<a href=\"http://"));
+    }
+
+    #[test]
+    fn compose_restores_rewritten_http_links() {
+        let received = sanitize_received_html(
+            r#"<p><a href="https://library.example.test/hours">Hours</a></p>"#,
+        );
+        assert!(received
+            .html
+            .contains("data-external-href=\"https://library.example.test/hours\""));
+        let compose = sanitize_compose_html(&received.html);
+        assert!(compose.contains("href=\"https://library.example.test/hours\""));
+        assert!(!compose.contains("data-external-href"));
     }
 
     #[test]

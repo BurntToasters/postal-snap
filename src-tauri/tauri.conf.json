@@ -11,7 +11,7 @@
   },
   "app": {
     "withGlobalTauri": false,
-    "macOSPrivateApi": true,
+    "macOSPrivateApi": false,
     "windows": [
       {
         "label": "main",
@@ -22,7 +22,8 @@
         "minHeight": 540,
         "resizable": true,
         "decorations": true,
-        "transparent": true
+        "transparent": true,
+        "create": false
       }
     ],
     "security": {
@@ -57,6 +58,7 @@
     "resources": {
       "../THIRD_PARTY_NOTICES.npm.txt": "THIRD_PARTY_NOTICES.npm.txt",
       "../THIRD_PARTY_NOTICES.cargo.txt": "THIRD_PARTY_NOTICES.cargo.txt",
+      "../LICENSE": "LICENSE",
       "filters/LICENSE-CC-BY-SA-3.0.txt": "LICENSE-CC-BY-SA-3.0.txt",
       "filters/LICENSE-CC0-1.0.txt": "LICENSE-CC0-1.0.txt"
     },
@@ -65,6 +67,11 @@
     "longDescription": "Postal Snap is a calm, accessible desktop email client with secure IMAP and SMTP support.",
     "windows": {
       "digestAlgorithm": "sha256",
+      "signCommand": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ../scripts/windows-artifact-sign.ps1 -FilePath %1",
+      "webviewInstallMode": {
+        "type": "embedBootstrapper",
+        "silent": true
+      },
       "nsis": {
         "installMode": "currentUser",
         "installerIcon": "icons/icon.ico"

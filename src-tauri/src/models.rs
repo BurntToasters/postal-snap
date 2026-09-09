@@ -29,6 +29,14 @@ fn default_true() -> bool {
     true
 }
 
+fn default_group_threads() -> bool {
+    true
+}
+
+fn default_notify_new_mail() -> bool {
+    true
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum TlsMode {
@@ -214,6 +222,8 @@ pub struct MessageDetail {
     pub html_body: Option<String>,
     pub remote_images_blocked: bool,
     pub attachments: Vec<Attachment>,
+    #[serde(default)]
+    pub references: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -352,6 +362,10 @@ pub struct AppSettings {
     pub block_advertising_and_tracking: bool,
     #[serde(default = "default_true")]
     pub block_reported_threats: bool,
+    #[serde(default = "default_group_threads")]
+    pub group_threads: bool,
+    #[serde(default = "default_notify_new_mail")]
+    pub notify_new_mail: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -382,6 +396,10 @@ pub struct PortableSettings {
     pub block_advertising_and_tracking: bool,
     #[serde(default = "default_true")]
     pub block_reported_threats: bool,
+    #[serde(default = "default_group_threads")]
+    pub group_threads: bool,
+    #[serde(default = "default_notify_new_mail")]
+    pub notify_new_mail: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -411,6 +429,8 @@ impl Default for AppSettings {
             undo_send_seconds: default_undo_send_seconds(),
             block_advertising_and_tracking: true,
             block_reported_threats: true,
+            group_threads: true,
+            notify_new_mail: true,
         }
     }
 }

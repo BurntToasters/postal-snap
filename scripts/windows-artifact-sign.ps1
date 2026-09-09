@@ -11,7 +11,13 @@ if ($env:OS -ne 'Windows_NT') { throw 'Azure Artifact Signing must run on Window
 
 $required = @('AZURE_CLIENT_ID','AZURE_TENANT_ID','AZURE_CLIENT_SECRET','AZURE_ARTIFACT_SIGNING_ENDPOINT','AZURE_ARTIFACT_SIGNING_ACCOUNT','AZURE_ARTIFACT_SIGNING_PROFILE','AZURE_ARTIFACT_SIGNING_PUBLISHER')
 $missing = @($required | Where-Object { [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) })
-if ($missing.Count) { throw "Missing Azure Artifact Signing environment variables: $($missing -join ', ')" }
+if ($missing.Count) {
+  if ($env:POSTAL_SNAP_REQUIRE_WIN_CODESIGN -eq '1') {
+    throw "Missing Azure Artifact Signing environment variables: $($missing -join ', ')"
+  }
+  Write-Host "Azure Artifact Signing is not configured; leaving Windows artifact unsigned: $FilePath"
+  exit 0
+}
 
 $resolved = (Resolve-Path -LiteralPath $FilePath).Path
 if ([IO.Path]::GetExtension($resolved).ToLowerInvariant() -in @('.appx','.msix','.appxbundle','.msixbundle')) { throw "Microsoft Store package signing is intentionally excluded: $resolved" }

@@ -2,6 +2,10 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ensureReleaseDir, process, root, run } from "./_utils.js";
 
+// The binary is compiled on the host, then installed into GNOME Platform.
+// Confirm it starts inside bwrap on the signing host; an SDK rebuild is
+// the fallback if host glibc/WebKit symbols do not match runtime 49.
+
 const arch = process.argv.includes("--arm64")
   ? "aarch64"
   : process.arch === "arm64"

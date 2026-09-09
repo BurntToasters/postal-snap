@@ -28,6 +28,7 @@ vi.mock("../api", () => ({
     exportSettings: vi.fn(),
     importSettings: vi.fn(),
     resetSettings: vi.fn(),
+    openExternalUrl: vi.fn(),
     cacheUsage: vi.fn().mockResolvedValue({
       totalBytes: 1024,
       databaseBytes: 512,
@@ -414,6 +415,7 @@ describe("SettingsDialog component", () => {
 
     expect(api.saveSettings).toHaveBeenCalledWith(
       expect.objectContaining({ blockReportedThreats: false }),
+      "CONFIRM",
     );
     expect(dialog).not.toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
