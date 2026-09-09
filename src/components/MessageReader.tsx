@@ -14,6 +14,7 @@ import {
   Image,
   Mail,
   MailOpen,
+  MoreHorizontal,
   Printer,
   Reply,
   ReplyAll,
@@ -23,7 +24,6 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "../api";
 import { formatBytes, formatFullMessageDate } from "../format";
 import { strings } from "../i18n";
@@ -100,6 +100,91 @@ export function MessageReader() {
   }
   const [showDetailsFor, setShowDetailsFor] = useState<number>();
   const [snoozeOpen, setSnoozeOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreMenuRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState("");
+  const findInputRef = useRef<HTMLInputElement>(null);
+
+  function printMessage() {
+    if (!message) return;
+    const from = message.senderName
+      ? `${message.senderName} <${message.senderAddress}>`
+      : message.senderAddress;
+    const header = [
+      `<p><strong>${escapePrint(strings.reader.from)}</strong> ${escapePrint(from)}</p>`,
+      `<p><strong>${escapePrint(strings.reader.to)}</strong> ${escapePrint(message.to.join(", ") || strings.reader.noRecipients)}</p>`,
+      message.cc.length
+        ? `<p><strong>${escapePrint(strings.reader.cc)}</strong> ${escapePrint(message.cc.join(", "))}</p>`
+        : "",
+      `<p><strong>${escapePrint(strings.reader.subject)}</strong> ${escapePrint(message.subject || strings.common.noSubject)}</p>`,
+      `<p><strong>${escapePrint(strings.reader.date)}</strong> ${escapePrint(formatFullMessageDate(message.receivedAt))}</p>`,
+    ].join("");
+    const body =
+      loadedHtml?.messageId === message.id && loadedHtml.html
+        ? loadedHtml.html
+        : `<pre style="white-space:pre-wrap;font:inherit">${escapePrint(message.textBody)}</pre>`;
+    const html = messageFrameDocument(
+      `<section style="margin:0 0 16px;padding:0 0 12px;border-bottom:1px solid #c8d2dc">${header}</section>${body}`,
+      settings.textScale,
+    );
+    const printer = document.createElement("iframe");
+    printer.setAttribute("aria-hidden", "true");
+    printer.style.position = "fixed";
+    printer.style.width = "0";
+    printer.style.height = "0";
+    printer.style.border = "0";
+    printer.srcdoc = html;
+    printer.addEventListener("load", () => {
+      printer.contentWindow?.focus();
+      printer.contentWindow?.print();
+      window.setTimeout(() => printer.remove(), 1500);
+    });
+    document.body.appendChild(printer);
+  }
+  const printMessageRef = useRef(printMessage);
+  printMessageRef.current = printMessage;
+
+  function scrollMessage(direction: 1 | -1) {
+    const amount = Math.round(window.innerHeight * 0.85) * direction;
+    const frameWindow = frame.current?.contentWindow;
+    if (frameWindow) {
+      frameWindow.scrollBy(0, amount);
+      return;
+    }
+    bodyRef.current?.scrollBy({ top: amount, behavior: "auto" });
+  }
+
+  function findInMessage() {
+    const query = findQuery.trim();
+    if (!query) return;
+    const frameWindow = frame.current?.contentWindow as
+      (Window & { find?: (text: string) => boolean }) | null;
+    if (frameWindow?.find) {
+      frameWindow.find(query);
+      return;
+    }
+    const body = bodyRef.current;
+    if (!body) return;
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      const text = node.textContent ?? "";
+      const index = text.toLowerCase().indexOf(query.toLowerCase());
+      if (index < 0) continue;
+      const range = document.createRange();
+      range.setStart(node, index);
+      range.setEnd(node, index + query.length);
+      selection?.addRange(range);
+      (node.parentElement as HTMLElement | null)?.scrollIntoView({
+        block: "center",
+      });
+      break;
+    }
+  }
 
   async function snoozeCurrentMessage(untilIso: string) {
     if (!message) return;
@@ -112,22 +197,79 @@ export function MessageReader() {
     }
   }
   const isOverlay = settings.readingPane === "hidden" && message !== undefined;
-  const dialogRef = useDialogFocus(() => selectMessage(undefined));
+  const [narrowViewport, setNarrowViewport] = useState(() =>
+    typeof window.matchMedia === "function"
+      ? window.matchMedia("(max-width: 760px)").matches
+      : false,
+  );
+  const treatAsOverlay = isOverlay || (narrowViewport && message !== undefined);
+  const dialogRef = useDialogFocus(() => {
+    if (preview) {
+      setPreview(null);
+      return;
+    }
+    if (snoozeOpen) {
+      setSnoozeOpen(false);
+      return;
+    }
+    if (moreOpen) {
+      setMoreOpen(false);
+      return;
+    }
+    selectMessage(undefined);
+  });
   const titleRef = useRef<HTMLHeadingElement>(null);
   const overlayMessageId = message?.id;
 
   useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia("(max-width: 760px)");
+    const update = () => setNarrowViewport(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+
+  useEffect(() => {
     if (overlayMessageId === undefined) return;
-    const narrow =
-      typeof window.matchMedia === "function" &&
-      window.matchMedia("(max-width: 760px)").matches;
-    if (!isOverlay && !narrow) return;
+    if (!treatAsOverlay) return;
     const previous = document.activeElement as HTMLElement | null;
     titleRef.current?.focus();
     return () => {
       previous?.focus();
     };
-  }, [isOverlay, overlayMessageId]);
+  }, [treatAsOverlay, overlayMessageId]);
+
+  useEffect(() => {
+    if (!moreOpen) return;
+    const close = (event: MouseEvent) => {
+      if (!moreMenuRef.current?.contains(event.target as Node)) {
+        setMoreOpen(false);
+      }
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      if (snoozeOpen) {
+        setSnoozeOpen(false);
+        return;
+      }
+      setMoreOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [moreOpen, snoozeOpen]);
+
+  const [menuMessageId, setMenuMessageId] = useState(message?.id);
+  if (message?.id !== menuMessageId) {
+    setMenuMessageId(message?.id);
+    if (moreOpen) setMoreOpen(false);
+    if (snoozeOpen) setSnoozeOpen(false);
+  }
 
   const account = accounts.find((a) => a.id === message?.accountId);
   const currentMailbox = mailboxes.find((m) => m.id === message?.mailboxId);
@@ -136,33 +278,38 @@ export function MessageReader() {
   const isJunkMailbox = currentMailbox?.role === "junk";
 
   async function handleExternalLink(url: string) {
-    if (!/^https?:/i.test(url)) return;
-    let display: string;
+    let check;
     try {
-      const parsed = new URL(url);
-      // Never hand credentials to the browser or show a misleading host.
-      if (parsed.username || parsed.password) return;
-      display = parsed.href;
+      check = await api.inspectExternalUrl(url);
     } catch {
       return;
     }
-    const confirmed = await api.showNativeConfirm(
-      strings.appName,
-      strings.reader.openLink(display),
-    );
-    if (confirmed) {
-      await openUrl(display);
+    const shownUrl =
+      check.url.length > 1400 ? `${check.url.slice(0, 1400)}…` : check.url;
+    if (check.reportedThreat) {
+      const proceed = await api.showNativeConfirm(
+        strings.reader.reportedThreatTitle,
+        strings.reader.reportedThreat(check.hostname, shownUrl),
+      );
+      if (!proceed) return;
+      const anyway = await api.showNativeConfirm(
+        strings.reader.reportedThreatTitle,
+        strings.reader.reportedThreatOpenAnyway,
+      );
+      if (!anyway) return;
+    } else {
+      const confirmed = await api.showNativeConfirm(
+        strings.appName,
+        strings.reader.openLink(check.hostname, shownUrl),
+      );
+      if (!confirmed) return;
+    }
+    try {
+      await api.openExternalUrl(check.url, check.reportedThreat);
+    } catch {
+      // Opening failures stay in the generic native error; do not surface URLs.
     }
   }
-
-  useEffect(() => {
-    if (settings.readingPane !== "hidden" || !message) return;
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") selectMessage(undefined);
-    };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [message, selectMessage, settings.readingPane]);
 
   const menuHandlersRef = useRef({
     message,
@@ -198,9 +345,36 @@ export function MessageReader() {
       if (action === "trash") void h.move("trash");
       if (action === "toggle-read") void h.setRead();
       if (action === "toggle-star") void h.setStarred();
+      if (action === "junk") void h.move("junk");
+      if (action === "print" || action === "file-print") {
+        window.dispatchEvent(new Event("postal:print-message"));
+      }
+      if (action === "find-in-message") {
+        window.dispatchEvent(new Event("postal:find-in-message"));
+      }
     };
     window.addEventListener("postal:menu-action", menuAction);
     return () => window.removeEventListener("postal:menu-action", menuAction);
+  }, []);
+
+  useEffect(() => {
+    const print = () => printMessageRef.current();
+    const find = () => {
+      setFindOpen(true);
+      window.setTimeout(() => findInputRef.current?.focus(), 0);
+    };
+    const scroll = (event: Event) => {
+      const direction = (event as CustomEvent<1 | -1>).detail;
+      scrollMessage(direction);
+    };
+    window.addEventListener("postal:print-message", print);
+    window.addEventListener("postal:find-in-message", find);
+    window.addEventListener("postal:scroll-reader", scroll);
+    return () => {
+      window.removeEventListener("postal:print-message", print);
+      window.removeEventListener("postal:find-in-message", find);
+      window.removeEventListener("postal:scroll-reader", scroll);
+    };
   }, []);
 
   const htmlBody = message?.htmlBody;
@@ -213,11 +387,27 @@ export function MessageReader() {
     loadedHtml && loadedHtml.messageId === message?.id
       ? loadedHtml.html
       : undefined;
-  const remainingBlockedImages = useMemo(() => {
-    if (!sanitized) return 0;
-    if (!currentLoadedHtml) return sanitized.blockedImages;
-    return (currentLoadedHtml.match(/data-remote-src=/g) || []).length;
-  }, [sanitized, currentLoadedHtml]);
+  const { remainingBlockedImages, filteredImages, threatImages } =
+    useMemo(() => {
+      if (!currentLoadedHtml) {
+        return {
+          remainingBlockedImages: sanitized?.blockedImages ?? 0,
+          filteredImages: 0,
+          threatImages: 0,
+        };
+      }
+      const doc = new DOMParser().parseFromString(
+        currentLoadedHtml,
+        "text/html",
+      );
+      return {
+        remainingBlockedImages: doc.querySelectorAll("img[data-remote-src]")
+          .length,
+        filteredImages: doc.querySelectorAll("img[data-content-blocked]")
+          .length,
+        threatImages: doc.querySelectorAll("img[data-threat-blocked]").length,
+      };
+    }, [sanitized, currentLoadedHtml]);
   const inlineAttachments = useMemo(
     () => attachments?.filter((attachment) => attachment.inline) ?? [],
     [attachments],
@@ -254,31 +444,59 @@ export function MessageReader() {
     };
   }, [inlineAttachments, messageAccountId, messageId, sanitized]);
 
+  const frameLinkCleanup = useRef<(() => void) | undefined>(undefined);
+
   function wireFrameLinks() {
+    frameLinkCleanup.current?.();
+    frameLinkCleanup.current = undefined;
     const body = frame.current?.contentDocument?.body;
     if (!body) return;
-    const handleLink = async (event: MouseEvent) => {
+    const handleLink = (event: MouseEvent) => {
       if (event.button > 1) return;
       const target = (event.target as HTMLElement).closest<HTMLAnchorElement>(
-        "a[href]",
+        "a[href], a[data-external-href]",
       );
       if (!target) return;
       event.preventDefault();
-      const url = target.href;
+      event.stopPropagation();
+      const marked = target.getAttribute("data-external-href")?.trim() ?? "";
+      const href = target.getAttribute("href")?.trim() ?? "";
+      const url = /^https?:/i.test(marked)
+        ? marked
+        : /^https?:/i.test(href)
+          ? href
+          : /^mailto:/i.test(href)
+            ? href
+            : "";
       if (/^https?:/i.test(url)) {
-        const confirmed = await api.showNativeConfirm(
-          strings.appName,
-          strings.reader.openLink(url),
-        );
-        if (confirmed) {
-          void openUrl(url);
-        }
+        void handleExternalLink(url);
+        return;
       }
       if (/^mailto:/i.test(url)) openComposer({ prefill: parseMailto(url) });
     };
+    const blockNativeOpen = (event: Event) => {
+      if (
+        (event.target as HTMLElement).closest("a[href], a[data-external-href]")
+      ) {
+        event.preventDefault();
+      }
+    };
     body.addEventListener("click", handleLink);
     body.addEventListener("auxclick", handleLink);
+    body.addEventListener("contextmenu", blockNativeOpen);
+    frameLinkCleanup.current = () => {
+      body.removeEventListener("click", handleLink);
+      body.removeEventListener("auxclick", handleLink);
+      body.removeEventListener("contextmenu", blockNativeOpen);
+    };
   }
+
+  useEffect(
+    () => () => {
+      frameLinkCleanup.current?.();
+    },
+    [],
+  );
 
   async function loadImages() {
     if (!sanitized || loadingImages || !messageId) return;
@@ -302,9 +520,18 @@ export function MessageReader() {
             const url = image.dataset.remoteSrc;
             if (!url) return;
             try {
-              image.src = await api.fetchRemoteImage(url);
+              const result = await api.fetchRemoteImage(url);
+              if (result.status === "blocked") {
+                image.dataset.contentBlocked = "true";
+                image.alt = strings.reader.filteredImage;
+              } else if (result.status === "reportedThreat") {
+                image.dataset.threatBlocked = "true";
+                image.alt = strings.reader.threatImage;
+              } else {
+                image.src = result.dataUrl;
+                image.classList.remove("remote-image-blocked");
+              }
               image.removeAttribute("data-remote-src");
-              image.classList.remove("remote-image-blocked");
             } catch {
               // Keep placeholder on individual image error without blocking other images
             }
@@ -684,10 +911,11 @@ export function MessageReader() {
   return (
     <article
       className="reader-pane"
+      id="reader-pane"
       aria-labelledby="message-title"
-      ref={isOverlay ? dialogRef : undefined}
-      role={isOverlay ? "dialog" : undefined}
-      aria-modal={isOverlay ? "true" : undefined}
+      ref={treatAsOverlay ? dialogRef : undefined}
+      role={treatAsOverlay ? "dialog" : undefined}
+      aria-modal={treatAsOverlay ? "true" : undefined}
     >
       <div
         className="reader-actions"
@@ -714,143 +942,186 @@ export function MessageReader() {
             <X aria-hidden="true" />
           </button>
         ) : null}
-        <button
-          type="button"
-          onClick={() =>
-            openComposer({ sourceMessage: message, composeMode: "reply" })
-          }
-        >
-          <Reply aria-hidden="true" />
-          {strings.reader.reply}
-        </button>
-        <button
-          type="button"
-          onClick={() =>
-            openComposer({ sourceMessage: message, composeMode: "replyAll" })
-          }
-        >
-          <ReplyAll aria-hidden="true" />
-          {strings.reader.replyAll}
-        </button>
-        <button
-          type="button"
-          onClick={() => void forwardMessage()}
-          disabled={preparingForward}
-        >
-          <Forward aria-hidden="true" />
-          {preparingForward ? strings.reader.preparing : strings.reader.forward}
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            if (frame.current?.contentWindow) {
-              frame.current.contentWindow.focus();
-              frame.current.contentWindow.print();
-            } else {
-              window.print();
+        <div className="reader-primary-actions">
+          <button
+            type="button"
+            onClick={() =>
+              openComposer({ sourceMessage: message, composeMode: "reply" })
             }
-          }}
-          aria-label={strings.reader.print}
-          title={strings.reader.print}
-        >
-          <Printer aria-hidden="true" />
-        </button>
-        <span className="action-spacer" />
-        <button
-          type="button"
-          onClick={() => void setRead()}
-          aria-label={
-            message.isRead ? strings.reader.markUnread : strings.reader.markRead
-          }
-          title={
-            message.isRead ? strings.reader.markUnread : strings.reader.markRead
-          }
-        >
-          {message.isRead ? (
-            <Mail aria-hidden="true" />
-          ) : (
-            <MailOpen aria-hidden="true" />
-          )}
-        </button>
-        <button
-          type="button"
-          onClick={() => void setStarred()}
-          aria-label={
-            message.isStarred
-              ? strings.reader.removeStar
-              : strings.reader.addStar
-          }
-          title={
-            message.isStarred
-              ? strings.reader.removeStar
-              : strings.reader.addStar
-          }
-        >
-          <Star
-            aria-hidden="true"
-            fill={message.isStarred ? "currentColor" : "none"}
-          />
-        </button>
-        <button
-          type="button"
-          onClick={() => void move("archive")}
-          disabled={isArchiveMailbox}
-          aria-label={strings.reader.archive}
-          title={strings.reader.archive}
-        >
-          <Archive aria-hidden="true" />
-        </button>
-        <button
-          type="button"
-          onClick={() => void move("junk")}
-          disabled={isJunkMailbox}
-          aria-label={strings.reader.junk}
-          title={strings.reader.junk}
-        >
-          <ShieldAlert aria-hidden="true" />
-        </button>
-        <button
-          type="button"
-          onClick={() => void move("trash")}
-          disabled={isTrashMailbox}
-          aria-label={strings.reader.trash}
-          title={strings.reader.trash}
-        >
-          <Trash2 aria-hidden="true" />
-        </button>
-        <button
-          type="button"
-          onClick={() => setSnoozeOpen((value) => !value)}
-          aria-expanded={snoozeOpen}
-          aria-label={strings.reader.snooze}
-          title={strings.reader.snooze}
-        >
-          <Clock aria-hidden="true" />
-        </button>
-        <label className="move-control" title={strings.reader.moveFolder}>
-          <FolderInput aria-hidden="true" />
-          <select
-            aria-label={strings.reader.moveFolder}
-            value=""
-            onChange={(event) => {
-              const mailboxId = Number(event.target.value);
-              if (mailboxId) void moveToMailbox(mailboxId);
-            }}
           >
-            <option value="">{strings.reader.move}</option>
-            {mailboxes
-              .filter(
-                (mailbox) =>
-                  mailbox.accountId === message.accountId &&
-                  mailbox.id !== message.mailboxId,
-              )
-              .map((mailbox) => (
-                <option key={mailbox.id} value={mailbox.id}>
-                  {mailbox.displayName}
-                </option>
-              ))}
-          </select>
-        </label>
+            <Reply aria-hidden="true" />
+            {strings.reader.reply}
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              openComposer({ sourceMessage: message, composeMode: "replyAll" })
+            }
+          >
+            <ReplyAll aria-hidden="true" />
+            {strings.reader.replyAll}
+          </button>
+          <button
+            type="button"
+            onClick={() => void forwardMessage()}
+            disabled={preparingForward}
+          >
+            <Forward aria-hidden="true" />
+            {preparingForward
+              ? strings.reader.preparing
+              : strings.reader.forward}
+          </button>
+        </div>
+        <span className="action-spacer" />
+        <div className="reader-secondary-actions">
+          <button
+            type="button"
+            onClick={() => void move("archive")}
+            disabled={isArchiveMailbox}
+            aria-label={strings.reader.archive}
+            title={strings.reader.archive}
+          >
+            <Archive aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            onClick={() => void move("trash")}
+            disabled={isTrashMailbox}
+            aria-label={strings.reader.trash}
+            title={strings.reader.trash}
+          >
+            <Trash2 aria-hidden="true" />
+          </button>
+          <div className="reader-more" ref={moreMenuRef}>
+            <button
+              type="button"
+              onClick={() => setMoreOpen((value) => !value)}
+              aria-expanded={moreOpen}
+              aria-haspopup="menu"
+              aria-label={strings.reader.moreActions}
+              title={strings.reader.moreActions}
+            >
+              <MoreHorizontal aria-hidden="true" />
+            </button>
+            {moreOpen ? (
+              <div className="reader-more-menu" role="menu">
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    printMessage();
+                    setMoreOpen(false);
+                  }}
+                >
+                  <Printer aria-hidden="true" />
+                  {strings.reader.print}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    void setRead();
+                    setMoreOpen(false);
+                  }}
+                >
+                  {message.isRead ? (
+                    <Mail aria-hidden="true" />
+                  ) : (
+                    <MailOpen aria-hidden="true" />
+                  )}
+                  {message.isRead
+                    ? strings.reader.markUnread
+                    : strings.reader.markRead}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    void setStarred();
+                    setMoreOpen(false);
+                  }}
+                >
+                  <Star
+                    aria-hidden="true"
+                    fill={message.isStarred ? "currentColor" : "none"}
+                  />
+                  {message.isStarred
+                    ? strings.reader.removeStar
+                    : strings.reader.addStar}
+                </button>
+                {isJunkMailbox ? (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      const inbox = mailboxes.find(
+                        (box) => box.role === "inbox",
+                      );
+                      if (inbox) void moveToMailbox(inbox.id);
+                      setMoreOpen(false);
+                    }}
+                  >
+                    <ShieldCheck aria-hidden="true" />
+                    {strings.reader.notJunk}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      void move("junk");
+                      setMoreOpen(false);
+                    }}
+                  >
+                    <ShieldAlert aria-hidden="true" />
+                    {strings.reader.junk}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setSnoozeOpen(true);
+                    setMoreOpen(false);
+                  }}
+                >
+                  <Clock aria-hidden="true" />
+                  {strings.reader.snooze}
+                </button>
+                <label
+                  className="move-control"
+                  title={strings.reader.moveFolder}
+                >
+                  <FolderInput aria-hidden="true" />
+                  <select
+                    aria-label={strings.reader.moveFolder}
+                    value=""
+                    onChange={(event) => {
+                      const mailboxId = Number(event.target.value);
+                      if (mailboxId) {
+                        void moveToMailbox(mailboxId);
+                        setMoreOpen(false);
+                      }
+                    }}
+                  >
+                    <option value="">{strings.reader.move}</option>
+                    {mailboxes
+                      .filter(
+                        (mailbox) =>
+                          mailbox.accountId === message.accountId &&
+                          mailbox.id !== message.mailboxId,
+                      )
+                      .map((mailbox) => (
+                        <option key={mailbox.id} value={mailbox.id}>
+                          {mailbox.displayName}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              </div>
+            ) : null}
+          </div>
+        </div>
       </div>
       {snoozeOpen ? (
         <SnoozePanel
@@ -862,7 +1133,7 @@ export function MessageReader() {
         <h1
           id="message-title"
           ref={titleRef}
-          tabIndex={isOverlay ? -1 : undefined}
+          tabIndex={treatAsOverlay ? -1 : undefined}
         >
           {message.subject || strings.common.noSubject}
         </h1>
@@ -1021,6 +1292,18 @@ export function MessageReader() {
           </div>
         ) : null}
       </header>
+      {filteredImages > 0 ? (
+        <div className="remote-content-banner" role="status" aria-live="polite">
+          <ShieldCheck aria-hidden="true" />
+          <span>{strings.reader.filteredImages(filteredImages)}</span>
+        </div>
+      ) : null}
+      {threatImages > 0 ? (
+        <div className="remote-content-banner" role="status" aria-live="polite">
+          <ShieldAlert aria-hidden="true" />
+          <span>{strings.reader.threatImages(threatImages)}</span>
+        </div>
+      ) : null}
       {sanitized && remainingBlockedImages > 0 ? (
         <div className="remote-content-banner" role="status" aria-live="polite">
           <Image aria-hidden="true" />
@@ -1041,7 +1324,34 @@ export function MessageReader() {
           </button>
         </div>
       ) : null}
-      <div className="message-body">
+      {findOpen ? (
+        <form
+          className="message-find"
+          onSubmit={(event) => {
+            event.preventDefault();
+            findInMessage();
+          }}
+        >
+          <input
+            ref={findInputRef}
+            value={findQuery}
+            onChange={(event) => setFindQuery(event.target.value)}
+            placeholder={strings.reader.findInMessage}
+            aria-label={strings.reader.findInMessage}
+          />
+          <button type="submit">{strings.reader.findNext}</button>
+          <button
+            type="button"
+            onClick={() => {
+              setFindOpen(false);
+              setFindQuery("");
+            }}
+          >
+            {strings.common.close}
+          </button>
+        </form>
+      ) : null}
+      <div className="message-body" ref={bodyRef}>
         {!message.htmlBody && !message.textBody ? (
           <p className="plain-text-body" role="note">
             {message.size > 50 * 1024 * 1024
@@ -1052,7 +1362,8 @@ export function MessageReader() {
           <iframe
             ref={frame}
             title={strings.reader.messageContent}
-            sandbox="allow-same-origin"
+            tabIndex={0}
+            sandbox="allow-same-origin allow-modals"
             srcDoc={frameHtml}
             onLoad={wireFrameLinks}
           />
@@ -1251,6 +1562,14 @@ async function hydrateInlineImages(
   );
 }
 
+function escapePrint(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 function normalizeContentId(value: string): string {
   return value.trim().replace(/^cid:/i, "").replace(/^<|>$/g, "");
 }
@@ -1414,11 +1733,17 @@ function PlainTextContent({
           return (
             <a
               key={idx}
-              href={part.content}
+              href="#"
+              data-external-href={part.content}
               onClick={(e) => {
                 e.preventDefault();
                 onOpenLink(part.content);
               }}
+              onAuxClick={(e) => {
+                e.preventDefault();
+                onOpenLink(part.content);
+              }}
+              onContextMenu={(e) => e.preventDefault()}
             >
               {part.content}
             </a>
@@ -1427,11 +1752,16 @@ function PlainTextContent({
         return (
           <a
             key={idx}
-            href={part.content}
+            href="#"
             onClick={(e) => {
               e.preventDefault();
               onOpenMailto(part.content);
             }}
+            onAuxClick={(e) => {
+              e.preventDefault();
+              onOpenMailto(part.content);
+            }}
+            onContextMenu={(e) => e.preventDefault()}
           >
             {part.content.replace(/^mailto:/i, "")}
           </a>

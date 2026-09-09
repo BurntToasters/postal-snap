@@ -21,6 +21,8 @@ import type {
   AttachmentPreview,
   BulkOutcome,
   RecipientSuggestion,
+  ExternalLinkCheck,
+  RemoteImageResult,
   MessageChangeEvent,
   MessagePage,
   MessageSummary,
@@ -61,8 +63,87 @@ function inTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
+export type NativeCommand =
+  | "list_accounts"
+  | "test_account"
+  | "update_account_password"
+  | "add_account"
+  | "remove_account"
+  | "update_account_display_name"
+  | "update_account_signature"
+  | "get_account_inbox_counts"
+  | "list_mailboxes"
+  | "list_all_mailboxes"
+  | "sync_account"
+  | "sync_all_accounts"
+  | "list_messages"
+  | "get_message"
+  | "set_message_flags"
+  | "move_message"
+  | "move_message_to_mailbox"
+  | "set_messages_flags"
+  | "move_messages_to_mailbox"
+  | "mark_mailbox_read"
+  | "suggest_recipients"
+  | "create_folder"
+  | "rename_folder"
+  | "delete_folder"
+  | "empty_trash"
+  | "empty_junk"
+  | "search_cached_messages"
+  | "search_all_cached_messages"
+  | "search_server_messages"
+  | "save_draft"
+  | "list_drafts"
+  | "get_draft"
+  | "delete_draft"
+  | "send_message"
+  | "list_outbox"
+  | "get_outbox"
+  | "restore_outbox"
+  | "retry_outbox"
+  | "retry_sent_copy"
+  | "send_scheduled_outbox"
+  | "snooze_message"
+  | "unsnooze_message"
+  | "list_snoozed"
+  | "list_filter_rules"
+  | "create_filter_rule"
+  | "update_filter_rule"
+  | "delete_filter_rule"
+  | "delete_outbox"
+  | "save_attachment"
+  | "preview_attachment"
+  | "prepare_forward_attachments"
+  | "choose_attachments"
+  | "fetch_remote_image"
+  | "inspect_external_url"
+  | "open_external_url"
+  | "open_help_url"
+  | "read_message_inline_image"
+  | "read_compose_image"
+  | "release_compose_attachments"
+  | "get_settings"
+  | "save_settings"
+  | "set_mail_shortcut_guard"
+  | "export_settings"
+  | "import_settings"
+  | "reset_settings"
+  | "get_startup_notice"
+  | "get_startup_error"
+  | "get_cache_usage"
+  | "clear_downloaded_mail"
+  | "get_distribution_channel"
+  | "discover_account_aliases"
+  | "update_account_aliases"
+  | "show_native_confirm"
+  | "show_native_message"
+  | "relaunch_app"
+  | "supports_workspace_window_fx"
+  | "set_workspace_window_fx";
+
 async function call<T>(
-  command: string,
+  command: NativeCommand,
   args: Record<string, unknown> = {},
 ): Promise<T> {
   if (!inTauri())
@@ -167,6 +248,7 @@ export const api = {
   deleteFolder: (accountId: string, mailboxId: number) =>
     call<void>("delete_folder", { accountId, mailboxId }),
   emptyTrash: (accountId: string) => call<void>("empty_trash", { accountId }),
+  emptyJunk: (accountId: string) => call<void>("empty_junk", { accountId }),
   searchCached: (query: SearchQuery) =>
     call<MessageSummary[]>("search_cached_messages", { query }),
   searchAllCached: (query: string, limit?: number) =>
@@ -187,6 +269,8 @@ export const api = {
     call<OutboxSummary[]>("list_outbox", { accountId }),
   getOutbox: (outboxId: string, accountId: string) =>
     call<ComposeDraft>("get_outbox", { outboxId, accountId }),
+  restoreOutbox: (outboxId: string, accountId: string) =>
+    call<ComposeDraft>("restore_outbox", { outboxId, accountId }),
   retryOutbox: (outboxId: string, accountId: string) =>
     call<SendOutcome>("retry_outbox", { outboxId, accountId }),
   retrySentCopy: (outboxId: string, accountId: string) =>
@@ -239,7 +323,12 @@ export const api = {
   chooseAttachments: (accountId: string, inline: boolean) =>
     call<ComposeAttachment[]>("choose_attachments", { accountId, inline }),
   fetchRemoteImage: (url: string) =>
-    call<string>("fetch_remote_image", { url }),
+    call<RemoteImageResult>("fetch_remote_image", { url }),
+  inspectExternalUrl: (url: string) =>
+    call<ExternalLinkCheck>("inspect_external_url", { url }),
+  openExternalUrl: (url: string, openAnyway = false) =>
+    call<void>("open_external_url", { url, openAnyway }),
+  openHelpUrl: () => call<void>("open_help_url"),
   readMessageInlineImage: (
     accountId: string,
     messageId: number,
@@ -255,12 +344,20 @@ export const api = {
   releaseComposeAttachments: (accountId: string, tokens: string[]) =>
     call<void>("release_compose_attachments", { accountId, tokens }),
   getSettings: () => call<AppSettings>("get_settings"),
-  saveSettings: (settings: AppSettings) =>
+  saveSettings: (settings: AppSettings, confirmToken?: string) =>
     queueSettings(
-      () => call<AppSettings>("save_settings", { settings }),
+      () =>
+        call<AppSettings>(
+          "save_settings",
+          confirmToken ? { settings, confirmToken } : { settings },
+        ),
       settingsGeneration,
       () => call<AppSettings>("get_settings"),
     ),
+  setMailShortcutGuard: (guarded: boolean) =>
+    inTauri()
+      ? call<void>("set_mail_shortcut_guard", { guarded })
+      : Promise.resolve(),
   exportSettings: () => queueSettings(() => call<boolean>("export_settings")),
   importSettings: () => {
     return queueSettings(async () => {

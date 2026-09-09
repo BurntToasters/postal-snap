@@ -90,6 +90,9 @@ if (requireWindowsSigning && windowsSigning.skipSigning) {
     "[tauri-build] SKIP_WIN_CODESIGN=1; producing unsigned Windows artifacts.",
   );
 }
+if (requireWindowsSigning && !windowsSigning.skipSigning) {
+  process.env.POSTAL_SNAP_REQUIRE_WIN_CODESIGN = "1";
+}
 if (requireMacosSigning) requireEnv(["APPLE_SIGNING_IDENTITY"]);
 if (requireMacosNotarization) {
   const apiCredentials =
@@ -134,6 +137,7 @@ try {
   const updaterOverride = storeBuild
     ? { plugins: { updater: null } }
     : {
+        app: { macOSPrivateApi: true },
         plugins: {
           updater: {
             pubkey: resolveUpdaterPublicKey({
@@ -209,6 +213,8 @@ if (!noBundle) {
         artifactSigningPowershellArgs(signScript, ["-FilePath", artifact]),
       );
     }
+    await keepEmittedWindowsUpdaterZip(bundleOutputDir);
+    await resignWindowsUpdaterSignatures(bundleOutputDir);
     await run(
       "powershell.exe",
       artifactSigningPowershellArgs(
@@ -221,6 +227,10 @@ if (!noBundle) {
     {
       test: (path) => path.endsWith("-setup.exe"),
       name: `Postal-Snap-Windows-${arch}.exe`,
+    },
+    {
+      test: (path) => path.endsWith("-setup.exe.sig"),
+      name: `Postal-Snap-Windows-${arch}.exe.sig`,
     },
     { test: (path) => path.endsWith(".dmg"), name: "Postal-Snap-macOS.dmg" },
     {
@@ -273,6 +283,30 @@ if (!noBundle) {
       );
     }
   }
+  if (requireTauriSigning && process.platform === "win32") {
+    const required = [
+      `Postal-Snap-Windows-${arch}.exe`,
+      `Postal-Snap-Windows-${arch}.exe.sig`,
+    ];
+    const missing = required.filter((name) => !collected.has(name));
+    if (missing.length) {
+      throw new Error(
+        `Signed Windows build did not produce required updater artifacts: ${missing.join(", ")}`,
+      );
+    }
+  }
+  if (requireTauriSigning && process.platform === "linux") {
+    const required = [
+      `Postal-Snap-Linux-${arch}.AppImage.tar.gz`,
+      `Postal-Snap-Linux-${arch}.AppImage.tar.gz.sig`,
+    ];
+    const missing = required.filter((name) => !collected.has(name));
+    if (missing.length) {
+      throw new Error(
+        `Signed Linux build did not produce required updater artifacts: ${missing.join(", ")}`,
+      );
+    }
+  }
   if (requireMacosSigning && process.platform === "darwin") {
     const info = await newestMatching(bundleOutputDir, (path) =>
       path.endsWith("Postal Snap.app/Contents/Info.plist"),
@@ -286,11 +320,100 @@ if (!noBundle) {
       "--verbose=2",
       app,
     ]);
+    const display = await output("codesign", ["--display", "--verbose=4", app]);
+    if (!/\bflags=.*runtime/.test(display)) {
+      throw new Error("Postal Snap.app is missing the Hardened Runtime flag.");
+    }
+    if (!/Developer ID Application/.test(display)) {
+      throw new Error(
+        "Postal Snap.app is not signed with Developer ID Application.",
+      );
+    }
+    const binary = join(app, "Contents/MacOS/Postal Snap");
+    const archs = await output("lipo", ["-archs", binary]);
+    if (!/\bx86_64\b/.test(archs) || !/\barm64\b/.test(archs)) {
+      throw new Error(
+        `Postal Snap.app is not a universal binary: ${archs.trim()}`,
+      );
+    }
     if (requireMacosNotarization) {
       await run("xcrun", ["stapler", "validate", app]);
+      const dmg = join(release, "Postal-Snap-macOS.dmg");
+      await notarizeAppleArtifact(dmg);
+      await run("xcrun", ["stapler", "staple", dmg]);
+      await run("xcrun", ["stapler", "validate", dmg]);
+      await run("spctl", ["--assess", "--type", "install", "--verbose=2", dmg]);
     }
     await run("spctl", ["--assess", "--type", "execute", "--verbose=2", app]);
     await run("hdiutil", ["verify", join(release, "Postal-Snap-macOS.dmg")]);
   }
   console.log(`Collected ${pkg.name} ${pkg.version} artifacts in release/`);
+}
+
+async function keepEmittedWindowsUpdaterZip(bundleDir) {
+  const zip = await newestMatching(bundleDir, (path) =>
+    path.endsWith(".nsis.zip"),
+  );
+  if (!zip) return;
+  console.log(
+    `[tauri-build] Keeping Tauri NSIS updater zip as emitted: ${zip}`,
+  );
+}
+
+async function resignWindowsUpdaterSignatures(bundleDir) {
+  const payloads = [];
+  const setup = await newestMatching(bundleDir, (path) =>
+    path.endsWith("-setup.exe"),
+  );
+  if (setup) payloads.push(setup);
+  const zip = await newestMatching(bundleDir, (path) =>
+    path.endsWith(".nsis.zip"),
+  );
+  if (zip) payloads.push(zip);
+  for (const payload of payloads) {
+    console.log(
+      `[tauri-build] Replacing updater signature after Authenticode: ${payload}`,
+    );
+    await run("npm", ["run", "tauri", "--", "signer", "sign", payload]);
+  }
+}
+
+async function notarizeAppleArtifact(path) {
+  const hasApiKey = Boolean(
+    process.env.APPLE_API_KEY &&
+    process.env.APPLE_API_ISSUER &&
+    process.env.APPLE_API_KEY_PATH,
+  );
+  const hasAppleId = Boolean(
+    process.env.APPLE_ID &&
+    process.env.APPLE_PASSWORD &&
+    process.env.APPLE_TEAM_ID,
+  );
+  if (!hasApiKey && !hasAppleId) {
+    throw new Error(
+      "DMG notarization requires APPLE_API_KEY + APPLE_API_ISSUER + APPLE_API_KEY_PATH, or APPLE_ID + APPLE_PASSWORD + APPLE_TEAM_ID.",
+    );
+  }
+  const args = ["notarytool", "submit", path, "--wait"];
+  if (hasApiKey) {
+    args.push(
+      "--key",
+      process.env.APPLE_API_KEY_PATH,
+      "--key-id",
+      process.env.APPLE_API_KEY,
+      "--issuer",
+      process.env.APPLE_API_ISSUER,
+    );
+  } else {
+    args.push(
+      "--apple-id",
+      process.env.APPLE_ID,
+      "--password",
+      process.env.APPLE_PASSWORD,
+      "--team-id",
+      process.env.APPLE_TEAM_ID,
+    );
+  }
+  console.log(`[tauri-build] Submitting ${path} to notarytool`);
+  await run("xcrun", args);
 }

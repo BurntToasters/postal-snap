@@ -5,19 +5,123 @@ use reqwest::{header::LOCATION, redirect::Policy};
 use tokio::net::lookup_host;
 use url::Url;
 
+use crate::{content_blocking, threat_blocking};
+
 const MAX_REMOTE_IMAGE_BYTES: usize = 10 * 1024 * 1024;
 const MAX_REMOTE_IMAGE_TIME: std::time::Duration = std::time::Duration::from_secs(20);
 
-pub async fn fetch_public_image(raw_url: &str) -> Result<String, String> {
-    tokio::time::timeout(MAX_REMOTE_IMAGE_TIME, fetch_public_image_inner(raw_url))
-        .await
-        .map_err(|_| "The remote image took too long to load.".to_string())?
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProtectionPolicy {
+    pub block_advertising_and_tracking: bool,
+    pub block_reported_threats: bool,
 }
 
-async fn fetch_public_image_inner(raw_url: &str) -> Result<String, String> {
-    let mut target = validate_public_url(raw_url, None).await?;
+impl ProtectionPolicy {
+    #[cfg(test)]
+    pub const STRICT: Self = Self {
+        block_advertising_and_tracking: true,
+        block_reported_threats: true,
+    };
+}
+
+#[derive(serde::Serialize, Debug, PartialEq)]
+#[serde(tag = "status", rename_all = "camelCase")]
+pub enum RemoteImageResult {
+    Loaded {
+        #[serde(rename = "dataUrl")]
+        data_url: String,
+    },
+    Blocked,
+    ReportedThreat,
+}
+
+#[derive(serde::Serialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalLinkCheck {
+    pub url: String,
+    pub hostname: String,
+    pub reported_threat: bool,
+}
+
+enum PublicImageTarget {
+    Fetch(Url, String, Vec<SocketAddr>),
+    Blocked,
+    ReportedThreat,
+}
+
+pub async fn fetch_public_image(
+    raw_url: &str,
+    policy: ProtectionPolicy,
+) -> Result<RemoteImageResult, String> {
+    tokio::time::timeout(
+        MAX_REMOTE_IMAGE_TIME,
+        fetch_public_image_inner(raw_url, policy),
+    )
+    .await
+    .map_err(|_| "The remote image took too long to load.".to_string())?
+}
+
+pub fn inspect_external_link(
+    raw_url: &str,
+    policy: ProtectionPolicy,
+) -> Result<ExternalLinkCheck, String> {
+    if raw_url.len() > 16 * 1024 {
+        return Err("That link is too long.".into());
+    }
+    let url =
+        Url::parse(raw_url).map_err(|_| "That link is not a valid web address.".to_string())?;
+    if !matches!(url.scheme(), "http" | "https")
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err("Postal Snap can only open ordinary web links.".into());
+    }
+    let hostname = url
+        .host_str()
+        .ok_or_else(|| "That link is not a valid web address.".to_string())?
+        .to_string();
+    Ok(ExternalLinkCheck {
+        url: url.as_str().to_string(),
+        hostname,
+        reported_threat: policy.block_reported_threats && threat_blocking::reports_url(&url),
+    })
+}
+
+pub fn authorize_external_open(check: &ExternalLinkCheck, open_anyway: bool) -> Result<(), String> {
+    if check.reported_threat && !open_anyway {
+        return Err(
+            "That address was reported as potentially dangerous. Confirm again if you still want to open it."
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+pub fn detect_image_mime(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if bytes.starts_with(b"\xff\xd8\xff") {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
+}
+
+async fn fetch_public_image_inner(
+    raw_url: &str,
+    policy: ProtectionPolicy,
+) -> Result<RemoteImageResult, String> {
+    let mut target = validate_public_url(raw_url, None, policy).await?;
     for _ in 0..5 {
-        let (url, host, addresses) = target;
+        let (url, host, addresses) = match target {
+            PublicImageTarget::Blocked => return Ok(RemoteImageResult::Blocked),
+            PublicImageTarget::ReportedThreat => return Ok(RemoteImageResult::ReportedThreat),
+            PublicImageTarget::Fetch(url, host, addresses) => (url, host, addresses),
+        };
         // Pin this request to the public addresses we validated. Otherwise a
         // second DNS lookup could be rebound to a private network address.
         let client = reqwest::Client::builder()
@@ -46,7 +150,7 @@ async fn fetch_public_image_inner(raw_url: &str) -> Result<String, String> {
             let redirected = url
                 .join(location)
                 .map_err(|_| "The image server returned an unsafe redirect.".to_string())?;
-            target = validate_public_url(redirected.as_str(), Some(url.scheme())).await?;
+            target = validate_public_url(redirected.as_str(), Some(url.scheme()), policy).await?;
             continue;
         }
         if !response.status().is_success() {
@@ -90,10 +194,14 @@ async fn fetch_public_image_inner(raw_url: &str) -> Result<String, String> {
             }
             bytes.extend_from_slice(&chunk);
         }
-        return Ok(format!(
-            "data:{content_type};base64,{}",
-            STANDARD.encode(bytes)
-        ));
+        let sniffed = detect_image_mime(&bytes)
+            .ok_or_else(|| "The remote resource is not a supported image.".to_string())?;
+        if sniffed != content_type {
+            return Err("The remote resource is not a supported image.".into());
+        }
+        return Ok(RemoteImageResult::Loaded {
+            data_url: format!("data:{sniffed};base64,{}", STANDARD.encode(bytes)),
+        });
     }
     Err("The image server redirected too many times.".into())
 }
@@ -101,7 +209,30 @@ async fn fetch_public_image_inner(raw_url: &str) -> Result<String, String> {
 async fn validate_public_url(
     raw_url: &str,
     previous_scheme: Option<&str>,
-) -> Result<(Url, String, Vec<SocketAddr>), String> {
+    policy: ProtectionPolicy,
+) -> Result<PublicImageTarget, String> {
+    validate_public_url_with_resolver(raw_url, previous_scheme, policy, |host, port| async move {
+        lookup_host((host.as_str(), port))
+            .await
+            .map(|addresses| addresses.collect())
+            .map_err(|_| "Could not resolve the image server.".to_string())
+    })
+    .await
+}
+
+async fn validate_public_url_with_resolver<F, Fut>(
+    raw_url: &str,
+    previous_scheme: Option<&str>,
+    policy: ProtectionPolicy,
+    resolve: F,
+) -> Result<PublicImageTarget, String>
+where
+    F: FnOnce(String, u16) -> Fut,
+    Fut: std::future::Future<Output = Result<Vec<SocketAddr>, String>>,
+{
+    if raw_url.len() > 16 * 1024 {
+        return Err("The image address is too long.".into());
+    }
     let url = Url::parse(raw_url).map_err(|_| "Invalid image address.".to_string())?;
     if !matches!(url.scheme(), "http" | "https")
         || !url.username().is_empty()
@@ -125,9 +256,13 @@ async fn validate_public_url(
     if !matches!(port, 80 | 443) {
         return Err("Images may only be loaded from standard web ports.".into());
     }
-    let resolved = lookup_host((host.as_str(), port))
-        .await
-        .map_err(|_| "Could not resolve the image server.".to_string())?;
+    if policy.block_reported_threats && threat_blocking::reports_url(&url) {
+        return Ok(PublicImageTarget::ReportedThreat);
+    }
+    if policy.block_advertising_and_tracking && content_blocking::blocks_image(&url).await? {
+        return Ok(PublicImageTarget::Blocked);
+    }
+    let resolved = resolve(host.clone(), port).await?;
     let mut addresses = Vec::new();
     for address in resolved {
         if !is_public_ip(address.ip()) {
@@ -138,7 +273,7 @@ async fn validate_public_url(
     if addresses.is_empty() {
         return Err("Could not resolve the image server.".into());
     }
-    Ok((url, host, addresses))
+    Ok(PublicImageTarget::Fetch(url, host, addresses))
 }
 
 fn is_public_ip(ip: IpAddr) -> bool {
@@ -281,12 +416,254 @@ pub fn safe_filename(value: &str) -> String {
 }
 
 pub fn redact_error(_error: &dyn std::fmt::Display, action: &str) -> String {
-    format!("{action} failed. Check the server settings, password, and internet connection.")
+    format!("{action} failed. Check the mail server, password, and internet connection.")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn blocks_tracking_images_before_dns_including_redirect_targets() {
+        for previous_scheme in [None, Some("https")] {
+            let target = validate_public_url_with_resolver(
+                "https://images.example.test/email/track/pixel.gif",
+                previous_scheme,
+                ProtectionPolicy::STRICT,
+                |_, _| async { panic!("Blocked images must never resolve DNS") },
+            )
+            .await
+            .unwrap();
+            assert!(matches!(target, PublicImageTarget::Blocked));
+        }
+        assert_eq!(
+            fetch_public_image(
+                "https://images.example.test/email/track/pixel.gif",
+                ProtectionPolicy::STRICT,
+            )
+            .await
+            .unwrap(),
+            RemoteImageResult::Blocked,
+        );
+    }
+
+    #[tokio::test]
+    async fn blocks_reported_threat_images_before_dns_including_redirect_targets() {
+        let domain = crate::threat_blocking::test_listed_domain();
+        let url = format!("https://{domain}/family/photo.jpg");
+        for previous_scheme in [None, Some("https")] {
+            let target = validate_public_url_with_resolver(
+                &url,
+                previous_scheme,
+                ProtectionPolicy::STRICT,
+                |_, _| async { panic!("Reported-threat images must never resolve DNS") },
+            )
+            .await
+            .unwrap();
+            assert!(matches!(target, PublicImageTarget::ReportedThreat));
+        }
+        assert_eq!(
+            fetch_public_image(&url, ProtectionPolicy::STRICT)
+                .await
+                .unwrap(),
+            RemoteImageResult::ReportedThreat,
+        );
+    }
+
+    #[tokio::test]
+    async fn filtering_preserves_url_and_dns_safety_checks() {
+        for url in [
+            "file:///photo.png",
+            "https://name:password@images.example.test/photo.jpg",
+            "https://localhost/photo.jpg",
+            "https://images.example.test:8080/photo.jpg",
+            "http://images.example.test/photo.jpg",
+        ] {
+            assert!(validate_public_url_with_resolver(
+                url,
+                Some("https"),
+                ProtectionPolicy::STRICT,
+                |_, _| async { panic!("Unsafe image URL must never resolve DNS") },
+            )
+            .await
+            .is_err());
+        }
+        for addresses in [
+            vec!["127.0.0.1:443"],
+            vec!["8.8.8.8:443", "10.0.0.1:443"],
+            vec![],
+        ] {
+            assert!(validate_public_url_with_resolver(
+                "https://images.example.test/photo.jpg",
+                None,
+                ProtectionPolicy::STRICT,
+                |_, _| async {
+                    Ok(addresses
+                        .iter()
+                        .map(|value| value.parse().unwrap())
+                        .collect())
+                },
+            )
+            .await
+            .is_err());
+        }
+        let target = validate_public_url_with_resolver(
+            "https://images.example.test/photo.jpg?signature=synthetic",
+            None,
+            ProtectionPolicy::STRICT,
+            |host, port| async move {
+                assert_eq!(host, "images.example.test");
+                assert_eq!(port, 443);
+                Ok(vec!["8.8.8.8:443".parse().unwrap()])
+            },
+        )
+        .await
+        .unwrap();
+        let PublicImageTarget::Fetch(parsed, _, addresses) = target else {
+            panic!("safe image URL should be fetchable");
+        };
+        assert_eq!(parsed.query(), Some("signature=synthetic"));
+        assert_eq!(
+            addresses,
+            vec!["8.8.8.8:443".parse::<SocketAddr>().unwrap()]
+        );
+    }
+
+    #[test]
+    fn inspects_external_links_without_claiming_they_are_safe() {
+        let clean = inspect_external_link(
+            "https://Library.example.test/hours",
+            ProtectionPolicy::STRICT,
+        )
+        .unwrap();
+        assert_eq!(clean.hostname, "library.example.test");
+        assert!(!clean.reported_threat);
+        assert!(clean.url.starts_with("https://"));
+
+        let domain = crate::threat_blocking::test_listed_domain();
+        let reported = inspect_external_link(
+            &format!("https://mail.{domain}/login"),
+            ProtectionPolicy::STRICT,
+        )
+        .unwrap();
+        assert_eq!(reported.hostname, format!("mail.{domain}"));
+        assert!(reported.reported_threat);
+        let allowed = inspect_external_link(
+            &format!("https://mail.{domain}/login"),
+            ProtectionPolicy {
+                block_advertising_and_tracking: true,
+                block_reported_threats: false,
+            },
+        )
+        .unwrap();
+        assert!(!allowed.reported_threat);
+
+        assert!(inspect_external_link(
+            "https://name:password@library.example.test/hours",
+            ProtectionPolicy::STRICT
+        )
+        .is_err());
+        assert!(inspect_external_link("javascript:alert(1)", ProtectionPolicy::STRICT).is_err());
+        let idn =
+            inspect_external_link("https://xn--pple-43d.com/", ProtectionPolicy::STRICT).unwrap();
+        assert_eq!(idn.hostname, "xn--pple-43d.com");
+        authorize_external_open(&reported, false).unwrap_err();
+        authorize_external_open(&reported, true).unwrap();
+        authorize_external_open(&clean, false).unwrap();
+    }
+
+    #[test]
+    fn image_magic_bytes_are_required() {
+        assert_eq!(
+            detect_image_mime(b"\x89PNG\r\n\x1a\nrest"),
+            Some("image/png")
+        );
+        assert_eq!(detect_image_mime(b"<html>not an image"), None);
+        assert_eq!(detect_image_mime(b"GIF89a...."), Some("image/gif"));
+    }
+
+    #[tokio::test]
+    async fn protection_toggles_skip_list_checks_but_keep_ssrf_rules() {
+        let tracker = validate_public_url_with_resolver(
+            "https://images.example.test/email/track/pixel.gif",
+            None,
+            ProtectionPolicy {
+                block_advertising_and_tracking: false,
+                block_reported_threats: true,
+            },
+            |host, port| async move {
+                assert_eq!(host, "images.example.test");
+                assert_eq!(port, 443);
+                Ok(vec!["8.8.8.8:443".parse().unwrap()])
+            },
+        )
+        .await
+        .unwrap();
+        assert!(matches!(tracker, PublicImageTarget::Fetch(_, _, _)));
+
+        let domain = crate::threat_blocking::test_listed_domain();
+        let url = format!("https://{domain}/family/photo.jpg");
+        let reported = validate_public_url_with_resolver(
+            &url,
+            None,
+            ProtectionPolicy {
+                block_advertising_and_tracking: true,
+                block_reported_threats: false,
+            },
+            |host, port| async move {
+                assert_eq!(host, domain);
+                assert_eq!(port, 443);
+                Ok(vec!["8.8.8.8:443".parse().unwrap()])
+            },
+        )
+        .await
+        .unwrap();
+        assert!(matches!(reported, PublicImageTarget::Fetch(_, _, _)));
+
+        assert!(validate_public_url_with_resolver(
+            "https://localhost/photo.jpg",
+            None,
+            ProtectionPolicy {
+                block_advertising_and_tracking: false,
+                block_reported_threats: false,
+            },
+            |_, _| async { panic!("Private-network images must never resolve DNS") },
+        )
+        .await
+        .is_err());
+    }
+
+    #[test]
+    fn remote_image_results_are_typed_and_redacted() {
+        assert_eq!(
+            serde_json::to_value(RemoteImageResult::Blocked).unwrap(),
+            serde_json::json!({"status": "blocked"})
+        );
+        assert_eq!(
+            serde_json::to_value(RemoteImageResult::Loaded {
+                data_url: "data:image/png;base64,".into()
+            })
+            .unwrap(),
+            serde_json::json!({"status": "loaded", "dataUrl": "data:image/png;base64,"})
+        );
+        assert_eq!(
+            serde_json::to_value(RemoteImageResult::ReportedThreat).unwrap(),
+            serde_json::json!({"status": "reportedThreat"})
+        );
+        assert_eq!(
+            serde_json::to_value(ExternalLinkCheck {
+                url: "https://library.example.test/hours".into(),
+                hostname: "library.example.test".into(),
+                reported_threat: false,
+            })
+            .unwrap(),
+            serde_json::json!({
+                "url": "https://library.example.test/hours",
+                "hostname": "library.example.test",
+                "reportedThreat": false
+            })
+        );
+    }
 
     #[test]
     fn blocks_non_public_addresses() {

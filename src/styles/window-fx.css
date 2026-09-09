@@ -1,7 +1,7 @@
 /* ==========================================================================
    Native Window Blur & Vibrancy
    Mirrored from Zinnia (macOS vibrancy / Windows Mica & Acrylic).
-   Everything but the rendered email will have it.
+   App chrome may be translucent. Rendered email stays fully opaque.
    ========================================================================== */
 
 /* 1. Root & Shell Translucency */
@@ -11,80 +11,82 @@ html[data-window-fx="vibrant"] body {
 }
 
 html[data-window-fx="vibrant"] .mail-shell {
-  background: color-mix(in srgb, var(--canvas) 68%, transparent) !important;
+  background: color-mix(in srgb, var(--canvas) 72%, transparent) !important;
 }
 
 /* 2. Sidebars, Toolbars, and Lists: Translucent Glass */
 html[data-window-fx="vibrant"] .app-toolbar {
-  background: color-mix(in srgb, var(--surface) 60%, transparent) !important;
-  backdrop-filter: blur(20px) saturate(140%);
-  -webkit-backdrop-filter: blur(20px) saturate(140%);
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  background: color-mix(in srgb, var(--surface) 62%, transparent) !important;
+  backdrop-filter: blur(22px) saturate(140%);
+  -webkit-backdrop-filter: blur(22px) saturate(140%);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
 }
 
 html[data-window-fx="vibrant"] .folder-pane {
   background: color-mix(
     in srgb,
-    var(--surface-muted) 55%,
+    var(--surface-muted) 58%,
     transparent
   ) !important;
-  backdrop-filter: blur(20px) saturate(130%);
-  -webkit-backdrop-filter: blur(20px) saturate(130%);
-  border-right: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
-}
-
-html[data-window-fx="vibrant"] .message-pane {
-  background: color-mix(in srgb, var(--surface) 50%, transparent) !important;
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(22px) saturate(130%);
+  -webkit-backdrop-filter: blur(22px) saturate(130%);
   border-right: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
 }
 
+html[data-window-fx="vibrant"] .message-pane {
+  background: color-mix(in srgb, var(--surface) 55%, transparent) !important;
+  backdrop-filter: blur(18px) saturate(120%);
+  -webkit-backdrop-filter: blur(18px) saturate(120%);
+  border-right: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+}
+
 html[data-window-fx="vibrant"] .reader-pane {
-  background: color-mix(in srgb, var(--canvas) 50%, transparent) !important;
+  background: color-mix(in srgb, var(--canvas) 55%, transparent) !important;
 }
 
-html[data-window-fx="vibrant"] .reader-actions {
-  background: color-mix(in srgb, var(--surface) 60%, transparent) !important;
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-}
-
-html[data-window-fx="vibrant"] .message-header {
-  background: color-mix(in srgb, var(--surface) 60%, transparent) !important;
+html[data-window-fx="vibrant"] .reader-actions,
+html[data-window-fx="vibrant"] .message-header,
+html[data-window-fx="vibrant"] .remote-content-banner {
+  background: color-mix(in srgb, var(--surface) 68%, transparent) !important;
+  backdrop-filter: blur(16px) saturate(130%);
+  -webkit-backdrop-filter: blur(16px) saturate(130%);
 }
 
 /* 3. Modals and Composer Glass */
-html[data-window-fx="vibrant"] .composer-window {
-  background: color-mix(in srgb, var(--surface) 75%, transparent) !important;
-  backdrop-filter: blur(24px) saturate(140%);
-  -webkit-backdrop-filter: blur(24px) saturate(140%);
-  box-shadow:
-    0 16px 40px rgba(0, 0, 0, 0.28),
-    inset 0 1px 0 rgba(255, 255, 255, 0.1);
-}
-
-html[data-window-fx="vibrant"] .modal {
-  background: color-mix(in srgb, var(--surface) 80%, transparent) !important;
+html[data-window-fx="vibrant"] .composer-window,
+html[data-window-fx="vibrant"] .settings-window,
+html[data-window-fx="vibrant"] .setup-card,
+html[data-window-fx="vibrant"] .attachment-preview-dialog {
+  background: color-mix(in srgb, var(--surface) 78%, transparent) !important;
   backdrop-filter: blur(28px) saturate(140%);
   -webkit-backdrop-filter: blur(28px) saturate(140%);
+  box-shadow:
+    var(--shadow),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
-/* 4. CRITICAL EXCLUSION: EVERYTHING BUT THE RENDERED EMAIL WILL HAVE IT */
-/* The rendered email content MUST remain completely opaque for readability,
-   proper sender HTML display, and contrast. */
+html[data-window-fx="vibrant"] .composer-window .tiptap,
+html[data-window-fx="vibrant"] .settings-content,
+html[data-window-fx="vibrant"] .setup-card input,
+html[data-window-fx="vibrant"] .setup-card select,
+html[data-window-fx="vibrant"] .setup-card textarea {
+  background: var(--surface) !important;
+}
+
+/* 4. CRITICAL EXCLUSION: rendered email stays completely opaque */
+html[data-window-fx="vibrant"] .message-body,
+html[data-window-fx="vibrant"] .message-body iframe,
+html[data-window-fx="vibrant"] .message-body .plain-text-body,
+html[data-window-fx="vibrant"] .message-body pre {
+  background: #ffffff !important;
+  color-scheme: light !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
 html[data-window-fx="vibrant"] .message-body {
-  background: var(--surface) !important;
-  border-radius: 12px;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
-}
-
-html[data-window-fx="vibrant"] .message-body iframe {
-  background: var(--surface) !important;
-}
-
-html[data-window-fx="vibrant"] .message-body .plain-text-body {
-  background: var(--surface) !important;
+  border-radius: var(--radius-md);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 70%, transparent);
 }
 
 /* 5. Solid opaque shell when native FX is off */

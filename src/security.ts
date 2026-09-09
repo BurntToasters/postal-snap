@@ -23,8 +23,8 @@ export function sanitizeReceivedHtml(input: string): SanitizedMail {
       if (attribute.name === "background")
         element.removeAttribute(attribute.name);
       if (
-        attribute.name === "data-remote-src" ||
-        attribute.name === "data-inline-cid"
+        attribute.name === "data-content-blocked" ||
+        attribute.name === "data-threat-blocked"
       ) {
         element.removeAttribute(attribute.name);
       }
@@ -43,6 +43,10 @@ export function sanitizeReceivedHtml(input: string): SanitizedMail {
 
   for (const image of doc.querySelectorAll<HTMLImageElement>("img")) {
     const src = image.getAttribute("src")?.trim() ?? "";
+    const markedRemote = image.getAttribute("data-remote-src")?.trim() ?? "";
+    const markedCid = image.getAttribute("data-inline-cid")?.trim() ?? "";
+    image.removeAttribute("data-remote-src");
+    image.removeAttribute("data-inline-cid");
     if (REMOTE_IMAGE.test(src)) {
       image.dataset.remoteSrc = src.startsWith("//") ? `https:${src}` : src;
       image.removeAttribute("src");
@@ -57,6 +61,18 @@ export function sanitizeReceivedHtml(input: string): SanitizedMail {
         .slice(0, 512);
       image.removeAttribute("src");
       image.alt = image.alt || "Inline image";
+    } else if (REMOTE_IMAGE.test(markedRemote)) {
+      image.dataset.remoteSrc = markedRemote.startsWith("//")
+        ? `https:${markedRemote}`
+        : markedRemote;
+      image.removeAttribute("src");
+      image.alt = image.alt || "Remote image blocked";
+      image.classList.add("remote-image-blocked");
+      blockedImages += 1;
+    } else if (markedCid) {
+      image.dataset.inlineCid = markedCid.replace(/^<|>$/g, "").slice(0, 512);
+      image.removeAttribute("src");
+      image.alt = image.alt || "Inline image";
     } else if (
       src &&
       !/^(?:blob:|data:image\/(?:png|jpeg|gif|webp);base64,)/i.test(src)
@@ -65,9 +81,25 @@ export function sanitizeReceivedHtml(input: string): SanitizedMail {
     }
   }
 
-  for (const link of doc.querySelectorAll<HTMLAnchorElement>("a[href]")) {
+  for (const link of doc.querySelectorAll<HTMLAnchorElement>("a")) {
     const href = link.getAttribute("href")?.trim() ?? "";
-    if (!/^(https?:|mailto:)/i.test(href)) link.removeAttribute("href");
+    const marked = link.getAttribute("data-external-href")?.trim() ?? "";
+    const http = REMOTE_IMAGE.test(href)
+      ? href.startsWith("//")
+        ? `https:${href}`
+        : href
+      : REMOTE_IMAGE.test(marked)
+        ? marked.startsWith("//")
+          ? `https:${marked}`
+          : marked
+        : "";
+    if (http) {
+      link.setAttribute("data-external-href", http);
+      link.setAttribute("href", "#");
+    } else if (!/^mailto:/i.test(href) && href !== "#") {
+      link.removeAttribute("href");
+      link.removeAttribute("data-external-href");
+    }
     link.setAttribute("rel", "noopener noreferrer");
   }
 
@@ -91,10 +123,46 @@ export function sanitizeReceivedHtml(input: string): SanitizedMail {
       "picture",
     ],
     FORBID_ATTR: ["srcset", "ping", "formaction", "background", "poster"],
-    ALLOW_DATA_ATTR: true,
+    ALLOW_DATA_ATTR: false,
+    ADD_ATTR: [
+      "data-remote-src",
+      "data-inline-cid",
+      "data-external-href",
+      "class",
+      "alt",
+    ],
   });
 
   return { html: clean, blockedImages };
+}
+
+export function sanitizeComposeHtml(input: string): string {
+  const { html } = sanitizeReceivedHtml(input);
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  for (const image of doc.querySelectorAll<HTMLImageElement>(
+    "img[data-inline-cid]",
+  )) {
+    const cid = image.getAttribute("data-inline-cid");
+    if (!cid) continue;
+    image.setAttribute("src", `cid:${cid}`);
+    image.removeAttribute("data-inline-cid");
+  }
+  return doc.body.innerHTML || "<p></p>";
+}
+
+export function restoreComposeHtmlLinks(input: string): string {
+  const doc = new DOMParser().parseFromString(
+    sanitizeComposeHtml(input),
+    "text/html",
+  );
+  for (const link of doc.querySelectorAll<HTMLAnchorElement>(
+    "a[data-external-href]",
+  )) {
+    const url = link.getAttribute("data-external-href")?.trim() ?? "";
+    if (/^https?:/i.test(url)) link.setAttribute("href", url);
+    link.removeAttribute("data-external-href");
+  }
+  return doc.body.innerHTML || "<p></p>";
 }
 
 export function messageFrameDocument(html: string, textScale = 1): string {
@@ -109,7 +177,7 @@ export function messageFrameDocument(html: string, textScale = 1): string {
     "object-src 'none'",
     "base-uri 'none'",
   ].join("; ");
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${policy}"><style>body{font:${fontSize}px/1.55 system-ui,sans-serif;color:#20252b;background:transparent;margin:16px;overflow-wrap:anywhere}img{max-width:100%;height:auto}.remote-image-blocked{display:inline-block;min-width:120px;min-height:40px;background:#eef2f6;border:1px solid #c8d2dc}a{color:#1264a3}</style></head><body>${html}</body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${policy}"><style>html,body{background:#ffffff !important;color-scheme:light}body{font:${fontSize}px/1.55 system-ui,sans-serif;color:#20252b;margin:16px;overflow-wrap:anywhere}img{max-width:100%;height:auto}.remote-image-blocked{display:inline-block;min-width:120px;min-height:40px;background:#eef2f6;border:1px solid #c8d2dc}a{color:#1264a3}</style></head><body>${html}</body></html>`;
 }
 
 export function htmlToPlainText(html: string): string {

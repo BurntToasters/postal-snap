@@ -1,11 +1,15 @@
 import { useEffect, useRef } from "react";
 
 const focusable =
-  'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])';
+  'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), iframe, [href], [tabindex]:not([tabindex="-1"])';
 
-export function useDialogFocus(onClose: () => void) {
+export function useDialogFocus(
+  onClose: () => void,
+  options?: { trapFocus?: boolean },
+) {
   const ref = useRef<HTMLElement>(null);
   const closeRef = useRef(onClose);
+  const trapFocus = options?.trapFocus ?? true;
 
   useEffect(() => {
     closeRef.current = onClose;
@@ -38,17 +42,25 @@ export function useDialogFocus(onClose: () => void) {
     function onKeyDown(event: KeyboardEvent) {
       const currentDialog = ref.current;
       if (!currentDialog || !document.contains(currentDialog)) return;
+      if (
+        currentDialog.hasAttribute("inert") ||
+        currentDialog.closest("[inert]")
+      ) {
+        return;
+      }
       if (event.key === "Escape") {
+        if (event.defaultPrevented) return;
         event.preventDefault();
         closeRef.current();
         return;
       }
-      if (event.key !== "Tab") return;
+      if (event.key !== "Tab" || !trapFocus) return;
       const items = [
         ...currentDialog.querySelectorAll<HTMLElement>(focusable),
       ].filter(
         (item) =>
           !item.hidden &&
+          !item.closest("[inert]") &&
           (typeof item.checkVisibility === "function"
             ? item.checkVisibility()
             : item.offsetParent !== null || item.getClientRects().length > 0),
@@ -78,7 +90,7 @@ export function useDialogFocus(onClose: () => void) {
       document.removeEventListener("keydown", onKeyDown);
       previous?.focus();
     };
-  }, []);
+  }, [trapFocus]);
 
   return ref;
 }

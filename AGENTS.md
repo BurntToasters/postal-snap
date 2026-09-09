@@ -2,7 +2,7 @@
 
 ## Product
 
-Postal Snap is a proprietary, paid-capable desktop email client for seniors and anyone wanting a calm, minimal interface. Package name: `postal-snap`. Application identifier: `run.rosie.snap`.
+Postal Snap is an open-source, MPL-2.0-licensed desktop email client for seniors and anyone wanting a calm, minimal interface. Package name: `postal-snap`. Application identifier: `run.rosie.snap`. The root `LICENSE` is authoritative; paid distribution remains possible.
 
 The v0.1 scope is deliberately focused:
 
@@ -10,10 +10,11 @@ The v0.1 scope is deliberately focused:
 - Secure manual IMAP/SMTP setup.
 - Multiple isolated accounts; no unified inbox.
 - Familiar folders, message list, reader, search, drafts, outbox, attachments, and rich compose.
+- Shipped extras already in the tree: per-account signatures, filter rules, optional thread grouping, undo-send / scheduled outbox, snooze, iCloud aliases, recipient suggestions, and optional window glass.
 - No telemetry, analytics, licensing server, trial logic, or Postal Snap cloud.
 - English-US first, with UI strings kept central for later localization.
 
-Do not add Gmail/Outlook OAuth presets, POP, plaintext transport, threading, contacts, signatures, rules, templates, scheduled send, calendar, or a cloud backend unless the user expands scope.
+Do not add Gmail/Outlook OAuth UI, POP, plaintext transport, contacts, templates, calendar, or a cloud backend unless the user expands scope. Keep `oauth.rs` compiled but unwired; do not register `run.rosie.snap://oauth/callback`. Parked cross-account search APIs stay unused by the mailbox UI.
 
 ## Stack and layout
 
@@ -39,9 +40,14 @@ Important files:
 - `src-tauri/src/commands.rs`: typed IPC boundary and account serialization.
 - `src-tauri/src/mail.rs`: IMAP, SMTP, MIME, sync, and server search.
 - `src-tauri/src/db.rs`: SQLite, FTS, offline queue, drafts, and outbox.
-- `src-tauri/src/security.rs`: remote-image SSRF defenses and redaction.
+- `src-tauri/src/html_sanitize.rs`: ammonia first-pass sanitizer for received and draft HTML.
+- `src-tauri/src/security.rs`: remote-image SSRF defenses, redaction, and shared external-link inspection.
+- `src-tauri/src/content_blocking.rs`: Brave `adblock` network-rule checks for remote images.
+- `src-tauri/src/threat_blocking.rs`: local TweetFeed domain/URL reported-threat checks.
 - `src-tauri/src/settings.rs`: validated atomic `settings.json` storage.
 - `docs/ARCHITECTURE.md`: architecture overview.
+- `docs/CONTENT_BLOCKING.md`: official EasyList/EasyPrivacy verification and snapshot updates.
+- `docs/THREAT_BLOCKING.md`: official TweetFeed snapshot verification and reported-threat policy.
 - `docs/RELEASING.md`: release process.
 - `docs/RELEASE_CHECKLIST.md`: final manual go/no-go checks.
 
@@ -63,11 +69,12 @@ These are release blockers. Do not weaken them for convenience.
 - Accept only implicit TLS or required STARTTLS. Reject plaintext, invalid certificates, POP, and OAuth-only manual configurations.
 - Credentials cross IPC only during setup, are cleared by the frontend, wrapped/zeroized in Rust, stored only in the native credential vault, and never returned or logged.
 - Never log addresses, subjects, bodies, credentials, attachment names, local paths, or raw server responses.
-- Received HTML must remain sanitized and displayed in a scriptless, networkless sandboxed iframe.
+- Received HTML must remain sanitized and displayed in a scriptless, networkless sandboxed iframe. Rust sanitizes received and draft HTML with ammonia before SQLite/IPC; DOMPurify remains the second pass. Draft, reply, forward, and paste HTML must be sanitized before Tiptap in the privileged webview.
 - Block scripts, forms, frames, active objects, event handlers, unsafe URLs, remote CSS resources, and automatic remote images.
 - Remote images load only after consent through the Rust proxy. Revalidate every redirect, pin validated DNS addresses, reject credentials in URLs, and block loopback/private/link-local/reserved destinations.
+- Check remote images and every redirect with bundled official TweetFeed domain/URL snapshots and Brave's official `adblock` crate plus EasyList/EasyPrivacy network rules before DNS/network access, unless the matching Advanced preference is off. A reported-threat match overrides an EasyList exception when both checks are on. Preserve consent and SSRF defenses even when a list check is off. See `docs/CONTENT_BLOCKING.md` and `docs/THREAT_BLOCKING.md`.
 - Received CID images may be exposed only as bounded data URLs through opaque attachment IDs. Never expose raw paths.
-- External HTTP(S) links require deliberate activation and confirmation, then open in the system browser.
+- External HTTP(S) links require native URL validation, a local TweetFeed check when that Advanced preference is on, deliberate confirmation (hostname first; reported-threat default deny plus explicit Open anyway), then open through Rust. `open_external_url` must refuse a reported-threat URL unless `openAnyway` is true. Do not call the frontend opener plugin for mail or help links. UI may say reported / potentially dangerous, never confirmed malicious or an unqualified Safe. Turning the reported-threat preference off requires typing `CONFIRM`.
 - No broad filesystem permissions. Attachments write only to explicit user-selected destinations.
 - Preserve strict CSP and separate capabilities: `default.json` is direct distribution; `store.json` excludes updater/process permissions.
 - Store builds must not initialize or expose the Tauri updater.
@@ -98,8 +105,8 @@ These are release blockers. Do not weaken them for convenience.
 - Never reintroduce `prod.rosie.run` or S3 updater assumptions.
 - Direct Windows: signed x64/arm64 NSIS `.exe` plus signed updater payloads.
 - Direct macOS: universal Developer ID signed/notarized DMG and ZIP.
-- Linux: x64/arm64 AppImage and Flatpak only; no DEB/RPM.
-- First 0.1.0 shipment is GitHub-only. Microsoft Store and Mac App Store packaging scripts exist for a later train; they are not a 0.1.0 ship gate.
+- Linux: x64 AppImage and Flatpak are required. arm64 scripts exist (`build:linux:arm64`, Flatpak arm64) and are optional until an arm64 signing host ships them. No DEB/RPM.
+- GitHub Releases remain the only current distribution. Microsoft Store and Mac App Store packaging scripts exist for a later train; they are not a GitHub-train ship gate.
 - Microsoft Store (later): x64/arm64 MSIX bundle, Store-managed updates, Windows 10 22H2 floor.
 - Mac App Store (later): universal sandboxed app and signed installer PKG, Store-managed updates.
 - Mac Store and direct Mac builds use separate configuration/entitlements.
@@ -123,6 +130,9 @@ npm run typecheck
 npm run format:check
 npm run audit
 npm run licenses
+npm run filters:check
+npm run filters:update
+npm run tweetfeed:update
 ```
 
 Useful packaging commands include `build:win:*`, `build:mac:universal`, `build:mas`, `build:msstore`, `build:linux:*`, and `flatpak:bundle*`. See `package.json` and `docs/RELEASING.md` before changing release flow.
@@ -144,7 +154,7 @@ The `b` and `r` package scripts intentionally perform destructive branch cleanup
 
 ## Release status and manual gates
 
-Automated frontend, Playwright, Rust, lint, clippy, type, config, and production-build gates are established. They do not make a release ready. Final GitHub 0.1.0 approval still requires external systems and real credentials:
+Automated frontend, Playwright, Rust, lint, clippy, type, config, and production-build gates are established. They do not make a release ready. Final GitHub 0.1.x approval still requires external systems and real credentials:
 
 - Online npm and RustSec audits.
 - Pinned GreenMail 2.1.11 TLS integration run (requires Docker and OpenSSL).
@@ -155,4 +165,4 @@ Automated frontend, Playwright, Rust, lint, clippy, type, config, and production
 
 Windows App Certification Kit, Mac App Store Connect, and store metadata are later store-train gates.
 
-Use `docs/RELEASE_CHECKLIST.md` as the authoritative final checklist. Prefer a signed GitHub release candidate before publishing stable `0.1.0`.
+Use `docs/RELEASE_CHECKLIST.md` as the authoritative final checklist. Prefer a signed GitHub release candidate before publishing the next stable tag.

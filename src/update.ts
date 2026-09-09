@@ -54,6 +54,9 @@ export function runUpdateSingleFlight(
   }
   if (updateInFlight) return updateInFlight;
   const task = (async (): Promise<UpdateCheckResult> => {
+    if (!(await updatesManagedByPostalSnap())) {
+      return { available: false };
+    }
     const { check } = await import("@tauri-apps/plugin-updater");
     const update = await check();
     if (!update) return { available: false };
@@ -132,6 +135,9 @@ export async function checkUpdateInteractive(): Promise<void> {
   }
   const task = (async (): Promise<void> => {
     try {
+      if (!(await updatesManagedByPostalSnap())) {
+        return;
+      }
       const { check } = await import("@tauri-apps/plugin-updater");
       const update = await check();
       if (!update) {
@@ -173,6 +179,15 @@ export async function checkUpdateInteractive(): Promise<void> {
     await task;
   } finally {
     if (interactiveInFlight === task) interactiveInFlight = undefined;
+  }
+}
+
+async function updatesManagedByPostalSnap(): Promise<boolean> {
+  try {
+    const channel = await api.distribution();
+    return channel.updatesManagedBy === "postalSnap";
+  } catch {
+    return false;
   }
 }
 

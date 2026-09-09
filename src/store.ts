@@ -41,6 +41,10 @@ export const defaultSettings: AppSettings = {
   readerPaneHeight: 360,
   windowEffects: false,
   undoSendSeconds: 10,
+  blockAdvertisingAndTracking: true,
+  blockReportedThreats: true,
+  groupThreads: true,
+  notifyNewMail: true,
 };
 
 interface AppState {

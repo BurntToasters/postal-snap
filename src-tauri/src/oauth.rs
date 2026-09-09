@@ -89,10 +89,12 @@ impl OAuthProvider {
         TlsMode::StartTls
     }
 
-    /// Redirect target for the system-browser sign-in. Handled by the
-    /// already-registered deep-link plugin once a setup flow listens for it.
-    pub fn redirect_uri() -> &'static str {
-        "run.rosie.snap://oauth/callback"
+    /// Redirect used only if a future setup flow wires OAuth. Never register
+    /// `run.rosie.snap://oauth/callback`. Google and Microsoft desktop apps
+    /// use a loopback HTTP listener; pass a ported `http://127.0.0.1:<port>/`
+    /// URI from that flow.
+    pub fn redirect_uri(custom: Option<&str>) -> &str {
+        custom.unwrap_or("http://127.0.0.1/")
     }
 }
 
@@ -108,13 +110,14 @@ pub fn authorization_url(
     client_id: &str,
     state: &str,
     code_verifier: &str,
+    redirect_uri: &str,
 ) -> Result<url::Url, String> {
     let mut url = url::Url::parse(provider.authorization_endpoint())
         .map_err(|_| "The sign-in service address is invalid.".to_string())?;
     url.query_pairs_mut()
         .append_pair("response_type", "code")
         .append_pair("client_id", client_id)
-        .append_pair("redirect_uri", OAuthProvider::redirect_uri())
+        .append_pair("redirect_uri", redirect_uri)
         .append_pair("scope", &provider.scopes().join(" "))
         .append_pair("state", state)
         .append_pair("code_challenge", &pkce_challenge(code_verifier))
@@ -162,6 +165,7 @@ pub async fn exchange_code(
     client_id: &str,
     code: &str,
     code_verifier: &str,
+    redirect_uri: &str,
 ) -> Result<TokenResponse, String> {
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -174,7 +178,7 @@ pub async fn exchange_code(
             ("grant_type", "authorization_code"),
             ("client_id", client_id),
             ("code", code),
-            ("redirect_uri", OAuthProvider::redirect_uri()),
+            ("redirect_uri", redirect_uri),
             ("code_verifier", code_verifier),
         ])
         .send()
@@ -274,18 +278,31 @@ mod tests {
 
     #[test]
     fn authorization_urls_carry_pkce_and_scopes() {
-        let url = authorization_url(OAuthProvider::Gmail, "client-1", "state-1", "verifier-1")
-            .unwrap()
-            .to_string();
+        let url = authorization_url(
+            OAuthProvider::Gmail,
+            "client-1",
+            "state-1",
+            "verifier-1",
+            OAuthProvider::redirect_uri(None),
+        )
+        .unwrap()
+        .to_string();
         assert!(url.starts_with("https://accounts.google.com/o/oauth2/v2/auth?"));
         assert!(url.contains("code_challenge_method=S256"));
         assert!(url.contains("mail.google.com"));
+        assert!(url.contains("127.0.0.1"));
+        assert!(!url.contains("run.rosie.snap"));
         assert!(!url.contains("verifier-1"));
 
-        let outlook =
-            authorization_url(OAuthProvider::Outlook, "client-2", "state-2", "verifier-2")
-                .unwrap()
-                .to_string();
+        let outlook = authorization_url(
+            OAuthProvider::Outlook,
+            "client-2",
+            "state-2",
+            "verifier-2",
+            OAuthProvider::redirect_uri(None),
+        )
+        .unwrap()
+        .to_string();
         assert!(outlook.contains("IMAP.AccessAsUser.All"));
         assert!(outlook.contains("prompt=select_account"));
     }

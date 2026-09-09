@@ -56,6 +56,15 @@ for (const arch of arches) {
   ]) {
     await cp(join(root, name), join(stage, name));
   }
+  await cp(join(root, "LICENSE"), join(stage, "LICENSE"));
+  await cp(
+    join(root, "src-tauri/filters/LICENSE-CC-BY-SA-3.0.txt"),
+    join(stage, "LICENSE-CC-BY-SA-3.0.txt"),
+  );
+  await cp(
+    join(root, "src-tauri/filters/LICENSE-CC0-1.0.txt"),
+    join(stage, "LICENSE-CC0-1.0.txt"),
+  );
   await writeFile(join(stage, "AppxManifest.xml"), manifest(arch, msixVersion));
   const output = join(storeRoot, `PostalSnap_${msixVersion}_${arch}.msix`);
   await run("makeappx.exe", ["pack", "/d", stage, "/p", output, "/o"]);

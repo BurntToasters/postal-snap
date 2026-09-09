@@ -50,13 +50,35 @@
   flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--surface);
   box-shadow: var(--shadow);
 }
 
-.composer-layer-maximized {
-  padding: 0;
+.composer-layer-followup:not(.composer-layer-maximized) {
+  place-items: end center;
+  padding: 12px 18px 18px;
+  pointer-events: none;
+  background: transparent;
+}
+
+.composer-layer-followup:not(.composer-layer-maximized) .composer-window {
+  pointer-events: auto;
+  height: min(460px, 52vh);
+}
+
+.composer-signature-preview {
+  margin: 0 16px 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-muted, var(--surface));
+}
+
+.composer-signature-preview pre {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  font: inherit;
 }
 
 .composer-window.composer-maximized {
@@ -303,13 +325,26 @@
   background: var(--surface-muted);
 }
 
+.format-toolbar-secondary {
+  display: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.format-toolbar-secondary.open,
+.format-toolbar-secondary:not([hidden]) {
+  display: flex;
+}
+
 .toolbar-group {
   display: inline-flex;
   align-items: center;
   gap: 2px;
   padding: 2px 4px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--surface);
 }
 
@@ -329,7 +364,8 @@
 }
 
 .toolbar-group > button:hover,
-.toolbar-group > button.active {
+.toolbar-group > button.active,
+.toolbar-group > button[aria-pressed="true"] {
   border-color: var(--border);
   background: var(--accent-soft);
   color: var(--accent);

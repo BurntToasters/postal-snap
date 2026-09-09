@@ -9,6 +9,10 @@ import {
   sha256,
 } from "./_utils.js";
 import { validateManifest } from "./validate-updater-manifest.js";
+import {
+  committedUpdaterPublicKey,
+  verifyTauriSignatureFile,
+} from "./verify-tauri-signature.js";
 
 const directory = process.argv[2]
   ? resolve(root, process.argv[2])
@@ -20,27 +24,38 @@ const artifacts = [
   "Postal-Snap-macOS.dmg",
   "Postal-Snap-macOS.zip",
   "Postal-Snap-Linux-x64.AppImage",
-  "Postal-Snap-Linux-arm64.AppImage",
   "Postal-Snap-Linux-x64.flatpak",
-  "Postal-Snap-Linux-arm64.flatpak",
 ];
 const updaterPayloads = [
-  "Postal-Snap-Windows-x64.nsis.zip",
-  "Postal-Snap-Windows-arm64.nsis.zip",
+  "Postal-Snap-Windows-x64.exe",
+  "Postal-Snap-Windows-arm64.exe",
   "Postal-Snap-macOS.app.tar.gz",
   "Postal-Snap-Linux-x64.AppImage.tar.gz",
+];
+const optionalLinuxArm64 = [
+  "Postal-Snap-Linux-arm64.AppImage",
+  "Postal-Snap-Linux-arm64.flatpak",
   "Postal-Snap-Linux-arm64.AppImage.tar.gz",
 ];
+if (optionalLinuxArm64.some((name) => files.has(name))) {
+  artifacts.push(
+    "Postal-Snap-Linux-arm64.AppImage",
+    "Postal-Snap-Linux-arm64.flatpak",
+  );
+  updaterPayloads.push("Postal-Snap-Linux-arm64.AppImage.tar.gz");
+}
 const pkg = await json(join(root, "package.json"));
 const tag = `v${pkg.version}`;
 const channel = pkg.version.includes("-") ? "-beta" : "";
 const manifests = [
-  ["windows", "x86_64", "Postal-Snap-Windows-x64.nsis.zip"],
-  ["windows", "aarch64", "Postal-Snap-Windows-arm64.nsis.zip"],
+  ["windows", "x86_64", "Postal-Snap-Windows-x64.exe"],
+  ["windows", "aarch64", "Postal-Snap-Windows-arm64.exe"],
   ["darwin", "x86_64", "Postal-Snap-macOS.app.tar.gz"],
   ["darwin", "aarch64", "Postal-Snap-macOS.app.tar.gz"],
   ["linux", "x86_64", "Postal-Snap-Linux-x64.AppImage.tar.gz"],
-  ["linux", "aarch64", "Postal-Snap-Linux-arm64.AppImage.tar.gz"],
+  ...(updaterPayloads.includes("Postal-Snap-Linux-arm64.AppImage.tar.gz")
+    ? [["linux", "aarch64", "Postal-Snap-Linux-arm64.AppImage.tar.gz"]]
+    : []),
 ].map(([platform, arch, payload]) => ({
   platform,
   arch,
@@ -68,12 +83,13 @@ for (const name of [...artifacts, ...updaterPayloads]) {
   await run("gpg", ["--batch", "--verify", `${path}.asc`, path]);
 }
 
+const updaterPublicKey = await committedUpdaterPublicKey();
 for (const name of updaterPayloads) {
-  const signature = (
-    await readFile(join(directory, `${name}.sig`), "utf8")
-  ).trim();
-  if (signature.length < 64)
-    throw new Error(`Invalid embedded Tauri signature for ${name}`);
+  await verifyTauriSignatureFile(
+    join(directory, name),
+    join(directory, `${name}.sig`),
+    updaterPublicKey,
+  );
 }
 
 for (const { platform, arch, payload, name } of manifests) {

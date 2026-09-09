@@ -38,7 +38,7 @@ import { formatMessageDate } from "../format";
 import { applySettings } from "../settings";
 import { useAppStore } from "../store";
 import { groupThreads } from "../threads";
-import type { MailboxRole, MessageSummary } from "../types";
+import type { MailboxRole, MessageSummary, ReadingPane } from "../types";
 import { promptToRestartForUpdate } from "../update";
 import { AppMark } from "./AppMark";
 import { MessageReader } from "./MessageReader";
@@ -114,6 +114,8 @@ export function MailShell({ onOpenSettings }: Props) {
   const [allFolders, setAllFolders] = useState(false);
   const [addAccountOpen, setAddAccountOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const sidebarToggleRef = useRef<HTMLButtonElement>(null);
+  const folderPaneRef = useRef<HTMLElement>(null);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [loadingMessageId, setLoadingMessageId] = useState<number>();
   const [folderDialog, setFolderDialog] = useState<
@@ -247,28 +249,6 @@ export function MailShell({ onOpenSettings }: Props) {
     setMessages,
   ]);
 
-  const refresh = useCallback(async () => {
-    if (!activeAccountId || busy) return;
-    setBusy(true);
-    try {
-      await api.syncAccount(activeAccountId);
-      await loadAccountData();
-      await refreshList();
-    } catch (cause) {
-      setError(String(cause));
-    } finally {
-      setBusy(false);
-    }
-  }, [
-    activeAccountId,
-    busy,
-    loadAccountData,
-    loadMessages,
-    refreshList,
-    setBusy,
-    setError,
-  ]);
-
   async function loadMoreMessages() {
     if (
       !activeAccountId ||
@@ -386,6 +366,29 @@ export function MailShell({ onOpenSettings }: Props) {
     setMessages,
   ]);
 
+  const refresh = useCallback(async () => {
+    if (!activeAccountId || busy) return;
+    setBusy(true);
+    try {
+      await api.syncAccount(activeAccountId);
+      await loadAccountData();
+      if (queryRef.current.trim()) await runSearch();
+      else await loadMessages();
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setBusy(false);
+    }
+  }, [
+    activeAccountId,
+    busy,
+    loadAccountData,
+    loadMessages,
+    runSearch,
+    setBusy,
+    setError,
+  ]);
+
   async function refreshList() {
     if (queryRef.current.trim()) await runSearch();
     else await loadMessages();
@@ -441,6 +444,21 @@ export function MailShell({ onOpenSettings }: Props) {
     }
   }
 
+  async function emptyJunkFolders() {
+    if (!activeAccountId) return;
+    const confirmed = await api.showNativeConfirm(
+      strings.appName,
+      strings.mail.emptyJunkQuestion,
+    );
+    if (!confirmed) return;
+    try {
+      await api.emptyJunk(activeAccountId);
+      await loadAccountData();
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }
+
   function toggleSelectMessage(id: number) {
     setSelectedIds((prev) => {
       if (prev.includes(id)) return prev.filter((item) => item !== id);
@@ -475,7 +493,7 @@ export function MailShell({ onOpenSettings }: Props) {
     }
   }
 
-  async function bulkMove(role: "archive" | "trash" | "junk") {
+  async function bulkMove(role: "archive" | "trash" | "junk" | "inbox") {
     if (!activeAccountId || selectedIds.length === 0 || bulkBusy) return;
     const destination = mailboxes.find(
       (mailbox) =>
@@ -599,6 +617,8 @@ export function MailShell({ onOpenSettings }: Props) {
   }, [loadAccountData]);
 
   useEffect(() => {
+    const account = accounts.find((item) => item.id === activeAccountId);
+    if (account?.syncState === "offline" || sync?.phase === "offline") return;
     const due = outbox
       .filter((item) => item.state === "scheduled" && item.sendAt)
       .map((item) => new Date(item.sendAt as string).getTime() - Date.now())
@@ -631,7 +651,16 @@ export function MailShell({ onOpenSettings }: Props) {
           item.sendAt &&
           new Date(item.sendAt).getTime() <= Date.now(),
       );
-      if (ready && current.activeAccountId) {
+      const livePhase = current.activeAccountId
+        ? current.sync[current.activeAccountId]?.phase
+        : undefined;
+      if (
+        ready &&
+        current.activeAccountId &&
+        livePhase !== "offline" &&
+        current.accounts.find((item) => item.id === current.activeAccountId)
+          ?.syncState !== "offline"
+      ) {
         void api
           .sendScheduledOutbox(ready.id, current.activeAccountId)
           .catch((cause) => setError(String(cause)))
@@ -641,7 +670,7 @@ export function MailShell({ onOpenSettings }: Props) {
       }
     }, wait);
     return () => window.clearTimeout(timer);
-  }, [outbox, activeAccountId, loadAccountData, setError]);
+  }, [accounts, outbox, activeAccountId, sync, loadAccountData, setError]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void loadMessages(), 0);
@@ -661,10 +690,18 @@ export function MailShell({ onOpenSettings }: Props) {
         else fn();
       });
     void api
-      .onMessageChanged(({ accountId }) => {
-        if (accountId !== useAppStore.getState().activeAccountId) return;
+      .onMessageChanged(({ accountId, messageId, kind }) => {
+        const store = useAppStore.getState();
+        if (accountId !== store.activeAccountId) return;
         if (queryRef.current.trim()) void runSearch();
         else void loadMessages();
+        if (
+          messageId &&
+          store.selectedMessage?.id === messageId &&
+          kind === "moved"
+        ) {
+          store.selectMessage(undefined);
+        }
       })
       .then((fn) => {
         if (active) unsubs.push(fn);
@@ -731,12 +768,39 @@ export function MailShell({ onOpenSettings }: Props) {
           })
           .catch((cause) => setError(String(cause)));
       }
+      if (
+        action === "reading-pane-right" ||
+        action === "reading-pane-bottom" ||
+        action === "reading-pane-hidden"
+      ) {
+        const readingPane: ReadingPane =
+          action === "reading-pane-right"
+            ? "right"
+            : action === "reading-pane-bottom"
+              ? "bottom"
+              : "hidden";
+        const next = { ...settings, readingPane };
+        void api
+          .saveSettings(next)
+          .then((saved) => {
+            setSettings(saved);
+            applySettings(saved);
+          })
+          .catch((cause) => setError(String(cause)));
+      }
     };
     const keyboard = (event: KeyboardEvent) => {
       if (document.querySelector(".modal-layer")) return;
       const target = event.target as HTMLElement | null;
       const isEditing = Boolean(
-        target?.matches("input,textarea,select,[contenteditable='true']"),
+        target?.matches(
+          "input,textarea,select,[contenteditable='true'],[role='combobox'],[role='textbox']",
+        ),
+      );
+      const onChromeControl = Boolean(
+        target?.closest(
+          "button, a, [role='menuitem'], .reader-actions, .format-toolbar, .settings-nav, .bulk-bar",
+        ) && !target?.closest(".message-list, .local-mail-list"),
       );
       const mod = event.metaKey || event.ctrlKey;
       const key = event.key.toLowerCase();
@@ -746,7 +810,11 @@ export function MailShell({ onOpenSettings }: Props) {
         openComposer();
         return;
       }
-      if ((mod && event.shiftKey && key === "m") || event.key === "F5") {
+      if (
+        (mod && event.shiftKey && key === "m") ||
+        (mod && event.shiftKey && key === "n") ||
+        event.key === "F5"
+      ) {
         event.preventDefault();
         void refresh();
         return;
@@ -779,6 +847,13 @@ export function MailShell({ onOpenSettings }: Props) {
         );
         return;
       }
+      if (event.ctrlKey && event.metaKey && key === "a") {
+        event.preventDefault();
+        window.dispatchEvent(
+          new CustomEvent("postal:menu-action", { detail: "archive" }),
+        );
+        return;
+      }
       if (mod && event.shiftKey && key === "u") {
         event.preventDefault();
         window.dispatchEvent(
@@ -793,16 +868,21 @@ export function MailShell({ onOpenSettings }: Props) {
         );
         return;
       }
+      if (mod && event.altKey && key === "f") {
+        event.preventDefault();
+        window.dispatchEvent(new Event("postal:find-in-message"));
+        return;
+      }
       if (
         (event.key === "/" && !mod) ||
-        (mod && !event.shiftKey && key === "f")
+        (mod && !event.shiftKey && !event.altKey && key === "f")
       ) {
         event.preventDefault();
         searchInput.current?.focus();
         searchInput.current?.select();
         return;
       }
-      if (isEditing) return;
+      if (isEditing || onChromeControl) return;
 
       if (event.key === "Delete" || (mod && event.key === "Backspace")) {
         const state = useAppStore.getState();
@@ -841,6 +921,13 @@ export function MailShell({ onOpenSettings }: Props) {
           event.preventDefault();
           void chooseMessage(last);
         }
+      } else if (event.key === " " || event.code === "Space") {
+        event.preventDefault();
+        window.dispatchEvent(
+          new CustomEvent("postal:scroll-reader", {
+            detail: event.shiftKey ? -1 : 1,
+          }),
+        );
       }
     };
     window.addEventListener("postal:menu-action", menuAction);
@@ -885,6 +972,7 @@ export function MailShell({ onOpenSettings }: Props) {
     value: number,
     persist: boolean,
   ) {
+    const previous = useAppStore.getState().settings;
     const limits = {
       folderPaneWidth: [210, 420],
       messagePaneWidth: [300, 720],
@@ -892,7 +980,7 @@ export function MailShell({ onOpenSettings }: Props) {
     } as const;
     const [minimum, maximum] = limits[key];
     const next = {
-      ...useAppStore.getState().settings,
+      ...previous,
       [key]: Math.round(Math.min(maximum, Math.max(minimum, value))),
     };
     setSettings(next);
@@ -900,7 +988,10 @@ export function MailShell({ onOpenSettings }: Props) {
       void api
         .saveSettings(next)
         .then(setSettings)
-        .catch((cause) => setError(String(cause)));
+        .catch((cause) => {
+          setSettings(previous);
+          setError(String(cause));
+        });
   }
 
   async function openDraft(id: string) {
@@ -1038,12 +1129,98 @@ export function MailShell({ onOpenSettings }: Props) {
     );
     if (!confirmed) return;
     try {
-      await api.deleteOutbox(id, activeAccountId);
+      if (state === "scheduled") {
+        const draft = await api.restoreOutbox(id, activeAccountId);
+        openComposer({ draft });
+      } else {
+        await api.deleteOutbox(id, activeAccountId);
+      }
       await loadAccountData();
     } catch (cause) {
       setError(String(cause));
     }
   }
+
+  useEffect(() => {
+    if (!sidebarOpen) return;
+    const pane = folderPaneRef.current;
+    const toggle = sidebarToggleRef.current;
+    const previous = document.activeElement as HTMLElement | null;
+    const firstFocusable = pane?.querySelector<HTMLElement>(
+      "button:not([disabled]), select:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex='-1'])",
+    );
+    window.setTimeout(() => firstFocusable?.focus(), 0);
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      event.preventDefault();
+      setSidebarOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      if (previous && document.contains(previous)) previous.focus();
+      else toggle?.focus();
+    };
+  }, [sidebarOpen]);
+
+  useEffect(() => {
+    if (!sidebarOpen) return;
+    if (typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia("(max-width: 1049px)");
+    if (!media.matches) return;
+    const shell = document.querySelector(".mail-shell");
+    const inertTargets = shell
+      ? [...shell.children].filter(
+          (child) =>
+            child !== folderPaneRef.current &&
+            !child.classList.contains("sidebar-scrim") &&
+            !child.classList.contains("folder-pane"),
+        )
+      : [];
+    for (const target of inertTargets) {
+      target.setAttribute("inert", "");
+    }
+    return () => {
+      for (const target of inertTargets) {
+        target.removeAttribute("inert");
+      }
+    };
+  }, [sidebarOpen]);
+
+  const [narrowViewport, setNarrowViewport] = useState(() =>
+    typeof window.matchMedia === "function"
+      ? window.matchMedia("(max-width: 760px)").matches
+      : false,
+  );
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia("(max-width: 760px)");
+    const update = () => setNarrowViewport(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+  const readerOverlay =
+    Boolean(selectedMessage) &&
+    (settings.readingPane === "hidden" || narrowViewport);
+
+  useEffect(() => {
+    if (!readerOverlay) return;
+    const shell = document.querySelector(".mail-shell");
+    if (!shell) return;
+    const inertTargets = [...shell.children].filter(
+      (child) => child.id !== "reader-pane",
+    );
+    for (const target of inertTargets) {
+      target.setAttribute("inert", "");
+    }
+    return () => {
+      for (const target of inertTargets) {
+        target.removeAttribute("inert");
+      }
+    };
+  }, [readerOverlay]);
 
   const activeMailbox = useMemo(
     () => mailboxes.find((box) => box.id === activeMailboxId),
@@ -1075,6 +1252,7 @@ export function MailShell({ onOpenSettings }: Props) {
     <main className={shellClass} style={shellStyle}>
       <header className="app-toolbar">
         <button
+          ref={sidebarToggleRef}
           className="icon-button sidebar-toggle"
           type="button"
           onClick={() => setSidebarOpen((open) => !open)}
@@ -1128,12 +1306,18 @@ export function MailShell({ onOpenSettings }: Props) {
               setQuery(event.target.value);
             }}
             placeholder={
-              activeLocalView
+              activeLocalView === "drafts" || activeLocalView === "outbox"
                 ? strings.mail.searchMailboxOnly
-                : strings.mail.search
+                : activeLocalView
+                  ? strings.mail.searchMailboxOnly
+                  : strings.mail.search
             }
             aria-label={strings.mail.search}
-            disabled={Boolean(activeLocalView)}
+            disabled={Boolean(
+              activeLocalView &&
+              activeLocalView !== "drafts" &&
+              activeLocalView !== "outbox",
+            )}
           />
           {!activeLocalView ? (
             <label className="search-scope">
@@ -1179,6 +1363,7 @@ export function MailShell({ onOpenSettings }: Props) {
       />
       <aside
         id="folder-pane"
+        ref={folderPaneRef}
         className="folder-pane"
         aria-label={strings.mail.accountsAndMailboxes}
       >
@@ -1419,6 +1604,17 @@ export function MailShell({ onOpenSettings }: Props) {
               <Trash2 aria-hidden="true" /> {strings.mail.emptyTrash}
             </button>
           ) : null}
+          {mailboxes.some(
+            (mailbox) => mailbox.role === "junk" && mailbox.totalCount > 0,
+          ) ? (
+            <button
+              type="button"
+              className="add-account-button"
+              onClick={() => void emptyJunkFolders()}
+            >
+              <ShieldAlert aria-hidden="true" /> {strings.mail.emptyJunk}
+            </button>
+          ) : null}
         </nav>
         <div
           className={`sync-indicator ${sync?.phase ?? "idle"}`}
@@ -1522,13 +1718,23 @@ export function MailShell({ onOpenSettings }: Props) {
             >
               <Archive aria-hidden="true" /> {strings.reader.archive}
             </button>
-            <button
-              type="button"
-              disabled={selectedIds.length === 0 || bulkBusy}
-              onClick={() => void bulkMove("junk")}
-            >
-              <ShieldAlert aria-hidden="true" /> {strings.reader.junk}
-            </button>
+            {activeMailbox?.role === "junk" ? (
+              <button
+                type="button"
+                disabled={selectedIds.length === 0 || bulkBusy}
+                onClick={() => void bulkMove("inbox")}
+              >
+                <Inbox aria-hidden="true" /> {strings.reader.notJunk}
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled={selectedIds.length === 0 || bulkBusy}
+                onClick={() => void bulkMove("junk")}
+              >
+                <ShieldAlert aria-hidden="true" /> {strings.reader.junk}
+              </button>
+            )}
             <button
               type="button"
               disabled={selectedIds.length === 0 || bulkBusy}
@@ -1539,7 +1745,12 @@ export function MailShell({ onOpenSettings }: Props) {
           </div>
         ) : null}
         {activeLocalView === "drafts" ? (
-          <DraftList drafts={drafts} onOpen={openDraft} />
+          <DraftList
+            drafts={drafts.filter((draft) =>
+              matchesLocalQuery(`${draft.subject} ${draft.recipients}`, query),
+            )}
+            onOpen={openDraft}
+          />
         ) : activeLocalView === "snoozed" ? (
           <SnoozedList
             items={snoozed}
@@ -1548,7 +1759,9 @@ export function MailShell({ onOpenSettings }: Props) {
           />
         ) : activeLocalView === "outbox" ? (
           <OutboxList
-            items={outbox}
+            items={outbox.filter((item) =>
+              matchesLocalQuery(`${item.subject} ${item.recipients}`, query),
+            )}
             onRetry={retryQueued}
             onRetryCopy={retrySentCopy}
             onSendNow={sendScheduledNow}
@@ -1610,13 +1823,19 @@ export function MailShell({ onOpenSettings }: Props) {
         <AddAccountDialog
           onClose={() => setAddAccountOpen(false)}
           onComplete={async () => {
-            const previousIds = new Set(accounts.map((account) => account.id));
-            const loaded = await api.listAccounts();
-            setAccounts(loaded);
-            const added = loaded.find(
-              (account) => !previousIds.has(account.id),
-            );
-            if (added) selectAccount(added.id);
+            try {
+              const previousIds = new Set(
+                accounts.map((account) => account.id),
+              );
+              const loaded = await api.listAccounts();
+              setAccounts(loaded);
+              const added = loaded.find(
+                (account) => !previousIds.has(account.id),
+              );
+              if (added) selectAccount(added.id);
+            } catch {
+              // The account is already saved; listing is best-effort.
+            }
             setAddAccountOpen(false);
           }}
         />
@@ -1809,6 +2028,12 @@ function mergeSearchResults(
   return merged;
 }
 
+function matchesLocalQuery(value: string, query: string) {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return true;
+  return value.toLowerCase().includes(needle);
+}
+
 function MessageList({
   messages,
   selectedId,
@@ -1836,6 +2061,9 @@ function MessageList({
   selectedIds?: number[];
   onToggleSelect?: (id: number) => void;
 }) {
+  const groupConversations = useAppStore(
+    (state) => state.settings.groupThreads,
+  );
   const listRef = useRef<HTMLDivElement>(null);
   const [expandedThreads, setExpandedThreads] = useState<string[]>([]);
 
@@ -2006,7 +2234,7 @@ function MessageList({
         aria-label={strings.mail.messages}
         aria-busy={loading}
       >
-        {selecting
+        {selecting || !groupConversations
           ? messages.map((message, index) => renderRow(message, index))
           : groupThreads(messages).map((group) => {
               if (group.items.length === 1) {
@@ -2014,12 +2242,15 @@ function MessageList({
               }
               const expanded = effectiveExpanded.includes(group.key);
               return (
-                <div key={group.key} className="thread-group">
+                <div key={group.key} className="thread-group" role="group">
                   <button
                     type="button"
                     className={`message-row thread-header ${group.newest.id === selectedId ? "selected" : ""}`}
                     aria-expanded={expanded}
-                    onClick={() => toggleThread(group.key)}
+                    onClick={() => {
+                      void onChoose(group.newest);
+                      toggleThread(group.key);
+                    }}
                     aria-label={[
                       strings.mail.conversation,
                       group.newest.subject || strings.common.noSubject,
