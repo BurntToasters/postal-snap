@@ -37,7 +37,10 @@ describe("settings appearance", () => {
       removeListener: vi.fn(),
       dispatchEvent: vi.fn(() => true),
     } as unknown as MediaQueryList;
-    vi.stubGlobal("matchMedia", vi.fn(() => media));
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => media),
+    );
 
     applySettings({
       ...defaultSettings,

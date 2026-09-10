@@ -524,7 +524,7 @@ html[data-platform="macos"] .folder-pane {
 }
 
 .folder.active {
-  color: color-mix(in srgb, var(--accent) 88%, var(--text));
+  color: var(--text);
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   font-weight: 650;
 }

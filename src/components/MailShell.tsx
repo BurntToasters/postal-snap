@@ -46,6 +46,8 @@ import { MessageReader } from "./MessageReader";
 import { SetupWizard } from "./SetupWizard";
 import { useDialogFocus } from "./useDialogFocus";
 
+const SIDEBAR_DRAWER_QUERY = "(max-width: 1049px)";
+
 interface Props {
   onOpenSettings: () => void;
 }
@@ -115,6 +117,11 @@ export function MailShell({ onOpenSettings }: Props) {
   const [allFolders, setAllFolders] = useState(false);
   const [addAccountOpen, setAddAccountOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarDrawerViewport, setSidebarDrawerViewport] = useState(() =>
+    typeof window.matchMedia === "function"
+      ? window.matchMedia(SIDEBAR_DRAWER_QUERY).matches
+      : false,
+  );
   const sidebarToggleRef = useRef<HTMLButtonElement>(null);
   const folderPaneRef = useRef<HTMLElement>(null);
   const [loadingMessages, setLoadingMessages] = useState(false);
@@ -1201,6 +1208,18 @@ export function MailShell({ onOpenSettings }: Props) {
   }
 
   useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia(SIDEBAR_DRAWER_QUERY);
+    const update = () => {
+      setSidebarDrawerViewport(media.matches);
+      if (!media.matches) setSidebarOpen(false);
+    };
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+
+  useEffect(() => {
     if (!sidebarOpen) return;
     const pane = folderPaneRef.current;
     const toggle = sidebarToggleRef.current;
@@ -1224,10 +1243,7 @@ export function MailShell({ onOpenSettings }: Props) {
   }, [sidebarOpen]);
 
   useEffect(() => {
-    if (!sidebarOpen) return;
-    if (typeof window.matchMedia !== "function") return;
-    const media = window.matchMedia("(max-width: 1049px)");
-    if (!media.matches) return;
+    if (!sidebarOpen || !sidebarDrawerViewport) return;
     const shell = document.querySelector(".mail-shell");
     const inertTargets = shell
       ? [...shell.children].filter(
@@ -1245,7 +1261,7 @@ export function MailShell({ onOpenSettings }: Props) {
         target.removeAttribute("inert");
       }
     };
-  }, [sidebarOpen]);
+  }, [sidebarDrawerViewport, sidebarOpen]);
 
   const [narrowViewport, setNarrowViewport] = useState(() =>
     typeof window.matchMedia === "function"
@@ -1320,19 +1336,21 @@ export function MailShell({ onOpenSettings }: Props) {
             className="icon-button sidebar-toggle"
             type="button"
             onClick={() => {
-              if (narrowViewport && sidebarVisible)
+              if (sidebarDrawerViewport && sidebarVisible)
                 setSidebarOpen((open) => !open);
-              else if (narrowViewport) {
+              else if (sidebarDrawerViewport) {
                 toggleSidebar();
                 setSidebarOpen(true);
               } else toggleSidebar();
             }}
             aria-label={
-              sidebarVisible && (!narrowViewport || sidebarOpen)
+              sidebarVisible && (!sidebarDrawerViewport || sidebarOpen)
                 ? strings.mail.hideMailboxes
                 : strings.mail.showMailboxes
             }
-            aria-expanded={sidebarVisible && (sidebarOpen || !narrowViewport)}
+            aria-expanded={
+              sidebarVisible && (sidebarOpen || !sidebarDrawerViewport)
+            }
             aria-controls="folder-pane"
           >
             <PanelLeft aria-hidden="true" />
@@ -1370,6 +1388,7 @@ export function MailShell({ onOpenSettings }: Props) {
             <Search aria-hidden="true" />
             <input
               ref={searchInput}
+              type="search"
               value={query}
               onChange={(event) => {
                 queryRef.current = event.target.value;
@@ -1395,15 +1414,20 @@ export function MailShell({ onOpenSettings }: Props) {
                 type="button"
                 aria-pressed={allFolders}
                 title={
-                  allFolders ? strings.mail.thisAccount : strings.mail.thisMailbox
+                  allFolders
+                    ? strings.mail.thisAccount
+                    : strings.mail.thisMailbox
                 }
                 onClick={() => {
                   const next = !allFolders;
                   allFoldersRef.current = next;
                   setAllFolders(next);
+                  if (queryRef.current.trim()) void runSearch();
                 }}
               >
-                {allFolders ? strings.mail.thisAccount : strings.mail.thisMailbox}
+                {allFolders
+                  ? strings.mail.thisAccount
+                  : strings.mail.thisMailbox}
               </button>
             ) : null}
           </form>

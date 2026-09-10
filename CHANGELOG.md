@@ -21,9 +21,11 @@ Postal Snap is a calm, accessible desktop email client. Mail stays on your compu
 
 - **UI - macOS 27 Mail-inspired shell:** The mailbox sidebar now reaches the window edges, the main toolbar is quieter and consistently grouped, Compose and Get Mail remain explicit at normal desktop widths, and search sits in the trailing toolbar cluster with mailbox/account scoping.
 - **UI - Mailbox and reader hierarchy:** Message rows use tighter Mail-like spacing and selection treatment, sidebar symbols use the app accent, Mark All Read moves into the mailbox More menu, and reader actions are grouped into compact pill controls.
-- **UI - Liquid Glass restraint:** Glass is reserved for navigation and interactive chrome while the message list, reader, and rendered email stay opaque for legibility. macOS now requests semantic Sidebar vibrancy instead of HUD material.
+- **UI - Liquid Glass restraint:** Glass is reserved for navigation and interactive chrome while message lists, readers, rendered email, composer, Settings, setup, and attachment previews stay opaque for legibility. macOS now requests semantic Sidebar vibrancy instead of HUD material.
 - **UI - Composer, setup, and settings polish:** Dialog chrome, grouped controls, selected settings navigation, and setup provider cards use flatter surfaces, quieter borders, and more consistent rounded geometry.
 - **FIX - Native appearance sync:** When theme follows the system, native window-effect tint now tracks live light/dark appearance changes instead of staying at the launch appearance.
+- **FIX - Responsive mailbox drawer:** The sidebar toggle now follows the same 1049px drawer breakpoint as CSS, stays usable in 761–1049px windows, and clears modal/inert state when resizing back to desktop.
+- **FIX - Search scope refresh:** Switching between This mailbox and This account reruns an active search immediately instead of leaving stale results on screen.
 - **PKG:** Application, Tauri, npm lockfile, and Cargo metadata are synchronized to `0.1.8`.
 
 ## Changes in `v0.1.7:`
