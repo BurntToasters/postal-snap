@@ -30,19 +30,18 @@ const updaterPayloads = [
   "Postal-Snap-Windows-x64.exe",
   "Postal-Snap-Windows-arm64.exe",
   "Postal-Snap-macOS.app.tar.gz",
-  "Postal-Snap-Linux-x64.AppImage.tar.gz",
+  "Postal-Snap-Linux-x64.AppImage",
 ];
 const optionalLinuxArm64 = [
   "Postal-Snap-Linux-arm64.AppImage",
   "Postal-Snap-Linux-arm64.flatpak",
-  "Postal-Snap-Linux-arm64.AppImage.tar.gz",
 ];
 if (optionalLinuxArm64.some((name) => files.has(name))) {
   artifacts.push(
     "Postal-Snap-Linux-arm64.AppImage",
     "Postal-Snap-Linux-arm64.flatpak",
   );
-  updaterPayloads.push("Postal-Snap-Linux-arm64.AppImage.tar.gz");
+  updaterPayloads.push("Postal-Snap-Linux-arm64.AppImage");
 }
 const pkg = await json(join(root, "package.json"));
 const tag = `v${pkg.version}`;
@@ -52,9 +51,9 @@ const manifests = [
   ["windows", "aarch64", "Postal-Snap-Windows-arm64.exe"],
   ["darwin", "x86_64", "Postal-Snap-macOS.app.tar.gz"],
   ["darwin", "aarch64", "Postal-Snap-macOS.app.tar.gz"],
-  ["linux", "x86_64", "Postal-Snap-Linux-x64.AppImage.tar.gz"],
-  ...(updaterPayloads.includes("Postal-Snap-Linux-arm64.AppImage.tar.gz")
-    ? [["linux", "aarch64", "Postal-Snap-Linux-arm64.AppImage.tar.gz"]]
+  ["linux", "x86_64", "Postal-Snap-Linux-x64.AppImage"],
+  ...(updaterPayloads.includes("Postal-Snap-Linux-arm64.AppImage")
+    ? [["linux", "aarch64", "Postal-Snap-Linux-arm64.AppImage"]]
     : []),
 ].map(([platform, arch, payload]) => ({
   platform,

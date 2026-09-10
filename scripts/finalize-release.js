@@ -6,6 +6,7 @@ import {
   artifactPlatform,
   basename,
   ensureReleaseDir,
+  isLinuxAppImage,
   json,
   process,
   rmRetry,
@@ -119,9 +120,10 @@ console.log("[2/3] Generating updater manifests...");
 const artifacts = await readdir(directory);
 const updaterPayloads = artifacts.filter(
   (name) =>
-    /\.(app\.tar\.gz|AppImage\.tar\.gz)$/.test(name) ||
+    /\.app\.tar\.gz$/.test(name) ||
     (/^Postal-Snap-Windows-(x64|arm64)\.exe$/.test(name) &&
-      artifacts.includes(`${name}.sig`)),
+      artifacts.includes(`${name}.sig`)) ||
+    (isLinuxAppImage(name) && artifacts.includes(`${name}.sig`)),
 );
 for (const payload of updaterPayloads) {
   const signaturePath = join(directory, `${payload}.sig`);

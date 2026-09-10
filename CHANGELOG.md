@@ -29,7 +29,7 @@ Postal Snap is a calm, accessible desktop email client. Mail stays on your compu
 - **UI - Print headers:** Print includes From, To, Subject, and Date for HTML and plain text. File > Print is wired. ⌘P / Ctrl+P prints the open message even when search is focused.
 - **UI - Follow-up compose:** Reply/forward sheets no longer trap Tab, so keyboard users can return to the visible source message.
 - **Security:** Unused `deep-link:allow-register` is removed from direct builds. Overlapping Settings saves keep every field, including nested cache policy, and still send `CONFIRM` when turning reported-threat checks off.
-- **PKG:** macOS release submits the DMG to notarytool before stapling. Windows re-minisigns updater payloads after Authenticode. `release:verify:local` cryptographically verifies `.sig` files. Beta manifest sync pulls every architecture JSON from the published beta before copying them to latest. CI compile jobs generate third-party notices before `cargo check` on Linux, macOS, and Windows.
+- **PKG:** macOS release submits the DMG to notarytool before stapling. Windows re-minisigns updater payloads after Authenticode. `release:verify:local` cryptographically verifies `.sig` files. Beta manifest sync pulls every architecture JSON from the published beta before copying them to latest. CI compile jobs generate third-party notices before `cargo check` on Linux, macOS, and Windows. Signed collection matches the IYERIS/Zinnia Tauri v2 pipeline: Linux updater payload is the AppImage plus `.AppImage.sig` (not `.AppImage.tar.gz`); macOS `codesign --display` reads stderr and requires Developer ID, TeamIdentifier, and Hardened Runtime.
 
 ## Changes in `v0.1.6:`
 
