@@ -124,8 +124,7 @@
     grid-template-areas: "toolbar" "messages";
   }
 
-  .get-mail-button span,
-  .search-scope {
+  .get-mail-button span {
     display: none;
   }
 
@@ -153,8 +152,8 @@
   }
 
   .search-box {
-    min-width: 110px;
-    flex-basis: 150px;
+    min-width: 200px;
+    flex-basis: 230px;
   }
 
   .reader-pane,
@@ -314,10 +313,6 @@
 
   .settings-row select {
     width: 100%;
-  }
-
-  .settings-nav button span {
-    display: none;
   }
 
   .address-fields label {
