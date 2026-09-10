@@ -394,6 +394,8 @@ test("Windows release signing uses Azure Artifact Signing, not a local PFX", asy
   );
   assert.match(tauriBuild, /stapler", "staple"/);
   assert.match(tauriBuild, /signer", "sign"/);
+  assert.match(tauriBuild, /macosBundleExecutablePath/);
+  assert.match(tauriBuild, /Print:CFBundleExecutable/);
   assert.match(tauriBuild, /lipo/);
   assert.match(signingEnv, /Hardened Runtime/);
   assert.match(signingEnv, /Authority=Developer ID Application:/);
