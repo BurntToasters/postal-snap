@@ -30,7 +30,7 @@
     5px minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
   grid-template-areas:
-    "folders folder-splitter toolbar toolbar toolbar"
+    "toolbar toolbar toolbar toolbar toolbar"
     "folders folder-splitter messages reader-splitter reader";
   background: var(--surface);
 }
@@ -39,7 +39,7 @@
   grid-template-columns: var(--rendered-folder-width) 5px minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr) 5px var(--rendered-reader-height);
   grid-template-areas:
-    "folders folder-splitter toolbar"
+    "toolbar toolbar toolbar"
     "folders folder-splitter messages"
     "folders folder-splitter reader-bottom-splitter"
     "folders folder-splitter reader";
@@ -49,7 +49,7 @@
   grid-template-columns: var(--rendered-folder-width) 5px minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
   grid-template-areas:
-    "folders folder-splitter toolbar"
+    "toolbar toolbar toolbar"
     "folders folder-splitter messages";
 }
 
@@ -141,7 +141,7 @@
   min-width: 0;
   min-height: var(--toolbar-height);
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 8px;
   padding: 7px 12px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
@@ -167,9 +167,10 @@
 }
 
 .toolbar-trailing {
-  flex: 0 1 auto;
-  flex-wrap: wrap;
+  flex: 1 1 auto;
+  flex-wrap: nowrap;
   justify-content: flex-end;
+  overflow: hidden;
 }
 
 .app-toolbar .toolbar-button,
@@ -224,7 +225,8 @@
   border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
   border-radius: var(--radius-pill);
   background: color-mix(in srgb, var(--surface) 92%, transparent);
-  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 40%, transparent);
+  box-shadow: inset 0 1px 0
+    color-mix(in srgb, var(--accent-contrast) 40%, transparent);
 }
 
 .search-box:focus-within {
@@ -240,7 +242,7 @@
 
 .search-box > input {
   min-width: 72px;
-  min-height: 42px;
+  min-height: 44px;
   padding-inline: 8px;
   border: 0;
   background: transparent;
@@ -279,7 +281,7 @@
   min-height: 44px;
   padding: 6px 16px;
   border: 1px solid var(--accent);
-  border-radius: 9999px;
+  border-radius: var(--radius-pill);
   background: var(--accent-soft);
   color: var(--accent);
   font-size: 0.92rem;
@@ -294,21 +296,16 @@
 
 .update-ready-badge:hover {
   background: var(--accent);
-  color: var(--accent-contrast, #ffffff);
+  color: var(--accent-contrast);
 }
 
 .update-ready-badge .badge-dot {
   width: 9px;
   height: 9px;
   border-radius: 50%;
-  background: var(--success, #18794e);
-  box-shadow: 0 0 0 2px rgba(24, 121, 78, 0.25);
+  background: var(--success);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--success) 25%, transparent);
   animation: pulse-badge 2.5s infinite;
-}
-
-:root[data-theme="dark"] .update-ready-badge .badge-dot {
-  background: var(--success, #6bd6a6);
-  box-shadow: 0 0 0 2px rgba(107, 214, 166, 0.25);
 }
 
 @keyframes pulse-badge {
@@ -508,14 +505,43 @@
   color: var(--warning);
 }
 
+/* Role-tinted sidebar icons (macOS Mail). Active rows stay accent
+   monochrome so the selected state reads as one unit. */
+.folder.sent:not(.active) svg {
+  color: var(--folder-sent);
+}
+
+.folder.drafts:not(.active) svg {
+  color: var(--folder-drafts);
+}
+
+.folder.archive:not(.active) svg {
+  color: var(--folder-archive);
+}
+
+.folder.trash:not(.active) svg {
+  color: var(--folder-trash);
+}
+
+.folder.junk:not(.active) svg {
+  color: var(--folder-junk);
+}
+
 .folder strong {
-  min-width: 24px;
-  padding: 2px 4px;
-  text-align: right;
-  color: var(--accent);
-  background: transparent;
+  min-width: 26px;
+  padding: 2px 8px;
+  text-align: center;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--text-muted) 14%, transparent);
+  border-radius: var(--radius-pill);
   font-size: 0.78rem;
   font-weight: 680;
+  font-variant-numeric: tabular-nums;
+}
+
+.folder.active strong {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
 .sync-indicator {
@@ -658,7 +684,7 @@
   gap: 6px;
   padding: 7px 12px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: var(--surface);
   white-space: nowrap;
 }
@@ -713,8 +739,8 @@
   min-width: 25px;
   padding: 2px 6px;
   text-align: center;
-  border-radius: 12px;
-  color: var(--accent-contrast, #fff);
+  border-radius: var(--radius-md);
+  color: var(--accent-contrast);
   background: var(--accent);
   font-size: 0.78rem;
   font-weight: 700;
@@ -748,7 +774,7 @@
   position: relative;
   display: grid;
   width: calc(100% - 12px);
-  min-height: 80px;
+  min-height: 88px;
   grid-template-columns: 10px minmax(0, 1fr) auto;
   grid-template-areas:
     "dot sender date"
@@ -759,7 +785,7 @@
   padding: 10px 12px 10px 10px;
   text-align: left;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--surface);
   box-shadow: inset 0 -1px color-mix(in srgb, var(--border) 72%, transparent);
   transition: background-color 120ms ease;
@@ -784,6 +810,10 @@
 .message-row.selected :is(.message-date, .message-preview),
 .message-row.selected.unread .message-date {
   color: var(--accent-contrast);
+}
+
+.message-row.selected .message-preview {
+  opacity: 0.85;
 }
 
 .message-row.selected .unread-dot {
@@ -854,17 +884,27 @@
 
 .message-preview {
   grid-area: preview;
+  display: -webkit-box;
   overflow: hidden;
   color: var(--text-muted);
   font-size: 0.87rem;
+  line-height: 1.4;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
 }
 
 :root[data-density="compact"] .message-row {
   min-height: 64px;
   padding-block: 7px;
   grid-template-areas: "dot sender date" "dot subject subject";
+}
+
+:root[data-density="compact"] .message-row .message-sender,
+:root[data-density="compact"] .message-row .message-subject {
+  font-size: 0.92rem;
+  letter-spacing: 0;
 }
 
 .message-list,
@@ -898,6 +938,26 @@
 :root[data-density="compact"] .attention-row {
   min-height: 56px;
   padding-block: 8px;
+}
+
+:root[data-density="compact"] .folder-pane .folder-row {
+  min-height: 44px;
+  padding-block: 6px;
+}
+
+:root[data-density="compact"] .folder-pane .folder-row svg {
+  width: 16px;
+  height: 16px;
+}
+
+:root[data-density="compact"] .app-toolbar {
+  gap: 6px;
+}
+
+:root[data-density="compact"] .bulk-bar,
+:root[data-density="compact"] .snooze-bar {
+  min-height: 44px;
+  padding-block: 6px;
 }
 
 .local-mail-row,
@@ -963,7 +1023,7 @@
   min-height: 44px;
   padding: 6px 10px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: var(--surface);
 }
 

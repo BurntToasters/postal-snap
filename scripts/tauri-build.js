@@ -142,7 +142,6 @@ try {
   const updaterOverride = storeBuild
     ? { plugins: { updater: null } }
     : {
-        app: { macOSPrivateApi: true },
         plugins: {
           updater: {
             pubkey: resolveUpdaterPublicKey({

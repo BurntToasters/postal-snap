@@ -953,6 +953,7 @@ async fn import_remote_drafts_locked(
             attachments,
             in_reply_to: remote.in_reply_to,
             references: remote.references,
+            send_at: None,
         };
         if state
             .db
@@ -1786,6 +1787,26 @@ pub async fn delete_draft(
     Ok(())
 }
 
+/// Validate an explicit Send Later time. Returns the normalized RFC 3339
+/// timestamp, or `None` when the composer did not request scheduling.
+fn resolve_requested_send_at(send_at: Option<&str>) -> Result<Option<String>, String> {
+    let requested = send_at.map(str::trim).filter(|value| !value.is_empty());
+    let Some(requested) = requested else {
+        return Ok(None);
+    };
+    let when = chrono::DateTime::parse_from_rfc3339(requested)
+        .map_err(|_| "Scheduled send time is invalid.".to_string())?
+        .with_timezone(&chrono::Utc);
+    let now = chrono::Utc::now();
+    if when <= now {
+        return Err("Scheduled send time must be in the future.".to_string());
+    }
+    if when > now + chrono::Duration::days(365) {
+        return Err("Scheduled send time is too far in the future.".to_string());
+    }
+    Ok(Some(when.to_rfc3339()))
+}
+
 #[tauri::command]
 pub async fn send_message(
     draft: ComposeDraft,
@@ -1801,6 +1822,28 @@ pub async fn send_message(
     let delay = settings.undo_send_seconds.min(30);
     let offline = account.summary.sync_state == "offline";
     let initial_detail = offline.then_some("Waiting for a secure mail connection.");
+    if let Some(send_at) = resolve_requested_send_at(draft.send_at.as_deref())? {
+        let detail = if offline {
+            "Waiting for a secure mail connection."
+        } else {
+            "Scheduled to send."
+        };
+        let outbox_id = state.db.queue_outbox(
+            &draft,
+            "scheduled",
+            Some(detail),
+            &prepared.message_id,
+            &prepared.bytes,
+            Some(&send_at),
+        )?;
+        state.actor(&draft.account_id)?.wake.notify_one();
+        emit_outbox_change(&app, &draft.account_id, Some(&outbox_id), Some("scheduled"));
+        return Ok(SendOutcome {
+            id: outbox_id,
+            state: "scheduled".into(),
+            detail: Some(detail.into()),
+        });
+    }
     if delay > 0 {
         let send_at =
             (chrono::Utc::now() + chrono::Duration::seconds(i64::from(delay))).to_rfc3339();
@@ -3211,7 +3254,7 @@ fn notify_new_mail(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_filter_rules, cleanup_orphaned_account_dirs, preview_text,
+        apply_filter_rules, cleanup_orphaned_account_dirs, preview_text, resolve_requested_send_at,
         take_normalized_account_password,
     };
     use crate::db::{CachedMessage, Database};
@@ -3405,5 +3448,18 @@ mod tests {
         );
         assert!(preview_text(b"\x00\x01\x02binary").is_none());
         assert!(preview_text("héllo wörld".as_bytes()).is_some());
+    }
+
+    #[test]
+    fn requested_send_at_accepts_only_bounded_future_times() {
+        assert_eq!(resolve_requested_send_at(None).unwrap(), None);
+        assert_eq!(resolve_requested_send_at(Some("   ")).unwrap(), None);
+        assert!(resolve_requested_send_at(Some("tomorrow-ish")).is_err());
+        assert!(resolve_requested_send_at(Some("2000-01-01T00:00:00Z")).is_err());
+        let far = (chrono::Utc::now() + chrono::Duration::days(366)).to_rfc3339();
+        assert!(resolve_requested_send_at(Some(&far)).is_err());
+        let soon = (chrono::Utc::now() + chrono::Duration::hours(3)).to_rfc3339();
+        let resolved = resolve_requested_send_at(Some(&soon)).unwrap().unwrap();
+        assert!(resolved.contains("T"));
     }
 }

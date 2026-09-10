@@ -305,10 +305,10 @@ for (const [platform, userAgent] of Object.entries(platforms)) {
         path: testInfo.outputPath(`${platform}-setup-top-200.png`),
       });
       await page
-        .getByRole("button", { name: /iCloud Mail/i })
+        .getByRole("button", { name: "Continue", exact: true })
         .scrollIntoViewIfNeeded();
       await expect(
-        page.getByRole("button", { name: /iCloud Mail/i }),
+        page.getByRole("button", { name: "Continue", exact: true }),
       ).toBeInViewport();
       expect(
         await setup.evaluate(
@@ -319,6 +319,9 @@ for (const [platform, userAgent] of Object.entries(platforms)) {
         animations: "disabled",
         path: testInfo.outputPath(`${platform}-setup-200.png`),
       });
+      await page.getByRole("button", { name: "Continue", exact: true }).click();
+      await page.getByRole("button", { name: "Continue", exact: true }).click();
+      await page.getByRole("button", { name: "Continue", exact: true }).click();
       await page.getByRole("button", { name: /iCloud Mail/i }).click();
       await setup.evaluate((element) => {
         element.scrollTop = 0;

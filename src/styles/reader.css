@@ -41,8 +41,7 @@
   background: var(--surface);
 }
 
-.reader-primary-actions,
-.reader-secondary-actions {
+.reader-unified-actions {
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
@@ -51,6 +50,13 @@
   border: 1px solid color-mix(in srgb, var(--border) 58%, transparent);
   border-radius: var(--radius-pill);
   background: color-mix(in srgb, var(--surface-muted) 72%, transparent);
+}
+
+.toolbar-divider {
+  width: 1px;
+  align-self: stretch;
+  margin-block: 8px;
+  background: color-mix(in srgb, var(--border) 70%, transparent);
 }
 
 .reader-actions button {
@@ -90,7 +96,7 @@
   gap: 2px;
   padding: 8px;
   border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
-  border-radius: 14px;
+  border-radius: var(--radius-md);
   background: var(--surface);
   box-shadow: var(--shadow-soft);
 }
@@ -146,7 +152,7 @@
 
 .message-header {
   display: grid;
-  grid-template-columns: 42px minmax(0, 1fr);
+  grid-template-columns: 42px minmax(0, 1fr) auto;
   gap: 8px 11px;
   padding: 20px clamp(18px, 3vw, 30px) 16px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
@@ -166,7 +172,7 @@
   height: 42px;
   place-items: center;
   border-radius: 50%;
-  color: var(--accent-contrast, #fff);
+  color: var(--accent-contrast);
   background: var(--accent);
   font-weight: 750;
 }
@@ -212,10 +218,13 @@
 }
 
 .message-header time {
-  grid-column: 2;
+  grid-column: 3;
+  grid-row: 2;
+  align-self: start;
   color: var(--text-muted);
   font-size: 0.82rem;
-  text-align: left;
+  text-align: right;
+  white-space: nowrap;
   overflow-wrap: anywhere;
 }
 
@@ -225,12 +234,12 @@
   min-height: 44px;
   align-items: center;
   gap: 6px;
-  padding: 6px 14px;
+  padding: 6px 4px;
   margin-top: 4px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
+  border: 0;
+  border-radius: var(--radius-sm);
   color: var(--accent);
-  background: var(--accent-soft);
+  background: transparent;
   font-size: 0.85rem;
   font-weight: 600;
   cursor: pointer;
@@ -240,8 +249,8 @@
 }
 
 .details-toggle:hover {
-  background: var(--accent);
-  color: var(--accent-contrast, #fff);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .message-details-panel {
@@ -250,7 +259,7 @@
   padding: 14px 18px;
   background: var(--surface-muted);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
 }
 
 .details-grid {
@@ -295,7 +304,7 @@
   padding: 3px 9px;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   font-size: 0.84rem;
 }
 
@@ -304,7 +313,8 @@
 }
 
 .reply-to-highlight {
-  color: var(--warning);
+  padding-left: 8px;
+  border-left: 3px solid var(--accent);
   font-weight: 600;
 }
 
@@ -329,7 +339,7 @@
   font-size: 0.8rem;
   background: var(--surface);
   padding: 2px 7px;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border);
 }
 
@@ -341,7 +351,7 @@
   padding: 6px 12px;
   font-size: 0.82rem;
   font-weight: 550;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--text-muted);
@@ -400,7 +410,7 @@
   min-height: 180px;
   flex: 1 0 180px;
   overflow: auto;
-  background: #fff;
+  background: var(--mail-canvas);
   color-scheme: light;
   isolation: isolate;
 }
@@ -410,7 +420,7 @@
   width: 100%;
   height: 100%;
   border: 0;
-  background: #fff;
+  background: var(--mail-canvas);
   color-scheme: light;
 }
 
@@ -424,7 +434,7 @@
   line-height: 1.55;
   /* The body stays white in both themes so sender content keeps its
      contrast; pin the ink color to match the framed HTML document. */
-  color: #20252b;
+  color: var(--mail-ink);
 }
 
 .plain-text-body a {
@@ -449,7 +459,7 @@
   width: 60px;
   height: 60px;
   place-items: center;
-  border-radius: 15px;
+  border-radius: var(--radius-md);
   color: var(--accent);
   background: var(--accent-soft);
   font-size: 1.8rem;
@@ -477,7 +487,7 @@
   padding: 6px 10px;
   text-align: left;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: var(--surface-muted);
 }
 

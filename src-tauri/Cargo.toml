@@ -7,9 +7,8 @@ edition = "2021"
 license = "MPL-2.0"
 
 [features]
-default = ["direct-updater", "window-fx"]
+default = ["direct-updater"]
 direct-updater = ["dep:tauri-plugin-process", "dep:tauri-plugin-updater"]
-window-fx = ["tauri/macos-private-api"]
 flatpak = []
 mas = []
 msstore = []
@@ -37,7 +36,7 @@ rusqlite = { version = "0.37", features = ["bundled", "chrono"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-tauri = { version = "2", features = ["macos-private-api"] }
+tauri = { version = "2" }
 tauri-plugin-dialog = "2"
 tauri-plugin-deep-link = "2"
 tauri-plugin-notification = "2"
@@ -49,7 +48,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync",
 tokio-native-tls = "0.3"
 url = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
-# Native window blur / vibrancy (macOS vibrancy, Windows Mica / Acrylic, mirrored from Zinnia)
+# Native window blur / vibrancy via public OS APIs only (MAS-safe, no macos-private-api).
 window-vibrancy = "0.6"
 zeroize = { version = "1", features = ["derive"] }
 

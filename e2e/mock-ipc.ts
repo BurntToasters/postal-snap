@@ -588,6 +588,10 @@ export async function installMockIpc(
                 blockReportedThreats: true,
                 groupThreads: true,
                 notifyNewMail: true,
+                setupCompleted: location.search.includes("firstRun")
+                  ? false
+                  : true,
+                setupStep: null,
               };
             case "supports_workspace_window_fx":
               return true;
@@ -611,7 +615,7 @@ export async function installMockIpc(
                 cachePolicy: {
                   mode: "recent",
                   days: 90,
-                  maxBytes: 1_073_741_824,
+                  maxBytes: 1073741824,
                 },
                 lastAccountId: null,
                 lastMailboxId: null,
@@ -622,6 +626,8 @@ export async function installMockIpc(
                 blockReportedThreats: true,
                 groupThreads: true,
                 notifyNewMail: true,
+                setupCompleted: true,
+                setupStep: null,
               };
             case "reset_settings":
               state.resetSettings += 1;
@@ -635,7 +641,7 @@ export async function installMockIpc(
                 cachePolicy: {
                   mode: "recent",
                   days: 90,
-                  maxBytes: 1_073_741_824,
+                  maxBytes: 1073741824,
                 },
                 lastAccountId: null,
                 lastMailboxId: null,
@@ -646,6 +652,8 @@ export async function installMockIpc(
                 blockReportedThreats: true,
                 groupThreads: true,
                 notifyNewMail: true,
+                setupCompleted: true,
+                setupStep: null,
               };
             case "get_startup_notice":
               return null;

@@ -958,7 +958,7 @@ export function MessageReader() {
             <X aria-hidden="true" />
           </button>
         ) : null}
-        <div className="reader-primary-actions">
+        <div className="reader-unified-actions">
           <button
             type="button"
             onClick={() =>
@@ -987,9 +987,7 @@ export function MessageReader() {
               ? strings.reader.preparing
               : strings.reader.forward}
           </button>
-        </div>
-        <span className="action-spacer" />
-        <div className="reader-secondary-actions">
+          <span className="toolbar-divider" aria-hidden="true" />
           <button
             type="button"
             onClick={() => void move("archive")}

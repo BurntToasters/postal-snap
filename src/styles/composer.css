@@ -17,7 +17,7 @@
   height: 100%;
   border: 0;
   border-radius: 0;
-  background: rgb(15 25 33 / 52%);
+  background: var(--scrim);
 }
 
 .setup-modal .setup-page {
@@ -79,7 +79,7 @@
   margin: 0 16px 12px;
   padding: 8px 12px;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   background: var(--surface-muted, var(--surface));
 }
 
@@ -129,9 +129,9 @@
   max-width: 380px;
   min-height: 48px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   background: var(--surface);
-  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.18);
+  box-shadow: var(--shadow);
   overflow: hidden;
   animation: slide-up 0.2s ease-out;
 }
@@ -241,6 +241,11 @@
   color: var(--text-muted);
 }
 
+.composer-from-value {
+  color: var(--text);
+  font-weight: 500;
+}
+
 .composer-from-select {
   border: 0;
   background: transparent;
@@ -341,6 +346,20 @@
   padding: 8px 12px;
   font-size: 0.82rem;
   white-space: nowrap;
+}
+
+.format-toggle-row {
+  display: flex;
+  padding: 6px 12px 0;
+}
+
+.format-toggle .format-aa {
+  font-weight: 800;
+  font-size: 1rem;
+}
+
+.format-toolbar[hidden] {
+  display: none;
 }
 
 .format-toolbar {
@@ -565,6 +584,79 @@
 .composer-window .discard-button {
   margin-left: auto;
   color: var(--danger);
+}
+
+.send-split {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+}
+
+.send-split .send-button {
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+}
+
+.send-split .send-chevron {
+  min-width: 44px;
+  padding-inline: 8px;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  border-left: 1px solid
+    color-mix(in srgb, var(--accent-contrast) 30%, transparent);
+}
+
+.send-split .send-chevron svg {
+  width: 17px;
+}
+
+.send-menu {
+  position: absolute;
+  z-index: 20;
+  bottom: calc(100% + 6px);
+  left: 0;
+  display: grid;
+  min-width: 250px;
+  gap: 2px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.send-menu > button {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.send-menu > button:hover {
+  background: var(--surface-hover);
+}
+
+.send-menu > button svg {
+  width: 17px;
+  color: var(--text-muted);
+}
+
+.schedule-form {
+  display: grid;
+  gap: 8px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+}
+
+.schedule-form label {
+  display: grid;
+  gap: 4px;
+  font-size: 0.84rem;
+  font-weight: 600;
 }
 
 .field-error {

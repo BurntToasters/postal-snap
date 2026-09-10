@@ -253,6 +253,8 @@ pub struct ComposeDraft {
     pub attachments: Vec<ComposeAttachment>,
     pub in_reply_to: Option<String>,
     pub references: Option<Vec<String>>,
+    #[serde(default)]
+    pub send_at: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -368,6 +370,10 @@ pub struct AppSettings {
     pub group_threads: bool,
     #[serde(default = "default_notify_new_mail")]
     pub notify_new_mail: bool,
+    #[serde(default)]
+    pub setup_completed: bool,
+    #[serde(default)]
+    pub setup_step: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -436,6 +442,8 @@ impl Default for AppSettings {
             block_reported_threats: true,
             group_threads: true,
             notify_new_mail: true,
+            setup_completed: false,
+            setup_step: None,
         }
     }
 }
@@ -1039,6 +1047,7 @@ mod tests {
             attachments: vec![],
             in_reply_to: None,
             references: None,
+            send_at: None,
         };
         assert!(validate_compose_draft(&draft).is_err());
         draft.subject = "Hello".into();

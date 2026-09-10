@@ -85,7 +85,7 @@
 .setup-progress span.active,
 .setup-progress span.done {
   border-color: var(--accent);
-  color: var(--accent-contrast, #fff);
+  color: var(--accent-contrast);
   background: var(--accent);
 }
 
@@ -371,4 +371,185 @@ legend {
 .connection-status .text-button {
   width: fit-content;
   min-height: 44px;
+}
+
+/* Staged first-run flow: app config before account */
+.setup-card.setup-flow {
+  width: min(720px, 100%);
+}
+
+.setup-flow-progress {
+  grid-template-columns: repeat(4, 30px);
+  justify-content: start;
+  gap: 8px;
+}
+
+.setup-flow-progress span {
+  grid-row: 1;
+}
+
+.setup-step {
+  display: grid;
+  gap: 16px;
+}
+
+.setup-actions {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.setup-actions.split {
+  grid-template-columns: 1fr 1fr;
+}
+
+.setup-field-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.setup-field-grid label {
+  display: grid;
+  gap: 6px;
+  font-weight: 650;
+}
+
+.setup-switches {
+  display: grid;
+  gap: 10px;
+}
+
+.setup-preview {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-muted);
+}
+
+.setup-preview-live {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.setup-preview-mail {
+  display: grid;
+  grid-template-columns: 110px 1fr 1fr;
+  gap: 8px;
+  min-height: 132px;
+}
+
+.setup-preview[data-reading-pane="bottom"] .setup-preview-mail {
+  grid-template-columns: 110px 1fr;
+  grid-template-rows: 1fr auto;
+}
+
+.setup-preview[data-reading-pane="bottom"] .setup-preview-reader {
+  grid-column: 1 / -1;
+}
+
+.setup-preview[data-reading-pane="hidden"] .setup-preview-mail {
+  grid-template-columns: 110px 1fr;
+}
+
+.setup-preview-folders,
+.setup-preview-list,
+.setup-preview-reader {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.setup-preview-folders strong,
+.setup-preview-reader strong {
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.setup-preview-folders span {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  border-radius: 7px;
+  font-size: 0.86rem;
+}
+
+.setup-preview-folders span.active {
+  background: var(--accent-soft);
+  color: var(--text);
+  font-weight: 700;
+}
+
+.setup-preview-row {
+  display: grid;
+  gap: 2px;
+  min-height: 56px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.setup-preview-row.muted {
+  opacity: 0.75;
+}
+
+.setup-preview-row strong {
+  font-size: 0.92rem;
+}
+
+.setup-preview-row span {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 0.86rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.setup-preview-reader span {
+  font-size: 0.86rem;
+  color: var(--text-muted);
+}
+
+.setup-preview[data-reading-pane="hidden"] .setup-preview-reader {
+  border-style: dashed;
+}
+
+:root[data-density="compact"] .setup-preview-row {
+  min-height: 44px;
+  padding-block: 6px;
+}
+
+:root[data-density="compact"] .setup-preview-row span {
+  display: none;
+}
+
+:root[data-density="compact"] .setup-preview-row strong {
+  font-size: 0.86rem;
+}
+
+.setup-account-embed {
+  gap: 12px;
+}
+
+.setup-account-embed .setup-page {
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.setup-account-embed .setup-card {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }

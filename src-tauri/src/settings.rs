@@ -214,6 +214,8 @@ impl PortableSettings {
             block_reported_threats: true,
             group_threads: self.group_threads,
             notify_new_mail: self.notify_new_mail,
+            setup_completed: current.setup_completed,
+            setup_step: current.setup_step.clone(),
         }
     }
 }
@@ -251,18 +253,26 @@ fn normalize_legacy(mut settings: AppSettings) -> Result<AppSettings, String> {
     if !matches!(settings.density.as_str(), "comfortable" | "compact") {
         settings.density = "comfortable".into();
     }
+    // First-run progress did not exist before this version. Existing installs
+    // have already passed first launch, so treat legacy data as completed.
+    settings.setup_completed = true;
+    settings.setup_step = None;
     validate(&settings)?;
     Ok(settings)
 }
 
 fn parse_and_validate(raw: &str) -> Result<AppSettings, String> {
-    let settings: AppSettings =
+    let mut settings: AppSettings =
         serde_json::from_str(raw).map_err(|_| "Settings JSON is invalid.".to_string())?;
-    let settings = if settings.schema_version == 1 {
-        normalize_legacy(settings)?
-    } else {
-        settings
-    };
+    if settings.schema_version == 1 {
+        return normalize_legacy(settings);
+    }
+    // Files written before first-run tracking lack the flag. Do not force
+    // existing users through setup again; fresh installs have no file.
+    if !raw.contains("setupCompleted") {
+        settings.setup_completed = true;
+        settings.setup_step = None;
+    }
     validate(&settings)?;
     Ok(settings)
 }
@@ -276,10 +286,15 @@ fn validate(settings: &AppSettings) -> Result<(), String> {
     } else {
         (1..=3650).contains(&settings.cache_policy.days)
     };
+    let valid_setup_step = settings
+        .setup_step
+        .as_deref()
+        .is_none_or(|step| matches!(step, "welcome" | "appearance" | "comfort" | "account"));
     if settings.schema_version != 2
         || !(0.85..=2.0).contains(&settings.text_scale)
         || !valid_cache_max_bytes
         || !valid_cache_days
+        || !valid_setup_step
         || !matches!(
             settings.reading_pane.as_str(),
             "right" | "bottom" | "hidden"
@@ -351,10 +366,35 @@ fn backup_invalid(path: &Path) -> Result<(), String> {
             let unique = format!("settings.json.corrupt-{stamp}-{}", uuid::Uuid::new_v4());
             let backup = path.with_file_name(unique);
             fs::rename(path, backup)
-                .map_err(|_| "Could not preserve damaged application settings.".to_string())
+                .map_err(|_| "Could not preserve damaged application settings.".to_string())?;
+            prune_corrupt_backups(path);
+            Ok(())
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(_) => Err("Could not inspect damaged application settings.".into()),
+    }
+}
+
+fn prune_corrupt_backups(path: &Path) {
+    let parent = match path.parent() {
+        Some(parent) => parent,
+        None => return,
+    };
+    let mut backups: Vec<PathBuf> = Vec::new();
+    let entries = match fs::read_dir(parent) {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with("settings.json.corrupt-") {
+            backups.push(entry.path());
+        }
+    }
+    // Newest first by filename (timestamp prefix sorts chronologically).
+    backups.sort_by(|a, b| b.cmp(a));
+    for stale in backups.into_iter().skip(5) {
+        let _ = fs::remove_file(stale);
     }
 }
 
@@ -759,5 +799,86 @@ mod tests {
         assert!(require_threat_off_confirm(&on, &off, Some("nope")).is_err());
         assert!(require_threat_off_confirm(&on, &off, Some("CONFIRM")).is_ok());
         assert!(require_threat_off_confirm(&on, &on, None).is_ok());
+    }
+
+    #[test]
+    fn first_run_progress_defaults_and_validates() {
+        let defaults = AppSettings::default();
+        assert!(!defaults.setup_completed);
+        assert_eq!(defaults.setup_step, None);
+        assert!(validate(&defaults).is_ok());
+
+        let bad = AppSettings {
+            setup_step: Some("third-party".into()),
+            ..AppSettings::default()
+        };
+        assert!(validate(&bad).is_err());
+
+        for step in ["welcome", "appearance", "comfort", "account"] {
+            let ok = AppSettings {
+                setup_step: Some(step.into()),
+                ..AppSettings::default()
+            };
+            assert!(validate(&ok).is_ok());
+        }
+
+        // Files written before first-run tracking still load.
+        let legacy_raw = "{\"schemaVersion\":2,\"readingPane\":\"right\",\"textScale\":1,\"privateNotifications\":false,\"theme\":\"system\",\"density\":\"comfortable\",\"cachePolicy\":{\"mode\":\"recent\",\"days\":90,\"maxBytes\":1073741824},\"lastAccountId\":null,\"lastMailboxId\":null,\"folderPaneWidth\":264,\"messagePaneWidth\":400,\"readerPaneHeight\":360}";
+        let legacy_direct: AppSettings = serde_json::from_str(legacy_raw).unwrap();
+        assert!(!legacy_direct.setup_completed);
+        // parse_and_validate migrates pre-existing files to completed so
+        // current users are not forced through setup again.
+        let legacy = parse_and_validate(legacy_raw).unwrap();
+        assert!(legacy.setup_completed);
+        assert_eq!(legacy.setup_step, None);
+    }
+
+    #[test]
+    fn portable_round_trip_preserves_first_run_progress() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let export_path = directory.path().join("export.json");
+        let store = SettingsStore::load(path, &Database::memory()).unwrap();
+        store
+            .save(AppSettings {
+                setup_completed: true,
+                setup_step: Some("account".into()),
+                theme: "dark".into(),
+                ..AppSettings::default()
+            })
+            .unwrap();
+        store.export_to(&export_path).unwrap();
+        let raw = fs::read_to_string(&export_path).unwrap();
+        assert!(!raw.contains("setupCompleted"));
+        assert!(!raw.contains("setupStep"));
+        let imported = store.import_from(&export_path).unwrap();
+        assert!(imported.setup_completed);
+        assert_eq!(imported.setup_step.as_deref(), Some("account"));
+        let reset = store.reset_preferences().unwrap();
+        assert!(reset.setup_completed);
+        assert_eq!(reset.setup_step.as_deref(), Some("account"));
+    }
+
+    #[test]
+    fn corrupt_backups_are_pruned_to_newest_five() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        for index in 0..8 {
+            let name = format!("settings.json.corrupt-2024010100000{index}-test");
+            fs::write(directory.path().join(name), "bad").unwrap();
+        }
+        fs::write(&path, "{not json").unwrap();
+        let _store = SettingsStore::load(path.clone(), &Database::memory()).unwrap();
+        let remaining = fs::read_dir(directory.path())
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("settings.json.corrupt-")
+            })
+            .count();
+        assert_eq!(remaining, 5);
     }
 }

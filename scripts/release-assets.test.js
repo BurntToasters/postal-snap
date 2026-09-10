@@ -227,7 +227,7 @@ test("direct and Store builds keep separate capabilities", async () => {
   assert.equal(mas.app.windows[0].transparent, false);
   assert.equal(direct.app.macOSPrivateApi, false);
   const directOverlay = await readJson("src-tauri/tauri.direct.conf.json");
-  assert.equal(directOverlay.app.macOSPrivateApi, true);
+  assert.equal(directOverlay.app.macOSPrivateApi, false);
   assert.equal(direct.bundle.createUpdaterArtifacts, true);
   assert.equal(mas.bundle.createUpdaterArtifacts, false);
   assert.equal(msstore.bundle.createUpdaterArtifacts, false);
@@ -388,7 +388,7 @@ test("Windows release signing uses Azure Artifact Signing, not a local PFX", asy
     "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/setup-windows-artifact-signing.ps1",
   );
   assert.match(packageJson.scripts["tauri:dev"], /tauri\.direct\.conf\.json/);
-  assert.match(tauriBuild, /macOSPrivateApi: true/);
+  assert.doesNotMatch(tauriBuild, /macOSPrivateApi/);
   assert.match(
     packageJson.scripts["build:win:x64:prepared"],
     /--require-windows-signing --target x86_64-pc-windows-msvc --bundles nsis/,
