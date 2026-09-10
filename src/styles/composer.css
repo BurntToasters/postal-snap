@@ -49,9 +49,9 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--surface) 96%, var(--surface-muted));
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: 20px;
+  background: var(--surface);
   box-shadow: var(--shadow);
 }
 
@@ -163,11 +163,11 @@
 
 .composer-window > header {
   display: flex;
-  min-height: 58px;
+  min-height: 56px;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 14px 8px 18px;
-  border-bottom: 1px solid var(--border);
+  padding: 7px 12px 7px 18px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
 }
 
 .composer-window > header > span {
@@ -321,8 +321,8 @@
   gap: 6px;
   padding: 6px 12px;
   overflow-x: auto;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-muted);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
+  background: color-mix(in srgb, var(--surface) 90%, var(--surface-muted));
 }
 
 .format-toolbar-secondary {
@@ -343,9 +343,9 @@
   align-items: center;
   gap: 2px;
   padding: 2px 4px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--surface) 86%, transparent);
 }
 
 .toolbar-group > button {
@@ -356,7 +356,7 @@
   height: 44px;
   place-items: center;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--radius-pill);
   background: transparent;
   color: var(--text);
   cursor: pointer;
@@ -381,7 +381,7 @@
   min-height: 44px;
   padding: 4px 8px;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--radius-pill);
   background: transparent;
   font-size: 0.88rem;
 }

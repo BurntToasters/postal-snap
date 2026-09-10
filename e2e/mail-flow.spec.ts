@@ -707,6 +707,50 @@ test("fills resized window without exposing a blank footer", async ({
   }
 });
 
+test("uses an edge-to-edge Mail-style sidebar and trailing scoped search", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1240, height: 820 });
+  await page.goto("/");
+  await page.locator(".mail-shell").waitFor();
+
+  const geometry = await page.evaluate(() => {
+    const folder = document.querySelector<HTMLElement>(".folder-pane");
+    const toolbar = document.querySelector<HTMLElement>(".app-toolbar");
+    const search = document.querySelector<HTMLElement>(".search-box");
+    const folderBounds = folder?.getBoundingClientRect();
+    const toolbarBounds = toolbar?.getBoundingClientRect();
+    const searchBounds = search?.getBoundingClientRect();
+    return {
+      folderTop: folderBounds?.top ?? -1,
+      folderBottom: folderBounds?.bottom ?? -1,
+      folderRight: folderBounds?.right ?? -1,
+      toolbarTop: toolbarBounds?.top ?? -1,
+      toolbarLeft: toolbarBounds?.left ?? -1,
+      toolbarRight: toolbarBounds?.right ?? -1,
+      searchLeft: searchBounds?.left ?? -1,
+      viewportBottom: window.innerHeight,
+    };
+  });
+
+  expect(Math.abs(geometry.folderTop)).toBeLessThanOrEqual(1);
+  expect(Math.abs(geometry.toolbarTop)).toBeLessThanOrEqual(1);
+  expect(
+    Math.abs(geometry.folderBottom - geometry.viewportBottom),
+  ).toBeLessThanOrEqual(1);
+  expect(geometry.toolbarLeft).toBeGreaterThanOrEqual(geometry.folderRight);
+  expect(geometry.searchLeft).toBeGreaterThan(
+    geometry.toolbarLeft + (geometry.toolbarRight - geometry.toolbarLeft) / 2,
+  );
+
+  await expect(page.getByRole("button", { name: "Get Mail" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Compose" })).toBeVisible();
+  await page.getByRole("button", { name: "This mailbox" }).click();
+  await expect(
+    page.getByRole("button", { name: "This account" }),
+  ).toHaveAttribute("aria-pressed", "true");
+});
+
 test("completes guided iCloud first run", async ({ page }) => {
   await page.goto("/?firstRun=1");
   await page.getByRole("button", { name: /iCloud Mail/i }).click();
@@ -718,7 +762,7 @@ test("completes guided iCloud first run", async ({ page }) => {
   await page.getByLabel("App-specific password").fill("app-password");
   await page.getByRole("button", { name: "Connect securely" }).click();
 
-  await expect(page.getByRole("button", { name: "Write" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Compose" })).toBeVisible();
   await expect(
     page.getByRole("navigation", { name: "Mailboxes" }),
   ).toContainText("Inbox");
@@ -867,7 +911,7 @@ test("completes secure manual first run", async ({ page }) => {
   await outgoing.getByLabel("Server").fill("smtp.example.com");
   await page.getByRole("button", { name: "Connect securely" }).click();
 
-  await expect(page.getByRole("button", { name: "Write" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Compose" })).toBeVisible();
   const setup = await page.evaluate(
     () =>
       (
@@ -901,7 +945,7 @@ test("explains how to recover from a failed iCloud sign-in", async ({
   await expect(
     page.getByText(/regular Apple Account password will not work/i),
   ).toBeVisible();
-  await expect(page.getByRole("button", { name: "Write" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Compose" })).toHaveCount(0);
 });
 
 test("reads, replies, and sends through typed IPC", async ({ page }) => {
@@ -1260,7 +1304,7 @@ test("loads older mail with cursor pagination", async ({ page }) => {
 
 test("validates recipients before sending", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "Write" }).click();
+  await page.getByRole("button", { name: "Compose" }).click();
   await page
     .getByRole("combobox", { name: "To", exact: true })
     .fill("not-an-address");
@@ -1395,7 +1439,7 @@ test("detects and manages account aliases and presents From selector in composer
   );
 
   await page.keyboard.press("Escape");
-  await page.getByRole("button", { name: "Write", exact: true }).click();
+  await page.getByRole("button", { name: "Compose", exact: true }).click();
   await expect(page.getByLabel("From address")).toBeVisible();
   await expect(page.getByLabel("From address")).toContainText(
     "custom@mydomain.com",
@@ -1490,7 +1534,8 @@ test("triages several messages at once", async ({ page }) => {
   await page.getByRole("button", { name: "Mark read", exact: true }).click();
   await expect(page.getByRole("toolbar", { name: "1 selected" })).toBeHidden();
 
-  await page.getByRole("button", { name: "Mark all read" }).click();
+  await page.getByRole("button", { name: "More mailbox actions" }).click();
+  await page.getByRole("menuitem", { name: "Mark all read" }).click();
   await expect(page.getByRole("button", { name: /^Inbox/ })).not.toContainText(
     "1",
   );
@@ -1498,7 +1543,7 @@ test("triages several messages at once", async ({ page }) => {
 
 test("completes recipients from send history", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "Write", exact: true }).click();
+  await page.getByRole("button", { name: "Compose", exact: true }).click();
   await page.getByPlaceholder("name@example.com").fill("jan");
   await expect(
     page.getByRole("option", { name: /jane@example.com/i }),

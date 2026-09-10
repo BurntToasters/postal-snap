@@ -1,6 +1,6 @@
 // Native window blur / vibrancy (macOS vibrancy / Windows Mica / Acrylic).
-// Everything but the rendered email will have it.
-// Linux is intentionally a no-op; stays fully opaque there.
+// Native material sits behind structural chrome; content panes remain opaque.
+// Linux is intentionally a no-op and stays fully opaque.
 
 import { invoke } from "@tauri-apps/api/core";
 import type { NativeCommand } from "./api";

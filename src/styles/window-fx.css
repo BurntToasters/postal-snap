@@ -1,7 +1,7 @@
 /* ==========================================================================
    Native Window Blur & Vibrancy
-   Mirrored from Zinnia (macOS vibrancy / Windows Mica & Acrylic).
-   App chrome may be translucent. Rendered email stays fully opaque.
+   macOS vibrancy / Windows Mica & Acrylic. Structural chrome may be
+   translucent while message-list and rendered-email content stay opaque.
    ========================================================================== */
 
 /* 1. Root & Shell Translucency */
@@ -14,7 +14,7 @@ html[data-window-fx="vibrant"] .mail-shell {
   background: color-mix(in srgb, var(--canvas) 72%, transparent) !important;
 }
 
-/* 2. Sidebars, Toolbars, and Lists: Translucent Glass */
+/* 2. Structural chrome: translucent glass. Content panes stay opaque. */
 html[data-window-fx="vibrant"] .app-toolbar {
   background: color-mix(in srgb, var(--surface) 62%, transparent) !important;
   backdrop-filter: blur(22px) saturate(140%);
@@ -33,23 +33,26 @@ html[data-window-fx="vibrant"] .folder-pane {
   border-right: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
 }
 
-html[data-window-fx="vibrant"] .message-pane {
-  background: color-mix(in srgb, var(--surface) 55%, transparent) !important;
-  backdrop-filter: blur(18px) saturate(120%);
-  -webkit-backdrop-filter: blur(18px) saturate(120%);
-  border-right: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
-}
-
+html[data-window-fx="vibrant"] .message-pane,
 html[data-window-fx="vibrant"] .reader-pane {
-  background: color-mix(in srgb, var(--canvas) 55%, transparent) !important;
+  background: var(--surface) !important;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
-html[data-window-fx="vibrant"] .reader-actions,
+html[data-window-fx="vibrant"] .message-pane {
+  border-right: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+}
+
+html[data-window-fx="vibrant"] .reader-actions {
+  background: color-mix(in srgb, var(--surface) 78%, transparent) !important;
+  backdrop-filter: blur(18px) saturate(130%);
+  -webkit-backdrop-filter: blur(18px) saturate(130%);
+}
+
 html[data-window-fx="vibrant"] .message-header,
 html[data-window-fx="vibrant"] .remote-content-banner {
-  background: color-mix(in srgb, var(--surface) 68%, transparent) !important;
-  backdrop-filter: blur(16px) saturate(130%);
-  -webkit-backdrop-filter: blur(16px) saturate(130%);
+  background: var(--surface) !important;
 }
 
 /* Controls remain readable over glass; message content remains opaque below. */
@@ -114,7 +117,6 @@ html:not([data-window-fx]) body {
 @media (prefers-contrast: more) {
   html[data-window-fx="vibrant"] .app-toolbar,
   html[data-window-fx="vibrant"] .folder-pane,
-  html[data-window-fx="vibrant"] .message-pane,
   html[data-window-fx="vibrant"] .reader-actions {
     background: var(--surface) !important;
     backdrop-filter: none !important;
@@ -125,7 +127,6 @@ html:not([data-window-fx]) body {
 @media (prefers-reduced-transparency: reduce) {
   html[data-window-fx="vibrant"] .app-toolbar,
   html[data-window-fx="vibrant"] .folder-pane,
-  html[data-window-fx="vibrant"] .message-pane,
   html[data-window-fx="vibrant"] .reader-actions {
     background: var(--surface) !important;
     backdrop-filter: none !important;

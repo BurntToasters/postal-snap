@@ -262,7 +262,7 @@ describe("mail shell", () => {
     expect(
       await screen.findByRole("button", { name: "Get Mail" }),
     ).toBeVisible();
-    expect(screen.getByRole("button", { name: "Write" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Compose" })).toBeVisible();
   });
 
   it("exposes the message toolbar for keyboard navigation", async () => {
@@ -322,7 +322,10 @@ describe("mail shell", () => {
     renderShell();
 
     await screen.findByRole("option", { name: /First message/i });
-    fireEvent.click(screen.getByRole("button", { name: "Mark all read" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Mark all read" }));
 
     await waitFor(() =>
       expect(mockedMarkMailboxRead).toHaveBeenCalledWith("account-1", 1),

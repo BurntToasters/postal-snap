@@ -25,7 +25,7 @@ export const strings = {
       "Your saved mail was not deleted. Restart Postal Snap and try again.",
   },
   mail: {
-    compose: "Write",
+    compose: "Compose",
     getMail: "Get Mail",
     search: "Search mail",
     searchMailboxOnly: "Search this list",
@@ -137,6 +137,7 @@ export const strings = {
     selectMessage: (subject: string) => `Select ${subject}`,
     paneSize: (pixels: number) => `${pixels} pixels`,
     markAllRead: "Mark all read",
+    moreMailboxActions: "More mailbox actions",
     conversation: "Conversation",
     threadMessages: (count: number) =>
       count === 1 ? "1 message" : `${count} messages`,

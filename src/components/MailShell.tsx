@@ -19,6 +19,7 @@ import {
   MailOpen,
   MailPlus,
   Menu,
+  MoreHorizontal,
   PanelLeft,
   Paperclip,
   Pencil,
@@ -41,7 +42,6 @@ import { useAppStore } from "../store";
 import { groupThreads } from "../threads";
 import type { MailboxRole, MessageSummary, ReadingPane } from "../types";
 import { promptToRestartForUpdate } from "../update";
-import { AppMark } from "./AppMark";
 import { MessageReader } from "./MessageReader";
 import { SetupWizard } from "./SetupWizard";
 import { useDialogFocus } from "./useDialogFocus";
@@ -127,11 +127,31 @@ export function MailShell({ onOpenSettings }: Props) {
   const [selecting, setSelecting] = useState(false);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [mailboxMoreOpen, setMailboxMoreOpen] = useState(false);
+  const mailboxMoreRef = useRef<HTMLDivElement>(null);
   const toolbarRef = useRef<HTMLElement>(null);
   const newFolderButtonRef = useRef<HTMLButtonElement>(null);
   const lastFolderInvoker = useRef<HTMLElement | null>(null);
 
   const sidebarVisible = settings.sidebarVisible !== false;
+
+  useEffect(() => {
+    if (!mailboxMoreOpen) return;
+    const close = (event: MouseEvent) => {
+      if (!mailboxMoreRef.current?.contains(event.target as Node)) {
+        setMailboxMoreOpen(false);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMailboxMoreOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [mailboxMoreOpen]);
 
   useLayoutEffect(() => {
     const toolbar = toolbarRef.current;
@@ -1294,115 +1314,120 @@ export function MailShell({ onOpenSettings }: Props) {
   return (
     <main className={shellClass} style={shellStyle}>
       <header ref={toolbarRef} className="app-toolbar">
-        <button
-          ref={sidebarToggleRef}
-          className="icon-button sidebar-toggle"
-          type="button"
-          onClick={() => {
-            if (narrowViewport && sidebarVisible)
-              setSidebarOpen((open) => !open);
-            else if (narrowViewport) {
-              toggleSidebar();
-              setSidebarOpen(true);
-            } else toggleSidebar();
-          }}
-          aria-label={
-            sidebarVisible && (!narrowViewport || sidebarOpen)
-              ? strings.mail.hideMailboxes
-              : strings.mail.showMailboxes
-          }
-          aria-expanded={sidebarVisible && (sidebarOpen || !narrowViewport)}
-          aria-controls="folder-pane"
-        >
-          <PanelLeft aria-hidden="true" />
-        </button>
-        <div className="app-brand" aria-label={strings.appName}>
-          <AppMark size={28} />
-          <strong>{strings.appName}</strong>
-        </div>
-        <button
-          className="toolbar-button get-mail-button"
-          type="button"
-          onClick={() => void refresh()}
-          disabled={busy}
-          aria-label={strings.mail.getMail}
-        >
-          <RefreshCw aria-hidden="true" className={busy ? "spinning" : ""} />
-          <span aria-hidden="false">{strings.mail.getMail}</span>
-        </button>
-        <button
-          className="primary-button compose-button"
-          type="button"
-          onClick={() => openComposer()}
-          aria-label={strings.mail.compose}
-        >
-          <MailPlus aria-hidden="true" />
-          <span aria-hidden="false">{strings.mail.compose}</span>
-        </button>
-        <form
-          className="search-box"
-          role="search"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void runSearch();
-          }}
-        >
-          <Search aria-hidden="true" />
-          <input
-            ref={searchInput}
-            value={query}
-            onChange={(event) => {
-              queryRef.current = event.target.value;
-              setQuery(event.target.value);
-            }}
-            placeholder={
-              activeLocalView === "drafts" || activeLocalView === "outbox"
-                ? strings.mail.searchMailboxOnly
-                : activeLocalView
-                  ? strings.mail.searchMailboxOnly
-                  : strings.mail.search
-            }
-            aria-label={strings.mail.search}
-            disabled={Boolean(
-              activeLocalView &&
-              activeLocalView !== "drafts" &&
-              activeLocalView !== "outbox",
-            )}
-          />
-          {!activeLocalView ? (
-            <label className="search-scope">
-              <input
-                type="checkbox"
-                checked={allFolders}
-                onChange={(event) => {
-                  allFoldersRef.current = event.target.checked;
-                  setAllFolders(event.target.checked);
-                }}
-              />
-              {allFolders ? strings.mail.thisAccount : strings.mail.thisMailbox}
-            </label>
-          ) : null}
-        </form>
-        {updateReady ? (
+        <div className="toolbar-cluster toolbar-leading">
           <button
+            ref={sidebarToggleRef}
+            className="icon-button sidebar-toggle"
             type="button"
-            className="update-ready-badge"
-            onClick={() => void promptToRestartForUpdate(updateReady)}
-            title={strings.mail.updateReadyTooltip(updateReady)}
-            aria-label={strings.mail.updateReadyBadge}
+            onClick={() => {
+              if (narrowViewport && sidebarVisible)
+                setSidebarOpen((open) => !open);
+              else if (narrowViewport) {
+                toggleSidebar();
+                setSidebarOpen(true);
+              } else toggleSidebar();
+            }}
+            aria-label={
+              sidebarVisible && (!narrowViewport || sidebarOpen)
+                ? strings.mail.hideMailboxes
+                : strings.mail.showMailboxes
+            }
+            aria-expanded={sidebarVisible && (sidebarOpen || !narrowViewport)}
+            aria-controls="folder-pane"
           >
-            <span className="badge-dot" aria-hidden="true" />
-            <span>{strings.mail.updateReadyBadge}</span>
+            <PanelLeft aria-hidden="true" />
           </button>
-        ) : null}
-        <button
-          className="icon-button"
-          type="button"
-          onClick={onOpenSettings}
-          aria-label={strings.mail.settings}
-        >
-          <Settings />
-        </button>
+          <button
+            className="toolbar-button get-mail-button"
+            type="button"
+            onClick={() => void refresh()}
+            disabled={busy}
+            aria-label={strings.mail.getMail}
+          >
+            <RefreshCw aria-hidden="true" className={busy ? "spinning" : ""} />
+            <span>{strings.mail.getMail}</span>
+          </button>
+        </div>
+        <span className="toolbar-flex-spacer" aria-hidden="true" />
+        <div className="toolbar-trailing">
+          <button
+            className="primary-button compose-button"
+            type="button"
+            onClick={() => openComposer()}
+            aria-label={strings.mail.compose}
+          >
+            <MailPlus aria-hidden="true" />
+            <span>{strings.mail.compose}</span>
+          </button>
+          <form
+            className="search-box"
+            role="search"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void runSearch();
+            }}
+          >
+            <Search aria-hidden="true" />
+            <input
+              ref={searchInput}
+              value={query}
+              onChange={(event) => {
+                queryRef.current = event.target.value;
+                setQuery(event.target.value);
+              }}
+              placeholder={
+                activeLocalView === "drafts" || activeLocalView === "outbox"
+                  ? strings.mail.searchMailboxOnly
+                  : activeLocalView
+                    ? strings.mail.searchMailboxOnly
+                    : strings.mail.search
+              }
+              aria-label={strings.mail.search}
+              disabled={Boolean(
+                activeLocalView &&
+                activeLocalView !== "drafts" &&
+                activeLocalView !== "outbox",
+              )}
+            />
+            {!activeLocalView ? (
+              <button
+                className="search-scope"
+                type="button"
+                aria-pressed={allFolders}
+                title={
+                  allFolders ? strings.mail.thisAccount : strings.mail.thisMailbox
+                }
+                onClick={() => {
+                  const next = !allFolders;
+                  allFoldersRef.current = next;
+                  setAllFolders(next);
+                }}
+              >
+                {allFolders ? strings.mail.thisAccount : strings.mail.thisMailbox}
+              </button>
+            ) : null}
+          </form>
+          {updateReady ? (
+            <button
+              type="button"
+              className="update-ready-badge"
+              onClick={() => void promptToRestartForUpdate(updateReady)}
+              title={strings.mail.updateReadyTooltip(updateReady)}
+              aria-label={strings.mail.updateReadyBadge}
+            >
+              <span className="badge-dot" aria-hidden="true" />
+              <span>{strings.mail.updateReadyBadge}</span>
+            </button>
+          ) : null}
+          <button
+            className="icon-button settings-button"
+            type="button"
+            onClick={onOpenSettings}
+            aria-label={strings.mail.settings}
+          >
+            <Settings aria-hidden="true" />
+          </button>
+        </div>
       </header>
 
       <button
@@ -1717,15 +1742,7 @@ export function MailShell({ onOpenSettings }: Props) {
               <>
                 <button
                   type="button"
-                  className="toolbar-button"
-                  onClick={() => void markAllRead()}
-                  disabled={bulkBusy}
-                >
-                  <MailOpen aria-hidden="true" /> {strings.mail.markAllRead}
-                </button>
-                <button
-                  type="button"
-                  className="toolbar-button"
+                  className="toolbar-button select-messages-button"
                   aria-pressed={selecting}
                   onClick={() => {
                     setSelecting((value) => !value);
@@ -1734,6 +1751,35 @@ export function MailShell({ onOpenSettings }: Props) {
                 >
                   {selecting ? strings.mail.doneSelecting : strings.mail.select}
                 </button>
+                <div className="mailbox-more" ref={mailboxMoreRef}>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    onClick={() => setMailboxMoreOpen((open) => !open)}
+                    aria-expanded={mailboxMoreOpen}
+                    aria-haspopup="menu"
+                    aria-label={strings.mail.moreMailboxActions}
+                    title={strings.mail.moreMailboxActions}
+                  >
+                    <MoreHorizontal aria-hidden="true" />
+                  </button>
+                  {mailboxMoreOpen ? (
+                    <div className="mailbox-more-menu" role="menu">
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setMailboxMoreOpen(false);
+                          void markAllRead();
+                        }}
+                        disabled={bulkBusy}
+                      >
+                        <MailOpen aria-hidden="true" />
+                        {strings.mail.markAllRead}
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
               </>
             ) : null}
             {query && !activeLocalView ? (

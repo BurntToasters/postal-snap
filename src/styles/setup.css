@@ -22,8 +22,8 @@
 .setup-card {
   width: min(640px, 100%);
   padding: clamp(24px, 5vw, 42px);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: 20px;
   background: var(--surface);
   box-shadow: var(--shadow-soft);
 }
@@ -137,15 +137,15 @@
   gap: 14px;
   padding: 14px;
   text-align: left;
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
   border-radius: 12px;
-  background: var(--surface);
+  background: color-mix(in srgb, var(--surface) 96%, var(--surface-muted));
 }
 
 .provider-button:hover,
 .provider-button.provider-primary:hover {
-  border-color: var(--accent);
-  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 54%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
 }
 
 .provider-button.provider-primary {
