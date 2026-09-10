@@ -60,8 +60,5 @@ export function applySettings(settings: AppSettings) {
     return;
   }
 
-  void syncWorkspaceWindowFx(
-    settings.windowEffects,
-    settings.theme === "dark",
-  );
+  void syncWorkspaceWindowFx(settings.windowEffects, settings.theme === "dark");
 }

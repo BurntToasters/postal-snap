@@ -62,17 +62,15 @@ html[data-window-fx="vibrant"] .primary-button {
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 10%);
 }
 
-/* 3. Modals and Composer Glass */
+/* 3. Content windows remain opaque; glass is reserved for app chrome. */
 html[data-window-fx="vibrant"] .composer-window,
 html[data-window-fx="vibrant"] .settings-window,
 html[data-window-fx="vibrant"] .setup-card,
 html[data-window-fx="vibrant"] .attachment-preview-dialog {
-  background: color-mix(in srgb, var(--surface) 78%, transparent) !important;
-  backdrop-filter: blur(28px) saturate(140%);
-  -webkit-backdrop-filter: blur(28px) saturate(140%);
-  box-shadow:
-    var(--shadow),
-    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  background: var(--surface) !important;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: var(--shadow);
 }
 
 html[data-window-fx="vibrant"] .composer-window .tiptap,

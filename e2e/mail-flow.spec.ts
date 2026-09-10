@@ -314,6 +314,18 @@ async function installMockIpc(page: Page) {
               return [];
             case "delete_draft":
               return undefined;
+            case "search_cached_messages":
+            case "search_server_messages": {
+              const search = args.query as { allFolders?: boolean } | undefined;
+              return [
+                {
+                  ...summary,
+                  subject: search?.allFolders
+                    ? "Across account"
+                    : "Current mailbox",
+                },
+              ];
+            }
             case "list_messages":
               if (state.moved)
                 return { items: [], nextCursor: null, hasMore: false };
@@ -745,10 +757,42 @@ test("uses an edge-to-edge Mail-style sidebar and trailing scoped search", async
 
   await expect(page.getByRole("button", { name: "Get Mail" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Compose" })).toBeVisible();
+
+  const search = page.getByRole("searchbox", { name: "Search" });
+  await search.fill("weekend");
+  await search.press("Enter");
+  await expect(
+    page.getByRole("option", { name: /Current mailbox/i }),
+  ).toBeVisible();
+
   await page.getByRole("button", { name: "This mailbox" }).click();
   await expect(
     page.getByRole("button", { name: "This account" }),
   ).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    page.getByRole("option", { name: /Across account/i }),
+  ).toBeVisible();
+});
+
+test("opens the mailbox drawer across the responsive sidebar range", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 900, height: 720 });
+  await page.goto("/");
+
+  const folderPane = page.locator(".folder-pane");
+  const toolbar = page.locator(".app-toolbar");
+  await expect(folderPane).toBeHidden();
+  await page.getByRole("button", { name: "Show mailboxes" }).click();
+  await expect(folderPane).toBeVisible();
+  await expect(toolbar).toHaveAttribute("inert", "");
+
+  await page.setViewportSize({ width: 1240, height: 820 });
+  await expect(folderPane).toBeVisible();
+  await expect(toolbar).not.toHaveAttribute("inert", "");
+  await expect(
+    page.getByRole("button", { name: "Hide mailboxes" }),
+  ).toHaveAttribute("aria-expanded", "true");
 });
 
 test("completes guided iCloud first run", async ({ page }) => {
