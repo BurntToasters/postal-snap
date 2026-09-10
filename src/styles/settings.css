@@ -2,23 +2,23 @@
 .settings-window {
   position: relative;
   z-index: 1;
-  width: min(840px, 96vw);
-  max-height: 94vh;
+  width: min(860px, 96vw);
+  max-height: 92vh;
   overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--surface) 96%, var(--surface-muted));
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: 20px;
+  background: var(--surface);
   box-shadow: var(--shadow);
 }
 
 .settings-window > header {
   display: flex;
-  min-height: 58px;
+  min-height: 56px;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 14px 8px 18px;
-  border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--surface-muted) 70%, transparent);
+  padding: 7px 12px 7px 18px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  background: var(--surface);
 }
 
 .settings-window > header > span {
@@ -37,7 +37,7 @@
 .settings-layout {
   display: grid;
   min-height: min(500px, 70vh);
-  grid-template-columns: 200px minmax(0, 1fr);
+  grid-template-columns: 210px minmax(0, 1fr);
 }
 
 .settings-nav {
@@ -45,10 +45,10 @@
   align-content: start;
   gap: 3px;
   max-height: min(500px, 70vh);
-  padding: 16px 10px;
+  padding: 14px 9px;
   overflow-y: auto;
-  border-right: 1px solid var(--border);
-  background: var(--surface-muted);
+  border-right: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
+  background: color-mix(in srgb, var(--surface-muted) 88%, var(--surface));
 }
 
 .settings-nav button {
@@ -71,9 +71,9 @@
 }
 
 .settings-nav button.active {
-  color: var(--accent-contrast, #fff);
-  background: var(--accent);
-  font-weight: 600;
+  color: color-mix(in srgb, var(--accent) 88%, var(--text));
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  font-weight: 650;
 }
 
 .settings-nav svg {
@@ -82,7 +82,7 @@
 
 .settings-content {
   max-height: 70vh;
-  padding: 24px 28px;
+  padding: 22px 26px 28px;
   overflow-y: auto;
 }
 
@@ -134,9 +134,9 @@
   justify-content: space-between;
   gap: 18px;
   padding: 10px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--surface) 94%, var(--surface-muted));
   box-shadow: none;
 }
 
@@ -326,10 +326,10 @@
   display: grid;
   gap: 12px;
   padding: 16px;
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
   border-radius: 12px;
-  background: var(--surface);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  background: color-mix(in srgb, var(--surface) 94%, var(--surface-muted));
+  box-shadow: none;
 }
 
 .account-card-header {
