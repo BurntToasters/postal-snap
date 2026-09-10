@@ -550,6 +550,12 @@ test("test:all still includes Playwright e2e unless SKIP_E2E is set", async () =
   assert.match(ci, /npm run test:e2e/);
   assert.match(ci, /npm run check:cargo-update-policy/);
   assert.match(ci, /npm run test:cargo-safe-update/);
+  assert.match(ci, /test-linux:/);
+  assert.match(ci, /name: compile-\$\{\{ matrix\.name \}\}/);
+  assert.match(ci, /name: linux\s*\n\s*os: ubuntu-24\.04/);
+  assert.match(ci, /name: macos\s*\n\s*os: macos-15/);
+  assert.match(ci, /name: windows\s*\n\s*os: windows-2022/);
+  assert.match(ci, /npm run licenses\s*\n\s*- run: cargo check --locked/);
 });
 
 test("workspace:prepare sets SKIP_E2E for every platform release", async () => {
