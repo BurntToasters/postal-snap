@@ -119,6 +119,21 @@ export function inspectCodesignDisplay(details, label = "Postal Snap.app") {
   return { teamIdentifier };
 }
 
+export function macosBundleExecutablePath(appPath, executableName) {
+  const name = String(executableName ?? "").trim();
+  if (
+    !name ||
+    name === "." ||
+    name === ".." ||
+    name.includes("/") ||
+    name.includes("\\") ||
+    name.includes("\0")
+  ) {
+    throw new Error("CFBundleExecutable is missing or invalid.");
+  }
+  return join(appPath, "Contents", "MacOS", name);
+}
+
 export function assertAppleSigningIdentityAvailable(
   identity,
   identitiesOutput,
