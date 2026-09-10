@@ -71,13 +71,17 @@
 }
 
 .settings-nav button.active {
-  color: color-mix(in srgb, var(--accent) 88%, var(--text));
+  color: var(--text);
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   font-weight: 650;
 }
 
 .settings-nav svg {
   width: 19px;
+}
+
+.settings-nav button.active svg {
+  color: var(--accent);
 }
 
 .settings-content {

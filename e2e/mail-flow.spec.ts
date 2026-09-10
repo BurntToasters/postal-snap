@@ -519,7 +519,9 @@ async function installMockIpc(page: Page) {
             case "get_settings":
               return {
                 schemaVersion: 2,
-                readingPane: "right",
+                readingPane: location.search.includes("tallBottom")
+                  ? "bottom"
+                  : "right",
                 textScale: 1,
                 privateNotifications: false,
                 theme: "system",
@@ -533,7 +535,9 @@ async function installMockIpc(page: Page) {
                 lastMailboxId: null,
                 folderPaneWidth: 248,
                 messagePaneWidth: 390,
-                readerPaneHeight: 360,
+                readerPaneHeight: location.search.includes("tallBottom")
+                  ? 800
+                  : 360,
                 windowEffects: false,
                 sidebarVisible: true,
                 undoSendSeconds: 10,
@@ -719,6 +723,32 @@ test("fills resized window without exposing a blank footer", async ({
   }
 });
 
+test("clamps a saved bottom reader height to the resized viewport", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1240, height: 540 });
+  await page.goto("/?tallBottom=1");
+  await page.locator(".mail-shell").waitFor();
+  await expect(page.locator(".mail-shell")).toHaveClass(/pane-bottom/);
+
+  const bounds = await page.evaluate(() => {
+    const message = document.querySelector<HTMLElement>(".message-pane");
+    const reader = document.querySelector<HTMLElement>(".reader-pane");
+    const messageBounds = message?.getBoundingClientRect();
+    const readerBounds = reader?.getBoundingClientRect();
+    return {
+      messageHeight: messageBounds?.height ?? 0,
+      readerBottom: readerBounds?.bottom ?? 0,
+      viewportBottom: window.innerHeight,
+    };
+  });
+
+  expect(bounds.messageHeight).toBeGreaterThanOrEqual(219);
+  expect(
+    Math.abs(bounds.readerBottom - bounds.viewportBottom),
+  ).toBeLessThanOrEqual(1);
+});
+
 test("uses an edge-to-edge Mail-style sidebar and trailing scoped search", async ({
   page,
 }) => {
@@ -741,6 +771,10 @@ test("uses an edge-to-edge Mail-style sidebar and trailing scoped search", async
       toolbarLeft: toolbarBounds?.left ?? -1,
       toolbarRight: toolbarBounds?.right ?? -1,
       searchLeft: searchBounds?.left ?? -1,
+      scopeHeight:
+        document
+          .querySelector<HTMLElement>(".search-scope")
+          ?.getBoundingClientRect().height ?? 0,
       viewportBottom: window.innerHeight,
     };
   });
@@ -754,6 +788,7 @@ test("uses an edge-to-edge Mail-style sidebar and trailing scoped search", async
   expect(geometry.searchLeft).toBeGreaterThan(
     geometry.toolbarLeft + (geometry.toolbarRight - geometry.toolbarLeft) / 2,
   );
+  expect(geometry.scopeHeight).toBeGreaterThanOrEqual(44);
 
   await expect(page.getByRole("button", { name: "Get Mail" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Compose" })).toBeVisible();

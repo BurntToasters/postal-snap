@@ -28,6 +28,8 @@ Postal Snap is a calm, accessible desktop email client. Mail stays on your compu
 - **FIX - Search scope refresh:** Switching between This mailbox and This account reruns an active search immediately instead of leaving stale results on screen.
 - **UI - Narrow-window clarity:** Mailbox/account search scope remains visible in compact windows, and Settings keeps section labels visible while its tab strip scrolls horizontally.
 - **FIX - Test and release gates:** Search tests follow the native searchbox role, Playwright no longer fans one mocked-IPC spec across dozens of competing workers, the accessibility scan waits for the actual mail shell, and draft download links target `v0.1.8`.
+- **UI - macOS toolbar refinement:** Non-primary toolbar controls drop permanent pill bezels, Settings selection keeps neutral text with an accented symbol, message rows use a single quiet separator, and the search-scope control now keeps a full 44px target.
+- **FIX - Bottom reader resize:** Large saved bottom-pane heights are clamped to the available desktop viewport so shrinking a window cannot push the reader past its lower edge.
 - **PKG:** Application, Tauri, npm lockfile, and Cargo metadata are synchronized to `0.1.8`.
 
 ## Changes in `v0.1.7:`
