@@ -156,6 +156,9 @@ test("opens the mailbox drawer across the responsive sidebar range", async ({
 
 test("completes guided iCloud first run", async ({ page }) => {
   await page.goto("/?firstRun=1");
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
   await page.getByRole("button", { name: /iCloud Mail/i }).click();
   await expect(page.locator(".server-summary")).toContainText(
     "imap.mail.me.com",
@@ -307,6 +310,9 @@ test("exports, imports, and resets portable settings", async ({ page }) => {
 
 test("completes secure manual first run", async ({ page }) => {
   await page.goto("/?firstRun=1");
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
   await page.getByRole("button", { name: /Other email/i }).click();
   await expect(page.getByText("imap.mail.me.com")).toHaveCount(0);
   await page.getByLabel("Your name").fill("Sam");
@@ -344,6 +350,9 @@ test("explains how to recover from a failed iCloud sign-in", async ({
   page,
 }) => {
   await page.goto("/?firstRun=1&setupFail=1");
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
   await page.getByRole("button", { name: /iCloud Mail/i }).click();
   await page.getByLabel("Your name").fill("Sam");
   await page.getByLabel("Email address").fill("sam@icloud.com");
@@ -892,6 +901,9 @@ test("exposes the message toolbar for keyboard users", async ({ page }) => {
 
 test("announces failed sign-ins as alerts", async ({ page }) => {
   await page.goto("/?firstRun=1&setupFail=1");
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
   await page.getByRole("button", { name: /iCloud Mail/i }).click();
   await page.getByLabel("Your name").fill("Sam");
   await page.getByLabel("Email address").fill("sam@icloud.com");

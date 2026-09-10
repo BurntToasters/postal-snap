@@ -2407,6 +2407,7 @@ mod tests {
             attachments: vec![],
             in_reply_to: None,
             references: None,
+            send_at: None,
         };
         let message_id = "<draft-22222222-2222-4222-8222-222222222222-1@run.rosie.snap>";
         let bytes = prepare_draft_message(&account, &draft, message_id)
@@ -2443,6 +2444,7 @@ mod tests {
             attachments: vec![],
             in_reply_to: None,
             references: None,
+            send_at: None,
         }
     }
 
@@ -2538,6 +2540,7 @@ mod tests {
             attachments: Vec::<ComposeAttachment>::new(),
             in_reply_to: None,
             references: None,
+            send_at: None,
         };
 
         let rendered =
@@ -2587,6 +2590,7 @@ mod tests {
             attachments: vec![],
             in_reply_to: None,
             references: None,
+            send_at: None,
         };
         let prepared = prepare_message(&account, &draft).await.unwrap();
         let rendered = String::from_utf8(prepared.bytes).unwrap();
@@ -2611,7 +2615,7 @@ mod tests {
             summary: AccountSummary {
                 id: "11111111-1111-4111-8111-111111111111".into(),
                 provider: ProviderKind::Manual,
-                email: "senior@example.test".into(),
+                email: "user@example.test".into(),
                 display_name: "Postal Snap Test".into(),
                 sync_state: "idle".into(),
                 error: None,
@@ -2623,13 +2627,13 @@ mod tests {
                 host: "localhost".into(),
                 port: 3993,
                 tls_mode: TlsMode::Tls,
-                username: "senior@example.test".into(),
+                username: "user@example.test".into(),
             },
             smtp: ServerConfig {
                 host: "localhost".into(),
                 port: 3465,
                 tls_mode: TlsMode::Tls,
-                username: "senior@example.test".into(),
+                username: "user@example.test".into(),
             },
         };
         let setup = AccountSetupRequest {
@@ -2674,6 +2678,7 @@ mod tests {
             }],
             in_reply_to: None,
             references: None,
+            send_at: None,
         };
         let prepared = prepare_message(&account, &draft).await.unwrap();
         send_prepared(&account, password, &draft, &prepared.bytes)

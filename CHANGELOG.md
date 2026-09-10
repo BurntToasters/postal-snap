@@ -83,7 +83,7 @@ Postal Snap is a calm, accessible desktop email client. Mail stays on your compu
 ## Changes in `v0.1.4:`
 
 - **NEW - Native Update Flow & Streamlined macOS Menu Check:** Checking for updates from the macOS menu bar or Settings now exclusively displays clean native OS dialogues (reporting up to date, asking to download, and confirming restart) without redundantly opening the Settings window over an alert.
-- **NEW - Background Auto-Download & Restart Badge:** Updates are silently checked and downloaded in the background; when ready, a prominent, accessible top-right badge ("Update Ready · Click to Restart") informs seniors to click and restart at their convenience.
+- **NEW - Background Auto-Download & Restart Badge:** Updates are silently checked and downloaded in the background; when ready, a prominent, accessible top-right badge ("Update Ready · Click to Restart") informs you to click and restart at your convenience.
 - **NEW - Comprehensive Email Details Breakdown:** Completely overhauled the "Show Details" view in the email reader: reveals From, Reply-To, To, Cc, full date/time with timezone, folder name, verified TLS security badge, Message-ID, and total message size, with one-click copy buttons.
 - **FIX - Message Reader Inline Images & Attachments:** Fixed an issue where emails with only inline images displayed an empty attachments section; now only true file attachments are listed with clean counts and sizes.
 - **FIX - Plain Text Email Linkification:** Safe click-to-open confirmation for web links (`http/https`) and mailto links in plain text messages.
@@ -91,7 +91,7 @@ Postal Snap is a calm, accessible desktop email client. Mail stays on your compu
 - **FIX - Mailbox Role Fallbacks & Dot Hierarchies:** Expanded IMAP folder role detection to support dot-separated mailbox hierarchies (e.g., `INBOX.Sent`, `INBOX.Trash`) and standard Outlook/Exchange naming conventions (`Deleted Items`, `Sent Items`, `Junk Email`, `Bin`).
 - **FIX - Search Results Merging & Empty State:** Search now seamlessly combines local cached FTS results with server search matches without overwriting, and displays an informative empty state with a "Clear search" action when no results are found.
 - **FIX - Composer Quoted Recipient Splitting:** Fixed recipient address field validation when pasting or entering quoted display names containing commas (e.g., `"Doe, Jane" <jane@example.com>`).
-- **UI - Senior Accessibility & WCAG Contrast Uplift:** Raised button and text contrast in dark mode to >6.5:1 (exceeding WCAG AAA), improved high-contrast focus rings, enlarged touch targets and composer controls, and enlarged auxiliary text labels across the mail shell.
+- **UI - Accessibility & WCAG Contrast Uplift:** Raised button and text contrast in dark mode to >6.5:1 (exceeding WCAG AAA), improved high-contrast focus rings, enlarged touch targets and composer controls, and enlarged auxiliary text labels across the mail shell.
 - **PKG:** Updated packages.
 
 - **NEW - iCloud Aliases & Custom Domains:** Discover and manage iCloud email aliases and custom domains via CalDAV, with support for sending from any alias.

@@ -33,6 +33,8 @@ const settings = (theme: AppSettings["theme"]): AppSettings => ({
   blockReportedThreats: true,
   groupThreads: true,
   notifyNewMail: true,
+  setupCompleted: true,
+  setupStep: null,
 });
 
 describe("settings IPC serialization", () => {

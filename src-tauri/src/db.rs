@@ -3564,6 +3564,7 @@ mod tests {
             attachments: vec![],
             in_reply_to: None,
             references: None,
+            send_at: None,
         }
     }
 

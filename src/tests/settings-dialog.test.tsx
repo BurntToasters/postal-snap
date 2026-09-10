@@ -53,8 +53,8 @@ vi.mock("../api", () => ({
 const account = {
   id: "account-1",
   provider: "icloud" as const,
-  email: "senior@icloud.com",
-  displayName: "Senior Citizen",
+  email: "user@icloud.com",
+  displayName: "Test User",
   syncState: "idle" as const,
   aliases: ["alias@icloud.com"],
 };

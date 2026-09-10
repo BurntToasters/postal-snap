@@ -758,7 +758,7 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
                       }
                     >
                       <option value="system">
-                        {strings.settings.followSystem}
+                        {strings.settings.autoDefault}
                       </option>
                       <option value="light">{strings.settings.light}</option>
                       <option value="dark">{strings.settings.dark}</option>

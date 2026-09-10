@@ -56,7 +56,7 @@
     height: auto;
     border: 0;
     border-radius: 0;
-    background: rgb(15 25 33 / 38%);
+    background: var(--scrim-soft);
   }
 
   .sidebar-open .sidebar-scrim {
@@ -203,7 +203,7 @@
   }
 
   .message-header {
-    grid-template-columns: 38px minmax(0, 1fr);
+    grid-template-columns: 38px minmax(0, 1fr) auto;
     padding: 14px;
   }
 
@@ -365,8 +365,7 @@
   *::after {
     scroll-behavior: auto !important;
     transition: none !important;
-    animation-duration: 0.001ms !important;
-    animation-iteration-count: 1 !important;
+    animation: none !important;
   }
 }
 
@@ -380,6 +379,11 @@
   .toast,
   .pane-hidden .reader-pane:not(.reader-hidden):not(.empty-reader) {
     border: 2px solid Highlight;
+  }
+
+  .message-row:focus-visible {
+    outline: 3px solid Highlight;
+    outline-offset: -3px;
   }
 
   .settings-window,
@@ -413,6 +417,7 @@
 }
 
 @media print {
+  /* Force paper: print stays black on white regardless of app theme. */
   html,
   body,
   #root,

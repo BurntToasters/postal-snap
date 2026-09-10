@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import { MailShell } from "../components/MailShell";
+import { strings } from "../i18n";
 import { defaultSettings, useAppStore } from "../store";
 import type {
   AccountSummary,
@@ -152,6 +153,7 @@ function resetStore() {
     composeSeed: undefined,
     busy: false,
     error: undefined,
+    lastSent: undefined,
   });
 }
 
@@ -603,5 +605,36 @@ describe("mail shell", () => {
     expect(api.deleteOutbox).not.toHaveBeenCalled();
     expect(useAppStore.getState().composerOpen).toBe(true);
     expect(useAppStore.getState().composeSeed?.draft).toEqual(draft);
+  });
+
+  it("shows an undo toast after a held send and clears it", async () => {
+    const draft = {
+      id: "draft-sent",
+      accountId: account.id,
+      to: ["lee@example.com"],
+      cc: [],
+      bcc: [],
+      subject: "Just sent",
+      htmlBody: "<p>Hi</p>",
+      textBody: "Hi",
+      attachments: [],
+    };
+    vi.mocked(api.restoreOutbox).mockResolvedValue(draft);
+    useAppStore.setState({
+      lastSent: {
+        outboxId: "outbox-2",
+        accountId: account.id,
+        scheduled: false,
+      },
+    });
+    renderShell();
+
+    expect(await screen.findByText(strings.mail.messageSent)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() =>
+      expect(api.restoreOutbox).toHaveBeenCalledWith("outbox-2", "account-1"),
+    );
+    expect(useAppStore.getState().composerOpen).toBe(true);
+    expect(useAppStore.getState().lastSent).toBeUndefined();
   });
 });

@@ -25,6 +25,14 @@ describe("formatMessageDate", () => {
     ).toBe(strings.mail.yesterday);
   });
 
+  it("uses a weekday name within the last few days", () => {
+    const text = formatMessageDate(
+      new Date(2026, 7, 24, 12, 0, 0).toISOString(),
+      now,
+    );
+    expect(text).toMatch(/mon/i);
+  });
+
   it("uses a short date for older mail this year", () => {
     const text = formatMessageDate(
       new Date(2026, 0, 5, 12, 0, 0).toISOString(),

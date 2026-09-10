@@ -21,6 +21,8 @@ import {
   AlignLeft,
   AlignRight,
   Bold,
+  ChevronDown,
+  Clock,
   Highlighter,
   ImagePlus,
   IndentDecrease,
@@ -32,12 +34,15 @@ import {
   Maximize2,
   Minimize2,
   Minus,
+  Moon,
   MoreHorizontal,
   Paperclip,
   Redo2,
   RemoveFormatting,
+  Save,
   Send,
   Strikethrough,
+  Sunrise,
   Table2,
   TriangleAlert,
   Underline as UnderlineIcon,
@@ -247,6 +252,12 @@ export function Composer({ accountId }: Props) {
   const [linkDialogOpen, setLinkDialogOpen] = useState(false);
   const [linkValue, setLinkValue] = useState("https://");
   const [showCc, setShowCc] = useState(Boolean(cc));
+  const [showBcc, setShowBcc] = useState(Boolean(bcc));
+  const [formattingOpen, setFormattingOpen] = useState(false);
+  const [sendMenuOpen, setSendMenuOpen] = useState(false);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [scheduleValue, setScheduleValue] = useState("");
+  const sendMenuRef = useRef<HTMLDivElement>(null);
   const [recipientError, setRecipientError] = useState<string>();
   const [subjectError, setSubjectError] = useState<string>();
   const [saveState, setSaveState] = useState<"unsaved" | "saving" | "saved">(
@@ -585,34 +596,52 @@ export function Composer({ accountId }: Props) {
   );
   const isAttachmentSizeWarning = totalAttachmentBytes > 25 * 1024 * 1024;
 
-  const sendMessage = useCallback(async () => {
-    const validation = validateRecipientFields(to, cc, bcc);
-    const subjectValidation = validateSubject(subject);
-    setRecipientError(validation);
-    setSubjectError(subjectValidation);
-    if (!canSend || validation || subjectValidation || isSending.current)
-      return;
-    pendingClose.current = false;
-    isSending.current = true;
-    setSending(true);
-    try {
-      const outcome = await api.sendMessage(buildDraft());
-      announceLocalMailChanged(accountId);
-      if (outcome.state === "needs_attention" && outcome.detail) {
-        setError(outcome.detail);
+  const sendMessage = useCallback(
+    async (sendAt?: string) => {
+      const validation = validateRecipientFields(to, cc, bcc);
+      const subjectValidation = validateSubject(subject);
+      setRecipientError(validation);
+      setSubjectError(subjectValidation);
+      if (!canSend || validation || subjectValidation || isSending.current)
+        return;
+      if (sendAt) {
+        const when = new Date(sendAt).getTime();
+        const limit = Date.now() + 365 * 24 * 60 * 60 * 1000;
+        if (!Number.isFinite(when) || when <= Date.now() || when > limit) {
+          setError(strings.composer.invalidSchedule);
+          return;
+        }
       }
-      if (outcome.state === "scheduled") {
-        useAppStore.getState().selectLocalView("outbox");
+      pendingClose.current = false;
+      isSending.current = true;
+      setSending(true);
+      try {
+        const draft = buildDraft();
+        const outcome = await api.sendMessage(
+          sendAt ? { ...draft, sendAt } : draft,
+        );
+        announceLocalMailChanged(accountId);
+        if (outcome.state === "needs_attention" && outcome.detail) {
+          setError(outcome.detail);
+        }
+        if (outcome.state === "scheduled") {
+          useAppStore.getState().setLastSent({
+            outboxId: outcome.id,
+            accountId,
+            scheduled: Boolean(sendAt),
+          });
+        }
+        close();
+      } catch (cause) {
+        announceLocalMailChanged(accountId);
+        setError(String(cause));
+      } finally {
+        isSending.current = false;
+        setSending(false);
       }
-      close();
-    } catch (cause) {
-      announceLocalMailChanged(accountId);
-      setError(String(cause));
-    } finally {
-      isSending.current = false;
-      setSending(false);
-    }
-  }, [accountId, bcc, buildDraft, canSend, cc, close, setError, subject, to]);
+    },
+    [accountId, bcc, buildDraft, canSend, cc, close, setError, subject, to],
+  );
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -630,6 +659,28 @@ export function Composer({ accountId }: Props) {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [minimized, saveDraft, sendMessage]);
+
+  useEffect(() => {
+    if (!sendMenuOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!sendMenuRef.current?.contains(event.target as Node)) {
+        setSendMenuOpen(false);
+        setScheduleOpen(false);
+      }
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setSendMenuOpen(false);
+        setScheduleOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [sendMenuOpen]);
 
   async function addAttachments() {
     try {
@@ -887,7 +938,7 @@ export function Composer({ accountId }: Props) {
                 ))}
               </select>
             ) : (
-              <input readOnly value={fromValue} aria-readonly="true" />
+              <span className="composer-from-value">{fromValue}</span>
             )}
           </label>
           <div className="to-field-row">
@@ -919,61 +970,72 @@ export function Composer({ accountId }: Props) {
               type="button"
               className="cc-toggle"
               aria-expanded={showCc}
+              aria-pressed={showCc}
               onClick={(event) => {
                 event.preventDefault();
                 setShowCc((value) => !value);
               }}
             >
-              {strings.composer.ccBcc}
+              {strings.composer.cc}
+            </button>
+            <button
+              type="button"
+              className="cc-toggle"
+              aria-expanded={showBcc}
+              aria-pressed={showBcc}
+              onClick={(event) => {
+                event.preventDefault();
+                setShowBcc((value) => !value);
+              }}
+            >
+              {strings.composer.bcc}
             </button>
           </div>
           {showCc ? (
-            <>
-              <label>
-                <span>{strings.composer.cc}</span>
-                <RecipientField
-                  id="composer-cc"
-                  accountId={accountId}
-                  value={cc}
-                  onChange={(value) => {
-                    setCc(value);
-                    if (recipientError) {
-                      setRecipientError(
-                        validateRecipientFields(to, value, bcc),
-                      );
-                    }
-                    markUnsaved();
-                  }}
-                  onBlur={() => {
-                    if (to.trim() || cc.trim() || bcc.trim()) {
-                      setRecipientError(validateRecipientFields(to, cc, bcc));
-                    }
-                  }}
-                  ariaInvalid={Boolean(recipientError)}
-                />
-              </label>
-              <label>
-                <span>{strings.composer.bcc}</span>
-                <RecipientField
-                  id="composer-bcc"
-                  accountId={accountId}
-                  value={bcc}
-                  onChange={(value) => {
-                    setBcc(value);
-                    if (recipientError) {
-                      setRecipientError(validateRecipientFields(to, cc, value));
-                    }
-                    markUnsaved();
-                  }}
-                  onBlur={() => {
-                    if (to.trim() || cc.trim() || bcc.trim()) {
-                      setRecipientError(validateRecipientFields(to, cc, bcc));
-                    }
-                  }}
-                  ariaInvalid={Boolean(recipientError)}
-                />
-              </label>
-            </>
+            <label>
+              <span>{strings.composer.cc}</span>
+              <RecipientField
+                id="composer-cc"
+                accountId={accountId}
+                value={cc}
+                onChange={(value) => {
+                  setCc(value);
+                  if (recipientError) {
+                    setRecipientError(validateRecipientFields(to, value, bcc));
+                  }
+                  markUnsaved();
+                }}
+                onBlur={() => {
+                  if (to.trim() || cc.trim() || bcc.trim()) {
+                    setRecipientError(validateRecipientFields(to, cc, bcc));
+                  }
+                }}
+                ariaInvalid={Boolean(recipientError)}
+              />
+            </label>
+          ) : null}
+          {showBcc ? (
+            <label>
+              <span>{strings.composer.bcc}</span>
+              <RecipientField
+                id="composer-bcc"
+                accountId={accountId}
+                value={bcc}
+                onChange={(value) => {
+                  setBcc(value);
+                  if (recipientError) {
+                    setRecipientError(validateRecipientFields(to, cc, value));
+                  }
+                  markUnsaved();
+                }}
+                onBlur={() => {
+                  if (to.trim() || cc.trim() || bcc.trim()) {
+                    setRecipientError(validateRecipientFields(to, cc, bcc));
+                  }
+                }}
+                ariaInvalid={Boolean(recipientError)}
+              />
+            </label>
           ) : null}
           {recipientError ? (
             <p id="recipient-error" className="field-error" role="alert">
@@ -1000,11 +1062,29 @@ export function Composer({ accountId }: Props) {
             </p>
           ) : null}
         </div>
+        <div className="format-toggle-row">
+          <button
+            type="button"
+            className="toolbar-button format-toggle"
+            aria-expanded={formattingOpen}
+            aria-controls="composer-formatting"
+            onClick={() => setFormattingOpen((value) => !value)}
+          >
+            <span className="format-aa" aria-hidden="true">
+              Aa
+            </span>
+            {formattingOpen
+              ? strings.composer.hideFormatting
+              : strings.composer.showFormatting}
+          </button>
+        </div>
         <div
+          id="composer-formatting"
           className="format-toolbar"
           role="toolbar"
           aria-label={strings.composer.formatting}
           onKeyDown={moveToolbarFocus}
+          hidden={!formattingOpen}
         >
           <div className="toolbar-group">
             <button
@@ -1029,7 +1109,10 @@ export function Composer({ accountId }: Props) {
             <select
               aria-label={strings.composer.font}
               title={strings.composer.font}
-              defaultValue=""
+              value={
+                (editor?.getAttributes("textStyle").fontFamily as
+                  string | undefined) ?? ""
+              }
               onChange={(event) =>
                 event.target.value
                   ? editor
@@ -1049,7 +1132,10 @@ export function Composer({ accountId }: Props) {
             <select
               aria-label={strings.composer.fontSize}
               title={strings.composer.fontSize}
-              defaultValue="16px"
+              value={
+                (editor?.getAttributes("textStyle").fontSize as
+                  string | undefined) ?? "16px"
+              }
               onChange={(event) =>
                 editor?.chain().focus().setFontSize(event.target.value).run()
               }
@@ -1328,22 +1414,135 @@ export function Composer({ accountId }: Props) {
           </div>
         ) : null}
         <footer>
+          <div className="send-split" ref={sendMenuRef}>
+            <button
+              className="primary-button send-button"
+              type="button"
+              disabled={!canSend}
+              onClick={() => void sendMessage()}
+              aria-keyshortcuts="Meta+Enter Control+Enter"
+              aria-label={
+                sending ? strings.composer.sending : strings.composer.send
+              }
+              title={`${sending ? strings.composer.sending : strings.composer.send} (${shortcutMod()}↵)`}
+            >
+              <Send />
+              <span>
+                {sending ? strings.composer.sending : strings.composer.send}
+              </span>
+              <kbd className="send-kbd-hint">{`${shortcutMod()}↵`}</kbd>
+            </button>
+            <button
+              className="primary-button send-chevron"
+              type="button"
+              disabled={!canSend}
+              aria-expanded={sendMenuOpen}
+              aria-haspopup="menu"
+              aria-label={strings.composer.sendOptions}
+              title={strings.composer.sendOptions}
+              onClick={() => {
+                setSendMenuOpen((value) => !value);
+                setScheduleOpen(false);
+              }}
+            >
+              <ChevronDown aria-hidden="true" />
+            </button>
+            {sendMenuOpen ? (
+              <div
+                className="send-menu"
+                role="menu"
+                aria-label={strings.composer.sendOptions}
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setSendMenuOpen(false);
+                    void sendMessage();
+                  }}
+                >
+                  <Send aria-hidden="true" />
+                  {strings.composer.sendNow}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setSendMenuOpen(false);
+                    void sendMessage(tonightAtNine().toISOString());
+                  }}
+                >
+                  <Moon aria-hidden="true" />
+                  {strings.composer.sendTonight}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setSendMenuOpen(false);
+                    void sendMessage(tomorrowAtEight().toISOString());
+                  }}
+                >
+                  <Sunrise aria-hidden="true" />
+                  {strings.composer.sendTomorrow}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  aria-expanded={scheduleOpen}
+                  onClick={() => setScheduleOpen((value) => !value)}
+                >
+                  <Clock aria-hidden="true" />
+                  {strings.composer.sendCustom}
+                </button>
+                {scheduleOpen ? (
+                  <form
+                    className="schedule-form"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      const iso = new Date(scheduleValue).toISOString();
+                      setSendMenuOpen(false);
+                      setScheduleOpen(false);
+                      void sendMessage(iso);
+                    }}
+                  >
+                    <label>
+                      <span>{strings.composer.scheduleTime}</span>
+                      <input
+                        type="datetime-local"
+                        required
+                        value={scheduleValue}
+                        onChange={(event) =>
+                          setScheduleValue(event.target.value)
+                        }
+                      />
+                    </label>
+                    <button
+                      className="primary-button"
+                      type="submit"
+                      disabled={!scheduleValue}
+                    >
+                      {strings.composer.scheduleAction}
+                    </button>
+                  </form>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
           <button
-            className="primary-button send-button"
+            className="toolbar-button"
             type="button"
-            disabled={!canSend}
-            onClick={() => void sendMessage()}
-            aria-keyshortcuts="Meta+Enter Control+Enter"
-            aria-label={
-              sending ? strings.composer.sending : strings.composer.send
-            }
-            title={`${sending ? strings.composer.sending : strings.composer.send} (${shortcutMod()}↵)`}
+            onClick={() => void saveDraft(false)}
+            disabled={sending || saveState === "saving"}
+            aria-keyshortcuts="Meta+S Control+S"
+            title={`${strings.composer.saveDraft} (${shortcutMod()}+S)`}
           >
-            <Send />
-            <span>
-              {sending ? strings.composer.sending : strings.composer.send}
-            </span>
-            <kbd className="send-kbd-hint">{`${shortcutMod()}↵`}</kbd>
+            <Save aria-hidden="true" />
+            {saveState === "saving"
+              ? strings.common.saving
+              : saveState === "saved"
+                ? strings.composer.draftSaved
+                : strings.composer.saveDraft}
           </button>
           <button
             className="toolbar-button"
@@ -1420,6 +1619,20 @@ export function Composer({ accountId }: Props) {
       </section>
     </div>
   );
+}
+
+function tonightAtNine(now = new Date()): Date {
+  const next = new Date(now);
+  next.setHours(21, 0, 0, 0);
+  if (next.getTime() <= now.getTime()) next.setDate(next.getDate() + 1);
+  return next;
+}
+
+function tomorrowAtEight(now = new Date()): Date {
+  const next = new Date(now);
+  next.setDate(next.getDate() + 1);
+  next.setHours(8, 0, 0, 0);
+  return next;
 }
 
 function splitAddresses(value: string): string[] {
@@ -1602,6 +1815,8 @@ function RecipientField({
           requestSuggestions(event.target.value, event.target.selectionStart);
         }}
         onKeyDown={(event) => {
+          // Cmd/Ctrl+Enter sends; never swallow it as suggestion accept.
+          if (event.metaKey || event.ctrlKey) return;
           if (!open) return;
           if (event.key === "ArrowDown" || event.key === "ArrowUp") {
             event.preventDefault();

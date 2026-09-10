@@ -10,7 +10,7 @@
   min-height: 0;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
-  border-radius: 20px;
+  border-radius: var(--radius-lg);
   background: var(--surface);
   box-shadow: var(--shadow);
 }
@@ -159,7 +159,7 @@
   gap: 18px;
   padding: 10px 14px;
   border: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
-  border-radius: 11px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--surface) 94%, var(--surface-muted));
   box-shadow: none;
 }
@@ -228,7 +228,7 @@
   display: grid;
   place-items: center;
   padding: 20px;
-  background: rgb(15 25 33 / 52%);
+  background: var(--scrim);
 }
 
 .settings-confirm-card {

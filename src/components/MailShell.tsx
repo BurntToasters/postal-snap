@@ -960,6 +960,9 @@ export function MailShell({ onOpenSettings }: Props) {
         return;
       }
       if (isEditing || onChromeControl) return;
+      // List rows own arrows/Space/Home/End/j/k through roving tabindex.
+      // The global handler must not double-handle them when focus is in list.
+      const inMessageList = Boolean(target?.closest('[role="listbox"]'));
 
       if (event.key === "Delete" || (mod && event.key === "Backspace")) {
         const state = useAppStore.getState();
@@ -974,24 +977,28 @@ export function MailShell({ onOpenSettings }: Props) {
           }
         }
       } else if (event.key === "ArrowDown" || event.key === "j") {
+        if (inMessageList) return;
         const next = relativeMessage(1);
         if (next) {
           event.preventDefault();
           void chooseMessage(next);
         }
       } else if (event.key === "ArrowUp" || event.key === "k") {
+        if (inMessageList) return;
         const previous = relativeMessage(-1);
         if (previous) {
           event.preventDefault();
           void chooseMessage(previous);
         }
       } else if (event.key === "Home") {
+        if (inMessageList) return;
         const first = useAppStore.getState().messages[0];
         if (first) {
           event.preventDefault();
           void chooseMessage(first);
         }
       } else if (event.key === "End") {
+        if (inMessageList) return;
         const items = useAppStore.getState().messages;
         const last = items[items.length - 1];
         if (last) {
@@ -999,6 +1006,7 @@ export function MailShell({ onOpenSettings }: Props) {
           void chooseMessage(last);
         }
       } else if (event.key === " " || event.code === "Space") {
+        if (inMessageList) return;
         event.preventDefault();
         window.dispatchEvent(
           new CustomEvent("postal:scroll-reader", {
@@ -1550,6 +1558,7 @@ export function MailShell({ onOpenSettings }: Props) {
             label={strings.mail.drafts}
             count={drafts.length}
             active={activeLocalView === "drafts"}
+            tone="drafts"
             onClick={() => {
               messageRequest.current += 1;
               searchRequest.current += 1;
@@ -1581,6 +1590,7 @@ export function MailShell({ onOpenSettings }: Props) {
             label={strings.mail.snoozed}
             count={snoozed.length}
             active={activeLocalView === "snoozed"}
+            tone="archive"
             onClick={() => {
               messageRequest.current += 1;
               searchRequest.current += 1;
@@ -1645,6 +1655,7 @@ export function MailShell({ onOpenSettings }: Props) {
                 label={mailbox.displayName}
                 count={mailbox.unreadCount}
                 active={mailbox.id === activeMailboxId}
+                tone={mailbox.role}
                 onClick={() => {
                   const sameMailbox =
                     mailbox.id === activeMailboxId && !activeLocalView;
@@ -1992,6 +2003,7 @@ export function MailShell({ onOpenSettings }: Props) {
       ) : null}
 
       <MessageReader />
+      <SentNoticeToast />
       {addAccountOpen ? (
         <AddAccountDialog
           onClose={() => setAddAccountOpen(false)}
@@ -2014,6 +2026,62 @@ export function MailShell({ onOpenSettings }: Props) {
         />
       ) : null}
     </main>
+  );
+}
+
+function SentNoticeToast() {
+  const lastSent = useAppStore((state) => state.lastSent);
+  const setLastSent = useAppStore((state) => state.setLastSent);
+  const openComposer = useAppStore((state) => state.openComposer);
+  const selectLocalView = useAppStore((state) => state.selectLocalView);
+  const setError = useAppStore((state) => state.setError);
+
+  useEffect(() => {
+    if (!lastSent) return;
+    const timer = window.setTimeout(() => setLastSent(undefined), 15_000);
+    return () => window.clearTimeout(timer);
+  }, [lastSent, setLastSent]);
+
+  if (!lastSent) return null;
+  const notice = lastSent;
+
+  async function undoLastSent() {
+    try {
+      const draft = await api.restoreOutbox(notice.outboxId, notice.accountId);
+      setLastSent(undefined);
+      openComposer({ draft });
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }
+
+  return (
+    <div className="toast sent-toast" role="status">
+      <span>
+        {notice.scheduled
+          ? strings.mail.messageScheduled
+          : strings.mail.messageSent}
+      </span>
+      <button type="button" onClick={() => void undoLastSent()}>
+        {strings.mail.undoSend}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setLastSent(undefined);
+          selectLocalView("outbox");
+        }}
+      >
+        {strings.mail.viewOutbox}
+      </button>
+      <button
+        type="button"
+        onClick={() => setLastSent(undefined)}
+        aria-label={strings.mail.dismissNotice}
+      >
+        ×
+      </button>
+    </div>
   );
 }
 
@@ -2126,7 +2194,7 @@ function FolderButton({
   label: string;
   count: number;
   active: boolean;
-  tone?: "warning";
+  tone?: "warning" | MailboxRole;
   onClick: () => void;
   onRename?: () => void;
   onDelete?: () => void;
@@ -2368,12 +2436,7 @@ function MessageList({
             void onChoose(next);
           }}
         >
-          <span
-            className="unread-dot"
-            aria-label={
-              message.isRead ? strings.mail.read : strings.mail.unread
-            }
-          />
+          <span className="unread-dot" aria-hidden="true" />
           <span className="message-sender">
             {message.senderName || message.senderAddress}
           </span>
@@ -2382,12 +2445,10 @@ function MessageList({
           </time>
           <span className="message-subject">
             {message.isStarred ? (
-              <Star fill="currentColor" aria-label={strings.mail.starred} />
+              <Star fill="currentColor" aria-hidden="true" />
             ) : null}
             <span>{message.subject || strings.common.noSubject}</span>
-            {message.hasAttachments ? (
-              <Paperclip aria-label={strings.mail.hasAttachments} />
-            ) : null}
+            {message.hasAttachments ? <Paperclip aria-hidden="true" /> : null}
           </span>
           <span className="message-preview">
             {loadingMessageId === message.id
@@ -2418,7 +2479,7 @@ function MessageList({
                 <div key={group.key} className="thread-group" role="group">
                   <button
                     type="button"
-                    className={`message-row thread-header ${group.newest.id === selectedId ? "selected" : ""}`}
+                    className={`message-row thread-header ${group.newest.id === selectedId ? "selected" : ""} ${group.unread > 0 ? "unread" : "read"}`}
                     aria-expanded={expanded}
                     onClick={() => {
                       void onChoose(group.newest);

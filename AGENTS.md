@@ -2,7 +2,9 @@
 
 ## Product
 
-Postal Snap is an open-source, MPL-2.0-licensed desktop email client for seniors and anyone wanting a calm, minimal interface. Package name: `postal-snap`. Application identifier: `run.rosie.snap`. The root `LICENSE` is authoritative; paid distribution remains possible.
+Postal Snap is an open-source, MPL-2.0-licensed desktop email client with a calm, minimal interface. Package name: `postal-snap`. Application identifier: `run.rosie.snap`. The root `LICENSE` is authoritative; paid distribution remains possible.
+
+Large readable defaults (comfortable density, adjustable text up to 200%) are an accessibility feature for low vision and eye strain, not an age-branded product tier. Never use "senior" in UI copy, docs, or fixtures.
 
 The v0.1 scope is deliberately focused:
 
