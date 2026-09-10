@@ -82,6 +82,7 @@ export async function installMockIpc(
     }
     const state = {
       windowCommands: [] as string[],
+      snapBounds: [] as Array<Record<string, unknown>>,
       maximized: false,
       fullscreen: false,
       failWindowAction: false,
@@ -149,6 +150,9 @@ export async function installMockIpc(
             return undefined;
           }
           switch (command) {
+            case "set_snap_overlay_bounds":
+              state.snapBounds.push({ ...args });
+              return undefined;
             case "plugin:event|listen": {
               const event = String(args.event);
               const handler = Number(args.handler);

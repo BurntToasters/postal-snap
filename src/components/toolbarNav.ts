@@ -23,6 +23,7 @@ export function moveToolbarFocus(event: KeyboardEvent<HTMLElement>) {
         : item.offsetParent !== null || item.getClientRects().length > 0),
   );
   if (items.length === 0) return;
+  event.stopPropagation();
   const active = document.activeElement as HTMLElement | null;
   let index = items.findIndex(
     (item) => item === active || item.contains(active),
@@ -32,6 +33,40 @@ export function moveToolbarFocus(event: KeyboardEvent<HTMLElement>) {
   if (event.key === "Home") index = 0;
   else if (event.key === "End") index = items.length - 1;
   else if (event.key === "ArrowRight") index = (index + 1) % items.length;
+  else index = (index - 1 + items.length) % items.length;
+  items[index].focus();
+}
+
+export function moveMenuFocus(event: KeyboardEvent<HTMLElement>) {
+  if (
+    event.key !== "ArrowUp" &&
+    event.key !== "ArrowDown" &&
+    event.key !== "Home" &&
+    event.key !== "End"
+  ) {
+    return;
+  }
+  const items = [
+    ...event.currentTarget.querySelectorAll<HTMLElement>(
+      '[role="menuitem"]:not([disabled]), select:not([disabled])',
+    ),
+  ].filter(
+    (item) =>
+      !item.hidden &&
+      (typeof item.checkVisibility === "function"
+        ? item.checkVisibility()
+        : item.offsetParent !== null || item.getClientRects().length > 0),
+  );
+  if (items.length === 0) return;
+  event.stopPropagation();
+  const active = document.activeElement as HTMLElement | null;
+  let index = items.findIndex(
+    (item) => item === active || item.contains(active),
+  );
+  event.preventDefault();
+  if (event.key === "Home") index = 0;
+  else if (event.key === "End") index = items.length - 1;
+  else if (event.key === "ArrowDown") index = (index + 1) % items.length;
   else index = (index - 1 + items.length) % items.length;
   items[index].focus();
 }

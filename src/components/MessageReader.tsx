@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
   ArrowLeft,
@@ -31,7 +31,7 @@ import { parseMailto } from "../mailto";
 import { messageFrameDocument, sanitizeReceivedHtml } from "../security";
 import { useAppStore } from "../store";
 import type { Attachment, AttachmentPreview } from "../types";
-import { moveToolbarFocus } from "./toolbarNav";
+import { moveMenuFocus, moveToolbarFocus } from "./toolbarNav";
 import { useDialogFocus } from "./useDialogFocus";
 
 export function MessageReader() {
@@ -102,6 +102,7 @@ export function MessageReader() {
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const moreMenuRef = useRef<HTMLDivElement>(null);
+  const moreTriggerRef = useRef<HTMLButtonElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const [findOpen, setFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState("");
@@ -203,13 +204,24 @@ export function MessageReader() {
       : false,
   );
   const treatAsOverlay = isOverlay || (narrowViewport && message !== undefined);
+  const restoreMoreFocus = useCallback(() => {
+    window.setTimeout(() => moreTriggerRef.current?.focus(), 0);
+  }, []);
+  const closeSnoozePanel = useCallback(() => {
+    setSnoozeOpen(false);
+    restoreMoreFocus();
+  }, [restoreMoreFocus]);
+  const closeMoreMenu = useCallback(() => {
+    setMoreOpen(false);
+    restoreMoreFocus();
+  }, [restoreMoreFocus]);
   const dialogRef = useDialogFocus(() => {
     if (preview) {
       setPreview(null);
       return;
     }
     if (snoozeOpen) {
-      setSnoozeOpen(false);
+      closeSnoozePanel();
       return;
     }
     if (moreOpen) {
@@ -242,19 +254,23 @@ export function MessageReader() {
 
   useEffect(() => {
     if (!moreOpen) return;
+    const first = moreMenuRef.current?.querySelector<HTMLElement>(
+      '[role="menuitem"]:not([disabled]), select:not([disabled])',
+    );
+    first?.focus();
     const close = (event: MouseEvent) => {
       if (!moreMenuRef.current?.contains(event.target as Node)) {
         setMoreOpen(false);
       }
     };
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
+      if (event.key !== "Escape" && event.key !== "Tab") return;
+      if (event.key === "Escape") event.preventDefault();
       if (snoozeOpen) {
-        setSnoozeOpen(false);
+        closeSnoozePanel();
         return;
       }
-      setMoreOpen(false);
+      closeMoreMenu();
     };
     document.addEventListener("mousedown", close);
     document.addEventListener("keydown", onKey);
@@ -262,7 +278,7 @@ export function MessageReader() {
       document.removeEventListener("mousedown", close);
       document.removeEventListener("keydown", onKey);
     };
-  }, [moreOpen, snoozeOpen]);
+  }, [closeMoreMenu, closeSnoozePanel, moreOpen, snoozeOpen]);
 
   const [menuMessageId, setMenuMessageId] = useState(message?.id);
   if (message?.id !== menuMessageId) {
@@ -994,23 +1010,37 @@ export function MessageReader() {
           </button>
           <div className="reader-more" ref={moreMenuRef}>
             <button
+              ref={moreTriggerRef}
               type="button"
               onClick={() => setMoreOpen((value) => !value)}
+              onKeyDown={(event) => {
+                if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                  event.preventDefault();
+                  setMoreOpen(true);
+                }
+              }}
               aria-expanded={moreOpen}
               aria-haspopup="menu"
+              aria-controls="reader-more-menu"
               aria-label={strings.reader.moreActions}
               title={strings.reader.moreActions}
             >
               <MoreHorizontal aria-hidden="true" />
             </button>
             {moreOpen ? (
-              <div className="reader-more-menu" role="menu">
+              <div
+                id="reader-more-menu"
+                className="reader-more-menu"
+                role="menu"
+                aria-label={strings.reader.moreActions}
+                onKeyDownCapture={moveMenuFocus}
+              >
                 <button
                   type="button"
                   role="menuitem"
                   onClick={() => {
                     printMessage();
-                    setMoreOpen(false);
+                    closeMoreMenu();
                   }}
                 >
                   <Printer aria-hidden="true" />
@@ -1021,7 +1051,7 @@ export function MessageReader() {
                   role="menuitem"
                   onClick={() => {
                     void setRead();
-                    setMoreOpen(false);
+                    closeMoreMenu();
                   }}
                 >
                   {message.isRead ? (
@@ -1038,7 +1068,7 @@ export function MessageReader() {
                   role="menuitem"
                   onClick={() => {
                     void setStarred();
-                    setMoreOpen(false);
+                    closeMoreMenu();
                   }}
                 >
                   <Star
@@ -1126,7 +1156,7 @@ export function MessageReader() {
       {snoozeOpen ? (
         <SnoozePanel
           onSnooze={(untilIso) => void snoozeCurrentMessage(untilIso)}
-          onClose={() => setSnoozeOpen(false)}
+          onClose={closeSnoozePanel}
         />
       ) : null}
       <header className="message-header">
@@ -1645,7 +1675,11 @@ function SnoozePanel({
       role="group"
       aria-label={strings.reader.snooze}
     >
-      <button type="button" onClick={() => onSnooze(tomorrowMorning())}>
+      <button
+        type="button"
+        autoFocus
+        onClick={() => onSnooze(tomorrowMorning())}
+      >
         {strings.reader.snoozeTomorrow}
       </button>
       <button type="button" onClick={() => onSnooze(nextMonday())}>

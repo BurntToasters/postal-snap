@@ -121,6 +121,11 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
   >({});
   const [savingSignatureId, setSavingSignatureId] = useState<string>();
   const [confirmThreatOff, setConfirmThreatOff] = useState(false);
+  const [horizontalTabs, setHorizontalTabs] = useState(() =>
+    typeof window.matchMedia === "function"
+      ? window.matchMedia("(max-width: 760px)").matches
+      : false,
+  );
   const [confirmToken, setConfirmToken] = useState("");
   const confirmInputRef = useRef<HTMLInputElement>(null);
   const pendingSettingsPatch = useRef<SettingsPatch>({});
@@ -160,6 +165,15 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
     () => () => removeUpdateFoundListener(handleUpdateFound),
     [handleUpdateFound],
   );
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia("(max-width: 760px)");
+    const updateOrientation = () => setHorizontalTabs(media.matches);
+    updateOrientation();
+    media.addEventListener("change", updateOrientation);
+    return () => media.removeEventListener("change", updateOrientation);
+  }, []);
 
   useEffect(() => {
     if (tab !== "accounts") return;
@@ -631,17 +645,10 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
   }
 
   function moveTab(event: KeyboardEvent<HTMLButtonElement>, index: number) {
-    if (
-      ![
-        "ArrowLeft",
-        "ArrowRight",
-        "ArrowUp",
-        "ArrowDown",
-        "Home",
-        "End",
-      ].includes(event.key)
-    )
-      return;
+    const directionKeys = horizontalTabs
+      ? ["ArrowLeft", "ArrowRight"]
+      : ["ArrowUp", "ArrowDown"];
+    if (![...directionKeys, "Home", "End"].includes(event.key)) return;
     event.preventDefault();
     const nextIndex =
       event.key === "Home"
@@ -656,10 +663,11 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
             tabs.length;
     const next = tabs[nextIndex].id;
     setTab(next);
-    window.setTimeout(
-      () => document.getElementById(`settings-tab-${next}`)?.focus(),
-      0,
-    );
+    window.setTimeout(() => {
+      const element = document.getElementById(`settings-tab-${next}`);
+      element?.focus();
+      element?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    }, 0);
   }
 
   const advertisingOn = settings.blockAdvertisingAndTracking;
@@ -705,6 +713,7 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
             className="settings-nav"
             aria-label={strings.settings.sections}
             role="tablist"
+            aria-orientation={horizontalTabs ? "horizontal" : "vertical"}
           >
             {tabs.map(({ id, label, icon: Icon }, index) => (
               <button
@@ -717,7 +726,13 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
                 aria-controls={`settings-${id}`}
                 tabIndex={tab === id ? 0 : -1}
                 className={tab === id ? "active" : ""}
-                onClick={() => setTab(id)}
+                onClick={(event) => {
+                  setTab(id);
+                  event.currentTarget.scrollIntoView?.({
+                    block: "nearest",
+                    inline: "nearest",
+                  });
+                }}
                 onKeyDown={(event) => moveTab(event, index)}
               >
                 <Icon aria-hidden="true" />

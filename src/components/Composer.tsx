@@ -899,11 +899,16 @@ export function Composer({ accountId }: Props) {
                 value={to}
                 onChange={(value) => {
                   setTo(value);
+                  if (recipientError) {
+                    setRecipientError(validateRecipientFields(value, cc, bcc));
+                  }
                   markUnsaved();
                 }}
-                onBlur={() =>
-                  setRecipientError(validateRecipientFields(to, cc, bcc))
-                }
+                onBlur={() => {
+                  if (to.trim() || cc.trim() || bcc.trim()) {
+                    setRecipientError(validateRecipientFields(to, cc, bcc));
+                  }
+                }}
                 placeholder={strings.composer.addressPlaceholder}
                 autoFocus
                 ariaInvalid={Boolean(recipientError)}
@@ -932,11 +937,18 @@ export function Composer({ accountId }: Props) {
                   value={cc}
                   onChange={(value) => {
                     setCc(value);
+                    if (recipientError) {
+                      setRecipientError(
+                        validateRecipientFields(to, value, bcc),
+                      );
+                    }
                     markUnsaved();
                   }}
-                  onBlur={() =>
-                    setRecipientError(validateRecipientFields(to, cc, bcc))
-                  }
+                  onBlur={() => {
+                    if (to.trim() || cc.trim() || bcc.trim()) {
+                      setRecipientError(validateRecipientFields(to, cc, bcc));
+                    }
+                  }}
                   ariaInvalid={Boolean(recipientError)}
                 />
               </label>
@@ -948,11 +960,16 @@ export function Composer({ accountId }: Props) {
                   value={bcc}
                   onChange={(value) => {
                     setBcc(value);
+                    if (recipientError) {
+                      setRecipientError(validateRecipientFields(to, cc, value));
+                    }
                     markUnsaved();
                   }}
-                  onBlur={() =>
-                    setRecipientError(validateRecipientFields(to, cc, bcc))
-                  }
+                  onBlur={() => {
+                    if (to.trim() || cc.trim() || bcc.trim()) {
+                      setRecipientError(validateRecipientFields(to, cc, bcc));
+                    }
+                  }}
                   ariaInvalid={Boolean(recipientError)}
                 />
               </label>
@@ -1316,6 +1333,7 @@ export function Composer({ accountId }: Props) {
             type="button"
             disabled={!canSend}
             onClick={() => void sendMessage()}
+            aria-keyshortcuts="Meta+Enter Control+Enter"
             aria-label={
               sending ? strings.composer.sending : strings.composer.send
             }

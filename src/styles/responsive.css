@@ -84,6 +84,40 @@
 }
 
 @media (max-width: 760px) {
+  html[data-text-scale="large"] .setup-progress:not(.compact) small {
+    display: none;
+  }
+
+  html[data-text-scale="large"] .setup-progress:not(.compact) {
+    margin-block: 22px;
+  }
+
+  html[data-text-scale="large"] .setup-form-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 12px;
+  }
+
+  html[data-text-scale="large"] .setup-form-header .setup-settings-button {
+    max-width: 100%;
+    white-space: nowrap;
+  }
+
+  html[data-text-scale="large"] .setup-form-header .setup-progress {
+    width: 100%;
+    grid-column: 1 / -1;
+  }
+
+  html[data-text-scale="large"] :is(.settings-row, .switch-row) {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  html[data-text-scale="large"] .settings-row select {
+    width: 100%;
+  }
+
   .mail-shell.pane-right,
   .mail-shell.pane-bottom,
   .mail-shell.pane-hidden {
@@ -224,12 +258,16 @@
     padding: 7px;
     overflow-x: auto;
     overflow-y: hidden;
+    overscroll-behavior-inline: contain;
+    scroll-padding-inline: 7px;
+    scroll-snap-type: inline proximity;
     border-right: 0;
     border-bottom: 1px solid var(--border);
   }
 
   .settings-nav button {
     flex: 0 0 auto;
+    scroll-snap-align: nearest;
   }
 
   .settings-content {

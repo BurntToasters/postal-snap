@@ -1367,6 +1367,7 @@ export function MailShell({ onOpenSettings }: Props) {
           <button
             className="toolbar-button get-mail-button"
             type="button"
+            aria-keyshortcuts="F5 Meta+Shift+M Meta+Shift+N Control+Shift+M Control+Shift+N"
             onClick={() => void refresh()}
             disabled={busy}
             aria-label={strings.mail.getMail}
@@ -1380,6 +1381,7 @@ export function MailShell({ onOpenSettings }: Props) {
           <button
             className="primary-button compose-button"
             type="button"
+            aria-keyshortcuts="Meta+N Control+N"
             onClick={() => openComposer()}
             aria-label={strings.mail.compose}
           >
@@ -1412,6 +1414,7 @@ export function MailShell({ onOpenSettings }: Props) {
                     : strings.mail.search
               }
               aria-label={strings.mail.search}
+              aria-keyshortcuts="Meta+F Control+F /"
               disabled={Boolean(
                 activeLocalView &&
                 activeLocalView !== "drafts" &&
@@ -1505,32 +1508,34 @@ export function MailShell({ onOpenSettings }: Props) {
             <small>{activeAccount?.email}</small>
           </span>
         </div>
-        <label className="account-select-label">
-          <span>{strings.mail.account}</span>
-          <span className="account-select-wrap">
-            <select
-              value={activeAccountId ?? ""}
-              onChange={(event) => {
-                mailboxRequest.current += 1;
-                messageRequest.current += 1;
-                detailRequest.current += 1;
-                searchRequest.current += 1;
-                queryRef.current = "";
-                setQuery("");
-                setAllFolders(false);
-                resetListState();
-                selectAccount(event.target.value);
-              }}
-            >
-              {accounts.map((account) => (
-                <option key={account.id} value={account.id}>
-                  {account.displayName || account.email}
-                </option>
-              ))}
-            </select>
-            <ChevronDown aria-hidden="true" />
-          </span>
-        </label>
+        {accounts.length > 1 ? (
+          <label className="account-select-label">
+            <span>{strings.mail.account}</span>
+            <span className="account-select-wrap">
+              <select
+                value={activeAccountId ?? ""}
+                onChange={(event) => {
+                  mailboxRequest.current += 1;
+                  messageRequest.current += 1;
+                  detailRequest.current += 1;
+                  searchRequest.current += 1;
+                  queryRef.current = "";
+                  setQuery("");
+                  setAllFolders(false);
+                  resetListState();
+                  selectAccount(event.target.value);
+                }}
+              >
+                {accounts.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.displayName || account.email}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown aria-hidden="true" />
+            </span>
+          </label>
+        ) : null}
         <button
           className="add-account-button"
           type="button"
@@ -1720,9 +1725,9 @@ export function MailShell({ onOpenSettings }: Props) {
               <FolderPlus aria-hidden="true" /> {strings.mail.newFolder}
             </button>
           )}
-          {mailboxes.some(
-            (mailbox) => mailbox.role === "trash" && mailbox.totalCount > 0,
-          ) ? (
+          {!activeLocalView &&
+          activeMailbox?.role === "trash" &&
+          activeMailbox.totalCount > 0 ? (
             <button
               type="button"
               className="add-account-button"
@@ -1731,9 +1736,9 @@ export function MailShell({ onOpenSettings }: Props) {
               <Trash2 aria-hidden="true" /> {strings.mail.emptyTrash}
             </button>
           ) : null}
-          {mailboxes.some(
-            (mailbox) => mailbox.role === "junk" && mailbox.totalCount > 0,
-          ) ? (
+          {!activeLocalView &&
+          activeMailbox?.role === "junk" &&
+          activeMailbox.totalCount > 0 ? (
             <button
               type="button"
               className="add-account-button"
@@ -1806,6 +1811,7 @@ export function MailShell({ onOpenSettings }: Props) {
                     }}
                     aria-expanded={mailboxMoreOpen}
                     aria-haspopup="menu"
+                    aria-controls="mailbox-more-menu"
                     aria-label={strings.mail.moreMailboxActions}
                     title={strings.mail.moreMailboxActions}
                   >
@@ -1813,6 +1819,7 @@ export function MailShell({ onOpenSettings }: Props) {
                   </button>
                   {mailboxMoreOpen ? (
                     <div
+                      id="mailbox-more-menu"
                       className="mailbox-more-menu"
                       role="menu"
                       aria-label={strings.mail.moreMailboxActions}

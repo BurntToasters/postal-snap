@@ -14,6 +14,7 @@ mod security;
 mod settings;
 mod threat_blocking;
 mod window_fx;
+mod window_snap;
 
 use commands::AppState;
 use tauri::{
@@ -154,6 +155,11 @@ fn main() {
             }
             Ok(())
         })
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                window_snap::on_window_destroyed(window);
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             commands::list_accounts,
             commands::test_account,
@@ -232,6 +238,7 @@ fn main() {
             commands::relaunch_app,
             window_fx::set_workspace_window_fx,
             window_fx::supports_workspace_window_fx,
+            window_snap::set_snap_overlay_bounds,
         ])
         .build(tauri::generate_context!())
         .expect("Postal Snap failed to start");

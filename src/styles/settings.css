@@ -106,6 +106,20 @@
   gap: 12px;
 }
 
+.settings-section
+  > :is(.settings-row, .switch-row)
+  + :is(.settings-row, .switch-row) {
+  margin-top: -13px;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+.settings-section
+  > :is(.settings-row, .switch-row):has(+ :is(.settings-row, .switch-row)) {
+  border-bottom-right-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
 .settings-section > h3 {
   margin: 4px 0 0;
   font-size: 0.78rem;
