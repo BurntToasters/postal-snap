@@ -3582,6 +3582,7 @@ dependencies = [
  "url",
  "uuid",
  "window-vibrancy",
+ "windows",
  "zeroize",
 ]
 

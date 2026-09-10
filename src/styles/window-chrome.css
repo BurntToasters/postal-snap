@@ -26,6 +26,7 @@ html:is([data-platform="macos"], [data-platform="windows"]) .window-chrome {
   height: 100%;
   background: var(--surface);
   pointer-events: auto;
+  user-select: none;
 }
 
 /* Retain a drag surface when a dialog makes the mail toolbar inert. */
@@ -68,7 +69,7 @@ html[data-platform="windows"] .global-window-caption-controls {
   height: 16px;
 }
 
-.global-window-caption-controls button:hover {
+.global-window-caption-controls button:is(:hover, .snap-hover) {
   background: var(--surface-hover);
 }
 

@@ -100,7 +100,23 @@
 .composer-window-controls {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: var(--radius-pill);
+  background: var(--surface-muted);
+}
+
+.composer-window-controls .icon-button {
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  box-shadow: none;
+}
+
+.composer-window-controls .icon-button:last-child:hover {
+  color: var(--danger);
+  background: var(--danger-soft);
 }
 
 .composer-docked-pill {
@@ -170,6 +186,9 @@
 }
 
 .composer-window > header {
+  position: sticky;
+  z-index: 3;
+  top: 0;
   flex: 0 0 auto;
   display: flex;
   min-height: 56px;
@@ -177,6 +196,7 @@
   justify-content: space-between;
   padding: 7px 12px 7px 18px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  background: var(--surface);
 }
 
 .composer-window > header > span {
@@ -527,11 +547,15 @@
 }
 
 .composer-window footer {
+  position: sticky;
+  z-index: 3;
+  bottom: 0;
   display: flex;
   flex-wrap: wrap;
   gap: 7px;
   padding: 9px 15px;
   border-top: 1px solid var(--border);
+  background: var(--surface);
 }
 
 .composer-window footer > * {

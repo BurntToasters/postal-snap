@@ -31,6 +31,7 @@ function nativeDragScript(platform: string) {
 
 type WindowFixture = {
   windowCommands: string[];
+  snapBounds: Array<{ x: number; y: number; width: number; height: number }>;
   maximized: boolean;
   fullscreen: boolean;
   failWindowAction: boolean;
@@ -63,6 +64,7 @@ for (const [platform, userAgent] of Object.entries(platforms)) {
     }) => {
       await page.setViewportSize({ width: 1240, height: 820 });
       await page.goto("/");
+      await expect(page.locator(".account-select-label")).toHaveCount(0);
       const toolbar = page.locator(".app-toolbar");
       await toolbar.waitFor();
       await toolbar.dispatchEvent("mousedown", { button: 0, detail: 1 });
@@ -119,6 +121,31 @@ for (const [platform, userAgent] of Object.entries(platforms)) {
       expect((await windowState(page)).windowCommands).toHaveLength(count);
       await page.getByRole("searchbox").fill("weekend");
       await expect(page.getByRole("searchbox")).toHaveValue("weekend");
+      if (platform === "windows") {
+        await expect
+          .poll(async () => (await windowState(page)).snapBounds.at(-1))
+          .toMatchObject({ width: 46, height: 44 });
+        await page.evaluate(async () => {
+          await (
+            window as unknown as {
+              __TAURI_INTERNALS__: {
+                invoke: (
+                  command: string,
+                  args: Record<string, unknown>,
+                ) => Promise<unknown>;
+              };
+            }
+          ).__TAURI_INTERNALS__.invoke("plugin:event|emit", {
+            event: "snap-max-hover",
+            payload: true,
+          });
+        });
+        await expect(page.locator("#maximize-window-button")).toHaveClass(
+          /snap-hover/,
+        );
+      } else {
+        expect((await windowState(page)).snapBounds).toEqual([]);
+      }
     });
 
     test("mailbox menu supports keyboard opening and restores focus", async ({
@@ -144,6 +171,32 @@ for (const [platform, userAgent] of Object.entries(platforms)) {
       await expect(page.getByRole("menu")).toHaveCount(0);
     });
 
+    test("reader menu supports directional keys and restores focus", async ({
+      page,
+    }) => {
+      await page.goto("/");
+      await page.getByRole("option", { name: /Weekend plans/ }).click();
+      const trigger = page.getByRole("button", { name: "More actions" });
+      await trigger.focus();
+      await page.keyboard.press("ArrowDown");
+      await expect(page.getByRole("menuitem", { name: "Print" })).toBeFocused();
+      await page.keyboard.press("ArrowDown");
+      await expect(
+        page.getByRole("menuitem", { name: "Mark unread" }),
+      ).toBeFocused();
+      await page.keyboard.press("End");
+      await expect(
+        page.getByRole("combobox", { name: "Move to folder" }),
+      ).toBeFocused();
+      await page.keyboard.press("Home");
+      await expect(page.getByRole("menuitem", { name: "Print" })).toBeFocused();
+      await page.keyboard.press("Escape");
+      await expect(trigger).toBeFocused();
+      await expect(
+        page.getByRole("menu", { name: "More actions" }),
+      ).toHaveCount(0);
+    });
+
     test("keeps captions clear and a drag surface reachable in setup and dialogs", async ({
       page,
     }, testInfo) => {
@@ -158,6 +211,13 @@ for (const [platform, userAgent] of Object.entries(platforms)) {
 
       await page.goto("/");
       await page.getByRole("button", { name: "Settings", exact: true }).click();
+      await expect(page.getByRole("tablist")).toHaveAttribute(
+        "aria-orientation",
+        "horizontal",
+      );
+      await page.getByRole("tab", { name: "General" }).focus();
+      await page.keyboard.press("ArrowRight");
+      await expect(page.getByRole("tab", { name: "Reading" })).toBeFocused();
       await expect(page.locator(".settings-window")).toBeVisible();
       expect(
         (await page.locator(".settings-window").boundingBox())!.y,
@@ -228,6 +288,64 @@ for (const [platform, userAgent] of Object.entries(platforms)) {
         animations: "disabled",
         path: testInfo.outputPath(`${platform}-composer-200.png`),
       });
+    });
+
+    test("setup remains readable and actionable at 200% text", async ({
+      page,
+    }, testInfo) => {
+      await page.setViewportSize({ width: 620, height: 540 });
+      await page.goto("/?firstRun=1&scale=2&theme=dark");
+      const setup = page.locator(".setup-page");
+      await expect(setup).toBeVisible();
+      await setup.evaluate((element) => {
+        element.scrollTop = 0;
+      });
+      await page.screenshot({
+        animations: "disabled",
+        path: testInfo.outputPath(`${platform}-setup-top-200.png`),
+      });
+      await page
+        .getByRole("button", { name: /iCloud Mail/i })
+        .scrollIntoViewIfNeeded();
+      await expect(
+        page.getByRole("button", { name: /iCloud Mail/i }),
+      ).toBeInViewport();
+      expect(
+        await setup.evaluate(
+          (element) => element.scrollWidth <= element.clientWidth + 1,
+        ),
+      ).toBe(true);
+      await page.screenshot({
+        animations: "disabled",
+        path: testInfo.outputPath(`${platform}-setup-200.png`),
+      });
+      await page.getByRole("button", { name: /iCloud Mail/i }).click();
+      await setup.evaluate((element) => {
+        element.scrollTop = 0;
+      });
+      await page.screenshot({
+        animations: "disabled",
+        path: testInfo.outputPath(`${platform}-setup-form-top-200.png`),
+      });
+      const connect = page.getByRole("button", { name: "Connect securely" });
+      await connect.scrollIntoViewIfNeeded();
+      await expect(connect).toBeInViewport();
+      await expect(
+        page.getByRole("button", { name: "Back", exact: true }),
+      ).toBeVisible();
+      expect(
+        await setup.evaluate(
+          (element) => element.scrollWidth <= element.clientWidth + 1,
+        ),
+      ).toBe(true);
+      await page.screenshot({
+        animations: "disabled",
+        path: testInfo.outputPath(`${platform}-setup-form-200.png`),
+      });
+      expect(
+        (await new AxeBuilder({ page }).include(".setup-page").analyze())
+          .violations,
+      ).toEqual([]);
     });
 
     for (const pane of ["right", "bottom", "hidden"]) {
@@ -410,6 +528,50 @@ for (const [platform, userAgent] of Object.entries(platforms)) {
     });
   });
 }
+
+test.describe("whole-app responsive UI", () => {
+  test.use({ userAgent: platforms.windows });
+
+  test("keeps every settings destination reachable without horizontal clipping", async ({
+    page,
+  }) => {
+    await installMockIpc(page);
+    await page.setViewportSize({ width: 620, height: 540 });
+    await page.goto("/?scale=2");
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    const names = [
+      "General",
+      "Reading",
+      "Notifications",
+      "Storage",
+      "Accounts",
+      "Shortcuts",
+      "Updates",
+      "Advanced",
+      "About",
+    ];
+    for (const name of names) {
+      const tab = page.getByRole("tab", { name });
+      await tab.click();
+      await expect(tab).toHaveAttribute("aria-selected", "true");
+      await expect(page.getByRole("tabpanel", { name })).toBeVisible();
+      expect(
+        await page
+          .locator(".settings-window")
+          .evaluate(
+            (element) => element.scrollWidth <= element.clientWidth + 1,
+          ),
+      ).toBe(true);
+      expect(
+        await page
+          .locator(".settings-content")
+          .evaluate(
+            (element) => element.scrollWidth <= element.clientWidth + 1,
+          ),
+      ).toBe(true);
+    }
+  });
+});
 
 test.describe("Windows Store caption lifecycle", () => {
   test.use({ userAgent: platforms.windows });

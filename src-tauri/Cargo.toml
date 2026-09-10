@@ -56,12 +56,21 @@ zeroize = { version = "1", features = ["derive"] }
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.61.3", features = [
+    "Win32_Foundation",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
 [dev-dependencies]
 tauri = { version = "2", features = ["test"] }
 tempfile = "3"
 
 [lints.rust]
-unsafe_code = "forbid"
+# Win32 Snap Layout integration contains one reviewed, Windows-only adapter.
+unsafe_code = "deny"
 
 [profile.release]
 panic = "abort"

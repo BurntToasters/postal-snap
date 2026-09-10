@@ -713,6 +713,11 @@ test("validates recipients before sending", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Compose" }).click();
   await page
+    .locator(".composer-window")
+    .getByRole("button", { name: "Maximize editor" })
+    .click();
+  await expect(page.getByText("Add at least one recipient.")).toHaveCount(0);
+  await page
     .getByRole("combobox", { name: "To", exact: true })
     .fill("not-an-address");
   await page.getByRole("textbox", { name: "Subject" }).click();
@@ -914,6 +919,10 @@ test("creates, renames, and deletes personal folders", async ({ page }) => {
 
 test("empties trash only after confirmation", async ({ page }) => {
   await page.goto("/");
+  await expect(page.getByRole("button", { name: "Empty trash" })).toHaveCount(
+    0,
+  );
+  await page.getByRole("button", { name: /^Deleted Messages/ }).click();
   page.once("dialog", (dialog) => void dialog.accept());
   await page.getByRole("button", { name: "Empty trash" }).click();
   await expect(page.getByRole("button", { name: "Empty trash" })).toBeHidden();
