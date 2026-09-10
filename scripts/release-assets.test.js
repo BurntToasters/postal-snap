@@ -207,6 +207,22 @@ test("direct and Store builds keep separate capabilities", async () => {
   assert.ok(!storeCapability.permissions.includes("updater:default"));
   assert.ok(!storeCapability.permissions.includes("process:default"));
   assert.ok(!storeCapability.permissions.includes("process:allow-restart"));
+  for (const capability of [directCapability, storeCapability]) {
+    assert.deepEqual(capability.windows, ["main"]);
+    for (const action of [
+      "start-dragging",
+      "minimize",
+      "toggle-maximize",
+      "set-fullscreen",
+      "close",
+    ]) {
+      assert.ok(
+        capability.permissions.includes(`core:window:allow-${action}`),
+        `Missing caption permission: ${action}`,
+      );
+    }
+    assert.ok(!capability.permissions.includes("core:window:allow-destroy"));
+  }
   assert.equal(mas.app.macOSPrivateApi, false);
   assert.equal(mas.app.windows[0].transparent, false);
   assert.equal(direct.app.macOSPrivateApi, false);

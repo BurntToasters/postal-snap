@@ -3,7 +3,11 @@
   position: relative;
   z-index: 1;
   width: min(860px, 96vw);
-  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+  height: min(680px, 100%);
+  max-height: 100%;
+  min-height: 0;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
   border-radius: 20px;
@@ -12,6 +16,7 @@
 }
 
 .settings-window > header {
+  flex: 0 0 auto;
   display: flex;
   min-height: 56px;
   align-items: center;
@@ -36,7 +41,8 @@
 
 .settings-layout {
   display: grid;
-  min-height: min(500px, 70vh);
+  min-height: 0;
+  flex: 1;
   grid-template-columns: 210px minmax(0, 1fr);
 }
 
@@ -44,7 +50,7 @@
   display: grid;
   align-content: start;
   gap: 3px;
-  max-height: min(500px, 70vh);
+  min-height: 0;
   padding: 14px 9px;
   overflow-y: auto;
   border-right: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
@@ -85,7 +91,7 @@
 }
 
 .settings-content {
-  max-height: 70vh;
+  min-height: 0;
   padding: 22px 26px 28px;
   overflow-y: auto;
 }

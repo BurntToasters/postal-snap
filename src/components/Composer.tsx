@@ -794,7 +794,7 @@ export function Composer({ accountId }: Props) {
         className={`composer-window${maximized ? " composer-maximized" : ""}`}
         ref={dialogRef}
       >
-        <header>
+        <header data-tauri-drag-region="deep">
           <span>
             <h1 id="composer-title">{composerTitle(seed)}</h1>
             <small aria-live="polite">

@@ -4,6 +4,8 @@
   z-index: 30;
   inset: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   place-items: center;
   padding: 18px;
 }
@@ -22,7 +24,7 @@
   position: relative;
   z-index: 1;
   width: min(820px, 100%);
-  max-height: 94vh;
+  max-height: 100%;
   min-height: auto;
   padding: 0;
   background: transparent;
@@ -32,11 +34,13 @@
   position: relative;
   z-index: 1;
   width: min(820px, 100%);
-  max-height: 94vh;
+  max-height: 100%;
+  min-height: 0;
+  overflow: auto;
 }
 
 .setup-modal .setup-card {
-  max-height: 92vh;
+  max-height: 100%;
   overflow: auto;
 }
 
@@ -44,15 +48,19 @@
   position: relative;
   z-index: 1;
   width: min(940px, 96vw);
-  max-height: 94vh;
-  height: min(780px, 94vh);
+  max-height: 100%;
+  height: min(780px, 100%);
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow: auto;
   border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
   border-radius: 20px;
   background: var(--surface);
   box-shadow: var(--shadow);
+}
+
+.composer-window > * {
+  flex-shrink: 0;
 }
 
 .composer-layer-followup:not(.composer-layer-maximized) {
@@ -82,9 +90,9 @@
 }
 
 .composer-window.composer-maximized {
-  width: 100vw;
-  height: 100vh;
-  max-height: 100vh;
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
   border-radius: 0;
   border: none;
 }
@@ -162,6 +170,7 @@
 }
 
 .composer-window > header {
+  flex: 0 0 auto;
   display: flex;
   min-height: 56px;
   align-items: center;
@@ -435,8 +444,8 @@
 }
 
 .composer-window > div:has(.composer-editor) {
-  min-height: 0;
-  flex: 1;
+  min-height: 160px;
+  flex: 1 0 160px;
   overflow: hidden;
 }
 

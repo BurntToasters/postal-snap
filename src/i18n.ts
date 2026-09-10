@@ -15,6 +15,14 @@ export const strings = {
     on: "On",
     off: "Off",
   },
+  window: {
+    controls: "Window controls",
+    minimize: "Minimize",
+    maximize: "Maximize",
+    restore: "Restore",
+    close: "Close",
+    actionFailed: "The window action could not finish. Try again.",
+  },
   app: {
     starting: "Opening Postal Snap…",
     preview: "Run npm run tauri:dev to connect native mail services.",

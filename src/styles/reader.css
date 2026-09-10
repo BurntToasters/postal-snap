@@ -3,8 +3,12 @@
   grid-area: reader;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow: auto;
   background: var(--surface);
+}
+
+.reader-pane > * {
+  flex-shrink: 0;
 }
 
 .pane-hidden .reader-pane.reader-hidden,
@@ -15,7 +19,8 @@
 .pane-hidden .reader-pane:not(.reader-hidden):not(.empty-reader) {
   position: fixed;
   z-index: 12;
-  inset: 74px clamp(18px, 5vw, 72px) 18px;
+  inset: calc(var(--mail-toolbar-height, var(--toolbar-height)) + 14px)
+    clamp(18px, 5vw, 72px) 18px;
   border: 1px solid var(--border);
   border-radius: 12px;
   box-shadow: var(--shadow);
@@ -138,7 +143,7 @@
 
 .message-header {
   display: grid;
-  grid-template-columns: 42px minmax(0, 1fr) auto;
+  grid-template-columns: 42px minmax(0, 1fr);
   gap: 8px 11px;
   padding: 20px clamp(18px, 3vw, 30px) 16px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
@@ -204,10 +209,11 @@
 }
 
 .message-header time {
+  grid-column: 2;
   color: var(--text-muted);
   font-size: 0.82rem;
-  text-align: right;
-  white-space: nowrap;
+  text-align: left;
+  overflow-wrap: anywhere;
 }
 
 .details-toggle {
@@ -388,8 +394,8 @@
 }
 
 .message-body {
-  min-height: 0;
-  flex: 1;
+  min-height: 180px;
+  flex: 1 0 180px;
   overflow: auto;
   background: #fff;
   color-scheme: light;

@@ -108,7 +108,9 @@ fn main() {
                 .on_navigation(allowed_webview_navigation);
             #[cfg(target_os = "macos")]
             {
-                window_builder = window_builder.title_bar_style(tauri::TitleBarStyle::Overlay);
+                window_builder = window_builder
+                    .title_bar_style(tauri::TitleBarStyle::Overlay)
+                    .hidden_title(true);
             }
             #[cfg(target_os = "windows")]
             {
