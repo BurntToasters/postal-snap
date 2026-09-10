@@ -45,9 +45,9 @@ for (const payload of [
   "Postal-Snap-Windows-x64.exe",
   "Postal-Snap-Windows-arm64.exe",
   "Postal-Snap-macOS.app.tar.gz",
-  "Postal-Snap-Linux-x64.AppImage.tar.gz",
-  ...(assets.includes("Postal-Snap-Linux-arm64.AppImage.tar.gz")
-    ? ["Postal-Snap-Linux-arm64.AppImage.tar.gz"]
+  "Postal-Snap-Linux-x64.AppImage",
+  ...(assets.includes("Postal-Snap-Linux-arm64.AppImage")
+    ? ["Postal-Snap-Linux-arm64.AppImage"]
     : []),
 ]) {
   required.push(
@@ -63,7 +63,7 @@ for (const [platform, arch] of [
   ["darwin", "x86_64"],
   ["darwin", "aarch64"],
   ["linux", "x86_64"],
-  ...(assets.includes("Postal-Snap-Linux-arm64.AppImage.tar.gz")
+  ...(assets.includes("Postal-Snap-Linux-arm64.AppImage")
     ? [["linux", "aarch64"]]
     : []),
 ]) {

@@ -12,10 +12,7 @@ import {
 
 test("artifact platform and architecture mapping", () => {
   assert.equal(artifactPlatform("Postal-Snap-Windows-x64.nsis.zip"), "windows");
-  assert.equal(
-    artifactArch("Postal-Snap-Linux-arm64.AppImage.tar.gz"),
-    "aarch64",
-  );
+  assert.equal(artifactArch("Postal-Snap-Linux-arm64.AppImage"), "aarch64");
   assert.equal(artifactArch("Postal-Snap-macOS.app.tar.gz"), "universal");
 });
 
@@ -215,6 +212,7 @@ test("direct and Store builds keep separate capabilities", async () => {
   assert.equal(direct.app.macOSPrivateApi, false);
   const directOverlay = await readJson("src-tauri/tauri.direct.conf.json");
   assert.equal(directOverlay.app.macOSPrivateApi, true);
+  assert.equal(direct.bundle.createUpdaterArtifacts, true);
   assert.equal(mas.bundle.createUpdaterArtifacts, false);
   assert.equal(msstore.bundle.createUpdaterArtifacts, false);
   assert.equal(flatpak.bundle.createUpdaterArtifacts, false);
@@ -352,6 +350,10 @@ test("Windows release signing uses Azure Artifact Signing, not a local PFX", asy
     join(root, "scripts/tauri-build.js"),
     "utf8",
   );
+  const signingEnv = await readFile(
+    join(root, "scripts/tauri-signing-env.js"),
+    "utf8",
+  );
   const setup = await readFile(
     join(root, "scripts/setup-windows-artifact-signing.ps1"),
     "utf8",
@@ -380,6 +382,10 @@ test("Windows release signing uses Azure Artifact Signing, not a local PFX", asy
   assert.match(tauriBuild, /windows-artifact-sign\.ps1/);
   assert.match(tauriBuild, /verify-windows-authenticode\.ps1/);
   assert.match(tauriBuild, /Postal-Snap-Windows-\$\{arch\}\.exe\.sig/);
+  assert.match(tauriBuild, /Postal-Snap-Linux-\$\{arch\}\.AppImage\.sig/);
+  assert.match(tauriBuild, /includeStderr: true/);
+  assert.match(tauriBuild, /inspectCodesignDisplay/);
+  assert.doesNotMatch(tauriBuild, /AppImage\.tar\.gz/);
   assert.doesNotMatch(tauriBuild, /Compress-Archive/);
   assert.match(tauriBuild, /notarytool", "submit"/);
   assert.match(
@@ -389,7 +395,9 @@ test("Windows release signing uses Azure Artifact Signing, not a local PFX", asy
   assert.match(tauriBuild, /stapler", "staple"/);
   assert.match(tauriBuild, /signer", "sign"/);
   assert.match(tauriBuild, /lipo/);
-  assert.match(tauriBuild, /Hardened Runtime/);
+  assert.match(signingEnv, /Hardened Runtime/);
+  assert.match(signingEnv, /Authority=Developer ID Application:/);
+  assert.match(signingEnv, /TeamIdentifier/);
   assert.match(setup, /Microsoft\.Azure\.ArtifactSigningClientTools/);
   assert.doesNotMatch(setup, /WINDOWS_CERTIFICATE_/);
   assert.doesNotMatch(setup, /Import-PfxCertificate/);
@@ -437,6 +445,11 @@ test("release verification covers generated manifests after finalization", async
   );
   assert.ok(remoteVerifier.includes('"download"'));
   assert.ok(remoteVerifier.includes("verify-release-directory.js"));
+  assert.match(finalizer, /isLinuxAppImage/);
+  assert.doesNotMatch(finalizer, /AppImage\.tar\.gz/);
+  assert.ok(verifier.includes("Postal-Snap-Linux-x64.AppImage"));
+  assert.doesNotMatch(verifier, /AppImage\.tar\.gz/);
+  assert.doesNotMatch(remoteVerifier, /AppImage\.tar\.gz/);
 });
 
 test("per-platform continue uploads without requiring the complete artifact set", async () => {

@@ -5,6 +5,8 @@ import { buildTauriBuildArgs } from "./tauri-build-args.js";
 import {
   ensureReleaseDir,
   json,
+  isLinuxAppImage,
+  isLinuxAppImageSignature,
   newestMatching,
   output,
   process,
@@ -20,6 +22,7 @@ import {
   artifactSigningPowershellArgs,
   assertAppleSigningIdentityAvailable,
   assertWindowsSigningConfigured,
+  inspectCodesignDisplay,
   windowsArtifactsToSign,
 } from "./tauri-signing-env.js";
 import { validateEntitlementsPlist } from "./validate-macos-entitlements.js";
@@ -234,8 +237,12 @@ if (!noBundle) {
     },
     { test: (path) => path.endsWith(".dmg"), name: "Postal-Snap-macOS.dmg" },
     {
-      test: (path) => path.endsWith(".AppImage"),
+      test: isLinuxAppImage,
       name: `Postal-Snap-Linux-${arch}.AppImage`,
+    },
+    {
+      test: isLinuxAppImageSignature,
+      name: `Postal-Snap-Linux-${arch}.AppImage.sig`,
     },
     {
       test: (path) => path.endsWith(".nsis.zip"),
@@ -252,14 +259,6 @@ if (!noBundle) {
     {
       test: (path) => path.endsWith(".app.tar.gz.sig"),
       name: "Postal-Snap-macOS.app.tar.gz.sig",
-    },
-    {
-      test: (path) => path.endsWith(".AppImage.tar.gz"),
-      name: `Postal-Snap-Linux-${arch}.AppImage.tar.gz`,
-    },
-    {
-      test: (path) => path.endsWith(".AppImage.tar.gz.sig"),
-      name: `Postal-Snap-Linux-${arch}.AppImage.tar.gz.sig`,
     },
   ];
   const collected = new Set();
@@ -297,8 +296,8 @@ if (!noBundle) {
   }
   if (requireTauriSigning && process.platform === "linux") {
     const required = [
-      `Postal-Snap-Linux-${arch}.AppImage.tar.gz`,
-      `Postal-Snap-Linux-${arch}.AppImage.tar.gz.sig`,
+      `Postal-Snap-Linux-${arch}.AppImage`,
+      `Postal-Snap-Linux-${arch}.AppImage.sig`,
     ];
     const missing = required.filter((name) => !collected.has(name));
     if (missing.length) {
@@ -320,15 +319,12 @@ if (!noBundle) {
       "--verbose=2",
       app,
     ]);
-    const display = await output("codesign", ["--display", "--verbose=4", app]);
-    if (!/\bflags=.*runtime/.test(display)) {
-      throw new Error("Postal Snap.app is missing the Hardened Runtime flag.");
-    }
-    if (!/Developer ID Application/.test(display)) {
-      throw new Error(
-        "Postal Snap.app is not signed with Developer ID Application.",
-      );
-    }
+    const display = await output(
+      "codesign",
+      ["--display", "--verbose=4", app],
+      { includeStderr: true },
+    );
+    inspectCodesignDisplay(display);
     const binary = join(app, "Contents/MacOS/Postal Snap");
     const archs = await output("lipo", ["-archs", binary]);
     if (!/\bx86_64\b/.test(archs) || !/\barm64\b/.test(archs)) {
