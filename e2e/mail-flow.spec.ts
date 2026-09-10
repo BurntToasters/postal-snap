@@ -793,6 +793,11 @@ test("opens the mailbox drawer across the responsive sidebar range", async ({
   await expect(
     page.getByRole("button", { name: "Hide mailboxes" }),
   ).toHaveAttribute("aria-expanded", "true");
+
+  await page.setViewportSize({ width: 620, height: 540 });
+  await expect(
+    page.getByRole("button", { name: "This mailbox" }),
+  ).toBeVisible();
 });
 
 test("completes guided iCloud first run", async ({ page }) => {
@@ -889,6 +894,17 @@ test("keeps settings tab names accessible in a narrow window", async ({
   await page.setViewportSize({ width: 540, height: 800 });
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
+  const tabNames = [
+    "General",
+    "Reading",
+    "Notifications",
+    "Storage",
+    "Accounts",
+    "Shortcuts",
+    "Updates",
+    "Advanced",
+    "About",
+  ];
   await expect
     .poll(() =>
       page
@@ -897,17 +913,10 @@ test("keeps settings tab names accessible in a narrow window", async ({
           tabs.map((tab) => tab.getAttribute("aria-label")),
         ),
     )
-    .toEqual([
-      "General",
-      "Reading",
-      "Notifications",
-      "Storage",
-      "Accounts",
-      "Shortcuts",
-      "Updates",
-      "Advanced",
-      "About",
-    ]);
+    .toEqual(tabNames);
+  for (const name of tabNames) {
+    await expect(page.getByRole("tab", { name }).locator("span")).toBeVisible();
+  }
 });
 
 test("exports, imports, and resets portable settings", async ({ page }) => {
@@ -1446,6 +1455,7 @@ test("mail shell has no detectable serious accessibility violations", async ({
   page,
 }) => {
   await page.goto("/");
+  await page.locator(".mail-shell").waitFor();
   const scan = await new AxeBuilder({ page }).analyze();
   expect(
     scan.violations.filter((violation) =>

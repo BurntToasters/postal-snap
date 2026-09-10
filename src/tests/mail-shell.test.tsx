@@ -229,7 +229,7 @@ describe("mail shell", () => {
     await screen.findByRole("option", { name: /First message/i });
     await waitFor(() => expect(mockedListMessages).toHaveBeenCalledTimes(1));
 
-    const search = screen.getByRole("textbox", { name: "Search mail" });
+    const search = screen.getByRole("searchbox", { name: "Search mail" });
     fireEvent.change(search, { target: { value: "old" } });
     fireEvent.submit(screen.getByRole("search"));
     await waitFor(() => expect(mockedSearchServer).toHaveBeenCalledTimes(1));
