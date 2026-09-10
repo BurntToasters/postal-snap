@@ -27,6 +27,7 @@ const settings = (theme: AppSettings["theme"]): AppSettings => ({
   messagePaneWidth: 390,
   readerPaneHeight: 360,
   windowEffects: false,
+  sidebarVisible: true,
   undoSendSeconds: 10,
   blockAdvertisingAndTracking: true,
   blockReportedThreats: true,

@@ -136,8 +136,8 @@
   display: grid;
   grid-template-columns: 42px minmax(0, 1fr) auto;
   gap: 8px 11px;
-  padding: 22px 24px 18px;
-  border-bottom: 1px solid var(--border);
+  padding: 24px clamp(18px, 3vw, 34px) 20px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
 }
 
 .message-header h1 {

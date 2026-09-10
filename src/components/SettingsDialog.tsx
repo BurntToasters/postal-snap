@@ -767,6 +767,19 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
                       </option>
                     </select>
                   </SettingRow>
+                  <label className="switch-row">
+                    <span>
+                      <strong>{strings.settings.sidebar}</strong>
+                      <small>{strings.settings.sidebarHelp}</small>
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={settings.sidebarVisible !== false}
+                      onChange={(event) =>
+                        void update({ sidebarVisible: event.target.checked })
+                      }
+                    />
+                  </label>
                   {windowFxSupported ? (
                     <label className="switch-row">
                       <span>

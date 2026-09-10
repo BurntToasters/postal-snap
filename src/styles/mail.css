@@ -2,9 +2,13 @@
 .mail-shell {
   display: grid;
   height: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
   grid-template-columns:
-    var(--folder-pane-width, 264px) 5px
-    var(--message-pane-width, 400px) 5px minmax(360px, 1fr);
+    minmax(210px, min(var(--folder-pane-width, 264px), 32vw)) 5px
+    minmax(300px, min(var(--message-pane-width, 400px), 40vw)) 5px
+    minmax(0, 1fr);
   grid-template-rows: minmax(58px, auto) minmax(0, 1fr);
   grid-template-areas:
     "toolbar toolbar toolbar toolbar toolbar"
@@ -13,7 +17,9 @@
 }
 
 .mail-shell.pane-bottom {
-  grid-template-columns: var(--folder-pane-width, 248px) 5px minmax(560px, 1fr);
+  grid-template-columns:
+    minmax(210px, min(var(--folder-pane-width, 248px), 32vw))
+    5px minmax(0, 1fr);
   grid-template-rows:
     minmax(58px, auto) minmax(220px, 1fr) 5px
     var(--reader-pane-height, 360px);
@@ -25,11 +31,32 @@
 }
 
 .mail-shell.pane-hidden {
-  grid-template-columns: var(--folder-pane-width, 248px) 5px minmax(420px, 1fr);
+  grid-template-columns:
+    minmax(210px, min(var(--folder-pane-width, 248px), 32vw))
+    5px minmax(0, 1fr);
   grid-template-rows: minmax(58px, auto) minmax(0, 1fr);
   grid-template-areas:
     "toolbar toolbar toolbar"
     "folders folder-splitter messages";
+}
+
+.mail-shell.sidebar-collapsed {
+  grid-template-columns: minmax(420px, 1fr);
+  grid-template-areas:
+    "toolbar"
+    "messages";
+}
+
+.mail-shell.sidebar-collapsed.pane-right {
+  grid-template-columns: minmax(420px, 1fr) 5px minmax(360px, 1fr);
+  grid-template-areas:
+    "toolbar toolbar toolbar"
+    "messages reader-splitter reader";
+}
+
+.mail-shell.sidebar-collapsed.pane-bottom {
+  grid-template-columns: 1fr;
+  grid-template-areas: "toolbar" "messages" "reader-bottom-splitter" "reader";
 }
 
 .pane-splitter {
@@ -103,6 +130,57 @@
   padding: 10px 16px;
   border-bottom: 1px solid var(--border);
   background: var(--surface-muted);
+  min-width: 0;
+  position: relative;
+}
+
+.global-window-caption-controls {
+  position: fixed;
+  z-index: 100;
+  top: 0;
+  right: 0;
+  display: none;
+  align-items: center;
+  gap: 2px;
+  margin-left: 2px;
+}
+
+.global-window-caption-controls button {
+  display: inline-grid;
+  width: 42px;
+  height: 36px;
+  min-height: 36px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  background: transparent;
+}
+
+.global-window-caption-controls button:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+html[data-platform="windows"] .global-window-caption-controls {
+  display: inline-flex;
+  -webkit-app-region: no-drag;
+}
+
+html[data-platform="macos"] .app-toolbar {
+  padding-left: 82px;
+}
+
+html[data-platform="windows"] .app-toolbar {
+  -webkit-app-region: drag;
+}
+
+html[data-platform="windows"] .app-toolbar button,
+html[data-platform="windows"] .app-toolbar form,
+html[data-platform="windows"] .app-toolbar input,
+html[data-platform="windows"] .app-toolbar label {
+  -webkit-app-region: no-drag;
 }
 
 .app-brand {
@@ -130,10 +208,23 @@
   display: none;
 }
 
+.sidebar-toggle {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.sidebar-collapsed .folder-splitter {
+  display: none;
+}
+
+.sidebar-collapsed .folder-pane {
+  display: none;
+}
+
 .search-box {
   display: flex;
   min-width: 0;
-  max-width: 560px;
+  max-width: 620px;
   flex: 1 1 160px;
   align-items: center;
   margin-inline: auto;
@@ -235,14 +326,68 @@
   min-height: 0;
 }
 
+.folder-pane,
+.message-pane,
+.reader-pane {
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+.message-pane,
+.reader-pane {
+  overscroll-behavior: contain;
+}
+
 .folder-pane {
   grid-area: folders;
   display: flex;
   flex-direction: column;
-  padding: 14px 10px;
+  padding: 18px 12px 14px;
   overflow: hidden;
   border-right: 1px solid var(--border);
   background: var(--surface-muted);
+}
+
+.account-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 56px;
+  margin: 0 2px 12px;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--surface) 55%, transparent);
+}
+
+.account-heading > span:last-child {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.account-heading strong,
+.account-heading small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-heading small {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.account-avatar {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--accent-contrast);
+  background: var(--accent);
+  font-size: 0.9rem;
+  font-weight: 700;
 }
 
 .account-select-label {
@@ -408,13 +553,13 @@
 
 .pane-heading {
   display: flex;
-  min-height: 72px;
+  min-height: 80px;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   padding: 14px 20px;
   border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--surface) 92%, var(--surface-muted));
+  background: color-mix(in srgb, var(--surface) 88%, var(--surface-muted));
 }
 
 .pane-heading > span {
@@ -552,7 +697,6 @@
 .message-row {
   position: relative;
   display: grid;
-  width: 100%;
   min-height: 96px;
   grid-template-columns: 10px minmax(0, 1fr) auto;
   grid-template-areas:
@@ -560,11 +704,13 @@
     "dot subject subject"
     "dot preview preview";
   gap: 3px 8px;
+  margin: 3px 8px;
+  width: calc(100% - 16px);
   padding: 14px 16px 14px 12px;
   text-align: left;
-  border: 0;
-  border-bottom: 1px solid var(--border);
-  border-radius: 0;
+  border: 1px solid transparent;
+  border-bottom-color: var(--border);
+  border-radius: 10px;
   background: var(--surface);
   transition: background-color 120ms ease;
 }
@@ -580,6 +726,7 @@
 
 .message-row.selected {
   background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
   box-shadow: inset 3px 0 var(--accent);
 }
 
@@ -653,6 +800,11 @@
   min-height: 52px;
   padding-block: 6px;
   grid-template-areas: "dot sender date" "dot subject subject";
+}
+
+.message-list,
+.local-mail-list {
+  padding-block: 3px;
 }
 
 :root[data-density="compact"] .message-preview {

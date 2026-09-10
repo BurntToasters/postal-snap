@@ -103,11 +103,18 @@ fn main() {
                 .first()
                 .cloned()
                 .ok_or("Postal Snap window configuration is missing.")?;
-            tauri::WebviewWindowBuilder::from_config(app.handle(), &window_config)
+            let mut window_builder = tauri::WebviewWindowBuilder::from_config(app.handle(), &window_config)
                 .map_err(|error| error.to_string())?
-                .on_navigation(allowed_webview_navigation)
-                .build()
-                .map_err(|error| error.to_string())?;
+                .on_navigation(allowed_webview_navigation);
+            #[cfg(target_os = "macos")]
+            {
+                window_builder = window_builder.title_bar_style(tauri::TitleBarStyle::Overlay);
+            }
+            #[cfg(target_os = "windows")]
+            {
+                window_builder = window_builder.decorations(false);
+            }
+            window_builder.build().map_err(|error| error.to_string())?;
             install_menu(
                 app,
                 !has_startup_error && mail_actions_enabled(accounts.len()),

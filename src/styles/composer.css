@@ -51,7 +51,7 @@
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  background: var(--surface);
+  background: color-mix(in srgb, var(--surface) 96%, var(--surface-muted));
   box-shadow: var(--shadow);
 }
 
@@ -268,7 +268,7 @@
   list-style: none;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--surface);
+  background: color-mix(in srgb, var(--surface) 92%, var(--surface-muted));
   box-shadow: var(--shadow);
   max-height: 264px;
   overflow: auto;
