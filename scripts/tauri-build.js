@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { buildTauriBuildArgs } from "./tauri-build-args.js";
 import {
   ensureReleaseDir,
+  existsSync,
   json,
   isLinuxAppImage,
   isLinuxAppImageSignature,
@@ -23,6 +24,7 @@ import {
   assertAppleSigningIdentityAvailable,
   assertWindowsSigningConfigured,
   inspectCodesignDisplay,
+  macosBundleExecutablePath,
   windowsArtifactsToSign,
 } from "./tauri-signing-env.js";
 import { validateEntitlementsPlist } from "./validate-macos-entitlements.js";
@@ -325,7 +327,17 @@ if (!noBundle) {
       { includeStderr: true },
     );
     inspectCodesignDisplay(display);
-    const binary = join(app, "Contents/MacOS/Postal Snap");
+    const executableName = await output("/usr/libexec/PlistBuddy", [
+      "-c",
+      "Print:CFBundleExecutable",
+      join(app, "Contents/Info.plist"),
+    ]);
+    const binary = macosBundleExecutablePath(app, executableName);
+    if (!existsSync(binary)) {
+      throw new Error(
+        `Postal Snap.app is missing Mach-O executable "${executableName}".`,
+      );
+    }
     const archs = await output("lipo", ["-archs", binary]);
     if (!/\bx86_64\b/.test(archs) || !/\barm64\b/.test(archs)) {
       throw new Error(

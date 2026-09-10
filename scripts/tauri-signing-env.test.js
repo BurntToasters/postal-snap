@@ -8,6 +8,7 @@ import {
   artifactSigningPowershellArgs,
   assertWindowsSigningConfigured,
   inspectCodesignDisplay,
+  macosBundleExecutablePath,
   missingAzureArtifactSigningVars,
   skipWindowsCodeSigning,
   windowsArtifactsToSign,
@@ -139,6 +140,22 @@ Authority=Developer ID Certification Authority
 Authority=Apple Root CA
 TeamIdentifier=ABCDE12345
 `;
+
+test("macosBundleExecutablePath follows CFBundleExecutable, not productName", () => {
+  const app = join("/tmp", "Postal Snap.app");
+  assert.equal(
+    macosBundleExecutablePath(app, "postal-snap"),
+    join(app, "Contents", "MacOS", "postal-snap"),
+  );
+  assert.equal(
+    macosBundleExecutablePath(app, "Postal Snap"),
+    join(app, "Contents", "MacOS", "Postal Snap"),
+  );
+  assert.throws(
+    () => macosBundleExecutablePath(app, "../evil"),
+    /CFBundleExecutable/,
+  );
+});
 
 test("inspectCodesignDisplay matches Zinnia stdout+stderr codesign output", () => {
   assert.deepEqual(inspectCodesignDisplay(codesignDisplayStderr), {
