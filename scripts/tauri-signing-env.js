@@ -95,6 +95,30 @@ export function applyApplePasswordCompatibility(env = process.env) {
   return env;
 }
 
+// Zinnia zip-macos.js: codesign --display --verbose=4 writes
+// Authority/TeamIdentifier/flags to stderr. Callers must pass stdout+stderr.
+export function inspectCodesignDisplay(details, label = "Postal Snap.app") {
+  const text = String(details ?? "");
+  if (/Signature=adhoc/i.test(text)) {
+    throw new Error(
+      `${label} is signed ad hoc, not with a Developer ID Application certificate.`,
+    );
+  }
+  if (!/Authority=Developer ID Application:/i.test(text)) {
+    throw new Error(
+      `${label} is not signed with a Developer ID Application certificate.`,
+    );
+  }
+  if (!/\bflags=.*runtime/.test(text)) {
+    throw new Error(`${label} is missing the Hardened Runtime flag.`);
+  }
+  const teamIdentifier = text.match(/^TeamIdentifier=(.+)$/m)?.[1]?.trim();
+  if (!teamIdentifier || teamIdentifier === "not set") {
+    throw new Error(`${label} signature has no TeamIdentifier.`);
+  }
+  return { teamIdentifier };
+}
+
 export function assertAppleSigningIdentityAvailable(
   identity,
   identitiesOutput,

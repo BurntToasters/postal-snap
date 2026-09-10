@@ -7,6 +7,7 @@ import {
   AZURE_ARTIFACT_SIGNING_ENV_VARS,
   artifactSigningPowershellArgs,
   assertWindowsSigningConfigured,
+  inspectCodesignDisplay,
   missingAzureArtifactSigningVars,
   skipWindowsCodeSigning,
   windowsArtifactsToSign,
@@ -126,6 +127,48 @@ test("windowsArtifactsToSign collects runtime and NSIS exe, not updater zip", as
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+const codesignDisplayStderr = `
+Executable=/tmp/Postal Snap.app/Contents/MacOS/Postal Snap
+Identifier=run.rosie.snap
+Format=app bundle with Mach-O universal (x86_64 arm64)
+CodeDirectory v=20500 size=123 flags=0x10000(runtime) hashes=8+0 location=embedded
+Authority=Developer ID Application: Example (ABCDE12345)
+Authority=Developer ID Certification Authority
+Authority=Apple Root CA
+TeamIdentifier=ABCDE12345
+`;
+
+test("inspectCodesignDisplay matches Zinnia stdout+stderr codesign output", () => {
+  assert.deepEqual(inspectCodesignDisplay(codesignDisplayStderr), {
+    teamIdentifier: "ABCDE12345",
+  });
+  assert.throws(
+    () => inspectCodesignDisplay("Identifier=run.rosie.snap\n"),
+    /Developer ID Application/,
+  );
+  assert.throws(
+    () => inspectCodesignDisplay(`${codesignDisplayStderr}\nSignature=adhoc\n`),
+    /ad hoc/,
+  );
+  assert.throws(
+    () =>
+      inspectCodesignDisplay(
+        codesignDisplayStderr.replace("flags=0x10000(runtime)", "flags=0x0"),
+      ),
+    /Hardened Runtime/,
+  );
+  assert.throws(
+    () =>
+      inspectCodesignDisplay(
+        codesignDisplayStderr.replace(
+          "TeamIdentifier=ABCDE12345",
+          "TeamIdentifier=not set",
+        ),
+      ),
+    /TeamIdentifier/,
+  );
 });
 
 test("artifactSigningPowershellArgs match Zinnia SignTool invocation flags", () => {

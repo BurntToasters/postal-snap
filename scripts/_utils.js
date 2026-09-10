@@ -113,10 +113,11 @@ export async function runWithInput(command, args, input, options = {}) {
 }
 
 export async function output(command, args = [], options = {}) {
+  const { includeStderr = false, ...spawnOptions } = options;
   return new Promise((resolvePromise, reject) => {
     const child = spawnChild(command, args, {
       stdio: ["ignore", "pipe", "pipe"],
-      ...options,
+      ...spawnOptions,
     });
     let stdout = "";
     let stderr = "";
@@ -129,7 +130,9 @@ export async function output(command, args = [], options = {}) {
     child.once("error", reject);
     child.once("close", (code, signal) =>
       code === 0
-        ? resolvePromise(stdout.trim())
+        ? resolvePromise(
+            (includeStderr ? `${stdout}\n${stderr}` : stdout).trim(),
+          )
         : reject(commandFailure(command, code, signal, stderr)),
     );
   });
@@ -187,6 +190,16 @@ export function artifactPlatform(name) {
   if (/macOS/i.test(name)) return "darwin";
   if (/Linux/i.test(name)) return "linux";
   return undefined;
+}
+
+// IYERIS/Zinnia gpg-sign treat the AppImage itself as the Linux updater
+// payload. `.AppImage.tar.gz` is v1Compatible only and must not match.
+export function isLinuxAppImage(name) {
+  return /\.AppImage$/i.test(name);
+}
+
+export function isLinuxAppImageSignature(name) {
+  return /\.AppImage\.sig$/i.test(name);
 }
 export function artifactArch(name) {
   if (/arm64|aarch64/i.test(name)) return "aarch64";
