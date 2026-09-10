@@ -261,6 +261,7 @@ export interface AppSettings {
   messagePaneWidth: number;
   readerPaneHeight: number;
   windowEffects: boolean;
+  sidebarVisible: boolean;
   undoSendSeconds: number;
   blockAdvertisingAndTracking: boolean;
   blockReportedThreats: boolean;

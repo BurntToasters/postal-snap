@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -126,8 +127,46 @@ export function MailShell({ onOpenSettings }: Props) {
   const [selecting, setSelecting] = useState(false);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [bulkBusy, setBulkBusy] = useState(false);
+  const toolbarRef = useRef<HTMLElement>(null);
   const newFolderButtonRef = useRef<HTMLButtonElement>(null);
   const lastFolderInvoker = useRef<HTMLElement | null>(null);
+
+  const sidebarVisible = settings.sidebarVisible !== false;
+
+  useLayoutEffect(() => {
+    const toolbar = toolbarRef.current;
+    const shell = toolbar?.closest<HTMLElement>(".mail-shell");
+    if (!toolbar || !shell) return;
+
+    const updateToolbarHeight = () => {
+      const height = Math.ceil(toolbar.getBoundingClientRect().height);
+      if (height > 0)
+        shell.style.setProperty("--toolbar-height", `${height}px`);
+    };
+    updateToolbarHeight();
+    window.addEventListener("resize", updateToolbarHeight);
+    if (typeof ResizeObserver === "undefined") {
+      return () => window.removeEventListener("resize", updateToolbarHeight);
+    }
+    const observer = new ResizeObserver(updateToolbarHeight);
+    observer.observe(toolbar);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", updateToolbarHeight);
+    };
+  }, []);
+
+  function toggleSidebar() {
+    const next = {
+      ...useAppStore.getState().settings,
+      sidebarVisible: !sidebarVisible,
+    };
+    setSettings(next);
+    void api
+      .saveSettings(next)
+      .then(setSettings)
+      .catch((cause) => setError(String(cause)));
+  }
 
   function openFolderDialog(
     dialog: { mode: "create" } | { mode: "rename"; id: number; name: string },
@@ -1226,6 +1265,10 @@ export function MailShell({ onOpenSettings }: Props) {
     () => mailboxes.find((box) => box.id === activeMailboxId),
     [activeMailboxId, mailboxes],
   );
+  const activeAccount = useMemo(
+    () => accounts.find((account) => account.id === activeAccountId),
+    [activeAccountId, accounts],
+  );
   const heading = activeLocalView
     ? activeLocalView === "drafts"
       ? strings.mail.drafts
@@ -1240,7 +1283,7 @@ export function MailShell({ onOpenSettings }: Props) {
         ? snoozed.length
         : outbox.length
     : messages.length;
-  const shellClass = `mail-shell pane-${settings.readingPane} ${sidebarOpen ? "sidebar-open" : ""} ${selectedMessage ? "message-open" : ""}`;
+  const shellClass = `mail-shell pane-${settings.readingPane} ${sidebarOpen ? "sidebar-open" : ""} ${sidebarVisible ? "" : "sidebar-collapsed"} ${selectedMessage ? "message-open" : ""}`;
 
   const shellStyle = {
     "--folder-pane-width": `${settings.folderPaneWidth}px`,
@@ -1250,18 +1293,25 @@ export function MailShell({ onOpenSettings }: Props) {
 
   return (
     <main className={shellClass} style={shellStyle}>
-      <header className="app-toolbar">
+      <header ref={toolbarRef} className="app-toolbar">
         <button
           ref={sidebarToggleRef}
           className="icon-button sidebar-toggle"
           type="button"
-          onClick={() => setSidebarOpen((open) => !open)}
+          onClick={() => {
+            if (narrowViewport && sidebarVisible)
+              setSidebarOpen((open) => !open);
+            else if (narrowViewport) {
+              toggleSidebar();
+              setSidebarOpen(true);
+            } else toggleSidebar();
+          }}
           aria-label={
-            sidebarOpen
+            sidebarVisible && (!narrowViewport || sidebarOpen)
               ? strings.mail.hideMailboxes
               : strings.mail.showMailboxes
           }
-          aria-expanded={sidebarOpen}
+          aria-expanded={sidebarVisible && (sidebarOpen || !narrowViewport)}
           aria-controls="folder-pane"
         >
           <PanelLeft aria-hidden="true" />
@@ -1329,7 +1379,7 @@ export function MailShell({ onOpenSettings }: Props) {
                   setAllFolders(event.target.checked);
                 }}
               />
-              {strings.mail.allFolders}
+              {allFolders ? strings.mail.thisAccount : strings.mail.thisMailbox}
             </label>
           ) : null}
         </form>
@@ -1378,11 +1428,24 @@ export function MailShell({ onOpenSettings }: Props) {
             <X />
           </button>
         </div>
+        <div className="account-heading">
+          <span className="account-avatar" aria-hidden="true">
+            {(activeAccount?.displayName || activeAccount?.email || "?")
+              .slice(0, 1)
+              .toUpperCase()}
+          </span>
+          <span>
+            <strong>
+              {activeAccount?.displayName || strings.mail.account}
+            </strong>
+            <small>{activeAccount?.email}</small>
+          </span>
+        </div>
         <label className="account-select-label">
           <span>{strings.mail.account}</span>
           <span className="account-select-wrap">
             <select
-              value={activeAccountId}
+              value={activeAccountId ?? ""}
               onChange={(event) => {
                 mailboxRequest.current += 1;
                 messageRequest.current += 1;

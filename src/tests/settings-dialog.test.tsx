@@ -72,7 +72,7 @@ beforeEach(() => {
   useAppStore.setState({
     accounts: [account],
     activeAccountId: account.id,
-    settings: defaultSettings,
+    settings: { ...defaultSettings, windowEffects: false },
     error: undefined,
   });
 });

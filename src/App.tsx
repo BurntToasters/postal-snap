@@ -7,6 +7,8 @@ import {
   useState,
 } from "react";
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { Maximize2, Minus, X } from "lucide-react";
 import {
   isPermissionGranted,
   requestPermission,
@@ -30,6 +32,53 @@ const Composer = lazy(() =>
     default: module.Composer,
   })),
 );
+
+function WindowCaptionControls() {
+  useEffect(() => {
+    if (!inTauri() || !/Windows/i.test(navigator.userAgent)) return;
+    const appWindow = getCurrentWebviewWindow();
+    const controls = document.querySelector<HTMLElement>(
+      ".global-window-caption-controls",
+    );
+    if (!controls) return;
+    const actions = new Map<string, () => void>([
+      ["minimize", () => void appWindow.minimize()],
+      ["maximize", () => void appWindow.toggleMaximize()],
+      ["close", () => void appWindow.close()],
+    ]);
+    const listeners: Array<[Element, EventListener]> = [];
+    controls
+      .querySelectorAll<HTMLElement>("[data-window-action]")
+      .forEach((button) => {
+        const action = actions.get(button.dataset.windowAction ?? "");
+        if (!action) return;
+        const listener = () => action();
+        button.addEventListener("click", listener);
+        listeners.push([button, listener]);
+      });
+    return () =>
+      listeners.forEach(([button, listener]) =>
+        button.removeEventListener("click", listener),
+      );
+  }, []);
+
+  return (
+    <div
+      className="global-window-caption-controls"
+      aria-label="Window controls"
+    >
+      <button type="button" aria-label="Minimize" data-window-action="minimize">
+        <Minus aria-hidden="true" />
+      </button>
+      <button type="button" aria-label="Maximize" data-window-action="maximize">
+        <Maximize2 aria-hidden="true" />
+      </button>
+      <button type="button" aria-label="Close" data-window-action="close">
+        <X aria-hidden="true" />
+      </button>
+    </div>
+  );
+}
 
 export default function App() {
   const accounts = useAppStore((state) => state.accounts);
@@ -256,7 +305,7 @@ export default function App() {
 
   return (
     <>
-      <div inert={settingsOpen || undefined}>
+      <div className="app-viewport" inert={settingsOpen || undefined}>
         {mainContent}
         {composerOpen && composerAccountId ? (
           <Suspense
@@ -292,6 +341,7 @@ export default function App() {
           </button>
         </div>
       ) : null}
+      <WindowCaptionControls />
     </>
   );
 }

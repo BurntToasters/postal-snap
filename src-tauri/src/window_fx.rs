@@ -118,17 +118,17 @@ pub fn set_workspace_window_fx(
     window: WebviewWindow,
     enabled: bool,
     dark: bool,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     if !supports_basic_window_fx() {
         paint_opaque_background(&window, dark);
         let _ = enabled;
-        return Ok(());
+        return Ok(false);
     }
 
     if enabled {
-        apply_basic_window_fx(&window, dark)
+        apply_basic_window_fx(&window, dark).map(|()| true)
     } else {
-        clear_basic_window_fx(&window, dark)
+        clear_basic_window_fx(&window, dark).map(|()| false)
     }
 }
 

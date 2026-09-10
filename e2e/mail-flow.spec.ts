@@ -523,6 +523,7 @@ async function installMockIpc(page: Page) {
                 messagePaneWidth: 390,
                 readerPaneHeight: 360,
                 windowEffects: false,
+                sidebarVisible: true,
                 undoSendSeconds: 10,
                 blockAdvertisingAndTracking: true,
                 blockReportedThreats: true,
@@ -668,6 +669,43 @@ async function installMockIpc(page: Page) {
 }
 
 test.beforeEach(async ({ page }) => installMockIpc(page));
+
+test("fills resized window without exposing a blank footer", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.locator(".mail-shell").waitFor();
+  for (const viewport of [
+    { width: 620, height: 540 },
+    { width: 900, height: 720 },
+    { width: 1240, height: 820 },
+    { width: 1875, height: 1400 },
+  ]) {
+    await page.setViewportSize(viewport);
+    const bounds = await page.evaluate(() => {
+      const shell = document.querySelector<HTMLElement>(".mail-shell");
+      const panes = [
+        document.querySelector<HTMLElement>(".message-pane"),
+        document.querySelector<HTMLElement>(
+          ".reader-pane:not(.empty-reader):not(.reader-hidden)",
+        ),
+      ].filter((pane): pane is HTMLElement =>
+        Boolean(pane && pane.getBoundingClientRect().height > 0),
+      );
+      return {
+        shellBottom: shell?.getBoundingClientRect().bottom ?? 0,
+        paneBottoms: panes.map((pane) => pane.getBoundingClientRect().bottom),
+        viewportBottom: window.innerHeight,
+      };
+    });
+    expect(
+      Math.abs(bounds.shellBottom - bounds.viewportBottom),
+    ).toBeLessThanOrEqual(1);
+    for (const bottom of bounds.paneBottoms) {
+      expect(Math.abs(bottom - bounds.viewportBottom)).toBeLessThanOrEqual(1);
+    }
+  }
+});
 
 test("completes guided iCloud first run", async ({ page }) => {
   await page.goto("/?firstRun=1");

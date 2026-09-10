@@ -356,6 +356,8 @@ pub struct AppSettings {
     pub reader_pane_height: u32,
     #[serde(default)]
     pub window_effects: bool,
+    #[serde(default = "default_true")]
+    pub sidebar_visible: bool,
     #[serde(default = "default_undo_send_seconds")]
     pub undo_send_seconds: u32,
     #[serde(default = "default_true")]
@@ -390,6 +392,8 @@ pub struct PortableSettings {
     pub reader_pane_height: u32,
     #[serde(default)]
     pub window_effects: bool,
+    #[serde(default = "default_true")]
+    pub sidebar_visible: bool,
     #[serde(default = "default_undo_send_seconds")]
     pub undo_send_seconds: u32,
     #[serde(default = "default_true")]
@@ -425,7 +429,8 @@ impl Default for AppSettings {
             folder_pane_width: 264,
             message_pane_width: 400,
             reader_pane_height: 360,
-            window_effects: false,
+            window_effects: true,
+            sidebar_visible: true,
             undo_send_seconds: default_undo_send_seconds(),
             block_advertising_and_tracking: true,
             block_reported_threats: true,

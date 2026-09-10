@@ -52,6 +52,13 @@ html[data-window-fx="vibrant"] .remote-content-banner {
   -webkit-backdrop-filter: blur(16px) saturate(130%);
 }
 
+/* Controls remain readable over glass; message content remains opaque below. */
+html[data-window-fx="vibrant"] .toolbar-button,
+html[data-window-fx="vibrant"] .icon-button,
+html[data-window-fx="vibrant"] .primary-button {
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 10%);
+}
+
 /* 3. Modals and Composer Glass */
 html[data-window-fx="vibrant"] .composer-window,
 html[data-window-fx="vibrant"] .settings-window,
@@ -93,4 +100,35 @@ html[data-window-fx="vibrant"] .message-body {
 html[data-window-fx="opaque"] body,
 html:not([data-window-fx]) body {
   background: var(--canvas);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-window-fx="vibrant"] *,
+  html[data-window-fx="vibrant"] *::before,
+  html[data-window-fx="vibrant"] *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
+
+@media (prefers-contrast: more) {
+  html[data-window-fx="vibrant"] .app-toolbar,
+  html[data-window-fx="vibrant"] .folder-pane,
+  html[data-window-fx="vibrant"] .message-pane,
+  html[data-window-fx="vibrant"] .reader-actions {
+    background: var(--surface) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  html[data-window-fx="vibrant"] .app-toolbar,
+  html[data-window-fx="vibrant"] .folder-pane,
+  html[data-window-fx="vibrant"] .message-pane,
+  html[data-window-fx="vibrant"] .reader-actions {
+    background: var(--surface) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
 }

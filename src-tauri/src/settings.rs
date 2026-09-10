@@ -183,6 +183,7 @@ impl From<&AppSettings> for PortableSettings {
             reader_pane_height: settings.reader_pane_height,
             undo_send_seconds: settings.undo_send_seconds,
             window_effects: settings.window_effects,
+            sidebar_visible: settings.sidebar_visible,
             block_advertising_and_tracking: settings.block_advertising_and_tracking,
             block_reported_threats: settings.block_reported_threats,
             group_threads: settings.group_threads,
@@ -208,6 +209,7 @@ impl PortableSettings {
             reader_pane_height: self.reader_pane_height,
             undo_send_seconds: self.undo_send_seconds,
             window_effects: self.window_effects,
+            sidebar_visible: self.sidebar_visible,
             block_advertising_and_tracking: self.block_advertising_and_tracking,
             block_reported_threats: true,
             group_threads: self.group_threads,
@@ -244,6 +246,8 @@ impl From<&PortableCachePolicy> for CachePolicy {
 
 fn normalize_legacy(mut settings: AppSettings) -> Result<AppSettings, String> {
     settings.schema_version = 2;
+    // Legacy settings predates integrated glass/sidebar preferences.
+    settings.window_effects = false;
     if !matches!(settings.density.as_str(), "comfortable" | "compact") {
         settings.density = "comfortable".into();
     }
@@ -662,8 +666,8 @@ mod tests {
     }
 
     #[test]
-    fn window_effects_default_off_and_survive_portable_round_trip() {
-        assert!(!AppSettings::default().window_effects);
+    fn window_effects_default_on_and_survive_portable_round_trip() {
+        assert!(AppSettings::default().window_effects);
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.json");
         let export_path = directory.path().join("export.json");

@@ -11,6 +11,26 @@
       "messages reader-splitter reader";
   }
 
+  .mail-shell.sidebar-collapsed.pane-right {
+    grid-template-columns:
+      minmax(240px, var(--message-pane-width, 360px))
+      5px minmax(280px, 1fr);
+    grid-template-areas: "toolbar toolbar toolbar" "messages reader-splitter reader";
+  }
+
+  .mail-shell.sidebar-collapsed.pane-hidden {
+    grid-template-columns: 1fr;
+    grid-template-areas: "toolbar" "messages";
+  }
+
+  .mail-shell.sidebar-collapsed.pane-bottom {
+    grid-template-columns: 1fr;
+    grid-template-rows:
+      var(--toolbar-height, 60px) minmax(180px, 1fr)
+      5px minmax(200px, var(--reader-pane-height, 320px));
+    grid-template-areas: "toolbar" "messages" "reader-bottom-splitter" "reader";
+  }
+
   .mail-shell.pane-bottom {
     grid-template-columns: 1fr;
     grid-template-rows:
@@ -30,6 +50,10 @@
 
   .sidebar-toggle {
     display: inline-flex;
+  }
+
+  html[data-platform="macos"] .app-toolbar {
+    padding-left: 76px;
   }
 
   .app-brand {
@@ -236,6 +260,14 @@
 
   .composer-window footer {
     flex-wrap: wrap;
+  }
+
+  html[data-platform="macos"] .app-toolbar {
+    padding-left: 68px;
+  }
+
+  html:not([data-platform="windows"]) .global-window-caption-controls {
+    display: none !important;
   }
 }
 
