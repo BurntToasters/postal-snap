@@ -2,6 +2,8 @@
 
 `npm run u` is a lockfile-only dependency proposal. It does not install npm packages, run npm lifecycle scripts, compile Rust, execute Cargo build scripts or procedural macros, format source files, or run tests.
 
+The command does not update `node_modules` or bump the application version. It synchronizes the existing version from `package.json` into the Tauri manifests after updating the lockfiles. After reviewing the lockfile changes, an isolated development environment must run `npm ci --ignore-scripts` before starting the app; otherwise the installed JavaScript packages can be older than the lockfile and Tauri may reject mismatched plugin versions.
+
 The command requires Node.js `^22.22.2 || ^24.15.0 || >=26.0.0`, npm 12.0.1 or newer, and an already-installed Rust 1.97.1 toolchain. It performs these steps:
 
 1. Resolve npm updates with `--package-lock-only`, `--ignore-scripts`, and a three-day minimum release age in a disposable npm cache.
