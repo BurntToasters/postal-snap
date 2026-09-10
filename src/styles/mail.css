@@ -1,15 +1,34 @@
 /* Main mail window */
 .mail-shell {
+  --rendered-folder-width: clamp(210px, var(--folder-pane-width, 248px), 26vw);
+  --rendered-message-width: clamp(
+    240px,
+    var(--message-pane-width, 390px),
+    calc((100vw - var(--rendered-folder-width) - 10px) * 0.55)
+  );
+  --mail-body-height: max(
+    0px,
+    calc(100dvh - var(--mail-toolbar-height, var(--toolbar-height)))
+  );
+  --rendered-reader-height: min(
+    var(--reader-pane-height, 360px),
+    max(
+      0px,
+      calc(
+        var(--mail-body-height) - min(220px, var(--mail-body-height) * 0.5) -
+          5px
+      )
+    )
+  );
   display: grid;
   height: 100%;
   min-height: 0;
   min-width: 0;
   overflow: hidden;
   grid-template-columns:
-    minmax(210px, min(var(--folder-pane-width, 264px), 32vw)) 5px
-    minmax(300px, min(var(--message-pane-width, 400px), 40vw)) 5px
-    minmax(0, 1fr);
-  grid-template-rows: minmax(58px, auto) minmax(0, 1fr);
+    var(--rendered-folder-width) 5px var(--rendered-message-width)
+    5px minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   grid-template-areas:
     "folders folder-splitter toolbar toolbar toolbar"
     "folders folder-splitter messages reader-splitter reader";
@@ -17,16 +36,8 @@
 }
 
 .mail-shell.pane-bottom {
-  grid-template-columns:
-    minmax(210px, min(var(--folder-pane-width, 248px), 32vw))
-    5px minmax(0, 1fr);
-  grid-template-rows:
-    minmax(58px, auto) minmax(220px, 1fr) 5px
-    clamp(
-      240px,
-      var(--reader-pane-height, 360px),
-      calc(100dvh - var(--toolbar-height, 60px) - 225px)
-    );
+  grid-template-columns: var(--rendered-folder-width) 5px minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) 5px var(--rendered-reader-height);
   grid-template-areas:
     "folders folder-splitter toolbar"
     "folders folder-splitter messages"
@@ -35,30 +46,29 @@
 }
 
 .mail-shell.pane-hidden {
-  grid-template-columns:
-    minmax(210px, min(var(--folder-pane-width, 248px), 32vw))
-    5px minmax(0, 1fr);
-  grid-template-rows: minmax(58px, auto) minmax(0, 1fr);
+  grid-template-columns: var(--rendered-folder-width) 5px minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   grid-template-areas:
     "folders folder-splitter toolbar"
     "folders folder-splitter messages";
 }
 
 .mail-shell.sidebar-collapsed {
-  grid-template-columns: minmax(420px, 1fr);
+  --rendered-folder-width: 0px;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-areas:
     "toolbar"
     "messages";
 }
 
-.mail-shell.sidebar-collapsed.pane-right {
-  grid-template-columns: minmax(420px, 1fr) 5px minmax(360px, 1fr);
+.mail-shell.sidebar-collapsed:where(.pane-right) {
+  grid-template-columns: var(--rendered-message-width) 5px minmax(0, 1fr);
   grid-template-areas:
     "toolbar toolbar toolbar"
     "messages reader-splitter reader";
 }
 
-.mail-shell.sidebar-collapsed.pane-bottom {
+.mail-shell.sidebar-collapsed:where(.pane-bottom) {
   grid-template-columns: 1fr;
   grid-template-areas: "toolbar" "messages" "reader-bottom-splitter" "reader";
 }
@@ -174,60 +184,6 @@
 .app-toolbar .compose-button {
   border-radius: var(--radius-pill);
   box-shadow: 0 1px 4px color-mix(in srgb, var(--accent) 18%, transparent);
-}
-
-.global-window-caption-controls {
-  position: fixed;
-  z-index: 100;
-  top: 0;
-  right: 0;
-  display: none;
-  align-items: center;
-  gap: 2px;
-  margin-left: 2px;
-}
-
-.global-window-caption-controls button {
-  display: inline-grid;
-  width: 42px;
-  height: 36px;
-  min-height: 36px;
-  place-items: center;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-sm);
-  color: var(--text-muted);
-  background: transparent;
-}
-
-.global-window-caption-controls button:hover {
-  color: var(--text);
-  background: var(--surface-hover);
-}
-
-html[data-platform="windows"] .global-window-caption-controls {
-  display: inline-flex;
-  -webkit-app-region: no-drag;
-}
-
-html[data-platform="macos"] .app-toolbar {
-  padding-left: 12px;
-}
-
-html[data-platform="macos"] .sidebar-collapsed .app-toolbar {
-  padding-left: 82px;
-}
-
-html[data-platform="windows"] .app-toolbar {
-  padding-right: 138px;
-  -webkit-app-region: drag;
-}
-
-html[data-platform="windows"] .app-toolbar button,
-html[data-platform="windows"] .app-toolbar form,
-html[data-platform="windows"] .app-toolbar input,
-html[data-platform="windows"] .app-toolbar label {
-  -webkit-app-region: no-drag;
 }
 
 .setup-brand > svg {
@@ -392,10 +348,6 @@ html[data-platform="windows"] .app-toolbar label {
   overflow: hidden;
   border-right: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
   background: var(--surface-muted);
-}
-
-html[data-platform="macos"] .folder-pane {
-  padding-top: 64px;
 }
 
 .account-heading {
@@ -818,6 +770,11 @@ html[data-platform="macos"] .folder-pane {
   color: var(--text);
   background: color-mix(in srgb, var(--accent) 17%, var(--surface));
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+.message-row.selected:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: -3px;
 }
 
 .unread-dot {

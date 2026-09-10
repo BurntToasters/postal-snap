@@ -1,0 +1,151 @@
+/* Native window chrome is independent of dialog focus and application state. */
+:root {
+  --native-chrome-height: 0px;
+}
+
+html:is([data-platform="macos"], [data-platform="windows"]) {
+  --native-chrome-height: 44px;
+}
+
+.window-chrome,
+.sidebar-titlebar-drag {
+  display: none;
+}
+
+html:is([data-platform="macos"], [data-platform="windows"]) .window-chrome {
+  position: fixed;
+  z-index: 100;
+  inset: 0 0 auto;
+  display: block;
+  height: var(--native-chrome-height);
+  pointer-events: none;
+}
+
+.window-drag-strip {
+  display: none;
+  height: 100%;
+  background: var(--surface);
+  pointer-events: auto;
+}
+
+/* Retain a drag surface when a dialog makes the mail toolbar inert. */
+html:not(:has(.mail-shell)) .window-drag-strip,
+html:has(
+    .modal-layer:not(.composer-layer-followup),
+    .composer-layer-maximized,
+    .reader-pane[aria-modal="true"]
+  )
+  .window-drag-strip {
+  display: block;
+}
+
+.global-window-caption-controls {
+  position: absolute;
+  inset: 0 0 auto auto;
+  display: none;
+  pointer-events: auto;
+}
+
+html[data-platform="windows"] .global-window-caption-controls {
+  display: flex;
+}
+
+.global-window-caption-controls button {
+  display: grid;
+  width: 46px;
+  height: 44px;
+  min-height: 44px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: var(--text);
+  background: transparent;
+}
+
+.global-window-caption-controls svg {
+  width: 16px;
+  height: 16px;
+}
+
+.global-window-caption-controls button:hover {
+  background: var(--surface-hover);
+}
+
+.global-window-caption-controls .window-close-button:hover {
+  color: #fff;
+  background: #c42b1c;
+}
+
+.global-window-caption-controls button:focus-visible {
+  outline-offset: -3px;
+}
+
+html[data-platform="windows"] .app-toolbar {
+  padding-right: 150px;
+}
+
+html[data-platform="macos"] .sidebar-collapsed .app-toolbar {
+  padding-left: 84px;
+}
+
+html:is([data-platform="macos"], [data-platform="windows"]) .folder-pane {
+  padding-top: 60px;
+}
+
+html:is([data-platform="macos"], [data-platform="windows"])
+  .sidebar-titlebar-drag {
+  position: absolute;
+  inset: 0 0 auto;
+  display: block;
+  height: var(--native-chrome-height);
+}
+
+@media (min-width: 1050px) {
+  .folder-pane {
+    position: relative;
+  }
+}
+
+@media (max-width: 1049px) {
+  html[data-platform="macos"] .app-toolbar {
+    padding-left: 84px;
+  }
+}
+
+@media (max-width: 760px) {
+  html:is([data-platform="macos"], [data-platform="windows"]) .app-toolbar {
+    padding: calc(var(--native-chrome-height) + 6px) 10px 8px;
+  }
+}
+
+.setup-host,
+.startup-recovery,
+.splash {
+  padding-top: var(--native-chrome-height);
+}
+
+.modal-layer {
+  top: var(--native-chrome-height);
+}
+
+.composer-layer-maximized {
+  padding: 0;
+}
+
+/* In fullscreen macOS moves traffic lights into its own transient titlebar. */
+html[data-platform="macos"][data-window-fullscreen="true"] .app-toolbar {
+  padding-left: 12px;
+}
+
+@media (forced-colors: active) {
+  .global-window-caption-controls button {
+    border: 1px solid ButtonText;
+  }
+}
+
+@media print {
+  .window-chrome {
+    display: none !important;
+  }
+}

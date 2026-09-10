@@ -144,13 +144,24 @@ export function MailShell({ onOpenSettings }: Props) {
 
   useEffect(() => {
     if (!mailboxMoreOpen) return;
+    const menu = mailboxMoreRef.current;
+    const trigger = menu?.querySelector<HTMLButtonElement>(
+      "button[aria-haspopup='menu']",
+    );
+    menu
+      ?.querySelector<HTMLButtonElement>("[role='menuitem']:not(:disabled)")
+      ?.focus();
     const close = (event: MouseEvent) => {
       if (!mailboxMoreRef.current?.contains(event.target as Node)) {
         setMailboxMoreOpen(false);
       }
     };
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMailboxMoreOpen(false);
+      if (event.key === "Escape" || event.key === "Tab") {
+        if (event.key === "Escape") event.preventDefault();
+        setMailboxMoreOpen(false);
+        trigger?.focus();
+      }
     };
     document.addEventListener("mousedown", close);
     document.addEventListener("keydown", closeOnEscape);
@@ -168,7 +179,7 @@ export function MailShell({ onOpenSettings }: Props) {
     const updateToolbarHeight = () => {
       const height = Math.ceil(toolbar.getBoundingClientRect().height);
       if (height > 0)
-        shell.style.setProperty("--toolbar-height", `${height}px`);
+        shell.style.setProperty("--mail-toolbar-height", `${height}px`);
     };
     updateToolbarHeight();
     window.addEventListener("resize", updateToolbarHeight);
@@ -1329,28 +1340,26 @@ export function MailShell({ onOpenSettings }: Props) {
 
   return (
     <main className={shellClass} style={shellStyle}>
-      <header ref={toolbarRef} className="app-toolbar">
+      <header
+        ref={toolbarRef}
+        className="app-toolbar"
+        data-tauri-drag-region="deep"
+      >
         <div className="toolbar-cluster toolbar-leading">
           <button
             ref={sidebarToggleRef}
             className="icon-button sidebar-toggle"
             type="button"
             onClick={() => {
-              if (sidebarDrawerViewport && sidebarVisible)
-                setSidebarOpen((open) => !open);
-              else if (sidebarDrawerViewport) {
-                toggleSidebar();
-                setSidebarOpen(true);
-              } else toggleSidebar();
+              if (sidebarDrawerViewport) setSidebarOpen((open) => !open);
+              else toggleSidebar();
             }}
             aria-label={
-              sidebarVisible && (!sidebarDrawerViewport || sidebarOpen)
+              (sidebarDrawerViewport ? sidebarOpen : sidebarVisible)
                 ? strings.mail.hideMailboxes
                 : strings.mail.showMailboxes
             }
-            aria-expanded={
-              sidebarVisible && (sidebarOpen || !sidebarDrawerViewport)
-            }
+            aria-expanded={sidebarDrawerViewport ? sidebarOpen : sidebarVisible}
             aria-controls="folder-pane"
           >
             <PanelLeft aria-hidden="true" />
@@ -1379,6 +1388,7 @@ export function MailShell({ onOpenSettings }: Props) {
           </button>
           <form
             className="search-box"
+            data-tauri-drag-region="false"
             role="search"
             onSubmit={(event) => {
               event.preventDefault();
@@ -1466,6 +1476,11 @@ export function MailShell({ onOpenSettings }: Props) {
         className="folder-pane"
         aria-label={strings.mail.accountsAndMailboxes}
       >
+        <div
+          className="sidebar-titlebar-drag"
+          data-tauri-drag-region
+          aria-hidden="true"
+        />
         <div className="sidebar-mobile-header">
           <strong>{strings.mail.mailboxes}</strong>
           <button
@@ -1780,6 +1795,15 @@ export function MailShell({ onOpenSettings }: Props) {
                     type="button"
                     className="icon-button"
                     onClick={() => setMailboxMoreOpen((open) => !open)}
+                    onKeyDown={(event) => {
+                      if (
+                        event.key === "ArrowDown" ||
+                        event.key === "ArrowUp"
+                      ) {
+                        event.preventDefault();
+                        setMailboxMoreOpen(true);
+                      }
+                    }}
                     aria-expanded={mailboxMoreOpen}
                     aria-haspopup="menu"
                     aria-label={strings.mail.moreMailboxActions}
@@ -1788,12 +1812,21 @@ export function MailShell({ onOpenSettings }: Props) {
                     <MoreHorizontal aria-hidden="true" />
                   </button>
                   {mailboxMoreOpen ? (
-                    <div className="mailbox-more-menu" role="menu">
+                    <div
+                      className="mailbox-more-menu"
+                      role="menu"
+                      aria-label={strings.mail.moreMailboxActions}
+                    >
                       <button
                         type="button"
                         role="menuitem"
                         onClick={() => {
                           setMailboxMoreOpen(false);
+                          mailboxMoreRef.current
+                            ?.querySelector<HTMLButtonElement>(
+                              "button[aria-haspopup='menu']",
+                            )
+                            ?.focus();
                           void markAllRead();
                         }}
                         disabled={bulkBusy}

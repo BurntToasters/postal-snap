@@ -9,4 +9,5 @@
 @import "./styles/settings.css";
 @import "./styles/status.css";
 @import "./styles/responsive.css";
+@import "./styles/window-chrome.css";
 @import "./styles/window-fx.css";

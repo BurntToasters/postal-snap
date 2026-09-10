@@ -681,7 +681,10 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
         onClick={requestClose}
       />
       <section className="settings-window" ref={dialogRef}>
-        <header inert={confirmThreatOff || undefined}>
+        <header
+          inert={confirmThreatOff || undefined}
+          data-tauri-drag-region="deep"
+        >
           <span>
             <h1 id="settings-title">{strings.settings.title}</h1>
             <small>

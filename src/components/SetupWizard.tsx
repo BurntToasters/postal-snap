@@ -199,7 +199,7 @@ export function SetupWizard({ onComplete, onOpenSettings }: Props) {
           className="setup-card provider-picker"
           aria-labelledby="setup-title"
         >
-          <header className="setup-brand">
+          <header className="setup-brand" data-tauri-drag-region="deep">
             <AppMark size={52} />
             <span>
               <p>{strings.appName}</p>
@@ -279,7 +279,7 @@ export function SetupWizard({ onComplete, onOpenSettings }: Props) {
         onSubmit={submit}
         aria-labelledby="setup-form-title"
       >
-        <header className="setup-form-header">
+        <header className="setup-form-header" data-tauri-drag-region="deep">
           <button
             className="back-button"
             type="button"
