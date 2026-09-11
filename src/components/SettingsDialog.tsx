@@ -24,6 +24,7 @@ import { useAppStore } from "../store";
 import { supportsWorkspaceWindowFx } from "../window-fx";
 import type { CacheUsage, DistributionChannel, FilterRule } from "../types";
 import {
+  addUpdateFoundListener,
   checkUpdateInteractive,
   removeUpdateFoundListener,
   type UpdateFoundListener,
@@ -142,10 +143,10 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
     setUpdateStatus(strings.settings.installing(version ?? ""));
   }, []);
 
-  useEffect(
-    () => () => removeUpdateFoundListener(handleUpdateFound),
-    [handleUpdateFound],
-  );
+  useEffect(() => {
+    addUpdateFoundListener(handleUpdateFound);
+    return () => removeUpdateFoundListener(handleUpdateFound);
+  }, [handleUpdateFound]);
 
   useEffect(() => {
     if (typeof window.matchMedia !== "function") return;

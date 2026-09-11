@@ -279,4 +279,24 @@ describe("account setup", () => {
     ) as HTMLInputElement;
     expect(nextPassword.value).toBe("");
   });
+
+  it("edits manual servers, reveals the password, and opens help", async () => {
+    render(<SetupWizard onComplete={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /iCloud Mail/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /Create app-specific password/i }),
+    );
+    expect(api.openHelpUrl).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /Show password/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Back/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Other email/i }));
+    const ports = screen.getAllByLabelText("Port") as HTMLInputElement[];
+    fireEvent.change(ports[0], { target: { value: "143" } });
+    const usernames = screen.getAllByLabelText(
+      "Username",
+    ) as HTMLInputElement[];
+    fireEvent.change(usernames[0], { target: { value: "imap-user" } });
+    expect(ports[0].value).toBe("143");
+    expect(usernames[0].value).toBe("imap-user");
+  });
 });

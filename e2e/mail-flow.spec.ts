@@ -1,6 +1,6 @@
-import { expect, test } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 
+import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
 
 test.beforeEach(async ({ page }) => installMockIpc(page));

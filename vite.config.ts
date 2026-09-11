@@ -1,8 +1,16 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import istanbul from "vite-plugin-istanbul";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    istanbul({
+      include: ["src/**/*.ts", "src/**/*.tsx"],
+      exclude: ["src/tests/**"],
+      requireEnv: true,
+    }),
+  ],
   clearScreen: false,
   server: {
     port: 5173,
@@ -14,6 +22,6 @@ export default defineConfig({
     target:
       process.env.TAURI_ENV_PLATFORM === "windows" ? "chrome120" : "safari17",
     minify: "esbuild",
-    sourcemap: false,
+    sourcemap: process.env.VITE_COVERAGE === "true" ? "inline" : false,
   },
 });

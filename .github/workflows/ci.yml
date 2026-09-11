@@ -52,9 +52,8 @@ jobs:
       - run: npm run test:cargo-safe-update
       - run: npm run typecheck
       - run: npm run typecheck:test
-      - run: npm test
       - run: npx playwright install --with-deps chromium
-      - run: npm run test:e2e
+      - run: npm run test:cov
       - run: npm run test:release-assets
       - run: npm run test:rust
       - run: npm run test:mail-integration

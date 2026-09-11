@@ -142,4 +142,63 @@ describe("first-run setup flow", () => {
     );
     expect(screen.getByText(/Damaged settings were restored/i)).toBeVisible();
   });
+
+  it("persists every comfort toggle and supports back navigation", async () => {
+    render(<SetupFlow onComplete={vi.fn()} startupNotice={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
+
+    fireEvent.change(screen.getByLabelText(/Interface spacing/i), {
+      target: { value: "compact" },
+    });
+    fireEvent.change(screen.getByLabelText(/Text size/i), {
+      target: { value: "1.5" },
+    });
+    expect(await screen.findByRole("status")).toHaveTextContent(/large text/i);
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(screen.getByText(/Welcome to Postal Snap/i)).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
+    const toggles = screen.getAllByRole("checkbox");
+    for (const toggle of toggles) fireEvent.click(toggle);
+    await waitFor(() => {
+      expect(saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ notifyNewMail: false }),
+      );
+      expect(saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ privateNotifications: true }),
+      );
+      expect(saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ groupThreads: false }),
+      );
+      expect(saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ windowEffects: true }),
+      );
+      expect(saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ blockAdvertisingAndTracking: false }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(screen.getByText(/Choose how mail looks/i)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Back to setup/i }));
+    expect(screen.getByText(/Make it comfortable/i)).toBeVisible();
+  });
+
+  it("keeps setup usable when a live preference save fails", async () => {
+    saveSettings.mockImplementation(async (next) => {
+      if (next.theme === "dark") throw new Error("offline");
+      return next;
+    });
+    render(<SetupFlow onComplete={vi.fn()} startupNotice={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
+    fireEvent.change(screen.getByRole("combobox", { name: /Appearance/i }), {
+      target: { value: "dark" },
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("Saving…"),
+    );
+  });
 });

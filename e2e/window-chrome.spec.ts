@@ -1,8 +1,9 @@
-import { expect, test, type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import AxeBuilder from "@axe-core/playwright";
+import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
 
 // Exercise the handler shipped by the locked Tauri dependency, not a JS copy

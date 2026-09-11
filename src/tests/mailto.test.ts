@@ -54,5 +54,12 @@ describe("mailto links", () => {
     expect(parseMailto("mailto:%E0%A4%A?body=%E0%A4%A").to).toEqual([
       "%E0%A4%A",
     ]);
+    expect(parseMailto("")).toEqual({
+      to: [],
+      cc: [],
+      bcc: [],
+      subject: "",
+      textBody: "",
+    });
   });
 });
