@@ -69,6 +69,7 @@ export type NativeCommand =
   | "update_account_password"
   | "add_account"
   | "remove_account"
+  | "erase_all_data"
   | "update_account_display_name"
   | "update_account_signature"
   | "get_account_inbox_counts"
@@ -167,6 +168,13 @@ export const api = {
     call<AccountSummary>("add_account", { request }),
   removeAccount: (accountId: string) =>
     call<AccountRemovalOutcome>("remove_account", { accountId }),
+  eraseAllData: () => {
+    return queueSettings(async () => {
+      const removed = await call<number>("erase_all_data");
+      settingsGeneration += 1;
+      return removed;
+    });
+  },
   updateAccountDisplayName: (accountId: string, displayName: string) =>
     call<void>("update_account_display_name", { accountId, displayName }),
   updateAccountSignature: (accountId: string, signature: string) =>

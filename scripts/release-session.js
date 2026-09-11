@@ -1,6 +1,7 @@
 import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { process, root, writeJson } from "./_utils.js";
+import { writeJson } from "./lib/json.js";
+import { process, root } from "./lib/paths.js";
 import {
   currentReleaseSessionIdentity,
   verifiedReleaseSession,

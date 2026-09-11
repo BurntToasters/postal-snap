@@ -1,6 +1,6 @@
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { filesRecursively } from "./_utils.js";
+import { filesRecursively } from "./lib/artifacts.js";
 
 export const AZURE_ARTIFACT_SIGNING_ENV_VARS = [
   "AZURE_CLIENT_ID",

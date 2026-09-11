@@ -2,7 +2,9 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import { Composer } from "../components/Composer";
-import { defaultSettings, useAppStore } from "../store";
+import { useAppStore } from "../store";
+import { makeAccount } from "./helpers/fixtures";
+import { resetStore } from "./helpers/store";
 
 vi.mock("../api", () => ({
   api: {
@@ -16,13 +18,7 @@ vi.mock("../api", () => ({
   },
 }));
 
-const account = {
-  id: "account-1",
-  provider: "manual" as const,
-  email: "sam@example.test",
-  displayName: "Sam",
-  syncState: "idle" as const,
-};
+const account = makeAccount();
 
 const mockedSaveDraft = vi.mocked(api.saveDraft);
 
@@ -35,13 +31,9 @@ beforeEach(() => {
   });
   vi.mocked(api.deleteDraft).mockResolvedValue(undefined);
   vi.mocked(api.releaseComposeAttachments).mockResolvedValue(undefined);
-  useAppStore.setState({
+  resetStore({
     accounts: [account],
     activeAccountId: account.id,
-    settings: defaultSettings,
-    error: undefined,
-    composeSeed: undefined,
-    composerOpen: false,
   });
 });
 

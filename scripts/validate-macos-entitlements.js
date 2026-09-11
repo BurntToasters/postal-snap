@@ -1,7 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { output, process, root } from "./_utils.js";
+import { process, root } from "./lib/paths.js";
+import { output } from "./lib/spawn.js";
 
 const PLIST_ELEMENTS = new Set([
   "array",

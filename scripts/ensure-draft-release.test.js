@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { root } from "./_utils.js";
+import { root } from "./lib/paths.js";
 import {
   ensureDraftRelease,
   existingDraft,

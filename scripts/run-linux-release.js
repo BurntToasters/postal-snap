@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import process from "node:process";
-import { run } from "./_utils.js";
+import { run } from "./lib/spawn.js";
 
 export function selectLinuxReleaseScript({
   platform = process.platform,

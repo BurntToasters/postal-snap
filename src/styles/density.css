@@ -1,0 +1,73 @@
+/* Shared compact density pattern (moved, no visual change) */
+:root[data-density="compact"] .message-row {
+  min-height: 64px;
+  padding-block: 7px;
+  grid-template-areas: "dot sender date" "dot subject subject";
+}
+
+:root[data-density="compact"] .message-row .message-sender,
+:root[data-density="compact"] .message-row .message-subject {
+  font-size: 0.92rem;
+  letter-spacing: 0;
+}
+
+:root[data-density="compact"] .message-preview {
+  display: none;
+}
+
+:root[data-density="compact"] .pane-heading {
+  min-height: 48px;
+  padding-block: 6px;
+}
+
+:root[data-density="compact"] .pane-heading h1 {
+  font-size: 1.08rem;
+}
+
+:root[data-density="compact"] .reader-actions {
+  min-height: 48px;
+  padding-block: 4px;
+}
+
+:root[data-density="compact"] .message-header {
+  padding-block: 10px 8px;
+}
+
+:root[data-density="compact"] .local-mail-row,
+:root[data-density="compact"] .attention-row {
+  min-height: 56px;
+  padding-block: 8px;
+}
+
+:root[data-density="compact"] .folder-pane .folder-row {
+  min-height: 44px;
+  padding-block: 6px;
+}
+
+:root[data-density="compact"] .folder-pane .folder-row svg {
+  width: 16px;
+  height: 16px;
+}
+
+:root[data-density="compact"] .app-toolbar {
+  gap: 6px;
+}
+
+:root[data-density="compact"] .bulk-bar,
+:root[data-density="compact"] .snooze-bar {
+  min-height: 44px;
+  padding-block: 6px;
+}
+
+:root[data-density="compact"] .setup-preview-row {
+  min-height: 44px;
+  padding-block: 6px;
+}
+
+:root[data-density="compact"] .setup-preview-row span {
+  display: none;
+}
+
+:root[data-density="compact"] .setup-preview-row strong {
+  font-size: 0.86rem;
+}

@@ -1,5 +1,6 @@
 import { join } from "node:path";
-import { json, process, root } from "./_utils.js";
+import { json } from "./lib/json.js";
+import { process, root } from "./lib/paths.js";
 import { validateManifest } from "./validate-updater-manifest.js";
 
 const shapeOnly = process.argv.includes("--shape-only");

@@ -1,4 +1,5 @@
-import { output, process, run } from "./_utils.js";
+import { process } from "./lib/paths.js";
+import { output, run } from "./lib/spawn.js";
 
 const dryRun = process.argv.includes("--dry-run");
 const force = process.argv.includes("--force");

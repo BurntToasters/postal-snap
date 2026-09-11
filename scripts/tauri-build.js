@@ -3,20 +3,13 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { buildTauriBuildArgs } from "./tauri-build-args.js";
 import {
-  ensureReleaseDir,
-  existsSync,
-  json,
   isLinuxAppImage,
   isLinuxAppImageSignature,
   newestMatching,
-  output,
-  process,
-  requireEnv,
-  rmRetry,
-  root,
-  run,
-  writeJson,
-} from "./_utils.js";
+} from "./lib/artifacts.js";
+import { ensureReleaseDir, json, requireEnv, writeJson } from "./lib/json.js";
+import { existsSync, process, root } from "./lib/paths.js";
+import { output, rmRetry, run } from "./lib/spawn.js";
 import { resolveUpdaterPublicKey } from "./updater-pubkey.js";
 import {
   applyApplePasswordCompatibility,

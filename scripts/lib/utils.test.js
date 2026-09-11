@@ -1,15 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import process from "node:process";
+import { isLinuxAppImage, isLinuxAppImageSignature } from "./artifacts.js";
 import {
-  isLinuxAppImage,
-  isLinuxAppImageSignature,
+  RM_RETRY_OPTIONS,
   output,
   quoteWindowsCmdArg,
   resolveSpawnInvocation,
-  RM_RETRY_OPTIONS,
   windowsCmdLine,
-} from "./_utils.js";
+} from "./spawn.js";
 
 test("Windows cmd quoting wraps spaces and empty args", () => {
   assert.equal(quoteWindowsCmdArg("run"), "run");
