@@ -626,17 +626,17 @@ describe("SettingsDialog component", () => {
     );
   });
 
-  it("exports, imports, and resets preference files", async () => {
+  it("exports and imports preference files without a second reset action", async () => {
     vi.mocked(api.exportSettings).mockResolvedValue(true);
     vi.mocked(api.importSettings).mockResolvedValue({
       ...defaultSettings,
       theme: "dark",
     });
-    vi.mocked(api.resetSettings).mockResolvedValue({
-      ...defaultSettings,
-      density: "compact",
-    });
     render(<SettingsDialog initialTab="general" onClose={vi.fn()} />);
+
+    expect(
+      screen.queryByRole("button", { name: "Reset settings" }),
+    ).not.toBeInTheDocument();
 
     fireEvent.click(
       await screen.findByRole("button", { name: "Export settings" }),
@@ -648,10 +648,10 @@ describe("SettingsDialog component", () => {
     expect(useAppStore.getState().settings.theme).toBe("dark");
     expect(await screen.findByText(/Settings imported/)).toBeVisible();
 
-    fireEvent.click(screen.getByRole("button", { name: "Reset settings" }));
-    await waitFor(() => expect(api.resetSettings).toHaveBeenCalled());
-    expect(useAppStore.getState().settings.density).toBe("compact");
-    expect(await screen.findByText(/Settings reset/)).toBeVisible();
+    fireEvent.click(screen.getByRole("tab", { name: "Accounts" }));
+    expect(
+      screen.getAllByRole("button", { name: "Reset & Restart" }),
+    ).toHaveLength(1);
   });
 
   it("clears downloaded mail and refreshes usage", async () => {
@@ -758,8 +758,20 @@ describe("SettingsDialog component", () => {
       expect(screen.getByRole("tab", { name: "About" })).toHaveFocus(),
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns each settings tab to the top", async () => {
+    const { container } = render(
+      <SettingsDialog initialTab="general" onClose={vi.fn()} />,
+    );
+    const content = container.querySelector<HTMLElement>(".settings-content")!;
+    content.scrollTop = 180;
+
+    fireEvent.click(screen.getByRole("tab", { name: "Accounts" }));
+
+    await waitFor(() => expect(content.scrollTop).toBe(0));
   });
 
   it("reports preference-file and cache maintenance failures", async () => {
@@ -768,9 +780,6 @@ describe("SettingsDialog component", () => {
     );
     vi.mocked(api.importSettings).mockRejectedValueOnce(
       new Error("import failed"),
-    );
-    vi.mocked(api.resetSettings).mockRejectedValueOnce(
-      new Error("reset failed"),
     );
     vi.mocked(api.clearCache).mockRejectedValueOnce(new Error("clear failed"));
     render(<SettingsDialog initialTab="general" onClose={vi.fn()} />);
@@ -785,11 +794,6 @@ describe("SettingsDialog component", () => {
     await waitFor(() =>
       expect(useAppStore.getState().error).toMatch(/import failed/i),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Reset settings" }));
-    await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/reset failed/i),
-    );
-
     fireEvent.click(screen.getByRole("tab", { name: "Storage" }));
     fireEvent.click(
       await screen.findByRole("button", { name: "Clear downloaded mail" }),

@@ -19,6 +19,19 @@ svg {
 }
 
 @media (forced-colors: active) {
+  .switch-row input {
+    width: 44px;
+    min-width: 44px;
+    appearance: auto;
+    border: 1px solid ButtonText;
+    accent-color: Highlight;
+  }
+
+  .switch-row input::before,
+  .switch-row input::after {
+    display: none;
+  }
+
   .folder.active,
   .message-row.selected,
   .primary-button,
@@ -87,6 +100,11 @@ svg {
 }
 
 @media (prefers-contrast: more) {
+  .modal-backdrop {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
   html[data-window-fx="vibrant"] .app-toolbar,
   html[data-window-fx="vibrant"] .folder-pane,
   html[data-window-fx="vibrant"] .reader-actions {
@@ -97,6 +115,11 @@ svg {
 }
 
 @media (prefers-reduced-transparency: reduce) {
+  .modal-backdrop {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
   html[data-window-fx="vibrant"] .app-toolbar,
   html[data-window-fx="vibrant"] .folder-pane,
   html[data-window-fx="vibrant"] .reader-actions {

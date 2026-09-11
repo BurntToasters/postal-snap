@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import { AboutTab } from "../components/settings/aboutTab";
@@ -23,9 +23,17 @@ afterEach(() => {
 
 describe("small settings tabs", () => {
   it("opens project and license pages from About", () => {
+    const inspectExternalUrl = vi
+      .spyOn(api, "inspectExternalUrl")
+      .mockImplementation(async (url) => ({
+        url,
+        hostname: new URL(url).hostname,
+        reportedThreat: false,
+      }));
     const openExternalUrl = vi
       .spyOn(api, "openExternalUrl")
       .mockResolvedValue(undefined);
+    vi.spyOn(api, "showNativeConfirm").mockResolvedValue(true);
     render(<AboutTab />);
     fireEvent.click(
       screen.getByRole("button", { name: strings.settings.aboutSource }),
@@ -33,10 +41,81 @@ describe("small settings tabs", () => {
     fireEvent.click(
       screen.getByRole("button", { name: strings.settings.aboutLicense }),
     );
-    expect(openExternalUrl.mock.calls).toEqual([
-      ["https://github.com/BurntToasters/postal-snap"],
-      ["https://www.mozilla.org/MPL/2.0/"],
-    ]);
+    return waitFor(() => {
+      expect(inspectExternalUrl.mock.calls).toEqual([
+        ["https://github.com/BurntToasters/postal-snap"],
+        ["https://www.mozilla.org/MPL/2.0/"],
+      ]);
+      expect(openExternalUrl.mock.calls).toEqual([
+        ["https://github.com/BurntToasters/postal-snap", false],
+        ["https://www.mozilla.org/MPL/2.0/", false],
+      ]);
+    });
+  });
+
+  it("does not open an About link when confirmation is canceled", async () => {
+    vi.spyOn(api, "inspectExternalUrl").mockResolvedValue({
+      url: "https://github.com/BurntToasters/postal-snap",
+      hostname: "github.com",
+      reportedThreat: false,
+    });
+    const openExternalUrl = vi
+      .spyOn(api, "openExternalUrl")
+      .mockResolvedValue(undefined);
+    vi.spyOn(api, "showNativeConfirm").mockResolvedValue(false);
+    render(<AboutTab />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.settings.aboutSource }),
+    );
+
+    await waitFor(() => expect(openExternalUrl).not.toHaveBeenCalled());
+  });
+
+  it("requires both confirmations before opening a reported About link", async () => {
+    vi.spyOn(api, "inspectExternalUrl").mockResolvedValue({
+      url: "https://github.com/BurntToasters/postal-snap",
+      hostname: "github.com",
+      reportedThreat: true,
+    });
+    const showNativeConfirm = vi
+      .spyOn(api, "showNativeConfirm")
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true);
+    const openExternalUrl = vi
+      .spyOn(api, "openExternalUrl")
+      .mockResolvedValue(undefined);
+    render(<AboutTab />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.settings.aboutSource }),
+    );
+
+    await waitFor(() => {
+      expect(showNativeConfirm).toHaveBeenCalledTimes(2);
+      expect(openExternalUrl).toHaveBeenCalledWith(
+        "https://github.com/BurntToasters/postal-snap",
+        true,
+      );
+    });
+  });
+
+  it("does not surface or open links when inspection is rejected", async () => {
+    vi.spyOn(api, "inspectExternalUrl").mockRejectedValue(
+      new Error("inspection failed"),
+    );
+    const showNativeConfirm = vi.spyOn(api, "showNativeConfirm");
+    const openExternalUrl = vi
+      .spyOn(api, "openExternalUrl")
+      .mockResolvedValue(undefined);
+    render(<AboutTab />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.settings.aboutSource }),
+    );
+
+    await waitFor(() => expect(openExternalUrl).not.toHaveBeenCalled());
+    expect(showNativeConfirm).not.toHaveBeenCalled();
   });
 
   it("updates both notification preferences", () => {

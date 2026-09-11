@@ -113,6 +113,7 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
   );
   const [confirmToken, setConfirmToken] = useState("");
   const confirmInputRef = useRef<HTMLInputElement>(null);
+  const settingsContentRef = useRef<HTMLDivElement>(null);
   const [filterRules, setFilterRules] = useState<Record<string, FilterRule[]>>(
     {},
   );
@@ -213,6 +214,10 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
     return () => window.clearTimeout(timer);
   }, [confirmThreatOff]);
 
+  useEffect(() => {
+    if (settingsContentRef.current) settingsContentRef.current.scrollTop = 0;
+  }, [tab]);
+
   function cancelThreatOff() {
     setConfirmThreatOff(false);
     setConfirmToken("");
@@ -291,27 +296,6 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
         applySettings(imported);
         setDataStatus(strings.settings.importApplied);
       }
-    } catch (cause) {
-      setError(String(cause));
-    } finally {
-      setDataBusy(false);
-    }
-  }
-
-  async function resetSettings() {
-    if (dataBusy) return;
-    const confirmed = await api.showNativeConfirm(
-      strings.settings.resetSettings,
-      strings.settings.resetQuestion,
-    );
-    if (!confirmed) return;
-    setDataBusy(true);
-    setDataStatus(undefined);
-    try {
-      const reset = await api.resetSettings();
-      setSettings(reset);
-      applySettings(reset);
-      setDataStatus(strings.settings.resetApplied);
     } catch (cause) {
       setError(String(cause));
     } finally {
@@ -663,7 +647,7 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
             className="icon-button"
             type="button"
             onClick={requestClose}
-            aria-label={strings.common.close}
+            aria-label={strings.settings.close}
           >
             <X aria-hidden="true" />
           </button>
@@ -700,7 +684,7 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
               </button>
             ))}
           </nav>
-          <div className="settings-content">
+          <div className="settings-content" ref={settingsContentRef}>
             {tab === "general" ? (
               <GeneralTab
                 update={update}
@@ -710,7 +694,6 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
                 setTab={setTab}
                 exportSettings={exportSettings}
                 importSettings={importSettings}
-                resetSettings={resetSettings}
               />
             ) : null}
             {tab === "reading" ? <ReadingTab update={update} /> : null}

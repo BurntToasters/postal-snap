@@ -243,7 +243,7 @@ test("routes native settings and update menu actions", async ({ page }) => {
     }),
   );
   await expect(page.getByRole("dialog")).toBeVisible();
-  await page.getByRole("button", { name: "Close", exact: true }).click();
+  await page.getByRole("button", { name: "Close settings" }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   const dialogPromise = page.waitForEvent("dialog");
   await page.evaluate(() =>
@@ -299,7 +299,9 @@ test("keeps settings tab names accessible in a narrow window", async ({
   }
 });
 
-test("exports, imports, and resets portable settings", async ({ page }) => {
+test("exports and imports portable settings with reset kept in Accounts", async ({
+  page,
+}) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("button", { name: "Export settings" }).click();
@@ -323,12 +325,13 @@ test("exports, imports, and resets portable settings", async ({ page }) => {
   );
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
 
-  page.once("dialog", (dialog) => void dialog.accept());
-  await page.getByRole("button", { name: "Reset settings" }).click();
-  await expect(page.locator(".settings-data-status")).toContainText(
-    "Settings reset.",
-  );
-  await expect(page.locator("html")).not.toHaveAttribute("data-theme", "dark");
+  await expect(
+    page.getByRole("button", { name: "Reset settings" }),
+  ).toHaveCount(0);
+  await page.getByRole("tab", { name: "Accounts" }).click();
+  await expect(
+    page.getByRole("button", { name: "Reset & Restart" }),
+  ).toHaveCount(1);
 });
 
 test("completes secure manual first run", async ({ page }) => {
@@ -446,13 +449,13 @@ test("switches reading layouts and opens hidden messages accessibly", async ({
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("tab", { name: "Reading" }).click();
   await page.getByLabel("Reading pane", { exact: true }).selectOption("bottom");
-  await page.getByRole("button", { name: "Close", exact: true }).click();
+  await page.getByRole("button", { name: "Close settings" }).click();
   await expect(page.locator("main.mail-shell")).toHaveClass(/pane-bottom/);
 
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("tab", { name: "Reading" }).click();
   await page.getByLabel("Reading pane", { exact: true }).selectOption("hidden");
-  await page.getByRole("button", { name: "Close", exact: true }).click();
+  await page.getByRole("button", { name: "Close settings" }).click();
   await page.getByRole("option", { name: /Weekend plans/i }).click();
   await expect(
     page.getByRole("button", { name: "Close message" }),
@@ -818,7 +821,7 @@ test("hides message previews in compact density", async ({ page }) => {
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("tab", { name: "General" }).click();
   await page.getByLabel("Interface spacing").selectOption("compact");
-  await page.getByRole("button", { name: "Close", exact: true }).click();
+  await page.getByRole("button", { name: "Close settings" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-density", "compact");
   await expect(
     page.getByText("Are we still meeting on Saturday?"),
@@ -1105,7 +1108,7 @@ test("keeps message body opaque when translucent window effects are enabled", as
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("tab", { name: "General" }).click();
   await page.getByLabel("Translucent window background").check();
-  await page.getByRole("button", { name: "Close", exact: true }).click();
+  await page.getByRole("button", { name: "Close settings" }).click();
   await page.getByRole("option", { name: /Weekend plans/i }).click();
   const bodyBackground = await page
     .locator(".message-body")

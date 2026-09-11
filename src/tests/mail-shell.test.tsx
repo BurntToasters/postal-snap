@@ -1068,6 +1068,34 @@ describe("mail shell", () => {
     window.removeEventListener("postal:scroll-reader", scrollListener);
   });
 
+  it("leaves Space available for local-mail action buttons", async () => {
+    const held = {
+      id: "attention-space",
+      accountId: account.id,
+      recipients: "lee@example.com",
+      subject: "Needs retry",
+      state: "needs_attention" as const,
+      detail: "Held for review.",
+      createdAt: "2026-08-18T11:00:00Z",
+    };
+    mockedListOutbox.mockResolvedValue([held]);
+    useAppStore.setState({ activeLocalView: "outbox", outbox: [held] });
+    renderShell();
+
+    const retry = await screen.findByRole("button", {
+      name: "Retry sending",
+    });
+    const event = new KeyboardEvent("keydown", {
+      key: " ",
+      code: "Space",
+      bubbles: true,
+      cancelable: true,
+    });
+
+    expect(retry.dispatchEvent(event)).toBe(true);
+    expect(event.defaultPrevented).toBe(false);
+  });
+
   it("automatically submits overdue scheduled mail while online", async () => {
     const held = {
       id: "due-now",

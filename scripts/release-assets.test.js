@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { artifactArch, artifactPlatform } from "./lib/artifacts.js";
 import { root } from "./lib/paths.js";
 import { validateManifest } from "./validate-updater-manifest.js";
+import { updaterManifestName } from "./validate-updater-live.js";
 import {
   remoteTagCommit,
   verifyDraftReleaseCommit,
@@ -29,6 +30,17 @@ test("signed GitHub updater manifest shape", () => {
       },
     }),
     true,
+  );
+});
+
+test("live updater validation selects beta manifest names for prereleases", () => {
+  assert.equal(
+    updaterManifestName("windows-x86_64", "0.1.9"),
+    "latest-windows-x86_64.json",
+  );
+  assert.equal(
+    updaterManifestName("windows-x86_64", "0.1.9-beta.1"),
+    "latest-windows-x86_64-beta.json",
   );
 });
 

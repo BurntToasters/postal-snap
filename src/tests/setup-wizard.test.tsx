@@ -49,6 +49,11 @@ describe("account setup", () => {
     const { container } = render(<SetupWizard embedded onComplete={vi.fn()} />);
     expect(container.querySelector(".setup-page")).toBeNull();
     expect(container.querySelector(".setup-wizard-embedded")).toBeVisible();
+    expect(container.querySelector(".setup-brand")).toBeNull();
+    expect(container.querySelector(".setup-progress")).toBeNull();
+    expect(
+      screen.getByRole("heading", { name: "Choose account" }),
+    ).toBeVisible();
   });
 
   it("never offers plaintext transport", () => {

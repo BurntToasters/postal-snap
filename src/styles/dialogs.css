@@ -4,8 +4,14 @@
   padding: clamp(24px, 5vw, 42px);
   border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
   border-radius: 20px;
-  background: var(--surface);
-  box-shadow: var(--shadow-soft);
+  background: linear-gradient(
+    155deg,
+    color-mix(in srgb, var(--surface-raised) 90%, var(--surface-highlight)),
+    var(--surface) 46%
+  );
+  box-shadow:
+    var(--shadow),
+    inset 0 1px 0 var(--surface-highlight);
 }
 
 .setup-card.account-form {
@@ -78,6 +84,8 @@
   border: 0;
   border-radius: 0;
   background: var(--scrim);
+  backdrop-filter: blur(14px) saturate(115%);
+  -webkit-backdrop-filter: blur(14px) saturate(115%);
 }
 
 .setup-modal .setup-page {
@@ -116,7 +124,9 @@
   border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
   border-radius: 20px;
   background: var(--surface);
-  box-shadow: var(--shadow);
+  box-shadow:
+    var(--shadow),
+    inset 0 1px 0 var(--surface-highlight);
 }
 
 .composer-window.composer-maximized {
@@ -138,7 +148,11 @@
   justify-content: space-between;
   padding: 7px 12px 7px 18px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  background: var(--surface);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--surface-raised) 86%, var(--surface-highlight)),
+    var(--surface)
+  );
 }
 
 .composer-window > header > span {
@@ -166,8 +180,10 @@
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
   border-radius: var(--radius-lg);
-  background: var(--surface);
-  box-shadow: var(--shadow);
+  background: var(--surface-sunken);
+  box-shadow:
+    var(--shadow),
+    inset 0 1px 0 var(--surface-highlight);
 }
 
 .settings-window > header {
@@ -178,7 +194,13 @@
   justify-content: space-between;
   padding: 7px 12px 7px 18px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  background: var(--surface);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--surface-raised) 88%, var(--surface-highlight)),
+    var(--surface)
+  );
+  box-shadow: 0 1px 0
+    color-mix(in srgb, var(--surface-highlight) 55%, transparent);
 }
 
 .settings-window > header > span {
