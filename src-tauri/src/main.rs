@@ -14,6 +14,7 @@ mod security;
 mod settings;
 mod threat_blocking;
 mod window_fx;
+mod window_snap;
 
 use commands::AppState;
 use tauri::{
@@ -103,11 +104,20 @@ fn main() {
                 .first()
                 .cloned()
                 .ok_or("Postal Snap window configuration is missing.")?;
-            tauri::WebviewWindowBuilder::from_config(app.handle(), &window_config)
+            let mut window_builder = tauri::WebviewWindowBuilder::from_config(app.handle(), &window_config)
                 .map_err(|error| error.to_string())?
-                .on_navigation(allowed_webview_navigation)
-                .build()
-                .map_err(|error| error.to_string())?;
+                .on_navigation(allowed_webview_navigation);
+            #[cfg(target_os = "macos")]
+            {
+                window_builder = window_builder
+                    .title_bar_style(tauri::TitleBarStyle::Overlay)
+                    .hidden_title(true);
+            }
+            #[cfg(target_os = "windows")]
+            {
+                window_builder = window_builder.decorations(false);
+            }
+            window_builder.build().map_err(|error| error.to_string())?;
             install_menu(
                 app,
                 !has_startup_error && mail_actions_enabled(accounts.len()),
@@ -145,84 +155,91 @@ fn main() {
             }
             Ok(())
         })
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                window_snap::on_window_destroyed(window);
+            }
+        })
         .invoke_handler(tauri::generate_handler![
-            commands::list_accounts,
-            commands::test_account,
-            commands::update_account_password,
-            commands::add_account,
-            commands::remove_account,
-            commands::list_mailboxes,
-            commands::sync_account,
-            commands::list_messages,
-            commands::get_message,
-            commands::set_message_flags,
-            commands::set_messages_flags,
-            commands::move_message,
-            commands::move_message_to_mailbox,
-            commands::move_messages_to_mailbox,
-            commands::mark_mailbox_read,
-            commands::suggest_recipients,
-            commands::create_folder,
-            commands::rename_folder,
-            commands::delete_folder,
-            commands::empty_trash,
-            commands::empty_junk,
-            commands::search_cached_messages,
-            commands::search_server_messages,
-            commands::save_draft,
-            commands::list_drafts,
-            commands::get_draft,
-            commands::delete_draft,
-            commands::send_message,
-            commands::list_outbox,
-            commands::get_outbox,
-            commands::retry_outbox,
-            commands::retry_sent_copy,
-            commands::send_scheduled_outbox,
-            commands::snooze_message,
-            commands::unsnooze_message,
-            commands::list_snoozed,
-            commands::list_filter_rules,
-            commands::create_filter_rule,
-            commands::update_filter_rule,
-            commands::delete_filter_rule,
-            commands::delete_outbox,
-            commands::restore_outbox,
-            commands::save_attachment,
-            commands::preview_attachment,
-            commands::prepare_forward_attachments,
-            commands::choose_attachments,
-            commands::fetch_remote_image,
-            commands::inspect_external_url,
-            commands::open_external_url,
-            commands::open_help_url,
-            commands::read_message_inline_image,
-            commands::read_compose_image,
-            commands::release_compose_attachments,
-            commands::get_settings,
-            commands::save_settings,
-            commands::set_mail_shortcut_guard,
-            commands::export_settings,
-            commands::import_settings,
-            commands::reset_settings,
-            commands::get_startup_notice,
-            commands::get_startup_error,
-            commands::get_cache_usage,
-            commands::clear_downloaded_mail,
-            commands::get_distribution_channel,
-            commands::discover_account_aliases,
-            commands::update_account_aliases,
-            commands::update_account_display_name,
-            commands::update_account_signature,
-            commands::get_account_inbox_counts,
-            commands::list_all_mailboxes,
-            commands::sync_all_accounts,
-            commands::search_all_cached_messages,
-            commands::show_native_confirm,
-            commands::show_native_message,
-            commands::relaunch_app,
+            commands::accounts::list_accounts,
+            commands::accounts::test_account,
+            commands::accounts::update_account_password,
+            commands::accounts::add_account,
+            commands::accounts::remove_account,
+            commands::accounts::erase_all_data,
+            commands::sync::list_mailboxes,
+            commands::sync::sync_account,
+            commands::messages::list_messages,
+            commands::messages::get_message,
+            commands::messages::set_message_flags,
+            commands::messages::set_messages_flags,
+            commands::messages::move_message,
+            commands::messages::move_message_to_mailbox,
+            commands::messages::move_messages_to_mailbox,
+            commands::messages::mark_mailbox_read,
+            commands::folders::suggest_recipients,
+            commands::folders::create_folder,
+            commands::folders::rename_folder,
+            commands::folders::delete_folder,
+            commands::folders::empty_trash,
+            commands::folders::empty_junk,
+            commands::messages::search_cached_messages,
+            commands::messages::search_server_messages,
+            commands::drafts_send::save_draft,
+            commands::drafts_send::list_drafts,
+            commands::drafts_send::get_draft,
+            commands::drafts_send::delete_draft,
+            commands::drafts_send::send_message,
+            commands::outbox::list_outbox,
+            commands::outbox::get_outbox,
+            commands::outbox::retry_outbox,
+            commands::outbox::retry_sent_copy,
+            commands::drafts_send::send_scheduled_outbox,
+            commands::snooze_filters::snooze_message,
+            commands::snooze_filters::unsnooze_message,
+            commands::snooze_filters::list_snoozed,
+            commands::snooze_filters::list_filter_rules,
+            commands::snooze_filters::create_filter_rule,
+            commands::snooze_filters::update_filter_rule,
+            commands::snooze_filters::delete_filter_rule,
+            commands::outbox::delete_outbox,
+            commands::outbox::restore_outbox,
+            commands::attachments::save_attachment,
+            commands::attachments::preview_attachment,
+            commands::attachments::prepare_forward_attachments,
+            commands::attachments::choose_attachments,
+            commands::security_net::fetch_remote_image,
+            commands::security_net::inspect_external_url,
+            commands::security_net::open_external_url,
+            commands::security_net::open_help_url,
+            commands::attachments::read_message_inline_image,
+            commands::attachments::read_compose_image,
+            commands::attachments::release_compose_attachments,
+            commands::settings_system::get_settings,
+            commands::settings_system::save_settings,
+            commands::settings_system::set_mail_shortcut_guard,
+            commands::settings_system::export_settings,
+            commands::settings_system::import_settings,
+            commands::settings_system::reset_settings,
+            commands::settings_system::get_startup_notice,
+            commands::settings_system::get_startup_error,
+            commands::settings_system::get_cache_usage,
+            commands::settings_system::clear_downloaded_mail,
+            commands::settings_system::get_distribution_channel,
+            commands::accounts::discover_account_aliases,
+            commands::accounts::update_account_aliases,
+            commands::accounts::update_account_display_name,
+            commands::accounts::update_account_signature,
+            commands::accounts::get_account_inbox_counts,
+            commands::sync::list_all_mailboxes,
+            commands::sync::sync_all_accounts,
+            commands::messages::search_all_cached_messages,
+            commands::settings_system::show_native_confirm,
+            commands::settings_system::show_native_message,
+            commands::settings_system::relaunch_app,
             window_fx::set_workspace_window_fx,
             window_fx::supports_workspace_window_fx,
+            window_snap::set_snap_overlay_bounds,
         ])
         .build(tauri::generate_context!())
         .expect("Postal Snap failed to start");

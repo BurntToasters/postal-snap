@@ -2,7 +2,9 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import { Composer } from "../components/Composer";
-import { defaultSettings, useAppStore } from "../store";
+import { useAppStore } from "../store";
+import { makeAccount } from "./helpers/fixtures";
+import { resetStore } from "./helpers/store";
 
 vi.mock("../api", () => ({
   api: {
@@ -16,13 +18,7 @@ vi.mock("../api", () => ({
   },
 }));
 
-const account = {
-  id: "account-1",
-  provider: "manual" as const,
-  email: "sam@example.test",
-  displayName: "Sam",
-  syncState: "idle" as const,
-};
+const account = makeAccount();
 
 const mockedSaveDraft = vi.mocked(api.saveDraft);
 
@@ -35,13 +31,9 @@ beforeEach(() => {
   });
   vi.mocked(api.deleteDraft).mockResolvedValue(undefined);
   vi.mocked(api.releaseComposeAttachments).mockResolvedValue(undefined);
-  useAppStore.setState({
+  resetStore({
     accounts: [account],
     activeAccountId: account.id,
-    settings: defaultSettings,
-    error: undefined,
-    composeSeed: undefined,
-    composerOpen: false,
   });
 });
 
@@ -111,7 +103,7 @@ describe("composer draft persistence", () => {
     });
 
     expect(mockedSaveDraft).toHaveBeenCalledTimes(2);
-    expect(screen.queryByText("Draft saved")).not.toBeNull();
+    expect(screen.getAllByText("Draft saved").length).toBeGreaterThan(0);
   });
 
   it("minimizes into docked pill and restores back to full composer", () => {
@@ -147,12 +139,16 @@ describe("composer draft persistence", () => {
     expect(select.value).toBe("alias1@example.test");
   });
 
-  it("exposes Cc/Bcc toggle state for assistive tech", () => {
+  it("exposes Cc and Bcc toggles separately for assistive tech", () => {
     render(<Composer accountId={account.id} />);
-    const toggle = screen.getByRole("button", { name: "Cc/Bcc" });
-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    fireEvent.click(toggle);
-    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    const ccToggle = screen.getByRole("button", { name: "Cc" });
+    const bccToggle = screen.getByRole("button", { name: "Bcc" });
+    expect(ccToggle.getAttribute("aria-expanded")).toBe("false");
+    expect(bccToggle.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(ccToggle);
+    expect(ccToggle.getAttribute("aria-expanded")).toBe("true");
+    expect(bccToggle.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.getByLabelText("Cc", { selector: "input" })).toBeDefined();
   });
 
   it("suggests previous recipients and completes on Enter", async () => {
@@ -198,6 +194,7 @@ describe("composer draft persistence", () => {
 
   it("exposes pressed state for active formatting controls", () => {
     render(<Composer accountId={account.id} />);
+    fireEvent.click(screen.getByRole("button", { name: "Show formatting" }));
     const bold = screen.getByRole("button", { name: "Bold" });
     expect(bold).toHaveAttribute("aria-pressed", "false");
     fireEvent.click(bold);
@@ -246,6 +243,7 @@ describe("composer draft persistence", () => {
   it("asks for a link in an in-app dialog", () => {
     const prompt = vi.spyOn(window, "prompt");
     render(<Composer accountId={account.id} />);
+    fireEvent.click(screen.getByRole("button", { name: "Show formatting" }));
     fireEvent.click(screen.getByRole("button", { name: "More formatting" }));
     fireEvent.click(screen.getByRole("button", { name: "Insert link" }));
     expect(prompt).not.toHaveBeenCalled();
@@ -369,5 +367,61 @@ describe("composer draft persistence", () => {
         references: ["<root@example.test>", "<parent@example.test>"],
       }),
     );
+  });
+
+  it("schedules sends through the Send options menu", async () => {
+    const send = vi.mocked(api.sendMessage);
+    send.mockResolvedValue({
+      id: "outbox-9",
+      state: "scheduled",
+      detail: null,
+    });
+    render(<Composer accountId={account.id} />);
+    fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
+      target: { value: "jane@example.test" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send options" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /tonight/i }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ sendAt: expect.stringMatching(/T/) }),
+    );
+    expect(useAppStore.getState().lastSent).toEqual(
+      expect.objectContaining({ outboxId: "outbox-9", scheduled: true }),
+    );
+  });
+
+  it("rejects a past scheduled time without calling send", async () => {
+    const send = vi.mocked(api.sendMessage);
+    render(<Composer accountId={account.id} />);
+    fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
+      target: { value: "jane@example.test" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send options" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /date and time/i }));
+    const input = screen.getByLabelText("Date and time") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "2000-01-01T00:00" } });
+    fireEvent.click(screen.getByRole("button", { name: "Schedule" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(send).not.toHaveBeenCalled();
+    expect(useAppStore.getState().error).toMatch(/future date and time/i);
+  });
+
+  it("saves on demand from the footer Save button", async () => {
+    render(<Composer accountId={account.id} />);
+    fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
+      target: { value: "jane@example.test" },
+    });
+    const calls = mockedSaveDraft.mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(mockedSaveDraft.mock.calls.length).toBeGreaterThan(calls);
   });
 });

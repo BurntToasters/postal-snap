@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { join } from "node:path";
-import { json, root } from "./_utils.js";
+import { json } from "./lib/json.js";
+import { root } from "./lib/paths.js";
 import {
   PLACEHOLDER_UPDATER_PUBLIC_KEY,
   isMinisignPublicKey,

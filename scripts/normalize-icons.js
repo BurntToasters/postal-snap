@@ -1,7 +1,8 @@
 import { cp, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { rmRetry, root, run } from "./_utils.js";
+import { root } from "./lib/paths.js";
+import { rmRetry, run } from "./lib/spawn.js";
 
 const iconsDir = join(root, "src-tauri/icons");
 const desktopSource = join(iconsDir, "app-icon.png");

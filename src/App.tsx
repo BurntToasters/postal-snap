@@ -7,6 +7,7 @@ import {
   useState,
 } from "react";
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
+import { WindowChrome } from "./components/WindowChrome";
 import {
   isPermissionGranted,
   requestPermission,
@@ -15,6 +16,7 @@ import { api, inTauri } from "./api";
 import { strings } from "./i18n";
 import { parseMailto } from "./mailto";
 import { SetupWizard } from "./components/SetupWizard";
+import { SetupFlow } from "./components/SetupFlow";
 import { MailShell } from "./components/MailShell";
 import { SettingsDialog, type SettingsTab } from "./components/SettingsDialog";
 import { useAppStore } from "./store";
@@ -33,6 +35,7 @@ const Composer = lazy(() =>
 
 export default function App() {
   const accounts = useAppStore((state) => state.accounts);
+  const settings = useAppStore((state) => state.settings);
   const setAccounts = useAppStore((state) => state.setAccounts);
   const setSettings = useAppStore((state) => state.setSettings);
   const setSync = useAppStore((state) => state.setSync);
@@ -47,6 +50,7 @@ export default function App() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
   const [settingsRouteRequest, setSettingsRouteRequest] = useState(0);
   const [startupError, setStartupError] = useState<string>();
+  const [startupNotice, setStartupNotice] = useState<string | null>(null);
   const [ready, setReady] = useState(!inTauri());
   const loadRequest = useRef(0);
 
@@ -78,6 +82,7 @@ export default function App() {
       setSettings(loadedSettings);
       setAccounts(loadedAccounts);
       applySettings(loadedSettings);
+      setStartupNotice(startupNotice);
       if (startupNotice) setError(startupNotice);
       if (loadedAccounts.length > 0) {
         void isPermissionGranted()
@@ -201,19 +206,14 @@ export default function App() {
     };
   }, [composerOpen, settingsOpen]);
 
-  useEffect(() => {
-    document.documentElement.dataset.platform = /Mac/i.test(navigator.userAgent)
-      ? "macos"
-      : /Windows/i.test(navigator.userAgent)
-        ? "windows"
-        : "linux";
-  }, []);
-
   if (!ready)
     return (
-      <div className="splash" role="status">
-        {strings.app.starting}
-      </div>
+      <>
+        <WindowChrome />
+        <div className="splash" role="status">
+          {strings.app.starting}
+        </div>
+      </>
     );
 
   if (!inTauri()) {
@@ -243,6 +243,14 @@ export default function App() {
         {strings.mail.settings}
       </button>
     </main>
+  ) : !settings.setupCompleted ? (
+    <main className="setup-host">
+      <SetupFlow
+        startupNotice={startupNotice}
+        onComplete={loadAccounts}
+        onOpenSettings={() => openSettings()}
+      />
+    </main>
   ) : accounts.length === 0 ? (
     <main className="setup-host">
       <SetupWizard
@@ -256,7 +264,7 @@ export default function App() {
 
   return (
     <>
-      <div inert={settingsOpen || undefined}>
+      <div className="app-viewport" inert={settingsOpen || undefined}>
         {mainContent}
         {composerOpen && composerAccountId ? (
           <Suspense
@@ -292,6 +300,7 @@ export default function App() {
           </button>
         </div>
       ) : null}
+      <WindowChrome />
     </>
   );
 }

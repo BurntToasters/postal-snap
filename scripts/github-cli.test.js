@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { join } from "node:path";
-import { output, root, run } from "./_utils.js";
+import { root } from "./lib/paths.js";
+import { output, run } from "./lib/spawn.js";
 import {
   githubApiArgs,
   githubCliEnvironment,

@@ -1,16 +1,10 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import {
-  ensureReleaseDir,
-  json,
-  newestMatching,
-  process,
-  requireEnv,
-  root,
-  run,
-  output,
-} from "./_utils.js";
+import { newestMatching } from "./lib/artifacts.js";
+import { ensureReleaseDir, json, requireEnv } from "./lib/json.js";
+import { process, root } from "./lib/paths.js";
+import { output, run } from "./lib/spawn.js";
 import { buildMasTauriArgs } from "./build-mas-args.js";
 import { validateEntitlementsPlist } from "./validate-macos-entitlements.js";
 

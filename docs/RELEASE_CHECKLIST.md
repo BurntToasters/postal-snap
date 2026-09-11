@@ -46,6 +46,8 @@ Required for GitHub 0.1.x. The live iCloud smoke is a signing-host gate; do not 
 - [ ] Keyboard-only setup, mail reading, composing, settings, and account switching work.
 - [ ] Screen-reader labels, visible focus, reduced motion, forced colors, and 200% text pass.
 - [ ] Narrow-window drawer and message back navigation work.
+- [ ] Native macOS and Windows titlebars drag from empty toolbar/heading space; controls, search and menus never initiate dragging. Double click, resize, fullscreen, minimize/restore and close follow platform behavior.
+- [ ] Window controls remain usable through startup, setup, settings, maximized compose, and reader overlays. Check macOS traffic lights and Windows edge/keyboard snapping on native hosts; Chromium IPC tests do not prove native hit testing or Snap Layout flyouts.
 - [ ] VoiceOver and Narrator complete setup, read, reply, attachment, and send flows with understandable announcements.
 
 ## GitHub packages (required for 0.1.1)

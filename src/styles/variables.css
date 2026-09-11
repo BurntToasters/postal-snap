@@ -7,33 +7,42 @@
   line-height: 1.45;
   letter-spacing: -0.01em;
 
-  --accent: #1670ad;
-  --accent-hover: #0d5e96;
-  --accent-soft: #e5f2fb;
+  /* macOS 27 Golden Gate / Tahoe light. Semantic mapping:
+     canvas = grouped background, surface = windowBackground,
+     muted/hover = system fills, text = label/secondaryLabel,
+     border = separator, accent = controlAccent/link. */
+  --accent: #007aff;
+  --accent-hover: #0068da;
+  --accent-soft: rgb(0 122 255 / 12%);
   --accent-contrast: #ffffff;
-  --canvas: #eef2f6;
+  --canvas: #f5f5f7;
   --surface: #ffffff;
-  --surface-muted: #f5f7f9;
-  --surface-hover: #ebf0f4;
-  --text: #1a2430;
-  --text-muted: #5f6e7c;
-  --border: #d5dde5;
-  --border-strong: #b8c4cf;
-  --focus: #c05e00;
-  --danger: #b42318;
-  --danger-soft: #fdeceb;
+  --surface-muted: #f2f2f7;
+  --surface-hover: #e5e5ea;
+  --text: rgb(0 0 0 / 85%);
+  --text-muted: rgb(0 0 0 / 55%);
+  --border: rgb(0 0 0 / 12%);
+  --border-strong: rgb(0 0 0 / 24%);
+  --focus: #007aff;
+  --danger: #d70015;
+  --danger-soft: rgb(215 0 21 / 10%);
   --warning: #9a6700;
-  --warning-soft: #fff6df;
-  --success: #18794e;
-  --success-soft: #e7f7ef;
-  --shadow: 0 18px 48px rgb(20 34 48 / 18%);
-  --shadow-soft: 0 8px 24px rgb(20 34 48 / 10%);
-  --scrollbar-thumb: rgba(0, 0, 0, 0.16);
-  --scrollbar-thumb-hover: rgba(0, 0, 0, 0.3);
+  --warning-soft: rgb(154 103 0 / 12%);
+  --success: #007e33;
+  --success-soft: rgb(52 199 89 / 14%);
+  --shadow: 0 18px 48px rgb(0 0 0 / 14%);
+  --shadow-soft: 0 8px 24px rgb(0 0 0 / 8%);
+  --scrollbar-thumb: rgba(0, 0, 0, 0.22);
+  --scrollbar-thumb-hover: rgba(0, 0, 0, 0.36);
+  --folder-sent: #1f7a33;
+  --folder-drafts: #b54708;
+  --folder-archive: #6e6e73;
+  --folder-trash: #d70015;
+  --folder-junk: #7d2ae8;
 
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
+  --radius-sm: 9px;
+  --radius-md: 13px;
+  --radius-lg: 18px;
   --radius-pill: 999px;
   --space-1: 0.25rem;
   --space-2: 0.5rem;
@@ -43,7 +52,12 @@
   --space-6: 1.5rem;
   --control-height: 2.75rem;
   --toolbar-height: 3.75rem;
-  --glass-opacity: 0.62;
+  --scrim: rgb(15 25 33 / 52%);
+  --scrim-soft: rgb(15 25 33 / 38%);
+  --mail-canvas: #ffffff;
+  --mail-ink: #20252b;
+  --glass-highlight: rgb(255 255 255 / 12%);
+  --window-close: #c42b1c;
 }
 
 :root[data-theme="light"] {
@@ -52,63 +66,88 @@
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --accent: #61b4ec;
-  --accent-hover: #85c8f2;
-  --accent-soft: #173b53;
-  --accent-contrast: #071926;
-  --canvas: #0f1418;
-  --surface: #1a2128;
-  --surface-muted: #141a20;
-  --surface-hover: #24303a;
-  --text: #edf3f7;
-  --text-muted: #a4b2bd;
-  --border: #33404a;
-  --border-strong: #465561;
-  --focus: #f5a623;
-  --danger: #ffaaa3;
-  --danger-soft: #3a1d1c;
-  --warning: #ffd37a;
-  --warning-soft: #3a2e14;
-  --success: #6bd6a6;
-  --success-soft: #163528;
-  --shadow: 0 18px 48px rgb(0 0 0 / 48%);
-  --shadow-soft: 0 8px 24px rgb(0 0 0 / 36%);
-  --scrollbar-thumb: rgba(255, 255, 255, 0.16);
-  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.3);
-  --glass-opacity: 0.55;
+  /* macOS 27 Golden Gate dark. Darkened edge + frosted fills:
+     canvas = near-black base, surface = elevated card,
+     muted/hover = secondary fills, text = label/secondaryLabel dark. */
+  --accent: #0a84ff;
+  --accent-hover: #409cff;
+  --accent-soft: rgb(10 132 255 / 20%);
+  --accent-contrast: #ffffff;
+  --canvas: #000000;
+  --surface: #1c1c1e;
+  --surface-muted: #2c2c2e;
+  --surface-hover: #3a3a3c;
+  --text: rgb(255 255 255 / 88%);
+  --text-muted: rgb(255 255 255 / 60%);
+  --border: rgb(255 255 255 / 14%);
+  --border-strong: rgb(255 255 255 / 26%);
+  --focus: #0a84ff;
+  --danger: #ff453a;
+  --danger-soft: rgb(255 69 58 / 16%);
+  --warning: #ffd60a;
+  --warning-soft: rgb(255 214 10 / 14%);
+  --success: #30d158;
+  --success-soft: rgb(48 209 88 / 16%);
+  --shadow: 0 18px 48px rgb(0 0 0 / 55%);
+  --shadow-soft: 0 8px 24px rgb(0 0 0 / 42%);
+  --scrollbar-thumb: rgba(255, 255, 255, 0.24);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.38);
+  --folder-sent: #30d158;
+  --folder-drafts: #ff9f0a;
+  --folder-archive: #98989d;
+  --folder-trash: #ff453a;
+  --folder-junk: #bf5af2;
+  --scrim: rgb(0 0 0 / 56%);
+  --scrim-soft: rgb(0 0 0 / 42%);
+  --mail-canvas: #ffffff;
+  --mail-ink: #20252b;
+  --glass-highlight: rgb(255 255 255 / 8%);
+  --window-close: #c42b1c;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]):not([data-theme="dark"]) {
-    --accent: #61b4ec;
-    --accent-hover: #85c8f2;
-    --accent-soft: #173b53;
-    --accent-contrast: #071926;
-    --canvas: #0f1418;
-    --surface: #1a2128;
-    --surface-muted: #141a20;
-    --surface-hover: #24303a;
-    --text: #edf3f7;
-    --text-muted: #a4b2bd;
-    --border: #33404a;
-    --border-strong: #465561;
-    --focus: #f5a623;
-    --danger: #ffaaa3;
-    --danger-soft: #3a1d1c;
-    --warning: #ffd37a;
-    --warning-soft: #3a2e14;
-    --success: #6bd6a6;
-    --success-soft: #163528;
-    --shadow: 0 18px 48px rgb(0 0 0 / 48%);
-    --shadow-soft: 0 8px 24px rgb(0 0 0 / 36%);
-    --scrollbar-thumb: rgba(255, 255, 255, 0.16);
-    --scrollbar-thumb-hover: rgba(255, 255, 255, 0.3);
-    --glass-opacity: 0.55;
+    --accent: #0a84ff;
+    --accent-hover: #409cff;
+    --accent-soft: rgb(10 132 255 / 20%);
+    --accent-contrast: #ffffff;
+    --canvas: #000000;
+    --surface: #1c1c1e;
+    --surface-muted: #2c2c2e;
+    --surface-hover: #3a3a3c;
+    --text: rgb(255 255 255 / 88%);
+    --text-muted: rgb(255 255 255 / 60%);
+    --border: rgb(255 255 255 / 14%);
+    --border-strong: rgb(255 255 255 / 26%);
+    --focus: #0a84ff;
+    --danger: #ff453a;
+    --danger-soft: rgb(255 69 58 / 16%);
+    --warning: #ffd60a;
+    --warning-soft: rgb(255 214 10 / 14%);
+    --success: #30d158;
+    --success-soft: rgb(48 209 88 / 16%);
+    --shadow: 0 18px 48px rgb(0 0 0 / 55%);
+    --shadow-soft: 0 8px 24px rgb(0 0 0 / 42%);
+    --scrollbar-thumb: rgba(255, 255, 255, 0.24);
+    --scrollbar-thumb-hover: rgba(255, 255, 255, 0.38);
+    --folder-sent: #30d158;
+    --folder-drafts: #ff9f0a;
+    --folder-archive: #98989d;
+    --folder-trash: #ff453a;
+    --folder-junk: #bf5af2;
+    --scrim: rgb(0 0 0 / 56%);
+    --scrim-soft: rgb(0 0 0 / 42%);
+    --mail-canvas: #ffffff;
+    --mail-ink: #20252b;
+    --glass-highlight: rgb(255 255 255 / 8%);
+    --window-close: #c42b1c;
   }
 }
 
 :root[data-density="compact"] {
-  --control-height: 2.5rem;
+  /* Keep --control-height at 44px for target-size comfort. Compact shrinks
+     visuals and spacing only; hit areas stay full size via min-height. */
+  --control-height: 2.75rem;
   --toolbar-height: 3.375rem;
   --space-3: 0.625rem;
   --space-4: 0.75rem;

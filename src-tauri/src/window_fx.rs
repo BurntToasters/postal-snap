@@ -1,5 +1,5 @@
 //! Native window blur / vibrancy (macOS vibrancy / Windows Mica / Acrylic).
-//! Everything but the rendered email will have it.
+//! Structural chrome uses native material; content panes remain opaque.
 //! Linux is intentionally a no-op; stays fully opaque there.
 
 use tauri::WebviewWindow;
@@ -7,7 +7,7 @@ use tauri::WebviewWindow;
 #[cfg(target_os = "macos")]
 fn apply_macos(window: &WebviewWindow) -> Result<(), String> {
     use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial};
-    apply_vibrancy(window, NSVisualEffectMaterial::HudWindow, None, None)
+    apply_vibrancy(window, NSVisualEffectMaterial::Sidebar, None, None)
         .map_err(|_| "Could not apply window glass.".to_string())
 }
 
@@ -118,17 +118,17 @@ pub fn set_workspace_window_fx(
     window: WebviewWindow,
     enabled: bool,
     dark: bool,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     if !supports_basic_window_fx() {
         paint_opaque_background(&window, dark);
         let _ = enabled;
-        return Ok(());
+        return Ok(false);
     }
 
     if enabled {
-        apply_basic_window_fx(&window, dark)
+        apply_basic_window_fx(&window, dark).map(|()| true)
     } else {
-        clear_basic_window_fx(&window, dark)
+        clear_basic_window_fx(&window, dark).map(|()| false)
     }
 }
 

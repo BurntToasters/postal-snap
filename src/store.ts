@@ -13,6 +13,13 @@ import type {
   SyncState,
 } from "./types";
 
+export interface SentNotice {
+  outboxId: string;
+  accountId: string;
+  /** True when the user picked Send Later vs the undo-send hold. */
+  scheduled: boolean;
+}
+
 export interface ComposerSeed {
   draft?: ComposeDraft;
   draftSummary?: DraftSummary;
@@ -39,12 +46,15 @@ export const defaultSettings: AppSettings = {
   folderPaneWidth: 264,
   messagePaneWidth: 400,
   readerPaneHeight: 360,
-  windowEffects: false,
+  windowEffects: true,
+  sidebarVisible: true,
   undoSendSeconds: 10,
   blockAdvertisingAndTracking: true,
   blockReportedThreats: true,
   groupThreads: true,
   notifyNewMail: true,
+  setupCompleted: false,
+  setupStep: null,
 };
 
 interface AppState {
@@ -68,6 +78,7 @@ interface AppState {
   composeNonce: number;
   busy: boolean;
   error?: string;
+  lastSent?: SentNotice;
   updateReady: string | null;
   setUpdateReady: (version: string | null) => void;
   setAccounts: (accounts: AccountSummary[]) => void;
@@ -95,6 +106,7 @@ interface AppState {
   closeComposer: () => void;
   setBusy: (busy: boolean) => void;
   setError: (error?: string) => void;
+  setLastSent: (notice?: SentNotice) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -259,4 +271,5 @@ export const useAppStore = create<AppState>((set) => ({
     }),
   setBusy: (busy) => set({ busy }),
   setError: (error) => set({ error }),
+  setLastSent: (lastSent) => set({ lastSent }),
 }));

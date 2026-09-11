@@ -146,6 +146,7 @@ export interface ComposeDraft {
   attachments: ComposeAttachment[];
   inReplyTo?: string;
   references?: string[];
+  sendAt?: string | null;
 }
 
 export interface DraftSummary {
@@ -247,6 +248,8 @@ export type SettingsPatch = Partial<Omit<AppSettings, "cachePolicy">> & {
   cachePolicy?: Partial<CachePolicy>;
 };
 
+export type SetupStep = "welcome" | "appearance" | "comfort" | "account";
+
 export interface AppSettings {
   schemaVersion: 2;
   readingPane: ReadingPane;
@@ -261,11 +264,14 @@ export interface AppSettings {
   messagePaneWidth: number;
   readerPaneHeight: number;
   windowEffects: boolean;
+  sidebarVisible: boolean;
   undoSendSeconds: number;
   blockAdvertisingAndTracking: boolean;
   blockReportedThreats: boolean;
   groupThreads: boolean;
   notifyNewMail: boolean;
+  setupCompleted: boolean;
+  setupStep?: SetupStep | null;
 }
 
 export interface DistributionChannel {

@@ -2,7 +2,8 @@ import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { connect } from "node:net";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { process, root, run } from "./_utils.js";
+import { process, root } from "./lib/paths.js";
+import { run } from "./lib/spawn.js";
 
 try {
   await run("docker", ["compose", "version"]);

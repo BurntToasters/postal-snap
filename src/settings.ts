@@ -1,6 +1,17 @@
 import type { AppSettings, SettingsPatch } from "./types";
 import { syncWorkspaceWindowFx } from "./window-fx";
 
+let systemThemeMedia: MediaQueryList | undefined;
+let systemThemeListener: (() => void) | undefined;
+
+function clearSystemThemeListener() {
+  if (systemThemeMedia && systemThemeListener) {
+    systemThemeMedia.removeEventListener?.("change", systemThemeListener);
+  }
+  systemThemeMedia = undefined;
+  systemThemeListener = undefined;
+}
+
 export function mergeSettingsPatches(
   current: SettingsPatch,
   patch: SettingsPatch,
@@ -32,12 +43,22 @@ export function applySettings(settings: AppSettings) {
     settings.textScale >= 1.5 ? "large" : "normal";
   document.documentElement.style.fontSize = `${settings.textScale * 100}%`;
 
-  // Native window blur / vibrancy (macOS vibrancy, Windows Mica / Acrylic, mirrored from Zinnia).
-  // Everything but the rendered email gets it; the email stays opaque.
-  const isDark =
-    settings.theme === "dark" ||
-    (settings.theme === "system" &&
-      typeof window !== "undefined" &&
-      window.matchMedia?.("(prefers-color-scheme: dark)")?.matches);
-  void syncWorkspaceWindowFx(settings.windowEffects, Boolean(isDark));
+  // Keep native material tint synchronized with the effective system theme.
+  clearSystemThemeListener();
+  if (
+    settings.theme === "system" &&
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function"
+  ) {
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const sync = () =>
+      void syncWorkspaceWindowFx(settings.windowEffects, media.matches);
+    systemThemeMedia = media;
+    systemThemeListener = sync;
+    media.addEventListener?.("change", sync);
+    sync();
+    return;
+  }
+
+  void syncWorkspaceWindowFx(settings.windowEffects, settings.theme === "dark");
 }

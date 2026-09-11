@@ -1,5 +1,8 @@
 import { join } from "node:path";
-import { json, output, process, root, sha256 } from "./_utils.js";
+import { sha256 } from "./lib/artifacts.js";
+import { json } from "./lib/json.js";
+import { process, root } from "./lib/paths.js";
+import { output } from "./lib/spawn.js";
 import { githubApi, githubJson } from "./github-cli.js";
 import {
   existingDraft,

@@ -4,17 +4,11 @@ import { join } from "node:path";
 import {
   artifactArch,
   artifactPlatform,
-  basename,
-  ensureReleaseDir,
   isLinuxAppImage,
-  json,
-  process,
-  rmRetry,
-  root,
-  run,
-  writeJson,
-  readFile,
-} from "./_utils.js";
+} from "./lib/artifacts.js";
+import { ensureReleaseDir, json, writeJson } from "./lib/json.js";
+import { basename, process, readFile, root } from "./lib/paths.js";
+import { rmRetry, run } from "./lib/spawn.js";
 import {
   assertGitHubCliAuthenticated,
   githubOutput,

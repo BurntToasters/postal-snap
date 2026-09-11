@@ -1,7 +1,8 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { json, root, writeJson } from "./_utils.js";
+import { json, writeJson } from "./lib/json.js";
+import { root } from "./lib/paths.js";
 
 export function cargoTomlPackageName(cargo) {
   const match = cargo.match(/^name\s*=\s*"([^"]+)"/m);

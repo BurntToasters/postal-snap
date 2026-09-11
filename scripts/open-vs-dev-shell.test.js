@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { join, win32 as path } from "node:path";
 import test from "node:test";
-import { root } from "./_utils.js";
+import { root } from "./lib/paths.js";
 import {
   launchVsDevShellPath,
   openVsDevShell,

@@ -1,0 +1,214 @@
+/* Shared popover / menu pattern (moved, no visual change) */
+.mailbox-more-menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 190px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.mailbox-more-menu button {
+  display: flex;
+  width: 100%;
+  min-height: 44px;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-start;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+}
+
+.mailbox-more-menu button:hover {
+  background: var(--surface-hover);
+}
+
+.mailbox-more-menu svg {
+  width: 17px;
+}
+
+.reader-more-menu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  right: 0;
+  display: grid;
+  min-width: 220px;
+  gap: 2px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.reader-more-menu button,
+.reader-more-menu .move-control {
+  width: 100%;
+  justify-content: flex-start;
+  padding: 8px 10px;
+}
+
+.reader-more-menu .move-control {
+  border: 1px solid transparent;
+}
+
+.reader-more-menu .move-control select {
+  width: auto;
+  flex: 1;
+}
+
+.move-control {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 6px;
+  padding-left: 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+}
+
+.move-control:hover {
+  border-color: var(--border);
+}
+
+.move-control svg {
+  width: 18px;
+}
+
+.move-control select {
+  width: 84px;
+  min-height: 44px;
+  border: 0;
+  background: transparent;
+}
+
+.recipient-suggestions {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface) 92%, var(--surface-muted));
+  box-shadow: var(--shadow);
+  max-height: 264px;
+  overflow: auto;
+}
+
+.recipient-suggestions li {
+  display: grid;
+  gap: 1px;
+  min-height: 44px;
+  align-content: center;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.recipient-suggestions li.active,
+.recipient-suggestions li:hover {
+  background: var(--surface-hover);
+}
+
+.recipient-suggestions .suggestion-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recipient-suggestions .suggestion-address {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.send-menu {
+  position: absolute;
+  z-index: 20;
+  bottom: calc(100% + 6px);
+  left: 0;
+  display: grid;
+  min-width: 250px;
+  gap: 2px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.send-menu > button {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.send-menu > button:hover {
+  background: var(--surface-hover);
+}
+
+.send-menu > button svg {
+  width: 17px;
+  color: var(--text-muted);
+}
+
+.schedule-form {
+  display: grid;
+  gap: 8px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+}
+
+.schedule-form label {
+  display: grid;
+  gap: 4px;
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+/* Shared popover helpers (additive only; existing selectors unchanged) */
+.popover-card {
+  min-width: 190px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.popover-item {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  text-align: left;
+}
+
+.popover-item:hover {
+  background: var(--surface-hover);
+}

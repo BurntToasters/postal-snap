@@ -2,7 +2,8 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import process from "node:process";
-import { resolveSpawnInvocation, root } from "./_utils.js";
+import { root } from "./lib/paths.js";
+import { resolveSpawnInvocation } from "./lib/spawn.js";
 
 const packageJson = JSON.parse(
   readFileSync(join(root, "package.json"), "utf8"),

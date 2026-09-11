@@ -1,4 +1,5 @@
-import { process, run } from "./_utils.js";
+import { process } from "./lib/paths.js";
+import { run } from "./lib/spawn.js";
 
 // Current Tauri 2 Linux WebKit/GTK support still traverses the unmaintained
 // gtk-rs GTK3 graph. Tauri's urlpattern support also uses the unmaintained

@@ -1,13 +1,9 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import {
-  ensureReleaseDir,
-  json,
-  process,
-  root,
-  run,
-  sha256,
-} from "./_utils.js";
+import { sha256 } from "./lib/artifacts.js";
+import { ensureReleaseDir, json } from "./lib/json.js";
+import { process, root } from "./lib/paths.js";
+import { run } from "./lib/spawn.js";
 import { validateManifest } from "./validate-updater-manifest.js";
 import {
   committedUpdaterPublicKey,

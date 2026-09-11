@@ -1,0 +1,145 @@
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { SetupFlow } from "../components/SetupFlow";
+import { defaultSettings, useAppStore } from "../store";
+import { mockSaveSettingsPassthrough } from "./helpers/api-mocks";
+import { resetStore } from "./helpers/store";
+
+vi.mock("../api", () => ({
+  api: {
+    addAccount: vi.fn(),
+    getSettings: vi.fn(),
+    saveSettings: vi.fn((settings: unknown) => Promise.resolve(settings)),
+    openHelpUrl: vi.fn(),
+  },
+}));
+
+vi.mock("../components/SetupWizard", () => ({
+  SetupWizard: ({ onComplete }: { onComplete: () => Promise<void> }) => (
+    <button type="button" onClick={() => void onComplete()}>
+      Mock connect account
+    </button>
+  ),
+}));
+
+import { api } from "../api";
+
+const saveSettings = vi.mocked(api.saveSettings);
+
+function resetSetupStore() {
+  resetStore({
+    accounts: [],
+    activeAccountId: undefined,
+    mailboxes: [],
+    activeMailboxId: undefined,
+    settings: { ...defaultSettings, setupCompleted: false, setupStep: null },
+  });
+}
+
+describe("first-run setup flow", () => {
+  beforeEach(() => {
+    resetSetupStore();
+    saveSettings.mockClear();
+    mockSaveSettingsPassthrough();
+  });
+
+  it("walks Welcome -> Appearance -> Comfort -> Account in order", async () => {
+    render(<SetupFlow onComplete={vi.fn()} startupNotice={null} />);
+    expect(screen.getByText(/Welcome to Postal Snap/i)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
+    expect(screen.getByText(/Choose how mail looks/i)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
+    expect(screen.getByText(/Make it comfortable/i)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
+    expect(screen.getByText(/Add your email/i)).toBeVisible();
+  });
+
+  it("persists appearance choices live and keeps compact hit areas", async () => {
+    render(<SetupFlow onComplete={vi.fn()} startupNotice={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
+    const spacing = screen.getByLabelText(/Interface spacing/i);
+    fireEvent.change(spacing, { target: { value: "compact" } });
+    await waitFor(() =>
+      expect(useAppStore.getState().settings.density).toBe("compact"),
+    );
+    expect(document.documentElement.dataset.density).toBe("compact");
+    expect(saveSettings).toHaveBeenCalled();
+  });
+
+  it("defaults theme to Auto and live-updates preview on every choice", async () => {
+    render(<SetupFlow onComplete={vi.fn()} startupNotice={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
+    const theme = screen.getByRole("combobox", {
+      name: /Appearance/i,
+    }) as HTMLSelectElement;
+    expect(theme.value).toBe("system");
+    expect(
+      screen.getByRole("option", { name: /Auto \(System default\)/i }),
+    ).toBeDefined();
+
+    fireEvent.change(theme, { target: { value: "dark" } });
+    await waitFor(() =>
+      expect(useAppStore.getState().settings.theme).toBe("dark"),
+    );
+    expect(document.documentElement.dataset.theme).toBe("dark");
+
+    const pane = screen.getByRole("combobox", { name: /Reading pane/i });
+    fireEvent.change(pane, { target: { value: "bottom" } });
+    await waitFor(() =>
+      expect(useAppStore.getState().settings.readingPane).toBe("bottom"),
+    );
+    expect(screen.getByLabelText(/Inbox preview/i)).toHaveAttribute(
+      "data-reading-pane",
+      "bottom",
+    );
+    expect(screen.getByText(/Live preview/i)).toBeVisible();
+  });
+
+  it("never exposes reported-threat toggle in first-run comfort step", () => {
+    render(<SetupFlow onComplete={vi.fn()} startupNotice={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
+    expect(screen.queryByText(/reported dangerous/i)).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/Block advertising and tracking images/i),
+    ).toBeVisible();
+  });
+
+  it("marks setup complete on skip and on account connect", async () => {
+    const onComplete = vi.fn(async () => undefined);
+    const { unmount } = render(
+      <SetupFlow onComplete={onComplete} startupNotice={null} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Skip for now/i }));
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    expect(saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ setupCompleted: true, setupStep: null }),
+    );
+    unmount();
+
+    resetSetupStore();
+    saveSettings.mockClear();
+    const onComplete2 = vi.fn(async () => undefined);
+    render(<SetupFlow onComplete={onComplete2} startupNotice={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /Mock connect account/i }),
+    );
+    await waitFor(() => expect(onComplete2).toHaveBeenCalled());
+  });
+
+  it("shows restored-settings notice inside setup", () => {
+    render(
+      <SetupFlow
+        onComplete={vi.fn()}
+        startupNotice="Postal Snap found damaged settings and restored safe defaults."
+      />,
+    );
+    expect(screen.getByText(/Damaged settings were restored/i)).toBeVisible();
+  });
+});

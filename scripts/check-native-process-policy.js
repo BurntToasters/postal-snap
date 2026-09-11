@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { extname } from "node:path";
-import { filesRecursively, root } from "./_utils.js";
+import { filesRecursively } from "./lib/artifacts.js";
+import { root } from "./lib/paths.js";
 
 const roots = [`${root}/src`, `${root}/src-tauri/src`];
 const forbidden = [

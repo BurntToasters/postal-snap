@@ -1,6 +1,6 @@
 # Postal Snap
 
-Postal Snap is an accessible desktop email client built for seniors and anyone who wants a calm mail experience. Big readable text, obvious buttons, no clutter — and your mail stays on your computer.
+Postal Snap is an accessible desktop email client for anyone who wants a calm mail experience. Big readable text, obvious buttons, no clutter — and your mail stays on your computer.
 
 ## Download
 
@@ -12,7 +12,7 @@ Get the latest release from [GitHub Releases](https://github.com/BurntToasters/p
 
 First releases are GitHub-only. Microsoft Store and Mac App Store builds come later.
 
-## Why seniors like it
+## Accessibility highlights
 
 - **Guided iCloud setup:** step-by-step sign-in with an app-specific password; manual IMAP/SMTP for other providers.
 - **Calm mailbox:** familiar folders, large labels, clear unread counts, right/bottom/hidden reading panes.

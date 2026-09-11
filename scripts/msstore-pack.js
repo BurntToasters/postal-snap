@@ -1,14 +1,8 @@
 import { cp, mkdir, rm } from "node:fs/promises";
 import { basename, join } from "node:path";
-import {
-  ensureReleaseDir,
-  json,
-  process,
-  requireEnv,
-  root,
-  run,
-  writeFile,
-} from "./_utils.js";
+import { ensureReleaseDir, json, requireEnv } from "./lib/json.js";
+import { process, root, writeFile } from "./lib/paths.js";
+import { run } from "./lib/spawn.js";
 
 if (process.platform !== "win32")
   throw new Error(

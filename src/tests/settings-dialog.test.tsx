@@ -11,6 +11,9 @@ import { api } from "../api";
 import { SettingsDialog } from "../components/SettingsDialog";
 import { defaultSettings, useAppStore } from "../store";
 import type { FilterRule } from "../types";
+import { mockSaveSettingsPassthrough } from "./helpers/api-mocks";
+import { makeAccount } from "./helpers/fixtures";
+import { resetStore } from "./helpers/store";
 
 vi.mock("../window-fx", () => ({
   supportsWorkspaceWindowFx: vi.fn().mockResolvedValue(true),
@@ -31,6 +34,7 @@ vi.mock("../api", () => ({
     deleteFilterRule: vi.fn(),
     syncAccount: vi.fn(),
     removeAccount: vi.fn(),
+    eraseAllData: vi.fn(),
     relaunch: vi.fn(),
     exportSettings: vi.fn(),
     importSettings: vi.fn(),
@@ -50,18 +54,15 @@ vi.mock("../api", () => ({
   },
 }));
 
-const account = {
-  id: "account-1",
-  provider: "icloud" as const,
-  email: "senior@icloud.com",
-  displayName: "Senior Citizen",
-  syncState: "idle" as const,
+const account = makeAccount("account-1", "icloud", {
+  email: "user@icloud.com",
+  displayName: "Test User",
   aliases: ["alias@icloud.com"],
-};
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(api.saveSettings).mockImplementation(async (s) => s);
+  mockSaveSettingsPassthrough();
   vi.mocked(api.listAccounts).mockResolvedValue([account]);
   vi.mocked(api.listFilterRules).mockResolvedValue([]);
   vi.mocked(api.updateAccountAliases).mockResolvedValue(account);
@@ -69,11 +70,10 @@ beforeEach(() => {
     ...account,
     aliases: ["alias@icloud.com", "custom@mydomain.com"],
   });
-  useAppStore.setState({
+  resetStore({
     accounts: [account],
     activeAccountId: account.id,
-    settings: defaultSettings,
-    error: undefined,
+    settings: { ...defaultSettings, windowEffects: false },
   });
 });
 
@@ -100,6 +100,48 @@ describe("SettingsDialog component", () => {
       "alias@icloud.com",
       "family@icloud.com",
     ]);
+  });
+
+  it("resets everything and restarts after confirm", async () => {
+    const onClose = vi.fn();
+    vi.mocked(api.eraseAllData).mockResolvedValue(1);
+    render(<SettingsDialog initialTab="accounts" onClose={onClose} />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("Reset everything")).toBeDefined();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Reset & Restart" }));
+      await Promise.resolve();
+    });
+
+    expect(api.showNativeConfirm).toHaveBeenCalledWith(
+      "Reset everything",
+      expect.stringMatching(/everything stored locally is removed/i),
+    );
+    expect(api.eraseAllData).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(api.relaunch).toHaveBeenCalledTimes(1));
+  });
+
+  it("does nothing when the reset confirm is dismissed", async () => {
+    const onClose = vi.fn();
+    vi.mocked(api.showNativeConfirm).mockResolvedValue(false);
+    render(<SettingsDialog initialTab="accounts" onClose={onClose} />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Reset & Restart" }));
+      await Promise.resolve();
+    });
+
+    expect(api.eraseAllData).not.toHaveBeenCalled();
+    expect(api.relaunch).not.toHaveBeenCalled();
+    vi.mocked(api.showNativeConfirm).mockResolvedValue(true);
   });
 
   it("detects iCloud aliases via CalDAV", async () => {

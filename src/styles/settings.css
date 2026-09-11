@@ -1,54 +1,20 @@
 /* Settings */
-.settings-window {
-  position: relative;
-  z-index: 1;
-  width: min(840px, 96vw);
-  max-height: 94vh;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--surface);
-  box-shadow: var(--shadow);
-}
-
-.settings-window > header {
-  display: flex;
-  min-height: 58px;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 14px 8px 18px;
-  border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--surface-muted) 70%, transparent);
-}
-
-.settings-window > header > span {
-  display: grid;
-}
-
-.settings-window h1 {
-  margin: 0;
-  font-size: 1.18rem;
-}
-
-.settings-window header small {
-  color: var(--text-muted);
-}
-
 .settings-layout {
   display: grid;
-  min-height: min(500px, 70vh);
-  grid-template-columns: 200px minmax(0, 1fr);
+  min-height: 0;
+  flex: 1;
+  grid-template-columns: 210px minmax(0, 1fr);
 }
 
 .settings-nav {
   display: grid;
   align-content: start;
   gap: 3px;
-  max-height: min(500px, 70vh);
-  padding: 16px 10px;
+  min-height: 0;
+  padding: 14px 9px;
   overflow-y: auto;
-  border-right: 1px solid var(--border);
-  background: var(--surface-muted);
+  border-right: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
+  background: color-mix(in srgb, var(--surface-muted) 88%, var(--surface));
 }
 
 .settings-nav button {
@@ -71,18 +37,22 @@
 }
 
 .settings-nav button.active {
-  color: var(--accent-contrast, #fff);
-  background: var(--accent);
-  font-weight: 600;
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  font-weight: 650;
 }
 
 .settings-nav svg {
   width: 19px;
 }
 
+.settings-nav button.active svg {
+  color: var(--accent);
+}
+
 .settings-content {
-  max-height: 70vh;
-  padding: 24px 28px;
+  min-height: 0;
+  padding: 22px 26px 28px;
   overflow-y: auto;
 }
 
@@ -94,6 +64,20 @@
 .settings-section {
   display: grid;
   gap: 12px;
+}
+
+.settings-section
+  > :is(.settings-row, .switch-row)
+  + :is(.settings-row, .switch-row) {
+  margin-top: -13px;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+.settings-section
+  > :is(.settings-row, .switch-row):has(+ :is(.settings-row, .switch-row)) {
+  border-bottom-right-radius: 0;
+  border-bottom-left-radius: 0;
 }
 
 .settings-section > h3 {
@@ -124,47 +108,6 @@
 .settings-panel h2 {
   margin: 0 0 4px;
   font-size: 1.25rem;
-}
-
-.settings-row,
-.switch-row {
-  display: flex;
-  min-height: 52px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-  padding: 10px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-  box-shadow: var(--shadow-soft);
-}
-
-.settings-row > span,
-.switch-row > span,
-.security-summary > span,
-.storage-card > span,
-.account-settings-list span {
-  display: grid;
-  gap: 3px;
-}
-
-.settings-row select {
-  width: min(220px, 48%);
-}
-
-.settings-panel small,
-.settings-note {
-  color: var(--text-muted);
-}
-
-.switch-row input {
-  width: 28px;
-  height: 28px;
-  min-width: 44px;
-  min-height: 44px;
-  accent-color: var(--accent);
-  cursor: pointer;
 }
 
 .security-summary,
@@ -204,7 +147,7 @@
   display: grid;
   place-items: center;
   padding: 20px;
-  background: rgb(15 25 33 / 52%);
+  background: var(--scrim);
 }
 
 .settings-confirm-card {
@@ -259,6 +202,11 @@
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--surface-muted);
+}
+
+.settings-data-card.danger-card {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface-muted));
 }
 
 .settings-data-card > div:first-child,
@@ -326,10 +274,10 @@
   display: grid;
   gap: 12px;
   padding: 16px;
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
   border-radius: 12px;
-  background: var(--surface);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  background: color-mix(in srgb, var(--surface) 94%, var(--surface-muted));
+  box-shadow: none;
 }
 
 .account-card-header {

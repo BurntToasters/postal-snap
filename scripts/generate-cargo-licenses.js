@@ -1,5 +1,6 @@
 import { join } from "node:path";
-import { output, root, writeFile } from "./_utils.js";
+import { root, writeFile } from "./lib/paths.js";
+import { output } from "./lib/spawn.js";
 
 const metadata = JSON.parse(
   await output("cargo", [
