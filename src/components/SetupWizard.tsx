@@ -28,6 +28,7 @@ import { ServerFields } from "./setup/serverFields";
 interface Props {
   onComplete: () => Promise<void>;
   onOpenSettings?: () => void;
+  embedded?: boolean;
 }
 
 const iCloudImapSummary = {
@@ -42,7 +43,7 @@ const iCloudSmtpSummary = {
   security: strings.setup.startTls,
 };
 
-export function SetupWizard({ onComplete, onOpenSettings }: Props) {
+export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
   const [provider, setProvider] = useState<ProviderKind>();
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
@@ -163,7 +164,7 @@ export function SetupWizard({ onComplete, onOpenSettings }: Props) {
 
   if (!provider) {
     return (
-      <div className="setup-page">
+      <div className={embedded ? "setup-wizard-embedded" : "setup-page"}>
         <section
           className="setup-card provider-picker"
           aria-labelledby="setup-title"
@@ -242,7 +243,7 @@ export function SetupWizard({ onComplete, onOpenSettings }: Props) {
   }
 
   return (
-    <div className="setup-page">
+    <div className={embedded ? "setup-wizard-embedded" : "setup-page"}>
       <form
         className="setup-card account-form"
         onSubmit={submit}

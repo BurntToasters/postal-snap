@@ -557,6 +557,14 @@ test("test:all still includes Playwright e2e unless SKIP_E2E is set", async () =
   );
   assert.equal(packageJson.scripts["test:all"], "node scripts/test-all.js");
   assert.equal(packageJson.scripts["test:e2e"], "playwright test");
+  assert.equal(
+    packageJson.scripts["test:cov"],
+    "node scripts/headless-coverage.js",
+  );
+  assert.equal(
+    packageJson.scripts["test:release-assets"],
+    "node --test scripts/*.test.js scripts/lib/*.test.js",
+  );
 
   const { qualityGateSteps } = await import("./test-all.js");
   assert.deepEqual(
@@ -579,7 +587,7 @@ test("test:all still includes Playwright e2e unless SKIP_E2E is set", async () =
 
   const ci = await readFile(join(root, ".github/workflows/ci.yml"), "utf8");
   assert.match(ci, /npx playwright install --with-deps chromium/);
-  assert.match(ci, /npm run test:e2e/);
+  assert.match(ci, /npm run test:cov/);
   assert.match(ci, /npm run check:cargo-update-policy/);
   assert.match(ci, /npm run test:cargo-safe-update/);
   assert.match(ci, /test-linux:/);

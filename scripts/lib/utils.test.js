@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
+import { join, resolve } from "node:path";
 import test from "node:test";
 import process from "node:process";
 import { isLinuxAppImage, isLinuxAppImageSignature } from "./artifacts.js";
+import { releaseDir, root } from "./paths.js";
 import {
   RM_RETRY_OPTIONS,
   output,
@@ -9,6 +12,12 @@ import {
   resolveSpawnInvocation,
   windowsCmdLine,
 } from "./spawn.js";
+
+test("shared paths resolve from scripts/lib to repository root", () => {
+  assert.equal(root, resolve(import.meta.dirname, "../.."));
+  assert.equal(releaseDir, join(root, "release"));
+  assert.equal(existsSync(join(root, "package.json")), true);
+});
 
 test("Windows cmd quoting wraps spaces and empty args", () => {
   assert.equal(quoteWindowsCmdArg("run"), "run");

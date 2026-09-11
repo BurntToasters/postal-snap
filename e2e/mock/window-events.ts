@@ -95,7 +95,7 @@ export async function registerMockWindowEvents(
               const mock = window.__POSTAL_SNAP_MOCK__ as MockShared;
               const handler = mock.handlers[command];
               if (handler) return handler(args);
-              return undefined;
+              throw new Error(`No mock handler for native command: ${command}`);
             }
           }
         },

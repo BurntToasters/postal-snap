@@ -1,9 +1,32 @@
-import { expect, test } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 
+import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
 
 test.beforeEach(async ({ page }) => installMockIpc(page));
+
+test("mock IPC fails closed for unregistered native commands", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const message = await page.evaluate(async () => {
+    try {
+      await (
+        window as typeof window & {
+          __TAURI_INTERNALS__: {
+            invoke: (command: string) => Promise<unknown>;
+          };
+        }
+      ).__TAURI_INTERNALS__.invoke("missing_native_command");
+      return null;
+    } catch (cause) {
+      return cause instanceof Error ? cause.message : String(cause);
+    }
+  });
+  expect(message).toContain(
+    "No mock handler for native command: missing_native_command",
+  );
+});
 
 test("fills resized window without exposing a blank footer", async ({
   page,

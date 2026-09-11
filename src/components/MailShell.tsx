@@ -870,7 +870,7 @@ export function MailShell({ onOpenSettings }: Props) {
     };
     const keyboard = (event: KeyboardEvent) => {
       if (document.querySelector(".modal-layer")) return;
-      const target = event.target as HTMLElement | null;
+      const target = event.target instanceof HTMLElement ? event.target : null;
       const isEditing = Boolean(
         target?.matches(
           "input,textarea,select,[contenteditable='true'],[role='combobox'],[role='textbox']",
