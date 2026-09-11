@@ -1,6 +1,6 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { process, releaseDir } from "./_utils.js";
+import { process, releaseDir } from "./lib/paths.js";
 
 export function validateManifest(manifest) {
   if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(manifest.version ?? ""))

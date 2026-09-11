@@ -1,6 +1,7 @@
 import { basename, join } from "node:path";
 import process from "node:process";
-import { json, readFile, root } from "./_utils.js";
+import { json } from "./lib/json.js";
+import { readFile, root } from "./lib/paths.js";
 import { assertGitHubCliAuthenticated, githubApi } from "./github-cli.js";
 import { verifiedReleaseSession } from "./release-identity.js";
 

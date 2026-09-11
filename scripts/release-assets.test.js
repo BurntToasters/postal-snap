@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { join } from "node:path";
-import { artifactArch, artifactPlatform, root } from "./_utils.js";
+import { artifactArch, artifactPlatform } from "./lib/artifacts.js";
+import { root } from "./lib/paths.js";
 import { validateManifest } from "./validate-updater-manifest.js";
 import {
   remoteTagCommit,

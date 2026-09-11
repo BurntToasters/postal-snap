@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { root } from "./_utils.js";
+import { root } from "./lib/paths.js";
 
 export const filterDirectory = join(root, "src-tauri", "filters");
 export const TWEETFEED_MANIFEST_URL = "https://api.tweetfeed.live/v1/manifest";

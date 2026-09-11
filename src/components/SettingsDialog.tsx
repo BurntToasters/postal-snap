@@ -4,7 +4,6 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
-  type ReactNode,
 } from "react";
 import {
   Bell,
@@ -13,55 +12,41 @@ import {
   Eye,
   Info,
   Keyboard,
-  Mail,
   Monitor,
-  RotateCcw,
   ShieldAlert,
-  ShieldCheck,
-  Upload,
   UserRound,
   X,
 } from "lucide-react";
 import { api } from "../api";
 import { strings } from "../i18n";
-import { shortcutMod, shortcutShiftMod, shortcutAltMod } from "../format";
-import {
-  applySettings,
-  applySettingsPatch,
-  mergeSettingsPatches,
-} from "../settings";
+import { applySettings } from "../settings";
 import { useAppStore } from "../store";
 import { supportsWorkspaceWindowFx } from "../window-fx";
-import { version as appVersion } from "../../package.json";
-import type {
-  AppSettings,
-  CacheUsage,
-  SettingsPatch,
-  DistributionChannel,
-  FilterRule,
-} from "../types";
+import type { CacheUsage, DistributionChannel, FilterRule } from "../types";
 import {
   checkUpdateInteractive,
   removeUpdateFoundListener,
   type UpdateFoundListener,
 } from "../update";
 import { useDialogFocus } from "./useDialogFocus";
+import type { SettingsTab } from "./settings/primitives";
+import { useSettingsSave } from "./settings/useSettingsSave";
+import { GeneralTab } from "./settings/generalTab";
+import { ReadingTab } from "./settings/readingTab";
+import { NotificationsTab } from "./settings/notificationsTab";
+import { StorageTab } from "./settings/storageTab";
+import { AccountsTab } from "./settings/accountsTab";
+import { ShortcutsTab } from "./settings/shortcutsTab";
+import { UpdatesTab } from "./settings/updatesTab";
+import { AdvancedTab } from "./settings/advancedTab";
+import { AboutTab } from "./settings/aboutTab";
+
+export type { SettingsTab } from "./settings/primitives";
 
 interface Props {
   onClose: () => void;
   initialTab?: SettingsTab;
 }
-
-export type SettingsTab =
-  | "general"
-  | "reading"
-  | "notifications"
-  | "storage"
-  | "accounts"
-  | "shortcuts"
-  | "updates"
-  | "advanced"
-  | "about";
 
 const tabs: Array<{
   id: SettingsTab;
@@ -80,9 +65,7 @@ const tabs: Array<{
 ];
 
 export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
-  const settings = useAppStore((state) => state.settings);
   const accounts = useAppStore((state) => state.accounts);
-  const mailboxes = useAppStore((state) => state.mailboxes);
   const setAccounts = useAppStore((state) => state.setAccounts);
   const setSettings = useAppStore((state) => state.setSettings);
   const setError = useAppStore((state) => state.setError);
@@ -93,13 +76,14 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
   const [updateStatus, setUpdateStatus] = useState<string>(
     strings.settings.checkUpdates,
   );
-  const [saving, setSaving] = useState(false);
+  const { saving, update } = useSettingsSave();
   const [dataBusy, setDataBusy] = useState(false);
   const [dataStatus, setDataStatus] = useState<string>();
+  const [eraseBusy, setEraseBusy] = useState(false);
+  const [eraseStatus, setEraseStatus] = useState<string>();
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [testingAccountId, setTestingAccountId] = useState<string>();
   const [testedHealthy, setTestedHealthy] = useState<string>();
-  const updateReady = useAppStore((state) => state.updateReady);
   const [detectingAliasesAccountId, setDetectingAliasesAccountId] =
     useState<string>();
   const [newAliasInputs, setNewAliasInputs] = useState<Record<string, string>>(
@@ -128,9 +112,6 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
   );
   const [confirmToken, setConfirmToken] = useState("");
   const confirmInputRef = useRef<HTMLInputElement>(null);
-  const pendingSettingsPatch = useRef<SettingsPatch>({});
-  const pendingConfirmToken = useRef<string | undefined>(undefined);
-  const settingsSaveChain = useRef(Promise.resolve());
   const [filterRules, setFilterRules] = useState<Record<string, FilterRule[]>>(
     {},
   );
@@ -236,44 +217,6 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
     setConfirmToken("");
   }
 
-  function update(patch: SettingsPatch, confirmToken?: string) {
-    pendingSettingsPatch.current = mergeSettingsPatches(
-      pendingSettingsPatch.current,
-      patch,
-    );
-    if (confirmToken) pendingConfirmToken.current = confirmToken;
-    const queued = settingsSaveChain.current.then(async () => {
-      const merged = pendingSettingsPatch.current;
-      const token = pendingConfirmToken.current;
-      pendingSettingsPatch.current = {};
-      pendingConfirmToken.current = undefined;
-      if (Object.keys(merged).length === 0 && !token) return;
-      const previous = useAppStore.getState().settings;
-      const next = applySettingsPatch(previous, merged);
-      setSaving(true);
-      setSettings(next);
-      applySettings(next);
-      try {
-        const saved = token
-          ? await api.saveSettings(next, token)
-          : await api.saveSettings(next);
-        setSettings(saved);
-        applySettings(saved);
-      } catch (cause) {
-        setSettings(previous);
-        applySettings(previous);
-        setError(String(cause));
-      } finally {
-        setSaving(false);
-      }
-    });
-    settingsSaveChain.current = queued.then(
-      () => undefined,
-      () => undefined,
-    );
-    return queued;
-  }
-
   async function setAdvertisingBlocking(enabled: boolean) {
     if (!enabled) {
       const confirmed = await api.showNativeConfirm(
@@ -372,6 +315,26 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
       setError(String(cause));
     } finally {
       setDataBusy(false);
+    }
+  }
+
+  async function eraseAllData() {
+    if (eraseBusy) return;
+    const confirmed = await api.showNativeConfirm(
+      strings.settings.eraseTitle,
+      strings.settings.eraseQuestion,
+    );
+    if (!confirmed) return;
+    setEraseBusy(true);
+    setEraseStatus(undefined);
+    try {
+      await api.eraseAllData();
+      await api.relaunch();
+    } catch (cause) {
+      setEraseStatus(strings.settings.eraseFailed);
+      setError(String(cause));
+    } finally {
+      setEraseBusy(false);
     }
   }
 
@@ -670,10 +633,6 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
     }, 0);
   }
 
-  const advertisingOn = settings.blockAdvertisingAndTracking;
-  const threatsOn = settings.blockReportedThreats;
-  const protectionOn = advertisingOn && threatsOn;
-
   return (
     <div
       className="modal-layer"
@@ -742,1050 +701,80 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
           </nav>
           <div className="settings-content">
             {tab === "general" ? (
-              <SettingsPanel id="general" title={strings.settings.general}>
-                <SettingsSection title={strings.settings.appearanceSection}>
-                  <SettingRow
-                    title={strings.settings.appearance}
-                    help={strings.settings.appearanceHelp}
-                  >
-                    <select
-                      aria-label={strings.settings.appearance}
-                      value={settings.theme}
-                      onChange={(event) =>
-                        void update({
-                          theme: event.target.value as AppSettings["theme"],
-                        })
-                      }
-                    >
-                      <option value="system">
-                        {strings.settings.autoDefault}
-                      </option>
-                      <option value="light">{strings.settings.light}</option>
-                      <option value="dark">{strings.settings.dark}</option>
-                    </select>
-                  </SettingRow>
-                  <SettingRow
-                    title={strings.settings.spacing}
-                    help={strings.settings.spacingHelp}
-                  >
-                    <select
-                      aria-label={strings.settings.spacing}
-                      value={settings.density}
-                      onChange={(event) =>
-                        void update({
-                          density: event.target.value as AppSettings["density"],
-                        })
-                      }
-                    >
-                      <option value="comfortable">
-                        {strings.settings.comfortable}
-                      </option>
-                      <option value="compact">
-                        {strings.settings.compact}
-                      </option>
-                    </select>
-                  </SettingRow>
-                  <label className="switch-row">
-                    <span>
-                      <strong>{strings.settings.sidebar}</strong>
-                      <small>{strings.settings.sidebarHelp}</small>
-                    </span>
-                    <input
-                      type="checkbox"
-                      checked={settings.sidebarVisible !== false}
-                      onChange={(event) =>
-                        void update({ sidebarVisible: event.target.checked })
-                      }
-                    />
-                  </label>
-                  {windowFxSupported ? (
-                    <label className="switch-row">
-                      <span>
-                        <strong>{strings.settings.windowEffects}</strong>
-                        <small>{strings.settings.windowEffectsHelp}</small>
-                      </span>
-                      <input
-                        type="checkbox"
-                        checked={settings.windowEffects}
-                        onChange={(event) =>
-                          void update({ windowEffects: event.target.checked })
-                        }
-                      />
-                    </label>
-                  ) : null}
-                </SettingsSection>
-                <SettingsSection title={strings.settings.sendingSection}>
-                  <SettingRow
-                    title={strings.mail.undoSendWindow}
-                    help={strings.mail.undoSendHelp}
-                  >
-                    <select
-                      aria-label={strings.mail.undoSendWindow}
-                      value={settings.undoSendSeconds ?? 10}
-                      onChange={(event) =>
-                        void update({
-                          undoSendSeconds: Number(event.target.value),
-                        })
-                      }
-                    >
-                      <option value={0}>{strings.mail.undoSendOff}</option>
-                      {[5, 10, 20, 30].map((seconds) => (
-                        <option key={seconds} value={seconds}>
-                          {strings.mail.undoSendSeconds(seconds)}
-                        </option>
-                      ))}
-                    </select>
-                  </SettingRow>
-                </SettingsSection>
-                <SettingsSection title={strings.settings.privacySection}>
-                  <div className="security-summary">
-                    <ShieldCheck aria-hidden="true" />
-                    <span>
-                      <strong>{strings.settings.vaultTitle}</strong>
-                      <small>{strings.settings.vaultHelp}</small>
-                    </span>
-                  </div>
-                  <div
-                    className={
-                      protectionOn
-                        ? "security-summary"
-                        : "security-summary warning"
-                    }
-                  >
-                    {protectionOn ? (
-                      <ShieldCheck aria-hidden="true" />
-                    ) : (
-                      <ShieldAlert aria-hidden="true" />
-                    )}
-                    <span>
-                      <strong>
-                        {protectionOn
-                          ? strings.settings.protectionOn
-                          : strings.settings.protectionOff}
-                      </strong>
-                      <small>
-                        {protectionOn
-                          ? strings.settings.protectionOnHelp
-                          : threatsOn
-                            ? strings.settings.protectionAdsOffHelp
-                            : strings.settings.protectionOffHelp}
-                      </small>
-                    </span>
-                    <button
-                      className="secondary-button"
-                      type="button"
-                      onClick={() => {
-                        setTab("advanced");
-                        window.requestAnimationFrame(() => {
-                          document
-                            .getElementById("settings-tab-advanced")
-                            ?.focus();
-                        });
-                      }}
-                    >
-                      {strings.settings.reviewAdvanced}
-                    </button>
-                  </div>
-                </SettingsSection>
-                <SettingsSection title={strings.settings.settingsData}>
-                  <div className="settings-data-card">
-                    <div>
-                      <small>{strings.settings.settingsDataHelp}</small>
-                    </div>
-                    <div className="settings-actions">
-                      <button
-                        className="secondary-button"
-                        type="button"
-                        onClick={() => void exportSettings()}
-                        disabled={dataBusy}
-                      >
-                        <Upload aria-hidden="true" />{" "}
-                        {strings.settings.exportSettings}
-                      </button>
-                      <button
-                        className="secondary-button"
-                        type="button"
-                        onClick={() => void importSettings()}
-                        disabled={dataBusy}
-                      >
-                        <DownloadCloud aria-hidden="true" />{" "}
-                        {strings.settings.importSettings}
-                      </button>
-                      <button
-                        className="danger-button"
-                        type="button"
-                        onClick={() => void resetSettings()}
-                        disabled={dataBusy}
-                      >
-                        <RotateCcw aria-hidden="true" />{" "}
-                        {strings.settings.resetSettings}
-                      </button>
-                    </div>
-                    {dataStatus ? (
-                      <small className="settings-data-status" role="status">
-                        {dataStatus}
-                      </small>
-                    ) : null}
-                  </div>
-                </SettingsSection>
-              </SettingsPanel>
+              <GeneralTab
+                update={update}
+                windowFxSupported={windowFxSupported}
+                dataBusy={dataBusy}
+                dataStatus={dataStatus}
+                setTab={setTab}
+                exportSettings={exportSettings}
+                importSettings={importSettings}
+                resetSettings={resetSettings}
+              />
             ) : null}
-            {tab === "reading" ? (
-              <SettingsPanel id="reading" title={strings.settings.reading}>
-                <SettingRow
-                  title={strings.settings.readingPane}
-                  help={strings.settings.readingPaneHelp}
-                >
-                  <select
-                    aria-label={strings.settings.readingPane}
-                    value={settings.readingPane}
-                    onChange={(event) =>
-                      void update({
-                        readingPane: event.target
-                          .value as AppSettings["readingPane"],
-                      })
-                    }
-                  >
-                    <option value="right">{strings.settings.paneRight}</option>
-                    <option value="bottom">
-                      {strings.settings.paneBottom}
-                    </option>
-                    <option value="hidden">
-                      {strings.settings.paneHidden}
-                    </option>
-                  </select>
-                </SettingRow>
-                <SettingRow
-                  title={strings.settings.textSize}
-                  help={strings.settings.textSizeHelp}
-                >
-                  <select
-                    aria-label={strings.settings.textSize}
-                    value={settings.textScale}
-                    onChange={(event) =>
-                      void update({ textScale: Number(event.target.value) })
-                    }
-                  >
-                    <option value={0.85}>{strings.settings.small}</option>
-                    <option value={1}>{strings.settings.normal}</option>
-                    <option value={1.15}>{strings.settings.large}</option>
-                    <option value={1.3}>{strings.settings.extraLarge}</option>
-                    <option value={1.5}>{strings.settings.veryLarge}</option>
-                    <option value={2}>{strings.settings.largest}</option>
-                  </select>
-                </SettingRow>
-                <label className="switch-row">
-                  <span>
-                    <strong>{strings.settings.groupThreads}</strong>
-                    <small>{strings.settings.groupThreadsHelp}</small>
-                  </span>
-                  <input
-                    type="checkbox"
-                    checked={settings.groupThreads}
-                    onChange={(event) =>
-                      void update({ groupThreads: event.target.checked })
-                    }
-                  />
-                </label>
-              </SettingsPanel>
-            ) : null}
+            {tab === "reading" ? <ReadingTab update={update} /> : null}
             {tab === "notifications" ? (
-              <SettingsPanel
-                id="notifications"
-                title={strings.settings.notifications}
-              >
-                <label className="switch-row">
-                  <span>
-                    <strong>{strings.settings.notifyNewMail}</strong>
-                    <small>{strings.settings.notifyNewMailHelp}</small>
-                  </span>
-                  <input
-                    type="checkbox"
-                    checked={settings.notifyNewMail}
-                    onChange={(event) =>
-                      void update({ notifyNewMail: event.target.checked })
-                    }
-                  />
-                </label>
-                <label className="switch-row">
-                  <span>
-                    <strong>{strings.settings.privateNotifications}</strong>
-                    <small>{strings.settings.privateNotificationsHelp}</small>
-                  </span>
-                  <input
-                    type="checkbox"
-                    checked={settings.privateNotifications}
-                    onChange={(event) =>
-                      void update({
-                        privateNotifications: event.target.checked,
-                      })
-                    }
-                  />
-                </label>
-              </SettingsPanel>
+              <NotificationsTab update={update} />
             ) : null}
             {tab === "storage" ? (
-              <SettingsPanel id="storage" title={strings.settings.storage}>
-                <div className="storage-card">
-                  <Database />
-                  <span>
-                    <strong>
-                      {usage
-                        ? formatBytes(usage.bytes)
-                        : strings.settings.calculating}{" "}
-                      {strings.settings.used}
-                    </strong>
-                    <small>
-                      {settings.cachePolicy.mode === "full"
-                        ? strings.settings.storageSummaryFull(
-                            usage?.messageCount ?? 0,
-                          )
-                        : strings.settings.storageSummary(
-                            usage?.messageCount ?? 0,
-                            settings.cachePolicy.days,
-                            settings.cachePolicy.maxBytes === 0
-                              ? strings.settings.cacheUnlimited
-                              : formatBytes(settings.cachePolicy.maxBytes),
-                          )}
-                    </small>
-                  </span>
-                </div>
-                <SettingRow
-                  title={strings.settings.cacheMode}
-                  help={strings.settings.cachePolicyHelp}
-                >
-                  <select
-                    aria-label={strings.settings.cacheMode}
-                    value={settings.cachePolicy.mode}
-                    onChange={(event) => {
-                      const mode = event.target.value as "recent" | "full";
-                      if (mode === "full") {
-                        void update({
-                          cachePolicy: {
-                            mode: "full",
-                            days: 0,
-                            maxBytes: 0,
-                          },
-                        });
-                      } else {
-                        void update({
-                          cachePolicy: {
-                            mode: "recent",
-                            days: 90,
-                            maxBytes: 1_073_741_824,
-                          },
-                        });
-                      }
-                    }}
-                  >
-                    <option value="recent">
-                      {strings.settings.cacheRecent}
-                    </option>
-                    <option value="full">{strings.settings.cacheFull}</option>
-                  </select>
-                </SettingRow>
-                {settings.cachePolicy.mode === "recent" ? (
-                  <SettingRow
-                    title={strings.settings.cacheDays}
-                    help={strings.settings.cachePolicyHelp}
-                  >
-                    <select
-                      aria-label={strings.settings.cacheDays}
-                      value={settings.cachePolicy.days}
-                      onChange={(event) =>
-                        void update({
-                          cachePolicy: { days: Number(event.target.value) },
-                        })
-                      }
-                    >
-                      <option value={30}>
-                        {strings.settings.cacheDaysOption(30)}
-                      </option>
-                      <option value={90}>
-                        {strings.settings.cacheDaysOption(90)}
-                      </option>
-                      <option value={180}>
-                        {strings.settings.cacheDaysOption(180)}
-                      </option>
-                      <option value={365}>
-                        {strings.settings.cacheDaysOption(365)}
-                      </option>
-                    </select>
-                  </SettingRow>
-                ) : null}
-                <SettingRow
-                  title={strings.settings.cacheLimit}
-                  help={strings.settings.cachePolicyHelp}
-                >
-                  <select
-                    aria-label={strings.settings.cacheLimit}
-                    value={settings.cachePolicy.maxBytes}
-                    disabled={settings.cachePolicy.mode === "full"}
-                    onChange={(event) =>
-                      void update({
-                        cachePolicy: { maxBytes: Number(event.target.value) },
-                      })
-                    }
-                  >
-                    {settings.cachePolicy.mode === "full" ? (
-                      <option value={0}>
-                        {strings.settings.cacheUnlimited}
-                      </option>
-                    ) : (
-                      <>
-                        <option value={524_288_000}>500 MB</option>
-                        <option value={1_073_741_824}>1 GB</option>
-                        <option value={2_147_483_648}>2 GB</option>
-                        <option value={5_368_709_120}>5 GB</option>
-                        <option value={0}>
-                          {strings.settings.cacheUnlimited}
-                        </option>
-                      </>
-                    )}
-                  </select>
-                </SettingRow>
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={() => void clearCache()}
-                >
-                  {strings.settings.clearMail}
-                </button>
-                <p className="settings-note">
-                  {strings.settings.clearMailHelp}
-                </p>
-              </SettingsPanel>
+              <StorageTab
+                usage={usage}
+                update={update}
+                clearCache={clearCache}
+              />
             ) : null}
             {tab === "accounts" ? (
-              <SettingsPanel id="accounts" title={strings.settings.accounts}>
-                {accounts.length === 0 ? (
-                  <div className="settings-empty-state">
-                    <Mail />
-                    <p>{strings.settings.noAccounts}</p>
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      onClick={onClose}
-                    >
-                      {strings.settings.returnToSetup}
-                    </button>
-                  </div>
-                ) : null}
-                <div className="account-settings-list">
-                  {accounts.map((account) => (
-                    <div key={account.id} className="account-settings-card">
-                      <div className="account-card-header">
-                        <Mail />
-                        <span className="account-card-info">
-                          <strong>
-                            {account.displayName || account.email}
-                          </strong>
-                          <small>
-                            {account.provider === "icloud"
-                              ? strings.setup.icloud
-                              : strings.setup.other}
-                            {" · "}
-                            {account.email}
-                          </small>
-                          {testedHealthy === account.id ? (
-                            <small style={{ color: "var(--success)" }}>
-                              ✓ {strings.settings.connectionHealthy}
-                            </small>
-                          ) : null}
-                        </span>
-                        <div className="account-card-actions">
-                          <button
-                            type="button"
-                            className="secondary-button"
-                            onClick={() => void testAccount(account.id)}
-                            disabled={testingAccountId === account.id}
-                          >
-                            {testingAccountId === account.id
-                              ? strings.settings.testingConnection
-                              : strings.settings.testConnection}
-                          </button>
-                          <button
-                            type="button"
-                            className="danger-button"
-                            onClick={() =>
-                              void removeAccount(
-                                account.id,
-                                account.displayName || account.email,
-                              )
-                            }
-                          >
-                            {strings.common.remove}
-                          </button>
-                        </div>
-                      </div>
-
-                      {account.error ? (
-                        <p className="account-error" role="alert">
-                          {account.error}
-                        </p>
-                      ) : null}
-                      {(account.authMethod ?? "password") === "password" ? (
-                        <div className="account-password-section">
-                          <label htmlFor={`account-password-${account.id}`}>
-                            {strings.settings.updatePassword}
-                          </label>
-                          <form
-                            className="add-alias-form"
-                            onSubmit={(event) => {
-                              event.preventDefault();
-                              void handleUpdatePassword(account.id);
-                            }}
-                          >
-                            <input
-                              id={`account-password-${account.id}`}
-                              type="password"
-                              autoComplete="new-password"
-                              spellCheck={false}
-                              placeholder={
-                                account.provider === "icloud"
-                                  ? (strings.setup.appPasswordPlaceholder ??
-                                    strings.settings.newPassword)
-                                  : strings.settings.newPassword
-                              }
-                              value={passwordInputs[account.id] ?? ""}
-                              onChange={(event) =>
-                                setPasswordInputs((prev) => ({
-                                  ...prev,
-                                  [account.id]: event.target.value,
-                                }))
-                              }
-                            />
-                            <button
-                              type="submit"
-                              className="secondary-button"
-                              disabled={
-                                updatingPasswordId === account.id ||
-                                !(passwordInputs[account.id] ?? "").trim()
-                              }
-                            >
-                              {updatingPasswordId === account.id
-                                ? strings.settings.testingConnection
-                                : strings.settings.updatePassword}
-                            </button>
-                          </form>
-                        </div>
-                      ) : null}
-                      {passwordStatus[account.id] ? (
-                        <div
-                          className="alias-status-message"
-                          role="status"
-                          aria-live="polite"
-                        >
-                          {passwordStatus[account.id]}
-                        </div>
-                      ) : null}
-                      <div className="account-password-section">
-                        <label htmlFor={`account-signature-${account.id}`}>
-                          {strings.settings.signature}
-                        </label>
-                        <p className="settings-note">
-                          {strings.settings.signatureHelp}
-                        </p>
-                        <div className="add-alias-form signature-form">
-                          <textarea
-                            id={`account-signature-${account.id}`}
-                            rows={3}
-                            maxLength={2000}
-                            placeholder={strings.settings.signaturePlaceholder}
-                            value={
-                              signatureInputs[account.id] ??
-                              account.signature ??
-                              ""
-                            }
-                            onChange={(event) =>
-                              setSignatureInputs((prev) => ({
-                                ...prev,
-                                [account.id]: event.target.value,
-                              }))
-                            }
-                          />
-                          <button
-                            type="button"
-                            className="secondary-button"
-                            disabled={savingSignatureId === account.id}
-                            onClick={() =>
-                              void handleSaveSignature(
-                                account.id,
-                                account.signature ?? "",
-                              )
-                            }
-                          >
-                            {strings.common.save}
-                          </button>
-                        </div>
-                        {signatureStatus[account.id] ? (
-                          <div
-                            className="alias-status-message"
-                            role="status"
-                            aria-live="polite"
-                          >
-                            {signatureStatus[account.id]}
-                          </div>
-                        ) : null}
-                      </div>
-
-                      <div className="account-rules-section">
-                        <div className="aliases-header">
-                          <div>
-                            <strong>{strings.settings.rulesTitle}</strong>
-                            <p className="settings-note">
-                              {strings.settings.rulesHelp}
-                            </p>
-                          </div>
-                        </div>
-                        {ruleStatus[account.id] ? (
-                          <div
-                            className="alias-status-message"
-                            role="status"
-                            aria-live="polite"
-                          >
-                            {ruleStatus[account.id]}
-                          </div>
-                        ) : null}
-                        {(filterRules[account.id] ?? []).length > 0 ? (
-                          <ul className="rule-list">
-                            {(filterRules[account.id] ?? []).map((rule) => (
-                              <li className="rule-item" key={rule.id}>
-                                <div className="rule-item-text">
-                                  <strong>{rule.name}</strong>
-                                  <span>
-                                    {strings.settings.describeRule(
-                                      rule.field === "from"
-                                        ? strings.settings.matchFrom
-                                        : strings.settings.matchSubject,
-                                      rule.contains,
-                                      rule.action,
-                                    )}
-                                  </span>
-                                </div>
-                                <button
-                                  type="button"
-                                  className="rule-toggle"
-                                  aria-pressed={rule.enabled}
-                                  aria-label={`${rule.name}: ${
-                                    rule.enabled
-                                      ? strings.common.on
-                                      : strings.common.off
-                                  }`}
-                                  onClick={() =>
-                                    void handleToggleRule(account.id, rule)
-                                  }
-                                >
-                                  {rule.enabled
-                                    ? strings.common.on
-                                    : strings.common.off}
-                                </button>
-                                <button
-                                  type="button"
-                                  className="secondary-button rule-delete"
-                                  onClick={() =>
-                                    void handleDeleteRule(account.id, rule)
-                                  }
-                                >
-                                  {strings.common.remove}
-                                </button>
-                              </li>
-                            ))}
-                          </ul>
-                        ) : null}
-                        <div className="rule-form">
-                          <label htmlFor={`rule-name-${account.id}`}>
-                            {strings.settings.ruleName}
-                          </label>
-                          <input
-                            id={`rule-name-${account.id}`}
-                            value={ruleInput(account.id).name}
-                            placeholder={strings.settings.ruleNamePlaceholder}
-                            onChange={(event) =>
-                              setRuleField(account.id, {
-                                name: event.target.value,
-                              })
-                            }
-                          />
-                          <label htmlFor={`rule-field-${account.id}`}>
-                            {strings.settings.matchBy}
-                          </label>
-                          <select
-                            id={`rule-field-${account.id}`}
-                            value={ruleInput(account.id).field}
-                            onChange={(event) =>
-                              setRuleField(account.id, {
-                                field: event.target.value,
-                              })
-                            }
-                          >
-                            <option value="from">
-                              {strings.settings.matchFrom}
-                            </option>
-                            <option value="subject">
-                              {strings.settings.matchSubject}
-                            </option>
-                          </select>
-                          <label htmlFor={`rule-contains-${account.id}`}>
-                            {strings.settings.ruleContains}
-                          </label>
-                          <input
-                            id={`rule-contains-${account.id}`}
-                            value={ruleInput(account.id).contains}
-                            placeholder={strings.settings.ruleMatchPlaceholder}
-                            onChange={(event) =>
-                              setRuleField(account.id, {
-                                contains: event.target.value,
-                              })
-                            }
-                          />
-                          <label htmlFor={`rule-action-${account.id}`}>
-                            {strings.settings.ruleAction}
-                          </label>
-                          <select
-                            id={`rule-action-${account.id}`}
-                            value={ruleInput(account.id).action}
-                            onChange={(event) =>
-                              setRuleField(account.id, {
-                                action: event.target.value,
-                              })
-                            }
-                          >
-                            <option value="mark_read">
-                              {strings.settings.actionMarkRead}
-                            </option>
-                            <option value="move_archive">
-                              {strings.settings.actionArchive}
-                            </option>
-                            <option value="move_trash">
-                              {strings.settings.actionTrash}
-                            </option>
-                            <option value="move_junk">
-                              {strings.settings.actionJunk}
-                            </option>
-                            <option value="move_mailbox">
-                              {strings.settings.actionFolder}
-                            </option>
-                          </select>
-                          {ruleInput(account.id).action === "move_mailbox" ? (
-                            <>
-                              <label htmlFor={`rule-target-${account.id}`}>
-                                {strings.settings.actionFolder}
-                              </label>
-                              <select
-                                id={`rule-target-${account.id}`}
-                                value={ruleInput(account.id).target}
-                                onChange={(event) =>
-                                  setRuleField(account.id, {
-                                    target: event.target.value,
-                                  })
-                                }
-                              >
-                                <option value="">
-                                  {strings.settings.chooseFolder}
-                                </option>
-                                {mailboxes
-                                  .filter(
-                                    (box) =>
-                                      box.accountId === account.id &&
-                                      box.role !== "trash" &&
-                                      box.role !== "junk" &&
-                                      box.role !== "inbox",
-                                  )
-                                  .map((box) => (
-                                    <option key={box.id} value={box.id}>
-                                      {box.name}
-                                    </option>
-                                  ))}
-                              </select>
-                            </>
-                          ) : null}
-                          <button
-                            type="button"
-                            className="primary-button add-rule-button"
-                            onClick={() => void handleAddRule(account.id)}
-                          >
-                            {strings.settings.addRule}
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="account-aliases-section">
-                        <div className="aliases-header">
-                          <div>
-                            <strong>{strings.settings.aliasesTitle}</strong>
-                            <p className="settings-note">
-                              {strings.settings.aliasesHelp}
-                            </p>
-                          </div>
-                          {account.provider === "icloud" ? (
-                            <button
-                              type="button"
-                              className="secondary-button detect-aliases-button"
-                              onClick={() =>
-                                void handleDetectAliases(account.id)
-                              }
-                              disabled={
-                                detectingAliasesAccountId === account.id
-                              }
-                            >
-                              {detectingAliasesAccountId === account.id
-                                ? strings.settings.detectingAliases
-                                : strings.settings.detectIcloudAliases}
-                            </button>
-                          ) : null}
-                        </div>
-
-                        {aliasStatus[account.id] ? (
-                          <div
-                            className="alias-status-message"
-                            role="status"
-                            aria-live="polite"
-                          >
-                            {aliasStatus[account.id]}
-                          </div>
-                        ) : null}
-
-                        <div className="aliases-list">
-                          <div className="alias-chip primary">
-                            <span>{account.email}</span>
-                            <span className="alias-badge">
-                              {strings.settings.primaryAddress}
-                            </span>
-                          </div>
-                          {(account.aliases ?? []).map((alias) => (
-                            <div key={alias} className="alias-chip">
-                              <span>{alias}</span>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  void handleRemoveAlias(account.id, alias)
-                                }
-                                aria-label={`${strings.common.remove} ${alias}`}
-                              >
-                                ×
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                        {(account.aliases ?? []).length === 0 ? (
-                          <p className="settings-note">
-                            {strings.settings.noAliasesConfigured}
-                          </p>
-                        ) : null}
-
-                        <div className="add-alias-form">
-                          <input
-                            type="email"
-                            placeholder={strings.settings.aliasPlaceholder}
-                            aria-label={strings.settings.aliasPlaceholder}
-                            value={newAliasInputs[account.id] ?? ""}
-                            onChange={(e) =>
-                              setNewAliasInputs((prev) => ({
-                                ...prev,
-                                [account.id]: e.target.value,
-                              }))
-                            }
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") {
-                                e.preventDefault();
-                                void handleAddAlias(account.id);
-                              }
-                            }}
-                          />
-                          <button
-                            type="button"
-                            className="secondary-button"
-                            onClick={() => void handleAddAlias(account.id)}
-                          >
-                            {strings.settings.addAlias}
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </SettingsPanel>
+              <AccountsTab
+                onClose={onClose}
+                testingAccountId={testingAccountId}
+                testedHealthy={testedHealthy}
+                testAccount={testAccount}
+                removeAccount={removeAccount}
+                passwordInputs={passwordInputs}
+                setPasswordInputs={setPasswordInputs}
+                passwordStatus={passwordStatus}
+                updatingPasswordId={updatingPasswordId}
+                handleUpdatePassword={handleUpdatePassword}
+                signatureInputs={signatureInputs}
+                setSignatureInputs={setSignatureInputs}
+                signatureStatus={signatureStatus}
+                savingSignatureId={savingSignatureId}
+                handleSaveSignature={handleSaveSignature}
+                filterRules={filterRules}
+                ruleInput={ruleInput}
+                setRuleField={setRuleField}
+                handleAddRule={handleAddRule}
+                handleToggleRule={handleToggleRule}
+                handleDeleteRule={handleDeleteRule}
+                ruleStatus={ruleStatus}
+                detectingAliasesAccountId={detectingAliasesAccountId}
+                handleDetectAliases={handleDetectAliases}
+                aliasStatus={aliasStatus}
+                newAliasInputs={newAliasInputs}
+                setNewAliasInputs={setNewAliasInputs}
+                handleAddAlias={handleAddAlias}
+                handleRemoveAlias={handleRemoveAlias}
+                eraseBusy={eraseBusy}
+                eraseStatus={eraseStatus}
+                eraseAllData={eraseAllData}
+              />
             ) : null}
-            {tab === "shortcuts" ? (
-              <SettingsPanel
-                id="shortcuts"
-                title={strings.settings.shortcutsTitle}
-              >
-                <div className="shortcuts-list">
-                  <div className="shortcut-row">
-                    <span>{strings.composer.newMessage}</span>
-                    <kbd>{`${shortcutMod()} N`}</kbd>
-                  </div>
-                  <div className="shortcut-row">
-                    <span>{strings.mail.getMail}</span>
-                    <kbd>{`${shortcutShiftMod()} N`}</kbd>
-                  </div>
-                  <div className="shortcut-row">
-                    <span>{strings.reader.reply}</span>
-                    <kbd>{`${shortcutMod()} R`}</kbd>
-                  </div>
-                  <div className="shortcut-row">
-                    <span>{strings.reader.replyAll}</span>
-                    <kbd>{`${shortcutShiftMod()} R`}</kbd>
-                  </div>
-                  <div className="shortcut-row">
-                    <span>{strings.reader.forward}</span>
-                    <kbd>{`${shortcutShiftMod()} F`}</kbd>
-                  </div>
-                  <div className="shortcut-row">
-                    <span>{strings.reader.archive}</span>
-                    <kbd>{`${shortcutMod()} E`}</kbd>
-                  </div>
-                  <div className="shortcut-row">
-                    <span>{strings.reader.trash}</span>
-                    <kbd>{`${shortcutMod()} ⌫`}</kbd>
-                  </div>
-                  <div className="shortcut-row">
-                    <span>{strings.mail.search}</span>
-                    <kbd>{`${shortcutMod()} F / /`}</kbd>
-                  </div>
-                  <div className="shortcut-row">
-                    <span>{strings.reader.findInMessage}</span>
-                    <kbd>{`${shortcutAltMod()} F`}</kbd>
-                  </div>
-                  <div className="shortcut-row">
-                    <span>{strings.composer.send}</span>
-                    <kbd>{`${shortcutMod()} ↵`}</kbd>
-                  </div>
-                  <div className="shortcut-row">
-                    <span>{strings.composer.saveDraft}</span>
-                    <kbd>{`${shortcutMod()} S`}</kbd>
-                  </div>
-                  <div className="shortcut-row">
-                    <span>{strings.settings.textSize}</span>
-                    <kbd>{`${shortcutMod()} + / ${shortcutMod()} -`}</kbd>
-                  </div>
-                  <div className="shortcut-row">
-                    <span>{strings.mail.settings}</span>
-                    <kbd>{`${shortcutMod()} ,`}</kbd>
-                  </div>
-                </div>
-              </SettingsPanel>
-            ) : null}
+            {tab === "shortcuts" ? <ShortcutsTab /> : null}
             {tab === "updates" ? (
-              <SettingsPanel id="updates" title={strings.settings.updates}>
-                {updateReady ? (
-                  <div className="update-ready-card">
-                    <div className="update-ready-icon">
-                      <DownloadCloud aria-hidden="true" />
-                    </div>
-                    <div className="update-ready-body">
-                      <strong>{strings.settings.updateReadyCardTitle}</strong>
-                      <p>{strings.settings.updateReadyCardHelp(updateReady)}</p>
-                      <button
-                        type="button"
-                        className="primary-button"
-                        onClick={() => void api.relaunch()}
-                      >
-                        {strings.settings.restartNow}
-                      </button>
-                    </div>
-                  </div>
-                ) : null}
-                <div className="storage-card">
-                  <DownloadCloud aria-hidden="true" />
-                  <span>
-                    <strong>
-                      {distribution?.updatesManagedBy === "store"
-                        ? strings.settings.storeUpdateTitle
-                        : strings.settings.directUpdateTitle}
-                    </strong>
-                    <small>
-                      {distribution
-                        ? editionName(distribution.kind)
-                        : strings.settings.checkingEdition}
-                    </small>
-                  </span>
-                </div>
-                {distribution?.updatesManagedBy === "postalSnap" ? (
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    onClick={() => void checkForUpdates()}
-                    disabled={checkingUpdate}
-                  >
-                    {updateStatus}
-                  </button>
-                ) : null}
-              </SettingsPanel>
+              <UpdatesTab
+                distribution={distribution}
+                updateStatus={updateStatus}
+                checkingUpdate={checkingUpdate}
+                checkForUpdates={checkForUpdates}
+              />
             ) : null}
             {tab === "advanced" ? (
-              <SettingsPanel id="advanced" title={strings.settings.advanced}>
-                <p className="settings-lead">{strings.settings.advancedHelp}</p>
-                <label className="switch-row">
-                  <span>
-                    <strong>{strings.settings.blockAds}</strong>
-                    <small>{strings.settings.blockAdsHelp}</small>
-                  </span>
-                  <input
-                    type="checkbox"
-                    checked={advertisingOn}
-                    onChange={(event) =>
-                      void setAdvertisingBlocking(event.target.checked)
-                    }
-                  />
-                </label>
-                <label className="switch-row">
-                  <span>
-                    <strong>{strings.settings.blockThreats}</strong>
-                    <small>{strings.settings.blockThreatsHelp}</small>
-                  </span>
-                  <input
-                    type="checkbox"
-                    checked={threatsOn}
-                    onChange={(event) =>
-                      void setThreatBlocking(event.target.checked)
-                    }
-                  />
-                </label>
-                {threatsOn ? null : (
-                  <div className="settings-warning" role="status">
-                    {strings.settings.threatOffWarning}
-                  </div>
-                )}
-              </SettingsPanel>
+              <AdvancedTab
+                setAdvertisingBlocking={setAdvertisingBlocking}
+                setThreatBlocking={setThreatBlocking}
+              />
             ) : null}
-            {tab === "about" ? (
-              <SettingsPanel id="about" title={strings.settings.about}>
-                <p className="settings-lead">{strings.settings.aboutLead}</p>
-                <p>{strings.settings.aboutVersion(appVersion)}</p>
-                <p>
-                  <button
-                    type="button"
-                    className="text-button"
-                    onClick={() =>
-                      void api.openExternalUrl(
-                        "https://github.com/BurntToasters/postal-snap",
-                      )
-                    }
-                  >
-                    {strings.settings.aboutSource}
-                  </button>
-                </p>
-                <p>
-                  <button
-                    type="button"
-                    className="text-button"
-                    onClick={() =>
-                      void api.openExternalUrl(
-                        "https://www.mozilla.org/MPL/2.0/",
-                      )
-                    }
-                  >
-                    {strings.settings.aboutLicense}
-                  </button>
-                </p>
-                <p>
-                  <small>{strings.settings.aboutFilters}</small>
-                </p>
-              </SettingsPanel>
-            ) : null}
+            {tab === "about" ? <AboutTab /> : null}
           </div>
         </div>
         {confirmThreatOff ? (
@@ -1849,77 +838,4 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
       </section>
     </div>
   );
-}
-
-function SettingsPanel({
-  id,
-  title,
-  children,
-}: {
-  id: SettingsTab;
-  title: string;
-  children: ReactNode;
-}) {
-  return (
-    <section
-      id={`settings-${id}`}
-      className="settings-panel"
-      role="tabpanel"
-      aria-labelledby={`settings-tab-${id}`}
-    >
-      <h2>{title}</h2>
-      {children}
-    </section>
-  );
-}
-
-function SettingsSection({
-  title,
-  children,
-}: {
-  title: string;
-  children: ReactNode;
-}) {
-  return (
-    <div className="settings-section">
-      <h3>{title}</h3>
-      {children}
-    </div>
-  );
-}
-
-function SettingRow({
-  title,
-  help,
-  children,
-}: {
-  title: string;
-  help: string;
-  children: ReactNode;
-}) {
-  return (
-    <label className="settings-row">
-      <span>
-        <strong>{title}</strong>
-        <small>{help}</small>
-      </span>
-      {children}
-    </label>
-  );
-}
-
-function editionName(kind: DistributionChannel["kind"]): string {
-  return {
-    direct: strings.settings.directEdition,
-    macAppStore: strings.settings.macStoreEdition,
-    microsoftStore: strings.settings.microsoftStoreEdition,
-    flatpak: strings.settings.flatpakEdition,
-  }[kind];
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
-  return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
 }

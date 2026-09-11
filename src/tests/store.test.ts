@@ -1,36 +1,17 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { defaultSettings, useAppStore } from "../store";
-import type { AccountSummary } from "../types";
+import { useAppStore } from "../store";
+import { makeAccount } from "./helpers/fixtures";
+import { resetStore } from "./helpers/store";
 
-const account = (id: string): AccountSummary => ({
-  id,
-  provider: "manual",
-  email: `${id}@example.test`,
-  displayName: id,
-  syncState: "idle",
-});
+const account = (id: string) => makeAccount(id);
 
 describe("account reconciliation", () => {
   beforeEach(() => {
-    useAppStore.setState({
+    resetStore({
       accounts: [],
       activeAccountId: undefined,
       mailboxes: [],
       activeMailboxId: undefined,
-      activeLocalView: undefined,
-      messages: [],
-      messageCursor: undefined,
-      hasMoreMessages: false,
-      drafts: [],
-      outbox: [],
-      selectedMessage: undefined,
-      sync: {},
-      settings: defaultSettings,
-      composerOpen: false,
-      composerAccountId: undefined,
-      composeSeed: undefined,
-      busy: false,
-      error: undefined,
     });
   });
 

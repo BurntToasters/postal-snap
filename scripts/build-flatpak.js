@@ -1,6 +1,8 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { ensureReleaseDir, process, root, run } from "./_utils.js";
+import { ensureReleaseDir } from "./lib/json.js";
+import { process, root } from "./lib/paths.js";
+import { run } from "./lib/spawn.js";
 
 // The binary is compiled on the host, then installed into GNOME Platform.
 // Confirm it starts inside bwrap on the signing host; an SDK rebuild is

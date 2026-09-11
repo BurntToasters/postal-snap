@@ -114,15 +114,3 @@ html[data-platform="windows"] .app-toolbar {
 html[data-platform="macos"][data-window-fullscreen="true"] .app-toolbar {
   padding-left: 12px;
 }
-
-@media (forced-colors: active) {
-  .global-window-caption-controls button {
-    border: 1px solid ButtonText;
-  }
-}
-
-@media print {
-  .window-chrome {
-    display: none !important;
-  }
-}

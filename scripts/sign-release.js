@@ -1,16 +1,9 @@
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
-import {
-  ensureReleaseDir,
-  json,
-  output,
-  process,
-  root,
-  run,
-  runWithInput,
-  sha256,
-  writeFile,
-} from "./_utils.js";
+import { sha256 } from "./lib/artifacts.js";
+import { ensureReleaseDir, json } from "./lib/json.js";
+import { process, root, writeFile } from "./lib/paths.js";
+import { output, run, runWithInput } from "./lib/spawn.js";
 
 const pkg = await json(join(root, "package.json"));
 const directory = await ensureReleaseDir();

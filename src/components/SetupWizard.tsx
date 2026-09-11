@@ -13,13 +13,17 @@ import {
 import { api } from "../api";
 import { describeSetupError } from "../errors";
 import { strings } from "../i18n";
-import type {
-  AccountSetupRequest,
-  ProviderKind,
-  ServerConfig,
-  TlsMode,
-} from "../types";
+import type { AccountSetupRequest, ProviderKind, ServerConfig } from "../types";
 import { AppMark } from "./AppMark";
+import {
+  defaultPort,
+  emptyManualImap,
+  emptyManualSmtp,
+  isStandardPort,
+  preparePassword,
+  trimServer,
+} from "./setup/request";
+import { ServerFields } from "./setup/serverFields";
 
 interface Props {
   onComplete: () => Promise<void>;
@@ -37,41 +41,6 @@ const iCloudSmtpSummary = {
   port: 587,
   security: strings.setup.startTls,
 };
-
-function emptyManualImap(username = ""): ServerConfig {
-  return { host: "", port: 993, tlsMode: "tls", username };
-}
-
-function emptyManualSmtp(username = ""): ServerConfig {
-  return { host: "", port: 587, tlsMode: "startTls", username };
-}
-
-function defaultPort(kind: "imap" | "smtp", tlsMode: TlsMode): number {
-  if (kind === "imap") return tlsMode === "tls" ? 993 : 143;
-  return tlsMode === "tls" ? 465 : 587;
-}
-
-function isStandardPort(kind: "imap" | "smtp", port: number): boolean {
-  return kind === "imap"
-    ? port === 993 || port === 143
-    : port === 465 || port === 587;
-}
-
-function preparePassword(provider: ProviderKind, password: string): string {
-  const trimmed = password.trim();
-  return provider === "icloud" ? trimmed.replace(/\s+/g, "") : trimmed;
-}
-
-function trimServer(server: ServerConfig): ServerConfig {
-  return {
-    ...server,
-    host: server.host.trim(),
-    username: server.username.trim(),
-    port: Number.isFinite(server.port)
-      ? Math.max(1, Math.min(65535, Math.trunc(server.port)))
-      : server.port,
-  };
-}
 
 export function SetupWizard({ onComplete, onOpenSettings }: Props) {
   const [provider, setProvider] = useState<ProviderKind>();
@@ -503,68 +472,5 @@ export function SetupWizard({ onComplete, onOpenSettings }: Props) {
         </button>
       </form>
     </div>
-  );
-}
-
-function ServerFields({
-  title,
-  value,
-  onChange,
-}: {
-  title: string;
-  value: ServerConfig;
-  onChange: (patch: Partial<ServerConfig>) => void;
-}) {
-  return (
-    <fieldset>
-      <legend>{title}</legend>
-      <div className="server-grid">
-        <label>
-          {strings.setup.server}
-          <input
-            required
-            value={value.host}
-            onChange={(event) => onChange({ host: event.target.value })}
-            placeholder={strings.setup.serverPlaceholder}
-            autoComplete="off"
-            spellCheck={false}
-          />
-        </label>
-        <label>
-          {strings.setup.port}
-          <input
-            required
-            type="number"
-            min={1}
-            max={65535}
-            value={value.port}
-            onChange={(event) => onChange({ port: Number(event.target.value) })}
-          />
-        </label>
-        <label>
-          {strings.setup.security}
-          <select
-            value={value.tlsMode}
-            onChange={(event) =>
-              onChange({ tlsMode: event.target.value as TlsMode })
-            }
-          >
-            <option value="tls">{strings.setup.tls}</option>
-            <option value="startTls">{strings.setup.startTls}</option>
-          </select>
-        </label>
-        <label>
-          {strings.setup.username}
-          <input
-            required
-            value={value.username}
-            onChange={(event) => onChange({ username: event.target.value })}
-            placeholder={strings.setup.usernamePlaceholder}
-            autoComplete="username"
-            spellCheck={false}
-          />
-        </label>
-      </div>
-    </fieldset>
   );
 }

@@ -359,63 +359,6 @@
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    scroll-behavior: auto !important;
-    transition: none !important;
-    animation: none !important;
-  }
-}
-
-@media (forced-colors: active) {
-  .folder.active,
-  .message-row.selected,
-  .primary-button,
-  .settings-nav button.active,
-  .update-ready-badge,
-  .alias-chip.primary,
-  .toast,
-  .pane-hidden .reader-pane:not(.reader-hidden):not(.empty-reader) {
-    border: 2px solid Highlight;
-  }
-
-  .message-row:focus-visible {
-    outline: 3px solid Highlight;
-    outline-offset: -3px;
-  }
-
-  .settings-window,
-  .composer-window,
-  .setup-card {
-    border: 2px solid CanvasText;
-  }
-
-  .pane-splitter:hover::after,
-  .pane-splitter:focus-visible::after {
-    background: Highlight;
-    outline: 2px solid Highlight;
-  }
-
-  .toolbar-group > button.active {
-    border: 2px solid Highlight;
-  }
-
-  .composer-window .tiptap:focus-visible {
-    outline: 2px solid Highlight !important;
-    outline-offset: -2px;
-  }
-
-  .update-ready-badge .badge-dot {
-    forced-color-adjust: none;
-  }
-
-  .unread-dot {
-    border: 1px solid CanvasText;
-  }
-}
-
 @media print {
   /* Force paper: print stays black on white regardless of app theme. */
   html,

@@ -1,5 +1,6 @@
 import { join } from "node:path";
-import { json, root, writeFile } from "./_utils.js";
+import { json } from "./lib/json.js";
+import { root, writeFile } from "./lib/paths.js";
 
 const lock = await json(join(root, "package-lock.json"));
 const rows = Object.entries(lock.packages ?? {})

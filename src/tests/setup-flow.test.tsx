@@ -2,6 +2,8 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SetupFlow } from "../components/SetupFlow";
 import { defaultSettings, useAppStore } from "../store";
+import { mockSaveSettingsPassthrough } from "./helpers/api-mocks";
+import { resetStore } from "./helpers/store";
 
 vi.mock("../api", () => ({
   api: {
@@ -24,21 +26,21 @@ import { api } from "../api";
 
 const saveSettings = vi.mocked(api.saveSettings);
 
-function resetStore() {
-  useAppStore.setState({
+function resetSetupStore() {
+  resetStore({
     accounts: [],
+    activeAccountId: undefined,
+    mailboxes: [],
+    activeMailboxId: undefined,
     settings: { ...defaultSettings, setupCompleted: false, setupStep: null },
-    error: undefined,
   });
 }
 
 describe("first-run setup flow", () => {
   beforeEach(() => {
-    resetStore();
+    resetSetupStore();
     saveSettings.mockClear();
-    saveSettings.mockImplementation((settings: unknown) =>
-      Promise.resolve(settings as never),
-    );
+    mockSaveSettingsPassthrough();
   });
 
   it("walks Welcome -> Appearance -> Comfort -> Account in order", async () => {
@@ -118,7 +120,7 @@ describe("first-run setup flow", () => {
     );
     unmount();
 
-    resetStore();
+    resetSetupStore();
     saveSettings.mockClear();
     const onComplete2 = vi.fn(async () => undefined);
     render(<SetupFlow onComplete={onComplete2} startupNotice={null} />);

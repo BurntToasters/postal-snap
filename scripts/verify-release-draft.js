@@ -1,7 +1,9 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { json, root, run } from "./_utils.js";
+import { json } from "./lib/json.js";
+import { root } from "./lib/paths.js";
+import { run } from "./lib/spawn.js";
 import {
   assertGitHubCliAuthenticated,
   githubJson,
