@@ -259,7 +259,7 @@ for (const [platform, userAgent] of Object.entries(platforms)) {
       }
       await page
         .locator(".settings-window")
-        .getByRole("button", { name: "Close", exact: true })
+        .getByRole("button", { name: "Close settings" })
         .click();
       await expect(
         page.getByRole("button", { name: "Settings", exact: true }),
@@ -323,10 +323,15 @@ for (const [platform, userAgent] of Object.entries(platforms)) {
       await page.getByRole("button", { name: "Continue", exact: true }).click();
       await page.getByRole("button", { name: "Continue", exact: true }).click();
       await page.getByRole("button", { name: "Continue", exact: true }).click();
+      await expect(page.locator(".setup-host")).toHaveJSProperty(
+        "scrollTop",
+        0,
+      );
       await page.getByRole("button", { name: /iCloud Mail/i }).click();
-      await setup.evaluate((element) => {
-        element.scrollTop = 0;
-      });
+      await expect(page.locator(".setup-host")).toHaveJSProperty(
+        "scrollTop",
+        0,
+      );
       await page.screenshot({
         animations: "disabled",
         path: testInfo.outputPath(`${platform}-setup-form-top-200.png`),

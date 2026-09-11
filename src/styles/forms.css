@@ -7,7 +7,8 @@ textarea {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   color: var(--text);
-  background: var(--surface);
+  background: color-mix(in srgb, var(--surface-raised) 92%, var(--surface));
+  box-shadow: inset 0 1px 0 var(--surface-highlight);
   transition:
     border-color 120ms ease,
     background-color 120ms ease,
@@ -166,8 +167,14 @@ legend {
   padding: 10px 14px;
   border: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--surface) 94%, var(--surface-muted));
-  box-shadow: none;
+  background: linear-gradient(
+    145deg,
+    color-mix(in srgb, var(--surface-raised) 92%, var(--surface-highlight)),
+    color-mix(in srgb, var(--surface) 92%, var(--surface-muted))
+  );
+  box-shadow:
+    var(--shadow-card),
+    inset 0 1px 0 var(--surface-highlight);
 }
 
 .settings-row > span,
@@ -189,10 +196,60 @@ legend {
 }
 
 .switch-row input {
-  width: 28px;
-  height: 28px;
-  min-width: 44px;
+  position: relative;
+  width: 50px;
+  height: 44px;
+  min-width: 50px;
   min-height: 44px;
-  accent-color: var(--accent);
+  padding: 0;
+  appearance: none;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  box-shadow: none;
   cursor: pointer;
+}
+
+.switch-row input::before,
+.switch-row input::after {
+  position: absolute;
+  content: "";
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    transform 140ms ease;
+}
+
+.switch-row input::before {
+  top: 8px;
+  left: 2px;
+  width: 46px;
+  height: 28px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--surface-sunken) 72%, var(--surface));
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / 16%);
+}
+
+.switch-row input::after {
+  top: 11px;
+  left: 5px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: white;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 32%);
+}
+
+.switch-row input:checked::before {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.switch-row input:checked::after {
+  transform: translateX(18px);
+}
+
+.switch-row input:focus-visible {
+  box-shadow: none;
 }

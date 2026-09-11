@@ -312,7 +312,8 @@ export function AccountStep({
   return (
     <div className="setup-step setup-account-embed">
       <p className="setup-intro">{strings.setup.accountIntro}</p>
-      <div className="setup-actions split">
+      <SetupWizard embedded onComplete={handleAccountAdded} />
+      <div className="setup-actions split setup-account-actions">
         <button
           type="button"
           className="secondary-button"
@@ -329,7 +330,6 @@ export function AccountStep({
           {strings.setup.skipForNow}
         </button>
       </div>
-      <SetupWizard embedded onComplete={handleAccountAdded} />
       {error ? (
         <p className="setup-field-hint" role="alert">
           {error}

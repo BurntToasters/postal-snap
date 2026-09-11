@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Check } from "lucide-react";
 import { api } from "../api";
 import { strings } from "../i18n";
@@ -22,6 +22,13 @@ interface Props {
 
 const STEPS: SetupStep[] = ["welcome", "appearance", "comfort", "account"];
 
+const STEP_LABELS: Record<SetupStep, string> = {
+  welcome: strings.setup.stepWelcome,
+  appearance: strings.setup.stepAppearance,
+  comfort: strings.setup.stepComfort,
+  account: strings.setup.stepAccount,
+};
+
 function stepIndex(step: SetupStep): number {
   return STEPS.indexOf(step);
 }
@@ -39,8 +46,17 @@ export function SetupFlow({
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
+  const pageRef = useRef<HTMLDivElement>(null);
 
   useSetupProgress(step);
+
+  useEffect(() => {
+    const page = pageRef.current;
+    if (!page) return;
+    page.scrollTop = 0;
+    const host = page.closest<HTMLElement>(".setup-host");
+    if (host) host.scrollTop = 0;
+  }, [step]);
 
   async function persist(patch: Partial<typeof settings>) {
     const current = useAppStore.getState().settings;
@@ -104,7 +120,7 @@ export function SetupFlow({
   const index = stepIndex(step);
 
   return (
-    <div className="setup-page">
+    <div className="setup-page" ref={pageRef}>
       <section
         className="setup-card setup-flow"
         aria-labelledby="setup-flow-title"
@@ -131,27 +147,19 @@ export function SetupFlow({
           aria-label={strings.setup.steps}
         >
           {STEPS.map((value, position) => (
-            <span
+            <div
               key={value}
               role="listitem"
               aria-current={value === step ? "step" : undefined}
-              aria-label={
-                strings.setup[
-                  value === "welcome"
-                    ? "stepWelcome"
-                    : value === "appearance"
-                      ? "stepAppearance"
-                      : value === "comfort"
-                        ? "stepComfort"
-                        : "stepAccount"
-                ]
-              }
               className={
                 position < index ? "done" : position === index ? "active" : ""
               }
             >
-              {position < index ? <Check aria-hidden="true" /> : position + 1}
-            </span>
+              <span aria-hidden="true">
+                {position < index ? <Check /> : position + 1}
+              </span>
+              <small>{STEP_LABELS[value]}</small>
+            </div>
           ))}
         </div>
 

@@ -879,7 +879,7 @@ export function MailShell({ onOpenSettings }: Props) {
       const onChromeControl = Boolean(
         target?.closest(
           "button, a, [role='menuitem'], .reader-actions, .format-toolbar, .settings-nav, .bulk-bar",
-        ) && !target?.closest(".message-list, .local-mail-list"),
+        ) && !target?.closest(".message-list"),
       );
       const mod = event.metaKey || event.ctrlKey;
       const key = event.key.toLowerCase();

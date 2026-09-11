@@ -38,7 +38,12 @@
   padding: 6px 12px;
   overflow: visible;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  background: var(--surface);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--surface-raised) 70%, var(--surface)),
+    var(--surface)
+  );
+  box-shadow: inset 0 1px 0 var(--surface-highlight);
 }
 
 .reader-unified-actions {
@@ -50,6 +55,9 @@
   border: 1px solid color-mix(in srgb, var(--border) 58%, transparent);
   border-radius: var(--radius-pill);
   background: color-mix(in srgb, var(--surface-muted) 72%, transparent);
+  box-shadow:
+    var(--shadow-control),
+    inset 0 1px 0 var(--surface-highlight);
 }
 
 .toolbar-divider {
