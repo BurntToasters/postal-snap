@@ -51,6 +51,7 @@ Before packaging, run:
 
 ```sh
 npm run test:all
+npm run test:cov # merged Vitest + Playwright coverage; HTML in coverage/combined
 npm run test:mail-integration # Docker + OpenSSL
 npm run audit
 npm run licenses

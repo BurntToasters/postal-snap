@@ -20,6 +20,10 @@ vi.mock("../window-fx", () => ({
   syncWorkspaceWindowFx: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("@tauri-apps/plugin-updater", () => ({
+  check: vi.fn().mockResolvedValue(null),
+}));
+
 vi.mock("../api", () => ({
   api: {
     saveSettings: vi.fn(),
@@ -39,6 +43,7 @@ vi.mock("../api", () => ({
     exportSettings: vi.fn(),
     importSettings: vi.fn(),
     resetSettings: vi.fn(),
+    clearCache: vi.fn(),
     openExternalUrl: vi.fn(),
     cacheUsage: vi.fn().mockResolvedValue({
       bytes: 1024,
@@ -619,5 +624,338 @@ describe("SettingsDialog component", () => {
     expect(api.saveSettings).toHaveBeenCalledWith(
       expect.objectContaining({ blockReportedThreats: true }),
     );
+  });
+
+  it("exports, imports, and resets preference files", async () => {
+    vi.mocked(api.exportSettings).mockResolvedValue(true);
+    vi.mocked(api.importSettings).mockResolvedValue({
+      ...defaultSettings,
+      theme: "dark",
+    });
+    vi.mocked(api.resetSettings).mockResolvedValue({
+      ...defaultSettings,
+      density: "compact",
+    });
+    render(<SettingsDialog initialTab="general" onClose={vi.fn()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Export settings" }),
+    );
+    expect(await screen.findByText("Settings exported.")).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "Import settings" }));
+    await waitFor(() => expect(api.importSettings).toHaveBeenCalled());
+    expect(useAppStore.getState().settings.theme).toBe("dark");
+    expect(await screen.findByText(/Settings imported/)).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset settings" }));
+    await waitFor(() => expect(api.resetSettings).toHaveBeenCalled());
+    expect(useAppStore.getState().settings.density).toBe("compact");
+    expect(await screen.findByText(/Settings reset/)).toBeVisible();
+  });
+
+  it("clears downloaded mail and refreshes usage", async () => {
+    vi.mocked(api.clearCache).mockResolvedValue(undefined);
+    vi.mocked(api.cacheUsage)
+      .mockResolvedValueOnce({
+        bytes: 1024,
+        maxBytes: 1_073_741_824,
+        messageCount: 5,
+      })
+      .mockResolvedValueOnce({
+        bytes: 0,
+        maxBytes: 1_073_741_824,
+        messageCount: 0,
+      });
+    render(<SettingsDialog initialTab="storage" onClose={vi.fn()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Clear downloaded mail" }),
+    );
+    await waitFor(() => expect(api.clearCache).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText(/0 B used/)).toBeVisible();
+  });
+
+  it("tests an account and removes the final account", async () => {
+    const onClose = vi.fn();
+    vi.mocked(api.syncAccount).mockResolvedValue(undefined);
+    vi.mocked(api.removeAccount).mockResolvedValue({ cleanupPending: false });
+    vi.mocked(api.listAccounts).mockResolvedValueOnce([]);
+    render(<SettingsDialog initialTab="accounts" onClose={onClose} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Test connection" }),
+    );
+    expect(await screen.findByText(/Connected and in sync/)).toBeVisible();
+    expect(api.syncAccount).toHaveBeenCalledWith("account-1");
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    await waitFor(() =>
+      expect(api.removeAccount).toHaveBeenCalledWith("account-1"),
+    );
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(useAppStore.getState().accounts).toEqual([]);
+  });
+
+  it("validates aliases and removes one only after confirmation", async () => {
+    render(<SettingsDialog initialTab="accounts" onClose={vi.fn()} />);
+    const input = await screen.findByLabelText("alias@yourdomain.com");
+
+    fireEvent.change(input, { target: { value: "not-an-address" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add alias" }));
+    expect(useAppStore.getState().error).toMatch(/valid email address/i);
+
+    fireEvent.change(input, { target: { value: "ALIAS@ICLOUD.COM" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(api.updateAccountAliases).not.toHaveBeenCalled();
+    expect(input).toHaveValue("");
+
+    vi.mocked(api.showNativeConfirm).mockResolvedValueOnce(false);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Remove alias@icloud.com" }),
+    );
+    await waitFor(() => expect(api.showNativeConfirm).toHaveBeenCalled());
+    expect(api.updateAccountAliases).not.toHaveBeenCalled();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Remove alias@icloud.com" }),
+    );
+    await waitFor(() =>
+      expect(api.updateAccountAliases).toHaveBeenCalledWith("account-1", []),
+    );
+  });
+
+  it("validates required rule name and match text", async () => {
+    render(<SettingsDialog initialTab="accounts" onClose={vi.fn()} />);
+    await screen.findByRole("button", { name: "Add rule" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
+    expect(useAppStore.getState().error).toMatch(/name/i);
+    fireEvent.change(screen.getByLabelText("Rule name"), {
+      target: { value: "Named rule" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
+    expect(useAppStore.getState().error).toMatch(/text to match/i);
+    expect(api.createFilterRule).not.toHaveBeenCalled();
+  });
+
+  it("supports keyboard tab navigation and normal close actions", async () => {
+    const onClose = vi.fn();
+    render(<SettingsDialog initialTab="general" onClose={onClose} />);
+    const general = screen.getByRole("tab", { name: "General" });
+
+    fireEvent.keyDown(general, { key: "ArrowDown" });
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: "Reading" })).toHaveFocus(),
+    );
+    expect(screen.getByRole("tab", { name: "Reading" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Reading" }), {
+      key: "End",
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: "About" })).toHaveFocus(),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports preference-file and cache maintenance failures", async () => {
+    vi.mocked(api.exportSettings).mockRejectedValueOnce(
+      new Error("export failed"),
+    );
+    vi.mocked(api.importSettings).mockRejectedValueOnce(
+      new Error("import failed"),
+    );
+    vi.mocked(api.resetSettings).mockRejectedValueOnce(
+      new Error("reset failed"),
+    );
+    vi.mocked(api.clearCache).mockRejectedValueOnce(new Error("clear failed"));
+    render(<SettingsDialog initialTab="general" onClose={vi.fn()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Export settings" }),
+    );
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toMatch(/export failed/i),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Import settings" }));
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toMatch(/import failed/i),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Reset settings" }));
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toMatch(/reset failed/i),
+    );
+
+    fireEvent.click(screen.getByRole("tab", { name: "Storage" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Clear downloaded mail" }),
+    );
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toMatch(/clear failed/i),
+    );
+  });
+
+  it("reports failures from every account-maintenance action", async () => {
+    const rule: FilterRule = {
+      id: "rule-failing",
+      accountId: account.id,
+      name: "Bills",
+      field: "from",
+      contains: "billing.example",
+      action: "mark_read",
+      targetMailbox: null,
+      enabled: true,
+    };
+    vi.mocked(api.listFilterRules).mockResolvedValue([rule]);
+    vi.mocked(api.syncAccount).mockRejectedValueOnce(new Error("test failed"));
+    vi.mocked(api.discoverAccountAliases).mockRejectedValueOnce(
+      new Error("detect failed"),
+    );
+    vi.mocked(api.updateAccountPassword).mockRejectedValueOnce(
+      new Error("password failed"),
+    );
+    vi.mocked(api.updateAccountSignature).mockRejectedValueOnce(
+      new Error("signature failed"),
+    );
+    vi.mocked(api.updateAccountAliases)
+      .mockRejectedValueOnce(new Error("alias add failed"))
+      .mockRejectedValueOnce(new Error("alias remove failed"));
+    vi.mocked(api.createFilterRule).mockRejectedValueOnce(
+      new Error("rule create failed"),
+    );
+    vi.mocked(api.updateFilterRule).mockRejectedValueOnce(
+      new Error("rule toggle failed"),
+    );
+    vi.mocked(api.deleteFilterRule).mockRejectedValueOnce(
+      new Error("rule delete failed"),
+    );
+    vi.mocked(api.removeAccount).mockRejectedValueOnce(
+      new Error("remove failed"),
+    );
+    vi.mocked(api.eraseAllData).mockRejectedValueOnce(
+      new Error("erase failed"),
+    );
+    render(<SettingsDialog initialTab="accounts" onClose={vi.fn()} />);
+    await screen.findByText("Bills");
+
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toMatch(/test failed/i),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Detect from iCloud" }));
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toMatch(/detect failed/i),
+    );
+
+    fireEvent.change(screen.getByLabelText("Update password"), {
+      target: { value: "new-app-password" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Update password" }));
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toMatch(/password failed/i),
+    );
+    fireEvent.change(screen.getByLabelText("Email signature"), {
+      target: { value: "Regards" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toMatch(/signature failed/i),
+    );
+
+    const aliasInput = screen.getByPlaceholderText("alias@yourdomain.com");
+    fireEvent.change(aliasInput, { target: { value: "new@icloud.com" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add alias" }));
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toMatch(/alias add failed/i),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Remove alias@icloud.com" }),
+    );
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toMatch(/alias remove failed/i),
+    );
+
+    fireEvent.change(screen.getByLabelText("Rule name"), {
+      target: { value: "New rule" },
+    });
+    fireEvent.change(screen.getByLabelText("Text to match"), {
+      target: { value: "needle" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toMatch(/rule create failed/i),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Bills: On/ }));
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toMatch(/rule toggle failed/i),
+    );
+    fireEvent.click(
+      within(screen.getByText("Bills").closest("li")!).getByRole("button", {
+        name: "Remove",
+      }),
+    );
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toMatch(/rule delete failed/i),
+    );
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Remove" })[0]);
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toMatch(/remove failed/i),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Reset & Restart" }));
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toMatch(/erase failed/i),
+    );
+    expect(screen.getByText(/Reset did not finish/)).toBeVisible();
+  });
+
+  it("checks for updates, rolls appearance saves back, and closes the threat overlay", async () => {
+    vi.mocked(api.saveSettings).mockRejectedValueOnce(
+      new Error("theme save failed"),
+    );
+    render(<SettingsDialog initialTab="general" onClose={vi.fn()} />);
+    fireEvent.change(await screen.findByLabelText("Appearance"), {
+      target: { value: "dark" },
+    });
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toMatch(/theme save failed/i),
+    );
+    expect(useAppStore.getState().settings.theme).toBe("system");
+
+    fireEvent.change(screen.getByLabelText("Interface spacing"), {
+      target: { value: "compact" },
+    });
+    const sidebar = screen
+      .getAllByRole("checkbox")
+      .find((input) =>
+        input.closest(".switch-row")?.textContent?.includes("Mailbox"),
+      );
+    if (sidebar) fireEvent.click(sidebar);
+
+    fireEvent.click(screen.getByRole("tab", { name: "Updates" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Check for updates/i }),
+    );
+    await waitFor(() => expect(api.showNativeMessage).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole("tab", { name: "Storage" }));
+    fireEvent.change(await screen.findByLabelText("Mail to keep"), {
+      target: { value: "recent" },
+    });
+
+    fireEvent.click(screen.getByRole("tab", { name: "Advanced" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /reported/i }));
+    fireEvent.click(
+      document.querySelector(".settings-confirm-overlay") as HTMLElement,
+    );
+    expect(
+      screen.queryByRole("alertdialog", {
+        name: /Turn off reported-address warnings/i,
+      }),
+    ).not.toBeInTheDocument();
   });
 });

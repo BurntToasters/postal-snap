@@ -44,6 +44,16 @@ describe("structured IPC errors", () => {
     expect(
       describeSetupError({ secret: "vault-token" }, "manual").text,
     ).not.toContain("vault-token");
+    expect(
+      describeSetupError(
+        new PostalError({
+          code: "connectionFailed",
+          message: "Could not reach the mail server. Check your connection.",
+          retryable: true,
+        }),
+        "manual",
+      ).hint,
+    ).toMatch(/server name/i);
   });
 
   it("uses actionable messages for settings file failures", () => {

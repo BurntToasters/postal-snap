@@ -118,7 +118,7 @@ export function MessageReader() {
       frameWindow.scrollBy(0, amount);
       return;
     }
-    bodyRef.current?.scrollBy({ top: amount, behavior: "auto" });
+    bodyRef.current?.scrollBy?.({ top: amount, behavior: "auto" });
   }
 
   function findInMessage() {
@@ -695,7 +695,7 @@ export function MessageReader() {
           (summary, index) => summary.id === expectedMessages[index]?.id,
         );
       if (listStillOptimistic) {
-        const restoredMessages = [...messages];
+        const restoredMessages = [...expectedMessages];
         restoredMessages.splice(
           Math.min(
             previousIndex < 0 ? restoredMessages.length : previousIndex,
@@ -775,7 +775,7 @@ export function MessageReader() {
           (summary, index) => summary.id === expectedMessages[index]?.id,
         );
       if (listStillOptimistic) {
-        const restoredMessages = [...messages];
+        const restoredMessages = [...expectedMessages];
         restoredMessages.splice(
           Math.min(
             previousIndex < 0 ? restoredMessages.length : previousIndex,
