@@ -54,9 +54,12 @@ export function useDialogFocus(
         closeRef.current();
         return;
       }
-      if (event.key !== "Tab" || !trapFocus) return;
+      if (event.key !== "Tab" || !trapFocus || event.defaultPrevented) return;
       const items = [
         ...currentDialog.querySelectorAll<HTMLElement>(focusable),
+        ...document.querySelectorAll<HTMLElement>(
+          ".global-window-caption-controls button",
+        ),
       ].filter(
         (item) =>
           !item.hidden &&
@@ -68,6 +71,17 @@ export function useDialogFocus(
       if (items.length === 0) return;
       const firstItem = items[0];
       const lastItem = items.at(-1)!;
+      const currentIndex = items.indexOf(document.activeElement as HTMLElement);
+      // Include the real window controls without leaking focus into inert mail.
+      // Explicit traversal also handles the caption controls' separate DOM root.
+      if (currentIndex >= 0) {
+        event.preventDefault();
+        items[
+          (currentIndex + (event.shiftKey ? -1 : 1) + items.length) %
+            items.length
+        ].focus();
+        return;
+      }
       if (
         event.shiftKey &&
         (document.activeElement === firstItem ||

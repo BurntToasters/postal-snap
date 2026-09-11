@@ -14,6 +14,14 @@ export function formatMessageDate(value: string, now = new Date()): string {
   if (date.toDateString() === yesterday.toDateString()) {
     return strings.mail.yesterday;
   }
+  const diffDays = Math.floor(
+    (now.getTime() - date.getTime()) / (24 * 60 * 60 * 1000),
+  );
+  if (diffDays >= 0 && diffDays < 6) {
+    return new Intl.DateTimeFormat(undefined, {
+      weekday: "short",
+    }).format(date);
+  }
   const sameYear = date.getFullYear() === now.getFullYear();
   return new Intl.DateTimeFormat(
     undefined,

@@ -1,5 +1,7 @@
 import { join } from "node:path";
-import { json, output, process, root, run } from "./_utils.js";
+import { json } from "./lib/json.js";
+import { process, root } from "./lib/paths.js";
+import { output, run } from "./lib/spawn.js";
 import { resolveUpdaterPublicKey } from "./updater-pubkey.js";
 import { validateRepositoryMacosEntitlements } from "./validate-macos-entitlements.js";
 

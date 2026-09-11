@@ -1,0 +1,198 @@
+/* Shared form pattern (moved, no visual change) */
+input,
+select,
+textarea {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  background: var(--surface);
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+input:hover,
+select:hover,
+textarea:hover {
+  border-color: var(--border-strong);
+}
+
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.account-form label,
+.form-grid label,
+.server-grid label,
+.field-label {
+  display: grid;
+  gap: 6px;
+  font-weight: 650;
+}
+
+.form-grid.two-columns,
+.server-settings {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.password-field {
+  display: grid;
+  grid-template-columns: 1fr 48px;
+}
+
+.password-field input {
+  border-radius: 8px 0 0 8px;
+}
+
+.password-field button {
+  border: 1px solid var(--border);
+  border-left: 0;
+  border-radius: 0 8px 8px 0;
+  background: var(--surface-muted);
+}
+
+.password-field svg {
+  width: 19px;
+}
+
+fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+legend {
+  padding: 0 5px;
+  font-weight: 700;
+}
+
+.server-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 10px;
+}
+
+.server-grid label:nth-child(3),
+.server-grid label:nth-child(4) {
+  grid-column: 1 / -1;
+}
+
+.address-fields {
+  position: relative;
+  display: grid;
+  padding: 5px 16px;
+}
+
+.address-fields label {
+  position: relative;
+  display: grid;
+  min-height: 44px;
+  grid-template-columns: 70px 1fr;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+}
+
+.address-fields label span {
+  font-weight: 700;
+}
+
+.address-fields input {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.address-fields .from-field input {
+  color: var(--text-muted);
+}
+
+.composer-from-value {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.composer-from-select {
+  border: 0;
+  background: transparent;
+  font-weight: 500;
+  color: var(--text);
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  max-width: calc(100% - 20px);
+}
+
+.composer-from-select:hover,
+.composer-from-select:focus-visible {
+  background: var(--surface-hover);
+}
+
+.address-fields .to-field-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.address-fields .to-field {
+  grid-template-columns: 70px minmax(0, 1fr);
+  flex: 1;
+  min-width: 0;
+  border-bottom: 0;
+}
+
+.address-fields .to-field input {
+  min-width: 0;
+  padding-right: 8px;
+}
+
+.settings-row,
+.switch-row {
+  display: flex;
+  min-height: 52px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--surface) 94%, var(--surface-muted));
+  box-shadow: none;
+}
+
+.settings-row > span,
+.switch-row > span,
+.security-summary > span,
+.storage-card > span,
+.account-settings-list span {
+  display: grid;
+  gap: 3px;
+}
+
+.settings-row select {
+  width: min(220px, 48%);
+}
+
+.settings-panel small,
+.settings-note {
+  color: var(--text-muted);
+}
+
+.switch-row input {
+  width: 28px;
+  height: 28px;
+  min-width: 44px;
+  min-height: 44px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}

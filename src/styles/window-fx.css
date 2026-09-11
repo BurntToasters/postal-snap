@@ -1,7 +1,7 @@
 /* ==========================================================================
    Native Window Blur & Vibrancy
-   Mirrored from Zinnia (macOS vibrancy / Windows Mica & Acrylic).
-   App chrome may be translucent. Rendered email stays fully opaque.
+   macOS vibrancy / Windows Mica & Acrylic. Structural chrome may be
+   translucent while message-list and rendered-email content stay opaque.
    ========================================================================== */
 
 /* 1. Root & Shell Translucency */
@@ -14,12 +14,13 @@ html[data-window-fx="vibrant"] .mail-shell {
   background: color-mix(in srgb, var(--canvas) 72%, transparent) !important;
 }
 
-/* 2. Sidebars, Toolbars, and Lists: Translucent Glass */
+/* 2. Structural chrome: translucent glass. Content panes stay opaque. */
 html[data-window-fx="vibrant"] .app-toolbar {
   background: color-mix(in srgb, var(--surface) 62%, transparent) !important;
   backdrop-filter: blur(22px) saturate(140%);
   -webkit-backdrop-filter: blur(22px) saturate(140%);
   border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  box-shadow: inset 0 1px 0 var(--glass-highlight);
 }
 
 html[data-window-fx="vibrant"] .folder-pane {
@@ -31,38 +32,47 @@ html[data-window-fx="vibrant"] .folder-pane {
   backdrop-filter: blur(22px) saturate(130%);
   -webkit-backdrop-filter: blur(22px) saturate(130%);
   border-right: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+  box-shadow: inset 0 1px 0 var(--glass-highlight);
+}
+
+html[data-window-fx="vibrant"] .message-pane,
+html[data-window-fx="vibrant"] .reader-pane {
+  background: var(--surface) !important;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 html[data-window-fx="vibrant"] .message-pane {
-  background: color-mix(in srgb, var(--surface) 55%, transparent) !important;
-  backdrop-filter: blur(18px) saturate(120%);
-  -webkit-backdrop-filter: blur(18px) saturate(120%);
-  border-right: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+  border-right: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
 }
 
-html[data-window-fx="vibrant"] .reader-pane {
-  background: color-mix(in srgb, var(--canvas) 55%, transparent) !important;
+html[data-window-fx="vibrant"] .reader-actions {
+  background: color-mix(in srgb, var(--surface) 78%, transparent) !important;
+  backdrop-filter: blur(18px) saturate(130%);
+  -webkit-backdrop-filter: blur(18px) saturate(130%);
 }
 
-html[data-window-fx="vibrant"] .reader-actions,
 html[data-window-fx="vibrant"] .message-header,
 html[data-window-fx="vibrant"] .remote-content-banner {
-  background: color-mix(in srgb, var(--surface) 68%, transparent) !important;
-  backdrop-filter: blur(16px) saturate(130%);
-  -webkit-backdrop-filter: blur(16px) saturate(130%);
+  background: var(--surface) !important;
 }
 
-/* 3. Modals and Composer Glass */
+/* Controls remain readable over glass; message content remains opaque below. */
+html[data-window-fx="vibrant"] .toolbar-button,
+html[data-window-fx="vibrant"] .icon-button,
+html[data-window-fx="vibrant"] .primary-button {
+  box-shadow: inset 0 1px 0 var(--glass-highlight);
+}
+
+/* 3. Content windows remain opaque; glass is reserved for app chrome. */
 html[data-window-fx="vibrant"] .composer-window,
 html[data-window-fx="vibrant"] .settings-window,
 html[data-window-fx="vibrant"] .setup-card,
 html[data-window-fx="vibrant"] .attachment-preview-dialog {
-  background: color-mix(in srgb, var(--surface) 78%, transparent) !important;
-  backdrop-filter: blur(28px) saturate(140%);
-  -webkit-backdrop-filter: blur(28px) saturate(140%);
-  box-shadow:
-    var(--shadow),
-    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  background: var(--surface) !important;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: var(--shadow);
 }
 
 html[data-window-fx="vibrant"] .composer-window .tiptap,
@@ -78,7 +88,7 @@ html[data-window-fx="vibrant"] .message-body,
 html[data-window-fx="vibrant"] .message-body iframe,
 html[data-window-fx="vibrant"] .message-body .plain-text-body,
 html[data-window-fx="vibrant"] .message-body pre {
-  background: #ffffff !important;
+  background: var(--mail-canvas) !important;
   color-scheme: light !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;

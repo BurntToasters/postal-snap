@@ -20,12 +20,18 @@
     box-shadow 120ms ease;
 }
 
+.toolbar-button,
+.secondary-button,
+.icon-button {
+  background: color-mix(in srgb, var(--surface) 82%, var(--surface-muted));
+}
+
 .primary-button {
   border-color: var(--accent);
-  color: var(--accent-contrast, #fff);
+  color: var(--accent-contrast);
   background: var(--accent);
   font-weight: 700;
-  box-shadow: 0 1px 0 color-mix(in srgb, #000 8%, transparent);
+  box-shadow: 0 2px 5px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 .primary-button:hover {

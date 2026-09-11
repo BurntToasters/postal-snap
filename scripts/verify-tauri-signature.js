@@ -1,7 +1,8 @@
 import { createHash, createPublicKey, verify } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { json, root } from "./_utils.js";
+import { json } from "./lib/json.js";
+import { root } from "./lib/paths.js";
 import { resolveUpdaterPublicKey } from "./updater-pubkey.js";
 
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");

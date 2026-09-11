@@ -253,6 +253,8 @@ pub struct ComposeDraft {
     pub attachments: Vec<ComposeAttachment>,
     pub in_reply_to: Option<String>,
     pub references: Option<Vec<String>>,
+    #[serde(default)]
+    pub send_at: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -356,6 +358,8 @@ pub struct AppSettings {
     pub reader_pane_height: u32,
     #[serde(default)]
     pub window_effects: bool,
+    #[serde(default = "default_true")]
+    pub sidebar_visible: bool,
     #[serde(default = "default_undo_send_seconds")]
     pub undo_send_seconds: u32,
     #[serde(default = "default_true")]
@@ -366,6 +370,10 @@ pub struct AppSettings {
     pub group_threads: bool,
     #[serde(default = "default_notify_new_mail")]
     pub notify_new_mail: bool,
+    #[serde(default)]
+    pub setup_completed: bool,
+    #[serde(default)]
+    pub setup_step: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -390,6 +398,8 @@ pub struct PortableSettings {
     pub reader_pane_height: u32,
     #[serde(default)]
     pub window_effects: bool,
+    #[serde(default = "default_true")]
+    pub sidebar_visible: bool,
     #[serde(default = "default_undo_send_seconds")]
     pub undo_send_seconds: u32,
     #[serde(default = "default_true")]
@@ -425,12 +435,15 @@ impl Default for AppSettings {
             folder_pane_width: 264,
             message_pane_width: 400,
             reader_pane_height: 360,
-            window_effects: false,
+            window_effects: true,
+            sidebar_visible: true,
             undo_send_seconds: default_undo_send_seconds(),
             block_advertising_and_tracking: true,
             block_reported_threats: true,
             group_threads: true,
             notify_new_mail: true,
+            setup_completed: false,
+            setup_step: None,
         }
     }
 }
@@ -1034,6 +1047,7 @@ mod tests {
             attachments: vec![],
             in_reply_to: None,
             references: None,
+            send_at: None,
         };
         assert!(validate_compose_draft(&draft).is_err());
         draft.subject = "Hello".into();

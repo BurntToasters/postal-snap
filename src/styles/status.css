@@ -11,18 +11,6 @@
   text-align: center;
 }
 
-.brand-mark {
-  display: grid;
-  width: 64px;
-  height: 64px;
-  place-items: center;
-  border-radius: var(--radius-lg);
-  color: var(--accent-contrast, #fff);
-  background: var(--accent);
-  font-size: 2rem;
-  box-shadow: var(--shadow-soft);
-}
-
 .overlay-splash {
   position: fixed;
   z-index: 35;
@@ -49,6 +37,19 @@
 
 .toast span {
   flex: 1;
+}
+
+.toast.sent-toast {
+  border-color: color-mix(in srgb, var(--success) 45%, var(--border));
+  color: var(--text);
+  background: color-mix(in srgb, var(--success-soft) 60%, var(--surface));
+}
+
+.toast.sent-toast button {
+  font-size: 0.9rem;
+  font-weight: 650;
+  color: var(--accent);
+  padding-inline: 8px;
 }
 
 .toast button {

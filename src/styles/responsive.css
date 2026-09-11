@@ -1,26 +1,23 @@
 @media (max-width: 1049px) {
-  .mail-shell,
-  .mail-shell.pane-bottom,
-  .mail-shell.pane-hidden {
-    grid-template-columns:
-      minmax(240px, var(--message-pane-width, 360px))
-      5px minmax(280px, 1fr);
-    grid-template-rows: var(--toolbar-height, 60px) minmax(0, 1fr);
-    grid-template-areas:
-      "toolbar toolbar toolbar"
-      "messages reader-splitter reader";
+  .mail-shell {
+    --rendered-folder-width: 0px;
+  }
+
+  .mail-shell.pane-right {
+    grid-template-columns: var(--rendered-message-width) 5px minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-areas: "toolbar toolbar toolbar" "messages reader-splitter reader";
   }
 
   .mail-shell.pane-bottom {
-    grid-template-columns: 1fr;
-    grid-template-rows:
-      var(--toolbar-height, 60px) minmax(180px, 1fr) 5px
-      minmax(200px, var(--reader-pane-height, 320px));
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr) 5px var(--rendered-reader-height);
     grid-template-areas: "toolbar" "messages" "reader-bottom-splitter" "reader";
   }
 
   .mail-shell.pane-hidden {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
     grid-template-areas: "toolbar" "messages";
   }
 
@@ -32,14 +29,11 @@
     display: inline-flex;
   }
 
-  .app-brand {
-    min-width: 128px;
-  }
-
-  .folder-pane {
+  .mail-shell .folder-pane {
+    display: flex;
     position: fixed;
     z-index: 22;
-    inset: var(--toolbar-height, 60px) auto 0 0;
+    inset: 0 auto 0 0;
     width: min(290px, 88vw);
     transform: translateX(-105%);
     visibility: hidden;
@@ -57,12 +51,12 @@
   .sidebar-scrim {
     position: fixed;
     z-index: 21;
-    inset: var(--toolbar-height, 60px) 0 0;
+    inset: 0;
     width: 100%;
     height: auto;
     border: 0;
     border-radius: 0;
-    background: rgb(15 25 33 / 38%);
+    background: var(--scrim-soft);
   }
 
   .sidebar-open .sidebar-scrim {
@@ -79,12 +73,6 @@
 }
 
 @media (max-height: 640px) {
-  .mail-shell.pane-bottom {
-    grid-template-rows:
-      var(--toolbar-height, 54px) minmax(140px, 1fr) 5px
-      minmax(160px, var(--reader-pane-height, 240px));
-  }
-
   .pane-heading {
     min-height: 56px;
     padding-block: 10px;
@@ -96,47 +84,100 @@
 }
 
 @media (max-width: 760px) {
-  .mail-shell,
+  html[data-text-scale="large"] .setup-progress:not(.compact) small {
+    display: none;
+  }
+
+  html[data-text-scale="large"] .setup-progress:not(.compact) {
+    margin-block: 22px;
+  }
+
+  html[data-text-scale="large"] .setup-form-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 12px;
+  }
+
+  html[data-text-scale="large"] .setup-form-header .setup-settings-button {
+    max-width: 100%;
+    white-space: nowrap;
+  }
+
+  html[data-text-scale="large"] .setup-form-header .setup-progress {
+    width: 100%;
+    grid-column: 1 / -1;
+  }
+
+  html[data-text-scale="large"] :is(.settings-row, .switch-row) {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  html[data-text-scale="large"] .settings-row select {
+    width: 100%;
+  }
+
+  .mail-shell.pane-right,
   .mail-shell.pane-bottom,
   .mail-shell.pane-hidden {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: var(--toolbar-height, 60px) minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
     grid-template-areas: "toolbar" "messages";
   }
 
-  .app-brand strong,
-  .get-mail-button span,
-  .search-scope {
-    display: none;
+  .app-toolbar {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr) auto 44px;
+    gap: 6px;
+    padding-inline: 10px;
   }
 
-  .app-brand {
-    min-width: 32px;
+  .toolbar-cluster,
+  .toolbar-trailing {
+    display: contents;
+  }
+
+  .app-toolbar .icon-button {
+    width: 44px;
+  }
+
+  .get-mail-button {
+    justify-self: start;
   }
 
   .compose-button {
-    width: 44px;
-    padding: 8px;
+    grid-column: 3;
+    grid-row: 1;
   }
 
-  .compose-button span {
+  .settings-button {
+    grid-column: 4;
+    grid-row: 1;
+  }
+
+  .toolbar-flex-spacer {
     display: none;
   }
 
-  .app-toolbar {
-    gap: 6px;
-    padding-inline: 7px;
+  .search-box {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    width: 100%;
+    min-width: 0;
+    max-width: none;
   }
 
-  .search-box {
-    margin-inline: 0;
+  .update-ready-badge {
+    grid-column: 1 / -1;
+    justify-self: end;
   }
 
   .reader-pane,
   .pane-hidden .reader-pane:not(.reader-hidden):not(.empty-reader) {
     position: fixed;
     z-index: 15;
-    inset: var(--toolbar-height, 60px) 0 0;
+    inset: var(--native-chrome-height, 0px) 0 0;
     display: flex;
     border: 0;
     border-radius: 0;
@@ -162,7 +203,7 @@
   }
 
   .message-header {
-    grid-template-columns: 38px minmax(0, 1fr);
+    grid-template-columns: 38px minmax(0, 1fr) auto;
     padding: 14px;
   }
 
@@ -217,12 +258,16 @@
     padding: 7px;
     overflow-x: auto;
     overflow-y: hidden;
+    overscroll-behavior-inline: contain;
+    scroll-padding-inline: 7px;
+    scroll-snap-type: inline proximity;
     border-right: 0;
     border-bottom: 1px solid var(--border);
   }
 
   .settings-nav button {
     flex: 0 0 auto;
+    scroll-snap-align: nearest;
   }
 
   .settings-content {
@@ -279,10 +324,6 @@
     width: 100%;
   }
 
-  .settings-nav button span {
-    display: none;
-  }
-
   .address-fields label {
     grid-template-columns: 58px minmax(0, 1fr);
   }
@@ -318,62 +359,12 @@
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    scroll-behavior: auto !important;
-    transition: none !important;
-    animation-duration: 0.001ms !important;
-    animation-iteration-count: 1 !important;
-  }
-}
-
-@media (forced-colors: active) {
-  .folder.active,
-  .message-row.selected,
-  .primary-button,
-  .settings-nav button.active,
-  .update-ready-badge,
-  .alias-chip.primary,
-  .toast,
-  .pane-hidden .reader-pane:not(.reader-hidden):not(.empty-reader) {
-    border: 2px solid Highlight;
-  }
-
-  .settings-window,
-  .composer-window,
-  .setup-card {
-    border: 2px solid CanvasText;
-  }
-
-  .pane-splitter:hover::after,
-  .pane-splitter:focus-visible::after {
-    background: Highlight;
-    outline: 2px solid Highlight;
-  }
-
-  .toolbar-group > button.active {
-    border: 2px solid Highlight;
-  }
-
-  .composer-window .tiptap:focus-visible {
-    outline: 2px solid Highlight !important;
-    outline-offset: -2px;
-  }
-
-  .update-ready-badge .badge-dot {
-    forced-color-adjust: none;
-  }
-
-  .unread-dot {
-    border: 1px solid CanvasText;
-  }
-}
-
 @media print {
+  /* Force paper: print stays black on white regardless of app theme. */
+  html,
   body,
   #root,
+  .app-viewport,
   .mail-shell {
     width: 100% !important;
     height: auto !important;
@@ -382,6 +373,7 @@
     color: #000000 !important;
   }
 
+  .window-chrome,
   .app-toolbar,
   .folder-pane,
   .folder-splitter,
@@ -404,6 +396,8 @@
   }
 
   .reader-pane {
+    position: static !important;
+    max-height: none !important;
     display: block !important;
     width: 100% !important;
     height: auto !important;

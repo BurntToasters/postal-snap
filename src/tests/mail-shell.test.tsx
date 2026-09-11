@@ -2,14 +2,17 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import { MailShell } from "../components/MailShell";
+import { strings } from "../i18n";
 import { defaultSettings, useAppStore } from "../store";
-import type {
-  AccountSummary,
-  MailboxSummary,
-  MessageChangeEvent,
-  MessageDetail,
-  MessageSummary,
-} from "../types";
+import type { MessageChangeEvent, MessageSummary } from "../types";
+import { mockSaveSettingsPassthrough } from "./helpers/api-mocks";
+import {
+  makeAccount,
+  makeMailbox,
+  makeMessage,
+  messageDetail as toDetail,
+} from "./helpers/fixtures";
+import { resetStore } from "./helpers/store";
 
 vi.mock("../api", () => ({
   api: {
@@ -44,60 +47,28 @@ vi.mock("../api", () => ({
   },
 }));
 
-const account: AccountSummary = {
-  id: "account-1",
-  provider: "manual",
-  email: "sam@example.test",
-  displayName: "Sam",
-  syncState: "idle",
-};
+const account = makeAccount();
 
-const inbox: MailboxSummary = {
-  id: 1,
-  accountId: account.id,
-  name: "INBOX",
-  displayName: "Inbox",
-  role: "inbox",
-  unreadCount: 2,
-  totalCount: 2,
-};
+const inbox = makeMailbox();
 
-const trash: MailboxSummary = {
+const trash = makeMailbox({
   id: 3,
-  accountId: account.id,
   name: "Trash",
   displayName: "Trash",
   role: "trash",
   unreadCount: 0,
   totalCount: 0,
-};
+});
 
-const firstMessage: MessageSummary = {
-  id: 1,
-  accountId: account.id,
-  mailboxId: inbox.id,
-  uid: 1,
-  messageId: "<first@example.test>",
-  subject: "First message",
-  senderName: "Jane",
-  senderAddress: "jane@example.test",
-  recipients: account.email,
-  receivedAt: "2026-08-18T12:00:00Z",
-  preview: "First preview",
-  isRead: false,
-  isStarred: false,
-  hasAttachments: false,
-  size: 100,
-};
+const firstMessage: MessageSummary = makeMessage();
 
-const secondMessage: MessageSummary = {
-  ...firstMessage,
+const secondMessage: MessageSummary = makeMessage({
   id: 2,
   uid: 2,
   messageId: "<second@example.test>",
   subject: "Second message",
   preview: "Second preview",
-};
+});
 
 const messages = [firstMessage, secondMessage];
 
@@ -118,41 +89,8 @@ const mockedSaveSettings = vi.mocked(api.saveSettings);
 const mockedOnFolderCountsChanged = vi.mocked(api.onFolderCountsChanged);
 const mockedOnMessageChanged = vi.mocked(api.onMessageChanged);
 
-function detail(summary: MessageSummary): MessageDetail {
-  return {
-    ...summary,
-    to: [account.email],
-    cc: [],
-    replyTo: null,
-    textBody: summary.preview,
-    htmlBody: null,
-    remoteImagesBlocked: false,
-    attachments: [],
-  };
-}
-
-function resetStore() {
-  useAppStore.setState({
-    accounts: [account],
-    activeAccountId: account.id,
-    mailboxes: [inbox, trash],
-    activeMailboxId: inbox.id,
-    activeLocalView: undefined,
-    messages: [],
-    messageCursor: undefined,
-    hasMoreMessages: false,
-    drafts: [],
-    outbox: [],
-    snoozed: [],
-    selectedMessage: undefined,
-    sync: {},
-    settings: defaultSettings,
-    composerOpen: false,
-    composerAccountId: undefined,
-    composeSeed: undefined,
-    busy: false,
-    error: undefined,
-  });
+function detail(summary: MessageSummary) {
+  return toDetail(summary);
 }
 
 function renderShell() {
@@ -162,7 +100,12 @@ function renderShell() {
 describe("mail shell", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    resetStore();
+    resetStore({
+      accounts: [account],
+      activeAccountId: account.id,
+      mailboxes: [inbox, trash],
+      activeMailboxId: inbox.id,
+    });
     mockedListMailboxes.mockResolvedValue([inbox, trash]);
     mockedListDrafts.mockResolvedValue([]);
     mockedListOutbox.mockResolvedValue([]);
@@ -178,7 +121,7 @@ describe("mail shell", () => {
       return detail(summary);
     });
     mockedSetMessageFlags.mockResolvedValue(undefined);
-    mockedSaveSettings.mockImplementation(async (next) => next);
+    mockSaveSettingsPassthrough();
     mockedOnFolderCountsChanged.mockResolvedValue(() => undefined);
     mockedOnMessageChanged.mockResolvedValue(() => undefined);
     mockedSearchCached.mockResolvedValue([]);
@@ -229,7 +172,7 @@ describe("mail shell", () => {
     await screen.findByRole("option", { name: /First message/i });
     await waitFor(() => expect(mockedListMessages).toHaveBeenCalledTimes(1));
 
-    const search = screen.getByRole("textbox", { name: "Search mail" });
+    const search = screen.getByRole("searchbox", { name: "Search mail" });
     fireEvent.change(search, { target: { value: "old" } });
     fireEvent.submit(screen.getByRole("search"));
     await waitFor(() => expect(mockedSearchServer).toHaveBeenCalledTimes(1));
@@ -262,7 +205,7 @@ describe("mail shell", () => {
     expect(
       await screen.findByRole("button", { name: "Get Mail" }),
     ).toBeVisible();
-    expect(screen.getByRole("button", { name: "Write" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Compose" })).toBeVisible();
   });
 
   it("exposes the message toolbar for keyboard navigation", async () => {
@@ -322,7 +265,10 @@ describe("mail shell", () => {
     renderShell();
 
     await screen.findByRole("option", { name: /First message/i });
-    fireEvent.click(screen.getByRole("button", { name: "Mark all read" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Mark all read" }));
 
     await waitFor(() =>
       expect(mockedMarkMailboxRead).toHaveBeenCalledWith("account-1", 1),
@@ -600,5 +546,36 @@ describe("mail shell", () => {
     expect(api.deleteOutbox).not.toHaveBeenCalled();
     expect(useAppStore.getState().composerOpen).toBe(true);
     expect(useAppStore.getState().composeSeed?.draft).toEqual(draft);
+  });
+
+  it("shows an undo toast after a held send and clears it", async () => {
+    const draft = {
+      id: "draft-sent",
+      accountId: account.id,
+      to: ["lee@example.com"],
+      cc: [],
+      bcc: [],
+      subject: "Just sent",
+      htmlBody: "<p>Hi</p>",
+      textBody: "Hi",
+      attachments: [],
+    };
+    vi.mocked(api.restoreOutbox).mockResolvedValue(draft);
+    useAppStore.setState({
+      lastSent: {
+        outboxId: "outbox-2",
+        accountId: account.id,
+        scheduled: false,
+      },
+    });
+    renderShell();
+
+    expect(await screen.findByText(strings.mail.messageSent)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() =>
+      expect(api.restoreOutbox).toHaveBeenCalledWith("outbox-2", "account-1"),
+    );
+    expect(useAppStore.getState().composerOpen).toBe(true);
+    expect(useAppStore.getState().lastSent).toBeUndefined();
   });
 });

@@ -40,6 +40,19 @@ body,
   overflow: hidden;
 }
 
+#root,
+.app-viewport,
+.setup-host,
+.app-viewport > main {
+  min-height: 0;
+}
+
+.app-viewport {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
 html[data-text-scale="large"],
 html[data-text-scale="large"] body,
 html[data-text-scale="large"] #root {
@@ -78,43 +91,6 @@ select {
 button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
-}
-
-:focus-visible {
-  outline: 3px solid var(--focus);
-  outline-offset: 2px;
-}
-
-svg {
-  flex: 0 0 auto;
-}
-
-input,
-select,
-textarea {
-  width: 100%;
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--text);
-  background: var(--surface);
-  transition:
-    border-color 120ms ease,
-    background-color 120ms ease,
-    box-shadow 120ms ease;
-}
-
-input:hover,
-select:hover,
-textarea:hover {
-  border-color: var(--border-strong);
-}
-
-input:focus-visible,
-select:focus-visible,
-textarea:focus-visible {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 .spinning {

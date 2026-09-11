@@ -1,11 +1,8 @@
 import { join } from "node:path";
-import {
-  ensureReleaseDir,
-  existsSync,
-  newestMatching,
-  root,
-  run,
-} from "./_utils.js";
+import { newestMatching } from "./lib/artifacts.js";
+import { ensureReleaseDir } from "./lib/json.js";
+import { existsSync, root } from "./lib/paths.js";
+import { run } from "./lib/spawn.js";
 
 const app = await newestMatching(
   join(root, "src-tauri/target/universal-apple-darwin/release/bundle/macos"),

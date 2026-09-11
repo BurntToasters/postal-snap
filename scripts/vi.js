@@ -1,4 +1,5 @@
-import { output, process, run } from "./_utils.js";
+import { process } from "./lib/paths.js";
+import { output, run } from "./lib/spawn.js";
 
 async function step(command, args) {
   console.log(`> ${command} ${args.join(" ")}`);

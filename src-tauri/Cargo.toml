@@ -1,15 +1,14 @@
 [package]
 name = "postal-snap"
-version = "0.1.7"
+version = "0.1.8"
 description = "A calm, accessible desktop email client."
 authors = ["BurntToasters <code@rosie.run>"]
 edition = "2021"
 license = "MPL-2.0"
 
 [features]
-default = ["direct-updater", "window-fx"]
+default = ["direct-updater"]
 direct-updater = ["dep:tauri-plugin-process", "dep:tauri-plugin-updater"]
-window-fx = ["tauri/macos-private-api"]
 flatpak = []
 mas = []
 msstore = []
@@ -49,19 +48,28 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync",
 tokio-native-tls = "0.3"
 url = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
-# Native window blur / vibrancy (macOS vibrancy, Windows Mica / Acrylic, mirrored from Zinnia)
+# Native window blur / vibrancy via public OS APIs only (MAS-safe, no macos-private-api).
 window-vibrancy = "0.6"
 zeroize = { version = "1", features = ["derive"] }
 
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.61.3", features = [
+    "Win32_Foundation",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
 [dev-dependencies]
 tauri = { version = "2", features = ["test"] }
 tempfile = "3"
 
 [lints.rust]
-unsafe_code = "forbid"
+# Win32 Snap Layout integration contains one reviewed, Windows-only adapter.
+unsafe_code = "deny"
 
 [profile.release]
 panic = "abort"

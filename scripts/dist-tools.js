@@ -1,5 +1,6 @@
 import { join } from "node:path";
-import { process, rmRetry, root } from "./_utils.js";
+import { process, root } from "./lib/paths.js";
+import { rmRetry } from "./lib/spawn.js";
 
 const action = process.argv[2];
 const targets = {

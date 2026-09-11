@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -18,32 +19,36 @@ import {
   MailOpen,
   MailPlus,
   Menu,
+  MoreHorizontal,
   PanelLeft,
-  Paperclip,
-  Pencil,
   RefreshCw,
   Search,
   Send,
   Settings,
   ShieldAlert,
-  Star,
   Trash2,
   TriangleAlert,
   X,
 } from "lucide-react";
 import { api } from "../api";
-import { PostalError } from "../errors";
 import { strings } from "../i18n";
-import { formatMessageDate } from "../format";
 import { applySettings } from "../settings";
 import { useAppStore } from "../store";
-import { groupThreads } from "../threads";
 import type { MailboxRole, MessageSummary, ReadingPane } from "../types";
 import { promptToRestartForUpdate } from "../update";
-import { AppMark } from "./AppMark";
 import { MessageReader } from "./MessageReader";
-import { SetupWizard } from "./SetupWizard";
-import { useDialogFocus } from "./useDialogFocus";
+import { AddAccountDialog, SentNoticeToast } from "./mail/mailDialogs";
+import { FolderButton } from "./mail/folderButton";
+import { DraftList, OutboxList, SnoozedList } from "./mail/localLists";
+import {
+  isOversizeError,
+  matchesLocalQuery,
+  mergeSearchResults,
+} from "./mail/mailSearch";
+import { MessageList } from "./mail/messageList";
+import { PaneSplitter } from "./mail/paneSplitter";
+
+const SIDEBAR_DRAWER_QUERY = "(max-width: 1049px)";
 
 interface Props {
   onOpenSettings: () => void;
@@ -114,6 +119,11 @@ export function MailShell({ onOpenSettings }: Props) {
   const [allFolders, setAllFolders] = useState(false);
   const [addAccountOpen, setAddAccountOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarDrawerViewport, setSidebarDrawerViewport] = useState(() =>
+    typeof window.matchMedia === "function"
+      ? window.matchMedia(SIDEBAR_DRAWER_QUERY).matches
+      : false,
+  );
   const sidebarToggleRef = useRef<HTMLButtonElement>(null);
   const folderPaneRef = useRef<HTMLElement>(null);
   const [loadingMessages, setLoadingMessages] = useState(false);
@@ -126,8 +136,77 @@ export function MailShell({ onOpenSettings }: Props) {
   const [selecting, setSelecting] = useState(false);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [mailboxMoreOpen, setMailboxMoreOpen] = useState(false);
+  const mailboxMoreRef = useRef<HTMLDivElement>(null);
+  const toolbarRef = useRef<HTMLElement>(null);
   const newFolderButtonRef = useRef<HTMLButtonElement>(null);
   const lastFolderInvoker = useRef<HTMLElement | null>(null);
+
+  const sidebarVisible = settings.sidebarVisible !== false;
+
+  useEffect(() => {
+    if (!mailboxMoreOpen) return;
+    const menu = mailboxMoreRef.current;
+    const trigger = menu?.querySelector<HTMLButtonElement>(
+      "button[aria-haspopup='menu']",
+    );
+    menu
+      ?.querySelector<HTMLButtonElement>("[role='menuitem']:not(:disabled)")
+      ?.focus();
+    const close = (event: MouseEvent) => {
+      if (!mailboxMoreRef.current?.contains(event.target as Node)) {
+        setMailboxMoreOpen(false);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" || event.key === "Tab") {
+        if (event.key === "Escape") event.preventDefault();
+        setMailboxMoreOpen(false);
+        trigger?.focus();
+      }
+    };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [mailboxMoreOpen]);
+
+  useLayoutEffect(() => {
+    const toolbar = toolbarRef.current;
+    const shell = toolbar?.closest<HTMLElement>(".mail-shell");
+    if (!toolbar || !shell) return;
+
+    const updateToolbarHeight = () => {
+      const height = Math.ceil(toolbar.getBoundingClientRect().height);
+      if (height > 0)
+        shell.style.setProperty("--mail-toolbar-height", `${height}px`);
+    };
+    updateToolbarHeight();
+    window.addEventListener("resize", updateToolbarHeight);
+    if (typeof ResizeObserver === "undefined") {
+      return () => window.removeEventListener("resize", updateToolbarHeight);
+    }
+    const observer = new ResizeObserver(updateToolbarHeight);
+    observer.observe(toolbar);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", updateToolbarHeight);
+    };
+  }, []);
+
+  function toggleSidebar() {
+    const next = {
+      ...useAppStore.getState().settings,
+      sidebarVisible: !sidebarVisible,
+    };
+    setSettings(next);
+    void api
+      .saveSettings(next)
+      .then(setSettings)
+      .catch((cause) => setError(String(cause)));
+  }
 
   function openFolderDialog(
     dialog: { mode: "create" } | { mode: "rename"; id: number; name: string },
@@ -883,6 +962,9 @@ export function MailShell({ onOpenSettings }: Props) {
         return;
       }
       if (isEditing || onChromeControl) return;
+      // List rows own arrows/Space/Home/End/j/k through roving tabindex.
+      // The global handler must not double-handle them when focus is in list.
+      const inMessageList = Boolean(target?.closest('[role="listbox"]'));
 
       if (event.key === "Delete" || (mod && event.key === "Backspace")) {
         const state = useAppStore.getState();
@@ -897,24 +979,28 @@ export function MailShell({ onOpenSettings }: Props) {
           }
         }
       } else if (event.key === "ArrowDown" || event.key === "j") {
+        if (inMessageList) return;
         const next = relativeMessage(1);
         if (next) {
           event.preventDefault();
           void chooseMessage(next);
         }
       } else if (event.key === "ArrowUp" || event.key === "k") {
+        if (inMessageList) return;
         const previous = relativeMessage(-1);
         if (previous) {
           event.preventDefault();
           void chooseMessage(previous);
         }
       } else if (event.key === "Home") {
+        if (inMessageList) return;
         const first = useAppStore.getState().messages[0];
         if (first) {
           event.preventDefault();
           void chooseMessage(first);
         }
       } else if (event.key === "End") {
+        if (inMessageList) return;
         const items = useAppStore.getState().messages;
         const last = items[items.length - 1];
         if (last) {
@@ -922,6 +1008,7 @@ export function MailShell({ onOpenSettings }: Props) {
           void chooseMessage(last);
         }
       } else if (event.key === " " || event.code === "Space") {
+        if (inMessageList) return;
         event.preventDefault();
         window.dispatchEvent(
           new CustomEvent("postal:scroll-reader", {
@@ -1142,6 +1229,18 @@ export function MailShell({ onOpenSettings }: Props) {
   }
 
   useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia(SIDEBAR_DRAWER_QUERY);
+    const update = () => {
+      setSidebarDrawerViewport(media.matches);
+      if (!media.matches) setSidebarOpen(false);
+    };
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+
+  useEffect(() => {
     if (!sidebarOpen) return;
     const pane = folderPaneRef.current;
     const toggle = sidebarToggleRef.current;
@@ -1165,10 +1264,7 @@ export function MailShell({ onOpenSettings }: Props) {
   }, [sidebarOpen]);
 
   useEffect(() => {
-    if (!sidebarOpen) return;
-    if (typeof window.matchMedia !== "function") return;
-    const media = window.matchMedia("(max-width: 1049px)");
-    if (!media.matches) return;
+    if (!sidebarOpen || !sidebarDrawerViewport) return;
     const shell = document.querySelector(".mail-shell");
     const inertTargets = shell
       ? [...shell.children].filter(
@@ -1186,7 +1282,7 @@ export function MailShell({ onOpenSettings }: Props) {
         target.removeAttribute("inert");
       }
     };
-  }, [sidebarOpen]);
+  }, [sidebarDrawerViewport, sidebarOpen]);
 
   const [narrowViewport, setNarrowViewport] = useState(() =>
     typeof window.matchMedia === "function"
@@ -1226,6 +1322,10 @@ export function MailShell({ onOpenSettings }: Props) {
     () => mailboxes.find((box) => box.id === activeMailboxId),
     [activeMailboxId, mailboxes],
   );
+  const activeAccount = useMemo(
+    () => accounts.find((account) => account.id === activeAccountId),
+    [activeAccountId, accounts],
+  );
   const heading = activeLocalView
     ? activeLocalView === "drafts"
       ? strings.mail.drafts
@@ -1240,7 +1340,7 @@ export function MailShell({ onOpenSettings }: Props) {
         ? snoozed.length
         : outbox.length
     : messages.length;
-  const shellClass = `mail-shell pane-${settings.readingPane} ${sidebarOpen ? "sidebar-open" : ""} ${selectedMessage ? "message-open" : ""}`;
+  const shellClass = `mail-shell pane-${settings.readingPane} ${sidebarOpen ? "sidebar-open" : ""} ${sidebarVisible ? "" : "sidebar-collapsed"} ${selectedMessage ? "message-open" : ""}`;
 
   const shellStyle = {
     "--folder-pane-width": `${settings.folderPaneWidth}px`,
@@ -1250,109 +1350,131 @@ export function MailShell({ onOpenSettings }: Props) {
 
   return (
     <main className={shellClass} style={shellStyle}>
-      <header className="app-toolbar">
-        <button
-          ref={sidebarToggleRef}
-          className="icon-button sidebar-toggle"
-          type="button"
-          onClick={() => setSidebarOpen((open) => !open)}
-          aria-label={
-            sidebarOpen
-              ? strings.mail.hideMailboxes
-              : strings.mail.showMailboxes
-          }
-          aria-expanded={sidebarOpen}
-          aria-controls="folder-pane"
-        >
-          <PanelLeft aria-hidden="true" />
-        </button>
-        <div className="app-brand" aria-label={strings.appName}>
-          <AppMark size={28} />
-          <strong>{strings.appName}</strong>
-        </div>
-        <button
-          className="toolbar-button get-mail-button"
-          type="button"
-          onClick={() => void refresh()}
-          disabled={busy}
-          aria-label={strings.mail.getMail}
-        >
-          <RefreshCw aria-hidden="true" className={busy ? "spinning" : ""} />
-          <span aria-hidden="false">{strings.mail.getMail}</span>
-        </button>
-        <button
-          className="primary-button compose-button"
-          type="button"
-          onClick={() => openComposer()}
-          aria-label={strings.mail.compose}
-        >
-          <MailPlus aria-hidden="true" />
-          <span aria-hidden="false">{strings.mail.compose}</span>
-        </button>
-        <form
-          className="search-box"
-          role="search"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void runSearch();
-          }}
-        >
-          <Search aria-hidden="true" />
-          <input
-            ref={searchInput}
-            value={query}
-            onChange={(event) => {
-              queryRef.current = event.target.value;
-              setQuery(event.target.value);
-            }}
-            placeholder={
-              activeLocalView === "drafts" || activeLocalView === "outbox"
-                ? strings.mail.searchMailboxOnly
-                : activeLocalView
-                  ? strings.mail.searchMailboxOnly
-                  : strings.mail.search
-            }
-            aria-label={strings.mail.search}
-            disabled={Boolean(
-              activeLocalView &&
-              activeLocalView !== "drafts" &&
-              activeLocalView !== "outbox",
-            )}
-          />
-          {!activeLocalView ? (
-            <label className="search-scope">
-              <input
-                type="checkbox"
-                checked={allFolders}
-                onChange={(event) => {
-                  allFoldersRef.current = event.target.checked;
-                  setAllFolders(event.target.checked);
-                }}
-              />
-              {strings.mail.allFolders}
-            </label>
-          ) : null}
-        </form>
-        {updateReady ? (
+      <header
+        ref={toolbarRef}
+        className="app-toolbar"
+        data-tauri-drag-region="deep"
+      >
+        <div className="toolbar-cluster toolbar-leading">
           <button
+            ref={sidebarToggleRef}
+            className="icon-button sidebar-toggle"
             type="button"
-            className="update-ready-badge"
-            onClick={() => void promptToRestartForUpdate(updateReady)}
-            title={strings.mail.updateReadyTooltip(updateReady)}
-            aria-label={strings.mail.updateReadyBadge}
+            onClick={() => {
+              if (sidebarDrawerViewport) setSidebarOpen((open) => !open);
+              else toggleSidebar();
+            }}
+            aria-label={
+              (sidebarDrawerViewport ? sidebarOpen : sidebarVisible)
+                ? strings.mail.hideMailboxes
+                : strings.mail.showMailboxes
+            }
+            aria-expanded={sidebarDrawerViewport ? sidebarOpen : sidebarVisible}
+            aria-controls="folder-pane"
           >
-            <span className="badge-dot" aria-hidden="true" />
-            <span>{strings.mail.updateReadyBadge}</span>
+            <PanelLeft aria-hidden="true" />
           </button>
-        ) : null}
-        <button
-          className="icon-button"
-          type="button"
-          onClick={onOpenSettings}
-          aria-label={strings.mail.settings}
-        >
-          <Settings />
-        </button>
+          <button
+            className="toolbar-button get-mail-button"
+            type="button"
+            aria-keyshortcuts="F5 Meta+Shift+M Meta+Shift+N Control+Shift+M Control+Shift+N"
+            onClick={() => void refresh()}
+            disabled={busy}
+            aria-label={strings.mail.getMail}
+          >
+            <RefreshCw aria-hidden="true" className={busy ? "spinning" : ""} />
+            <span>{strings.mail.getMail}</span>
+          </button>
+        </div>
+        <span className="toolbar-flex-spacer" aria-hidden="true" />
+        <div className="toolbar-trailing">
+          <button
+            className="primary-button compose-button"
+            type="button"
+            aria-keyshortcuts="Meta+N Control+N"
+            onClick={() => openComposer()}
+            aria-label={strings.mail.compose}
+          >
+            <MailPlus aria-hidden="true" />
+            <span>{strings.mail.compose}</span>
+          </button>
+          <form
+            className="search-box"
+            data-tauri-drag-region="false"
+            role="search"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void runSearch();
+            }}
+          >
+            <Search aria-hidden="true" />
+            <input
+              ref={searchInput}
+              type="search"
+              value={query}
+              onChange={(event) => {
+                queryRef.current = event.target.value;
+                setQuery(event.target.value);
+              }}
+              placeholder={
+                activeLocalView === "drafts" || activeLocalView === "outbox"
+                  ? strings.mail.searchMailboxOnly
+                  : activeLocalView
+                    ? strings.mail.searchMailboxOnly
+                    : strings.mail.search
+              }
+              aria-label={strings.mail.search}
+              aria-keyshortcuts="Meta+F Control+F /"
+              disabled={Boolean(
+                activeLocalView &&
+                activeLocalView !== "drafts" &&
+                activeLocalView !== "outbox",
+              )}
+            />
+            {!activeLocalView ? (
+              <button
+                className="search-scope"
+                type="button"
+                aria-pressed={allFolders}
+                title={
+                  allFolders
+                    ? strings.mail.thisAccount
+                    : strings.mail.thisMailbox
+                }
+                onClick={() => {
+                  const next = !allFolders;
+                  allFoldersRef.current = next;
+                  setAllFolders(next);
+                  if (queryRef.current.trim()) void runSearch();
+                }}
+              >
+                {allFolders
+                  ? strings.mail.thisAccount
+                  : strings.mail.thisMailbox}
+              </button>
+            ) : null}
+          </form>
+          {updateReady ? (
+            <button
+              type="button"
+              className="update-ready-badge"
+              onClick={() => void promptToRestartForUpdate(updateReady)}
+              title={strings.mail.updateReadyTooltip(updateReady)}
+              aria-label={strings.mail.updateReadyBadge}
+            >
+              <span className="badge-dot" aria-hidden="true" />
+              <span>{strings.mail.updateReadyBadge}</span>
+            </button>
+          ) : null}
+          <button
+            className="icon-button settings-button"
+            type="button"
+            onClick={onOpenSettings}
+            aria-label={strings.mail.settings}
+          >
+            <Settings aria-hidden="true" />
+          </button>
+        </div>
       </header>
 
       <button
@@ -1367,6 +1489,11 @@ export function MailShell({ onOpenSettings }: Props) {
         className="folder-pane"
         aria-label={strings.mail.accountsAndMailboxes}
       >
+        <div
+          className="sidebar-titlebar-drag"
+          data-tauri-drag-region
+          aria-hidden="true"
+        />
         <div className="sidebar-mobile-header">
           <strong>{strings.mail.mailboxes}</strong>
           <button
@@ -1378,32 +1505,47 @@ export function MailShell({ onOpenSettings }: Props) {
             <X />
           </button>
         </div>
-        <label className="account-select-label">
-          <span>{strings.mail.account}</span>
-          <span className="account-select-wrap">
-            <select
-              value={activeAccountId}
-              onChange={(event) => {
-                mailboxRequest.current += 1;
-                messageRequest.current += 1;
-                detailRequest.current += 1;
-                searchRequest.current += 1;
-                queryRef.current = "";
-                setQuery("");
-                setAllFolders(false);
-                resetListState();
-                selectAccount(event.target.value);
-              }}
-            >
-              {accounts.map((account) => (
-                <option key={account.id} value={account.id}>
-                  {account.displayName || account.email}
-                </option>
-              ))}
-            </select>
-            <ChevronDown aria-hidden="true" />
+        <div className="account-heading">
+          <span className="account-avatar" aria-hidden="true">
+            {(activeAccount?.displayName || activeAccount?.email || "?")
+              .slice(0, 1)
+              .toUpperCase()}
           </span>
-        </label>
+          <span>
+            <strong>
+              {activeAccount?.displayName || strings.mail.account}
+            </strong>
+            <small>{activeAccount?.email}</small>
+          </span>
+        </div>
+        {accounts.length > 1 ? (
+          <label className="account-select-label">
+            <span>{strings.mail.account}</span>
+            <span className="account-select-wrap">
+              <select
+                value={activeAccountId ?? ""}
+                onChange={(event) => {
+                  mailboxRequest.current += 1;
+                  messageRequest.current += 1;
+                  detailRequest.current += 1;
+                  searchRequest.current += 1;
+                  queryRef.current = "";
+                  setQuery("");
+                  setAllFolders(false);
+                  resetListState();
+                  selectAccount(event.target.value);
+                }}
+              >
+                {accounts.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.displayName || account.email}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown aria-hidden="true" />
+            </span>
+          </label>
+        ) : null}
         <button
           className="add-account-button"
           type="button"
@@ -1418,6 +1560,7 @@ export function MailShell({ onOpenSettings }: Props) {
             label={strings.mail.drafts}
             count={drafts.length}
             active={activeLocalView === "drafts"}
+            tone="drafts"
             onClick={() => {
               messageRequest.current += 1;
               searchRequest.current += 1;
@@ -1449,6 +1592,7 @@ export function MailShell({ onOpenSettings }: Props) {
             label={strings.mail.snoozed}
             count={snoozed.length}
             active={activeLocalView === "snoozed"}
+            tone="archive"
             onClick={() => {
               messageRequest.current += 1;
               searchRequest.current += 1;
@@ -1513,6 +1657,7 @@ export function MailShell({ onOpenSettings }: Props) {
                 label={mailbox.displayName}
                 count={mailbox.unreadCount}
                 active={mailbox.id === activeMailboxId}
+                tone={mailbox.role}
                 onClick={() => {
                   const sameMailbox =
                     mailbox.id === activeMailboxId && !activeLocalView;
@@ -1593,9 +1738,9 @@ export function MailShell({ onOpenSettings }: Props) {
               <FolderPlus aria-hidden="true" /> {strings.mail.newFolder}
             </button>
           )}
-          {mailboxes.some(
-            (mailbox) => mailbox.role === "trash" && mailbox.totalCount > 0,
-          ) ? (
+          {!activeLocalView &&
+          activeMailbox?.role === "trash" &&
+          activeMailbox.totalCount > 0 ? (
             <button
               type="button"
               className="add-account-button"
@@ -1604,9 +1749,9 @@ export function MailShell({ onOpenSettings }: Props) {
               <Trash2 aria-hidden="true" /> {strings.mail.emptyTrash}
             </button>
           ) : null}
-          {mailboxes.some(
-            (mailbox) => mailbox.role === "junk" && mailbox.totalCount > 0,
-          ) ? (
+          {!activeLocalView &&
+          activeMailbox?.role === "junk" &&
+          activeMailbox.totalCount > 0 ? (
             <button
               type="button"
               className="add-account-button"
@@ -1654,15 +1799,7 @@ export function MailShell({ onOpenSettings }: Props) {
               <>
                 <button
                   type="button"
-                  className="toolbar-button"
-                  onClick={() => void markAllRead()}
-                  disabled={bulkBusy}
-                >
-                  <MailOpen aria-hidden="true" /> {strings.mail.markAllRead}
-                </button>
-                <button
-                  type="button"
-                  className="toolbar-button"
+                  className="toolbar-button select-messages-button"
                   aria-pressed={selecting}
                   onClick={() => {
                     setSelecting((value) => !value);
@@ -1671,6 +1808,55 @@ export function MailShell({ onOpenSettings }: Props) {
                 >
                   {selecting ? strings.mail.doneSelecting : strings.mail.select}
                 </button>
+                <div className="mailbox-more" ref={mailboxMoreRef}>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    onClick={() => setMailboxMoreOpen((open) => !open)}
+                    onKeyDown={(event) => {
+                      if (
+                        event.key === "ArrowDown" ||
+                        event.key === "ArrowUp"
+                      ) {
+                        event.preventDefault();
+                        setMailboxMoreOpen(true);
+                      }
+                    }}
+                    aria-expanded={mailboxMoreOpen}
+                    aria-haspopup="menu"
+                    aria-controls="mailbox-more-menu"
+                    aria-label={strings.mail.moreMailboxActions}
+                    title={strings.mail.moreMailboxActions}
+                  >
+                    <MoreHorizontal aria-hidden="true" />
+                  </button>
+                  {mailboxMoreOpen ? (
+                    <div
+                      id="mailbox-more-menu"
+                      className="mailbox-more-menu"
+                      role="menu"
+                      aria-label={strings.mail.moreMailboxActions}
+                    >
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setMailboxMoreOpen(false);
+                          mailboxMoreRef.current
+                            ?.querySelector<HTMLButtonElement>(
+                              "button[aria-haspopup='menu']",
+                            )
+                            ?.focus();
+                          void markAllRead();
+                        }}
+                        disabled={bulkBusy}
+                      >
+                        <MailOpen aria-hidden="true" />
+                        {strings.mail.markAllRead}
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
               </>
             ) : null}
             {query && !activeLocalView ? (
@@ -1819,6 +2005,7 @@ export function MailShell({ onOpenSettings }: Props) {
       ) : null}
 
       <MessageReader />
+      <SentNoticeToast />
       {addAccountOpen ? (
         <AddAccountDialog
           onClose={() => setAddAccountOpen(false)}
@@ -1841,713 +2028,5 @@ export function MailShell({ onOpenSettings }: Props) {
         />
       ) : null}
     </main>
-  );
-}
-
-function PaneSplitter({
-  className,
-  label,
-  controls,
-  orientation,
-  value,
-  min,
-  max,
-  onChange,
-}: {
-  className: string;
-  label: string;
-  controls?: string;
-  orientation: "vertical" | "horizontal-reverse";
-  value: number;
-  min: number;
-  max: number;
-  onChange: (value: number, persist: boolean) => void;
-}) {
-  return (
-    <div
-      className={`pane-splitter ${className}`}
-      role="separator"
-      aria-label={label}
-      aria-controls={controls}
-      aria-orientation={orientation === "vertical" ? "vertical" : "horizontal"}
-      aria-valuenow={Math.round(value)}
-      aria-valuemin={min}
-      aria-valuemax={max}
-      aria-valuetext={strings.mail.paneSize(Math.round(value))}
-      tabIndex={0}
-      onKeyDown={(event) => {
-        const decrement =
-          orientation === "vertical" ? "ArrowLeft" : "ArrowDown";
-        const increment = orientation === "vertical" ? "ArrowRight" : "ArrowUp";
-        if (
-          event.key === "Home" ||
-          event.key === "End" ||
-          event.key === "PageUp" ||
-          event.key === "PageDown" ||
-          event.key === decrement ||
-          event.key === increment
-        ) {
-          event.preventDefault();
-        } else {
-          return;
-        }
-        if (event.key === "Home") {
-          onChange(min, true);
-          return;
-        }
-        if (event.key === "End") {
-          onChange(max, true);
-          return;
-        }
-        if (event.key === "PageUp" || event.key === "PageDown") {
-          onChange(value + (event.key === "PageUp" ? 64 : -64), true);
-          return;
-        }
-        onChange(value + (event.key === increment ? 16 : -16), true);
-      }}
-      onPointerDown={(event) => {
-        event.currentTarget.setPointerCapture(event.pointerId);
-        const start =
-          orientation === "vertical" ? event.clientX : event.clientY;
-        const initial = value;
-        const target = event.currentTarget;
-        const move = (moveEvent: PointerEvent) => {
-          const current =
-            orientation === "vertical" ? moveEvent.clientX : moveEvent.clientY;
-          const delta = current - start;
-          onChange(
-            initial + (orientation === "vertical" ? delta : -delta),
-            false,
-          );
-        };
-        const finish = (upEvent: PointerEvent) => {
-          const current =
-            orientation === "vertical" ? upEvent.clientX : upEvent.clientY;
-          const delta = current - start;
-          target.releasePointerCapture(upEvent.pointerId);
-          target.removeEventListener("pointermove", move);
-          target.removeEventListener("pointerup", finish);
-          onChange(
-            initial + (orientation === "vertical" ? delta : -delta),
-            true,
-          );
-        };
-        target.addEventListener("pointermove", move);
-        target.addEventListener("pointerup", finish);
-      }}
-    />
-  );
-}
-
-function FolderButton({
-  icon: Icon,
-  label,
-  count,
-  active,
-  tone,
-  onClick,
-  onRename,
-  onDelete,
-}: {
-  icon: typeof Inbox;
-  label: string;
-  count: number;
-  active: boolean;
-  tone?: "warning";
-  onClick: () => void;
-  onRename?: () => void;
-  onDelete?: () => void;
-}) {
-  return (
-    <div className="folder-row">
-      <button
-        type="button"
-        className={`folder ${active ? "active" : ""} ${tone ?? ""}`}
-        onClick={onClick}
-        aria-current={active ? "page" : undefined}
-      >
-        <Icon aria-hidden="true" />
-        <span>{label}</span>
-        {count > 0 ? <strong>{count > 999 ? "999+" : count}</strong> : null}
-      </button>
-      {onRename ? (
-        <button
-          type="button"
-          className="icon-button folder-action"
-          onClick={onRename}
-          aria-label={`${strings.mail.rename} ${label}`}
-          title={`${strings.mail.rename} ${label}`}
-        >
-          <Pencil aria-hidden="true" />
-        </button>
-      ) : null}
-      {onDelete ? (
-        <button
-          type="button"
-          className="icon-button folder-action"
-          onClick={onDelete}
-          aria-label={`${strings.mail.deleteFolder}: ${label}`}
-          title={`${strings.mail.deleteFolder}: ${label}`}
-        >
-          <Trash2 aria-hidden="true" />
-        </button>
-      ) : null}
-    </div>
-  );
-}
-
-function isOversizeError(cause: unknown): boolean {
-  if (cause instanceof PostalError) return cause.code === "limitExceeded";
-  return /too large|exceeds.*safety limit/i.test(String(cause));
-}
-
-function mergeSearchResults(
-  localItems: MessageSummary[],
-  serverItems: MessageSummary[],
-): MessageSummary[] {
-  // Cached FTS uses AND of up to 12 terms ranked by bm25; server uses IMAP
-  // TEXT phrase matching. Keep cached rank order, then append server-only
-  // body matches newest-first so server hits are not filtered through FTS.
-  const seen = new Set<number>();
-  const merged: MessageSummary[] = [];
-  for (const item of localItems) {
-    if (seen.has(item.id)) continue;
-    seen.add(item.id);
-    merged.push(item);
-  }
-  const serverOnly = serverItems
-    .filter((item) => !seen.has(item.id))
-    .sort(
-      (a, b) =>
-        new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime(),
-    );
-  for (const item of serverOnly) {
-    seen.add(item.id);
-    merged.push(item);
-  }
-  return merged;
-}
-
-function matchesLocalQuery(value: string, query: string) {
-  const needle = query.trim().toLowerCase();
-  if (!needle) return true;
-  return value.toLowerCase().includes(needle);
-}
-
-function MessageList({
-  messages,
-  selectedId,
-  loading,
-  loadingMessageId,
-  onChoose,
-  hasMore,
-  onLoadMore,
-  searchQuery,
-  onClearSearch,
-  selecting,
-  selectedIds,
-  onToggleSelect,
-}: {
-  messages: MessageSummary[];
-  selectedId?: number;
-  loading: boolean;
-  loadingMessageId?: number;
-  onChoose: (message: MessageSummary) => Promise<void>;
-  hasMore: boolean;
-  onLoadMore: () => Promise<void>;
-  searchQuery?: string;
-  onClearSearch?: () => void;
-  selecting?: boolean;
-  selectedIds?: number[];
-  onToggleSelect?: (id: number) => void;
-}) {
-  const groupConversations = useAppStore(
-    (state) => state.settings.groupThreads,
-  );
-  const listRef = useRef<HTMLDivElement>(null);
-  const [expandedThreads, setExpandedThreads] = useState<string[]>([]);
-
-  function toggleThread(key: string) {
-    setExpandedThreads((prev) =>
-      prev.includes(key) ? prev.filter((item) => item !== key) : [...prev, key],
-    );
-  }
-
-  useEffect(() => {
-    const selected = listRef.current?.querySelector<HTMLElement>(
-      "[role='option'][aria-selected='true']",
-    );
-    if (!selected) return;
-    selected.scrollIntoView?.({ block: "nearest" });
-    if (listRef.current?.contains(document.activeElement)) selected.focus();
-  }, [selectedId]);
-
-  // The open message's thread stays expanded without storing it:
-  // deriving keeps render pure and survives list reloads.
-  const selectedThreadKey = selectedId
-    ? groupThreads(messages).find(
-        (group) =>
-          group.items.length > 1 &&
-          group.items.some((item) => item.id === selectedId),
-      )?.key
-    : undefined;
-  const effectiveExpanded =
-    selectedThreadKey && !expandedThreads.includes(selectedThreadKey)
-      ? [...expandedThreads, selectedThreadKey]
-      : expandedThreads;
-
-  if (loading && messages.length === 0)
-    return (
-      <div className="list-state" role="status">
-        {strings.mail.loadingMessages}
-      </div>
-    );
-  if (messages.length === 0) {
-    if (searchQuery) {
-      return (
-        <div className="list-state" role="status">
-          <p>{strings.mail.noSearchResults(searchQuery)}</p>
-          {onClearSearch ? (
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={onClearSearch}
-            >
-              {strings.mail.clearSearch}
-            </button>
-          ) : null}
-        </div>
-      );
-    }
-    return (
-      <div className="list-state" role="status" aria-live="polite">
-        {strings.mail.emptyMailbox}
-      </div>
-    );
-  }
-  function renderRow(message: MessageSummary, index: number) {
-    const checked = selecting && (selectedIds ?? []).includes(message.id);
-    const rowLabel = [
-      message.isRead ? strings.mail.read : strings.mail.unread,
-      message.isStarred ? strings.mail.starred : null,
-      message.senderName || message.senderAddress,
-      message.subject || strings.common.noSubject,
-      formatMessageDate(message.receivedAt),
-      message.hasAttachments ? strings.mail.hasAttachments : null,
-    ]
-      .filter(Boolean)
-      .join(", ");
-    return (
-      <div key={message.id} className="message-row-wrap">
-        {selecting ? (
-          <input
-            type="checkbox"
-            className="message-select"
-            checked={checked}
-            onChange={() => onToggleSelect?.(message.id)}
-            aria-label={strings.mail.selectMessage(
-              message.subject || strings.common.noSubject,
-            )}
-          />
-        ) : null}
-        <button
-          type="button"
-          role="option"
-          aria-selected={selecting ? checked : selectedId === message.id}
-          tabIndex={
-            selecting
-              ? 0
-              : selectedId === message.id || (!selectedId && index === 0)
-                ? 0
-                : -1
-          }
-          aria-label={rowLabel}
-          className={`message-row ${message.isRead ? "read" : "unread"} ${!selecting && selectedId === message.id ? "selected" : ""} ${checked ? "checked" : ""}`}
-          onClick={() =>
-            selecting ? onToggleSelect?.(message.id) : void onChoose(message)
-          }
-          onKeyDown={(event) => {
-            if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key))
-              return;
-            event.preventDefault();
-            event.stopPropagation();
-            const nextIndex =
-              event.key === "Home"
-                ? 0
-                : event.key === "End"
-                  ? messages.length - 1
-                  : Math.max(
-                      0,
-                      Math.min(
-                        messages.length - 1,
-                        index + (event.key === "ArrowDown" ? 1 : -1),
-                      ),
-                    );
-            const next = messages[nextIndex];
-            if (!next || next.id === message.id) return;
-            if (selecting) {
-              const list = event.currentTarget.closest("[role='listbox']");
-              list
-                ?.querySelectorAll<HTMLElement>("[role='option']")
-                ?.[nextIndex]?.focus();
-              return;
-            }
-            void onChoose(next);
-          }}
-        >
-          <span
-            className="unread-dot"
-            aria-label={
-              message.isRead ? strings.mail.read : strings.mail.unread
-            }
-          />
-          <span className="message-sender">
-            {message.senderName || message.senderAddress}
-          </span>
-          <time className="message-date" dateTime={message.receivedAt}>
-            {formatMessageDate(message.receivedAt)}
-          </time>
-          <span className="message-subject">
-            {message.isStarred ? (
-              <Star fill="currentColor" aria-label={strings.mail.starred} />
-            ) : null}
-            <span>{message.subject || strings.common.noSubject}</span>
-            {message.hasAttachments ? (
-              <Paperclip aria-label={strings.mail.hasAttachments} />
-            ) : null}
-          </span>
-          <span className="message-preview">
-            {loadingMessageId === message.id
-              ? strings.mail.downloadingMessage
-              : message.preview || strings.mail.openToDownload}
-          </span>
-        </button>
-      </div>
-    );
-  }
-
-  return (
-    <div className="message-list">
-      <div
-        ref={listRef}
-        role="listbox"
-        aria-label={strings.mail.messages}
-        aria-busy={loading}
-      >
-        {selecting || !groupConversations
-          ? messages.map((message, index) => renderRow(message, index))
-          : groupThreads(messages).map((group) => {
-              if (group.items.length === 1) {
-                return renderRow(group.newest, messages.indexOf(group.newest));
-              }
-              const expanded = effectiveExpanded.includes(group.key);
-              return (
-                <div key={group.key} className="thread-group" role="group">
-                  <button
-                    type="button"
-                    className={`message-row thread-header ${group.newest.id === selectedId ? "selected" : ""}`}
-                    aria-expanded={expanded}
-                    onClick={() => {
-                      void onChoose(group.newest);
-                      toggleThread(group.key);
-                    }}
-                    aria-label={[
-                      strings.mail.conversation,
-                      group.newest.subject || strings.common.noSubject,
-                      strings.mail.threadMessages(group.items.length),
-                      group.unread > 0
-                        ? strings.mail.threadUnread(group.unread)
-                        : null,
-                    ]
-                      .filter(Boolean)
-                      .join(", ")}
-                  >
-                    <span
-                      className="unread-dot"
-                      aria-hidden="true"
-                      data-unread={group.unread > 0}
-                    />
-                    <span className="message-sender">
-                      {group.newest.senderName || group.newest.senderAddress}
-                    </span>
-                    <time
-                      className="message-date"
-                      dateTime={group.newest.receivedAt}
-                    >
-                      {formatMessageDate(group.newest.receivedAt)}
-                    </time>
-                    <span className="message-subject">
-                      <span>
-                        {group.newest.subject || strings.common.noSubject}
-                      </span>
-                      <strong className="thread-count">
-                        {group.items.length}
-                      </strong>
-                    </span>
-                    <span className="message-preview">
-                      {group.newest.preview || strings.mail.openToDownload}
-                    </span>
-                  </button>
-                  {expanded
-                    ? group.items.map((message) =>
-                        renderRow(message, messages.indexOf(message)),
-                      )
-                    : null}
-                </div>
-              );
-            })}
-      </div>
-      {hasMore ? (
-        <button
-          type="button"
-          className="load-more-button"
-          onClick={() => void onLoadMore()}
-          disabled={loading}
-        >
-          {loading ? strings.mail.loadingOlder : strings.mail.loadOlder}
-        </button>
-      ) : null}
-    </div>
-  );
-}
-
-function AddAccountDialog({
-  onClose,
-  onComplete,
-}: {
-  onClose: () => void;
-  onComplete: () => Promise<void>;
-}) {
-  const dialogRef = useDialogFocus(onClose);
-  return (
-    <div className="modal-layer setup-modal">
-      <button
-        type="button"
-        className="modal-backdrop"
-        aria-label={strings.mail.closeAddAccount}
-        onClick={onClose}
-      />
-      <section
-        className="setup-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-label={strings.mail.addEmailAccount}
-        ref={dialogRef}
-      >
-        <SetupWizard onComplete={onComplete} />
-      </section>
-    </div>
-  );
-}
-
-function SnoozedList({
-  items,
-  onOpen,
-  onUnsnooze,
-}: {
-  items: ReturnType<typeof useAppStore.getState>["snoozed"];
-  onOpen: (message: MessageSummary) => Promise<void>;
-  onUnsnooze: (id: number) => Promise<void>;
-}) {
-  if (items.length === 0)
-    return (
-      <div className="list-state" role="status" aria-live="polite">
-        {strings.mail.noSnoozed}
-      </div>
-    );
-  return (
-    <div className="local-mail-list">
-      {items.map((item) => (
-        <div key={item.message.id} className="message-row-wrap">
-          <button
-            type="button"
-            className="local-mail-row snoozed-row"
-            onClick={() => void onOpen(item.message)}
-            aria-label={[
-              item.message.isRead ? strings.mail.read : strings.mail.unread,
-              item.message.senderName || item.message.senderAddress,
-              item.message.subject || strings.common.noSubject,
-              strings.mail.snoozedUntil(formatMessageDate(item.snoozedUntil)),
-            ].join(", ")}
-          >
-            <Clock aria-hidden="true" />
-            <span>
-              <strong>
-                {item.message.subject || strings.common.noSubject}
-              </strong>
-              <small>
-                {item.message.senderName || item.message.senderAddress}
-              </small>
-              <small>
-                {strings.mail.snoozedUntil(
-                  formatMessageDate(item.snoozedUntil),
-                )}
-              </small>
-            </span>
-            <time dateTime={item.message.receivedAt}>
-              {formatMessageDate(item.message.receivedAt)}
-            </time>
-          </button>
-          <button
-            type="button"
-            className="icon-button"
-            onClick={() => void onUnsnooze(item.message.id)}
-            aria-label={`${strings.mail.unsnooze}: ${item.message.subject || strings.common.noSubject}`}
-            title={strings.mail.unsnooze}
-          >
-            <X aria-hidden="true" />
-          </button>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function DraftList({
-  drafts,
-  onOpen,
-}: {
-  drafts: ReturnType<typeof useAppStore.getState>["drafts"];
-  onOpen: (id: string) => Promise<void>;
-}) {
-  if (drafts.length === 0)
-    return (
-      <div className="list-state" role="status" aria-live="polite">
-        {strings.mail.noDrafts}
-      </div>
-    );
-  return (
-    <div className="local-mail-list">
-      {drafts.map((draft) => (
-        <button
-          key={draft.id}
-          type="button"
-          className="local-mail-row"
-          onClick={() => void onOpen(draft.id)}
-          aria-label={
-            draft.syncDetail
-              ? `${draft.subject || strings.common.noSubject} — ${draft.syncDetail}`
-              : undefined
-          }
-        >
-          <FileText aria-hidden="true" />
-          <span>
-            <strong>{draft.subject || strings.common.noSubject}</strong>
-            <small>{draft.recipients || strings.mail.noRecipientYet}</small>
-            <small
-              className={`draft-sync-state ${draft.syncState}`}
-              title={draft.syncDetail ?? undefined}
-            >
-              {draft.syncState === "synced"
-                ? strings.mail.savedServer
-                : draft.syncState === "conflict"
-                  ? strings.mail.recoveredConflict
-                  : draft.syncState === "localOnly"
-                    ? strings.mail.savedLocal
-                    : strings.mail.savingServer}
-            </small>
-          </span>
-          <time dateTime={draft.updatedAt}>
-            {formatMessageDate(draft.updatedAt)}
-          </time>
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function OutboxList({
-  items,
-  onRetry,
-  onRetryCopy,
-  onSendNow,
-  onDiscard,
-}: {
-  items: ReturnType<typeof useAppStore.getState>["outbox"];
-  onRetry: (id: string) => Promise<void>;
-  onRetryCopy: (id: string) => Promise<void>;
-  onSendNow: (id: string) => Promise<void>;
-  onDiscard: (
-    id: string,
-    state: ReturnType<typeof useAppStore.getState>["outbox"][number]["state"],
-  ) => Promise<void>;
-}) {
-  const hasScheduled = items.some((item) => item.state === "scheduled");
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!hasScheduled) return;
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [hasScheduled]);
-  if (items.length === 0)
-    return (
-      <div className="list-state" role="status" aria-live="polite">
-        {strings.mail.noQueued}
-      </div>
-    );
-  return (
-    <div className="local-mail-list">
-      {items.map((item) => (
-        <article key={item.id} className="attention-row">
-          {item.state === "needs_attention" ? (
-            <TriangleAlert aria-hidden="true" />
-          ) : (
-            <Send aria-hidden="true" />
-          )}
-          <span>
-            <strong>{item.subject || strings.common.noSubject}</strong>
-            <small>{item.recipients || strings.mail.noRecipient}</small>
-            <small>{item.detail}</small>
-            {item.state === "scheduled" && item.sendAt ? (
-              <small className="status-label">
-                {strings.mail.sendIn(
-                  Math.max(
-                    0,
-                    Math.round((new Date(item.sendAt).getTime() - now) / 1000),
-                  ),
-                )}
-              </small>
-            ) : null}
-            <small className="status-label">
-              {item.state === "queued"
-                ? strings.mail.waitingSend
-                : item.state === "sending"
-                  ? strings.mail.sending
-                  : item.state === "sent_copy_pending"
-                    ? strings.mail.sentCopyPending
-                    : item.state === "scheduled"
-                      ? strings.mail.scheduledWaiting
-                      : strings.mail.needsAttention}
-            </small>
-          </span>
-          <div>
-            {item.state === "needs_attention" ? (
-              <button type="button" onClick={() => void onRetry(item.id)}>
-                {strings.mail.retrySending}
-              </button>
-            ) : item.state === "sent_copy_pending" ? (
-              <button type="button" onClick={() => void onRetryCopy(item.id)}>
-                {strings.mail.saveSentCopy}
-              </button>
-            ) : item.state === "scheduled" ? (
-              <button type="button" onClick={() => void onSendNow(item.id)}>
-                {strings.mail.sendNow}
-              </button>
-            ) : null}
-            <button
-              type="button"
-              className="danger-button"
-              onClick={() => void onDiscard(item.id, item.state)}
-            >
-              {item.state === "sent_copy_pending"
-                ? strings.mail.dismissWarning
-                : item.state === "scheduled"
-                  ? strings.mail.undoSend
-                  : strings.common.discard}
-            </button>
-          </div>
-        </article>
-      ))}
-    </div>
   );
 }

@@ -1,4 +1,4 @@
-import { run } from "./_utils.js";
+import { run } from "./lib/spawn.js";
 await run("flatpak", [
   "remote-add",
   "--user",
