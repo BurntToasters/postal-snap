@@ -114,6 +114,19 @@ describe("account reconciliation", () => {
     });
   });
 
+  it("restores the last account when settings arrive before a selection", () => {
+    const remembered = account("remembered");
+    useAppStore.setState({
+      accounts: [remembered],
+      activeAccountId: undefined,
+    });
+    useAppStore.getState().setSettings({
+      ...useAppStore.getState().settings,
+      lastAccountId: remembered.id,
+    });
+    expect(useAppStore.getState().activeAccountId).toBe(remembered.id);
+  });
+
   it("closes a composer for a removed non-active account", () => {
     const first = account("first");
     const second = account("second");

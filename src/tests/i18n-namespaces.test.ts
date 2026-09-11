@@ -28,6 +28,11 @@ describe("i18n namespaces", () => {
     expect(strings.settings.eraseButton).toBe("Reset & Restart");
   });
 
+  it("names an in-progress update without claiming it is installed", () => {
+    expect(strings.settings.installing("0.1.9")).toMatch(/0\.1\.9/);
+    expect(strings.settings.installing("0.1.9")).not.toMatch(/installed/i);
+  });
+
   it("never claims a confirmed threat verdict", () => {
     // Allowed words that legitimately contain the substring "confirmed".
     const allowed = [/unconfirmed/i];

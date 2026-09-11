@@ -51,6 +51,7 @@ describe("received mail isolation", () => {
       <img src="file:///etc/passwd" srcset="https://tracker.test/2x 2x">
       <video src="https://tracker.test/movie" poster="https://tracker.test/poster"></video>
       <table background="https://tracker.test/table"><tr><td>cell</td></tr></table>
+      <p src="https://tracker.test/paragraph">keep text</p>
       <img src="//tracker.test/protocol-relative.gif" data-evil="1">
       <svg><a href="https://tracker.test/svg">vector</a></svg>
     `);
@@ -61,6 +62,8 @@ describe("received mail isolation", () => {
     expect(result.html).toContain("data-remote-src");
     expect(result.html).toContain("https://tracker.test/protocol-relative.gif");
     expect(result.html).not.toContain("data-evil");
+    expect(result.html).toContain("keep text");
+    expect(result.html).not.toMatch(/src="https:\/\/tracker\.test\/paragraph"/);
   });
 
   it("creates a scriptless, networkless iframe document", () => {

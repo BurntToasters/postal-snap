@@ -16,6 +16,17 @@ let updateFound = false;
 let updateVersion: string | undefined;
 let updateReadyVersion: string | undefined;
 
+export function addUpdateFoundListener(listener: UpdateFoundListener): void {
+  updateFoundListeners.add(listener);
+  if (updateInFlight && updateFound) {
+    try {
+      listener(updateVersion);
+    } catch {
+      // A remounted status view must not interrupt the update transaction.
+    }
+  }
+}
+
 export function removeUpdateFoundListener(listener: UpdateFoundListener): void {
   updateFoundListeners.delete(listener);
 }
@@ -42,16 +53,7 @@ export function runUpdateSingleFlight(
     return Promise.resolve({ available: true, version: alreadyReady });
   }
 
-  if (onUpdateFound) {
-    updateFoundListeners.add(onUpdateFound);
-    if (updateInFlight && updateFound) {
-      try {
-        onUpdateFound(updateVersion);
-      } catch {
-        // A remounted status view must not interrupt the update transaction.
-      }
-    }
-  }
+  if (onUpdateFound) addUpdateFoundListener(onUpdateFound);
   if (updateInFlight) return updateInFlight;
   const task = (async (): Promise<UpdateCheckResult> => {
     if (!(await updatesManagedByPostalSnap())) {

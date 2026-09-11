@@ -13,6 +13,7 @@ vi.mock("../api", () => ({
     deleteDraft: vi.fn(),
     releaseComposeAttachments: vi.fn(),
     readComposeImage: vi.fn(),
+    chooseAttachments: vi.fn(),
     suggestRecipients: vi.fn().mockResolvedValue([]),
     showNativeConfirm: vi.fn().mockResolvedValue(true),
   },
@@ -31,6 +32,11 @@ beforeEach(() => {
   });
   vi.mocked(api.deleteDraft).mockResolvedValue(undefined);
   vi.mocked(api.releaseComposeAttachments).mockResolvedValue(undefined);
+  vi.mocked(api.chooseAttachments).mockResolvedValue([]);
+  vi.mocked(api.readComposeImage).mockResolvedValue(
+    "data:image/png;base64,AA==",
+  );
+  vi.mocked(api.showNativeConfirm).mockResolvedValue(true);
   resetStore({
     accounts: [account],
     activeAccountId: account.id,
@@ -423,5 +429,481 @@ describe("composer draft persistence", () => {
       await Promise.resolve();
     });
     expect(mockedSaveDraft.mock.calls.length).toBeGreaterThan(calls);
+  });
+
+  it("adds, warns about, and releases regular attachments", async () => {
+    vi.mocked(api.chooseAttachments).mockResolvedValue([
+      {
+        token: "large-file",
+        filename: "archive.zip",
+        contentType: "application/zip",
+        inline: false,
+        size: 26 * 1024 * 1024,
+      },
+    ]);
+    render(<Composer accountId={account.id} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Attach" }));
+      await Promise.resolve();
+    });
+    expect(api.chooseAttachments).toHaveBeenCalledWith(account.id, false);
+    expect(screen.getByText("archive.zip")).toBeVisible();
+    expect(screen.getByRole("alert")).toHaveTextContent(/exceed 25 MB/i);
+    fireEvent.click(screen.getByRole("button", { name: "Remove archive.zip" }));
+    expect(api.releaseComposeAttachments).toHaveBeenCalledWith(account.id, [
+      "large-file",
+    ]);
+    expect(screen.queryByText("archive.zip")).not.toBeInTheDocument();
+  });
+
+  it("adds inline images and releases their token when removed", async () => {
+    vi.spyOn(crypto, "randomUUID").mockReturnValue(
+      "00000000-0000-4000-8000-000000000001",
+    );
+    vi.mocked(api.chooseAttachments).mockResolvedValue([
+      {
+        token: "inline-file",
+        filename: "photo.png",
+        contentType: "image/png",
+        inline: true,
+        size: 100,
+      },
+    ]);
+    render(<Composer accountId={account.id} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Picture" }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(api.chooseAttachments).toHaveBeenCalledWith(account.id, true);
+    expect(api.readComposeImage).toHaveBeenCalledWith(
+      account.id,
+      "inline-file",
+    );
+    expect(screen.getByText(/Image: photo\.png/)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Remove photo.png" }));
+    expect(api.releaseComposeAttachments).toHaveBeenCalledWith(account.id, [
+      "inline-file",
+    ]);
+  });
+
+  it("cleans up a selected inline token when image loading fails", async () => {
+    vi.mocked(api.chooseAttachments).mockResolvedValue([
+      {
+        token: "broken-inline",
+        filename: "broken.png",
+        contentType: "image/png",
+        inline: true,
+      },
+    ]);
+    vi.mocked(api.readComposeImage).mockRejectedValue(
+      new Error("image failed"),
+    );
+    render(<Composer accountId={account.id} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Picture" }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(api.releaseComposeAttachments).toHaveBeenCalledWith(account.id, [
+      "broken-inline",
+    ]);
+    expect(useAppStore.getState().error).toBe("Error: image failed");
+  });
+
+  it("restores stored inline images and reports restore failures", async () => {
+    const seed = {
+      draft: {
+        id: "inline-draft",
+        accountId: account.id,
+        to: ["jane@example.test"],
+        cc: [],
+        bcc: [],
+        subject: "Inline",
+        htmlBody: '<p>Image</p><img src="cid:stored-inline">',
+        textBody: "Image",
+        attachments: [
+          {
+            token: "stored-token",
+            filename: "stored.png",
+            contentType: "image/png",
+            inline: true,
+            contentId: "stored-inline",
+          },
+        ],
+      },
+    };
+    useAppStore.setState({ composeSeed: seed });
+    const view = render(<Composer accountId={account.id} />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(api.readComposeImage).toHaveBeenCalledWith(
+      account.id,
+      "stored-token",
+    );
+    view.unmount();
+
+    vi.clearAllMocks();
+    vi.mocked(api.readComposeImage).mockRejectedValue(
+      new Error("restore failed"),
+    );
+    useAppStore.setState({ composeSeed: seed, error: undefined });
+    render(<Composer accountId={account.id} />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(useAppStore.getState().error).toBe("Error: restore failed");
+  });
+
+  it("validates, applies, cancels, and escapes the link dialog", () => {
+    render(<Composer accountId={account.id} />);
+    fireEvent.click(screen.getByRole("button", { name: "Show formatting" }));
+    fireEvent.click(screen.getByRole("button", { name: "More formatting" }));
+    const open = () =>
+      fireEvent.click(screen.getByRole("button", { name: "Insert link" }));
+    open();
+    let input = screen.getByRole("textbox", { name: "Web address" });
+    fireEvent.change(input, { target: { value: "javascript:alert(1)" } });
+    fireEvent.submit(input.closest("form")!);
+    expect(useAppStore.getState().error).toMatch(/Links must start/);
+    expect(screen.getByRole("dialog", { name: "Insert link" })).toBeVisible();
+    fireEvent.change(input, { target: { value: "mailto:jane@example.test" } });
+    fireEvent.submit(input.closest("form")!);
+    expect(
+      screen.queryByRole("dialog", { name: "Insert link" }),
+    ).not.toBeInTheDocument();
+
+    open();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    open();
+    input = screen.getByRole("textbox", { name: "Web address" });
+    fireEvent.keyDown(input.closest("form")!, { key: "Escape" });
+    expect(
+      screen.queryByRole("dialog", { name: "Insert link" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("dismisses Send options with outside pointer or Escape", () => {
+    render(<Composer accountId={account.id} />);
+    fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
+      target: { value: "jane@example.test" },
+    });
+    const options = screen.getByRole("button", { name: "Send options" });
+    fireEvent.click(options);
+    expect(screen.getByRole("menu")).toBeVisible();
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    fireEvent.click(options);
+    fireEvent.click(screen.getByRole("menuitem", { name: /date and time/i }));
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("does not discard content without confirmation", async () => {
+    vi.mocked(api.showNativeConfirm).mockResolvedValue(false);
+    render(<Composer accountId={account.id} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Subject" }), {
+      target: { value: "Keep me" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(api.releaseComposeAttachments).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: /New message/i })).toBeVisible();
+  });
+
+  it("deletes a stored draft and reports discard failure", async () => {
+    useAppStore.setState({
+      composeSeed: {
+        draft: {
+          id: "draft-delete",
+          accountId: account.id,
+          to: [],
+          cc: [],
+          bcc: [],
+          subject: "Stored",
+          htmlBody: "<p></p>",
+          textBody: "",
+          attachments: [],
+        },
+      },
+    });
+    vi.mocked(api.deleteDraft).mockRejectedValueOnce(
+      new Error("delete failed"),
+    );
+    render(<Composer accountId={account.id} />);
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(api.deleteDraft).toHaveBeenCalledWith("draft-delete", account.id);
+    expect(useAppStore.getState().error).toBe("Error: delete failed");
+  });
+
+  it("surfaces send failures and uncertain SMTP outcomes", async () => {
+    const send = vi.mocked(api.sendMessage);
+    send.mockRejectedValueOnce(new Error("send failed"));
+    render(<Composer accountId={account.id} />);
+    fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
+      target: { value: "jane@example.test" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(useAppStore.getState().error).toBe("Error: send failed");
+
+    send.mockResolvedValueOnce({
+      id: "attention",
+      state: "needs_attention",
+      detail: "Delivery outcome uncertain.",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(useAppStore.getState().error).toBe("Delivery outcome uncertain.");
+  });
+
+  it("reports manual and automatic draft save failures", async () => {
+    mockedSaveDraft.mockRejectedValue(new Error("save failed"));
+    render(<Composer accountId={account.id} />);
+    fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
+      target: { value: "jane@example.test" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(useAppStore.getState().error).toBe("Error: save failed");
+    useAppStore.setState({ error: undefined });
+    await act(async () => {
+      vi.advanceTimersByTime(6_000);
+      await Promise.resolve();
+    });
+    expect(useAppStore.getState().error).toBe("Error: save failed");
+  });
+
+  it("selects the addressed alias for replies", () => {
+    useAppStore.setState({
+      accounts: [{ ...account, aliases: ["alias@example.test"] }],
+      composeSeed: {
+        composeMode: "reply",
+        sourceMessage: {
+          id: 1,
+          accountId: account.id,
+          mailboxId: 1,
+          uid: 1,
+          messageId: "<parent@example.test>",
+          subject: "Alias mail",
+          senderName: "Jane",
+          senderAddress: "jane@example.test",
+          recipients: "alias@example.test",
+          receivedAt: "2026-08-18T12:00:00Z",
+          preview: "Hello",
+          isRead: true,
+          isStarred: false,
+          hasAttachments: false,
+          size: 100,
+          to: ["alias@example.test"],
+          cc: [],
+          replyTo: null,
+          textBody: "Hello",
+          htmlBody: null,
+          remoteImagesBlocked: false,
+          attachments: [],
+        },
+      },
+    });
+
+    render(<Composer accountId={account.id} />);
+    expect(screen.getByLabelText("From")).toHaveValue("alias@example.test");
+  });
+
+  it("autosaves on window blur and hidden visibility", async () => {
+    render(<Composer accountId={account.id} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Subject" }), {
+      target: { value: "Blur save" },
+    });
+    fireEvent.blur(window);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(mockedSaveDraft).toHaveBeenCalledTimes(1);
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Subject" }), {
+      target: { value: "Visibility save" },
+    });
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    fireEvent(document, new Event("visibilitychange"));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(mockedSaveDraft).toHaveBeenCalledTimes(2);
+  });
+
+  it("closes empty and saved drafts without another save", async () => {
+    useAppStore.setState({ composerOpen: true });
+    const empty = render(<Composer accountId={account.id} />);
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Save draft and close" }).at(-1)!,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(useAppStore.getState().composerOpen).toBe(false);
+    expect(mockedSaveDraft).not.toHaveBeenCalled();
+    empty.unmount();
+
+    useAppStore.setState({
+      composerOpen: true,
+      composeSeed: {
+        draft: {
+          id: "saved-draft",
+          accountId: account.id,
+          to: ["jane@example.test"],
+          cc: [],
+          bcc: [],
+          subject: "Already saved",
+          htmlBody: "<p>Saved</p>",
+          textBody: "Saved",
+          attachments: [],
+        },
+      },
+    });
+    render(<Composer accountId={account.id} />);
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Save draft and close" }).at(-1)!,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(useAppStore.getState().composerOpen).toBe(false);
+    expect(mockedSaveDraft).not.toHaveBeenCalled();
+  });
+
+  it("discards an empty composer without asking", async () => {
+    useAppStore.setState({ composerOpen: true });
+    render(<Composer accountId={account.id} />);
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(api.showNativeConfirm).not.toHaveBeenCalled();
+    expect(api.releaseComposeAttachments).toHaveBeenCalledWith(account.id, []);
+    expect(useAppStore.getState().composerOpen).toBe(false);
+  });
+
+  it("reports attachment selection and release failures", async () => {
+    vi.mocked(api.chooseAttachments).mockRejectedValueOnce(
+      new Error("picker failed"),
+    );
+    render(<Composer accountId={account.id} />);
+    fireEvent.click(screen.getByRole("button", { name: "Attach" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(useAppStore.getState().error).toBe("Error: picker failed");
+
+    vi.mocked(api.chooseAttachments).mockResolvedValueOnce([
+      {
+        token: "release-fails",
+        filename: "note.txt",
+        inline: false,
+        size: 10,
+      },
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: "Attach" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    vi.mocked(api.releaseComposeAttachments).mockRejectedValueOnce(
+      new Error("release failed"),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Remove note.txt" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(useAppStore.getState().error).toBe("Error: release failed");
+  });
+
+  it("maximizes a signed composer and saves with the keyboard", async () => {
+    useAppStore.setState({
+      accounts: [{ ...account, signature: "Best, Sam" }],
+    });
+    const { container } = render(<Composer accountId={account.id} />);
+    expect(screen.getByText("Best, Sam")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Maximize editor" }));
+    expect(container.querySelector(".composer-maximized")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Subject" }), {
+      target: { value: "Keyboard save" },
+    });
+    fireEvent.keyDown(window, { key: "s", ctrlKey: true });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(mockedSaveDraft).toHaveBeenCalled();
+  });
+
+  it("formats, indents, links, and closes an empty draft", async () => {
+    render(<Composer accountId={account.id} />);
+    fireEvent.click(screen.getByRole("button", { name: "Show formatting" }));
+    fireEvent.click(screen.getByRole("button", { name: "More formatting" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "Font" }), {
+      target: { value: "Arial" },
+    });
+    fireEvent.change(screen.getByRole("combobox", { name: "Font" }), {
+      target: { value: "" },
+    });
+    fireEvent.change(screen.getByRole("combobox", { name: "Font size" }), {
+      target: { value: "20px" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Increase indentation" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Decrease indentation" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Insert link" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Web address" }), {
+      target: { value: "https://library.example.test/hours" },
+    });
+    fireEvent.submit(
+      screen.getByRole("textbox", { name: "Web address" }).closest("form")!,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const linked = document.querySelector("a[data-external-href], a[href]");
+    if (linked) {
+      fireEvent.contextMenu(linked);
+      fireEvent(
+        linked,
+        new MouseEvent("auxclick", { button: 1, bubbles: true }),
+      );
+    }
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Save draft and close" }).at(-1)!,
+    );
+    expect(useAppStore.getState().composerOpen).toBe(false);
+  });
+
+  it("closes from the docked pill and ignores backdrop clicks while sending", async () => {
+    render(<Composer accountId={account.id} />);
+    fireEvent.click(screen.getByRole("button", { name: "Minimize draft" }));
+    fireEvent.click(screen.getByRole("button", { name: /Maximize/i }));
+    expect(screen.getByRole("dialog", { name: /New message/i })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Minimize draft" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Save draft and close" }),
+    );
+    expect(useAppStore.getState().composerOpen).toBe(false);
   });
 });

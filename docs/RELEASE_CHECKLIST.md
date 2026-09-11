@@ -10,7 +10,7 @@ Mocked frontend, Playwright, and unit tests do not by themselves mean the releas
 - [ ] `npm ci` succeeds without lockfile changes.
 - [ ] `npm run audit` reports no npm or RustSec vulnerabilities (online; signing host).
 - [ ] `npm run workspace:prepare` passes (`SKIP_E2E=1`; Playwright is not required on the signing host).
-- [ ] CI on the release commit is green, including `npm run test:e2e`.
+- [ ] CI on the release commit is green, including merged Vitest + Playwright coverage from `npm run test:cov`.
 - [ ] `npm run test:mail-integration` passes against pinned GreenMail 2.1.11 TLS services.
 - [ ] A copy of the oldest supported v1 database opens, migrates transactionally, and preserves referenced draft/outbox attachments.
 - [ ] Direct feature builds compile. Store (`mas` / `msstore`) compile checks are optional for GitHub-only 0.1.x.
