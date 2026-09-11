@@ -73,7 +73,7 @@ export function AddressFields({
             ))}
           </select>
         ) : (
-          <span className="composer-from-value">{fromValue}</span>
+          <input readOnly value={fromValue} aria-readonly="true" />
         )}
       </label>
       <div className="to-field-row">

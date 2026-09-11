@@ -440,7 +440,8 @@
   gap: 12px;
 }
 
-.setup-account-embed .setup-page {
+.setup-wizard-embedded {
+  display: grid;
   min-height: 0;
   padding: 0;
   background: transparent;

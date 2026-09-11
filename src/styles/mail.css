@@ -30,7 +30,7 @@
     5px minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
   grid-template-areas:
-    "toolbar toolbar toolbar toolbar toolbar"
+    "folders folder-splitter toolbar toolbar toolbar"
     "folders folder-splitter messages reader-splitter reader";
   background: var(--surface);
 }
@@ -39,7 +39,7 @@
   grid-template-columns: var(--rendered-folder-width) 5px minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr) 5px var(--rendered-reader-height);
   grid-template-areas:
-    "toolbar toolbar toolbar"
+    "folders folder-splitter toolbar"
     "folders folder-splitter messages"
     "folders folder-splitter reader-bottom-splitter"
     "folders folder-splitter reader";
@@ -49,7 +49,7 @@
   grid-template-columns: var(--rendered-folder-width) 5px minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
   grid-template-areas:
-    "toolbar toolbar toolbar"
+    "folders folder-splitter toolbar"
     "folders folder-splitter messages";
 }
 

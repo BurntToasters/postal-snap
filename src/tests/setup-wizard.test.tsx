@@ -45,6 +45,12 @@ describe("account setup", () => {
     expect(screen.getByRole("button", { name: /Other email/i })).toBeVisible();
   });
 
+  it("uses no nested full-page setup shell when embedded", () => {
+    const { container } = render(<SetupWizard embedded onComplete={vi.fn()} />);
+    expect(container.querySelector(".setup-page")).toBeNull();
+    expect(container.querySelector(".setup-wizard-embedded")).toBeVisible();
+  });
+
   it("never offers plaintext transport", () => {
     render(<SetupWizard onComplete={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: /Other email/i }));

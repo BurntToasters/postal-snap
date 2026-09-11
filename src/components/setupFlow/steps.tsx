@@ -318,7 +318,7 @@ export function AccountStep({
           className="secondary-button"
           onClick={() => go("comfort")}
         >
-          {strings.common.back}
+          {strings.setup.backToSetup}
         </button>
         <button
           type="button"
@@ -329,7 +329,7 @@ export function AccountStep({
           {strings.setup.skipForNow}
         </button>
       </div>
-      <SetupWizard onComplete={handleAccountAdded} />
+      <SetupWizard embedded onComplete={handleAccountAdded} />
       {error ? (
         <p className="setup-field-hint" role="alert">
           {error}

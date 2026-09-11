@@ -9,37 +9,42 @@ export async function registerMockSettingsSystem(page: Page): Promise<void> {
     const mock = window.__POSTAL_SNAP_MOCK__ as MockShared;
     const state = window.__POSTAL_SNAP_TEST__ as MockState;
     const { params } = mock;
+    let currentSettings = {
+      schemaVersion: 2,
+      readingPane:
+        params.get("pane") ??
+        (location.search.includes("tallBottom") ? "bottom" : "right"),
+      textScale: Number(params.get("scale") ?? 1),
+      privateNotifications: false,
+      theme: params.get("theme") ?? "system",
+      density: params.get("density") ?? "comfortable",
+      cachePolicy: {
+        mode: "recent",
+        days: 90,
+        maxBytes: 1_073_741_824,
+      },
+      lastAccountId: null,
+      lastMailboxId: null,
+      folderPaneWidth: params.has("oversized") ? 400 : 248,
+      messagePaneWidth: params.has("oversized") ? 720 : 390,
+      readerPaneHeight: location.search.includes("tallBottom") ? 800 : 360,
+      windowEffects: false,
+      sidebarVisible: !params.has("hiddenSidebar"),
+      undoSendSeconds: 10,
+      blockAdvertisingAndTracking: true,
+      blockReportedThreats: true,
+      groupThreads: true,
+      notifyNewMail: true,
+      setupCompleted: !location.search.includes("firstRun"),
+      setupStep: null,
+    };
+    const copySettings = () => ({
+      ...currentSettings,
+      cachePolicy: { ...currentSettings.cachePolicy },
+    });
     Object.assign(mock.handlers, {
       get_settings() {
-        return {
-          schemaVersion: 2,
-          readingPane:
-            params.get("pane") ??
-            (location.search.includes("tallBottom") ? "bottom" : "right"),
-          textScale: Number(params.get("scale") ?? 1),
-          privateNotifications: false,
-          theme: params.get("theme") ?? "system",
-          density: params.get("density") ?? "comfortable",
-          cachePolicy: {
-            mode: "recent",
-            days: 90,
-            maxBytes: 1_073_741_824,
-          },
-          lastAccountId: null,
-          lastMailboxId: null,
-          folderPaneWidth: params.has("oversized") ? 400 : 248,
-          messagePaneWidth: params.has("oversized") ? 720 : 390,
-          readerPaneHeight: location.search.includes("tallBottom") ? 800 : 360,
-          windowEffects: false,
-          sidebarVisible: !params.has("hiddenSidebar"),
-          undoSendSeconds: 10,
-          blockAdvertisingAndTracking: true,
-          blockReportedThreats: true,
-          groupThreads: true,
-          notifyNewMail: true,
-          setupCompleted: location.search.includes("firstRun") ? false : true,
-          setupStep: null,
-        };
+        return copySettings();
       },
       supports_workspace_window_fx() {
         return true;
@@ -49,7 +54,15 @@ export async function registerMockSettingsSystem(page: Page): Promise<void> {
       },
       save_settings(args: Record<string, unknown>) {
         state.savedSettings.push(args.settings);
-        return args.settings;
+        currentSettings = {
+          ...currentSettings,
+          ...(args.settings as typeof currentSettings),
+          cachePolicy: {
+            ...currentSettings.cachePolicy,
+            ...((args.settings as typeof currentSettings).cachePolicy ?? {}),
+          },
+        };
+        return copySettings();
       },
       export_settings() {
         state.exportedSettings += 1;
@@ -57,8 +70,8 @@ export async function registerMockSettingsSystem(page: Page): Promise<void> {
       },
       import_settings() {
         state.importedSettings += 1;
-        return {
-          schemaVersion: 2,
+        currentSettings = {
+          ...currentSettings,
           readingPane: "bottom",
           textScale: 1.15,
           privateNotifications: true,
@@ -81,11 +94,12 @@ export async function registerMockSettingsSystem(page: Page): Promise<void> {
           setupCompleted: true,
           setupStep: null,
         };
+        return copySettings();
       },
       reset_settings() {
         state.resetSettings += 1;
-        return {
-          schemaVersion: 2,
+        currentSettings = {
+          ...currentSettings,
           readingPane: "right",
           textScale: 1,
           privateNotifications: false,
@@ -101,6 +115,9 @@ export async function registerMockSettingsSystem(page: Page): Promise<void> {
           folderPaneWidth: 248,
           messagePaneWidth: 390,
           readerPaneHeight: 360,
+          windowEffects: false,
+          sidebarVisible: true,
+          undoSendSeconds: 10,
           blockAdvertisingAndTracking: true,
           blockReportedThreats: true,
           groupThreads: true,
@@ -108,6 +125,7 @@ export async function registerMockSettingsSystem(page: Page): Promise<void> {
           setupCompleted: true,
           setupStep: null,
         };
+        return copySettings();
       },
       get_startup_notice() {
         return null;

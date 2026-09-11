@@ -557,6 +557,10 @@ test("test:all still includes Playwright e2e unless SKIP_E2E is set", async () =
   );
   assert.equal(packageJson.scripts["test:all"], "node scripts/test-all.js");
   assert.equal(packageJson.scripts["test:e2e"], "playwright test");
+  assert.equal(
+    packageJson.scripts["test:release-assets"],
+    "node --test scripts/*.test.js scripts/lib/*.test.js",
+  );
 
   const { qualityGateSteps } = await import("./test-all.js");
   assert.deepEqual(
