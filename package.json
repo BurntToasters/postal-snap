@@ -28,7 +28,7 @@
     "test:mail-integration": "node scripts/test-mail-integration.js",
     "test:e2e": "playwright test",
     "setup:e2e": "playwright install chromium",
-    "test:release-assets": "node --test scripts/*.test.js",
+    "test:release-assets": "node --test scripts/*.test.js scripts/lib/*.test.js",
     "test:cargo-safe-update": "node --test scripts/cargo-safe-update.test.mjs scripts/check-cargo-update-policy.test.mjs",
     "check:cargo-update-policy": "node scripts/check-cargo-update-policy.mjs",
     "test:all": "node scripts/test-all.js",
