@@ -368,6 +368,14 @@ test("direct updater is GitHub-only and notices are bundled", async () => {
     config.bundle.resources["../THIRD_PARTY_NOTICES.cargo.txt"],
     "THIRD_PARTY_NOTICES.cargo.txt",
   );
+  assert.equal(
+    config.bundle.resources["../public/licenses.json"],
+    "licenses.json",
+  );
+  assert.equal(
+    config.bundle.resources["../public/licenses-cargo.json"],
+    "licenses-cargo.json",
+  );
   assert.equal(config.bundle.resources["../LICENSE"], "LICENSE");
   assert.equal(
     config.bundle.resources["filters/LICENSE-CC-BY-SA-3.0.txt"],

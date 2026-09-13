@@ -22,7 +22,7 @@ import type {
   BulkOutcome,
   RecipientSuggestion,
   ExternalLinkCheck,
-  LicenseCredit,
+  LicenseCredits,
   RemoteImageResult,
   MessageChangeEvent,
   MessagePage,
@@ -379,7 +379,7 @@ export const api = {
   cacheUsage: () => call<CacheUsage>("get_cache_usage"),
   clearCache: () => call<void>("clear_downloaded_mail"),
   distribution: () => call<DistributionChannel>("get_distribution_channel"),
-  getLicenseCredits: () => call<LicenseCredit[]>("get_license_credits"),
+  getLicenseCredits: () => call<LicenseCredits>("get_license_credits"),
   async onSyncState(handler: (state: SyncState) => void): Promise<UnlistenFn> {
     if (!inTauri()) return () => undefined;
     return listen<SyncState>("sync-state", ({ payload }) => handler(payload));

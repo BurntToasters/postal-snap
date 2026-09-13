@@ -2,13 +2,13 @@ import { useState } from "react";
 import { api } from "../../api";
 import { strings } from "../../i18n";
 import { version as appVersion } from "../../../package.json";
-import type { LicenseCredit } from "../../types";
+import type { LicenseCredits } from "../../types";
 import { inspectAndOpenExternalLink } from "../externalLink";
 import { CreditsDialog } from "./creditsDialog";
 import { SettingsPanel } from "./primitives";
 
 export function AboutTab() {
-  const [credits, setCredits] = useState<LicenseCredit[] | null>(null);
+  const [credits, setCredits] = useState<LicenseCredits | null>(null);
   const [loadingCredits, setLoadingCredits] = useState(false);
 
   async function openCredits() {

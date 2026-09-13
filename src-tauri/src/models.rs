@@ -533,12 +533,32 @@ pub struct DistributionChannel {
     pub updates_managed_by: String,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct LicenseCredit {
     pub id: String,
     pub title: String,
     pub body: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LicensePackage {
+    pub id: String,
+    pub licenses: String,
+    #[serde(default)]
+    pub repository: Option<String>,
+    #[serde(default)]
+    pub license_text: Option<String>,
+    #[serde(default)]
+    pub license_text_status: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LicenseCredits {
+    pub notices: Vec<LicenseCredit>,
+    pub packages: Vec<LicensePackage>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]

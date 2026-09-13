@@ -23,6 +23,7 @@ let updateFound = false;
 let updateVersion: string | undefined;
 let updateReadyVersion: string | undefined;
 let pendingPackage: DownloadedUpdate | undefined;
+const quitUpdateListeners = new Set<() => void>();
 
 export function addUpdateFoundListener(listener: UpdateFoundListener): void {
   updateFoundListeners.add(listener);
@@ -48,6 +49,7 @@ export function resetUpdateStateForTesting(): void {
   updateVersion = undefined;
   updateReadyVersion = undefined;
   pendingPackage = undefined;
+  quitUpdateListeners.clear();
   useAppStore.getState().setUpdateReady(null);
 }
 
@@ -59,6 +61,7 @@ function markUpdateReady(update: DownloadedUpdate): void {
   pendingPackage = update;
   updateReadyVersion = update.version;
   useAppStore.getState().setUpdateReady(update.version);
+  for (const listener of quitUpdateListeners) listener();
 }
 
 function notifyUpdateFound(version: string): void {
@@ -253,22 +256,29 @@ export function startDeferredUpdateOnQuit(): () => void {
   }
   let unlisten: (() => void) | undefined;
   let cancelled = false;
-  void import("@tauri-apps/api/window")
-    .then(async ({ getCurrentWindow }) => {
-      if (cancelled) return;
-      unlisten = await getCurrentWindow().onCloseRequested(async (event) => {
-        if (!pendingPackage && !applyInFlight) return;
-        event.preventDefault();
-        try {
-          await applyPendingUpdate();
-        } catch {
-          // Leave the window open so drafts and unsent mail are not lost.
-        }
-      });
-    })
-    .catch(() => undefined);
+  const attach = () => {
+    if (cancelled || unlisten || !pendingPackage) return;
+    void import("@tauri-apps/api/window")
+      .then(async ({ getCurrentWindow }) => {
+        if (cancelled || unlisten || !pendingPackage) return;
+        // Always preventDefault: Tauri's listener otherwise destroy()s the
+        // window, and Postal Snap does not grant allow-destroy.
+        unlisten = await getCurrentWindow().onCloseRequested(async (event) => {
+          event.preventDefault();
+          try {
+            await applyPendingUpdate();
+          } catch {
+            // Leave the window open so drafts and unsent mail are not lost.
+          }
+        });
+      })
+      .catch(() => undefined);
+  };
+  quitUpdateListeners.add(attach);
+  attach();
   return () => {
     cancelled = true;
+    quitUpdateListeners.delete(attach);
     unlisten?.();
   };
 }

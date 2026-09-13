@@ -15,3 +15,5 @@ flatpak-repo/
 *.log
 .DS_Store
 THIRD_PARTY_NOTICES*.txt
+public/licenses.json
+public/licenses-cargo.json

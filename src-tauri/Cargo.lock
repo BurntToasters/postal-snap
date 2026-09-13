@@ -3544,7 +3544,7 @@ dependencies = [
 
 [[package]]
 name = "postal-snap"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "adblock",
  "addr",
