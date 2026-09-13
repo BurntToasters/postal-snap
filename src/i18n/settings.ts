@@ -179,8 +179,12 @@ export const settings = {
   aboutLicense: "Licenses and credits",
   aboutCreditsTitle: "Licenses and credits",
   aboutCreditsLead:
-    "Postal Snap and the bundled third-party notices included with this copy.",
+    "Postal Snap and the open-source software bundled with this copy.",
   aboutCreditsError: "Postal Snap could not load the bundled license credits.",
+  aboutCreditsPackages: "Bundled open-source packages",
+  aboutCreditsMissingText: (licenses: string) =>
+    `This package did not include license text. Declared SPDX terms: ${licenses}`,
+  aboutCreditsOpenSource: "Open source repository",
   aboutFilters:
     "Remote-image checks use official EasyList and EasyPrivacy network rules (CC BY-SA 3.0 / CC0) and a local TweetFeed reported-address snapshot (CC0).",
   aboutVersion: (version: string) => `Version ${version}`,

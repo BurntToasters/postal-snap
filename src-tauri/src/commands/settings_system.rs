@@ -4,7 +4,9 @@ use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 use super::{command_result, refresh_mail_menu, AppState, CommandResult};
-use crate::models::{AppSettings, CacheUsage, DistributionChannel, LicenseCredit};
+use crate::models::{
+    AppSettings, CacheUsage, DistributionChannel, LicenseCredit, LicenseCredits, LicensePackage,
+};
 
 #[tauri::command(async)]
 pub fn get_settings(state: State<'_, AppState>) -> CommandResult<AppSettings> {
@@ -185,11 +187,10 @@ pub fn relaunch_app(app: AppHandle) -> CommandResult<()> {
     app.restart();
 }
 
-const MAX_LICENSE_FILE_BYTES: usize = 1_048_576;
-const LICENSE_CREDIT_FILES: &[(&str, &str, &str)] = &[
+const MAX_LICENSE_NOTICE_BYTES: usize = 1_048_576;
+const MAX_LICENSE_PACKAGE_BYTES: usize = 16_777_216;
+const LICENSE_NOTICE_FILES: &[(&str, &str, &str)] = &[
     ("mpl", "Mozilla Public License 2.0", "LICENSE"),
-    ("npm", "npm dependencies", "THIRD_PARTY_NOTICES.npm.txt"),
-    ("cargo", "Rust crates", "THIRD_PARTY_NOTICES.cargo.txt"),
     (
         "cc-by-sa",
         "EasyList / EasyPrivacy (CC BY-SA 3.0)",
@@ -201,8 +202,9 @@ const LICENSE_CREDIT_FILES: &[(&str, &str, &str)] = &[
         "LICENSE-CC0-1.0.txt",
     ),
 ];
+const LICENSE_PACKAGE_FILES: &[&str] = &["licenses.json", "licenses-cargo.json"];
 
-fn read_named_license_file(dir: &Path, filename: &str) -> Result<String, String> {
+fn read_named_license_file(dir: &Path, filename: &str, max_bytes: usize) -> Result<String, String> {
     if filename.is_empty()
         || filename.contains('/')
         || filename.contains('\\')
@@ -215,27 +217,63 @@ fn read_named_license_file(dir: &Path, filename: &str) -> Result<String, String>
         return Err("Could not read license credits.".into());
     }
     let bytes = std::fs::read(&path).map_err(|_| "Could not read license credits.".to_string())?;
-    if bytes.len() > MAX_LICENSE_FILE_BYTES {
+    if bytes.len() > max_bytes {
         return Err("Could not read license credits.".into());
     }
     String::from_utf8(bytes).map_err(|_| "Could not read license credits.".to_string())
 }
 
-pub(crate) fn read_license_credits_from(dir: &Path) -> Result<Vec<LicenseCredit>, String> {
-    LICENSE_CREDIT_FILES
+fn read_compiled_license_packages(
+    dir: &Path,
+    filename: &str,
+) -> Result<Vec<LicensePackage>, String> {
+    let raw = read_named_license_file(dir, filename, MAX_LICENSE_PACKAGE_BYTES)?;
+    let entries: std::collections::BTreeMap<String, CompiledLicenseEntry> =
+        serde_json::from_str(&raw).map_err(|_| "Could not read license credits.".to_string())?;
+    Ok(entries
+        .into_iter()
+        .map(|(id, entry)| LicensePackage {
+            id,
+            licenses: entry.licenses,
+            repository: entry.repository.filter(|value| !value.is_empty()),
+            license_text: entry.license_text.filter(|value| !value.is_empty()),
+            license_text_status: entry.license_text_status,
+        })
+        .collect())
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CompiledLicenseEntry {
+    licenses: String,
+    #[serde(default)]
+    repository: Option<String>,
+    #[serde(default)]
+    license_text: Option<String>,
+    #[serde(default)]
+    license_text_status: Option<String>,
+}
+
+pub(crate) fn read_license_credits_from(dir: &Path) -> Result<LicenseCredits, String> {
+    let notices = LICENSE_NOTICE_FILES
         .iter()
         .map(|(id, title, filename)| {
             Ok(LicenseCredit {
                 id: (*id).into(),
                 title: (*title).into(),
-                body: read_named_license_file(dir, filename)?,
+                body: read_named_license_file(dir, filename, MAX_LICENSE_NOTICE_BYTES)?,
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>, String>>()?;
+    let mut packages = Vec::new();
+    for filename in LICENSE_PACKAGE_FILES {
+        packages.extend(read_compiled_license_packages(dir, filename)?);
+    }
+    Ok(LicenseCredits { notices, packages })
 }
 
 #[tauri::command]
-pub fn get_license_credits(app: AppHandle) -> CommandResult<Vec<LicenseCredit>> {
+pub fn get_license_credits(app: AppHandle) -> CommandResult<LicenseCredits> {
     let dir = app
         .path()
         .resource_dir()
@@ -245,23 +283,54 @@ pub fn get_license_credits(app: AppHandle) -> CommandResult<Vec<LicenseCredit>> 
 
 #[cfg(test)]
 mod tests {
-    use super::{read_license_credits_from, LICENSE_CREDIT_FILES, MAX_LICENSE_FILE_BYTES};
+    use super::{
+        read_license_credits_from, LICENSE_NOTICE_FILES, LICENSE_PACKAGE_FILES,
+        MAX_LICENSE_NOTICE_BYTES,
+    };
     use std::fs;
 
-    #[test]
-    fn reads_allowlisted_license_files_in_order() {
-        let directory = tempfile::tempdir().unwrap();
-        for (id, _, filename) in LICENSE_CREDIT_FILES {
-            fs::write(directory.path().join(filename), format!("{id} body")).unwrap();
+    fn write_required_files(dir: &std::path::Path) {
+        for (id, _, filename) in LICENSE_NOTICE_FILES {
+            fs::write(dir.join(filename), format!("{id} body")).unwrap();
         }
+        fs::write(
+            dir.join("licenses.json"),
+            r#"{"alpha@1.0.0":{"licenses":"MIT","repository":"https://example.test/alpha","licenseText":"alpha text","packageManager":"npm"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.join("licenses-cargo.json"),
+            r#"{"cargo:beta@2.0.0":{"licenses":"Apache-2.0","licenseTextStatus":"not-packaged"}}"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn reads_notices_and_compiled_package_credits() {
+        let directory = tempfile::tempdir().unwrap();
+        write_required_files(directory.path());
         fs::write(directory.path().join("secret.txt"), "ignore").unwrap();
         let credits = read_license_credits_from(directory.path()).unwrap();
-        assert_eq!(credits.len(), LICENSE_CREDIT_FILES.len());
-        assert_eq!(credits[0].id, "mpl");
-        assert_eq!(credits[0].title, "Mozilla Public License 2.0");
-        assert_eq!(credits[0].body, "mpl body");
-        assert_eq!(credits[1].id, "npm");
-        assert!(!credits.iter().any(|credit| credit.body.contains("ignore")));
+        assert_eq!(credits.notices.len(), LICENSE_NOTICE_FILES.len());
+        assert_eq!(credits.notices[0].id, "mpl");
+        assert_eq!(credits.notices[0].title, "Mozilla Public License 2.0");
+        assert_eq!(credits.notices[0].body, "mpl body");
+        assert_eq!(credits.packages.len(), 2);
+        assert_eq!(credits.packages[0].id, "alpha@1.0.0");
+        assert_eq!(
+            credits.packages[0].license_text.as_deref(),
+            Some("alpha text")
+        );
+        assert_eq!(credits.packages[1].id, "cargo:beta@2.0.0");
+        assert_eq!(
+            credits.packages[1].license_text_status.as_deref(),
+            Some("not-packaged")
+        );
+        assert!(!credits
+            .notices
+            .iter()
+            .any(|credit| credit.body.contains("ignore")));
+        assert_eq!(LICENSE_PACKAGE_FILES.len(), 2);
     }
 
     #[test]
@@ -272,14 +341,21 @@ mod tests {
     }
 
     #[test]
+    fn fails_closed_when_compiled_package_json_is_invalid() {
+        let directory = tempfile::tempdir().unwrap();
+        write_required_files(directory.path());
+        fs::write(directory.path().join("licenses.json"), "{not-json").unwrap();
+        let error = read_license_credits_from(directory.path()).unwrap_err();
+        assert_eq!(error, "Could not read license credits.");
+    }
+
+    #[test]
     fn fails_closed_when_a_license_file_is_too_large() {
         let directory = tempfile::tempdir().unwrap();
-        for (_, _, filename) in LICENSE_CREDIT_FILES {
-            fs::write(directory.path().join(filename), "ok").unwrap();
-        }
+        write_required_files(directory.path());
         fs::write(
             directory.path().join("LICENSE"),
-            vec![b'x'; MAX_LICENSE_FILE_BYTES + 1],
+            vec![b'x'; MAX_LICENSE_NOTICE_BYTES + 1],
         )
         .unwrap();
         let error = read_license_credits_from(directory.path()).unwrap_err();
