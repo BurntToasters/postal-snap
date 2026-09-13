@@ -29,6 +29,7 @@ describe("i18n namespaces", () => {
   });
 
   it("names an in-progress update without claiming it is installed", () => {
+    expect(strings.settings.installing("0.1.9")).toMatch(/Downloading/);
     expect(strings.settings.installing("0.1.9")).toMatch(/0\.1\.9/);
     expect(strings.settings.installing("0.1.9")).not.toMatch(/installed/i);
   });

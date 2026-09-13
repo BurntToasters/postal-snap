@@ -279,6 +279,12 @@ export interface DistributionChannel {
   updatesManagedBy: "postalSnap" | "store" | "githubDownload";
 }
 
+export interface LicenseCredit {
+  id: string;
+  title: string;
+  body: string;
+}
+
 export interface OfflineOperationsDroppedEvent {
   accountId: string;
   count: number;
