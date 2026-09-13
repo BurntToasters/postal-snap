@@ -145,4 +145,4 @@ jobs:
           sudo flatpak install -y flathub "org.gnome.Platform//${RUNTIME}" "org.gnome.Sdk//${RUNTIME}" org.flatpak.Builder
       - name: Lint Flatpak manifest
         run: |
-          flatpak run --command=flatpak-builder-lint org.flatpak.Builder --exceptions manifest "$GITHUB_WORKSPACE/packaging/flatpak/run.rosie.snap.yml"
+          flatpak run --command=flatpak-builder-lint org.flatpak.Builder --exceptions --user-exceptions "$GITHUB_WORKSPACE/packaging/flatpak/lint-exceptions.json" manifest "$GITHUB_WORKSPACE/packaging/flatpak/run.rosie.snap.yml"

@@ -307,24 +307,33 @@ test("direct and Store builds keep separate capabilities", async () => {
   assert.equal(flatpak.plugins.updater, null);
 });
 
-test("flatpak build-bundle uses the manifest branch, not a hardcoded mismatch", async () => {
+test("flatpak build-bundle uses the stable branch without a lint-invalid manifest branch", async () => {
   const manifest = await readFile(
     join(root, "packaging/flatpak/run.rosie.snap.yml"),
     "utf8",
   );
   const script = await readFile(join(root, "scripts/build-flatpak.js"), "utf8");
-  assert.match(manifest, /^branch:\s*stable\s*$/m);
+  assert.doesNotMatch(manifest, /^branch:/m);
   assert.match(manifest, /org\.freedesktop\.Notifications/);
   assert.match(manifest, /^runtime-version:\s*"50"$/m);
   assert.match(manifest, /run\.rosie\.snap\.metainfo\.xml/);
-  assert.match(script, /manifest\.match\(\/\^branch:/);
-  assert.doesNotMatch(script, /"run\.rosie\.snap",\s*"stable"/);
+  assert.match(script, /const branch = "stable";/);
+  assert.match(script, /"run\.rosie\.snap",\s*branch/);
   const metainfo = await readFile(
     join(root, "packaging/flatpak/run.rosie.snap.metainfo.xml"),
     "utf8",
   );
   assert.match(metainfo, /<id>run\.rosie\.snap<\/id>/);
   assert.match(metainfo, /MPL-2\.0/);
+  const lintExceptions = JSON.parse(
+    await readFile(
+      join(root, "packaging/flatpak/lint-exceptions.json"),
+      "utf8",
+    ),
+  );
+  assert.deepEqual(lintExceptions, {
+    "run.rosie.snap": ["appid-url-not-reachable"],
+  });
 });
 
 test("direct updater is GitHub-only and notices are bundled", async () => {
