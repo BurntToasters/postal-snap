@@ -36,16 +36,14 @@ await run("node", [
   "--",
   "--no-default-features",
 ]);
-const manifest = (await readFile(sourceManifest, "utf8")).replace(
-  "../../src-tauri/target/release/postal-snap",
-  `../../src-tauri/target/${rustTarget}/release/postal-snap`,
+const branch = "stable";
+const manifest = withSideloadBranch(
+  (await readFile(sourceManifest, "utf8")).replace(
+    "../../src-tauri/target/release/postal-snap",
+    `../../src-tauri/target/${rustTarget}/release/postal-snap`,
+  ),
+  branch,
 );
-const branch = manifest.match(/^branch:\s*["']?([^\s#"']+)/m)?.[1];
-if (!branch) {
-  throw new Error(
-    "Flatpak manifest must set branch so build-bundle matches the exported ref.",
-  );
-}
 await runFlatpakBuilderLint(sourceManifest);
 await validateAppStreamMetadata();
 await writeFile(generatedManifest, manifest);
@@ -117,4 +115,18 @@ async function validateAppStreamMetadata() {
     "validate",
     join(root, "packaging/flatpak/run.rosie.snap.metainfo.xml"),
   ]);
+}
+
+// Flathub lint forbids toplevel `branch`. GitHub sideload bundles still need
+// app/run.rosie.snap/<arch>/stable, so the generated rewrite adds it.
+function withSideloadBranch(yaml, branch) {
+  if (/^branch:/m.test(yaml)) {
+    throw new Error(
+      "Committed Flatpak manifest must not set toplevel branch; Flathub lint rejects it.",
+    );
+  }
+  if (!/^app-id:\s*\S+/m.test(yaml)) {
+    throw new Error("Flatpak manifest is missing app-id.");
+  }
+  return yaml.replace(/^(app-id:\s*\S+)\s*$/m, `$1\nbranch: ${branch}`);
 }
