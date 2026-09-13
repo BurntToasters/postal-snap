@@ -8,13 +8,18 @@ use super::parse::{
 };
 use super::send::connect_imap;
 use super::{
-    ImapSession, RemoteDraftAttachment, RemoteDraftData, RemoteDraftLocation, RemoteDraftSnapshot,
-    MAX_ATTACHMENTS, MAX_MESSAGE_BYTES, MAX_MIME_PARTS,
+    BodyBudget, ImapSession, RemoteDraftAttachment, RemoteDraftData, RemoteDraftLocation,
+    RemoteDraftSnapshot, IMAP_COMMAND_TIMEOUT, MAX_ATTACHMENTS, MAX_MESSAGE_BYTES, MAX_MIME_PARTS,
 };
 use crate::{
     models::AccountRecord,
     security::{redact_error, safe_filename},
 };
+
+/// Cumulative delivered-body cap for one draft import chunk. The declared
+/// RFC822.SIZE only filters which UIDs are requested; the delivered length and
+/// this cumulative budget bound what is retained.
+const DRAFT_BATCH_TOTAL_BYTES: usize = MAX_MESSAGE_BYTES;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn upsert_remote_draft(
@@ -27,55 +32,75 @@ pub async fn upsert_remote_draft(
     previous_uid_validity: Option<u32>,
 ) -> Result<RemoteDraftLocation, String> {
     let mut session = connect_imap(&account.imap, password).await?;
-    let selected = session
-        .select(mailbox)
+    let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(mailbox))
         .await
+        .map_err(|_| "Draft synchronization timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Draft synchronization"))?;
-    let capabilities = session
-        .capabilities()
+    let selected_uid_validity = selected.uid_validity.ok_or_else(|| {
+        "The Drafts folder identity is unavailable; Postal Snap kept the local draft safely."
+            .to_string()
+    })?;
+    let capabilities = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.capabilities())
         .await
+        .map_err(|_| "Draft synchronization timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Draft synchronization"))?;
     if previous_uid.is_some() && !capabilities.has_str("UIDPLUS") {
         return Err("This mail server cannot safely replace synchronized drafts.".into());
     }
     let mut matching = search_message_id(&mut session, message_id, "Draft synchronization").await?;
     if matching.is_empty() {
-        session
-            .append(mailbox, Some("(\\Draft)"), None, bytes)
+        tokio::time::timeout(
+            IMAP_COMMAND_TIMEOUT,
+            session.append(mailbox, Some("(\\Draft)"), None, bytes),
+        )
+        .await
+        .map_err(|_| "Draft upload timed out.".to_string())?
+        .map_err(|error| redact_error(&error, "Draft upload"))?;
+        let refreshed = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(mailbox))
             .await
-            .map_err(|error| redact_error(&error, "Draft upload"))?;
-        session
-            .select(mailbox)
-            .await
+            .map_err(|_| "Draft synchronization timed out.".to_string())?
             .map_err(|error| redact_error(&error, "Draft synchronization"))?;
+        if refreshed.uid_validity != Some(selected_uid_validity) {
+            return Err(
+                "The Drafts folder changed; Postal Snap kept the local draft safely.".into(),
+            );
+        }
         matching = search_message_id(&mut session, message_id, "Draft synchronization").await?;
     }
     let uid = matching
         .into_iter()
         .max()
         .ok_or_else(|| "The uploaded draft could not be confirmed.".to_string())?;
-    if previous_uid_validity == selected.uid_validity {
+    if previous_uid_validity == Some(selected_uid_validity) {
         if let Some(previous_uid) = previous_uid.filter(|previous_uid| *previous_uid != uid) {
-            session
-                .uid_store(previous_uid.to_string(), "+FLAGS.SILENT (\\Deleted)")
-                .await
-                .map_err(|error| redact_error(&error, "Draft replacement"))?
-                .try_collect::<Vec<_>>()
-                .await
-                .map_err(|error| redact_error(&error, "Draft replacement"))?;
-            session
-                .uid_expunge(previous_uid.to_string())
-                .await
-                .map_err(|error| redact_error(&error, "Draft replacement"))?
-                .try_collect::<Vec<_>>()
-                .await
-                .map_err(|error| redact_error(&error, "Draft replacement"))?;
+            tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
+                session
+                    .uid_store(previous_uid.to_string(), "+FLAGS.SILENT (\\Deleted)")
+                    .await
+                    .map_err(|error| redact_error(&error, "Draft replacement"))?
+                    .try_collect::<Vec<_>>()
+                    .await
+                    .map_err(|error| redact_error(&error, "Draft replacement"))
+            })
+            .await
+            .map_err(|_| "Draft replacement timed out.".to_string())??;
+            tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
+                session
+                    .uid_expunge(previous_uid.to_string())
+                    .await
+                    .map_err(|error| redact_error(&error, "Draft replacement"))?
+                    .try_collect::<Vec<_>>()
+                    .await
+                    .map_err(|error| redact_error(&error, "Draft replacement"))
+            })
+            .await
+            .map_err(|_| "Draft replacement timed out.".to_string())??;
         }
     }
-    let _ = session.logout().await;
+    let _ = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.logout()).await;
     Ok(RemoteDraftLocation {
         uid,
-        uid_validity: selected.uid_validity,
+        uid_validity: Some(selected_uid_validity),
     })
 }
 
@@ -86,36 +111,48 @@ pub async fn delete_remote_draft(
     uid: u32,
     expected_uid_validity: Option<u32>,
 ) -> Result<(), String> {
+    let expected_uid_validity = expected_uid_validity.ok_or_else(|| {
+        "The Drafts folder identity is unavailable; Postal Snap kept the local draft safely."
+            .to_string()
+    })?;
     let mut session = connect_imap(&account.imap, password).await?;
-    let selected = session
-        .select(mailbox)
+    let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(mailbox))
         .await
+        .map_err(|_| "Draft deletion timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Draft deletion"))?;
-    if expected_uid_validity.is_some() && selected.uid_validity != expected_uid_validity {
+    if selected.uid_validity != Some(expected_uid_validity) {
         return Err("The Drafts folder changed; Postal Snap kept the local draft safely.".into());
     }
-    let capabilities = session
-        .capabilities()
+    let capabilities = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.capabilities())
         .await
+        .map_err(|_| "Draft deletion timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Draft deletion"))?;
     if !capabilities.has_str("UIDPLUS") {
         return Err("This mail server cannot safely delete synchronized drafts.".into());
     }
-    session
-        .uid_store(uid.to_string(), "+FLAGS.SILENT (\\Deleted)")
-        .await
-        .map_err(|error| redact_error(&error, "Draft deletion"))?
-        .try_collect::<Vec<_>>()
-        .await
-        .map_err(|error| redact_error(&error, "Draft deletion"))?;
-    session
-        .uid_expunge(uid.to_string())
-        .await
-        .map_err(|error| redact_error(&error, "Draft deletion"))?
-        .try_collect::<Vec<_>>()
-        .await
-        .map_err(|error| redact_error(&error, "Draft deletion"))?;
-    let _ = session.logout().await;
+    tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
+        session
+            .uid_store(uid.to_string(), "+FLAGS.SILENT (\\Deleted)")
+            .await
+            .map_err(|error| redact_error(&error, "Draft deletion"))?
+            .try_collect::<Vec<_>>()
+            .await
+            .map_err(|error| redact_error(&error, "Draft deletion"))
+    })
+    .await
+    .map_err(|_| "Draft deletion timed out.".to_string())??;
+    tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
+        session
+            .uid_expunge(uid.to_string())
+            .await
+            .map_err(|error| redact_error(&error, "Draft deletion"))?
+            .try_collect::<Vec<_>>()
+            .await
+            .map_err(|error| redact_error(&error, "Draft deletion"))
+    })
+    .await
+    .map_err(|_| "Draft deletion timed out.".to_string())??;
+    let _ = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.logout()).await;
     Ok(())
 }
 
@@ -126,13 +163,16 @@ pub async fn fetch_remote_drafts(
     known_uids: &std::collections::HashSet<u32>,
 ) -> Result<RemoteDraftSnapshot, String> {
     let mut session = connect_imap(&account.imap, password).await?;
-    let selected = session
-        .examine(mailbox)
+    let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.examine(mailbox))
         .await
+        .map_err(|_| "Draft download timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Draft download"))?;
-    let mut uids = session
-        .uid_search("ALL")
+    let selected_uid_validity = selected.uid_validity.ok_or_else(|| {
+        "The Drafts folder identity is unavailable; server drafts were not imported.".to_string()
+    })?;
+    let mut uids = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.uid_search("ALL"))
         .await
+        .map_err(|_| "Draft download timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Draft download"))?
         .into_iter()
         .collect::<Vec<_>>();
@@ -143,19 +183,24 @@ pub async fn fetch_remote_drafts(
         .filter(|uid| !known_uids.contains(uid))
         .collect::<Vec<_>>();
     let mut drafts = Vec::new();
+    let mut budget = BodyBudget::default();
     for chunk in unknown.chunks(100) {
         let set = chunk
             .iter()
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join(",");
-        let sizes = session
-            .uid_fetch(&set, "(UID RFC822.SIZE)")
-            .await
-            .map_err(|error| redact_error(&error, "Draft download"))?
-            .try_collect::<Vec<_>>()
-            .await
-            .map_err(|error| redact_error(&error, "Draft download"))?;
+        let sizes = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
+            session
+                .uid_fetch(&set, "(UID RFC822.SIZE)")
+                .await
+                .map_err(|error| redact_error(&error, "Draft download"))?
+                .try_collect::<Vec<_>>()
+                .await
+                .map_err(|error| redact_error(&error, "Draft download"))
+        })
+        .await
+        .map_err(|_| "Draft download timed out.".to_string())??;
         let safe = sizes
             .into_iter()
             .filter_map(|item| {
@@ -171,16 +216,26 @@ pub async fn fetch_remote_drafts(
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join(",");
-        let rows = session
-            .uid_fetch(safe_set, "(UID INTERNALDATE BODY.PEEK[])")
-            .await
-            .map_err(|error| redact_error(&error, "Draft download"))?
-            .try_collect::<Vec<_>>()
-            .await
-            .map_err(|error| redact_error(&error, "Draft download"))?;
-        for row in rows {
+        let mut fetched = tokio::time::timeout(
+            IMAP_COMMAND_TIMEOUT,
+            session.uid_fetch(safe_set, "(UID INTERNALDATE BODY.PEEK[])"),
+        )
+        .await
+        .map_err(|_| "Draft download timed out.".to_string())?
+        .map_err(|error| redact_error(&error, "Draft download"))?;
+        loop {
+            let row = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, fetched.try_next())
+                .await
+                .map_err(|_| "Draft download timed out.".to_string())?
+                .map_err(|error| redact_error(&error, "Draft download"))?;
+            let Some(row) = row else {
+                break;
+            };
             let Some(uid) = row.uid else { continue };
             let Some(raw) = row.body() else { continue };
+            if !budget.admit(raw.len(), MAX_MESSAGE_BYTES, DRAFT_BATCH_TOTAL_BYTES) {
+                continue;
+            }
             let updated_at = row
                 .internal_date()
                 .map(|date| date.with_timezone(&Utc).to_rfc3339())
@@ -190,9 +245,9 @@ pub async fn fetch_remote_drafts(
             }
         }
     }
-    let _ = session.logout().await;
+    let _ = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.logout()).await;
     Ok(RemoteDraftSnapshot {
-        uid_validity: selected.uid_validity,
+        uid_validity: Some(selected_uid_validity),
         uids,
         drafts,
     })
@@ -281,12 +336,15 @@ pub(crate) async fn search_message_id(
         .collect::<String>()
         .replace('\\', "\\\\")
         .replace('"', "\\\"");
-    let mut matches = session
-        .uid_search(format!("HEADER Message-ID \"{value}\""))
-        .await
-        .map_err(|error| redact_error(&error, context))?
-        .into_iter()
-        .collect::<Vec<_>>();
+    let mut matches = tokio::time::timeout(
+        IMAP_COMMAND_TIMEOUT,
+        session.uid_search(format!("HEADER Message-ID \"{value}\"")),
+    )
+    .await
+    .map_err(|_| format!("{context} timed out."))?
+    .map_err(|error| redact_error(&error, context))?
+    .into_iter()
+    .collect::<Vec<_>>();
     matches.sort_unstable();
     Ok(matches)
 }

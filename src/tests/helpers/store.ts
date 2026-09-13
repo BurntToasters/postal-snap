@@ -32,6 +32,7 @@ export function resetStore(overrides: StoreOverrides = {}): void {
     composerOpen: false,
     composerAccountId: undefined,
     composeSeed: undefined,
+    pendingComposeSeed: undefined,
     busy: false,
     error: undefined,
     lastSent: undefined,

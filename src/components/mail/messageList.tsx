@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Paperclip, Star } from "lucide-react";
 import { formatMessageDate } from "../../format";
 import { strings } from "../../i18n";
@@ -44,6 +44,7 @@ export function MessageList({
     (state) => state.settings.groupThreads,
   );
   const listRef = useRef<HTMLDivElement>(null);
+  const listId = useId();
   const [expandedThreads, setExpandedThreads] = useState<string[]>([]);
   const [focusedOptionKey, setFocusedOptionKey] = useState<string>();
 
@@ -55,7 +56,7 @@ export function MessageList({
 
   useEffect(() => {
     const selected = listRef.current?.querySelector<HTMLElement>(
-      "[role='option'][aria-selected='true']",
+      "[role='option'][aria-selected='true'], [role='treeitem'][aria-selected='true']",
     );
     if (!selected) return;
     selected.scrollIntoView?.({ block: "nearest" });
@@ -64,7 +65,8 @@ export function MessageList({
 
   // The open message's thread stays expanded without storing it:
   // deriving keeps render pure and survives list reloads.
-  const groupedThreads = groupConversations && !selecting ? groupThreads(messages) : [];
+  const groupedThreads =
+    groupConversations && !selecting ? groupThreads(messages) : [];
   const selectedThreadKey = selectedId
     ? groupedThreads.find(
         (group) =>
@@ -76,6 +78,12 @@ export function MessageList({
     selectedThreadKey && !expandedThreads.includes(selectedThreadKey)
       ? [...expandedThreads, selectedThreadKey]
       : expandedThreads;
+  // Conversation headers expand, which listbox options cannot express. Use a
+  // tree only when a real thread renders; flat lists keep listbox semantics.
+  const hasThreadedGroups = groupedThreads.some(
+    (group) => group.items.length > 1,
+  );
+  const rowRole = hasThreadedGroups ? "treeitem" : "option";
 
   const visibleOptions: VisibleOption[] =
     groupedThreads.length > 0
@@ -116,10 +124,10 @@ export function MessageList({
         }));
 
   const selectedOptionKey = selectedId
-    ? visibleOptions.find(
+    ? (visibleOptions.find(
         (option) =>
           option.kind === "header" && option.message.id === selectedId,
-      )?.key ?? `message:${selectedId}`
+      )?.key ?? `message:${selectedId}`)
     : undefined;
   const activeOptionKey = visibleOptions.some(
     (option) => option.key === focusedOptionKey,
@@ -161,7 +169,9 @@ export function MessageList({
   }
   function focusOption(option: VisibleOption) {
     const optionElement = Array.from(
-      listRef.current?.querySelectorAll<HTMLElement>("[role='option']") ?? [],
+      listRef.current?.querySelectorAll<HTMLElement>(
+        "[role='option'], [role='treeitem']",
+      ) ?? [],
     ).find((element) => element.dataset.optionKey === option.key);
     optionElement?.focus();
   }
@@ -170,11 +180,54 @@ export function MessageList({
     event: React.KeyboardEvent<HTMLElement>,
     optionKey: string,
   ) {
-    if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key))
-      return;
+    const option = visibleOptions.find((item) => item.key === optionKey);
+    if (hasThreadedGroups) {
+      if (
+        event.key === "ArrowRight" &&
+        option?.kind === "header" &&
+        option.groupKey
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!effectiveExpanded.includes(option.groupKey)) {
+          toggleThread(option.groupKey);
+          return;
+        }
+        const firstChild = visibleOptions.find(
+          (item) =>
+            item.kind === "message" && item.groupKey === option.groupKey,
+        );
+        if (firstChild) focusOption(firstChild);
+        return;
+      }
+      if (event.key === "ArrowLeft") {
+        if (
+          option?.kind === "header" &&
+          option.groupKey &&
+          expandedThreads.includes(option.groupKey)
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          toggleThread(option.groupKey);
+          return;
+        }
+        if (option?.kind === "message" && option.groupKey) {
+          event.preventDefault();
+          event.stopPropagation();
+          const header = visibleOptions.find(
+            (item) => item.key === `thread:${option.groupKey}`,
+          );
+          if (header) focusOption(header);
+          return;
+        }
+      }
+    }
+    if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
     event.stopPropagation();
-    const index = visibleOptions.findIndex((option) => option.key === optionKey);
+    const index = visibleOptions.findIndex(
+      (option) => option.key === optionKey,
+    );
     if (index < 0) return;
     const nextIndex =
       event.key === "Home"
@@ -198,6 +251,7 @@ export function MessageList({
     message: MessageSummary,
     optionKey: string,
     groupKey?: string,
+    treeLevel?: number,
   ) {
     const checked = selecting && (selectedIds ?? []).includes(message.id);
     const isNewestThreadChild =
@@ -206,6 +260,9 @@ export function MessageList({
       groupedThreads.some(
         (group) => group.key === groupKey && group.newest.id === message.id,
       );
+    const isSelected = selecting
+      ? checked
+      : selectedId === message.id && !isNewestThreadChild;
     const rowLabel = [
       message.isRead ? strings.mail.read : strings.mail.unread,
       message.isStarred ? strings.mail.starred : null,
@@ -231,14 +288,13 @@ export function MessageList({
         ) : null}
         <button
           type="button"
-          role="option"
-          aria-selected={
-            selecting ? checked : selectedId === message.id && !isNewestThreadChild
-          }
+          role={rowRole}
+          aria-selected={isSelected}
+          aria-level={rowRole === "treeitem" ? (treeLevel ?? 1) : undefined}
           data-option-key={optionKey}
           tabIndex={activeOptionKey === optionKey ? 0 : -1}
           aria-label={rowLabel}
-          className={`message-row ${message.isRead ? "read" : "unread"} ${!selecting && selectedId === message.id ? "selected" : ""} ${checked ? "checked" : ""}`}
+          className={`message-row ${message.isRead ? "read" : "unread"} ${!selecting && isSelected ? "selected" : ""} ${checked ? "checked" : ""}`}
           onClick={() =>
             selecting ? onToggleSelect?.(message.id) : void onChoose(message)
           }
@@ -273,32 +329,37 @@ export function MessageList({
     <div className="message-list">
       <div
         ref={listRef}
-        role="listbox"
+        role={hasThreadedGroups ? "tree" : "listbox"}
         aria-label={strings.mail.messages}
         aria-busy={loading}
-        aria-multiselectable={selecting || undefined}
+        aria-multiselectable={
+          !hasThreadedGroups && selecting ? true : undefined
+        }
       >
         {selecting || !groupConversations
           ? messages.map((message) =>
               renderRow(message, `message:${message.id}`),
             )
-          : groupedThreads.map((group) => {
+          : groupedThreads.map((group, index) => {
               if (group.items.length === 1) {
                 return renderRow(group.newest, `message:${group.newest.id}`);
               }
               const expanded = effectiveExpanded.includes(group.key);
+              const childrenId = `thread-children-${listId}-${index}`;
               return (
-                <div key={group.key} className="thread-group" role="group">
+                <div key={group.key} className="thread-group">
                   <button
                     type="button"
-                    role="option"
+                    role="treeitem"
                     aria-selected={selectedId === group.newest.id}
+                    aria-level={1}
                     data-option-key={`thread:${group.key}`}
                     tabIndex={
                       activeOptionKey === `thread:${group.key}` ? 0 : -1
                     }
                     className={`message-row thread-header ${group.newest.id === selectedId ? "selected" : ""} ${group.unread > 0 ? "unread" : "read"}`}
                     aria-expanded={expanded}
+                    aria-owns={expanded ? childrenId : undefined}
                     onClick={() => {
                       void onChoose(group.newest);
                       toggleThread(group.key);
@@ -344,15 +405,22 @@ export function MessageList({
                       {group.newest.preview || strings.mail.openToDownload}
                     </span>
                   </button>
-                  {expanded
-                    ? group.items.map((message) =>
+                  {expanded ? (
+                    <div
+                      role="group"
+                      id={childrenId}
+                      className="thread-children"
+                    >
+                      {group.items.map((message) =>
                         renderRow(
                           message,
                           `message:${message.id}`,
                           group.key,
+                          2,
                         ),
-                      )
-                    : null}
+                      )}
+                    </div>
+                  ) : null}
                 </div>
               );
             })}

@@ -47,6 +47,8 @@ export function SetupFlow({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
   const pageRef = useRef<HTMLDivElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const previousStepRef = useRef(step);
 
   useSetupProgress(step);
 
@@ -56,6 +58,9 @@ export function SetupFlow({
     page.scrollTop = 0;
     const host = page.closest<HTMLElement>(".setup-host");
     if (host) host.scrollTop = 0;
+    if (previousStepRef.current !== step)
+      headingRef.current?.focus({ preventScroll: true });
+    previousStepRef.current = step;
   }, [step]);
 
   async function persist(patch: Partial<typeof settings>) {
@@ -129,7 +134,7 @@ export function SetupFlow({
           <AppMark size={52} />
           <span>
             <p>{strings.appName}</p>
-            <h1 id="setup-flow-title">
+            <h1 id="setup-flow-title" ref={headingRef} tabIndex={-1}>
               {step === "welcome"
                 ? strings.setup.welcomeTitle
                 : step === "appearance"

@@ -13,7 +13,10 @@ Quick tracker for things wired into the app but not 100% yet. Full scope rules l
 Kept on purpose; each has a planned consumer. Remove if still unused after that work lands.
 
 - `get_account_inbox_counts`: planned per-account sidebar badges.
-- `list_all_mailboxes` + `search_all_cached_messages`: planned unified-inbox search (scope decision pending).
+- `update_account_display_name`: planned inline account renaming; the command and `Database::update_account_display_name` exist but no UI calls them yet.
+- `sync_all_accounts`: planned single refresh across every account; no UI caller yet.
+- `list_all_mailboxes`: planned unified-inbox search (scope decision pending).
+- `search_all_cached_messages`: command registration removed from Rust because no mailbox UI used it. The backing `Database::search_all_accounts` API stays parked for the pending unified-inbox decision, and the frontend API entry is removed separately.
 
 ## Dead storage (removed in schema v6)
 

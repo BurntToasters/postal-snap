@@ -7,6 +7,11 @@ pub struct SanitizedHtml {
     pub blocked_images: u32,
 }
 
+/// Termination guard for the post-ammonia rewrite scanners. Every iteration
+/// advances past at least four bytes, so this exceeds the maximum possible
+/// iteration count for any input bounded by `mail::MAX_MESSAGE_BYTES`.
+const MAX_REWRITE_ITERATIONS: usize = 64 * 1024 * 1024;
+
 pub fn sanitize_received_html(input: &str) -> SanitizedHtml {
     sanitize_html(input, false, false)
 }
@@ -162,13 +167,28 @@ fn mail_builder() -> ammonia::Builder<'static> {
     builder
 }
 
+fn find_ascii_case_insensitive(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    haystack
+        .windows(needle.len())
+        .position(|window| window.eq_ignore_ascii_case(needle))
+}
+
 fn normalize_src_and_href(input: &str) -> String {
     let mut output = String::with_capacity(input.len() + 16);
     let mut rest = input;
+    let mut iterations = 0usize;
     loop {
-        let lower = rest.to_ascii_lowercase();
-        let src = lower.find("src=");
-        let href = lower.find("href=");
+        if iterations >= MAX_REWRITE_ITERATIONS {
+            output.push_str(rest);
+            break;
+        }
+        iterations += 1;
+        let bytes = rest.as_bytes();
+        let src = find_ascii_case_insensitive(bytes, b"src=");
+        let href = find_ascii_case_insensitive(bytes, b"href=");
         let (rel, token_len) = match (src, href) {
             (Some(src), Some(href)) if src <= href => (src, 4),
             (Some(src), None) => (src, 4),
@@ -227,16 +247,28 @@ fn is_safe_href(value: &str) -> bool {
 fn is_kept_image_src(value: &str) -> bool {
     let value = value.trim();
     is_http_url(value)
-        || value.to_ascii_lowercase().starts_with("cid:")
+        || value
+            .as_bytes()
+            .get(..4)
+            .is_some_and(|head| head.eq_ignore_ascii_case(b"cid:"))
         || is_safe_data_image(value)
 }
 
+const SAFE_DATA_IMAGE_PREFIXES: [&str; 4] = [
+    "data:image/png;base64,",
+    "data:image/jpeg;base64,",
+    "data:image/gif;base64,",
+    "data:image/webp;base64,",
+];
+
 fn is_safe_data_image(value: &str) -> bool {
-    let lower = value.trim().to_ascii_lowercase();
-    lower.starts_with("data:image/png;base64,")
-        || lower.starts_with("data:image/jpeg;base64,")
-        || lower.starts_with("data:image/gif;base64,")
-        || lower.starts_with("data:image/webp;base64,")
+    let value = value.trim();
+    SAFE_DATA_IMAGE_PREFIXES.iter().any(|prefix| {
+        value
+            .as_bytes()
+            .get(..prefix.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(prefix.as_bytes()))
+    })
 }
 
 fn is_safe_style(value: &str) -> bool {
@@ -244,22 +276,27 @@ fn is_safe_style(value: &str) -> bool {
 }
 
 fn regex_like_dangerous_css(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    lower.contains("url(")
-        || lower.contains("expression(")
-        || lower.contains("@import")
-        || lower.contains("-moz-binding")
-        || lower.contains('\\')
-        || lower.contains("https:")
-        || lower.contains("http:")
-        || lower.contains("//")
-        || lower.contains("data:")
+    let bytes = value.as_bytes();
+    find_ascii_case_insensitive(bytes, b"url(").is_some()
+        || find_ascii_case_insensitive(bytes, b"expression(").is_some()
+        || find_ascii_case_insensitive(bytes, b"@import").is_some()
+        || find_ascii_case_insensitive(bytes, b"-moz-binding").is_some()
+        || value.contains('\\')
+        || find_ascii_case_insensitive(bytes, b"https:").is_some()
+        || find_ascii_case_insensitive(bytes, b"http:").is_some()
+        || value.contains("//")
+        || find_ascii_case_insensitive(bytes, b"data:").is_some()
 }
 
 fn rewrite_links(html: &str, restore_href: bool) -> String {
     let mut output = String::with_capacity(html.len());
     let mut rest = html;
+    let mut iterations = 0usize;
     while let Some(start) = find_named_tag_start(rest, "a") {
+        if iterations >= MAX_REWRITE_ITERATIONS {
+            break;
+        }
+        iterations += 1;
         output.push_str(&rest[..start]);
         let Some(end) = find_tag_end(&rest[start..]) else {
             output.push_str(&rest[start..]);
@@ -338,16 +375,18 @@ fn rewrite_a_tag(tag: &str, restore_href: bool) -> String {
 }
 
 fn find_named_tag_start(html: &str, name: &str) -> Option<usize> {
-    let lower = html.to_ascii_lowercase();
     let open = format!("<{name}");
+    let open = open.as_bytes();
+    let bytes = html.as_bytes();
     let mut search = 0;
-    while let Some(rel) = lower[search..].find(&open) {
+    while search + open.len() <= bytes.len() {
+        let rel = find_ascii_case_insensitive(&bytes[search..], open)?;
         let idx = search + rel;
-        let next = html.as_bytes().get(idx + 1 + name.len())?;
+        let next = bytes.get(idx + open.len())?;
         if next.is_ascii_whitespace() || *next == b'>' || *next == b'/' {
             return Some(idx);
         }
-        search = idx + 1 + name.len();
+        search = idx + open.len();
     }
     None
 }
@@ -356,7 +395,12 @@ fn rewrite_images(html: &str, keep_cid_src: bool) -> (String, u32) {
     let mut output = String::with_capacity(html.len());
     let mut rest = html;
     let mut blocked = 0;
+    let mut iterations = 0usize;
     while let Some(start) = find_img_start(rest) {
+        if iterations >= MAX_REWRITE_ITERATIONS {
+            break;
+        }
+        iterations += 1;
         output.push_str(&rest[..start]);
         let Some(end) = find_tag_end(&rest[start..]) else {
             output.push_str(&rest[start..]);
@@ -371,11 +415,12 @@ fn rewrite_images(html: &str, keep_cid_src: bool) -> (String, u32) {
 }
 
 fn find_img_start(html: &str) -> Option<usize> {
-    let lower = html.to_ascii_lowercase();
+    let bytes = html.as_bytes();
     let mut search = 0;
-    while let Some(rel) = lower[search..].find("<img") {
+    while search + 4 <= bytes.len() {
+        let rel = find_ascii_case_insensitive(&bytes[search..], b"<img")?;
         let idx = search + rel;
-        let next = html.as_bytes().get(idx + 4)?;
+        let next = bytes.get(idx + 4)?;
         if next.is_ascii_whitespace() || *next == b'>' || *next == b'/' {
             return Some(idx);
         }
@@ -543,6 +588,66 @@ fn push_attr(out: &mut String, name: &str, value: &str) {
     out.push('"');
 }
 
+/// Invert the entity escaping ammonia applies when it serializes attribute
+/// values, so a value survives exactly one encode/decode round trip instead of
+/// being double-encoded by [`push_attr`].
+fn decode_html_entities(value: &str) -> String {
+    if !value.contains('&') {
+        return value.to_string();
+    }
+    let mut output = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(index) = rest.find('&') {
+        output.push_str(&rest[..index]);
+        let after = &rest[index + 1..];
+        let Some(semicolon) = after.find(';') else {
+            output.push('&');
+            rest = after;
+            continue;
+        };
+        let entity = &after[..semicolon];
+        if entity.len() > 10 {
+            output.push('&');
+            rest = after;
+            continue;
+        }
+        match decode_entity(entity) {
+            Some(decoded) => output.push(decoded),
+            None => {
+                output.push('&');
+                output.push_str(entity);
+                output.push(';');
+            }
+        }
+        rest = &after[semicolon + 1..];
+    }
+    output.push_str(rest);
+    output
+}
+
+fn decode_entity(entity: &str) -> Option<char> {
+    match entity {
+        "amp" => Some('&'),
+        "lt" => Some('<'),
+        "gt" => Some('>'),
+        "quot" => Some('"'),
+        "apos" => Some('\''),
+        "nbsp" => Some('\u{a0}'),
+        _ => {
+            let number = entity.strip_prefix('#')?;
+            let parsed = if let Some(hex) = number
+                .strip_prefix('x')
+                .or_else(|| number.strip_prefix('X'))
+            {
+                u32::from_str_radix(hex, 16).ok()?
+            } else {
+                number.parse::<u32>().ok()?
+            };
+            char::from_u32(parsed)
+        }
+    }
+}
+
 fn parse_attrs(inside: &str) -> Vec<(String, Option<String>)> {
     let mut attrs = Vec::new();
     let bytes = inside.as_bytes();
@@ -581,7 +686,7 @@ fn parse_attrs(inside: &str) -> Vec<(String, Option<String>)> {
             while index < bytes.len() && bytes[index] != quote {
                 index += 1;
             }
-            let value = inside[value_start..index].to_string();
+            let value = decode_html_entities(&inside[value_start..index]);
             if index < bytes.len() {
                 index += 1;
             }
@@ -591,7 +696,7 @@ fn parse_attrs(inside: &str) -> Vec<(String, Option<String>)> {
             while index < bytes.len() && !bytes[index].is_ascii_whitespace() {
                 index += 1;
             }
-            inside[value_start..index].to_string()
+            decode_html_entities(&inside[value_start..index])
         };
         attrs.push((name, Some(value)));
     }
@@ -694,5 +799,64 @@ mod tests {
             sanitize_received_html(r#"<img src="data:image/png;base64,iVBORw0KGgo=" alt="dot">"#);
         assert!(html.html.contains("data:image/png;base64,iVBORw0KGgo="));
         assert_eq!(html.blocked_images, 0);
+    }
+
+    #[test]
+    fn url_attributes_are_encoded_exactly_once() {
+        let result = sanitize_received_html(
+            r#"<p><a href="https://library.example.test/hours?a=1&b=2">Hours</a></p>
+               <img src="https://images.example.test/pic.png?a=1&b=2" alt="A &amp; B">"#,
+        );
+        assert!(result
+            .html
+            .contains("data-external-href=\"https://library.example.test/hours?a=1&amp;b=2\""));
+        assert!(result
+            .html
+            .contains("data-remote-src=\"https://images.example.test/pic.png?a=1&amp;b=2\""));
+        assert!(result.html.contains("alt=\"A &amp; B\""));
+        assert!(!result.html.contains("&amp;amp;"));
+
+        for raw in [
+            r#"<a href="https://library.example.test/x?a=1&amp;b=2">Hours</a>"#,
+            r#"<a href="https://library.example.test/x?a=1&#38;b=2">Hours</a>"#,
+            r#"<a href="https://library.example.test/x?a=1&#x26;b=2">Hours</a>"#,
+        ] {
+            let encoded = sanitize_received_html(raw);
+            assert!(
+                encoded
+                    .html
+                    .contains("data-external-href=\"https://library.example.test/x?a=1&amp;b=2\""),
+                "unexpected output for {raw}: {}",
+                encoded.html
+            );
+            assert!(!encoded.html.contains("&amp;amp;"));
+        }
+
+        let script = sanitize_received_html(r#"<a href="&#106;avascript:alert(1)">x</a>"#);
+        assert!(!script.html.contains("javascript"));
+        assert!(!script.html.contains("data-external-href"));
+    }
+
+    #[test]
+    fn rewrite_cap_exceeds_any_bounded_message_tag_count() {
+        const {
+            assert!(MAX_REWRITE_ITERATIONS > crate::mail::MAX_MESSAGE_BYTES / 4);
+        }
+    }
+
+    #[test]
+    fn sanitizer_processes_many_url_attributes_in_one_pass() {
+        let mut input = String::new();
+        for index in 0..10_000 {
+            input.push_str(&format!(
+                "<img src=\"https://tracker.example.test/{index}?a=1&b=2\">\
+                 <a href=\"https://library.example.test/{index}?a=1&b=2\">link</a>"
+            ));
+        }
+        let result = sanitize_received_html(&input);
+        assert_eq!(result.blocked_images, 10_000);
+        assert_eq!(result.html.matches("data-remote-src=").count(), 10_000);
+        assert_eq!(result.html.matches("data-external-href=").count(), 10_000);
+        assert!(!result.html.contains("&amp;amp;"));
     }
 }

@@ -35,7 +35,28 @@ export function replaceCargoLockPackageVersion(lock, packageName, version) {
   return lock.replace(pattern, `$1${version}$2`);
 }
 
+export function replacePackageLockVersion(lock, version) {
+  if (!lock || typeof lock !== "object" || !lock.packages?.[""]) {
+    throw new Error("package-lock.json is missing its root package entry.");
+  }
+  return {
+    ...lock,
+    version,
+    packages: {
+      ...lock.packages,
+      "": { ...lock.packages[""], version },
+    },
+  };
+}
+
 export async function syncWorkspaceVersions(workspaceRoot, version) {
+  const packageLockPath = join(workspaceRoot, "package-lock.json");
+  const packageLock = await json(packageLockPath);
+  await writeJson(
+    packageLockPath,
+    replacePackageLockVersion(packageLock, version),
+  );
+
   const tauriPath = join(workspaceRoot, "src-tauri/tauri.conf.json");
   const tauri = await json(tauriPath);
   tauri.version = version;

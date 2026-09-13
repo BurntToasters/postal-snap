@@ -9,6 +9,7 @@ export async function registerMockSettingsSystem(page: Page): Promise<void> {
     const mock = window.__POSTAL_SNAP_MOCK__ as MockShared;
     const state = window.__POSTAL_SNAP_TEST__ as MockState;
     const { params } = mock;
+    const windowFxSupported = !location.search.includes("noWindowFx");
     let currentSettings = {
       schemaVersion: 2,
       readingPane:
@@ -28,9 +29,9 @@ export async function registerMockSettingsSystem(page: Page): Promise<void> {
       folderPaneWidth: params.has("oversized") ? 400 : 248,
       messagePaneWidth: params.has("oversized") ? 720 : 390,
       readerPaneHeight: location.search.includes("tallBottom") ? 800 : 360,
-      windowEffects: false,
+      windowEffects: !windowFxSupported,
       sidebarVisible: !params.has("hiddenSidebar"),
-      undoSendSeconds: 10,
+      undoSendSeconds: params.has("undoSendOff") ? 0 : 10,
       blockAdvertisingAndTracking: true,
       blockReportedThreats: true,
       groupThreads: true,
@@ -47,19 +48,30 @@ export async function registerMockSettingsSystem(page: Page): Promise<void> {
         return copySettings();
       },
       supports_workspace_window_fx() {
-        return true;
+        return windowFxSupported;
       },
-      set_workspace_window_fx() {
-        return undefined;
+      set_workspace_window_fx(args: Record<string, unknown>) {
+        return windowFxSupported && args.enabled === true;
       },
       save_settings(args: Record<string, unknown>) {
+        const next = args.settings as typeof currentSettings;
+        const confirmToken = args.confirmToken;
+        if (
+          currentSettings.blockReportedThreats &&
+          !next.blockReportedThreats &&
+          confirmToken !== "CONFIRM"
+        ) {
+          throw new Error(
+            "Type CONFIRM to turn off reported-threat protection.",
+          );
+        }
         state.savedSettings.push(args.settings);
         currentSettings = {
           ...currentSettings,
-          ...(args.settings as typeof currentSettings),
+          ...next,
           cachePolicy: {
             ...currentSettings.cachePolicy,
-            ...((args.settings as typeof currentSettings).cachePolicy ?? {}),
+            ...(next.cachePolicy ?? {}),
           },
         };
         return copySettings();
@@ -87,37 +99,6 @@ export async function registerMockSettingsSystem(page: Page): Promise<void> {
           folderPaneWidth: 248,
           messagePaneWidth: 390,
           readerPaneHeight: 360,
-          blockAdvertisingAndTracking: true,
-          blockReportedThreats: true,
-          groupThreads: true,
-          notifyNewMail: true,
-          setupCompleted: true,
-          setupStep: null,
-        };
-        return copySettings();
-      },
-      reset_settings() {
-        state.resetSettings += 1;
-        currentSettings = {
-          ...currentSettings,
-          readingPane: "right",
-          textScale: 1,
-          privateNotifications: false,
-          theme: "system",
-          density: "comfortable",
-          cachePolicy: {
-            mode: "recent",
-            days: 90,
-            maxBytes: 1073741824,
-          },
-          lastAccountId: null,
-          lastMailboxId: null,
-          folderPaneWidth: 248,
-          messagePaneWidth: 390,
-          readerPaneHeight: 360,
-          windowEffects: false,
-          sidebarVisible: true,
-          undoSendSeconds: 10,
           blockAdvertisingAndTracking: true,
           blockReportedThreats: true,
           groupThreads: true,

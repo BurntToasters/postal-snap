@@ -75,7 +75,7 @@ export function sanitizeReceivedHtml(input: string): SanitizedMail {
       image.alt = image.alt || "Inline image";
     } else if (
       src &&
-      !/^(?:blob:|data:image\/(?:png|jpeg|gif|webp);base64,)/i.test(src)
+      !/^data:image\/(?:png|jpeg|gif|webp);base64,/i.test(src)
     ) {
       image.removeAttribute("src");
     }
@@ -121,8 +121,17 @@ export function sanitizeReceivedHtml(input: string): SanitizedMail {
       "source",
       "track",
       "picture",
+      "map",
+      "area",
     ],
-    FORBID_ATTR: ["srcset", "ping", "formaction", "background", "poster"],
+    FORBID_ATTR: [
+      "srcset",
+      "ping",
+      "formaction",
+      "background",
+      "poster",
+      "usemap",
+    ],
     ALLOW_DATA_ATTR: false,
     ADD_ATTR: [
       "data-remote-src",
@@ -169,7 +178,7 @@ export function messageFrameDocument(html: string, textScale = 1): string {
   const fontSize = Math.round(16 * Math.max(1, Math.min(2, textScale)));
   const policy = [
     "default-src 'none'",
-    "img-src data: blob: cid:",
+    "img-src data: cid:",
     "style-src 'unsafe-inline'",
     "font-src 'none'",
     "form-action 'none'",

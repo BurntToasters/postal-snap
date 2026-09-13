@@ -23,6 +23,28 @@ const BACKFILL_MESSAGE_BATCH: u32 = 75;
 
 type ImapSession = Session<TlsStream<TcpStream>>;
 
+/// Admission control for streamed IMAP body responses. A server-declared
+/// RFC822.SIZE is never trusted: only the actual delivered length counts, and
+/// the cumulative total bounds how much a single fetch cycle retains.
+#[derive(Default)]
+pub(crate) struct BodyBudget {
+    consumed: usize,
+}
+
+impl BodyBudget {
+    pub(crate) fn admit(&mut self, actual_len: usize, max_item: usize, max_total: usize) -> bool {
+        if actual_len > max_item {
+            return false;
+        }
+        let next = self.consumed.saturating_add(actual_len);
+        if next > max_total {
+            return false;
+        }
+        self.consumed = next;
+        true
+    }
+}
+
 pub struct PreparedMessage {
     pub message_id: String,
     pub bytes: Vec<u8>,
@@ -254,6 +276,74 @@ mod tests {
     fn rejects_excessive_multipart_nesting_before_parsing() {
         let raw = "multipart/".repeat(MAX_MULTIPART_DECLARATIONS + 1);
         assert!(validate_mime_resource_shape(raw.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn body_budget_rejects_oversized_items_and_caps_cumulative_bytes() {
+        let mut budget = BodyBudget::default();
+        assert!(budget.admit(400, 1_000, 1_000));
+        assert!(budget.admit(400, 1_000, 1_000));
+        assert!(!budget.admit(400, 1_000, 1_000));
+        assert!(!budget.admit(201, 1_000, 1_000));
+        assert!(budget.admit(200, 1_000, 1_000));
+
+        let mut budget = BodyBudget::default();
+        assert!(!budget.admit(1_001, 1_000, 10_000));
+        assert!(budget.admit(1_000, 1_000, 10_000));
+    }
+
+    #[tokio::test]
+    async fn uid_operations_fail_closed_without_mailbox_identity() {
+        let account = AccountRecord {
+            summary: AccountSummary {
+                id: "account-1".into(),
+                provider: ProviderKind::Manual,
+                email: "sam@example.com".into(),
+                display_name: "Sam".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+            },
+            imap: ServerConfig {
+                host: "127.0.0.1".into(),
+                port: 1,
+                tls_mode: TlsMode::Tls,
+                username: "sam".into(),
+            },
+            smtp: ServerConfig {
+                host: "127.0.0.1".into(),
+                port: 1,
+                tls_mode: TlsMode::Tls,
+                username: "sam".into(),
+            },
+        };
+
+        assert!(
+            set_remote_flags(&account, "secret", "INBOX", 1, None, Some(true), None)
+                .await
+                .unwrap_err()
+                .contains("identity is unavailable")
+        );
+        assert!(move_remote(&account, "secret", "INBOX", "Archive", 1, None)
+            .await
+            .unwrap_err()
+            .contains("identity is unavailable"));
+        assert!(empty_folder(&account, "secret", "Trash", None, &[])
+            .await
+            .unwrap_err()
+            .contains("identity is unavailable"));
+        assert!(
+            download_message(&account, "secret", "INBOX", 1, 10, None, None)
+                .await
+                .unwrap_err()
+                .contains("identity is unavailable")
+        );
+        assert!(delete_remote_draft(&account, "secret", "Drafts", 1, None)
+            .await
+            .unwrap_err()
+            .contains("identity is unavailable"));
     }
 
     #[tokio::test]

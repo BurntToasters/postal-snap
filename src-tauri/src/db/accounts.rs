@@ -105,7 +105,13 @@ impl Database {
                 account.summary.auth_method,
             ],
         )
-        .map_err(db_error)?;
+        .map_err(|error| {
+            if is_duplicate_account_email(&error) {
+                "An account with this email address is already set up.".to_string()
+            } else {
+                db_error(error)
+            }
+        })?;
         Ok(())
     }
 
@@ -228,6 +234,10 @@ impl Database {
         if removed != 1 {
             return Err("Account not found.".into());
         }
+        // Removing the last duplicate lets the database enforce uniqueness
+        // again. While other duplicates remain this fails and is retried by
+        // the next startup or account removal.
+        let _ = super::ensure_account_email_unique_index(&tx);
         tx.commit().map_err(db_error)
     }
 
@@ -251,4 +261,19 @@ impl Database {
             .map_err(db_error)?;
         Ok(())
     }
+}
+
+/// SQLite reports the `accounts_email_unique` index as a generic constraint
+/// violation. Treat it as the friendly duplicate-account error so a race
+/// between the command's `email_taken` check and the insert cannot surface a
+/// raw database failure.
+fn is_duplicate_account_email(error: &rusqlite::Error) -> bool {
+    matches!(
+        error,
+        rusqlite::Error::SqliteFailure(code, Some(message))
+            if code.code == rusqlite::ErrorCode::ConstraintViolation
+                && code.extended_code == 2067
+                && (message.contains("accounts.email")
+                    || message.contains("accounts_email_unique"))
+    )
 }

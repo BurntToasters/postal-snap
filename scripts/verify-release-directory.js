@@ -1,9 +1,14 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { sha256 } from "./lib/artifacts.js";
+import {
+  assertGpgSignatureFingerprint,
+  expectedGpgFingerprint,
+  gpgVerifyStatusArgs,
+} from "./lib/gpg-verify.js";
 import { ensureReleaseDir, json } from "./lib/json.js";
 import { process, root } from "./lib/paths.js";
-import { run } from "./lib/spawn.js";
+import { output } from "./lib/spawn.js";
 import { validateManifest } from "./validate-updater-manifest.js";
 import {
   committedUpdaterPublicKey,
@@ -38,6 +43,12 @@ if (optionalLinuxArm64.some((name) => files.has(name))) {
     "Postal-Snap-Linux-arm64.flatpak",
   );
   updaterPayloads.push("Postal-Snap-Linux-arm64.AppImage");
+}
+const expectedGpgKey = expectedGpgFingerprint(process.env);
+if (!expectedGpgKey) {
+  throw new Error(
+    "GPG_KEY_ID must be set to the expected signer's full fingerprint before verifying release signatures.",
+  );
 }
 const pkg = await json(join(root, "package.json"));
 const tag = `v${pkg.version}`;
@@ -75,7 +86,11 @@ for (const name of [...artifacts, ...updaterPayloads]) {
     throw new Error(`Invalid SHA-256 file for ${name}`);
   if (match[1].toLowerCase() !== (await sha256(path)))
     throw new Error(`SHA-256 mismatch for ${name}`);
-  await run("gpg", ["--batch", "--verify", `${path}.asc`, path]);
+  const gpgStatus = await output(
+    "gpg",
+    gpgVerifyStatusArgs(`${path}.asc`, path),
+  );
+  assertGpgSignatureFingerprint(gpgStatus, expectedGpgKey);
 }
 
 const updaterPublicKey = await committedUpdaterPublicKey();

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Reserved for a future signed-CI or store-signing path. The GitHub 0.1.x
+# train never runs this script: CI does not sign macOS artifacts and release
+# signing happens on a dedicated Mac signing host. See docs/RELEASING.md.
 set -euo pipefail
 set +x
 

@@ -10,7 +10,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import { SettingsDialog } from "../components/SettingsDialog";
 import { defaultSettings, useAppStore } from "../store";
-import type { FilterRule } from "../types";
+import type { AccountSummary, FilterRule } from "../types";
 import { mockSaveSettingsPassthrough } from "./helpers/api-mocks";
 import { makeAccount } from "./helpers/fixtures";
 import { resetStore } from "./helpers/store";
@@ -42,7 +42,6 @@ vi.mock("../api", () => ({
     relaunch: vi.fn(),
     exportSettings: vi.fn(),
     importSettings: vi.fn(),
-    resetSettings: vi.fn(),
     clearCache: vi.fn(),
     openExternalUrl: vi.fn(),
     cacheUsage: vi.fn().mockResolvedValue({
@@ -91,7 +90,7 @@ describe("SettingsDialog component", () => {
       await Promise.resolve();
     });
 
-    expect(screen.getByText("alias@icloud.com")).toBeDefined();
+    expect(screen.getByText("alias@icloud.com")).toBeVisible();
 
     const input = screen.getByPlaceholderText("alias@yourdomain.com");
     fireEvent.change(input, { target: { value: "family@icloud.com" } });
@@ -116,7 +115,7 @@ describe("SettingsDialog component", () => {
       await Promise.resolve();
     });
 
-    expect(screen.getByText("Reset everything")).toBeDefined();
+    expect(screen.getByText("Reset everything")).toBeVisible();
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Reset & Restart" }));
       await Promise.resolve();
@@ -177,13 +176,13 @@ describe("SettingsDialog component", () => {
       await Promise.resolve();
     });
 
-    expect(screen.getByText("Email Aliases & Custom Domains")).toBeDefined();
+    expect(screen.getByText("Email Aliases & Custom Domains")).toBeVisible();
     expect(
       screen.getByText(/Send and receive using iCloud aliases/),
-    ).toBeDefined();
+    ).toBeVisible();
     expect(
       screen.getByRole("button", { name: "Detect from iCloud" }),
-    ).toBeDefined();
+    ).toBeVisible();
     const header = container.querySelector(".aliases-header");
     expect(header?.querySelector("strong")).toBeDefined();
     expect(header?.querySelector(".settings-note")).toBeDefined();
@@ -220,7 +219,7 @@ describe("SettingsDialog component", () => {
     const toggle = await screen.findByRole("checkbox", {
       name: /Translucent window background/,
     });
-    expect(toggle).toBeDefined();
+    expect(toggle).toBeVisible();
     await act(async () => {
       fireEvent.click(toggle);
     });
@@ -369,7 +368,7 @@ describe("SettingsDialog component", () => {
       "account-1",
       "new-app-password",
     );
-    expect(await screen.findByText(/Password updated/)).toBeDefined();
+    expect(await screen.findByText(/Password updated/)).toBeVisible();
   });
 
   it("saves per-account signatures", async () => {
@@ -394,7 +393,7 @@ describe("SettingsDialog component", () => {
       "account-1",
       "Best,\nSam",
     );
-    expect(await screen.findByText(/Signature saved/)).toBeDefined();
+    expect(await screen.findByText(/Signature saved/)).toBeVisible();
   });
 
   it("changes the undo send window", async () => {
@@ -466,7 +465,7 @@ describe("SettingsDialog component", () => {
         action: "mark_read",
       }),
     );
-    expect(await screen.findByText(/Rule saved/)).toBeDefined();
+    expect(await screen.findByText(/Rule saved/)).toBeVisible();
 
     const billsRow = screen.getByText("Bills").closest("li") as HTMLElement;
     await act(async () => {
@@ -476,16 +475,116 @@ describe("SettingsDialog component", () => {
     });
     expect(api.showNativeConfirm).toHaveBeenCalled();
     expect(api.deleteFilterRule).toHaveBeenCalledWith(account.id, "rule-1");
-    expect(await screen.findByText(/Rule removed/)).toBeDefined();
+    expect(await screen.findByText(/Rule removed/)).toBeVisible();
+  });
+
+  it("describes filter rules with localized actions and folder names", async () => {
+    const rules: FilterRule[] = [
+      {
+        id: "rule-read",
+        accountId: account.id,
+        name: "Read note",
+        field: "from",
+        contains: "a",
+        action: "mark_read",
+        targetMailbox: null,
+        enabled: true,
+      },
+      {
+        id: "rule-folder",
+        accountId: account.id,
+        name: "Folder note",
+        field: "subject",
+        contains: "b",
+        action: "move_mailbox",
+        targetMailbox: "1",
+        enabled: true,
+      },
+    ];
+    vi.mocked(api.listFilterRules).mockResolvedValue(rules);
+    render(<SettingsDialog initialTab="accounts" onClose={vi.fn()} />);
+
+    await screen.findByText("Read note");
+    expect(screen.getByText(/Mark as read\./)).toBeVisible();
+    expect(screen.getByText(/Move to \u201CInbox\u201D\./)).toBeVisible();
+    expect(screen.queryByText(/mark_read/)).toBeNull();
+    expect(screen.queryByText(/move_mailbox/)).toBeNull();
+  });
+
+  it("keeps concurrent account changes when a signature save resolves", async () => {
+    const second = makeAccount("account-2");
+    let releaseSignature: (value: AccountSummary) => void = () => undefined;
+    vi.mocked(api.updateAccountSignature).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseSignature = resolve;
+        }),
+    );
+    render(<SettingsDialog initialTab="accounts" onClose={vi.fn()} />);
+    await screen.findByLabelText("Email signature");
+
+    fireEvent.change(screen.getByLabelText("Email signature"), {
+      target: { value: "Regards" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    });
+    act(() => {
+      useAppStore.setState({ accounts: [account, second] });
+    });
+    await act(async () => {
+      releaseSignature({ ...account, signature: "Regards" });
+      await Promise.resolve();
+    });
+
+    expect(useAppStore.getState().accounts.map((item) => item.id)).toEqual([
+      account.id,
+      second.id,
+    ]);
+    expect(useAppStore.getState().accounts[0]?.signature).toBe("Regards");
+  });
+
+  it("removes an alias using the latest account state", async () => {
+    let resolveConfirm: (value: boolean) => void = () => undefined;
+    vi.mocked(api.showNativeConfirm).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveConfirm = resolve;
+        }),
+    );
+    render(<SettingsDialog initialTab="accounts" onClose={vi.fn()} />);
+    await screen.findByText("alias@icloud.com");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Remove alias@icloud.com" }),
+    );
+    act(() => {
+      useAppStore.setState({
+        accounts: [
+          {
+            ...account,
+            aliases: ["alias@icloud.com", "newer@icloud.com"],
+          },
+        ],
+      });
+    });
+    await act(async () => {
+      resolveConfirm(true);
+      await Promise.resolve();
+    });
+
+    expect(api.updateAccountAliases).toHaveBeenCalledWith("account-1", [
+      "newer@icloud.com",
+    ]);
   });
 
   it("opens Advanced from the General protection card", async () => {
     render(<SettingsDialog initialTab="general" onClose={vi.fn()} />);
 
-    expect(screen.getByRole("heading", { name: "Appearance" })).toBeDefined();
-    expect(screen.getByRole("heading", { name: "Sending" })).toBeDefined();
-    expect(screen.getByRole("heading", { name: "Privacy" })).toBeDefined();
-    expect(screen.getByText("Mail protection is on")).toBeDefined();
+    expect(screen.getByRole("heading", { name: "Appearance" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Sending" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Privacy" })).toBeVisible();
+    expect(screen.getByText("Mail protection is on")).toBeVisible();
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Review Advanced" }));
     });
@@ -592,7 +691,7 @@ describe("SettingsDialog component", () => {
         }),
       );
     });
-    expect(screen.getByRole("alertdialog")).toBeDefined();
+    expect(screen.getByRole("alertdialog")).toBeVisible();
 
     await act(async () => {
       fireEvent.keyDown(document, { key: "Escape" });

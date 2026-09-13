@@ -67,29 +67,39 @@ export function PaneSplitter({
           orientation === "vertical" ? event.clientX : event.clientY;
         const initial = value;
         const target = event.currentTarget;
+        let latest = initial;
         const move = (moveEvent: PointerEvent) => {
           const current =
             orientation === "vertical" ? moveEvent.clientX : moveEvent.clientY;
           const delta = current - start;
-          onChange(
-            initial + (orientation === "vertical" ? delta : -delta),
-            false,
-          );
+          latest = initial + (orientation === "vertical" ? delta : -delta);
+          onChange(latest, false);
+        };
+        const cleanup = () => {
+          target.removeEventListener("pointermove", move);
+          target.removeEventListener("pointerup", finish);
+          target.removeEventListener("pointercancel", cancel);
         };
         const finish = (upEvent: PointerEvent) => {
           const current =
             orientation === "vertical" ? upEvent.clientX : upEvent.clientY;
           const delta = current - start;
           target.releasePointerCapture(upEvent.pointerId);
-          target.removeEventListener("pointermove", move);
-          target.removeEventListener("pointerup", finish);
+          cleanup();
           onChange(
             initial + (orientation === "vertical" ? delta : -delta),
             true,
           );
         };
+        const cancel = () => {
+          // pointercancel implicitly releases capture; persist the last
+          // previewed size instead of leaving listeners behind.
+          cleanup();
+          onChange(latest, true);
+        };
         target.addEventListener("pointermove", move);
         target.addEventListener("pointerup", finish);
+        target.addEventListener("pointercancel", cancel);
       }}
     />
   );

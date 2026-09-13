@@ -9,7 +9,9 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
   await page.addInitScript(() => {
     const mock = window.__POSTAL_SNAP_MOCK__ as MockShared;
     const state = window.__POSTAL_SNAP_TEST__ as MockState;
-    const { account, summary } = mock;
+    const { account, summary, params } = mock;
+    let lastSendOutcome: string | undefined;
+    let lastSendDetail: string | null = null;
     Object.assign(mock.handlers, {
       list_drafts() {
         return location.search.includes("localMail")
@@ -34,6 +36,7 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
         return {
           id: "draft-1",
           accountId: account.id,
+          from: null,
           to: ["pat@example.com"],
           cc: [],
           bcc: [],
@@ -51,42 +54,53 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
                 },
               ]
             : [],
+          inReplyTo: null,
+          references: null,
+          sendAt: null,
         };
       },
       list_outbox() {
         if (!location.search.includes("localMail") || state.discarded) {
           return [];
         }
+        const outcome =
+          lastSendOutcome ??
+          (location.search.includes("sentCopy")
+            ? "sent_copy_pending"
+            : location.search.includes("queued")
+              ? "queued"
+              : location.search.includes("scheduled")
+                ? "scheduled"
+                : "needs_attention");
+        if (outcome === "sent") return [];
         return [
           {
             id: "outbox-1",
             accountId: account.id,
             recipients: "lee@example.com",
             subject: "Could not confirm",
-            state: location.search.includes("sentCopy")
-              ? "sent_copy_pending"
-              : location.search.includes("queued")
-                ? "queued"
-                : location.search.includes("scheduled")
-                  ? "scheduled"
-                  : "needs_attention",
-            detail: location.search.includes("sentCopy")
-              ? "Message sent. Its Sent-folder copy is waiting for a safe retry."
-              : location.search.includes("queued")
-                ? "Waiting for a secure mail connection."
-                : location.search.includes("scheduled")
-                  ? "Held for review. Undo anytime before it sends."
-                  : "Delivery could not be confirmed.",
+            state: outcome,
+            detail:
+              lastSendDetail ??
+              (outcome === "sent_copy_pending"
+                ? "Message sent. Its Sent-folder copy is waiting for a safe retry."
+                : outcome === "queued"
+                  ? "Waiting for a secure mail connection."
+                  : outcome === "scheduled"
+                    ? "Held for review. Undo anytime before it sends."
+                    : "Delivery could not be confirmed."),
             createdAt: "2026-08-18T11:00:00Z",
-            sendAt: location.search.includes("scheduled")
-              ? new Date(Date.now() + 60_000).toISOString()
-              : null,
+            sendAt:
+              outcome === "scheduled"
+                ? new Date(Date.now() + 60_000).toISOString()
+                : null,
           },
         ];
       },
       get_outbox() {
         return {
           accountId: account.id,
+          from: null,
           to: ["lee@example.com"],
           cc: [],
           bcc: [],
@@ -94,6 +108,9 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
           htmlBody: "<p>Please review</p>",
           textBody: "Please review",
           attachments: [],
+          inReplyTo: null,
+          references: null,
+          sendAt: null,
         };
       },
       retry_outbox() {
@@ -110,7 +127,8 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
       restore_outbox() {
         state.discarded = true;
         return {
-          accountId: "acc-1",
+          accountId: account.id,
+          from: null,
           to: ["sam@example.test"],
           cc: [],
           bcc: [],
@@ -118,6 +136,9 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
           htmlBody: "<p>Queued</p>",
           textBody: "Queued",
           attachments: [],
+          inReplyTo: null,
+          references: null,
+          sendAt: null,
         };
       },
       set_mail_shortcut_guard() {
@@ -159,7 +180,50 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
       },
       send_message(args: Record<string, unknown>) {
         state.sentDraft = args.draft;
-        return { id: "outbox-1", state: "sent", detail: null };
+        const draft = args.draft as { sendAt?: string | null } | undefined;
+        const requested = params.get("sendOutcome");
+        const settings = mock.handlers.get_settings?.({}) as
+          { undoSendSeconds?: number } | undefined;
+        const delay = Math.min(settings?.undoSendSeconds ?? 10, 30);
+        const offline = account.syncState === "offline";
+        const offlineDetail = "Waiting for a secure mail connection.";
+        // Mirror drafts_send.rs: an explicit schedule and the undo-send
+        // window both hold the message, an offline account queues it, and only
+        // an immediate online send can report success. A query switch lets
+        // tests force any real outcome.
+        lastSendOutcome =
+          requested ??
+          (draft?.sendAt
+            ? "scheduled"
+            : delay > 0
+              ? "scheduled"
+              : offline
+                ? "queued"
+                : "sent");
+        if (lastSendOutcome === "queued") {
+          lastSendDetail = offlineDetail;
+        } else if (lastSendOutcome === "scheduled") {
+          lastSendDetail = draft?.sendAt
+            ? offline
+              ? offlineDetail
+              : "Scheduled to send."
+            : offline
+              ? offlineDetail
+              : "Held for review. Undo anytime before it sends.";
+        } else if (lastSendOutcome === "sent_copy_pending") {
+          lastSendDetail =
+            "Message sent. Its Sent-folder copy is waiting for a safe retry.";
+        } else if (lastSendOutcome === "needs_attention") {
+          lastSendDetail =
+            "Delivery could not be confirmed. Postal Snap will not resend automatically.";
+        } else {
+          lastSendDetail = null;
+        }
+        return {
+          id: "outbox-1",
+          state: lastSendOutcome,
+          detail: lastSendDetail,
+        };
       },
       choose_attachments() {
         return [];

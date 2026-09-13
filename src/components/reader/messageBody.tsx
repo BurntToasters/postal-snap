@@ -205,7 +205,10 @@ export function MessageBody({
             ref={frameRef}
             title={strings.reader.messageContent}
             tabIndex={0}
-            sandbox="allow-same-origin allow-modals"
+            // allow-same-origin is required so the parent can reach
+            // contentDocument for link wiring, scroll, and find; the document
+            // itself stays scriptless and networkless (no allow-scripts).
+            sandbox="allow-same-origin"
             srcDoc={frameHtml}
             onLoad={onFrameLoad}
           />

@@ -47,11 +47,11 @@ describe("first-run setup flow", () => {
     render(<SetupFlow onComplete={vi.fn()} startupNotice={null} />);
     expect(screen.getByText(/Welcome to Postal Snap/i)).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
-    expect(screen.getByText(/Choose how mail looks/i)).toBeVisible();
+    expect(screen.getByText(/Choose how mail looks/i)).toHaveFocus();
     fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
-    expect(screen.getByText(/Make it comfortable/i)).toBeVisible();
+    expect(screen.getByText(/Make it comfortable/i)).toHaveFocus();
     fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
-    expect(screen.getByText(/Add your email/i)).toBeVisible();
+    expect(screen.getByText(/Add your email/i)).toHaveFocus();
   });
 
   it("persists appearance choices live and keeps compact hit areas", async () => {

@@ -396,7 +396,7 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
       setError(strings.settings.aliasInvalid);
       return;
     }
-    const acc = accounts.find((a) => a.id === accountId);
+    const acc = useAppStore.getState().accounts.find((a) => a.id === accountId);
     if (!acc) return;
     const current = acc.aliases ?? [];
     if (current.includes(input) || acc.email.toLowerCase() === input) {
@@ -423,7 +423,7 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
       strings.settings.removeAliasConfirm(alias),
     );
     if (!confirmed) return;
-    const acc = accounts.find((a) => a.id === accountId);
+    const acc = useAppStore.getState().accounts.find((a) => a.id === accountId);
     if (!acc) return;
     const remainingAliases = (acc.aliases ?? []).filter((a) => a !== alias);
     try {
@@ -463,7 +463,9 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
       const value = signatureInputs[accountId] ?? fallback;
       const updated = await api.updateAccountSignature(accountId, value);
       setAccounts(
-        accounts.map((item) => (item.id === accountId ? updated : item)),
+        useAppStore
+          .getState()
+          .accounts.map((item) => (item.id === accountId ? updated : item)),
       );
       setSignatureInputs((prev) => ({
         ...prev,

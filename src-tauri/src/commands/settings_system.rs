@@ -68,11 +68,6 @@ pub fn import_settings(
 }
 
 #[tauri::command]
-pub fn reset_settings(state: State<'_, AppState>) -> CommandResult<AppSettings> {
-    command_result(state.settings.reset_preferences())
-}
-
-#[tauri::command]
 pub fn get_startup_notice(state: State<'_, AppState>) -> CommandResult<Option<String>> {
     command_result(state.settings.take_startup_notice())
 }

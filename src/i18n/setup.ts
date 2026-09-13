@@ -23,6 +23,9 @@ export const setup = {
   normalPasswordWarning:
     "Do not use your normal Apple Account password. iCloud Mail needs an app-specific password.",
   createAppPassword: "Create app-specific password",
+  helpLinkDeclined: "Help page not opened.",
+  helpLinkFailed:
+    "Postal Snap could not open that help page. Open support.apple.com in your browser.",
   icloudEmailHint:
     "Use the iCloud Mail address (@icloud.com, @me.com, or @mac.com), even if your Apple ID is different.",
   appPasswordHint:
@@ -70,7 +73,6 @@ export const setup = {
   stepAccount: "Account",
   continue: "Continue",
   skipForNow: "Skip for now",
-  finish: "Finish setup",
   backToSetup: "Back to setup",
   appearanceTitle: "Choose how mail looks",
   appearanceIntro:
@@ -81,9 +83,6 @@ export const setup = {
   accountTitle: "Add your email",
   accountIntro:
     "Add one account now. You can add more later. Password stays in your computer’s secure vault.",
-  accountSkipped:
-    "No account added yet. You can finish setup and add one later from Settings.",
-  enterMailbox: "Open mailbox",
   settingsRestored:
     "Damaged settings were restored to safe defaults. Review the choices below, then continue.",
   previewInbox: "Inbox preview",
@@ -97,6 +96,4 @@ export const setup = {
   previewReadingRight: "Reading pane on the right",
   comfortLargeText:
     "Large text with Compact needs more room. Try the over-list reader below.",
-  doneTitle: "You are set",
-  doneIntro: "Postal Snap saved your choices on this computer.",
 } as const;

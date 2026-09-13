@@ -50,7 +50,7 @@ Required for GitHub 0.1.x. The live iCloud smoke is a signing-host gate; do not 
 - [ ] Window controls remain usable through startup, setup, settings, maximized compose, and reader overlays. Check macOS traffic lights and Windows edge/keyboard snapping on native hosts; Chromium IPC tests do not prove native hit testing or Snap Layout flyouts.
 - [ ] VoiceOver and Narrator complete setup, read, reply, attachment, and send flows with understandable announcements.
 
-## GitHub packages (required for 0.1.1)
+## GitHub packages (required for 0.1.x)
 
 Windows creates the GitHub draft. Mac and Linux wait for that draft and never create a second one. Run `release:linux` on the x64 signing host (required). An arm64 Linux host is optional. Each continue path uploads only that host's artifacts; do not run complete-set verification until the required architectures are present.
 
@@ -62,7 +62,7 @@ Windows creates the GitHub draft. Mac and Linux wait for that draft and never cr
 - [ ] Direct builds update from the correct signed stable or beta GitHub manifest.
 - [ ] Install, upgrade, and uninstall preserve or remove user data exactly as documented.
 
-## Later: store packages (not a GitHub 0.1.1 gate)
+## Later: store packages (not a GitHub 0.1.x gate)
 
 - [ ] Store builds expose no self-updater and report store-managed updates.
 - [ ] Microsoft x64/arm64 MSIX bundle passes Windows App Certification Kit and clean Windows 10/11 VM tests.
@@ -72,6 +72,7 @@ Windows creates the GitHub draft. Mac and Linux wait for that draft and never cr
 ## Publish
 
 - [ ] Release session tag and remote tag resolve to the audited commit.
+- [ ] `GPG_KEY_ID` is the signer's full fingerprint; local and draft GPG verification compares it against `VALIDSIG` and rejects any other key.
 - [ ] Normalized artifacts, SHA-256 files, GPG signatures, updater payloads, and embedded updater signatures all verify.
 - [ ] Stable and beta manifest names route to the intended release.
 - [ ] After every architecture is uploaded, `npm run release:verify:local` and/or `npm run release:verify-draft` pass on the complete set. `release:finalize:hard` is the publish step; it also verifies the remote draft.

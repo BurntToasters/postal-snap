@@ -17,7 +17,11 @@ import {
   moveCounts,
 } from "./reader/readerUtils";
 
-export function MessageReader() {
+export function MessageReader({
+  onSnoozed,
+}: {
+  onSnoozed?: (accountId: string, messageId: number) => void | Promise<void>;
+}) {
   const message = useAppStore((state) => state.selectedMessage);
   const selectMessage = useAppStore((state) => state.selectMessage);
   const activeMailboxId = useAppStore((state) => state.activeMailboxId);
@@ -95,6 +99,12 @@ export function MessageReader() {
     if (!message) return;
     const html = buildPrintDocument(message, loadedHtml, settings.textScale);
     const printer = document.createElement("iframe");
+    // Intentionally unsandboxed: the parent calls contentWindow.print(), but a
+    // sandboxed srcdoc frame is cross-origin (print() is not exposed on the
+    // cross-origin WindowProxy) and its modals flag blocks window.print(), so
+    // sandbox="allow-modals" alone would break printing. buildPrintDocument
+    // wraps sanitized HTML in a restrictive CSP, and this frame is removed
+    // immediately after printing.
     printer.setAttribute("aria-hidden", "true");
     printer.style.position = "fixed";
     printer.style.width = "0";
@@ -153,10 +163,20 @@ export function MessageReader() {
 
   async function snoozeCurrentMessage(untilIso: string) {
     if (!message) return;
+    const target = message;
     try {
-      await api.snoozeMessage(message.accountId, message.id, untilIso);
-      setSnoozeOpen(false);
+      await api.snoozeMessage(target.accountId, target.id, untilIso);
+    } catch (cause) {
+      setError(String(cause));
+      return;
+    }
+    setSnoozeOpen(false);
+    const current = useAppStore.getState().selectedMessage;
+    if (current?.id === target.id && current.accountId === target.accountId) {
       selectMessage(undefined);
+    }
+    try {
+      await onSnoozed?.(target.accountId, target.id);
     } catch (cause) {
       setError(String(cause));
     }
@@ -431,10 +451,14 @@ export function MessageReader() {
     frameLinkCleanup.current = undefined;
     const body = frame.current?.contentDocument?.body;
     if (!body) return;
+    body.querySelectorAll("[usemap]").forEach((element) => {
+      element.removeAttribute("usemap");
+    });
+    const linkSelector = "a[href], a[data-external-href], area[href]";
     const handleLink = (event: MouseEvent) => {
       if (event.button > 1) return;
-      const target = (event.target as HTMLElement).closest<HTMLAnchorElement>(
-        "a[href], a[data-external-href]",
+      const target = (event.target as HTMLElement).closest<HTMLElement>(
+        linkSelector,
       );
       if (!target) return;
       event.preventDefault();
@@ -455,9 +479,7 @@ export function MessageReader() {
       if (/^mailto:/i.test(url)) openComposer({ prefill: parseMailto(url) });
     };
     const blockNativeOpen = (event: Event) => {
-      if (
-        (event.target as HTMLElement).closest("a[href], a[data-external-href]")
-      ) {
+      if ((event.target as HTMLElement).closest(linkSelector)) {
         event.preventDefault();
       }
     };

@@ -22,10 +22,8 @@ import {
   validateRecipientFields,
   validateSubject,
 } from "../components/composer/composerValidate";
-import {
-  RecipientField,
-  tokenAtCaret,
-} from "../components/composer/recipientField";
+import { RecipientField } from "../components/composer/recipientField";
+import { tokenAtCaret } from "../components/composer/recipientFieldUtils";
 import {
   tonightAtNine,
   tomorrowAtEight,
@@ -467,5 +465,59 @@ describe("recipient suggestions", () => {
     fireEvent.keyDown(input, { key: "Enter", metaKey: true });
     fireEvent.blur(input);
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+  });
+
+  it("drops a stale suggestion response that resolves after a newer one", async () => {
+    vi.useFakeTimers();
+    let resolveFirst: (
+      value: { name: string; address: string; useCount: number }[],
+    ) => void = () => undefined;
+    let resolveSecond: (
+      value: { name: string; address: string; useCount: number }[],
+    ) => void = () => undefined;
+    vi.spyOn(api, "suggestRecipients")
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSecond = resolve;
+          }),
+      );
+    render(<RecipientHarness />);
+    const input = screen.getByRole("combobox");
+    fireEvent.change(input, { target: { value: "ja", selectionStart: 2 } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150);
+    });
+    fireEvent.change(input, { target: { value: "j", selectionStart: 1 } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150);
+    });
+    expect(api.suggestRecipients).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      resolveSecond([
+        { name: "", address: "newest@example.test", useCount: 2 },
+      ]);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      resolveFirst([{ name: "", address: "stale@example.test", useCount: 1 }]);
+      await Promise.resolve();
+    });
+    expect(
+      screen.getByRole("option", { name: "newest@example.test" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("option", { name: "stale@example.test" }),
+    ).toBeNull();
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync();
+    });
   });
 });

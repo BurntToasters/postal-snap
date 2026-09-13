@@ -72,6 +72,7 @@ try {
     "cargo",
     [
       "test",
+      "--locked",
       "--manifest-path",
       "src-tauri/Cargo.toml",
       "greenmail_protocol_integration",

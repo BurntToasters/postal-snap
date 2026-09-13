@@ -14,8 +14,8 @@ use zeroize::Zeroizing;
 use super::parse::parse_mailbox;
 use super::remote_drafts::search_message_id;
 use super::{
-    ImapSession, PreparedMessage, CONNECT_TIMEOUT, MAX_ATTACHMENTS, MAX_MESSAGE_BYTES,
-    MAX_OUTGOING_BYTES,
+    ImapSession, PreparedMessage, CONNECT_TIMEOUT, IMAP_COMMAND_TIMEOUT, MAX_ATTACHMENTS,
+    MAX_MESSAGE_BYTES, MAX_OUTGOING_BYTES,
 };
 use crate::{
     models::{validate_compose_sender, AccountRecord, ComposeDraft, ServerConfig, TlsMode},
@@ -68,19 +68,22 @@ pub async fn ensure_sent_copy(
     bytes: &[u8],
 ) -> Result<(), String> {
     let mut session = connect_imap(&account.imap, password).await?;
-    session
-        .select(mailbox)
+    tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(mailbox))
         .await
+        .map_err(|_| "Sent folder timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Sent folder"))?;
     let existing = search_message_id(&mut session, message_id, "Sent folder").await?;
     if existing.is_empty() {
-        session
-            .append(mailbox, Some("(\\Seen)"), None, bytes)
+        tokio::time::timeout(
+            IMAP_COMMAND_TIMEOUT,
+            session.append(mailbox, Some("(\\Seen)"), None, bytes),
+        )
+        .await
+        .map_err(|_| "Saving the Sent copy timed out.".to_string())?
+        .map_err(|error| redact_error(&error, "Save Sent copy"))?;
+        tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(mailbox))
             .await
-            .map_err(|error| redact_error(&error, "Save Sent copy"))?;
-        session
-            .select(mailbox)
-            .await
+            .map_err(|_| "Sent folder timed out.".to_string())?
             .map_err(|error| redact_error(&error, "Sent folder"))?;
         if search_message_id(&mut session, message_id, "Sent folder")
             .await?
@@ -89,7 +92,7 @@ pub async fn ensure_sent_copy(
             return Err("The message was sent, but its Sent copy could not be confirmed.".into());
         }
     }
-    let _ = session.logout().await;
+    let _ = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.logout()).await;
     Ok(())
 }
 

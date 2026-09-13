@@ -41,15 +41,14 @@ impl Database {
     ) -> Result<i64, String> {
         let mut conn = self.conn()?;
         let transaction = conn.transaction().map_err(db_error)?;
-        let previous_validity: Option<u32> = transaction
+        let previous_validity: Option<Option<u32>> = transaction
             .query_row(
                 "SELECT uid_validity FROM mailboxes WHERE account_id = ?1 AND name = ?2",
                 params![account_id, name],
                 |row| row.get(0),
             )
             .optional()
-            .map_err(db_error)?
-            .flatten();
+            .map_err(db_error)?;
         transaction.execute(
             "INSERT INTO mailboxes (account_id, name, display_name, role, role_source, uid_validity, uid_next, server_unread, server_total, counts_updated_at)
              VALUES (?1, ?2, ?2, ?3, ?4, ?5, ?6, ?7, ?8, CURRENT_TIMESTAMP)
@@ -65,10 +64,7 @@ impl Database {
                 |row| row.get(0),
             )
             .map_err(db_error)?;
-        if previous_validity.is_some()
-            && uid_validity.is_some()
-            && previous_validity != uid_validity
-        {
+        if previous_validity.is_some() && previous_validity != Some(uid_validity) {
             transaction
                 .execute("DELETE FROM messages WHERE mailbox_id = ?1", [id])
                 .map_err(db_error)?;

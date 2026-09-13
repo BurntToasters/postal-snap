@@ -67,6 +67,7 @@ export const mail = {
   sendIn: (seconds: number) =>
     seconds <= 0 ? "Sending…" : `Sending in ${seconds}s`,
   sendNow: "Send now",
+  sendingNow: (subject: string) => `Sending "${subject}" now`,
   messageSent: "Message sent",
   messageScheduled: "Send scheduled",
   viewOutbox: "View Outbox",

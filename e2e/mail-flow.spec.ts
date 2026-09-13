@@ -334,6 +334,81 @@ test("exports and imports portable settings with reset kept in Accounts", async 
   ).toHaveCount(1);
 });
 
+test("settings save fails closed without the CONFIRM token for reported threats", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const outcome = await page.evaluate(async () => {
+    const invoke = (
+      window as typeof window & {
+        __TAURI_INTERNALS__: {
+          invoke: (
+            command: string,
+            args?: Record<string, unknown>,
+          ) => Promise<unknown>;
+        };
+      }
+    ).__TAURI_INTERNALS__.invoke;
+    const settings = (await invoke("get_settings")) as Record<string, unknown>;
+    const disabled = { ...settings, blockReportedThreats: false };
+    const attempt = async (args: Record<string, unknown>) => {
+      try {
+        await invoke("save_settings", args);
+        return "saved";
+      } catch (cause) {
+        return cause instanceof Error ? cause.message : String(cause);
+      }
+    };
+    return {
+      missingToken: await attempt({ settings: disabled }),
+      wrongToken: await attempt({
+        settings: disabled,
+        confirmToken: "confirm",
+      }),
+      rightToken: await attempt({
+        settings: disabled,
+        confirmToken: "CONFIRM",
+      }),
+    };
+  });
+  expect(outcome.missingToken).toMatch(/Type CONFIRM/);
+  expect(outcome.wrongToken).toMatch(/Type CONFIRM/);
+  expect(outcome.rightToken).toBe("saved");
+});
+
+test("requires typing CONFIRM before reported-threat warnings can be disabled", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("tab", { name: "Advanced" }).click();
+  const toggle = page.getByRole("checkbox", {
+    name: /Warn about reported dangerous addresses/,
+  });
+  await expect(toggle).toBeChecked();
+  await toggle.click();
+
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toBeVisible();
+  const disable = dialog.getByRole("button", { name: "Disable" });
+  await expect(disable).toBeDisabled();
+  await dialog.getByLabel("Type CONFIRM").fill("CONFIRM");
+  await expect(disable).toBeEnabled();
+  await disable.click();
+
+  await expect(
+    page.getByText(/Reported-address warnings are off/),
+  ).toBeVisible();
+  const saved = await page.evaluate(() =>
+    (
+      window as typeof window & {
+        __POSTAL_SNAP_TEST__: { savedSettings: Array<Record<string, unknown>> };
+      }
+    ).__POSTAL_SNAP_TEST__.savedSettings.at(-1),
+  );
+  expect(saved).toMatchObject({ blockReportedThreats: false });
+});
+
 test("completes secure manual first run", async ({ page }) => {
   await page.goto("/?firstRun=1");
   await page.getByRole("button", { name: "Continue", exact: true }).click();
@@ -410,11 +485,103 @@ test("reads, replies, and sends through typed IPC", async ({ page }) => {
     () =>
       (
         window as typeof window & {
-          __POSTAL_SNAP_TEST__: { sentDraft?: { to: string[] } };
+          __POSTAL_SNAP_TEST__: {
+            sentDraft?: {
+              to: string[];
+              inReplyTo?: string;
+              references?: string[];
+            };
+          };
         }
       ).__POSTAL_SNAP_TEST__.sentDraft,
   );
-  expect(sent?.to).toEqual(["jane@example.com"]);
+  await expect(sent?.to).toEqual(["jane@example.com"]);
+  expect(sent?.inReplyTo).toBe("<weekend@example.com>");
+  expect(sent?.references).toEqual(["<weekend@example.com>"]);
+  // Default undo-send holds the message; the notice offers Undo until it sends.
+  await expect(page.locator(".sent-toast")).toContainText("Message sent");
+  await expect(
+    page.locator(".sent-toast").getByRole("button", { name: "Undo" }),
+  ).toBeVisible();
+});
+
+test("holds an offline send in the outbox without claiming success", async ({
+  page,
+}) => {
+  await page.goto("/?localMail=1&offline=1&undoSendOff=1");
+  await page.getByRole("button", { name: "Compose", exact: true }).click();
+  await page.getByPlaceholder("name@example.com").fill("lee@example.com");
+  await page.getByRole("textbox", { name: "Subject" }).fill("Offline note");
+  await page
+    .getByLabel("Message body")
+    .pressSequentially("Queued until there is a connection.");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(page.locator(".composer-window")).toHaveCount(0);
+
+  await page.getByRole("button", { name: /^Outbox/ }).click();
+  await expect(page.getByText("Waiting to send")).toBeVisible();
+  await expect(
+    page.getByText("Waiting for a secure mail connection."),
+  ).toBeVisible();
+  await expect(page.getByText("Needs attention")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Retry sending" })).toHaveCount(
+    0,
+  );
+  await expect(page.getByText("Message sent")).toHaveCount(0);
+  await expect(page.getByText("Send scheduled")).toHaveCount(0);
+  await expect(page.locator(".error-toast")).toHaveCount(0);
+});
+
+test("keeps an uncertain send explicit with required retry and no success claim", async ({
+  page,
+}) => {
+  await page.goto("/?localMail=1&sendOutcome=needs_attention");
+  await page.getByRole("button", { name: "Compose", exact: true }).click();
+  await page.getByPlaceholder("name@example.com").fill("lee@example.com");
+  await page.getByRole("textbox", { name: "Subject" }).fill("Uncertain note");
+  await page.getByLabel("Message body").pressSequentially("Outcome unknown.");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(page.locator(".composer-window")).toHaveCount(0);
+
+  await expect(page.locator(".error-toast")).toContainText(
+    "Delivery could not be confirmed.",
+  );
+  await expect(page.getByText("Message sent")).toHaveCount(0);
+  await expect(page.getByText("Send scheduled")).toHaveCount(0);
+
+  await page.getByRole("button", { name: /^Outbox/ }).click();
+  await expect(page.getByText("Needs attention")).toBeVisible();
+  await expect(
+    page
+      .getByRole("region", { name: "Outbox" })
+      .getByText(
+        "Delivery could not be confirmed. Postal Snap will not resend automatically.",
+      ),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Retry sending" }),
+  ).toBeVisible();
+  await expect(page.getByText("Waiting to send")).toHaveCount(0);
+});
+
+test("removes a message from the outbox after an immediate send", async ({
+  page,
+}) => {
+  await page.goto("/?localMail=1&sendOutcome=sent");
+  await page.getByRole("button", { name: "Compose", exact: true }).click();
+  await page.getByPlaceholder("name@example.com").fill("lee@example.com");
+  await page.getByRole("textbox", { name: "Subject" }).fill("Sent now");
+  await page.getByLabel("Message body").pressSequentially("On its way.");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(page.locator(".composer-window")).toHaveCount(0);
+  await expect(page.locator(".error-toast")).toHaveCount(0);
+  await expect(page.getByText("Needs attention")).toHaveCount(0);
+
+  await page.getByRole("button", { name: /^Outbox/ }).click();
+  await expect(page.getByText("No queued messages.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Retry sending" })).toHaveCount(
+    0,
+  );
 });
 
 test("updates unread and folder state immediately after mutations", async ({
@@ -657,6 +824,58 @@ test("keeps reported links closed unless the user opens them anyway", async ({
   page.off("dialog", acceptBoth);
 });
 
+test("link mock refuses a reported threat unless Open anyway is explicit", async ({
+  page,
+}) => {
+  await page.goto("/?threatLink=1");
+  const outcome = await page.evaluate(async () => {
+    const invoke = (
+      window as typeof window & {
+        __TAURI_INTERNALS__: {
+          invoke: (
+            command: string,
+            args?: Record<string, unknown>,
+          ) => Promise<unknown>;
+        };
+      }
+    ).__TAURI_INTERNALS__.invoke;
+    const attempt = async (args: Record<string, unknown>) => {
+      try {
+        await invoke("open_external_url", args);
+        return "opened";
+      } catch (cause) {
+        return cause instanceof Error ? cause.message : String(cause);
+      }
+    };
+    return {
+      withoutConsent: await attempt({
+        url: "https://phish.example.test/login",
+      }),
+      explicitlyFalse: await attempt({
+        url: "https://phish.example.test/login",
+        openAnyway: false,
+      }),
+      openAnyway: await attempt({
+        url: "https://phish.example.test/login",
+        openAnyway: true,
+      }),
+    };
+  });
+  expect(outcome.withoutConsent).toMatch(/potentially dangerous/i);
+  expect(outcome.explicitlyFalse).toMatch(/potentially dangerous/i);
+  expect(outcome.openAnyway).toBe("opened");
+  expect(
+    await page.evaluate(
+      () =>
+        (
+          window as typeof window & {
+            __POSTAL_SNAP_TEST__: { openedUrls: string[] };
+          }
+        ).__POSTAL_SNAP_TEST__.openedUrls,
+    ),
+  ).toEqual(["https://phish.example.test/login"]);
+});
+
 test("rejects credentialed HTML links before opening them", async ({
   page,
 }) => {
@@ -858,6 +1077,77 @@ test("mail shell has no detectable serious accessibility violations", async ({
   ).toEqual([]);
 });
 
+test("composer has no detectable serious accessibility violations", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Compose", exact: true }).click();
+  await expect(page.locator(".composer-window")).toBeVisible();
+  const scan = await new AxeBuilder({ page })
+    .include(".composer-window")
+    .analyze();
+  expect(
+    scan.violations.filter((violation) =>
+      ["serious", "critical"].includes(violation.impact ?? ""),
+    ),
+  ).toEqual([]);
+});
+
+test("message reader has no detectable serious accessibility violations", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("option", { name: /Weekend plans/i }).click();
+  await expect(page.locator(".message-body")).toBeVisible();
+  // The sandboxed message frame is excluded; its own content is not scanned.
+  const scan = await new AxeBuilder({ page })
+    .include(".reader-pane")
+    .exclude('iframe[title="Message content"]')
+    .analyze();
+  expect(
+    scan.violations.filter((violation) =>
+      ["serious", "critical"].includes(violation.impact ?? ""),
+    ),
+  ).toEqual([]);
+});
+
+test("add-account dialog has no detectable serious accessibility violations", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Add account" }).click();
+  await expect(
+    page.getByRole("dialog", { name: "Add email account" }),
+  ).toBeVisible();
+  const scan = await new AxeBuilder({ page })
+    .include(".setup-dialog")
+    .analyze();
+  expect(
+    scan.violations.filter((violation) =>
+      ["serious", "critical"].includes(violation.impact ?? ""),
+    ),
+  ).toEqual([]);
+});
+
+test("settings Accounts and About tabs have no detectable serious accessibility violations", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  for (const tab of ["Accounts", "About"]) {
+    await page.getByRole("tab", { name: tab }).click();
+    await expect(page.getByRole("tabpanel", { name: tab })).toBeVisible();
+    const scan = await new AxeBuilder({ page })
+      .include(".settings-window")
+      .analyze();
+    expect(
+      scan.violations.filter((violation) =>
+        ["serious", "critical"].includes(violation.impact ?? ""),
+      ),
+    ).toEqual([]);
+  }
+});
+
 test("supports full sync download all option with unlimited storage limit", async ({
   page,
 }) => {
@@ -1030,20 +1320,51 @@ test("groups threaded replies behind one row", async ({ page }) => {
     page.getByRole("option", { name: /Weekend plans/i }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Load older mail" }).click();
-  const header = page.getByRole("button", {
+  const header = page.getByRole("treeitem", {
     name: /Conversation.*2 messages/i,
   });
+  const newestChild = page.locator(".message-row:not(.thread-header)", {
+    hasText: "Weekend plans",
+  });
   await expect(header).toBeVisible();
+  await expect(newestChild).toHaveCount(0);
+  await header.click();
+  await expect(newestChild).toBeVisible();
   await expect(
-    page.getByRole("option", { name: /Weekend plans/i }),
-  ).toHaveCount(0);
+    page.getByRole("treeitem", { name: /Older family note/i }),
+  ).toBeVisible();
+});
+
+test("threaded conversation list has no accessibility violations", async ({
+  page,
+}) => {
+  await page.goto("/?threaded=1&pagination=1");
+  await page.getByRole("button", { name: "Load older mail" }).click();
+  const header = page.getByRole("treeitem", {
+    name: /Conversation.*2 messages/i,
+  });
   await header.click();
   await expect(
-    page.getByRole("option", { name: /Weekend plans/i }),
+    page.getByRole("treeitem", { name: /Older family note/i }),
   ).toBeVisible();
-  await expect(
-    page.getByRole("option", { name: /Older family note/i }),
-  ).toBeVisible();
+
+  const scan = await new AxeBuilder({ page })
+    .include(".message-pane")
+    .analyze();
+  expect(
+    scan.violations.filter((violation) =>
+      [
+        "aria-allowed-attr",
+        "aria-required-parent",
+        "aria-required-children",
+      ].includes(violation.id),
+    ),
+  ).toEqual([]);
+  expect(
+    scan.violations.filter((violation) =>
+      ["serious", "critical"].includes(violation.impact ?? ""),
+    ),
+  ).toEqual([]);
 });
 
 test("saves a per-account signature", async ({ page }) => {
@@ -1108,10 +1429,30 @@ test("keeps message body opaque when translucent window effects are enabled", as
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("tab", { name: "General" }).click();
   await page.getByLabel("Translucent window background").check();
+  await expect(page.locator("html")).toHaveAttribute(
+    "data-window-fx",
+    "vibrant",
+  );
   await page.getByRole("button", { name: "Close settings" }).click();
   await page.getByRole("option", { name: /Weekend plans/i }).click();
   const bodyBackground = await page
     .locator(".message-body")
     .evaluate((node) => getComputedStyle(node).backgroundColor);
   expect(bodyBackground).toMatch(/rgb\(255,\s*255,\s*255\)|#fff/i);
+});
+
+test("keeps chrome opaque when the platform cannot provide native glass", async ({
+  page,
+}) => {
+  await page.goto("/?noWindowFx=1");
+  await page.locator(".mail-shell").waitFor();
+  await expect(page.locator("html")).toHaveAttribute(
+    "data-window-fx",
+    "opaque",
+  );
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("tab", { name: "General" }).click();
+  await expect(
+    page.getByRole("checkbox", { name: /Translucent window background/ }),
+  ).toHaveCount(0);
 });

@@ -37,12 +37,15 @@ pub async fn set_remote_uid_flags(
     if uids.is_empty() {
         return Ok(());
     }
+    let expected_uid_validity = expected_uid_validity.ok_or_else(|| {
+        "Mailbox identity is unavailable; refresh mail and try again.".to_string()
+    })?;
     let mut session = connect_imap(&account.imap, password).await?;
     let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(mailbox))
         .await
         .map_err(|_| "Message update timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Message update"))?;
-    if expected_uid_validity.is_some() && selected.uid_validity != expected_uid_validity {
+    if selected.uid_validity != Some(expected_uid_validity) {
         return Err("This mailbox changed; refresh mail and try again.".into());
     }
     let set = uids
@@ -86,7 +89,7 @@ pub async fn set_remote_uid_flags(
         .await
         .map_err(|_| "Message update timed out.".to_string())??;
     }
-    let _ = session.logout().await;
+    let _ = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.logout()).await;
     Ok(())
 }
 
@@ -120,12 +123,15 @@ pub async fn move_remote_uids(
     if uids.is_empty() {
         return Ok(());
     }
+    let expected_uid_validity = expected_uid_validity.ok_or_else(|| {
+        "Mailbox identity is unavailable; refresh mail and try again.".to_string()
+    })?;
     let mut session = connect_imap(&account.imap, password).await?;
     let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(source))
         .await
         .map_err(|_| "Move timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Move"))?;
-    if expected_uid_validity.is_some() && selected.uid_validity != expected_uid_validity {
+    if selected.uid_validity != Some(expected_uid_validity) {
         return Err("This mailbox changed; refresh mail and try again.".into());
     }
     let set = uids
@@ -175,7 +181,7 @@ pub async fn move_remote_uids(
     } else {
         return Err("This mail server cannot safely move messages.".into());
     }
-    let _ = session.logout().await;
+    let _ = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.logout()).await;
     Ok(())
 }
 
@@ -189,7 +195,7 @@ pub async fn create_folder(
         .await
         .map_err(|_| "Creating the folder timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Folder creation"));
-    let _ = session.logout().await;
+    let _ = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.logout()).await;
     result
 }
 
@@ -204,7 +210,7 @@ pub async fn rename_folder(
         .await
         .map_err(|_| "Renaming the folder timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Folder rename"));
-    let _ = session.logout().await;
+    let _ = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.logout()).await;
     result
 }
 
@@ -218,7 +224,7 @@ pub async fn delete_folder(
         .await
         .map_err(|_| "Deleting the folder timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Folder deletion"));
-    let _ = session.logout().await;
+    let _ = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.logout()).await;
     result
 }
 
@@ -229,16 +235,19 @@ pub async fn empty_folder(
     expected_uid_validity: Option<u32>,
     protected_uids: &[u32],
 ) -> Result<(), String> {
+    let expected_uid_validity = expected_uid_validity.ok_or_else(|| {
+        "Mailbox identity is unavailable; refresh mail and try again.".to_string()
+    })?;
     let mut session = connect_imap(&account.imap, password).await?;
     let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(name))
         .await
         .map_err(|_| "Emptying the folder timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Folder empty"))?;
-    if expected_uid_validity.is_some() && selected.uid_validity != expected_uid_validity {
+    if selected.uid_validity != Some(expected_uid_validity) {
         return Err("This mailbox changed; refresh mail and try again.".into());
     }
     if selected.exists == 0 {
-        let _ = session.logout().await;
+        let _ = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.logout()).await;
         return Ok(());
     }
     let all_uids: Vec<u32> = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.uid_search("ALL"))
@@ -248,7 +257,7 @@ pub async fn empty_folder(
         .into_iter()
         .collect();
     if all_uids.is_empty() {
-        let _ = session.logout().await;
+        let _ = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.logout()).await;
         return Ok(());
     }
     let set = all_uids
@@ -313,6 +322,6 @@ pub async fn empty_folder(
             .map_err(|_| "Emptying the folder timed out.".to_string())??;
         }
     }
-    let _ = session.logout().await;
+    let _ = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.logout()).await;
     Ok(())
 }

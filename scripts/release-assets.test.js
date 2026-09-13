@@ -5,7 +5,11 @@ import { join } from "node:path";
 import { artifactArch, artifactPlatform } from "./lib/artifacts.js";
 import { root } from "./lib/paths.js";
 import { validateManifest } from "./validate-updater-manifest.js";
-import { updaterManifestName } from "./validate-updater-live.js";
+import {
+  isDirectRun,
+  shouldSkipMissingTarget,
+  updaterManifestName,
+} from "./validate-updater-live.js";
 import {
   remoteTagCommit,
   verifyDraftReleaseCommit,
@@ -33,15 +37,42 @@ test("signed GitHub updater manifest shape", () => {
   );
 });
 
-test("live updater validation selects beta manifest names for prereleases", () => {
+test("live updater validation selects published beta manifest names", () => {
   assert.equal(
-    updaterManifestName("windows-x86_64", "0.1.9"),
+    updaterManifestName("windows", "x86_64", "0.1.9"),
     "latest-windows-x86_64.json",
   );
   assert.equal(
-    updaterManifestName("windows-x86_64", "0.1.9-beta.1"),
-    "latest-windows-x86_64-beta.json",
+    updaterManifestName("windows", "x86_64", "0.1.9-beta.1"),
+    "latest-windows-beta-x86_64.json",
   );
+  assert.equal(
+    updaterManifestName("darwin", "aarch64", "0.1.9-beta.1"),
+    "latest-darwin-beta-aarch64.json",
+  );
+  assert.doesNotMatch(
+    updaterManifestName("windows", "x86_64", "0.1.9-beta.1"),
+    /x86_64-beta/,
+  );
+});
+
+test("live updater validation fails on missing required manifests", () => {
+  assert.equal(shouldSkipMissingTarget("windows", "x86_64", 404), false);
+  assert.equal(shouldSkipMissingTarget("linux", "x86_64", 404), false);
+  assert.equal(shouldSkipMissingTarget("windows", "x86_64", 500), false);
+  assert.equal(shouldSkipMissingTarget("linux", "aarch64", 500), false);
+  assert.equal(shouldSkipMissingTarget("linux", "aarch64", 404), true);
+});
+
+test("live updater validation runs when the entry path casing differs", () => {
+  assert.equal(isDirectRun("/repo/scripts/validate-updater-live.js"), true);
+  assert.equal(isDirectRun("/repo/scripts/VALIDATE-UPDATER-LIVE.JS"), true);
+  assert.equal(isDirectRun("/repo/scripts/Validate-Updater-Live.Js"), true);
+  assert.equal(
+    isDirectRun("/repo/scripts/validate-updater-live.test.js"),
+    false,
+  );
+  assert.equal(isDirectRun(undefined), false);
 });
 
 test("annotated release tags resolve to their commit", async () => {
@@ -175,23 +206,47 @@ test("hard finalize still requires the published git tag to match the session co
   );
 });
 
-test("finalize-release verifies drafts before upload and tags only after publish", async () => {
+test("finalize-release verifies drafts before upload and beta-syncs before publish", async () => {
   const finalize = await readFile(
     join(root, "scripts/finalize-release.js"),
     "utf8",
   );
   const draftIndex = finalize.indexOf("await verifyDraftReleaseCommit");
-  const uploadIndex = finalize.indexOf('runGitHub([\n  "release",\n  "upload"');
-  const remoteIndex = finalize.indexOf("await verifyRemoteReleaseCommit");
+  const uploadIndex = finalize.indexOf(
+    'runGitHub([\n    "release",\n    "upload",',
+  );
+  const hardIndex = finalize.indexOf("await runHardFinalize({");
   const publishIndex = finalize.indexOf('"--draft=false"');
   assert.ok(draftIndex >= 0);
   assert.ok(uploadIndex > draftIndex);
-  assert.ok(remoteIndex > publishIndex);
-  assert.ok(publishIndex > uploadIndex);
+  assert.ok(hardIndex > uploadIndex);
+  assert.ok(publishIndex > hardIndex);
   assert.doesNotMatch(
     finalize.slice(draftIndex, uploadIndex),
     /verifyRemoteReleaseCommit/,
   );
+  assert.match(
+    finalize,
+    /syncBetaManifests: \(\) => syncLocalBetaManifests\(directory\)/,
+  );
+  assert.match(
+    finalize,
+    /reconcileBetaManifests: \(\) =>\s*run\("node", \["scripts\/finalize-release\.js", "--sync-beta-manifests"\]\)/,
+  );
+
+  const hardFinalize = finalize.slice(
+    finalize.indexOf("export async function runHardFinalize"),
+  );
+  const verifyStep = hardFinalize.indexOf("await verifyDraft()");
+  const syncStep = hardFinalize.indexOf("await syncBetaManifests()");
+  const publishStep = hardFinalize.indexOf("await publish()");
+  const remoteStep = hardFinalize.indexOf("await verifyRemote()");
+  const reconcileStep = hardFinalize.indexOf("await reconcileBetaManifests()");
+  assert.ok(verifyStep >= 0);
+  assert.ok(syncStep > verifyStep);
+  assert.ok(publishStep > syncStep);
+  assert.ok(remoteStep > publishStep);
+  assert.ok(reconcileStep > remoteStep);
 });
 
 test("direct and Store builds keep separate capabilities", async () => {
@@ -213,7 +268,7 @@ test("direct and Store builds keep separate capabilities", async () => {
   assert.deepEqual(msstore.app.security.capabilities, ["store"]);
   assert.deepEqual(flatpak.app.security.capabilities, ["store"]);
   assert.ok(directCapability.permissions.includes("updater:default"));
-  assert.ok(directCapability.permissions.includes("process:allow-restart"));
+  assert.ok(!directCapability.permissions.includes("process:allow-restart"));
   assert.ok(!directCapability.permissions.includes("process:default"));
   assert.ok(!directCapability.permissions.includes("notification:default"));
   assert.ok(!directCapability.permissions.includes("deep-link:allow-register"));
@@ -416,10 +471,20 @@ test("Windows release signing uses Azure Artifact Signing, not a local PFX", asy
   assert.match(tauriBuild, /inspectCodesignDisplay/);
   assert.doesNotMatch(tauriBuild, /AppImage\.tar\.gz/);
   assert.doesNotMatch(tauriBuild, /Compress-Archive/);
-  assert.match(tauriBuild, /notarytool", "submit"/);
+  assert.match(signingEnv, /notarytool", "submit"/);
+  assert.match(tauriBuild, /notarytoolSubmitArgs/);
   assert.match(
     tauriBuild,
-    /DMG notarization requires APPLE_API_KEY \+ APPLE_API_ISSUER \+ APPLE_API_KEY_PATH/,
+    /DMG notarization requires NOTARYTOOL_KEYCHAIN_PROFILE or an App Store Connect API key/,
+  );
+  assert.doesNotMatch(
+    tauriBuild,
+    /"--password",\s*process\.env\.APPLE_PASSWORD/,
+  );
+  assert.match(signingEnv, /ALLOW_UNSIGNED_WINDOWS/);
+  assert.match(
+    signingEnv,
+    /SKIP_WIN_CODESIGN=1 is not allowed for signed Windows release builds/,
   );
   assert.match(tauriBuild, /stapler", "staple"/);
   assert.match(tauriBuild, /signer", "sign"/);
@@ -439,6 +504,13 @@ test("Windows release signing uses Azure Artifact Signing, not a local PFX", asy
   assert.match(verify, /AZURE_ARTIFACT_SIGNING_PUBLISHER/);
   assert.match(verify, /POSTAL_SNAP_INSTALLED_EXE/);
   assert.doesNotMatch(verify, /zinnia_shell|ZinniaContextMenu/);
+  assert.match(verify, /try \{/);
+  assert.match(verify, /finally \{/);
+  assert.ok(
+    verify.indexOf("Remove-Item -LiteralPath $zipDir") >
+      verify.indexOf("finally {"),
+  );
+  assert.equal(verify.match(/Remove-Item -LiteralPath \$zipDir/g)?.length, 1);
 
   const ci = await readFile(join(root, ".github/workflows/ci.yml"), "utf8");
   assert.doesNotMatch(
@@ -446,6 +518,31 @@ test("Windows release signing uses Azure Artifact Signing, not a local PFX", asy
     /Microsoft\.Azure\.ArtifactSigningClientTools|ArtifactSigningClientTools\.msi/,
   );
   assert.match(ci, /Azure Artifact Signing/);
+});
+
+test("Apple credentials stay out of process arguments", async () => {
+  const [signingEnv, buildMas, masArgs, docs] = await Promise.all([
+    readFile(join(root, "scripts/tauri-signing-env.js"), "utf8"),
+    readFile(join(root, "scripts/build-mas.js"), "utf8"),
+    readFile(join(root, "scripts/build-mas-args.js"), "utf8"),
+    readFile(join(root, "docs/RELEASING.md"), "utf8"),
+  ]);
+  assert.match(signingEnv, /NOTARYTOOL_KEYCHAIN_PROFILE/);
+  assert.doesNotMatch(signingEnv, /--password/);
+  assert.match(masArgs, /@env:APPLE_PASSWORD/);
+  assert.doesNotMatch(buildMas, /"--password"/);
+  assert.match(docs, /NOTARYTOOL_KEYCHAIN_PROFILE/);
+  assert.match(docs, /mac-keychain-ssh/);
+});
+
+test("release docs match current automation behavior", async () => {
+  const docs = await readFile(join(root, "docs/RELEASING.md"), "utf8");
+  assert.doesNotMatch(docs, /test:all[^\n]*still install/);
+  assert.match(docs, /setup:e2e/);
+  assert.match(docs, /ALLOW_UNSIGNED_WINDOWS/);
+  assert.match(docs, /GPG_KEY_ID/);
+  assert.match(docs, /setup-macos-ci-keychain/);
+  assert.match(docs, /build:linux/);
 });
 
 test("release verification covers generated manifests after finalization", async () => {
@@ -458,6 +555,8 @@ test("release verification covers generated manifests after finalization", async
   );
   assert.ok(verifier.includes("latest-${platform}${channel}-${arch}.json"));
   assert.ok(verifier.includes("verifyTauriSignatureFile"));
+  assert.ok(verifier.includes("gpgVerifyStatusArgs"));
+  assert.ok(verifier.includes("assertGpgSignatureFingerprint"));
   assert.ok(verifier.includes("platformEntry.signature !== expectedSignature"));
   assert.match(
     packageJson.scripts["release:finalize:hard"],
@@ -568,14 +667,18 @@ test("test:all still includes Playwright e2e unless SKIP_E2E is set", async () =
     await readFile(join(root, "package.json"), "utf8"),
   );
   assert.equal(packageJson.scripts["test:all"], "node scripts/test-all.js");
-  assert.equal(packageJson.scripts["test:e2e"], "playwright test");
+  assert.equal(packageJson.scripts["test:e2e"], "node scripts/run-e2e.js");
   assert.equal(
     packageJson.scripts["test:cov"],
     "node scripts/headless-coverage.js",
   );
   assert.equal(
     packageJson.scripts["test:release-assets"],
-    "node --test scripts/*.test.js scripts/lib/*.test.js",
+    "node --test scripts/*.test.js scripts/lib/*.test.js scripts/*.test.mjs",
+  );
+  assert.ok(
+    !packageJson.scripts["test:release-assets"].includes("scripts/cargo/"),
+    "cargo-safe-update tests stay on test:cargo-safe-update only",
   );
 
   const { qualityGateSteps } = await import("./test-all.js");
@@ -662,7 +765,7 @@ test("test-all and package.json include cargo safe update and policy check", asy
   );
   assert.equal(
     packageJson.scripts["test:cargo-safe-update"],
-    "node --test scripts/cargo-safe-update.test.mjs scripts/check-cargo-update-policy.test.mjs",
+    "node --test scripts/cargo/safe-update.test.mjs scripts/cargo/check-update-policy.test.mjs",
   );
   assert.equal(
     packageJson.scripts["check:cargo-update-policy"],
