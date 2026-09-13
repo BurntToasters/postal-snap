@@ -40,7 +40,12 @@ const manifest = (await readFile(sourceManifest, "utf8")).replace(
   "../../src-tauri/target/release/postal-snap",
   `../../src-tauri/target/${rustTarget}/release/postal-snap`,
 );
-const branch = "stable";
+const branch = manifest.match(/^branch:\s*["']?([^\s#"']+)/m)?.[1];
+if (!branch) {
+  throw new Error(
+    "Flatpak manifest must set branch so build-bundle matches the exported ref.",
+  );
+}
 await runFlatpakBuilderLint(sourceManifest);
 await validateAppStreamMetadata();
 await writeFile(generatedManifest, manifest);
@@ -52,6 +57,7 @@ try {
     `--command=${flatpakBuilderCommand}`,
     flatpakBuilderRef,
     `--arch=${arch}`,
+    `--default-branch=${branch}`,
     "--force-clean",
     "--repo=flatpak-repo",
     "flatpak-build",
