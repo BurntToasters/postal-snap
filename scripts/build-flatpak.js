@@ -16,6 +16,7 @@ const arch = process.argv.includes("--arm64")
     : "x86_64";
 const rustTarget =
   arch === "aarch64" ? "aarch64-unknown-linux-gnu" : "x86_64-unknown-linux-gnu";
+const sourceManifest = join(root, "packaging/flatpak/run.rosie.snap.yml");
 const generatedManifest = join(
   root,
   "packaging/flatpak/run.rosie.snap.generated.yml",
@@ -35,16 +36,14 @@ await run("node", [
   "--",
   "--no-default-features",
 ]);
-const manifest = (
-  await readFile(join(root, "packaging/flatpak/run.rosie.snap.yml"), "utf8")
-).replace(
+const manifest = (await readFile(sourceManifest, "utf8")).replace(
   "../../src-tauri/target/release/postal-snap",
   `../../src-tauri/target/${rustTarget}/release/postal-snap`,
 );
 const branch = "stable";
-await writeFile(generatedManifest, manifest);
-await runFlatpakBuilderLint(generatedManifest);
+await runFlatpakBuilderLint(sourceManifest);
 await validateAppStreamMetadata();
+await writeFile(generatedManifest, manifest);
 await mkdir(join(root, "flatpak-build"), { recursive: true });
 try {
   await run("flatpak", [
