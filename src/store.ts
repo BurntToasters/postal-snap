@@ -18,6 +18,8 @@ export interface SentNotice {
   accountId: string;
   /** True when the user picked Send Later vs the undo-send hold. */
   scheduled: boolean;
+  /** Undo-send hold length in seconds; undefined for explicit Send Later. */
+  undoSeconds?: number;
 }
 
 export interface ComposerSeed {

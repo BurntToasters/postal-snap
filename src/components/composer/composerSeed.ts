@@ -17,16 +17,22 @@ export function seedRecipients(
   const replyAddress = message.replyTo ?? message.senderAddress;
   if (field === "to") return replyAddress ?? message.to.join(", ");
   const ownAddresses = [accountEmail, ...aliases];
-  return seed.composeMode === "replyAll"
-    ? [...message.to, ...message.cc]
-        .filter(
-          (address) =>
-            ![...ownAddresses, message.senderAddress, replyAddress].some(
-              (excluded) => excluded?.toLowerCase() === address.toLowerCase(),
-            ),
-        )
-        .join(", ")
-    : "";
+  if (seed.composeMode !== "replyAll") return "";
+  const seen = new Set<string>();
+  return [...message.to, ...message.cc]
+    .filter(
+      (address) =>
+        ![...ownAddresses, message.senderAddress, replyAddress].some(
+          (excluded) => excluded?.toLowerCase() === address.toLowerCase(),
+        ),
+    )
+    .filter((address) => {
+      const key = address.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .join(", ");
 }
 
 export function seedSubject(seed?: ComposerSeed): string {
@@ -69,6 +75,9 @@ export function seedBody(seed?: ComposerSeed): string {
 
 export function seedReferences(seed?: ComposerSeed): string[] | undefined {
   if (seed?.draft?.references?.length) return seed.draft.references;
+  // RFC 5322 3.6.4: a forward is a new message, not a reply, so it must not
+  // set In-Reply-To/References.
+  if (seed?.composeMode === "forward") return undefined;
   const parentId = seed?.sourceMessage?.messageId;
   if (!parentId) return seed?.draft?.references;
   const prior = seed?.sourceMessage?.references?.filter(Boolean) ?? [];

@@ -28,10 +28,11 @@ pub async fn prepare_message(
 ) -> Result<PreparedMessage, String> {
     let message_id = format!("<{}@run.rosie.snap>", uuid::Uuid::new_v4());
     let message = build_message_with_id(account, draft, &message_id, false).await?;
-    Ok(PreparedMessage {
-        message_id,
-        bytes: message.formatted(),
-    })
+    let bytes = message.formatted();
+    if bytes.len() > MAX_OUTGOING_BYTES {
+        return Err("The message and its attachments are too large to send safely.".into());
+    }
+    Ok(PreparedMessage { message_id, bytes })
 }
 
 pub async fn prepare_draft_message(
@@ -39,9 +40,13 @@ pub async fn prepare_draft_message(
     draft: &ComposeDraft,
     message_id: &str,
 ) -> Result<Vec<u8>, String> {
-    Ok(build_message_with_id(account, draft, message_id, true)
+    let bytes = build_message_with_id(account, draft, message_id, true)
         .await?
-        .formatted())
+        .formatted();
+    if bytes.len() > MAX_OUTGOING_BYTES {
+        return Err("The message and its attachments are too large to send safely.".into());
+    }
+    Ok(bytes)
 }
 
 pub async fn send_prepared(
@@ -328,7 +333,9 @@ async fn build_message_with_id(
         if bytes.len() > MAX_MESSAGE_BYTES {
             return Err("An attachment exceeds the maximum allowed size.".into());
         }
-        total_bytes = total_bytes.saturating_add(bytes.len());
+        // Base64 and MIME framing can inflate attachments by roughly a third;
+        // the formatted-size check below is authoritative.
+        total_bytes = total_bytes.saturating_add(bytes.len().saturating_mul(4) / 3);
         if total_bytes > MAX_OUTGOING_BYTES {
             return Err("The message and its attachments are too large to send safely.".into());
         }
@@ -439,7 +446,8 @@ fn escape_signature_html(value: &str) -> String {
 /// Retries reuse the queued draft, so the contains-check keeps it singular.
 pub fn apply_signature(mut draft: ComposeDraft, signature: &str) -> ComposeDraft {
     let signature = signature.trim();
-    if signature.is_empty() || draft.text_body.contains(signature) {
+    let already_applied = draft.text_body.ends_with(&format!("\n\n-- \n{signature}"));
+    if signature.is_empty() || already_applied {
         return draft;
     }
     draft.text_body = format!("{}\n\n-- \n{signature}", draft.text_body.trim_end());

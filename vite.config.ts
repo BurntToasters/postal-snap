@@ -17,7 +17,7 @@ export default defineConfig({
     strictPort: true,
     watch: { ignored: ["**/src-tauri/target/**"] },
   },
-  envPrefix: ["VITE_", "TAURI_"],
+  envPrefix: ["VITE_"],
   build: {
     target:
       process.env.TAURI_ENV_PLATFORM === "windows" ? "chrome120" : "safari17",

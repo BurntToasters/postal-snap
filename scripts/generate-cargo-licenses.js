@@ -25,7 +25,7 @@ export function collectCargoLicenseRows(packages) {
     .sort();
 }
 
-const filterNotices = `Bundled filter lists (not Cargo crates)
+export const filterNotices = `Bundled filter lists (not Cargo crates)
 
 EasyList and EasyPrivacy are authored by the EasyList authors.
 Homepage: https://easylist.to/

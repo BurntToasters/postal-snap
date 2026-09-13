@@ -106,6 +106,7 @@ export function RecipientField({
           requestSuggestions(event.target.value, event.target.selectionStart);
         }}
         onKeyDown={(event) => {
+          if (event.nativeEvent.isComposing || event.keyCode === 229) return;
           // Cmd/Ctrl+Enter sends; never swallow it as suggestion accept.
           if (event.metaKey || event.ctrlKey) return;
           if (!open) return;

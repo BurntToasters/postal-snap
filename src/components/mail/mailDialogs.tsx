@@ -1,9 +1,11 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { api } from "../../api";
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
 import { SetupWizard } from "../SetupWizard";
 import { useDialogFocus } from "../useDialogFocus";
+import { useInertBackground } from "../useInertBackground";
 
 export function SentNoticeToast() {
   const lastSent = useAppStore((state) => state.lastSent);
@@ -11,11 +13,29 @@ export function SentNoticeToast() {
   const openComposer = useAppStore((state) => state.openComposer);
   const selectLocalView = useAppStore((state) => state.selectLocalView);
   const setError = useAppStore((state) => state.setError);
+  const [expiredNoticeId, setExpiredNoticeId] = useState<string>();
 
   useEffect(() => {
     if (!lastSent) return;
-    const timer = window.setTimeout(() => setLastSent(undefined), 15_000);
-    return () => window.clearTimeout(timer);
+    const holdMs =
+      !lastSent.scheduled && lastSent.undoSeconds !== undefined
+        ? lastSent.undoSeconds * 1000
+        : undefined;
+    const undoTimer =
+      holdMs === undefined
+        ? undefined
+        : window.setTimeout(
+            () => setExpiredNoticeId(lastSent.outboxId),
+            holdMs,
+          );
+    const timer = window.setTimeout(
+      () => setLastSent(undefined),
+      (holdMs ?? 15_000) + 2_000,
+    );
+    return () => {
+      window.clearTimeout(timer);
+      if (undoTimer !== undefined) window.clearTimeout(undoTimer);
+    };
   }, [lastSent, setLastSent]);
 
   if (!lastSent) return null;
@@ -36,11 +56,13 @@ export function SentNoticeToast() {
       <span>
         {notice.scheduled
           ? strings.mail.messageScheduled
-          : strings.mail.messageSent}
+          : strings.composer.messageHeld}
       </span>
-      <button type="button" onClick={() => void undoLastSent()}>
-        {strings.mail.undoSend}
-      </button>
+      {notice.outboxId !== expiredNoticeId ? (
+        <button type="button" onClick={() => void undoLastSent()}>
+          {strings.mail.undoSend}
+        </button>
+      ) : null}
       <button
         type="button"
         onClick={() => {
@@ -69,7 +91,8 @@ export function AddAccountDialog({
   onComplete: () => Promise<void>;
 }) {
   const dialogRef = useDialogFocus(onClose);
-  return (
+  useInertBackground();
+  return createPortal(
     <div className="modal-layer setup-modal">
       <button
         type="button"
@@ -86,6 +109,7 @@ export function AddAccountDialog({
       >
         <SetupWizard onComplete={onComplete} />
       </section>
-    </div>
+    </div>,
+    document.body,
   );
 }

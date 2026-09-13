@@ -205,7 +205,7 @@ export function MessageHeader({
             <dt>{strings.reader.folder}</dt>
             <dd>
               {account ? `${account.displayName || account.email} › ` : ""}
-              {currentMailbox?.displayName || "Mailbox"}
+              {currentMailbox?.displayName || strings.mail.mailboxFallback}
             </dd>
             <dt>{strings.reader.security}</dt>
             <dd className="security-badge">

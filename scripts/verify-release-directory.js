@@ -8,7 +8,8 @@ import {
 } from "./lib/gpg-verify.js";
 import { ensureReleaseDir, json } from "./lib/json.js";
 import { process, root } from "./lib/paths.js";
-import { output } from "./lib/spawn.js";
+import { output, run } from "./lib/spawn.js";
+import { artifactSigningPowershellArgs } from "./tauri-signing-env.js";
 import { validateManifest } from "./validate-updater-manifest.js";
 import {
   committedUpdaterPublicKey,
@@ -99,6 +100,19 @@ for (const name of updaterPayloads) {
     join(directory, name),
     join(directory, `${name}.sig`),
     updaterPublicKey,
+  );
+}
+
+if (
+  process.platform === "win32" &&
+  [...files].some((name) => name.toLowerCase().endsWith(".exe"))
+) {
+  await run(
+    "powershell.exe",
+    artifactSigningPowershellArgs(
+      join(root, "scripts/verify-windows-authenticode.ps1"),
+      ["-TargetReleaseDir", directory],
+    ),
   );
 }
 

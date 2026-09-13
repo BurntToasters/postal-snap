@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import { Composer } from "../components/Composer";
+import { strings } from "../i18n";
 import { useAppStore } from "../store";
 import type { DraftSyncEvent } from "../types";
 import { makeAccount } from "./helpers/fixtures";
@@ -562,7 +563,9 @@ describe("composer draft persistence", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(useAppStore.getState().error).toBe("Error: restore failed");
+    expect(useAppStore.getState().error).toBe(
+      strings.composer.inlineImageFailed(1),
+    );
   });
 
   it("validates, applies, cancels, and escapes the link dialog", () => {

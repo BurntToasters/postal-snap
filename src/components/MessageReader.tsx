@@ -4,7 +4,7 @@ import { strings } from "../i18n";
 import { parseMailto } from "../mailto";
 import { messageFrameDocument, sanitizeReceivedHtml } from "../security";
 import { useAppStore } from "../store";
-import type { Attachment, AttachmentPreview } from "../types";
+import type { Attachment, AttachmentPreview, MessageSummary } from "../types";
 import { useDialogFocus } from "./useDialogFocus";
 import { AttachmentList } from "./reader/attachmentList";
 import { MessageBody } from "./reader/messageBody";
@@ -16,6 +16,31 @@ import {
   hydrateInlineImages,
   moveCounts,
 } from "./reader/readerUtils";
+
+function restoreMovedMessage(
+  current: MessageSummary[],
+  expected: MessageSummary[],
+  message: MessageSummary,
+  previousIndex: number,
+): MessageSummary[] | undefined {
+  if (previousIndex < 0) return undefined;
+  if (current.some((summary) => summary.id === message.id)) return undefined;
+  if (current.length > expected.length) return undefined;
+  const expectedIndexes = new Map(
+    expected.map((summary, index) => [summary.id, index]),
+  );
+  let lastIndex = -1;
+  let insertAt = 0;
+  for (const summary of current) {
+    const index = expectedIndexes.get(summary.id);
+    if (index === undefined || index < lastIndex) return undefined;
+    if (index < previousIndex) insertAt += 1;
+    lastIndex = index;
+  }
+  const restored = [...current];
+  restored.splice(insertAt, 0, message);
+  return restored;
+}
 
 export function MessageReader({
   onSnoozed,
@@ -39,7 +64,7 @@ export function MessageReader({
   const contentOperation = useRef(0);
   const starredOperation = useRef(0);
   const readOperation = useRef(0);
-  const moveOperation = useRef(0);
+  const moveOperations = useRef(new Map<number, number>());
   const forwardOperation = useRef(0);
   const [loadedHtml, setLoadedHtml] = useState<{
     messageId: number;
@@ -421,6 +446,10 @@ export function MessageReader({
   );
 
   useEffect(() => {
+    contentOperation.current += 1;
+  }, [messageId]);
+
+  useEffect(() => {
     const operation = ++contentOperation.current;
     if (
       !messageId ||
@@ -680,7 +709,8 @@ export function MessageReader({
       (destination && source?.name === destination.name)
     )
       return;
-    const operation = ++moveOperation.current;
+    const operation = (moveOperations.current.get(message.id) ?? 0) + 1;
+    moveOperations.current.set(message.id, operation);
     const viewMailboxId = activeMailboxId;
     const previousUnreadCounts = new Map(
       mailboxes.map((mailbox) => [mailbox.id, mailbox.unreadCount]),
@@ -700,7 +730,7 @@ export function MessageReader({
     } catch (cause) {
       const current = useAppStore.getState();
       if (
-        operation !== moveOperation.current ||
+        moveOperations.current.get(message.id) !== operation ||
         current.activeAccountId !== message.accountId ||
         current.activeMailboxId !== viewMailboxId ||
         current.activeLocalView
@@ -709,23 +739,13 @@ export function MessageReader({
       const expectedMessages = messages.filter(
         (summary) => summary.id !== message.id,
       );
-      const listStillOptimistic =
-        previousIndex >= 0 &&
-        !current.messages.some((summary) => summary.id === message.id) &&
-        current.messages.length === expectedMessages.length &&
-        current.messages.every(
-          (summary, index) => summary.id === expectedMessages[index]?.id,
-        );
-      if (listStillOptimistic) {
-        const restoredMessages = [...expectedMessages];
-        restoredMessages.splice(
-          Math.min(
-            previousIndex < 0 ? restoredMessages.length : previousIndex,
-            restoredMessages.length,
-          ),
-          0,
-          message,
-        );
+      const restoredMessages = restoreMovedMessage(
+        current.messages,
+        expectedMessages,
+        message,
+        previousIndex,
+      );
+      if (restoredMessages) {
         setMessages(
           restoredMessages,
           current.messageCursor,
@@ -751,8 +771,7 @@ export function MessageReader({
             : mailbox;
         }),
       );
-      if (listStillOptimistic && !current.selectedMessage)
-        selectMessage(message);
+      if (restoredMessages && !current.selectedMessage) selectMessage(message);
       setError(String(cause));
     }
   }
@@ -760,7 +779,8 @@ export function MessageReader({
   async function moveToMailbox(mailboxId: number) {
     if (!message) return;
     if (mailboxId === message.mailboxId) return;
-    const operation = ++moveOperation.current;
+    const operation = (moveOperations.current.get(message.id) ?? 0) + 1;
+    moveOperations.current.set(message.id, operation);
     const viewMailboxId = activeMailboxId;
     const previousUnreadCounts = new Map(
       mailboxes.map((mailbox) => [mailbox.id, mailbox.unreadCount]),
@@ -780,7 +800,7 @@ export function MessageReader({
     } catch (cause) {
       const current = useAppStore.getState();
       if (
-        operation !== moveOperation.current ||
+        moveOperations.current.get(message.id) !== operation ||
         current.activeAccountId !== message.accountId ||
         current.activeMailboxId !== viewMailboxId ||
         current.activeLocalView
@@ -789,23 +809,13 @@ export function MessageReader({
       const expectedMessages = messages.filter(
         (summary) => summary.id !== message.id,
       );
-      const listStillOptimistic =
-        previousIndex >= 0 &&
-        !current.messages.some((summary) => summary.id === message.id) &&
-        current.messages.length === expectedMessages.length &&
-        current.messages.every(
-          (summary, index) => summary.id === expectedMessages[index]?.id,
-        );
-      if (listStillOptimistic) {
-        const restoredMessages = [...expectedMessages];
-        restoredMessages.splice(
-          Math.min(
-            previousIndex < 0 ? restoredMessages.length : previousIndex,
-            restoredMessages.length,
-          ),
-          0,
-          message,
-        );
+      const restoredMessages = restoreMovedMessage(
+        current.messages,
+        expectedMessages,
+        message,
+        previousIndex,
+      );
+      if (restoredMessages) {
         setMessages(
           restoredMessages,
           current.messageCursor,
@@ -831,8 +841,7 @@ export function MessageReader({
             : mailbox;
         }),
       );
-      if (listStillOptimistic && !current.selectedMessage)
-        selectMessage(message);
+      if (restoredMessages && !current.selectedMessage) selectMessage(message);
       setError(String(cause));
     }
   }

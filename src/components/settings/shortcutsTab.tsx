@@ -58,6 +58,38 @@ export function ShortcutsTab() {
           <span>{strings.mail.settings}</span>
           <kbd>{`${shortcutMod()} ,`}</kbd>
         </div>
+        <div className="shortcut-row">
+          <span>{strings.settings.shortcutNextMessage}</span>
+          <kbd>j / ↓</kbd>
+        </div>
+        <div className="shortcut-row">
+          <span>{strings.settings.shortcutPreviousMessage}</span>
+          <kbd>k / ↑</kbd>
+        </div>
+        <div className="shortcut-row">
+          <span>{strings.settings.shortcutFirstLastMessage}</span>
+          <kbd>Home / End</kbd>
+        </div>
+        <div className="shortcut-row">
+          <span>{strings.settings.shortcutScrollReader}</span>
+          <kbd>Space / ⇧ Space</kbd>
+        </div>
+        <div className="shortcut-row">
+          <span>{strings.reader.trash}</span>
+          <kbd>Delete</kbd>
+        </div>
+        <div className="shortcut-row">
+          <span>{strings.settings.shortcutMarkReadUnread}</span>
+          <kbd>{`${shortcutShiftMod()} U`}</kbd>
+        </div>
+        <div className="shortcut-row">
+          <span>{strings.settings.shortcutStarMessage}</span>
+          <kbd>{`${shortcutShiftMod()} L`}</kbd>
+        </div>
+        <div className="shortcut-row">
+          <span>{strings.reader.print}</span>
+          <kbd>{`${shortcutMod()} P`}</kbd>
+        </div>
       </div>
     </SettingsPanel>
   );

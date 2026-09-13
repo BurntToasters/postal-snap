@@ -1,18 +1,28 @@
-// Native window blur / vibrancy (macOS vibrancy / Windows Mica / Acrylic).
-// Native material sits behind structural chrome; content panes remain opaque.
-// Linux is intentionally a no-op and stays fully opaque.
+// Native window blur: Windows Mica / Acrylic. macOS keeps opaque chrome
+// because transparent WKWebView requires the private macos-private-api
+// feature, which stays off for the store train. Linux is a no-op.
 
 import { invoke } from "@tauri-apps/api/core";
 import type { NativeCommand } from "./api";
 
 let lastSync: { enabled: boolean; isDark: boolean } | undefined;
 let accessibilityListenersInstalled = false;
+let reduceTransparencyPoll: number | undefined;
+let lastNativeReduceTransparency: boolean | undefined;
 
 function nativeInvoke<T>(
   command: NativeCommand,
   args?: Record<string, unknown>,
 ): Promise<T> {
   return args === undefined ? invoke<T>(command) : invoke<T>(command, args);
+}
+
+async function nativeReduceTransparency(): Promise<boolean> {
+  try {
+    return await nativeInvoke<boolean>("accessibility_reduce_transparency");
+  } catch {
+    return false;
+  }
 }
 
 export async function supportsWorkspaceWindowFx(): Promise<boolean> {
@@ -42,9 +52,27 @@ export async function syncWorkspaceWindowFx(
     }
   }
   const supports = await supportsWorkspaceWindowFx();
+  const nativeReduce = await nativeReduceTransparency();
+  lastNativeReduceTransparency = nativeReduce;
+  if (
+    supports &&
+    reduceTransparencyPoll === undefined &&
+    typeof window !== "undefined"
+  ) {
+    reduceTransparencyPoll = window.setInterval(() => {
+      void (async () => {
+        if (!lastSync) return;
+        const reduce = await nativeReduceTransparency();
+        if (reduce === lastNativeReduceTransparency) return;
+        lastNativeReduceTransparency = reduce;
+        await syncWorkspaceWindowFx(lastSync.enabled, lastSync.isDark);
+      })();
+    }, 10_000);
+  }
   const reducedTransparency =
-    window.matchMedia?.("(prefers-reduced-transparency: reduce)")?.matches ??
-    false;
+    nativeReduce ||
+    (window.matchMedia?.("(prefers-reduced-transparency: reduce)")?.matches ??
+      false);
   const increasedContrast =
     window.matchMedia?.("(prefers-contrast: more)")?.matches ?? false;
   const active =

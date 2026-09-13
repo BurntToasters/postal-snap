@@ -159,21 +159,6 @@ export function sanitizeComposeHtml(input: string): string {
   return doc.body.innerHTML || "<p></p>";
 }
 
-export function restoreComposeHtmlLinks(input: string): string {
-  const doc = new DOMParser().parseFromString(
-    sanitizeComposeHtml(input),
-    "text/html",
-  );
-  for (const link of doc.querySelectorAll<HTMLAnchorElement>(
-    "a[data-external-href]",
-  )) {
-    const url = link.getAttribute("data-external-href")?.trim() ?? "";
-    if (/^https?:/i.test(url)) link.setAttribute("href", url);
-    link.removeAttribute("data-external-href");
-  }
-  return doc.body.innerHTML || "<p></p>";
-}
-
 export function messageFrameDocument(html: string, textScale = 1): string {
   const fontSize = Math.round(16 * Math.max(1, Math.min(2, textScale)));
   const policy = [

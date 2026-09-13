@@ -361,7 +361,30 @@ fn is_public_v6(ip: Ipv6Addr) -> bool {
         || (segments[0] == 0x2001 && segments[1] == 0x0db8)
         || (segments[0] == 0x2001 && segments[1] == 0x0002)
         || (segments[0] == 0x2001 && (segments[1] & 0xfff0) == 0x0010)
-        || (segments[0] == 0x2001 && (segments[1] & 0xfff0) == 0x0020))
+        || (segments[0] == 0x2001 && (segments[1] & 0xfff0) == 0x0020)
+        // Documentation prefix 3fff::/20 (RFC 9637) and SRv6 SIDs 5f00::/16.
+        || (segments[0] == 0x3fff && (segments[1] & 0xf000) == 0)
+        || segments[0] == 0x5f00)
+}
+
+/// Unicode format/bidirectional controls that can spoof attachment names.
+fn is_format_control(character: char) -> bool {
+    matches!(
+        character,
+        '\u{00ad}'
+            | '\u{061c}'
+            | '\u{180e}'
+            | '\u{200b}'..='\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206f}'
+            | '\u{feff}'
+            | '\u{fff9}'..='\u{fffb}'
+            | '\u{1bca0}'..='\u{1bca3}'
+            | '\u{1d173}'..='\u{1d17a}'
+            | '\u{e0001}'
+            | '\u{e0020}'..='\u{e007f}'
+    )
 }
 
 pub fn safe_filename(value: &str) -> String {
@@ -369,6 +392,7 @@ pub fn safe_filename(value: &str) -> String {
         .chars()
         .filter(|character| {
             !character.is_control()
+                && !is_format_control(*character)
                 && !matches!(
                     character,
                     '/' | '\\' | ':' | '\0' | '<' | '>' | '"' | '|' | '?' | '*'

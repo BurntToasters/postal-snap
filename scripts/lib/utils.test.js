@@ -19,12 +19,18 @@ test("shared paths resolve from scripts/lib to repository root", () => {
   assert.equal(existsSync(join(root, "package.json")), true);
 });
 
-test("Windows cmd quoting wraps spaces and empty args", () => {
+test("Windows cmd quoting wraps spaces, metacharacters, and empty args", () => {
   assert.equal(quoteWindowsCmdArg("run"), "run");
   assert.equal(quoteWindowsCmdArg("sync-version"), "sync-version");
   assert.equal(quoteWindowsCmdArg(""), '""');
   assert.equal(quoteWindowsCmdArg("a b"), '"a b"');
-  assert.equal(quoteWindowsCmdArg('say "hi"'), '"say \\"hi\\""');
+  assert.equal(quoteWindowsCmdArg('say "hi"'), '"say ""hi"""');
+  assert.equal(quoteWindowsCmdArg("A&B\\postal-snap"), '"A&B\\postal-snap"');
+  assert.equal(quoteWindowsCmdArg("a|b"), '"a|b"');
+  assert.equal(quoteWindowsCmdArg("a^b"), '"a^b"');
+  assert.equal(quoteWindowsCmdArg("a<b>c"), '"a<b>c"');
+  assert.equal(quoteWindowsCmdArg("100%"), '"100%%"');
+  assert.equal(quoteWindowsCmdArg("(group)"), '"(group)"');
 });
 
 test("Windows npm spawn avoids DEP0190 args-plus-shell concatenation", () => {

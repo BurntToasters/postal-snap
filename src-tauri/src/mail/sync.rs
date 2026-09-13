@@ -26,6 +26,9 @@ use crate::{
 /// retention, per cycle.
 const PREFETCH_TOTAL_BYTES: usize = MAX_MESSAGE_BYTES;
 
+/// Upper bound on 150-message new-mail chunks pulled in a single sync pass.
+const MAX_NEW_MAIL_CHUNKS: u32 = 200;
+
 pub async fn test_account(
     request: &AccountSetupRequest,
     imap: &ServerConfig,
@@ -144,15 +147,30 @@ pub async fn sync_account(
                 .await?;
                 db.set_backfill_cursor(mailbox_id, start.saturating_sub(1))?;
             } else if newest_uid > max_uid {
-                cache_uid_range(
-                    &mut session,
-                    db,
-                    &account.summary.id,
-                    mailbox_id,
-                    &format!("{}:*", max_uid.saturating_add(1)),
-                    cutoff.as_ref(),
-                )
-                .await?;
+                // Chunk a large UID gap so one reconnect cannot pull an
+                // unbounded envelope stream into memory; the next sync
+                // continues where this pass stopped.
+                let mut start = max_uid.saturating_add(1);
+                let mut chunks = 0u32;
+                while start <= newest_uid && chunks < MAX_NEW_MAIL_CHUNKS {
+                    let end = start
+                        .saturating_add(INITIAL_MESSAGE_BATCH.saturating_sub(1))
+                        .min(newest_uid);
+                    cache_uid_range(
+                        &mut session,
+                        db,
+                        &account.summary.id,
+                        mailbox_id,
+                        &format!("{start}:{end}"),
+                        cutoff.as_ref(),
+                    )
+                    .await?;
+                    if end >= newest_uid {
+                        break;
+                    }
+                    start = end.saturating_add(1);
+                    chunks = chunks.saturating_add(1);
+                }
             }
         } else {
             db.set_backfill_cursor(mailbox_id, 0)?;
@@ -265,13 +283,15 @@ async fn cache_uid_range(
     range: &str,
     cutoff: Option<&DateTime<Utc>>,
 ) -> Result<FetchOutcome, String> {
-    let mut fetched = tokio::time::timeout(
-        IMAP_COMMAND_TIMEOUT,
-        session.uid_fetch(range, "(UID FLAGS RFC822.SIZE INTERNALDATE ENVELOPE BODYSTRUCTURE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID IN-REPLY-TO REFERENCES)])"),
-    )
-    .await
-    .map_err(|_| "Message list download timed out.".to_string())?
-    .map_err(|error| redact_error(&error, "Message list download"))?;
+    let header_query = format!(
+        "(UID FLAGS RFC822.SIZE INTERNALDATE ENVELOPE BODYSTRUCTURE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID IN-REPLY-TO REFERENCES)]<0.{}>)",
+        MAX_MESSAGE_BYTES + 1
+    );
+    let mut fetched =
+        tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.uid_fetch(range, header_query))
+            .await
+            .map_err(|_| "Message list download timed out.".to_string())?
+            .map_err(|error| redact_error(&error, "Message list download"))?;
     let mut age_marks: Vec<(u32, bool)> = Vec::new();
     let mut threaded: Vec<String> = Vec::new();
     loop {
@@ -518,7 +538,13 @@ pub async fn server_search(
     }
     let mut session = connect_imap(&account.imap, password).await?;
     let mut results = Vec::new();
+    // Bound all-folders searches so the account actor is not monopolized; a
+    // later search resumes from fresh results.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     for (mailbox_id, name) in mailboxes {
+        if tokio::time::Instant::now() >= deadline {
+            break;
+        }
         let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.examine(&name))
             .await
             .map_err(|_| "Server search timed out.".to_string())?
@@ -553,10 +579,14 @@ pub async fn server_search(
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join(",");
+        let header_query = format!(
+            "(UID FLAGS RFC822.SIZE INTERNALDATE ENVELOPE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID IN-REPLY-TO REFERENCES)]<0.{}>)",
+            MAX_MESSAGE_BYTES + 1
+        );
         let fetched = tokio::time::timeout(
             IMAP_COMMAND_TIMEOUT,
             session
-                .uid_fetch(set, "(UID FLAGS RFC822.SIZE INTERNALDATE ENVELOPE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID IN-REPLY-TO REFERENCES)])")
+                .uid_fetch(set, header_query)
                 .await
                 .map_err(|error| redact_error(&error, "Server search"))?
                 .try_collect::<Vec<_>>(),
@@ -628,12 +658,13 @@ pub async fn download_message(
     if selected.uid_validity != Some(expected_uid_validity) {
         return Err("This mailbox changed; refresh mail and try again.".into());
     }
+    let body_query = format!(
+        "(UID FLAGS RFC822.SIZE INTERNALDATE BODY.PEEK[]<0.{}>)",
+        MAX_MESSAGE_BYTES + 1
+    );
     let mut rows = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
         session
-            .uid_fetch(
-                uid.to_string(),
-                "(UID FLAGS RFC822.SIZE INTERNALDATE BODY.PEEK[])",
-            )
+            .uid_fetch(uid.to_string(), body_query)
             .await
             .map_err(|error| redact_error(&error, "Message download"))?
             .try_collect::<Vec<_>>()
@@ -689,9 +720,13 @@ async fn download_uncached_bodies(
         .map(|(uid, _)| uid.to_string())
         .collect::<Vec<_>>()
         .join(",");
+    let body_query = format!(
+        "(UID FLAGS RFC822.SIZE INTERNALDATE BODY.PEEK[]<0.{}>)",
+        MAX_MESSAGE_BYTES + 1
+    );
     let mut fetched = match tokio::time::timeout(
         IMAP_COMMAND_TIMEOUT,
-        session.uid_fetch(range, "(UID FLAGS RFC822.SIZE INTERNALDATE BODY.PEEK[])"),
+        session.uid_fetch(range, body_query),
     )
     .await
     {

@@ -26,6 +26,7 @@ import type {
   MessageChangeEvent,
   MessagePage,
   MessageSummary,
+  OfflineOperationsDroppedEvent,
   OutboxSummary,
   OutboxChangeEvent,
   SnoozedSummary,
@@ -66,11 +67,11 @@ function inTauri(): boolean {
 export type NativeCommand =
   | "list_accounts"
   | "test_account"
+  | "test_saved_account"
   | "update_account_password"
   | "add_account"
   | "remove_account"
   | "erase_all_data"
-  | "update_account_display_name"
   | "update_account_signature"
   | "get_account_inbox_counts"
   | "list_mailboxes"
@@ -139,6 +140,7 @@ export type NativeCommand =
   | "show_native_message"
   | "relaunch_app"
   | "supports_workspace_window_fx"
+  | "accessibility_reduce_transparency"
   | "set_workspace_window_fx";
 
 async function call<T>(
@@ -160,6 +162,8 @@ export const api = {
   listAccounts: () => call<AccountSummary[]>("list_accounts"),
   testAccount: (request: AccountSetupRequest) =>
     call<void>("test_account", { request }),
+  testSavedAccount: (accountId: string) =>
+    call<void>("test_saved_account", { accountId }),
   updateAccountPassword: (accountId: string, password: string) =>
     call<AccountSummary>("update_account_password", { accountId, password }),
   addAccount: (request: AccountSetupRequest) =>
@@ -173,8 +177,6 @@ export const api = {
       return removed;
     });
   },
-  updateAccountDisplayName: (accountId: string, displayName: string) =>
-    call<void>("update_account_display_name", { accountId, displayName }),
   updateAccountSignature: (accountId: string, signature: string) =>
     call<AccountSummary>("update_account_signature", { accountId, signature }),
   getAccountInboxCounts: () =>
@@ -418,6 +420,15 @@ export const api = {
   async onAppWarning(handler: (warning: string) => void): Promise<UnlistenFn> {
     if (!inTauri()) return () => undefined;
     return listen<string>("app-warning", ({ payload }) => handler(payload));
+  },
+  async onOfflineOperationsDropped(
+    handler: (event: OfflineOperationsDroppedEvent) => void,
+  ): Promise<UnlistenFn> {
+    if (!inTauri()) return () => undefined;
+    return listen<OfflineOperationsDroppedEvent>(
+      "offline-operations-dropped",
+      ({ payload }) => handler(payload),
+    );
   },
   discoverAccountAliases: (accountId: string) =>
     call<AccountSummary>("discover_account_aliases", { accountId }),

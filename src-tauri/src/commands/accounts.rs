@@ -27,6 +27,29 @@ pub async fn test_account(mut request: AccountSetupRequest) -> CommandResult<()>
 }
 
 #[tauri::command]
+pub async fn test_saved_account(
+    account_id: String,
+    state: State<'_, AppState>,
+) -> CommandResult<()> {
+    let _guard = state.lock_account(&account_id).await?;
+    let account = state.db.account(&account_id)?;
+    if account.summary.auth_method != "password" {
+        return Err("This account signs in without a password. Reconnect it instead.".into());
+    }
+    let password = credentials::load(&account_id)?;
+    let request = AccountSetupRequest {
+        provider: account.summary.provider.clone(),
+        email: account.summary.email.clone(),
+        display_name: account.summary.display_name.clone(),
+        password: String::new(),
+        imap: None,
+        smtp: None,
+    };
+    mail::test_account(&request, &account.imap, &account.smtp, &password).await?;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn update_account_password(
     account_id: String,
     password: String,

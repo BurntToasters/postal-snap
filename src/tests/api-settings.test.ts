@@ -129,13 +129,6 @@ describe("settings IPC serialization", () => {
   });
 
   it("dispatches multi-account management commands", async () => {
-    mockedInvoke.mockResolvedValue(undefined);
-    await api.updateAccountDisplayName("acc-1", "Work Mail");
-    expect(mockedInvoke).toHaveBeenCalledWith("update_account_display_name", {
-      accountId: "acc-1",
-      displayName: "Work Mail",
-    });
-
     mockedInvoke.mockResolvedValue([
       { accountId: "acc-1", unreadCount: 2, totalCount: 10 },
     ]);
@@ -219,10 +212,6 @@ describe("settings IPC serialization", () => {
       ["add_account", () => api.addAccount(request)],
       ["remove_account", () => api.removeAccount("acc")],
       ["erase_all_data", () => api.eraseAllData()],
-      [
-        "update_account_display_name",
-        () => api.updateAccountDisplayName("acc", "Name"),
-      ],
       [
         "update_account_signature",
         () => api.updateAccountSignature("acc", "Sig"),

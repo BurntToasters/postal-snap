@@ -252,7 +252,7 @@ export function Composer({ accountId }: Props) {
   const [draftSyncDetail, setDraftSyncDetail] = useState(
     seed?.draftSummary?.syncDetail,
   );
-  const restoredInlineImages = useRef(false);
+  const restoredInlineImages = useRef(new Set<string>());
   const isDiscarding = useRef(false);
   const isSending = useRef(false);
   const draftRevision = useRef(0);
@@ -348,34 +348,50 @@ export function Composer({ accountId }: Props) {
   );
 
   useEffect(() => {
-    if (!editor || restoredInlineImages.current) return;
-    restoredInlineImages.current = true;
+    if (!editor) return;
     const inline = attachments.filter(
-      (attachment) => attachment.inline && attachment.contentId,
+      (attachment) =>
+        attachment.inline &&
+        attachment.contentId &&
+        !restoredInlineImages.current.has(attachment.token),
     );
     if (inline.length === 0) return;
     let cancelled = false;
-    void Promise.all(
+    void Promise.allSettled(
       inline.map(async (attachment) => ({
         attachment,
         dataUrl: await api.readComposeImage(accountId, attachment.token),
       })),
-    )
-      .then((loaded) => {
-        if (cancelled) return;
+    ).then((results) => {
+      if (cancelled) return;
+      const loaded = results.flatMap((result) =>
+        result.status === "fulfilled" ? [result.value] : [],
+      );
+      for (const { attachment } of loaded)
+        restoredInlineImages.current.add(attachment.token);
+      if (loaded.length > 0) {
         let html = editor.getHTML();
-        const next = new Map<string, { dataUrl: string; contentId: string }>();
         for (const { attachment, dataUrl } of loaded) {
           const contentId = attachment.contentId!;
           html = html.split(`cid:${contentId}`).join(dataUrl);
-          next.set(attachment.token, { dataUrl, contentId });
         }
-        setInlineImages(next);
+        setInlineImages((items) => {
+          const next = new Map(items);
+          for (const { attachment, dataUrl } of loaded) {
+            next.set(attachment.token, {
+              dataUrl,
+              contentId: attachment.contentId!,
+            });
+          }
+          return next;
+        });
         editor.commands.setContent(sanitizeComposeHtml(html), {
           emitUpdate: false,
         });
-      })
-      .catch((cause) => setError(String(cause)));
+      }
+      const failed = results.length - loaded.length;
+      if (failed > 0) setError(strings.composer.inlineImageFailed(failed));
+    });
     return () => {
       cancelled = true;
     };
@@ -397,7 +413,10 @@ export function Composer({ accountId }: Props) {
       textBody: htmlToPlainText(htmlBody),
       attachments,
       inReplyTo:
-        seed?.draft?.inReplyTo ?? seed?.sourceMessage?.messageId ?? undefined,
+        seed?.draft?.inReplyTo ??
+        (seed?.composeMode === "forward"
+          ? undefined
+          : (seed?.sourceMessage?.messageId ?? undefined)),
       references: seedReferences(seed),
     };
   }, [
@@ -475,11 +494,18 @@ export function Composer({ accountId }: Props) {
     const onVisibility = () => {
       if (document.visibilityState === "hidden") tryAutosave();
     };
+    const flushDraft = () => {
+      void saveDraftRef.current(false);
+    };
     window.addEventListener("blur", onBlur);
+    window.addEventListener("pagehide", flushDraft);
+    window.addEventListener("beforeunload", flushDraft);
     document.addEventListener("visibilitychange", onVisibility);
     return () => {
       window.clearInterval(saveTimer);
       window.removeEventListener("blur", onBlur);
+      window.removeEventListener("pagehide", flushDraft);
+      window.removeEventListener("beforeunload", flushDraft);
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [accountId, editor, sending, setError]);
@@ -682,6 +708,12 @@ export function Composer({ accountId }: Props) {
             outboxId: outcome.id,
             accountId,
             scheduled: Boolean(sendAt),
+            undoSeconds: sendAt
+              ? undefined
+              : Math.min(
+                  useAppStore.getState().settings.undoSendSeconds ?? 10,
+                  30,
+                ),
           });
         }
         close();
@@ -698,6 +730,7 @@ export function Composer({ accountId }: Props) {
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
+      if (event.isComposing || event.keyCode === 229) return;
       if (minimized) return;
       if (document.querySelector(".settings-window")) return;
       if (!(event.metaKey || event.ctrlKey)) return;

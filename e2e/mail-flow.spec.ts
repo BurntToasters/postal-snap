@@ -499,7 +499,9 @@ test("reads, replies, and sends through typed IPC", async ({ page }) => {
   expect(sent?.inReplyTo).toBe("<weekend@example.com>");
   expect(sent?.references).toEqual(["<weekend@example.com>"]);
   // Default undo-send holds the message; the notice offers Undo until it sends.
-  await expect(page.locator(".sent-toast")).toContainText("Message sent");
+  await expect(page.locator(".sent-toast")).toContainText(
+    "Held for review. Undo anytime before it sends.",
+  );
   await expect(
     page.locator(".sent-toast").getByRole("button", { name: "Undo" }),
   ).toBeVisible();

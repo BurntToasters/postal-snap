@@ -104,6 +104,31 @@ export function applyApplePasswordCompatibility(env = process.env) {
   return env;
 }
 
+export const RELEASE_SECRET_ENV_VARS = [
+  "TAURI_SIGNING_PRIVATE_KEY",
+  "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+  "AZURE_CLIENT_SECRET",
+  "APPLE_PASSWORD",
+  "APPLE_APP_SPECIFIC_PASSWORD",
+  "APPLE_API_KEY",
+  "GPG_PASSPHRASE",
+  "SSH_USER_PWD",
+  "APPLE_CERTIFICATE_PASSWORD",
+  "APPLE_KEYCHAIN_PASSWORD",
+];
+
+// Children that sign or verify one artifact keep the ambient environment but
+// drop release secrets they do not consume, so a compromised helper cannot
+// read unrelated signing material.
+export function envForChild(env = process.env, allowed = []) {
+  const keep = new Set(allowed);
+  const result = { ...env };
+  for (const name of RELEASE_SECRET_ENV_VARS) {
+    if (!keep.has(name)) delete result[name];
+  }
+  return result;
+}
+
 export const NOTARYTOOL_KEYCHAIN_PROFILE_ENV = "NOTARYTOOL_KEYCHAIN_PROFILE";
 
 export function resolveNotarytoolKeychainProfile(env = process.env) {

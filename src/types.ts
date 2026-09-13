@@ -276,7 +276,12 @@ export interface AppSettings {
 
 export interface DistributionChannel {
   kind: "direct" | "macAppStore" | "microsoftStore" | "flatpak";
-  updatesManagedBy: "postalSnap" | "store";
+  updatesManagedBy: "postalSnap" | "store" | "githubDownload";
+}
+
+export interface OfflineOperationsDroppedEvent {
+  accountId: string;
+  count: number;
 }
 
 export type IpcErrorCode =

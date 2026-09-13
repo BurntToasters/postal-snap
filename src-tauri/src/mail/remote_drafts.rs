@@ -216,9 +216,13 @@ pub async fn fetch_remote_drafts(
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join(",");
+        let body_query = format!(
+            "(UID INTERNALDATE BODY.PEEK[]<0.{}>)",
+            MAX_MESSAGE_BYTES + 1
+        );
         let mut fetched = tokio::time::timeout(
             IMAP_COMMAND_TIMEOUT,
-            session.uid_fetch(safe_set, "(UID INTERNALDATE BODY.PEEK[])"),
+            session.uid_fetch(safe_set, body_query),
         )
         .await
         .map_err(|_| "Draft download timed out.".to_string())?

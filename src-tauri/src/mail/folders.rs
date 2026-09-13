@@ -4,6 +4,75 @@ use super::send::connect_imap;
 use super::IMAP_COMMAND_TIMEOUT;
 use crate::{models::AccountRecord, security::redact_error};
 
+/// A failed mailbox operation that keeps the terminal/transient distinction
+/// the redacted error string cannot carry. Terminal failures must not be
+/// replayed forever from the offline queue.
+#[derive(Debug, Clone)]
+pub struct MailboxOperationError {
+    pub terminal: bool,
+    pub message: String,
+}
+
+impl MailboxOperationError {
+    pub(crate) fn transient(message: String) -> Self {
+        Self {
+            terminal: false,
+            message,
+        }
+    }
+
+    pub(crate) fn terminal(message: String) -> Self {
+        Self {
+            terminal: true,
+            message,
+        }
+    }
+}
+
+impl std::fmt::Display for MailboxOperationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl From<MailboxOperationError> for String {
+    fn from(error: MailboxOperationError) -> Self {
+        error.message
+    }
+}
+
+/// A server `NO`/`BAD` response means the command itself was refused; retrying
+/// the identical UID operation cannot succeed. Connection and parse failures
+/// stay transient.
+fn classify_imap_failure(error: &async_imap::error::Error) -> bool {
+    match error {
+        async_imap::error::Error::No(message) | async_imap::error::Error::Bad(message) => {
+            let lower = message.to_ascii_lowercase();
+            lower.contains("uid")
+                || lower.contains("not found")
+                || lower.contains("no such")
+                || lower.contains("does not exist")
+                || lower.contains("nonexistent")
+                || lower.contains("unknown mailbox")
+                || lower.contains("already")
+                || lower.contains("expung")
+                || lower.contains("missing")
+                || lower.contains("invalid")
+        }
+        async_imap::error::Error::Validate(_) => true,
+        _ => false,
+    }
+}
+
+fn remote_failure(error: async_imap::error::Error, action: &str) -> MailboxOperationError {
+    let message = redact_error(&error, action);
+    if classify_imap_failure(&error) {
+        MailboxOperationError::terminal(message)
+    } else {
+        MailboxOperationError::transient(message)
+    }
+}
+
 pub async fn set_remote_flags(
     account: &AccountRecord,
     password: &str,
@@ -12,7 +81,7 @@ pub async fn set_remote_flags(
     expected_uid_validity: Option<u32>,
     is_read: Option<bool>,
     is_starred: Option<bool>,
-) -> Result<(), String> {
+) -> Result<(), MailboxOperationError> {
     set_remote_uid_flags(
         account,
         password,
@@ -33,20 +102,26 @@ pub async fn set_remote_uid_flags(
     expected_uid_validity: Option<u32>,
     is_read: Option<bool>,
     is_starred: Option<bool>,
-) -> Result<(), String> {
+) -> Result<(), MailboxOperationError> {
     if uids.is_empty() {
         return Ok(());
     }
     let expected_uid_validity = expected_uid_validity.ok_or_else(|| {
-        "Mailbox identity is unavailable; refresh mail and try again.".to_string()
+        MailboxOperationError::transient(
+            "Mailbox identity is unavailable; refresh mail and try again.".to_string(),
+        )
     })?;
-    let mut session = connect_imap(&account.imap, password).await?;
+    let mut session = connect_imap(&account.imap, password)
+        .await
+        .map_err(MailboxOperationError::transient)?;
     let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(mailbox))
         .await
-        .map_err(|_| "Message update timed out.".to_string())?
-        .map_err(|error| redact_error(&error, "Message update"))?;
+        .map_err(|_| MailboxOperationError::transient("Message update timed out.".to_string()))?
+        .map_err(|error| remote_failure(error, "Message update"))?;
     if selected.uid_validity != Some(expected_uid_validity) {
-        return Err("This mailbox changed; refresh mail and try again.".into());
+        return Err(MailboxOperationError::terminal(
+            "This mailbox changed; refresh mail and try again.".to_string(),
+        ));
     }
     let set = uids
         .iter()
@@ -63,13 +138,13 @@ pub async fn set_remote_uid_flags(
             session
                 .uid_store(set.clone(), operation)
                 .await
-                .map_err(|error| redact_error(&error, "Message update"))?
+                .map_err(|error| remote_failure(error, "Message update"))?
                 .try_collect::<Vec<_>>()
                 .await
-                .map_err(|error| redact_error(&error, "Message update"))
+                .map_err(|error| remote_failure(error, "Message update"))
         })
         .await
-        .map_err(|_| "Message update timed out.".to_string())??;
+        .map_err(|_| MailboxOperationError::transient("Message update timed out.".to_string()))??;
     }
     if let Some(value) = is_starred {
         let operation = if value {
@@ -81,16 +156,24 @@ pub async fn set_remote_uid_flags(
             session
                 .uid_store(set, operation)
                 .await
-                .map_err(|error| redact_error(&error, "Message update"))?
+                .map_err(|error| remote_failure(error, "Message update"))?
                 .try_collect::<Vec<_>>()
                 .await
-                .map_err(|error| redact_error(&error, "Message update"))
+                .map_err(|error| remote_failure(error, "Message update"))
         })
         .await
-        .map_err(|_| "Message update timed out.".to_string())??;
+        .map_err(|_| MailboxOperationError::transient("Message update timed out.".to_string()))??;
     }
     let _ = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.logout()).await;
     Ok(())
+}
+
+#[derive(Default)]
+pub struct MoveOptions<'a> {
+    pub message_id: Option<&'a str>,
+    /// Set when replaying an offline move so an already-applied server move is
+    /// recognized instead of copied twice.
+    pub dedupe_existing: bool,
 }
 
 pub async fn move_remote(
@@ -100,14 +183,16 @@ pub async fn move_remote(
     destination: &str,
     uid: u32,
     expected_uid_validity: Option<u32>,
-) -> Result<(), String> {
-    move_remote_uids(
+    options: MoveOptions<'_>,
+) -> Result<(), MailboxOperationError> {
+    move_remote_inner(
         account,
         password,
         source,
         destination,
         &[uid],
         expected_uid_validity,
+        options,
     )
     .await
 }
@@ -119,67 +204,164 @@ pub async fn move_remote_uids(
     destination: &str,
     uids: &[u32],
     expected_uid_validity: Option<u32>,
-) -> Result<(), String> {
+) -> Result<(), MailboxOperationError> {
+    move_remote_inner(
+        account,
+        password,
+        source,
+        destination,
+        uids,
+        expected_uid_validity,
+        MoveOptions::default(),
+    )
+    .await
+}
+
+fn quote_imap_search(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+async fn move_remote_inner(
+    account: &AccountRecord,
+    password: &str,
+    source: &str,
+    destination: &str,
+    uids: &[u32],
+    expected_uid_validity: Option<u32>,
+    options: MoveOptions<'_>,
+) -> Result<(), MailboxOperationError> {
     if uids.is_empty() {
         return Ok(());
     }
     let expected_uid_validity = expected_uid_validity.ok_or_else(|| {
-        "Mailbox identity is unavailable; refresh mail and try again.".to_string()
+        MailboxOperationError::transient(
+            "Mailbox identity is unavailable; refresh mail and try again.".to_string(),
+        )
     })?;
-    let mut session = connect_imap(&account.imap, password).await?;
+    let mut session = connect_imap(&account.imap, password)
+        .await
+        .map_err(MailboxOperationError::transient)?;
     let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(source))
         .await
-        .map_err(|_| "Move timed out.".to_string())?
-        .map_err(|error| redact_error(&error, "Move"))?;
+        .map_err(|_| MailboxOperationError::transient("Move timed out.".to_string()))?
+        .map_err(|error| remote_failure(error, "Move"))?;
     if selected.uid_validity != Some(expected_uid_validity) {
-        return Err("This mailbox changed; refresh mail and try again.".into());
+        return Err(MailboxOperationError::terminal(
+            "This mailbox changed; refresh mail and try again.".to_string(),
+        ));
     }
+    let capabilities = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.capabilities())
+        .await
+        .map_err(|_| MailboxOperationError::transient("Move timed out.".to_string()))?
+        .map_err(|error| remote_failure(error, "Move capability check"))?;
     let set = uids
         .iter()
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(",");
-    let capabilities = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.capabilities())
-        .await
-        .map_err(|_| "Move timed out.".to_string())?
-        .map_err(|error| redact_error(&error, "Move capability check"))?;
+    // A reconnect after an ambiguous COPY/MOVE replays the same source UID.
+    // If the destination already holds this Message-ID the server applied the
+    // original move, so only finish removing the source copy.
+    if options.dedupe_existing {
+        if let Some(raw_message_id) = options
+            .message_id
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+        {
+            let search = format!(
+                "HEADER Message-ID \"{}\"",
+                quote_imap_search(raw_message_id)
+            );
+            let destination_selected =
+                tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(destination))
+                    .await
+                    .map_err(|_| MailboxOperationError::transient("Move timed out.".to_string()))?
+                    .map_err(|error| remote_failure(error, "Move"))?;
+            let _ = destination_selected;
+            let existing = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.uid_search(&search))
+                .await
+                .map_err(|_| MailboxOperationError::transient("Move timed out.".to_string()))?
+                .map_err(|error| remote_failure(error, "Move"))?;
+            if !existing.is_empty() {
+                if !capabilities.has_str("UIDPLUS") {
+                    return Err(MailboxOperationError::terminal(
+                        "This mail server cannot safely move messages.".to_string(),
+                    ));
+                }
+                tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(source))
+                    .await
+                    .map_err(|_| MailboxOperationError::transient("Move timed out.".to_string()))?
+                    .map_err(|error| remote_failure(error, "Move"))?;
+                tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
+                    session
+                        .uid_store(set.clone(), "+FLAGS.SILENT (\\Deleted)")
+                        .await
+                        .map_err(|error| remote_failure(error, "Move"))?
+                        .try_collect::<Vec<_>>()
+                        .await
+                        .map_err(|error| remote_failure(error, "Move"))
+                })
+                .await
+                .map_err(|_| MailboxOperationError::transient("Move timed out.".to_string()))??;
+                tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
+                    session
+                        .uid_expunge(set)
+                        .await
+                        .map_err(|error| remote_failure(error, "Move"))?
+                        .try_collect::<Vec<_>>()
+                        .await
+                        .map_err(|error| remote_failure(error, "Move"))
+                })
+                .await
+                .map_err(|_| MailboxOperationError::transient("Move timed out.".to_string()))??;
+                let _ = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.logout()).await;
+                return Ok(());
+            }
+            tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(source))
+                .await
+                .map_err(|_| MailboxOperationError::transient("Move timed out.".to_string()))?
+                .map_err(|error| remote_failure(error, "Move"))?;
+        }
+    }
     if capabilities.has_str("MOVE") {
         tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.uid_mv(set, destination))
             .await
-            .map_err(|_| "Move timed out.".to_string())?
-            .map_err(|error| redact_error(&error, "Move"))?;
+            .map_err(|_| MailboxOperationError::transient("Move timed out.".to_string()))?
+            .map_err(|error| remote_failure(error, "Move"))?;
     } else if capabilities.has_str("UIDPLUS") {
         tokio::time::timeout(
             IMAP_COMMAND_TIMEOUT,
             session.uid_copy(set.clone(), destination),
         )
         .await
-        .map_err(|_| "Move timed out.".to_string())?
-        .map_err(|error| redact_error(&error, "Move"))?;
+        .map_err(|_| MailboxOperationError::transient("Move timed out.".to_string()))?
+        .map_err(|error| remote_failure(error, "Move"))?;
         tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
             session
                 .uid_store(set.clone(), "+FLAGS.SILENT (\\Deleted)")
                 .await
-                .map_err(|error| redact_error(&error, "Move"))?
+                .map_err(|error| remote_failure(error, "Move"))?
                 .try_collect::<Vec<_>>()
                 .await
-                .map_err(|error| redact_error(&error, "Move"))
+                .map_err(|error| remote_failure(error, "Move"))
         })
         .await
-        .map_err(|_| "Move timed out.".to_string())??;
+        .map_err(|_| MailboxOperationError::transient("Move timed out.".to_string()))??;
         tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
             session
                 .uid_expunge(set)
                 .await
-                .map_err(|error| redact_error(&error, "Move"))?
+                .map_err(|error| remote_failure(error, "Move"))?
                 .try_collect::<Vec<_>>()
                 .await
-                .map_err(|error| redact_error(&error, "Move"))
+                .map_err(|error| remote_failure(error, "Move"))
         })
         .await
-        .map_err(|_| "Move timed out.".to_string())??;
+        .map_err(|_| MailboxOperationError::transient("Move timed out.".to_string()))??;
     } else {
-        return Err("This mail server cannot safely move messages.".into());
+        return Err(MailboxOperationError::terminal(
+            "This mail server cannot safely move messages.".to_string(),
+        ));
     }
     let _ = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.logout()).await;
     Ok(())

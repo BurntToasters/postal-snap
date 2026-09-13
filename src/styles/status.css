@@ -30,7 +30,7 @@
   padding: 12px 14px;
   border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
   border-radius: var(--radius-md);
-  color: var(--danger);
+  color: var(--danger-ink);
   background: color-mix(in srgb, var(--danger-soft) 85%, var(--surface));
   box-shadow: var(--shadow);
 }

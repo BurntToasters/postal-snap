@@ -30,6 +30,7 @@ import {
   type UpdateFoundListener,
 } from "../update";
 import { useDialogFocus } from "./useDialogFocus";
+import { preparePassword } from "./setup/request";
 import type { SettingsTab } from "./settings/primitives";
 import { useSettingsSave } from "./settings/useSettingsSave";
 import { GeneralTab } from "./settings/generalTab";
@@ -362,7 +363,7 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
     setTestingAccountId(id);
     setTestedHealthy(undefined);
     try {
-      await api.syncAccount(id);
+      await api.testSavedAccount(id);
       setTestedHealthy(id);
     } catch (cause) {
       setError(String(cause));
@@ -437,8 +438,13 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
 
   async function handleUpdatePassword(accountId: string) {
     if (updatingPasswordId) return;
-    const password = passwordInputs[accountId] ?? "";
-    if (!password) return;
+    const rawPassword = passwordInputs[accountId] ?? "";
+    if (!rawPassword) return;
+    const account = accounts.find((item) => item.id === accountId);
+    const password = preparePassword(
+      account?.provider ?? "manual",
+      rawPassword,
+    );
     setUpdatingPasswordId(accountId);
     try {
       await api.updateAccountPassword(accountId, password);

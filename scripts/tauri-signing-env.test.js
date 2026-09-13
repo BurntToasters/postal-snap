@@ -9,6 +9,7 @@ import {
   allowUnsignedWindows,
   artifactSigningPowershellArgs,
   assertWindowsSigningConfigured,
+  envForChild,
   inspectCodesignDisplay,
   macosBundleExecutablePath,
   missingAzureArtifactSigningVars,
@@ -239,6 +240,29 @@ test("artifactSigningPowershellArgs match Zinnia SignTool invocation flags", () 
       "app.exe",
     ],
   );
+});
+
+test("envForChild removes release secrets the child does not consume", () => {
+  const env = {
+    PATH: "/usr/bin",
+    TAURI_SIGNING_PRIVATE_KEY: "key",
+    TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "pw",
+    AZURE_CLIENT_SECRET: "secret",
+    APPLE_PASSWORD: "pw",
+    GPG_PASSPHRASE: "gpg",
+  };
+  assert.deepEqual(
+    envForChild(env, [
+      "TAURI_SIGNING_PRIVATE_KEY",
+      "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+    ]),
+    {
+      PATH: "/usr/bin",
+      TAURI_SIGNING_PRIVATE_KEY: "key",
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "pw",
+    },
+  );
+  assert.deepEqual(envForChild(env, []), { PATH: "/usr/bin" });
 });
 
 test("notarytool prefers the keychain profile and never passes the password in argv", () => {

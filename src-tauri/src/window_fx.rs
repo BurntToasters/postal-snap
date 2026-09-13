@@ -1,23 +1,9 @@
-//! Native window blur / vibrancy (macOS vibrancy / Windows Mica / Acrylic).
-//! Structural chrome uses native material; content panes remain opaque.
-//! Linux is intentionally a no-op; stays fully opaque there.
+//! Native window blur: Windows Mica / Acrylic via public OS APIs.
+//! macOS keeps opaque chrome because making WKWebView transparent requires the
+//! private `macos-private-api` feature, which must stay off for the store
+//! train. Linux is intentionally a no-op and stays fully opaque.
 
 use tauri::WebviewWindow;
-
-#[cfg(target_os = "macos")]
-fn apply_macos(window: &WebviewWindow) -> Result<(), String> {
-    use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial};
-    apply_vibrancy(window, NSVisualEffectMaterial::Sidebar, None, None)
-        .map_err(|_| "Could not apply window glass.".to_string())
-}
-
-#[cfg(target_os = "macos")]
-fn clear_macos(window: &WebviewWindow) -> Result<(), String> {
-    use window_vibrancy::clear_vibrancy;
-    clear_vibrancy(window)
-        .map(|_| ())
-        .map_err(|_| "Could not clear window glass.".to_string())
-}
 
 #[cfg(target_os = "windows")]
 fn acrylic_tint(dark: bool) -> (u8, u8, u8, u8) {
@@ -59,32 +45,17 @@ fn paint_opaque_background(window: &WebviewWindow, dark: bool) {
     let _ = window.set_background_color(Some(color));
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-fn paint_transparent_background(window: &WebviewWindow) {
-    let _ = window.set_background_color(Some(tauri::window::Color(0, 0, 0, 0)));
-}
-
 pub fn apply_basic_window_fx(window: &WebviewWindow, dark: bool) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        let _ = dark;
-        paint_transparent_background(window);
-        let result = apply_macos(window);
-        if result.is_err() {
-            paint_opaque_background(window, dark);
-        }
-        result
-    }
     #[cfg(target_os = "windows")]
     {
-        paint_transparent_background(window);
+        let _ = window.set_background_color(Some(tauri::window::Color(0, 0, 0, 0)));
         let result = apply_windows(window, dark);
         if result.is_err() {
             paint_opaque_background(window, dark);
         }
         result
     }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(target_os = "windows"))]
     {
         let _ = dark;
         paint_opaque_background(window, dark);
@@ -93,20 +64,15 @@ pub fn apply_basic_window_fx(window: &WebviewWindow, dark: bool) -> Result<(), S
 }
 
 pub fn clear_basic_window_fx(window: &WebviewWindow, dark: bool) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        let result = clear_macos(window);
-        paint_opaque_background(window, dark);
-        result
-    }
     #[cfg(target_os = "windows")]
     {
         let result = clear_windows(window);
         paint_opaque_background(window, dark);
         result
     }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(target_os = "windows"))]
     {
+        let _ = dark;
         paint_opaque_background(window, dark);
         Ok(())
     }
@@ -133,7 +99,22 @@ pub fn set_workspace_window_fx(
 }
 
 pub fn supports_basic_window_fx() -> bool {
-    cfg!(any(target_os = "macos", target_os = "windows"))
+    cfg!(target_os = "windows")
+}
+
+/// WebKit does not implement `prefers-reduced-transparency`, so macOS must
+/// consult the OS setting directly when a future build offers glass again.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub fn accessibility_reduce_transparency() -> bool {
+    use objc2_app_kit::NSWorkspace;
+    NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceTransparency()
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+pub fn accessibility_reduce_transparency() -> bool {
+    false
 }
 
 #[tauri::command]
@@ -147,7 +128,7 @@ mod tests {
 
     #[test]
     fn supports_basic_window_fx_matches_platform() {
-        let expected = cfg!(any(target_os = "macos", target_os = "windows"));
+        let expected = cfg!(target_os = "windows");
         assert_eq!(supports_basic_window_fx(), expected);
         assert_eq!(supports_workspace_window_fx(), expected);
     }
@@ -162,9 +143,10 @@ mod tests {
         assert!(light.0 > dark.0);
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(not(target_os = "windows"))]
     #[test]
-    fn linux_does_not_claim_native_glass() {
+    fn non_windows_platforms_do_not_claim_native_glass() {
         assert!(!supports_basic_window_fx());
+        assert!(!supports_workspace_window_fx());
     }
 }

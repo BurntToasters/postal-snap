@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
-import { collectCargoLicenseRows } from "./generate-cargo-licenses.js";
+import {
+  collectCargoLicenseRows,
+  filterNotices,
+} from "./generate-cargo-licenses.js";
 import { collectNpmLicenseRows } from "./generate-npm-licenses.js";
 import { json } from "./lib/json.js";
 import { root } from "./lib/paths.js";
@@ -44,4 +48,47 @@ test("collectCargoLicenseRows accepts license or license_file and fails on neith
     /gamma@3\.0\.0/,
   );
   assert.throws(() => collectCargoLicenseRows([{}]), /unknown@unknown/);
+});
+
+test("generated notices carry filter attribution and every package ships them", async () => {
+  for (const pattern of [
+    /EasyList/,
+    /EasyPrivacy/,
+    /TweetFeed/,
+    /LICENSE-CC-BY-SA-3\.0\.txt/,
+    /LICENSE-CC0-1\.0\.txt/,
+  ]) {
+    assert.match(filterNotices, pattern);
+  }
+
+  const tauriConfig = await json(join(root, "src-tauri/tauri.conf.json"));
+  assert.equal(
+    tauriConfig.bundle.resources["../THIRD_PARTY_NOTICES.npm.txt"],
+    "THIRD_PARTY_NOTICES.npm.txt",
+  );
+  assert.equal(
+    tauriConfig.bundle.resources["../THIRD_PARTY_NOTICES.cargo.txt"],
+    "THIRD_PARTY_NOTICES.cargo.txt",
+  );
+
+  const flatpak = await readFile(
+    join(root, "packaging/flatpak/run.rosie.snap.yml"),
+    "utf8",
+  );
+  assert.match(flatpak, /THIRD_PARTY_NOTICES\.npm\.txt/);
+  assert.match(flatpak, /THIRD_PARTY_NOTICES\.cargo\.txt/);
+
+  const msstore = await readFile(join(root, "scripts/msstore-pack.js"), "utf8");
+  assert.match(msstore, /THIRD_PARTY_NOTICES\.npm\.txt/);
+  assert.match(msstore, /THIRD_PARTY_NOTICES\.cargo\.txt/);
+
+  const generated = await readFile(
+    join(root, "THIRD_PARTY_NOTICES.cargo.txt"),
+    "utf8",
+  ).catch(() => null);
+  if (generated) {
+    assert.match(generated, /EasyList/);
+    assert.match(generated, /EasyPrivacy/);
+    assert.match(generated, /TweetFeed/);
+  }
 });

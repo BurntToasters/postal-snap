@@ -861,6 +861,16 @@ export function MailShell({ onOpenSettings }: Props) {
         if (active) unsubs.push(fn);
         else fn();
       });
+    void api
+      .onOfflineOperationsDropped(({ accountId }) => {
+        if (accountId !== useAppStore.getState().activeAccountId) return;
+        setError(strings.mail.offlineChangesDropped);
+        void loadersRef.current.loadAccountData();
+      })
+      .then((fn) => {
+        if (active) unsubs.push(fn);
+        else fn();
+      });
     const refreshLocal = (event: Event) => {
       const accountId = (event as CustomEvent<string>).detail;
       if (accountId === useAppStore.getState().activeAccountId)
@@ -872,7 +882,7 @@ export function MailShell({ onOpenSettings }: Props) {
       unsubs.forEach((fn) => fn());
       window.removeEventListener("postal:local-mail-changed", refreshLocal);
     };
-  }, []);
+  }, [setError]);
 
   useEffect(() => {
     const menuAction = (event: Event) => {
@@ -926,6 +936,7 @@ export function MailShell({ onOpenSettings }: Props) {
       }
     };
     const keyboard = (event: KeyboardEvent) => {
+      if (event.isComposing || event.keyCode === 229) return;
       if (document.querySelector(".modal-layer")) return;
       const target = event.target instanceof HTMLElement ? event.target : null;
       const isEditing = Boolean(
@@ -1555,6 +1566,7 @@ export function MailShell({ onOpenSettings }: Props) {
             type="button"
             onClick={onOpenSettings}
             aria-label={strings.mail.settings}
+            title={strings.mail.settings}
           >
             <Settings aria-hidden="true" />
           </button>

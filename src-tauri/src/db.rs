@@ -11,6 +11,7 @@ use std::{
     time::Duration,
 };
 
+use chrono::{DateTime, SecondsFormat, Utc};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
 #[cfg(test)]
@@ -19,7 +20,7 @@ use crate::models::{
 };
 use crate::models::{Attachment, ComposeDraft, MailboxRole, MessageSummary, ProviderKind, TlsMode};
 
-const CURRENT_SCHEMA_VERSION: u32 = 15;
+const CURRENT_SCHEMA_VERSION: u32 = 17;
 
 pub type MailboxSyncState = (Option<u32>, Option<u32>, u32, Option<u32>);
 
@@ -82,6 +83,7 @@ impl Database {
         // removed the duplicate rows. Best effort: the index build fails while
         // duplicates remain.
         let _ = ensure_account_email_unique_index(&connection);
+        recover_fts_index(&connection)?;
         connection
             .execute(
                 "UPDATE outbox SET state='needs_attention', detail='Postal Snap closed before delivery could be confirmed. It will not resend automatically.' WHERE state='sending'",
@@ -131,7 +133,7 @@ pub(crate) fn map_message_summary(row: &Row<'_>) -> rusqlite::Result<MessageSumm
         is_read: row.get::<_, i32>(11)? != 0,
         is_starred: row.get::<_, i32>(12)? != 0,
         has_attachments: row.get::<_, i32>(13)? != 0,
-        size: row.get(14)?,
+        size: row.get::<_, i64>(14)?.max(0) as u64,
         thread_root: row.get(15)?,
     })
 }
@@ -625,6 +627,9 @@ fn migrate_schema(connection: &mut Connection) -> Result<(), String> {
                  CREATE INDEX IF NOT EXISTS filter_rules_account ON filter_rules(account_id,position);",
             )
             .map_err(db_error)?;
+        transaction
+            .pragma_update(None, "user_version", 12)
+            .map_err(db_error)?;
         version = 12;
     }
     if version < 13 {
@@ -679,6 +684,80 @@ fn migrate_schema(connection: &mut Connection) -> Result<(), String> {
         transaction
             .pragma_update(None, "user_version", 15)
             .map_err(db_error)?;
+        version = 15;
+    }
+    if version < 16 {
+        // Re-key message_fts by messages.id. FTS5 has no index on UNINDEXED
+        // columns, so every envelope upsert previously scanned the whole FTS
+        // table; the rowid is indexed. Repeated opens (including rewound test
+        // databases) can revisit this step, so detect the migrated shape.
+        let has_message_id: i64 = transaction
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('message_fts') WHERE name = 'message_id'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(db_error)?;
+        if has_message_id > 0 {
+            transaction
+                .execute_batch(
+                    "DROP TRIGGER IF EXISTS messages_after_delete;
+                     CREATE VIRTUAL TABLE message_fts_v16 USING fts5(subject, sender, recipients, body, tokenize='unicode61');
+                     INSERT INTO message_fts_v16(rowid, subject, sender, recipients, body)
+                       SELECT CAST(fts.message_id AS INTEGER), fts.subject, fts.sender, fts.recipients, fts.body
+                       FROM message_fts fts
+                       JOIN messages m ON m.id = CAST(fts.message_id AS INTEGER);
+                     DROP TABLE message_fts;
+                     ALTER TABLE message_fts_v16 RENAME TO message_fts;",
+                )
+                .map_err(db_error)?;
+        }
+        transaction
+            .execute_batch(
+                "DROP TRIGGER IF EXISTS messages_after_delete;
+                 CREATE TRIGGER messages_after_delete AFTER DELETE ON messages
+                   BEGIN DELETE FROM message_fts WHERE rowid=OLD.id; END;
+                 CREATE INDEX IF NOT EXISTS messages_account_unread_pending ON messages(account_id,is_read,pending_move_to);",
+            )
+            .map_err(db_error)?;
+        transaction
+            .pragma_update(None, "user_version", 16)
+            .map_err(db_error)?;
+        version = 16;
+    }
+    if version < 17 {
+        // Cursor pagination compares received_at as text, so fractional-second
+        // fallbacks sorted inconsistently with whole-second mail from servers.
+        let rows = {
+            let mut statement = transaction
+                .prepare(
+                    "SELECT id, received_at FROM messages
+                     WHERE received_at LIKE '%.%' OR received_at LIKE '%Z'",
+                )
+                .map_err(db_error)?;
+            let rows = statement
+                .query_map([], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(db_error)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(db_error)?;
+            rows
+        };
+        for (id, value) in rows {
+            let normalized = normalize_received_at(&value);
+            if normalized != value {
+                transaction
+                    .execute(
+                        "UPDATE messages SET received_at=?2 WHERE id=?1",
+                        params![id, normalized],
+                    )
+                    .map_err(db_error)?;
+            }
+        }
+        transaction
+            .pragma_update(None, "user_version", 17)
+            .map_err(db_error)?;
     }
     transaction
         .pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)
@@ -719,6 +798,79 @@ fn column_exists(connection: &Connection, table: &str, column: &str) -> Result<b
         .collect::<Result<Vec<_>, _>>()
         .map_err(db_error)?;
     Ok(columns.iter().any(|existing| existing == column))
+}
+
+/// Canonical stored timestamp format: whole seconds, explicit UTC offset.
+/// Fractional seconds would otherwise sort on the wrong side of the
+/// text-compared `received_at` cursor used by message pagination.
+pub(crate) fn normalize_received_at(value: &str) -> String {
+    DateTime::parse_from_rfc3339(value)
+        .map(|parsed| {
+            parsed
+                .with_timezone(&Utc)
+                .to_rfc3339_opts(SecondsFormat::Secs, false)
+        })
+        .unwrap_or_else(|_| value.to_string())
+}
+
+/// FTS rows are maintained alongside `messages`; repair the index when the
+/// row counts drift or a periodic integrity check fails. The check is guarded
+/// by a day-long marker so opening a large mailbox does not pay for it every
+/// launch.
+fn recover_fts_index(connection: &Connection) -> Result<(), String> {
+    let counts_match: bool = connection
+        .query_row(
+            "SELECT (SELECT COUNT(*) FROM messages) = (SELECT COUNT(*) FROM message_fts)",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(db_error)?;
+    if !counts_match {
+        return rebuild_fts_index(connection);
+    }
+    let last_checked: Option<i64> = connection
+        .query_row(
+            "SELECT CAST(value AS INTEGER) FROM settings WHERE key='fts_checked_at'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(db_error)?;
+    let due = last_checked
+        .map(|seconds| Utc::now().timestamp().saturating_sub(seconds) >= 86_400)
+        .unwrap_or(true);
+    if !due {
+        return Ok(());
+    }
+    if connection
+        .execute_batch("INSERT INTO message_fts(message_fts) VALUES('integrity-check');")
+        .is_err()
+    {
+        return rebuild_fts_index(connection);
+    }
+    mark_fts_checked(connection)
+}
+
+fn rebuild_fts_index(connection: &Connection) -> Result<(), String> {
+    connection
+        .execute_batch(
+            "DELETE FROM message_fts;
+             INSERT INTO message_fts(rowid, subject, sender, recipients, body)
+               SELECT id, subject, sender_name || ' ' || sender_address, recipients, text_body
+               FROM messages;",
+        )
+        .map_err(db_error)?;
+    mark_fts_checked(connection)
+}
+
+fn mark_fts_checked(connection: &Connection) -> Result<(), String> {
+    connection
+        .execute(
+            "INSERT OR REPLACE INTO settings(key,value) VALUES('fts_checked_at',?1)",
+            [Utc::now().timestamp().to_string()],
+        )
+        .map_err(db_error)?;
+    Ok(())
 }
 
 pub(crate) fn synthetic_thread_id(mailbox_id: i64, uid: u32) -> String {
@@ -830,7 +982,7 @@ CREATE TABLE IF NOT EXISTS messages (
   text_body TEXT NOT NULL DEFAULT '', html_body TEXT, attachments_json TEXT NOT NULL DEFAULT '[]', raw_message BLOB NOT NULL DEFAULT X'',
   accessed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, pending_move_to INTEGER, thread_parent TEXT, thread_root TEXT, UNIQUE(mailbox_id,uid)
 );
-CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(message_id UNINDEXED, subject, sender, recipients, body, tokenize='unicode61');
+CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(subject, sender, recipients, body, tokenize='unicode61');
 CREATE TABLE IF NOT EXISTS drafts (id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, draft_json TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS recipient_history (account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, address TEXT NOT NULL, name TEXT NOT NULL DEFAULT '', use_count INTEGER NOT NULL DEFAULT 0, last_used TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(account_id, address));
 CREATE TABLE IF NOT EXISTS outbox (id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, draft_json TEXT NOT NULL, state TEXT NOT NULL, detail TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, send_at TEXT);
@@ -846,7 +998,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS accounts_email_unique ON accounts(email);
 CREATE INDEX IF NOT EXISTS messages_mailbox_date_uid ON messages(mailbox_id,received_at DESC,uid DESC);
 CREATE INDEX IF NOT EXISTS messages_thread ON messages(account_id,thread_root);
 CREATE INDEX IF NOT EXISTS messages_account ON messages(account_id);
-CREATE TRIGGER IF NOT EXISTS messages_after_delete AFTER DELETE ON messages BEGIN DELETE FROM message_fts WHERE message_id=OLD.id; END;
+CREATE TRIGGER IF NOT EXISTS messages_after_delete AFTER DELETE ON messages BEGIN DELETE FROM message_fts WHERE rowid=OLD.id; END;
 "#;
 
 #[cfg(test)]
@@ -1944,7 +2096,9 @@ mod tests {
         db.set_flags(read_id, Some(true), None).unwrap();
 
         let rule = filter_rule(&account.summary.id);
-        let matches = db.find_rule_matches(&account.summary.id, &rule).unwrap();
+        let matches = db
+            .find_rule_matches(&account.summary.id, &rule, None)
+            .unwrap();
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].1, 1);
 
@@ -1952,7 +2106,7 @@ mod tests {
         subject_rule.field = "subject".into();
         subject_rule.contains = "PICNIC".into();
         let subject_matches = db
-            .find_rule_matches(&account.summary.id, &subject_rule)
+            .find_rule_matches(&account.summary.id, &subject_rule, None)
             .unwrap();
         assert_eq!(subject_matches.len(), 1);
 
@@ -1960,7 +2114,7 @@ mod tests {
         let mut wild = filter_rule(&account.summary.id);
         wild.contains = "%".into();
         assert!(db
-            .find_rule_matches(&account.summary.id, &wild)
+            .find_rule_matches(&account.summary.id, &wild, None)
             .unwrap()
             .is_empty());
 
