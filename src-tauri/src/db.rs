@@ -19,7 +19,7 @@ use crate::models::{
 };
 use crate::models::{Attachment, ComposeDraft, MailboxRole, MessageSummary, ProviderKind, TlsMode};
 
-const CURRENT_SCHEMA_VERSION: u32 = 14;
+const CURRENT_SCHEMA_VERSION: u32 = 15;
 
 pub type MailboxSyncState = (Option<u32>, Option<u32>, u32, Option<u32>);
 
@@ -77,6 +77,11 @@ impl Database {
             .busy_timeout(Duration::from_secs(5))
             .map_err(db_error)?;
         migrate_schema(&mut connection)?;
+        // A database that still held duplicate emails when v14 or v15 ran keeps
+        // working; retrying here restores the unique index once the user has
+        // removed the duplicate rows. Best effort: the index build fails while
+        // duplicates remain.
+        let _ = ensure_account_email_unique_index(&connection);
         connection
             .execute(
                 "UPDATE outbox SET state='needs_attention', detail='Postal Snap closed before delivery could be confirmed. It will not resend automatically.' WHERE state='sending'",
@@ -169,6 +174,9 @@ pub(crate) fn has_remote_images(html: &str) -> bool {
 }
 pub(crate) fn fts_query(value: &str) -> String {
     value
+        .chars()
+        .take(200)
+        .collect::<String>()
         .split_whitespace()
         .map(|term| {
             let cleaned = term.replace('*', "");
@@ -632,19 +640,61 @@ fn migrate_schema(connection: &mut Connection) -> Result<(), String> {
         version = 13;
     }
     if version < 14 {
-        transaction
-            .execute_batch(
-                "CREATE UNIQUE INDEX IF NOT EXISTS accounts_email_unique ON accounts(email);",
+        let duplicate_emails: u32 = transaction
+            .query_row(
+                "SELECT COUNT(*) FROM (SELECT email FROM accounts GROUP BY email HAVING COUNT(*) > 1)",
+                [],
+                |row| row.get(0),
             )
             .map_err(db_error)?;
+        // Older builds could contain duplicate account rows. Preserve both so
+        // the user can launch and remove the unwanted one; command-level
+        // validation still prevents adding another duplicate.
+        if duplicate_emails == 0 {
+            transaction
+                .execute_batch(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS accounts_email_unique ON accounts(email);",
+                )
+                .map_err(db_error)?;
+        }
         transaction
             .pragma_update(None, "user_version", 14)
+            .map_err(db_error)?;
+    }
+    if version < 15 {
+        // v14 advanced the schema without creating the unique index when
+        // duplicate emails existed. Retry transactionally on every open below
+        // v15 so the database-level guarantee returns once the duplicates are
+        // resolved.
+        let duplicate_emails: u32 = transaction
+            .query_row(
+                "SELECT COUNT(*) FROM (SELECT email FROM accounts GROUP BY email HAVING COUNT(*) > 1)",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(db_error)?;
+        if duplicate_emails == 0 {
+            ensure_account_email_unique_index(&transaction)?;
+        }
+        transaction
+            .pragma_update(None, "user_version", 15)
             .map_err(db_error)?;
     }
     transaction
         .pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)
         .map_err(db_error)?;
     transaction.commit().map_err(db_error)
+}
+
+/// Restore the database-level unique email guarantee. This is a no-op when the
+/// index already exists and an error while duplicate rows remain; callers that
+/// want self-healing ignore that error and retry after cleanup.
+fn ensure_account_email_unique_index(connection: &Connection) -> Result<(), String> {
+    connection
+        .execute_batch(
+            "CREATE UNIQUE INDEX IF NOT EXISTS accounts_email_unique ON accounts(email);",
+        )
+        .map_err(db_error)
 }
 
 fn ensure_column(
@@ -889,6 +939,17 @@ mod tests {
             .unwrap()
     }
 
+    fn accounts_email_unique_index_exists(db: &Database) -> bool {
+        db.conn()
+            .unwrap()
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name='accounts_email_unique')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
     #[test]
     fn settings_have_safe_recent_defaults() {
         let db = Database::memory();
@@ -921,6 +982,10 @@ mod tests {
         assert_eq!(fts_query("::: ... ???"), "");
         assert_eq!(fts_query("user@example.com"), "\"user@example.com\"*");
         assert_eq!(fts_query("foo*bar a**b"), "\"foobar\"* AND \"ab\"*");
+        assert_eq!(
+            fts_query(&"x".repeat(10_000)),
+            format!("\"{}\"*", "x".repeat(200))
+        );
     }
 
     #[test]
@@ -950,6 +1015,50 @@ mod tests {
 
         assert_eq!(db.max_uid(mailbox).unwrap(), 0);
         assert_eq!(db.backfill_cursor(mailbox).unwrap(), None);
+    }
+
+    #[test]
+    fn uidvalidity_becoming_unknown_or_known_resets_cached_uids() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let mailbox = mailbox(&db, &account.summary.id, "INBOX", &MailboxRole::Inbox);
+        db.upsert_message(
+            &account.summary.id,
+            mailbox,
+            &message(1, "2026-08-18T12:00:00Z"),
+        )
+        .unwrap();
+
+        db.upsert_mailbox(
+            &account.summary.id,
+            "INBOX",
+            &MailboxRole::Inbox,
+            None,
+            Some(2),
+            Some(0),
+            0,
+        )
+        .unwrap();
+        assert_eq!(db.max_uid(mailbox).unwrap(), 0);
+
+        db.upsert_message(
+            &account.summary.id,
+            mailbox,
+            &message(2, "2026-08-18T13:00:00Z"),
+        )
+        .unwrap();
+        db.upsert_mailbox(
+            &account.summary.id,
+            "INBOX",
+            &MailboxRole::Inbox,
+            Some(2),
+            Some(3),
+            Some(0),
+            0,
+        )
+        .unwrap();
+        assert_eq!(db.max_uid(mailbox).unwrap(), 0);
     }
 
     #[test]
@@ -1477,6 +1586,153 @@ mod tests {
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
         assert_eq!(version, CURRENT_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn migrates_v13_with_duplicate_emails_without_locking_out_accounts() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("mail.sqlite3");
+        {
+            let db = Database::open(&path).unwrap();
+            db.conn()
+                .unwrap()
+                .execute_batch("DROP INDEX accounts_email_unique;")
+                .unwrap();
+            let first = account();
+            db.insert_account(&first).unwrap();
+            let mut duplicate = first.clone();
+            duplicate.summary.id = "account-duplicate".into();
+            duplicate.summary.display_name = "Duplicate".into();
+            db.insert_account(&duplicate).unwrap();
+            db.conn()
+                .unwrap()
+                .pragma_update(None, "user_version", 13)
+                .unwrap();
+        }
+
+        let migrated = Database::open(&path).unwrap();
+        assert_eq!(migrated.list_accounts().unwrap().len(), 2);
+        let version: u32 = migrated
+            .conn()
+            .unwrap()
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn migrates_v14_with_duplicate_emails_defers_index_without_lockout() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("mail.sqlite3");
+        {
+            let db = Database::open(&path).unwrap();
+            db.conn()
+                .unwrap()
+                .execute_batch("DROP INDEX accounts_email_unique;")
+                .unwrap();
+            let first = account();
+            db.insert_account(&first).unwrap();
+            let mut duplicate = first.clone();
+            duplicate.summary.id = "account-duplicate".into();
+            duplicate.summary.display_name = "Duplicate".into();
+            db.insert_account(&duplicate).unwrap();
+            db.conn()
+                .unwrap()
+                .pragma_update(None, "user_version", 14)
+                .unwrap();
+        }
+
+        let migrated = Database::open(&path).unwrap();
+        assert_eq!(migrated.list_accounts().unwrap().len(), 2);
+        assert!(!accounts_email_unique_index_exists(&migrated));
+        assert!(migrated.email_taken("sam@example.com").unwrap());
+        let version: u32 = migrated
+            .conn()
+            .unwrap()
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn migrates_v14_restores_unique_index_when_duplicates_are_gone() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("mail.sqlite3");
+        {
+            let db = Database::open(&path).unwrap();
+            db.conn()
+                .unwrap()
+                .execute_batch("DROP INDEX accounts_email_unique; PRAGMA user_version=14;")
+                .unwrap();
+        }
+
+        let migrated = Database::open(&path).unwrap();
+        assert!(accounts_email_unique_index_exists(&migrated));
+        let account = account();
+        migrated.insert_account(&account).unwrap();
+        assert!(migrated.insert_account(&account).is_err());
+        let version: u32 = migrated
+            .conn()
+            .unwrap()
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn remove_account_restores_unique_index_once_duplicates_clear() {
+        let db = Database::memory();
+        db.conn()
+            .unwrap()
+            .execute_batch("DROP INDEX accounts_email_unique;")
+            .unwrap();
+        let first = account();
+        db.insert_account(&first).unwrap();
+        for id in ["account-duplicate", "account-third"] {
+            let mut duplicate = first.clone();
+            duplicate.summary.id = id.into();
+            db.insert_account(&duplicate).unwrap();
+        }
+
+        // Removing one of three still leaves duplicates: the index cannot be
+        // built yet and the removal must still commit.
+        db.remove_account("account-third").unwrap();
+        assert_eq!(db.list_accounts().unwrap().len(), 2);
+        assert!(!accounts_email_unique_index_exists(&db));
+
+        db.remove_account("account-duplicate").unwrap();
+        assert!(accounts_email_unique_index_exists(&db));
+        let mut fourth = first.clone();
+        fourth.summary.id = "account-fourth".into();
+        assert!(db.insert_account(&fourth).is_err());
+    }
+
+    #[test]
+    fn outbox_reads_resanitize_html_bodies() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let mut outgoing = draft(&account.summary.id);
+        outgoing.html_body =
+            "<p>Hello</p><script>alert(1)</script><img src=x onerror=alert(1)>".into();
+        let id = db
+            .queue_outbox(
+                &outgoing,
+                "queued",
+                None,
+                "<stable@example.com>",
+                b"Subject: test\r\n\r\nbody",
+                None,
+            )
+            .unwrap();
+
+        let (read, state) = db.outbox(&id, &account.summary.id).unwrap();
+        assert_eq!(state, "queued");
+        assert!(read.html_body.contains("Hello"));
+        assert!(!read.html_body.contains("<script"));
+        assert!(!read.html_body.contains("onerror"));
+        assert_eq!(read.to, outgoing.to);
+        assert_eq!(read.subject, outgoing.subject);
     }
 
     #[test]
@@ -2314,5 +2570,132 @@ mod tests {
             db.message_detail(id2, "acc-2").unwrap().summary.subject,
             "Project status update"
         );
+    }
+
+    #[test]
+    fn purge_stale_mailbox_removes_rows_and_generation_bound_operations() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, &account.summary.id, "INBOX", &MailboxRole::Inbox);
+        let archive = mailbox(&db, &account.summary.id, "Archive", &MailboxRole::Archive);
+        db.upsert_message(
+            &account.summary.id,
+            inbox,
+            &message(7, "2026-08-18T12:00:00Z"),
+        )
+        .unwrap();
+        let message_id = db.message_summary_by_uid(inbox, 7).unwrap().unwrap().id;
+        db.queue_operation(
+            &account.summary.id,
+            "flags",
+            &serde_json::json!({"messageId": message_id, "uid": 7, "mailbox": "INBOX"}),
+            Some("flags:7"),
+        )
+        .unwrap();
+        db.queue_operation(
+            &account.summary.id,
+            "move",
+            &serde_json::json!({
+                "messageId": message_id,
+                "uid": 7,
+                "source": "INBOX",
+                "destination": "Archive"
+            }),
+            Some("move:7"),
+        )
+        .unwrap();
+        db.queue_operation(
+            &account.summary.id,
+            "flags",
+            &serde_json::json!({"messageId": message_id, "uid": 7, "mailbox": "Archive"}),
+            Some("flags:archive:7"),
+        )
+        .unwrap();
+
+        db.purge_stale_mailbox(&account.summary.id, "INBOX", inbox)
+            .unwrap();
+
+        assert_eq!(db.max_uid(inbox).unwrap(), 0);
+        assert!(db.list_messages(inbox, None, 10).unwrap().items.is_empty());
+        let remaining = db.queued_operations(&account.summary.id).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert!(remaining[0].2.contains("Archive"));
+        assert!(db.message_summary_by_uid(archive, 7).unwrap().is_none());
+    }
+
+    #[test]
+    fn outbox_and_offline_mutations_are_account_scoped() {
+        let db = Database::memory();
+        let first = account_with_id("account-1", "one@example.com");
+        let second = account_with_id("account-2", "two@example.com");
+        db.insert_account(&first).unwrap();
+        db.insert_account(&second).unwrap();
+        let draft = draft(&first.summary.id);
+        let outbox_id = db
+            .queue_outbox(
+                &draft,
+                "queued",
+                None,
+                "<stable@example.com>",
+                b"Subject: test\r\n\r\nbody",
+                None,
+            )
+            .unwrap();
+
+        db.set_outbox_state(
+            &outbox_id,
+            &second.summary.id,
+            "needs_attention",
+            Some("wrong"),
+        )
+        .unwrap();
+        let (_, state) = db.outbox(&outbox_id, &first.summary.id).unwrap();
+        assert_eq!(state, "queued");
+        assert_eq!(
+            db.remove_outbox(&outbox_id, &second.summary.id),
+            Err("Queued message not found.".into())
+        );
+        assert!(db.outbox(&outbox_id, &first.summary.id).is_ok());
+
+        db.set_outbox_state(
+            &outbox_id,
+            &first.summary.id,
+            "needs_attention",
+            Some("right"),
+        )
+        .unwrap();
+        let (_, state) = db.outbox(&outbox_id, &first.summary.id).unwrap();
+        assert_eq!(state, "needs_attention");
+        db.remove_outbox(&outbox_id, &first.summary.id).unwrap();
+        assert!(db.outbox(&outbox_id, &first.summary.id).is_err());
+
+        db.queue_operation(
+            &first.summary.id,
+            "flags",
+            &serde_json::json!({"uid": 1}),
+            Some("flags:1"),
+        )
+        .unwrap();
+        let operation_id = db.queued_operations(&first.summary.id).unwrap()[0].0;
+        db.remove_operation(&second.summary.id, operation_id)
+            .unwrap();
+        assert_eq!(db.queued_operations(&first.summary.id).unwrap().len(), 1);
+        db.remove_operation(&first.summary.id, operation_id)
+            .unwrap();
+        assert!(db.queued_operations(&first.summary.id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn duplicate_account_email_is_reported_as_already_set_up() {
+        let db = Database::memory();
+        db.insert_account(&account()).unwrap();
+        let duplicate = account_with_id("account-2", "sam@example.com");
+        assert_eq!(
+            db.insert_account(&duplicate),
+            Err("An account with this email address is already set up.".into())
+        );
+        assert!(db.email_taken("sam@example.com").unwrap());
+        assert_eq!(db.list_accounts().unwrap().len(), 1);
     }
 }

@@ -1,4 +1,10 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/plugin-deep-link", () => ({
@@ -238,6 +244,40 @@ describe("App lifecycle", () => {
     expect(api.setMailShortcutGuard).toHaveBeenLastCalledWith(false);
     window.removeEventListener("postal:menu-action", capture);
     window.removeEventListener("postal:print-message", capture);
+  });
+
+  it("opens a cold-start mailto once accounts finish loading", async () => {
+    resetStore({
+      accounts: [],
+      activeAccountId: undefined,
+      mailboxes: [],
+      activeMailboxId: undefined,
+    });
+    let resolveAccounts: (value: (typeof account)[]) => void = () => undefined;
+    vi.mocked(api.listAccounts).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveAccounts = resolve;
+        }),
+    );
+    vi.mocked(getCurrent).mockResolvedValue(["mailto:late@example.test"]);
+
+    render(<App />);
+    await waitFor(() =>
+      expect(useAppStore.getState().pendingComposeSeed?.prefill?.to).toEqual([
+        "late@example.test",
+      ]),
+    );
+    expect(useAppStore.getState().composerOpen).toBe(false);
+
+    await act(async () => {
+      resolveAccounts([account]);
+    });
+    await waitFor(() => expect(useAppStore.getState().composerOpen).toBe(true));
+    expect(useAppStore.getState().composeSeed?.prefill?.to).toEqual([
+      "late@example.test",
+    ]);
+    expect(useAppStore.getState().pendingComposeSeed).toBeUndefined();
   });
 
   it("routes native menu settings and suppresses printing behind overlays", async () => {

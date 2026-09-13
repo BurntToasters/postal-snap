@@ -16,6 +16,9 @@ pub async fn save_draft(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<DraftSaveOutcome> {
+    // Serialize with delete_draft (and other account work) so a save racing a
+    // discard cannot resurrect a just-deleted draft.
+    let _guard = state.lock_account(&draft.account_id).await?;
     let account = state.db.account(&draft.account_id)?;
     let draft = prepare_owned_compose(draft, &account)?;
     let id = state.db.save_draft(&draft)?;

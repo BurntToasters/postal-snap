@@ -158,6 +158,9 @@ impl SettingsStore {
         self.save_locked(next)
     }
 
+    /// Preference-only reset retained for settings tests; the UI now exposes
+    /// only the Accounts "Reset & Restart" path (`erase_all_data`).
+    #[cfg(test)]
     pub fn reset_preferences(&self) -> Result<AppSettings, String> {
         let _write_guard = self
             .write_lock

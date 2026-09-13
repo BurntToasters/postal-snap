@@ -13,7 +13,6 @@
     "deep-link:default",
     "notification:allow-is-permission-granted",
     "notification:allow-request-permission",
-    "process:allow-restart",
     "updater:default"
   ]
 }

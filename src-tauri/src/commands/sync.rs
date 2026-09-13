@@ -95,7 +95,9 @@ async fn sync_one_locked(
     match mail::sync_account(&state.db, &account, &password, &settings.cache_policy).await {
         Ok(()) => {
             apply_filter_rules(&state.db, &account);
-            let pending_changes = replay_offline_operations(&state.db, &account, &password).await?;
+            let pending_changes =
+                replay_offline_operations(&state.db, &account, &password, &settings.cache_policy)
+                    .await?;
             sync_drafts_locked(state, &account, &password).await;
             replay_outbox_locked(account_id, app, state).await;
             let now = chrono::Utc::now().to_rfc3339();
@@ -186,19 +188,18 @@ pub(crate) fn apply_filter_rules(db: &Database, account: &AccountRecord) {
     }
     for (rule, destination, matches) in planned {
         if rule.action == "mark_read" {
-            let ids: Vec<i64> = matches.iter().map(|(id, _, _, _)| *id).collect();
-            if db.set_flags_bulk(&ids, Some(true), None).is_err() {
-                continue;
-            }
             for (id, uid, mailbox, _) in &matches {
-                let Ok(validity) = db.mailbox_uid_validity(account_id, mailbox) else {
+                let Ok(Some(validity)) = db.mailbox_uid_validity(account_id, mailbox) else {
+                    continue;
+                };
+                if db.set_flags(*id, Some(true), None).is_err() {
                     continue;
                 };
                 let operation = FlagOperation {
                     message_id: *id,
                     uid: *uid,
                     mailbox: mailbox.clone(),
-                    uid_validity: validity,
+                    uid_validity: Some(validity),
                     is_read: Some(true),
                     is_starred: None,
                 };
@@ -214,7 +215,7 @@ pub(crate) fn apply_filter_rules(db: &Database, account: &AccountRecord) {
             if source == &destination {
                 continue;
             }
-            let Ok(validity) = db.mailbox_uid_validity(account_id, source) else {
+            let Ok(Some(validity)) = db.mailbox_uid_validity(account_id, source) else {
                 continue;
             };
             let operation = MoveOperation {
@@ -222,7 +223,7 @@ pub(crate) fn apply_filter_rules(db: &Database, account: &AccountRecord) {
                 uid: *uid,
                 source: source.clone(),
                 destination: destination.clone(),
-                uid_validity: validity,
+                uid_validity: Some(validity),
             };
             let dedupe_key = format!("move:{id}");
             if db

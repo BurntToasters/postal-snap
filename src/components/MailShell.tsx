@@ -116,6 +116,7 @@ export function MailShell({ onOpenSettings }: Props) {
   );
   const updateReady = useAppStore((state) => state.updateReady);
   const [query, setQuery] = useState("");
+  const [submittedQuery, setSubmittedQuery] = useState("");
   const [allFolders, setAllFolders] = useState(false);
   const [addAccountOpen, setAddAccountOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -236,17 +237,45 @@ export function MailShell({ onOpenSettings }: Props) {
   const pagingRequest = useRef(0);
   const detailRequest = useRef(0);
   const searchRequest = useRef(0);
+  const scheduledOutboxInFlight = useRef(new Set<string>());
+  const [scheduledSendInFlight, setScheduledSendInFlight] = useState<
+    Set<string>
+  >(() => new Set());
   const searchInput = useRef<HTMLInputElement>(null);
   const queryRef = useRef(query);
+  const submittedQueryRef = useRef("");
   const allFoldersRef = useRef(allFolders);
   useEffect(() => {
     queryRef.current = query;
     allFoldersRef.current = allFolders;
   }, [allFolders, query]);
 
+  const beginScheduledSend = useCallback((id: string, accountId: string) => {
+    const key = `${accountId}:${id}`;
+    if (scheduledOutboxInFlight.current.has(key)) return undefined;
+    scheduledOutboxInFlight.current.add(key);
+    setScheduledSendInFlight((previous) => new Set(previous).add(key));
+    return api.sendScheduledOutbox(id, accountId).finally(() => {
+      scheduledOutboxInFlight.current.delete(key);
+      setScheduledSendInFlight((previous) => {
+        if (!previous.has(key)) return previous;
+        const next = new Set(previous);
+        next.delete(key);
+        return next;
+      });
+    });
+  }, []);
+
   function resetListState() {
     setSelectedIds([]);
     setSelecting(false);
+  }
+
+  function clearQuery() {
+    queryRef.current = "";
+    submittedQueryRef.current = "";
+    setQuery("");
+    setSubmittedQuery("");
   }
 
   const loadAccountData = useCallback(async () => {
@@ -295,9 +324,12 @@ export function MailShell({ onOpenSettings }: Props) {
       !activeAccountId ||
       !activeMailboxId ||
       activeLocalView ||
-      queryRef.current.trim()
-    )
+      submittedQueryRef.current
+    ) {
+      messageRequest.current += 1;
+      setLoadingMessages(false);
       return;
+    }
     const accountId = activeAccountId;
     const mailboxId = activeMailboxId;
     const request = ++messageRequest.current;
@@ -349,7 +381,7 @@ export function MailShell({ onOpenSettings }: Props) {
         current.activeAccountId === accountId &&
         current.activeMailboxId === mailboxId &&
         !current.activeLocalView &&
-        !queryRef.current.trim()
+        !submittedQueryRef.current
       )
         appendMessages(page.items, page.nextCursor ?? undefined, page.hasMore);
     } catch (cause) {
@@ -386,9 +418,13 @@ export function MailShell({ onOpenSettings }: Props) {
     messageRequest.current += 1;
     pagingRequest.current += 1;
     if (!text) {
+      submittedQueryRef.current = "";
+      setSubmittedQuery("");
       await loadMessages();
       return;
     }
+    submittedQueryRef.current = text;
+    setSubmittedQuery(text);
     const accountId = activeAccountId;
     const mailboxId = activeMailboxId;
     const search = {
@@ -451,7 +487,7 @@ export function MailShell({ onOpenSettings }: Props) {
     try {
       await api.syncAccount(activeAccountId);
       await loadAccountData();
-      if (queryRef.current.trim()) await runSearch();
+      if (submittedQueryRef.current) await runSearch();
       else await loadMessages();
     } catch (cause) {
       setError(String(cause));
@@ -469,7 +505,7 @@ export function MailShell({ onOpenSettings }: Props) {
   ]);
 
   async function refreshList() {
-    if (queryRef.current.trim()) await runSearch();
+    if (submittedQueryRef.current) await runSearch();
     else await loadMessages();
   }
 
@@ -699,7 +735,12 @@ export function MailShell({ onOpenSettings }: Props) {
     const account = accounts.find((item) => item.id === activeAccountId);
     if (account?.syncState === "offline" || sync?.phase === "offline") return;
     const due = outbox
-      .filter((item) => item.state === "scheduled" && item.sendAt)
+      .filter(
+        (item) =>
+          item.accountId === activeAccountId &&
+          item.state === "scheduled" &&
+          item.sendAt,
+      )
       .map((item) => new Date(item.sendAt as string).getTime() - Date.now())
       .filter((ms) => Number.isFinite(ms));
     if (due.length === 0 || !activeAccountId) return;
@@ -707,6 +748,7 @@ export function MailShell({ onOpenSettings }: Props) {
     if (wait <= 0) {
       const overdue = outbox.find(
         (item) =>
+          item.accountId === activeAccountId &&
           item.state === "scheduled" &&
           item.sendAt &&
           new Date(item.sendAt).getTime() <= Date.now(),
@@ -714,10 +756,11 @@ export function MailShell({ onOpenSettings }: Props) {
       if (overdue && activeAccountId) {
         const id = overdue.id;
         const account = activeAccountId;
-        void api
-          .sendScheduledOutbox(id, account)
-          .catch((cause) => setError(String(cause)))
-          .finally(() => void loadAccountData());
+        const request = beginScheduledSend(id, account);
+        if (request)
+          void request
+            .catch((cause) => setError(String(cause)))
+            .finally(() => void loadAccountData());
       }
       return;
     }
@@ -740,21 +783,35 @@ export function MailShell({ onOpenSettings }: Props) {
         current.accounts.find((item) => item.id === current.activeAccountId)
           ?.syncState !== "offline"
       ) {
-        void api
-          .sendScheduledOutbox(ready.id, current.activeAccountId)
-          .catch((cause) => setError(String(cause)))
-          .finally(() => void loadAccountData());
+        const request = beginScheduledSend(ready.id, current.activeAccountId);
+        if (request)
+          void request
+            .catch((cause) => setError(String(cause)))
+            .finally(() => void loadAccountData());
       } else {
         void loadAccountData();
       }
     }, wait);
     return () => window.clearTimeout(timer);
-  }, [accounts, outbox, activeAccountId, sync, loadAccountData, setError]);
+  }, [
+    accounts,
+    outbox,
+    activeAccountId,
+    sync,
+    beginScheduledSend,
+    loadAccountData,
+    setError,
+  ]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void loadMessages(), 0);
     return () => window.clearTimeout(timer);
   }, [loadMessages]);
+
+  const loadersRef = useRef({ loadAccountData, loadMessages, runSearch });
+  useEffect(() => {
+    loadersRef.current = { loadAccountData, loadMessages, runSearch };
+  });
 
   useEffect(() => {
     let active = true;
@@ -762,7 +819,7 @@ export function MailShell({ onOpenSettings }: Props) {
     void api
       .onFolderCountsChanged(({ accountId }) => {
         if (accountId === useAppStore.getState().activeAccountId)
-          void loadAccountData();
+          void loadersRef.current.loadAccountData();
       })
       .then((fn) => {
         if (active) unsubs.push(fn);
@@ -772,8 +829,8 @@ export function MailShell({ onOpenSettings }: Props) {
       .onMessageChanged(({ accountId, messageId, kind }) => {
         const store = useAppStore.getState();
         if (accountId !== store.activeAccountId) return;
-        if (queryRef.current.trim()) void runSearch();
-        else void loadMessages();
+        if (submittedQueryRef.current) void loadersRef.current.runSearch();
+        else void loadersRef.current.loadMessages();
         if (
           messageId &&
           store.selectedMessage?.id === messageId &&
@@ -789,7 +846,7 @@ export function MailShell({ onOpenSettings }: Props) {
     void api
       .onDraftSyncChanged(({ accountId }) => {
         if (accountId === useAppStore.getState().activeAccountId)
-          void loadAccountData();
+          void loadersRef.current.loadAccountData();
       })
       .then((fn) => {
         if (active) unsubs.push(fn);
@@ -798,7 +855,7 @@ export function MailShell({ onOpenSettings }: Props) {
     void api
       .onOutboxChanged(({ accountId }) => {
         if (accountId === useAppStore.getState().activeAccountId)
-          void loadAccountData();
+          void loadersRef.current.loadAccountData();
       })
       .then((fn) => {
         if (active) unsubs.push(fn);
@@ -807,7 +864,7 @@ export function MailShell({ onOpenSettings }: Props) {
     const refreshLocal = (event: Event) => {
       const accountId = (event as CustomEvent<string>).detail;
       if (accountId === useAppStore.getState().activeAccountId)
-        void loadAccountData();
+        void loadersRef.current.loadAccountData();
     };
     window.addEventListener("postal:local-mail-changed", refreshLocal);
     return () => {
@@ -815,7 +872,7 @@ export function MailShell({ onOpenSettings }: Props) {
       unsubs.forEach((fn) => fn());
       window.removeEventListener("postal:local-mail-changed", refreshLocal);
     };
-  }, [loadAccountData, loadMessages, runSearch]);
+  }, []);
 
   useEffect(() => {
     const menuAction = (event: Event) => {
@@ -964,7 +1021,9 @@ export function MailShell({ onOpenSettings }: Props) {
       if (isEditing || onChromeControl) return;
       // List rows own arrows/Space/Home/End/j/k through roving tabindex.
       // The global handler must not double-handle them when focus is in list.
-      const inMessageList = Boolean(target?.closest('[role="listbox"]'));
+      const inMessageList = Boolean(
+        target?.closest('[role="listbox"], [role="tree"]'),
+      );
 
       if (event.key === "Delete" || (mod && event.key === "Backspace")) {
         const state = useAppStore.getState();
@@ -1139,6 +1198,19 @@ export function MailShell({ onOpenSettings }: Props) {
     }
   }
 
+  async function handleSnoozedMessage(accountId: string, messageId: number) {
+    const current = useAppStore.getState();
+    if (current.activeAccountId !== accountId) return;
+    if (
+      current.selectedMessage?.id === messageId &&
+      current.selectedMessage.accountId === accountId
+    ) {
+      selectMessage(undefined);
+    }
+    await loadAccountData();
+    await refreshList();
+  }
+
   const chooseSnoozed = useCallback(
     async (summary: MessageSummary) => {
       const accountId = activeAccountId;
@@ -1191,7 +1263,12 @@ export function MailShell({ onOpenSettings }: Props) {
   async function sendScheduledNow(id: string) {
     if (!activeAccountId) return;
     try {
-      await api.sendScheduledOutbox(id, activeAccountId);
+      const request = beginScheduledSend(id, activeAccountId);
+      if (!request) return;
+      const outcome = await request;
+      if (outcome.state !== "sent" && outcome.detail) {
+        setError(outcome.detail);
+      }
       await loadAccountData();
     } catch (cause) {
       setError(String(cause));
@@ -1413,8 +1490,15 @@ export function MailShell({ onOpenSettings }: Props) {
               type="search"
               value={query}
               onChange={(event) => {
-                queryRef.current = event.target.value;
-                setQuery(event.target.value);
+                const value = event.target.value;
+                queryRef.current = value;
+                setQuery(value);
+                if (!value.trim() && submittedQueryRef.current) {
+                  submittedQueryRef.current = "";
+                  searchRequest.current += 1;
+                  setSubmittedQuery("");
+                  void loadMessages();
+                }
               }}
               placeholder={
                 activeLocalView === "drafts" || activeLocalView === "outbox"
@@ -1529,8 +1613,9 @@ export function MailShell({ onOpenSettings }: Props) {
                   messageRequest.current += 1;
                   detailRequest.current += 1;
                   searchRequest.current += 1;
-                  queryRef.current = "";
-                  setQuery("");
+                  clearQuery();
+                  setFolderDialog(null);
+                  setFolderName("");
                   setAllFolders(false);
                   resetListState();
                   selectAccount(event.target.value);
@@ -1564,8 +1649,7 @@ export function MailShell({ onOpenSettings }: Props) {
             onClick={() => {
               messageRequest.current += 1;
               searchRequest.current += 1;
-              queryRef.current = "";
-              setQuery("");
+              clearQuery();
               resetListState();
               selectLocalView("drafts");
               setSidebarOpen(false);
@@ -1580,8 +1664,7 @@ export function MailShell({ onOpenSettings }: Props) {
             onClick={() => {
               messageRequest.current += 1;
               searchRequest.current += 1;
-              queryRef.current = "";
-              setQuery("");
+              clearQuery();
               resetListState();
               selectLocalView("outbox");
               setSidebarOpen(false);
@@ -1596,8 +1679,7 @@ export function MailShell({ onOpenSettings }: Props) {
             onClick={() => {
               messageRequest.current += 1;
               searchRequest.current += 1;
-              queryRef.current = "";
-              setQuery("");
+              clearQuery();
               resetListState();
               selectLocalView("snoozed");
               setSidebarOpen(false);
@@ -1663,8 +1745,7 @@ export function MailShell({ onOpenSettings }: Props) {
                     mailbox.id === activeMailboxId && !activeLocalView;
                   if (!sameMailbox) messageRequest.current += 1;
                   searchRequest.current += 1;
-                  queryRef.current = "";
-                  setQuery("");
+                  clearQuery();
                   resetListState();
                   selectMailbox(mailbox.id);
                   setSidebarOpen(false);
@@ -1859,15 +1940,14 @@ export function MailShell({ onOpenSettings }: Props) {
                 </div>
               </>
             ) : null}
-            {query && !activeLocalView ? (
+            {!activeLocalView && (query || submittedQuery) ? (
               <button
                 type="button"
                 className="text-button"
                 onClick={() => {
                   messageRequest.current += 1;
                   searchRequest.current += 1;
-                  queryRef.current = "";
-                  setQuery("");
+                  clearQuery();
                   void loadMessages();
                 }}
               >
@@ -1948,6 +2028,7 @@ export function MailShell({ onOpenSettings }: Props) {
             items={outbox.filter((item) =>
               matchesLocalQuery(`${item.subject} ${item.recipients}`, query),
             )}
+            sendingIds={scheduledSendInFlight}
             onRetry={retryQueued}
             onRetryCopy={retrySentCopy}
             onSendNow={sendScheduledNow}
@@ -1955,7 +2036,7 @@ export function MailShell({ onOpenSettings }: Props) {
           />
         ) : (
           <MessageList
-            key={`${activeAccountId}:${activeMailboxId ?? ""}:${activeLocalView ?? ""}:${query.trim()}`}
+            key={`${activeAccountId}:${activeMailboxId ?? ""}:${activeLocalView ?? ""}:${submittedQuery}`}
             messages={messages}
             selectedId={selectedMessage?.id}
             loading={loadingMessages}
@@ -1963,13 +2044,12 @@ export function MailShell({ onOpenSettings }: Props) {
             onChoose={chooseMessage}
             hasMore={hasMoreMessages}
             onLoadMore={loadMoreMessages}
-            searchQuery={query.trim()}
+            searchQuery={submittedQuery}
             selecting={selecting}
             selectedIds={selectedIds}
             onToggleSelect={toggleSelectMessage}
             onClearSearch={() => {
-              queryRef.current = "";
-              setQuery("");
+              clearQuery();
               void loadMessages();
             }}
           />
@@ -2004,7 +2084,7 @@ export function MailShell({ onOpenSettings }: Props) {
         />
       ) : null}
 
-      <MessageReader />
+      <MessageReader onSnoozed={handleSnoozedMessage} />
       <SentNoticeToast />
       {addAccountOpen ? (
         <AddAccountDialog

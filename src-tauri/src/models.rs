@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -754,9 +754,12 @@ pub fn normalize_setup_password(provider: &ProviderKind, password: &str) -> Stri
 
 pub fn take_validated_setup(
     request: &mut AccountSetupRequest,
-) -> Result<(ServerConfig, ServerConfig, String), String> {
+) -> Result<(ServerConfig, ServerConfig, Zeroizing<String>), String> {
     let (imap, smtp) = validated_setup(request)?;
-    let password = normalize_setup_password(&request.provider, &request.password);
+    let password = Zeroizing::new(normalize_setup_password(
+        &request.provider,
+        &request.password,
+    ));
     request.password.zeroize();
     if password.is_empty() || password.len() > 4096 {
         return Err("Enter the app-specific or email password.".into());
@@ -1170,7 +1173,7 @@ mod tests {
             smtp: None,
         };
         let (_, _, password) = take_validated_setup(&mut request).unwrap();
-        assert_eq!(password, "abcdefghijklmnop");
+        assert_eq!(password.as_str(), "abcdefghijklmnop");
         assert!(request.password.is_empty());
     }
 
@@ -1222,7 +1225,7 @@ mod tests {
             }),
         };
         let (_, _, password) = take_validated_setup(&mut request).unwrap();
-        assert_eq!(password, "phrase with spaces");
+        assert_eq!(password.as_str(), "phrase with spaces");
     }
 
     #[test]

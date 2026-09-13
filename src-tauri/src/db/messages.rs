@@ -818,6 +818,9 @@ impl Database {
         rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
     }
 
+    /// Parked for the planned unified-inbox search; no command or mailbox UI
+    /// calls this yet (see `docs/partially_implemented.md`).
+    #[allow(dead_code)]
     pub fn search_all_accounts(
         &self,
         text: &str,

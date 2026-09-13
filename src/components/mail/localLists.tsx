@@ -123,12 +123,14 @@ export function DraftList({
 
 export function OutboxList({
   items,
+  sendingIds,
   onRetry,
   onRetryCopy,
   onSendNow,
   onDiscard,
 }: {
   items: ReturnType<typeof useAppStore.getState>["outbox"];
+  sendingIds?: ReadonlySet<string>;
   onRetry: (id: string) => Promise<void>;
   onRetryCopy: (id: string) => Promise<void>;
   onSendNow: (id: string) => Promise<void>;
@@ -152,67 +154,85 @@ export function OutboxList({
     );
   return (
     <div className="local-mail-list">
-      {items.map((item) => (
-        <article key={item.id} className="attention-row">
-          {item.state === "needs_attention" ? (
-            <TriangleAlert aria-hidden="true" />
-          ) : (
-            <Send aria-hidden="true" />
-          )}
-          <span>
-            <strong>{item.subject || strings.common.noSubject}</strong>
-            <small>{item.recipients || strings.mail.noRecipient}</small>
-            <small>{item.detail}</small>
-            {item.state === "scheduled" && item.sendAt ? (
-              <small className="status-label">
-                {strings.mail.sendIn(
-                  Math.max(
-                    0,
-                    Math.round((new Date(item.sendAt).getTime() - now) / 1000),
-                  ),
-                )}
-              </small>
-            ) : null}
-            <small className="status-label">
-              {item.state === "queued"
-                ? strings.mail.waitingSend
-                : item.state === "sending"
-                  ? strings.mail.sending
-                  : item.state === "sent_copy_pending"
-                    ? strings.mail.sentCopyPending
-                    : item.state === "scheduled"
-                      ? strings.mail.scheduledWaiting
-                      : strings.mail.needsAttention}
-            </small>
-          </span>
-          <div>
+      {items.map((item) => {
+        const sending =
+          sendingIds?.has(`${item.accountId}:${item.id}`) ?? false;
+        return (
+          <article key={item.id} className="attention-row">
             {item.state === "needs_attention" ? (
-              <button type="button" onClick={() => void onRetry(item.id)}>
-                {strings.mail.retrySending}
+              <TriangleAlert aria-hidden="true" />
+            ) : (
+              <Send aria-hidden="true" />
+            )}
+            <span>
+              <strong>{item.subject || strings.common.noSubject}</strong>
+              <small>{item.recipients || strings.mail.noRecipient}</small>
+              <small>{item.detail}</small>
+              {item.state === "scheduled" && item.sendAt ? (
+                <small className="status-label">
+                  {strings.mail.sendIn(
+                    Math.max(
+                      0,
+                      Math.round(
+                        (new Date(item.sendAt).getTime() - now) / 1000,
+                      ),
+                    ),
+                  )}
+                </small>
+              ) : null}
+              <small className="status-label">
+                {item.state === "queued"
+                  ? strings.mail.waitingSend
+                  : item.state === "sending"
+                    ? strings.mail.sending
+                    : item.state === "sent_copy_pending"
+                      ? strings.mail.sentCopyPending
+                      : item.state === "scheduled"
+                        ? strings.mail.scheduledWaiting
+                        : strings.mail.needsAttention}
+              </small>
+            </span>
+            <div>
+              {item.state === "needs_attention" ? (
+                <button type="button" onClick={() => void onRetry(item.id)}>
+                  {strings.mail.retrySending}
+                </button>
+              ) : item.state === "sent_copy_pending" ? (
+                <button type="button" onClick={() => void onRetryCopy(item.id)}>
+                  {strings.mail.saveSentCopy}
+                </button>
+              ) : item.state === "scheduled" ? (
+                <button
+                  type="button"
+                  onClick={() => void onSendNow(item.id)}
+                  disabled={sending}
+                  aria-label={
+                    sending
+                      ? strings.mail.sendingNow(
+                          item.subject || strings.common.noSubject,
+                        )
+                      : undefined
+                  }
+                >
+                  {sending ? strings.mail.sending : strings.mail.sendNow}
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="danger-button"
+                onClick={() => void onDiscard(item.id, item.state)}
+                disabled={sending}
+              >
+                {item.state === "sent_copy_pending"
+                  ? strings.mail.dismissWarning
+                  : item.state === "scheduled"
+                    ? strings.mail.undoSend
+                    : strings.common.discard}
               </button>
-            ) : item.state === "sent_copy_pending" ? (
-              <button type="button" onClick={() => void onRetryCopy(item.id)}>
-                {strings.mail.saveSentCopy}
-              </button>
-            ) : item.state === "scheduled" ? (
-              <button type="button" onClick={() => void onSendNow(item.id)}>
-                {strings.mail.sendNow}
-              </button>
-            ) : null}
-            <button
-              type="button"
-              className="danger-button"
-              onClick={() => void onDiscard(item.id, item.state)}
-            >
-              {item.state === "sent_copy_pending"
-                ? strings.mail.dismissWarning
-                : item.state === "scheduled"
-                  ? strings.mail.undoSend
-                  : strings.common.discard}
-            </button>
-          </div>
-        </article>
-      ))}
+            </div>
+          </article>
+        );
+      })}
     </div>
   );
 }

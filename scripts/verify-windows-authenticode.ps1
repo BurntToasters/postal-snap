@@ -27,77 +27,81 @@ Import-BundledPowerShellSecurityModule
 
 $releaseDir = (Resolve-Path -LiteralPath $TargetReleaseDir).Path
 $files = @()
-$files += Get-ChildItem -LiteralPath $releaseDir -File -Filter '*.exe'
-
-$bundleDir = Join-Path $releaseDir 'bundle'
 $zipDir = $null
-if (Test-Path -LiteralPath $bundleDir) {
-  $files += Get-ChildItem -LiteralPath $bundleDir -File -Recurse |
-    Where-Object { $_.Extension.ToLowerInvariant() -in @('.exe', '.msi') }
-  $zip = Get-ChildItem -LiteralPath $bundleDir -File -Recurse |
-    Where-Object { $_.Name -like '*.nsis.zip' } |
-    Select-Object -First 1
-  if ($zip) {
-    $zipDir = Join-Path ([System.IO.Path]::GetTempPath()) ("postal-snap-nsis-" + [guid]::NewGuid().ToString('N'))
-    New-Item -ItemType Directory -Path $zipDir | Out-Null
-    Expand-Archive -LiteralPath $zip.FullName -DestinationPath $zipDir -Force
-    $files += Get-ChildItem -LiteralPath $zipDir -File -Recurse |
-      Where-Object { $_.Extension.ToLowerInvariant() -eq '.exe' }
-  }
-}
+try {
+  $files += Get-ChildItem -LiteralPath $releaseDir -File -Filter '*.exe'
 
-if (-not [string]::IsNullOrWhiteSpace($env:POSTAL_SNAP_INSTALLED_EXE)) {
-  $ExtraFiles += $env:POSTAL_SNAP_INSTALLED_EXE.Trim()
-}
-
-foreach ($extra in $ExtraFiles) {
-  if ($extra -and (Test-Path -LiteralPath $extra)) {
-    $files += Get-Item -LiteralPath $extra
-  }
-}
-
-$files = @($files | Sort-Object FullName -Unique)
-if ($files.Count -eq 0) {
-  throw "No Windows runtime or installer artifacts were found under $releaseDir"
-}
-
-$expectedPublisher = $env:AZURE_ARTIFACT_SIGNING_PUBLISHER.Trim()
-$expectedSubject = $env:AZURE_ARTIFACT_SIGNING_PUBLISHER_DN
-if (-not [string]::IsNullOrWhiteSpace($expectedSubject)) {
-  $expectedSubject = $expectedSubject.Trim()
-} else {
-  $expectedSubject = $null
-}
-foreach ($file in $files) {
-  $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
-  if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
-    throw "Invalid or missing Authenticode signature: $($file.FullName) ($($signature.Status))"
-  }
-  if (-not $signature.SignerCertificate) {
-    throw "Missing signer certificate: $($file.FullName)"
-  }
-
-  $actualPublisher = $signature.SignerCertificate.GetNameInfo(
-    [System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName,
-    $false
-  )
-  if ($actualPublisher -ne $expectedPublisher) {
-    throw "Unexpected publisher for $($file.FullName). Expected '$expectedPublisher', got '$actualPublisher'."
-  }
-  if ($expectedSubject) {
-    $subject = $signature.SignerCertificate.Subject.Trim()
-    if ($subject -ne $expectedSubject) {
-      throw "Unexpected certificate Subject for $($file.FullName). Expected '$expectedSubject', got '$subject'."
+  $bundleDir = Join-Path $releaseDir 'bundle'
+  if (Test-Path -LiteralPath $bundleDir) {
+    $files += Get-ChildItem -LiteralPath $bundleDir -File -Recurse |
+      Where-Object { $_.Extension.ToLowerInvariant() -in @('.exe', '.msi') }
+    $zip = Get-ChildItem -LiteralPath $bundleDir -File -Recurse |
+      Where-Object { $_.Name -like '*.nsis.zip' } |
+      Select-Object -First 1
+    if ($zip) {
+      $zipDir = Join-Path ([System.IO.Path]::GetTempPath()) ("postal-snap-nsis-" + [guid]::NewGuid().ToString('N'))
+      New-Item -ItemType Directory -Path $zipDir | Out-Null
+      Expand-Archive -LiteralPath $zip.FullName -DestinationPath $zipDir -Force
+      $files += Get-ChildItem -LiteralPath $zipDir -File -Recurse |
+        Where-Object { $_.Extension.ToLowerInvariant() -eq '.exe' }
     }
   }
-  if (-not $signature.TimeStamperCertificate) {
-    throw "Missing RFC3161 timestamp: $($file.FullName)"
+
+  if (-not [string]::IsNullOrWhiteSpace($env:POSTAL_SNAP_INSTALLED_EXE)) {
+    $ExtraFiles += $env:POSTAL_SNAP_INSTALLED_EXE.Trim()
   }
 
-  Write-Host "Verified: $($file.FullName)"
-}
+  foreach ($extra in $ExtraFiles) {
+    if ($extra -and (Test-Path -LiteralPath $extra)) {
+      $files += Get-Item -LiteralPath $extra
+    }
+  }
 
-Write-Host "Verified $($files.Count) timestamped Windows artifact(s) from '$expectedPublisher'."
-if ($zipDir -and (Test-Path -LiteralPath $zipDir)) {
-  Remove-Item -LiteralPath $zipDir -Recurse -Force
+  $files = @($files | Sort-Object FullName -Unique)
+  if ($files.Count -eq 0) {
+    throw "No Windows runtime or installer artifacts were found under $releaseDir"
+  }
+
+  $expectedPublisher = $env:AZURE_ARTIFACT_SIGNING_PUBLISHER.Trim()
+  $expectedSubject = $env:AZURE_ARTIFACT_SIGNING_PUBLISHER_DN
+  if (-not [string]::IsNullOrWhiteSpace($expectedSubject)) {
+    $expectedSubject = $expectedSubject.Trim()
+  } else {
+    $expectedSubject = $null
+  }
+  foreach ($file in $files) {
+    $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
+    if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+      throw "Invalid or missing Authenticode signature: $($file.FullName) ($($signature.Status))"
+    }
+    if (-not $signature.SignerCertificate) {
+      throw "Missing signer certificate: $($file.FullName)"
+    }
+
+    $actualPublisher = $signature.SignerCertificate.GetNameInfo(
+      [System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName,
+      $false
+    )
+    if ($actualPublisher -ne $expectedPublisher) {
+      throw "Unexpected publisher for $($file.FullName). Expected '$expectedPublisher', got '$actualPublisher'."
+    }
+    if ($expectedSubject) {
+      $subject = $signature.SignerCertificate.Subject.Trim()
+      if ($subject -ne $expectedSubject) {
+        throw "Unexpected certificate Subject for $($file.FullName). Expected '$expectedSubject', got '$subject'."
+      }
+    }
+    if (-not $signature.TimeStamperCertificate) {
+      throw "Missing RFC3161 timestamp: $($file.FullName)"
+    }
+
+    Write-Host "Verified: $($file.FullName)"
+  }
+
+  Write-Host "Verified $($files.Count) timestamped Windows artifact(s) from '$expectedPublisher'."
+}
+finally {
+  if ($zipDir -and (Test-Path -LiteralPath $zipDir)) {
+    Remove-Item -LiteralPath $zipDir -Recurse -Force
+  }
 }

@@ -8,7 +8,7 @@ use tokio::sync::Notify;
 use super::parse::{parse_envelope, parse_message, received_at_fallback};
 use super::send::{connect_imap, test_smtp};
 use super::{
-    ImapSession, BACKFILL_MESSAGE_BATCH, IMAP_COMMAND_TIMEOUT, INITIAL_MESSAGE_BATCH,
+    BodyBudget, ImapSession, BACKFILL_MESSAGE_BATCH, IMAP_COMMAND_TIMEOUT, INITIAL_MESSAGE_BATCH,
     MAX_MESSAGE_BYTES,
 };
 use crate::{
@@ -19,6 +19,12 @@ use crate::{
     },
     security::redact_error,
 };
+
+/// Cumulative delivered-body cap for one background body prefetch cycle. Each
+/// item is also capped by `MAX_MESSAGE_BYTES`. Streaming the fetch means only
+/// one body is resident at a time; the cumulative cap bounds the work, not
+/// retention, per cycle.
+const PREFETCH_TOTAL_BYTES: usize = MAX_MESSAGE_BYTES;
 
 pub async fn test_account(
     request: &AccountSetupRequest,
@@ -38,7 +44,7 @@ async fn test_imap_with_icloud_fallback(
 ) -> Result<ServerConfig, String> {
     match connect_imap(imap, password).await {
         Ok(mut session) => {
-            let _ = session.logout().await;
+            let _ = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.logout()).await;
             Ok(imap.clone())
         }
         Err(first_error)
@@ -48,7 +54,7 @@ async fn test_imap_with_icloud_fallback(
             fallback.username = request.email.to_lowercase();
             match connect_imap(&fallback, password).await {
                 Ok(mut session) => {
-                    let _ = session.logout().await;
+                    let _ = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.logout()).await;
                     Ok(fallback)
                 }
                 Err(_) => Err(first_error),
@@ -224,7 +230,7 @@ pub async fn sync_account(
         }
     }
     db.reconcile_mailboxes(&account.summary.id, &server_mailboxes)?;
-    let _ = session.logout().await;
+    let _ = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.logout()).await;
     db.evict_to_policy(policy)?;
     Ok(())
 }
@@ -329,10 +335,13 @@ pub async fn refresh_mailbox_envelopes(
     password: &str,
     mailbox: &str,
     db: &Database,
+    policy: &CachePolicy,
 ) -> Result<(), String> {
     let Some(mailbox_id) = db.mailbox_id_for_name(&account.summary.id, mailbox)? else {
         return Ok(());
     };
+    let cutoff = (policy.mode == "recent")
+        .then(|| Utc::now() - chrono::Duration::days(i64::from(policy.days)));
     let mut session = connect_imap(&account.imap, password).await?;
     let status = tokio::time::timeout(
         IMAP_COMMAND_TIMEOUT,
@@ -344,7 +353,7 @@ pub async fn refresh_mailbox_envelopes(
     let status = match status {
         Ok(status) => status,
         Err(error) => {
-            let _ = session.logout().await;
+            let _ = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.logout()).await;
             return Err(error);
         }
     };
@@ -355,15 +364,12 @@ pub async fn refresh_mailbox_envelopes(
     let selected = match selected {
         Ok(selected) => selected,
         Err(error) => {
-            let _ = session.logout().await;
+            let _ = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.logout()).await;
             return Err(error);
         }
     };
     if let Some((previous_validity, ..)) = db.mailbox_sync_state(&account.summary.id, mailbox)? {
-        if previous_validity.is_some()
-            && selected.uid_validity.is_some()
-            && previous_validity != selected.uid_validity
-        {
+        if should_purge_stale_generation(previous_validity, selected.uid_validity) {
             db.purge_stale_mailbox(&account.summary.id, mailbox, mailbox_id)?;
         }
     }
@@ -374,30 +380,61 @@ pub async fn refresh_mailbox_envelopes(
         status.unseen,
         status.exists,
     ) {
-        let _ = session.logout().await;
+        let _ = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.logout()).await;
         return Err(error);
     }
     let max_uid = db.max_uid(mailbox_id)?;
-    let start = max_uid.saturating_add(1).max(1);
     let refresh = async {
         if let Some(newest_uid) = newest_uid(&mut session, selected.exists).await? {
+            let start = refresh_window_start(max_uid, newest_uid, INITIAL_MESSAGE_BATCH);
             if newest_uid >= start {
-                cache_uid_range(
+                let outcome = cache_uid_range(
                     &mut session,
                     db,
                     &account.summary.id,
                     mailbox_id,
                     &format!("{start}:*"),
-                    None,
+                    cutoff.as_ref(),
                 )
                 .await?;
+                if max_uid == 0 {
+                    // Treat a purged (or never synced) folder like an initial
+                    // sync so backfill does not resume against stale UIDs.
+                    let next_cursor = if start == 1 || outcome.older_than_cutoff {
+                        0
+                    } else {
+                        start - 1
+                    };
+                    db.set_backfill_cursor(mailbox_id, next_cursor)?;
+                }
+            } else if max_uid == 0 {
+                db.set_backfill_cursor(mailbox_id, 0)?;
             }
+        } else if max_uid == 0 {
+            db.set_backfill_cursor(mailbox_id, 0)?;
         }
         Ok::<(), String>(())
     }
     .await;
-    let _ = session.logout().await;
+    let _ = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.logout()).await;
     refresh
+}
+
+/// Bound a post-refresh fetch the same way initial sync does: when nothing is
+/// cached (including after a UIDVALIDITY purge) fetch only the newest
+/// `INITIAL_MESSAGE_BATCH` envelopes instead of `1:*`.
+fn refresh_window_start(max_uid: u32, newest_uid: u32, batch: u32) -> u32 {
+    if max_uid == 0 {
+        newest_uid.saturating_sub(batch.saturating_sub(1)).max(1)
+    } else {
+        max_uid.saturating_add(1)
+    }
+}
+
+/// Purge cached rows whenever a previously known UIDVALIDITY differs from the
+/// currently selected one, including when the server stops reporting validity.
+fn should_purge_stale_generation(previous: Option<u32>, selected: Option<u32>) -> bool {
+    previous.is_some() && previous != selected
 }
 
 pub async fn idle_inbox(
@@ -411,7 +448,7 @@ pub async fn idle_inbox(
         .map_err(|_| "IMAP capability check timed out.".to_string())?
         .map_err(|error| redact_error(&error, "IMAP capability check"))?;
     if !capabilities.has_str("IDLE") {
-        let _ = session.logout().await;
+        let _ = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.logout()).await;
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_secs(120)) => {},
             _ = wake.notified() => {},
@@ -442,7 +479,7 @@ pub async fn idle_inbox(
         Ok(Ok(session)) => session,
         _ => return Ok(()),
     };
-    let _ = session.logout().await;
+    let _ = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.logout()).await;
     match response {
         IdleResponse::ManualInterrupt | IdleResponse::Timeout | IdleResponse::NewData(_) => Ok(()),
     }
@@ -471,8 +508,8 @@ pub async fn server_search(
     let search_text = query
         .text
         .chars()
-        .filter(|character| !character.is_control())
         .take(200)
+        .filter(|character| !character.is_control())
         .collect::<String>()
         .replace('\\', "\\\\")
         .replace('"', "\\\"");
@@ -556,7 +593,7 @@ pub async fn server_search(
             .collect();
         let _ = db.repair_thread_roots(&account.summary.id, &threaded);
     }
-    let _ = session.logout().await;
+    let _ = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.logout()).await;
     results.sort_by(|left, right| {
         right
             .received_at
@@ -580,12 +617,15 @@ pub async fn download_message(
     if expected_size > MAX_MESSAGE_BYTES as u64 {
         return Err("This message is too large to download safely.".into());
     }
+    let expected_uid_validity = expected_uid_validity.ok_or_else(|| {
+        "Mailbox identity is unavailable; refresh mail and try again.".to_string()
+    })?;
     let mut session = connect_imap(&account.imap, password).await?;
     let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.examine(mailbox))
         .await
         .map_err(|_| "Message download timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Message download"))?;
-    if expected_uid_validity.is_some() && selected.uid_validity != expected_uid_validity {
+    if selected.uid_validity != Some(expected_uid_validity) {
         return Err("This mailbox changed; refresh mail and try again.".into());
     }
     let mut rows = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
@@ -625,7 +665,7 @@ pub async fn download_message(
         flags.contains("flagged"),
         fallback.as_deref(),
     )?;
-    let _ = session.logout().await;
+    let _ = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.logout()).await;
     Ok(parsed)
 }
 
@@ -649,28 +689,33 @@ async fn download_uncached_bodies(
         .map(|(uid, _)| uid.to_string())
         .collect::<Vec<_>>()
         .join(",");
-    let fetch_result = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
-        session
-            .uid_fetch(range, "(UID FLAGS RFC822.SIZE INTERNALDATE BODY.PEEK[])")
-            .await
-            .map_err(|error| redact_error(&error, "Message prefetch"))?
-            .try_collect::<Vec<_>>()
-            .await
-            .map_err(|error| redact_error(&error, "Message prefetch"))
-    })
-    .await;
-
-    let rows = match fetch_result {
-        Ok(Ok(rows)) => rows,
-        Ok(Err(error)) => return Err(error),
+    let mut fetched = match tokio::time::timeout(
+        IMAP_COMMAND_TIMEOUT,
+        session.uid_fetch(range, "(UID FLAGS RFC822.SIZE INTERNALDATE BODY.PEEK[])"),
+    )
+    .await
+    {
+        Ok(Ok(fetched)) => fetched,
+        Ok(Err(error)) => return Err(redact_error(&error, "Message prefetch")),
         Err(_) => return Err("Message prefetch timed out.".into()),
     };
-
-    for item in rows {
+    let mut budget = BodyBudget::default();
+    loop {
+        let next = match tokio::time::timeout(IMAP_COMMAND_TIMEOUT, fetched.try_next()).await {
+            Ok(Ok(next)) => next,
+            Ok(Err(error)) => return Err(redact_error(&error, "Message prefetch")),
+            Err(_) => return Err("Message prefetch timed out.".into()),
+        };
+        let Some(item) = next else {
+            break;
+        };
         let (Some(uid), Some(raw)) = (item.uid, item.body()) else {
             continue;
         };
-        if raw.len() > MAX_MESSAGE_BYTES {
+        // The delivered length decides, never the declared RFC822.SIZE, and
+        // the cumulative budget stops a hostile server from filling memory or
+        // the database. Over-budget bodies are drained and dropped.
+        if !budget.admit(raw.len(), MAX_MESSAGE_BYTES, PREFETCH_TOTAL_BYTES) {
             continue;
         }
         let flags = item
@@ -696,4 +741,36 @@ async fn download_uncached_bodies(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{refresh_window_start, should_purge_stale_generation, INITIAL_MESSAGE_BATCH};
+
+    #[test]
+    fn refresh_window_bounds_post_purge_fetch_to_initial_batch() {
+        assert_eq!(
+            refresh_window_start(0, 10_000, INITIAL_MESSAGE_BATCH),
+            9_851
+        );
+        assert_eq!(refresh_window_start(0, 1, INITIAL_MESSAGE_BATCH), 1);
+        assert_eq!(refresh_window_start(0, 150, INITIAL_MESSAGE_BATCH), 1);
+        assert_eq!(
+            refresh_window_start(151, 10_000, INITIAL_MESSAGE_BATCH),
+            152
+        );
+        assert_eq!(
+            refresh_window_start(u32::MAX, u32::MAX, INITIAL_MESSAGE_BATCH),
+            u32::MAX
+        );
+    }
+
+    #[test]
+    fn stale_generation_purge_covers_lost_uid_validity() {
+        assert!(should_purge_stale_generation(Some(7), None));
+        assert!(should_purge_stale_generation(Some(7), Some(8)));
+        assert!(!should_purge_stale_generation(Some(7), Some(7)));
+        assert!(!should_purge_stale_generation(None, Some(7)));
+        assert!(!should_purge_stale_generation(None, None));
+    }
 }

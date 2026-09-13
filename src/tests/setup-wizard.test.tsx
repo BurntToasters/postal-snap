@@ -3,11 +3,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import { SetupWizard } from "../components/SetupWizard";
 import { PostalError } from "../errors";
+import { strings } from "../i18n";
 
 vi.mock("../api", () => ({
   api: {
     addAccount: vi.fn(),
-    openHelpUrl: vi.fn(),
+    inspectExternalUrl: vi.fn(),
+    openExternalUrl: vi.fn(),
+    showNativeConfirm: vi.fn(),
   },
 }));
 
@@ -37,6 +40,16 @@ describe("account setup", () => {
       syncState: "idle",
       error: null,
     });
+    vi.mocked(api.inspectExternalUrl).mockReset();
+    vi.mocked(api.inspectExternalUrl).mockResolvedValue({
+      url: "https://support.apple.com/102654",
+      hostname: "support.apple.com",
+      reportedThreat: false,
+    });
+    vi.mocked(api.openExternalUrl).mockReset();
+    vi.mocked(api.openExternalUrl).mockResolvedValue(undefined);
+    vi.mocked(api.showNativeConfirm).mockReset();
+    vi.mocked(api.showNativeConfirm).mockResolvedValue(true);
   });
 
   it("starts with guided iCloud and secure manual choices", () => {
@@ -65,6 +78,18 @@ describe("account setup", () => {
       expect(select).toHaveTextContent("STARTTLS required");
       expect(select).not.toHaveTextContent(/none|plain/i);
     }
+  });
+
+  it("moves focus to the account form after choosing a provider", async () => {
+    render(<SetupWizard embedded onComplete={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /iCloud Mail/i }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("heading", { name: /Connect iCloud/i }),
+      ).toHaveFocus(),
+    );
   });
 
   it("auto-completes @icloud.com domain when username is entered without domain", () => {
@@ -291,7 +316,17 @@ describe("account setup", () => {
     fireEvent.click(
       screen.getByRole("button", { name: /Create app-specific password/i }),
     );
-    expect(api.openHelpUrl).toHaveBeenCalled();
+    await waitFor(() =>
+      expect(api.inspectExternalUrl).toHaveBeenCalledWith(
+        "https://support.apple.com/102654",
+      ),
+    );
+    await waitFor(() =>
+      expect(api.openExternalUrl).toHaveBeenCalledWith(
+        "https://support.apple.com/102654",
+        false,
+      ),
+    );
     fireEvent.click(screen.getByRole("button", { name: /Show password/i }));
     fireEvent.click(screen.getByRole("button", { name: /Back/i }));
     fireEvent.click(screen.getByRole("button", { name: /Other email/i }));
@@ -303,5 +338,70 @@ describe("account setup", () => {
     fireEvent.change(usernames[0], { target: { value: "imap-user" } });
     expect(ports[0].value).toBe("143");
     expect(usernames[0].value).toBe("imap-user");
+  });
+
+  it("confirms help links first and reports when they are not opened", async () => {
+    vi.mocked(api.showNativeConfirm).mockResolvedValueOnce(false);
+    render(<SetupWizard onComplete={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /iCloud Mail/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /Create app-specific password/i }),
+    );
+
+    await waitFor(() =>
+      expect(api.inspectExternalUrl).toHaveBeenCalledWith(
+        "https://support.apple.com/102654",
+      ),
+    );
+    expect(api.showNativeConfirm).toHaveBeenCalledWith(
+      strings.appName,
+      strings.reader.openLink(
+        "support.apple.com",
+        "https://support.apple.com/102654",
+      ),
+    );
+    expect(api.openExternalUrl).not.toHaveBeenCalled();
+    expect(
+      await screen.findByText(strings.setup.helpLinkDeclined),
+    ).toBeVisible();
+  });
+
+  it("reports help link failures without leaking native detail", async () => {
+    vi.mocked(api.inspectExternalUrl).mockRejectedValueOnce(
+      new Error("native secret detail"),
+    );
+    render(<SetupWizard onComplete={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /iCloud Mail/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /Create app-specific password/i }),
+    );
+
+    expect(await screen.findByText(strings.setup.helpLinkFailed)).toBeVisible();
+    expect(screen.queryByText(/native secret detail/)).toBeNull();
+    expect(api.openExternalUrl).not.toHaveBeenCalled();
+  });
+
+  it("keeps the standalone setup title focusable after Back", async () => {
+    render(<SetupWizard onComplete={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /iCloud Mail/i }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("heading", { name: /Connect iCloud/i }),
+      ).toHaveFocus(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Back/i }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("heading", { name: strings.setup.title }),
+      ).toHaveFocus(),
+    );
+  });
+
+  it("keeps the embedded account form heading at level two", () => {
+    render(<SetupWizard embedded onComplete={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /iCloud Mail/i }));
+    expect(
+      screen.getByRole("heading", { level: 2, name: /Connect iCloud/i }),
+    ).toBeVisible();
   });
 });

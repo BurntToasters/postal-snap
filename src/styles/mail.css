@@ -703,7 +703,12 @@
   border-bottom: 1px solid var(--border);
 }
 
-.thread-group > .message-row-wrap {
+.thread-children {
+  display: grid;
+}
+
+.thread-group > .message-row-wrap,
+.thread-group > .thread-children > .message-row-wrap {
   border-bottom: 0;
   border-top: 1px dashed var(--border);
   padding-left: 18px;
@@ -784,10 +789,6 @@
 .message-row.selected :is(.message-date, .message-preview),
 .message-row.selected.unread .message-date {
   color: var(--accent-contrast);
-}
-
-.message-row.selected .message-preview {
-  opacity: 0.85;
 }
 
 .message-row.selected .unread-dot {

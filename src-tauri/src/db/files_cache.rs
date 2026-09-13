@@ -40,9 +40,12 @@ impl Database {
         rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
     }
 
-    pub fn remove_operation(&self, id: i64) -> Result<(), String> {
+    pub fn remove_operation(&self, account_id: &str, id: i64) -> Result<(), String> {
         self.conn()?
-            .execute("DELETE FROM offline_ops WHERE id=?1", [id])
+            .execute(
+                "DELETE FROM offline_ops WHERE id=?1 AND account_id=?2",
+                params![id, account_id],
+            )
             .map_err(db_error)?;
         Ok(())
     }

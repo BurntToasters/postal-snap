@@ -64,6 +64,9 @@ describe("message header", () => {
     expect(
       screen.getByRole("button", { name: strings.reader.copied }),
     ).toBeVisible();
+    expect(
+      screen.getAllByRole("status").map((element) => element.textContent),
+    ).toContain(strings.reader.copied);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2000);
     });

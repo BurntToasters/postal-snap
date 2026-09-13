@@ -92,7 +92,6 @@ export type NativeCommand =
   | "empty_trash"
   | "empty_junk"
   | "search_cached_messages"
-  | "search_all_cached_messages"
   | "search_server_messages"
   | "save_draft"
   | "list_drafts"
@@ -129,7 +128,6 @@ export type NativeCommand =
   | "set_mail_shortcut_guard"
   | "export_settings"
   | "import_settings"
-  | "reset_settings"
   | "get_startup_notice"
   | "get_startup_error"
   | "get_cache_usage"
@@ -259,8 +257,6 @@ export const api = {
   emptyJunk: (accountId: string) => call<void>("empty_junk", { accountId }),
   searchCached: (query: SearchQuery) =>
     call<MessageSummary[]>("search_cached_messages", { query }),
-  searchAllCached: (query: string, limit?: number) =>
-    call<MessageSummary[]>("search_all_cached_messages", { query, limit }),
   searchServer: (query: SearchQuery) =>
     call<MessageSummary[]>("search_server_messages", { query }),
   saveDraft: (draft: ComposeDraft) =>
@@ -372,13 +368,6 @@ export const api = {
       const imported = await call<AppSettings | null>("import_settings");
       if (imported) settingsGeneration += 1;
       return imported;
-    });
-  },
-  resetSettings: () => {
-    return queueSettings(async () => {
-      const reset = await call<AppSettings>("reset_settings");
-      settingsGeneration += 1;
-      return reset;
     });
   },
   getStartupNotice: () => call<string | null>("get_startup_notice"),

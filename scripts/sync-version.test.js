@@ -7,6 +7,7 @@ import { root } from "./lib/paths.js";
 import {
   cargoTomlPackageName,
   replaceCargoLockPackageVersion,
+  replacePackageLockVersion,
   replaceCargoTomlVersion,
 } from "./sync-version.js";
 
@@ -58,8 +59,21 @@ test("replaceCargoLockPackageVersion fails closed when the package is missing", 
   );
 });
 
+test("replacePackageLockVersion updates both npm root version fields", () => {
+  const lock = {
+    name: "postal-snap",
+    version: "0.1.8",
+    packages: { "": { name: "postal-snap", version: "0.1.8" } },
+  };
+  const updated = replacePackageLockVersion(lock, "0.1.9");
+  assert.equal(updated.version, "0.1.9");
+  assert.equal(updated.packages[""].version, "0.1.9");
+  assert.equal(lock.version, "0.1.8");
+});
+
 test("committed package versions stay aligned for locked cargo commands", async () => {
   const pkg = await json(join(root, "package.json"));
+  const packageLock = await json(join(root, "package-lock.json"));
   const tauri = await json(join(root, "src-tauri/tauri.conf.json"));
   const cargo = await readFile(join(root, "src-tauri/Cargo.toml"), "utf8");
   const lock = await readFile(join(root, "src-tauri/Cargo.lock"), "utf8");
@@ -73,6 +87,8 @@ test("committed package versions stay aligned for locked cargo commands", async 
   )?.[1];
 
   assert.equal(tauri.version, pkg.version);
+  assert.equal(packageLock.version, pkg.version);
+  assert.equal(packageLock.packages[""].version, pkg.version);
   assert.equal(cargoVersion, pkg.version);
   assert.equal(lockVersion, pkg.version);
 });

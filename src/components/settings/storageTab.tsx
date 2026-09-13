@@ -1,8 +1,9 @@
 import { Database } from "lucide-react";
+import { formatBytes } from "../../format";
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
 import type { CacheUsage } from "../../types";
-import { SettingRow, SettingsPanel, formatBytes } from "./primitives";
+import { SettingRow, SettingsPanel } from "./primitives";
 import type { SettingsSaveUpdate } from "./useSettingsSave";
 
 interface StorageTabProps {

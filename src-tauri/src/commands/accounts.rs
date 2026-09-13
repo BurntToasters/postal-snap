@@ -22,7 +22,6 @@ pub fn list_accounts(state: State<'_, AppState>) -> CommandResult<Vec<AccountSum
 #[tauri::command]
 pub async fn test_account(mut request: AccountSetupRequest) -> CommandResult<()> {
     let (imap, smtp, password) = take_validated_setup(&mut request)?;
-    let password = Zeroizing::new(password);
     mail::test_account(&request, &imap, &smtp, &password).await?;
     Ok(())
 }
@@ -40,8 +39,7 @@ pub async fn update_account_password(
     if account.summary.auth_method != "password" {
         return Err("This account signs in without a password. Reconnect it instead.".into());
     }
-    let normalized =
-        take_normalized_account_password(&account.summary.provider, password.to_string())?;
+    let normalized = take_normalized_account_password(&account.summary.provider, password)?;
     let (imap, smtp) = mail::test_account(
         &AccountSetupRequest {
             provider: account.summary.provider.clone(),
@@ -56,8 +54,21 @@ pub async fn update_account_password(
         &normalized,
     )
     .await?;
-    state.db.update_account_servers(&account_id, &imap, &smtp)?;
+    let previous_password = credentials::load_for_removal(&account_id)?;
     credentials::store(&account_id, &normalized)?;
+    if let Err(error) = state.db.update_account_servers(&account_id, &imap, &smtp) {
+        let restored = match previous_password.as_deref() {
+            Some(previous) => credentials::store(&account_id, previous),
+            None => credentials::remove(&account_id),
+        };
+        if restored.is_err() {
+            return Err(
+                "Postal Snap could not safely finish updating this password. Restart Postal Snap before trying again."
+                    .into(),
+            );
+        }
+        return Err(error.into());
+    }
     state.db.set_account_state(&account_id, "idle", None)?;
     drop(_guard);
     let _ = sync_one(&account_id, &app, &state).await;
@@ -77,7 +88,6 @@ pub async fn add_account(
     state: State<'_, AppState>,
 ) -> CommandResult<AccountSummary> {
     let (imap, smtp, password) = take_validated_setup(&mut request)?;
-    let password = Zeroizing::new(password);
     let (imap, smtp) = mail::test_account(&request, &imap, &smtp, &password).await?;
     let mut aliases = Vec::new();
     if request.provider == ProviderKind::Icloud {

@@ -41,29 +41,36 @@ impl Database {
     pub fn set_outbox_state(
         &self,
         id: &str,
+        account_id: &str,
         state: &str,
         detail: Option<&str>,
     ) -> Result<(), String> {
         self.conn()?
             .execute(
-                "UPDATE outbox SET state=?2,detail=?3,updated_at=CURRENT_TIMESTAMP WHERE id=?1",
-                params![id, state, detail],
+                "UPDATE outbox SET state=?3,detail=?4,updated_at=CURRENT_TIMESTAMP WHERE id=?1 AND account_id=?2",
+                params![id, account_id, state, detail],
             )
             .map_err(db_error)?;
         Ok(())
     }
 
-    pub fn remove_outbox(&self, id: &str) -> Result<(), String> {
+    pub fn remove_outbox(&self, id: &str, account_id: &str) -> Result<(), String> {
         let mut conn = self.conn()?;
         let transaction = conn.transaction().map_err(db_error)?;
+        let changed = transaction
+            .execute(
+                "DELETE FROM outbox WHERE id=?1 AND account_id=?2",
+                params![id, account_id],
+            )
+            .map_err(db_error)?;
+        if changed == 0 {
+            return Err("Queued message not found.".into());
+        }
         transaction
             .execute(
                 "DELETE FROM attachment_refs WHERE owner_kind='outbox' AND owner_id=?1",
                 [id],
             )
-            .map_err(db_error)?;
-        transaction
-            .execute("DELETE FROM outbox WHERE id=?1", [id])
             .map_err(db_error)?;
         transaction.commit().map_err(db_error)?;
         Ok(())
@@ -119,8 +126,9 @@ impl Database {
             .optional()
             .map_err(db_error)?
             .ok_or_else(|| "Queued message not found.".to_string())?;
-        let draft = serde_json::from_str(&row.0)
+        let mut draft: ComposeDraft = serde_json::from_str(&row.0)
             .map_err(|_| "This queued message could not be read.".to_string())?;
+        draft.html_body = crate::html_sanitize::sanitize_compose_html(&draft.html_body);
         Ok((draft, row.1))
     }
 

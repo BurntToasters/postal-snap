@@ -11,7 +11,6 @@ export const settings = {
     "Export or import Postal Snap preferences, including Advanced protection. Accounts and passwords are never included.",
   exportSettings: "Export settings",
   importSettings: "Import settings",
-  resetSettings: "Reset settings",
   exportSaved: "Settings exported.",
   importApplied:
     "Settings imported. Reported-threat blocking stays on; use Advanced if you need to turn it off.",
@@ -141,6 +140,7 @@ export const settings = {
   actionTrash: "Move to Trash",
   actionJunk: "Move to Junk",
   actionFolder: "Move to folder…",
+  actionMoveToFolder: (folder: string) => `Move to “${folder}”`,
   chooseFolder: "Choose folder…",
   addRule: "Add rule",
   ruleEnabled: "Rule on",

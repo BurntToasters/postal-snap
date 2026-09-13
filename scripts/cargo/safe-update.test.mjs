@@ -31,7 +31,7 @@ import {
   prepareCandidate,
   restoreRealLock,
   validateCandidate,
-} from "./cargo-safe-update.mjs";
+} from "../cargo-safe-update.mjs";
 import {
   MINIMUM_NPM_VERSION,
   PINNED_RUST_VERSION,
@@ -42,7 +42,7 @@ import {
   npmUpdateArguments,
   parseVersion,
   restoreSnapshot,
-} from "./npm-safe-update.mjs";
+} from "../npm-safe-update.mjs";
 
 // Skip real Cargo integration tests if SKIP_CARGO_INTEGRATION=1
 const SKIP_CARGO_INTEGRATION = process.env.SKIP_CARGO_INTEGRATION === "1";
@@ -705,7 +705,7 @@ test("21. unit: detects and restores real lockfile modification drift during res
 
 test("22. candidate stage implementation never invokes cargo build/check/test/run/bench", () => {
   const source = readFileSync(
-    new URL("./cargo-safe-update.mjs", import.meta.url),
+    new URL("../cargo-safe-update.mjs", import.meta.url),
     "utf8",
   );
   assert.doesNotMatch(
@@ -769,7 +769,7 @@ test("24. unit: prepares candidate in temporary lockfile using CARGO_RESOLVER_LO
 
 test("25. dependency update entry points use guarded Cargo resolution", () => {
   const packageJson = JSON.parse(
-    readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+    readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
   );
   for (const name of ["u", "u2", "deps:rust:update"]) {
     const command = packageJson.scripts?.[name];
@@ -1677,7 +1677,7 @@ test(
       const result = spawnSync(
         process.execPath,
         [
-          fileURLToPath(new URL("./cargo-safe-update.mjs", import.meta.url)),
+          fileURLToPath(new URL("../cargo-safe-update.mjs", import.meta.url)),
           "--manifest-path",
           manifest,
           "--dry-run",
@@ -1735,7 +1735,7 @@ test("50. end-to-end npm update is lock-only and uses a disposable cache", () =>
 
     const result = spawnSync(
       process.execPath,
-      [fileURLToPath(new URL("./npm-safe-update.mjs", import.meta.url))],
+      [fileURLToPath(new URL("../npm-safe-update.mjs", import.meta.url))],
       {
         cwd: workspace,
         env: { ...process.env, npm_config_cache: userNpmCache },

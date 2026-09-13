@@ -114,13 +114,18 @@ pub async fn set_message_flags(
     if owner_id != account_id {
         return Err("Message does not belong to this account.".into());
     }
+    let uid_validity = state
+        .db
+        .mailbox_uid_validity(&account_id, &mailbox)?
+        .ok_or_else(|| {
+            "Mailbox identity is unavailable; refresh mail and try again.".to_string()
+        })?;
     state.db.set_flags(message_id, is_read, is_starred)?;
-    let uid_validity = state.db.mailbox_uid_validity(&account_id, &mailbox)?;
     let operation = FlagOperation {
         message_id,
         uid,
         mailbox: mailbox.clone(),
-        uid_validity,
+        uid_validity: Some(uid_validity),
         is_read,
         is_starred,
     };
@@ -132,7 +137,7 @@ pub async fn set_message_flags(
             &password,
             &mailbox,
             uid,
-            uid_validity,
+            Some(uid_validity),
             is_read,
             is_starred,
         )
@@ -253,7 +258,14 @@ async fn move_message_inner(
         uid,
         source: source.clone(),
         destination: destination.clone(),
-        uid_validity: state.db.mailbox_uid_validity(&account_id, &source)?,
+        uid_validity: Some(
+            state
+                .db
+                .mailbox_uid_validity(&account_id, &source)?
+                .ok_or_else(|| {
+                    "Mailbox identity is unavailable; refresh mail and try again.".to_string()
+                })?,
+        ),
     };
     let account = state.db.account(&account_id)?;
     let password = credentials::load(&account_id)?;
@@ -277,7 +289,14 @@ async fn move_message_inner(
         // dest envelopes so archive/trash is not empty until the next IDLE.
         state.db.mark_pending_move(message_id, destination_id)?;
         state.db.remove_message(message_id)?;
-        let _ = mail::refresh_mailbox_envelopes(&account, &password, &destination, &state.db).await;
+        let policy = state
+            .settings
+            .get()
+            .map(|settings| settings.cache_policy)
+            .unwrap_or_default();
+        let _ =
+            mail::refresh_mailbox_envelopes(&account, &password, &destination, &state.db, &policy)
+                .await;
     }
     emit_message_change(app, &account_id, Some(message_id), "moved");
     emit_folder_counts(app, &account_id);
@@ -316,13 +335,22 @@ async fn bulk_apply_flags(
     for (mailbox, entries) in mailboxes {
         let ids: Vec<i64> = entries.iter().map(|(id, _)| *id).collect();
         let uids: Vec<u32> = entries.iter().map(|(_, uid)| *uid).collect();
-        let validity = state.db.mailbox_uid_validity(account_id, &mailbox)?;
+        let Some(validity) = state.db.mailbox_uid_validity(account_id, &mailbox)? else {
+            failed += ids.len();
+            continue;
+        };
         if state.db.set_flags_bulk(&ids, is_read, is_starred).is_err() {
             failed += ids.len();
             continue;
         }
         let remote = mail::set_remote_uid_flags(
-            &account, &password, &mailbox, &uids, validity, is_read, is_starred,
+            &account,
+            &password,
+            &mailbox,
+            &uids,
+            Some(validity),
+            is_read,
+            is_starred,
         )
         .await;
         if remote.is_err() {
@@ -331,7 +359,7 @@ async fn bulk_apply_flags(
                     message_id: *id,
                     uid: *uid,
                     mailbox: mailbox.clone(),
-                    uid_validity: validity,
+                    uid_validity: Some(validity),
                     is_read,
                     is_starred,
                 };
@@ -421,13 +449,22 @@ pub async fn move_messages_to_mailbox(
     let password = credentials::load(&account_id)?;
     let mut updated = 0usize;
     let mut queued = 0usize;
-    let failed = 0usize;
+    let mut failed = 0usize;
     for (source, entries) in sources {
-        let validity = state.db.mailbox_uid_validity(&account_id, &source)?;
+        let Some(validity) = state.db.mailbox_uid_validity(&account_id, &source)? else {
+            failed += entries.len();
+            continue;
+        };
         let uids: Vec<u32> = entries.iter().map(|(_, uid)| *uid).collect();
-        let remote =
-            mail::move_remote_uids(&account, &password, &source, &destination, &uids, validity)
-                .await;
+        let remote = mail::move_remote_uids(
+            &account,
+            &password,
+            &source,
+            &destination,
+            &uids,
+            Some(validity),
+        )
+        .await;
         if remote.is_ok() {
             for (id, _) in &entries {
                 let _ = state.db.mark_pending_move(*id, destination_mailbox_id);
@@ -441,7 +478,7 @@ pub async fn move_messages_to_mailbox(
                     uid: *uid,
                     source: source.clone(),
                     destination: destination.clone(),
-                    uid_validity: validity,
+                    uid_validity: Some(validity),
                 };
                 let dedupe_key = format!("move:{id}");
                 let _ =
@@ -454,7 +491,14 @@ pub async fn move_messages_to_mailbox(
         }
     }
     if updated > 0 {
-        let _ = mail::refresh_mailbox_envelopes(&account, &password, &destination, &state.db).await;
+        let policy = state
+            .settings
+            .get()
+            .map(|settings| settings.cache_policy)
+            .unwrap_or_default();
+        let _ =
+            mail::refresh_mailbox_envelopes(&account, &password, &destination, &state.db, &policy)
+                .await;
     }
     emit_message_change(&app, &account_id, None, "moved");
     emit_folder_counts(&app, &account_id);
@@ -506,15 +550,6 @@ pub fn search_cached_messages(
         state.db.account(&query.account_id)?;
     }
     command_result(state.db.search(&query))
-}
-
-#[tauri::command]
-pub fn search_all_cached_messages(
-    query: String,
-    limit: Option<u32>,
-    state: State<'_, AppState>,
-) -> CommandResult<Vec<MessageSummary>> {
-    command_result(state.db.search_all_accounts(&query, limit.unwrap_or(50)))
 }
 
 #[tauri::command]

@@ -13,6 +13,7 @@ import {
   printSummary,
   qualityGateSteps,
   runCommand,
+  stripAnsi,
 } from "./test-all.js";
 
 const repoRoot = path.resolve(
@@ -70,10 +71,20 @@ function scriptName(args) {
   return args[0] === "run" ? args[1] : args[0];
 }
 
-test("SKIP_E2E drops Playwright from the plan", () => {
-  const withE2e = createStepPlan({ npm: "npm", env: {} });
+test("SKIP_E2E only drops Playwright for the exact value 1", () => {
+  for (const env of [
+    {},
+    { SKIP_E2E: "" },
+    { SKIP_E2E: "0" },
+    { SKIP_E2E: "false" },
+  ]) {
+    const plan = createStepPlan({ npm: "npm", env });
+    assert.ok(
+      plan.some((step) => step.name === "e2e"),
+      JSON.stringify(env),
+    );
+  }
   const withoutE2e = createStepPlan({ npm: "npm", env: { SKIP_E2E: "1" } });
-  assert.ok(withE2e.some((step) => step.name === "e2e"));
   assert.ok(!withoutE2e.some((step) => step.name === "e2e"));
 });
 
@@ -118,6 +129,37 @@ test("main fails the summary when a step fails", () => {
   assert.equal(exitCode, 1);
   assert.ok(calls.includes("run:releaseAssets"));
   assert.ok(logs.join("\n").includes("Some checks failed"));
+});
+
+test("summary prints an explicit E2E SKIPPED row for SKIP_E2E=1", () => {
+  const plan = createStepPlan({ npm: "npm", env: { SKIP_E2E: "1" } });
+  const logs = [];
+  const code = printSummary(
+    passingResults(plan),
+    plan,
+    (line) => logs.push(String(line)),
+    { e2eSkipped: true },
+  );
+  assert.equal(code, 0);
+  const text = stripAnsi(logs.join("\n"));
+  assert.match(text, /E2E:\s+SKIPPED/);
+  assert.match(text, /SKIP_E2E=1/);
+});
+
+test("main keeps the gate clean and reports skipped e2e", () => {
+  const calls = [];
+  const logs = [];
+  const exitCode = main({
+    env: { SKIP_E2E: "1" },
+    runStep: (step, results) => {
+      calls.push(step.name);
+      results[step.name].status = "passed";
+    },
+    log: (line) => logs.push(String(line)),
+  });
+  assert.equal(exitCode, 0);
+  assert.ok(!calls.includes("e2e"));
+  assert.match(stripAnsi(logs.join("\n")), /E2E:\s+SKIPPED/);
 });
 
 test("printSummary reports the release-asset step and fails the run", () => {

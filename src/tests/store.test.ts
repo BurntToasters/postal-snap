@@ -142,4 +142,39 @@ describe("account reconciliation", () => {
     expect(useAppStore.getState().activeAccountId).toBe(second.id);
     expect(useAppStore.getState().composerOpen).toBe(false);
   });
+
+  it("queues a composer prefill until an account becomes active", () => {
+    useAppStore
+      .getState()
+      .openComposer({ prefill: { to: ["late@example.test"] } });
+
+    expect(useAppStore.getState().composerOpen).toBe(false);
+    expect(useAppStore.getState().pendingComposeSeed?.prefill?.to).toEqual([
+      "late@example.test",
+    ]);
+
+    const late = account("late");
+    useAppStore.getState().setAccounts([late]);
+
+    expect(useAppStore.getState().composerOpen).toBe(true);
+    expect(useAppStore.getState().composerAccountId).toBe(late.id);
+    expect(useAppStore.getState().composeSeed?.prefill?.to).toEqual([
+      "late@example.test",
+    ]);
+    expect(useAppStore.getState().pendingComposeSeed).toBeUndefined();
+  });
+
+  it("flushes a queued prefill when an account is selected explicitly", () => {
+    const late = account("late");
+    useAppStore.setState({ accounts: [late], activeAccountId: undefined });
+    useAppStore
+      .getState()
+      .openComposer({ prefill: { to: ["queued@example.test"] } });
+
+    useAppStore.getState().selectAccount(late.id);
+
+    expect(useAppStore.getState().composerOpen).toBe(true);
+    expect(useAppStore.getState().composerAccountId).toBe(late.id);
+    expect(useAppStore.getState().pendingComposeSeed).toBeUndefined();
+  });
 });

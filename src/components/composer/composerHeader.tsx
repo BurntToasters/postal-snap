@@ -78,7 +78,7 @@ export function ComposerHeader({
           </button>
         </div>
       </header>
-      {draftSyncState && draftSyncState !== "synced" ? (
+      {draftSyncState === "localOnly" || draftSyncState === "conflict" ? (
         <div
           className={`draft-sync-banner ${draftSyncState}`}
           role={draftSyncState === "conflict" ? "alert" : "status"}
@@ -88,17 +88,13 @@ export function ComposerHeader({
             <strong>
               {draftSyncState === "conflict"
                 ? strings.composer.recoveredTitle
-                : draftSyncState === "localOnly"
-                  ? strings.composer.localTitle
-                  : strings.composer.syncingTitle}
+                : strings.composer.localTitle}
             </strong>
             <small>
               {draftSyncDetail ??
                 (draftSyncState === "conflict"
                   ? strings.composer.recoveredDetail
-                  : draftSyncState === "localOnly"
-                    ? strings.composer.localDetail
-                    : strings.composer.syncingDetail)}
+                  : strings.composer.localDetail)}
             </small>
           </span>
         </div>

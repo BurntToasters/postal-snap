@@ -17,6 +17,10 @@ import { strings } from "../i18n";
 import type { AccountSetupRequest, ProviderKind, ServerConfig } from "../types";
 import { AppMark } from "./AppMark";
 import {
+  APPLE_APP_PASSWORD_GUIDE_URL,
+  inspectAndOpenExternalLink,
+} from "./externalLink";
+import {
   defaultPort,
   emptyManualImap,
   emptyManualSmtp,
@@ -54,12 +58,14 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
   const [smtp, setSmtp] = useState(emptyManualSmtp);
   const [testing, setTesting] = useState(false);
   const wizardRef = useRef<HTMLDivElement>(null);
+  const previousProviderRef = useRef(provider);
   const [status, setStatus] = useState<{
     kind: "working" | "success" | "error";
     text: string;
     hint?: string;
     showAppPasswordLink?: boolean;
   }>();
+  const [helpLinkNotice, setHelpLinkNotice] = useState<string>();
 
   const normalizedEmail = useMemo(() => {
     const trimmed = email.trim();
@@ -86,6 +92,12 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
     if (!wizard) return;
     const host = wizard.closest<HTMLElement>(".setup-host");
     if (host) host.scrollTop = 0;
+    if (previousProviderRef.current !== provider) {
+      wizard
+        .querySelector<HTMLElement>("#setup-title, #setup-form-title")
+        ?.focus({ preventScroll: true });
+    }
+    previousProviderRef.current = provider;
   }, [provider]);
 
   function chooseProvider(next: ProviderKind) {
@@ -94,6 +106,7 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
     setPassword("");
     setShowPassword(false);
     setStatus(undefined);
+    setHelpLinkNotice(undefined);
     if (next === "manual") {
       setImap((current) =>
         current.host ? current : emptyManualImap(username),
@@ -171,6 +184,16 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
     }
   }
 
+  async function openHelpLink() {
+    setHelpLinkNotice(undefined);
+    const outcome = await inspectAndOpenExternalLink(
+      APPLE_APP_PASSWORD_GUIDE_URL,
+    );
+    if (outcome === "failed") setHelpLinkNotice(strings.setup.helpLinkFailed);
+    else if (outcome === "declined")
+      setHelpLinkNotice(strings.setup.helpLinkDeclined);
+  }
+
   if (!provider) {
     return (
       <div
@@ -189,7 +212,9 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
                 <AppMark size={52} />
                 <span>
                   <p>{strings.appName}</p>
-                  <h1 id="setup-title">{strings.setup.title}</h1>
+                  <h1 id="setup-title" tabIndex={-1}>
+                    {strings.setup.title}
+                  </h1>
                 </span>
               </header>
               <p className="setup-intro">{strings.setup.intro}</p>
@@ -208,7 +233,11 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
               </div>
             </>
           ) : (
-            <h2 id="setup-title" className="provider-picker-title">
+            <h2
+              id="setup-title"
+              className="provider-picker-title"
+              tabIndex={-1}
+            >
               {strings.setup.chooseAccount}
             </h2>
           )}
@@ -269,6 +298,8 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
     );
   }
 
+  const FormTitle = embedded ? "h2" : "h1";
+
   return (
     <div
       className={embedded ? "setup-wizard-embedded" : "setup-page"}
@@ -290,6 +321,7 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
               setPassword("");
               setShowPassword(false);
               setStatus(undefined);
+              setHelpLinkNotice(undefined);
             }}
           >
             <ArrowLeft aria-hidden="true" /> {strings.common.back}
@@ -320,11 +352,11 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
           ) : null}
         </header>
         <div>
-          <h1 id="setup-form-title">
+          <FormTitle id="setup-form-title" tabIndex={-1}>
             {provider === "icloud"
               ? strings.setup.connectIcloud
               : strings.setup.connectOther}
-          </h1>
+          </FormTitle>
           <p className="setup-intro">
             {provider === "icloud"
               ? strings.setup.icloudIntro
@@ -337,7 +369,7 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
             <button
               type="button"
               className="text-button"
-              onClick={() => void api.openHelpUrl()}
+              onClick={() => void openHelpLink()}
             >
               {strings.setup.createAppPassword}{" "}
               <ExternalLink aria-hidden="true" />
@@ -490,13 +522,19 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
                 <button
                   type="button"
                   className="text-button"
-                  onClick={() => void api.openHelpUrl()}
+                  onClick={() => void openHelpLink()}
                 >
-                  {strings.setup.createAppPassword} <ExternalLink />
+                  {strings.setup.createAppPassword}{" "}
+                  <ExternalLink aria-hidden="true" />
                 </button>
               ) : null}
             </span>
           </div>
+        ) : null}
+        {helpLinkNotice ? (
+          <p className="setup-field-hint" role="status">
+            {helpLinkNotice}
+          </p>
         ) : null}
         <button
           className="primary-button full-button"
