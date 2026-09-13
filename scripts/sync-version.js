@@ -49,20 +49,50 @@ export function replacePackageLockVersion(lock, version) {
   };
 }
 
-export function replaceMetainfoReleaseVersion(xml, version) {
+export function utcIsoDate(now = new Date()) {
+  if (Number.isNaN(now.getTime())) {
+    throw new Error("Invalid date for Flatpak metainfo.");
+  }
+  return now.toISOString().slice(0, 10);
+}
+
+function requireIsoDate(date) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    throw new Error(
+      `Flatpak metainfo release date must be YYYY-MM-DD, got ${date}`,
+    );
+  }
+  return date;
+}
+
+export function replaceMetainfoReleaseVersion(xml, version, date) {
+  requireIsoDate(date);
   const releases = String(xml ?? "").match(/<releases>[\s\S]*?<\/releases>/);
   if (!releases) {
     throw new Error("Flatpak metainfo is missing a <releases> block.");
   }
   let replaced = false;
-  const updatedBlock = releases[0].replace(
-    /(<release\b[^>]*\bversion=")[^"]+(")/,
-    (match, prefix, suffix) => {
-      if (replaced) return match;
-      replaced = true;
-      return `${prefix}${version}${suffix}`;
-    },
-  );
+  const updatedBlock = releases[0].replace(/<release\b[^>]*\/?>/, (tag) => {
+    if (replaced) return tag;
+    replaced = true;
+    const currentVersion = tag.match(/\bversion="([^"]+)"/)?.[1];
+    if (!currentVersion) {
+      throw new Error(
+        "Flatpak metainfo is missing a <release version=...> entry.",
+      );
+    }
+    const currentDate = tag.match(/\bdate="([^"]+)"/)?.[1];
+    const nextDate =
+      currentVersion === version && currentDate ? currentDate : date;
+    let next = tag.replace(/\bversion="[^"]+"/, `version="${version}"`);
+    if (/\bdate="/.test(next)) {
+      return next.replace(/\bdate="[^"]+"/, `date="${nextDate}"`);
+    }
+    if (/\/>/.test(next)) {
+      return next.replace(/\s*\/>/, ` date="${nextDate}" />`);
+    }
+    return next.replace(/>$/, ` date="${nextDate}">`);
+  });
   if (!replaced) {
     throw new Error(
       "Flatpak metainfo is missing a <release version=...> entry.",
@@ -135,10 +165,17 @@ export async function syncWorkspaceVersions(workspaceRoot, version) {
     ),
   );
 
-  await writeReplacedText(
-    join(workspaceRoot, "packaging/flatpak/run.rosie.snap.metainfo.xml"),
-    replaceMetainfoReleaseVersion,
-    version,
+  const metainfoPath = join(
+    workspaceRoot,
+    "packaging/flatpak/run.rosie.snap.metainfo.xml",
+  );
+  await writeFile(
+    metainfoPath,
+    replaceMetainfoReleaseVersion(
+      await readFile(metainfoPath, "utf8"),
+      version,
+      utcIsoDate(),
+    ),
   );
   await writeReplacedText(
     join(workspaceRoot, "CHANGELOG.md"),

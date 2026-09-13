@@ -338,6 +338,8 @@ test("flatpak build-bundle uses the stable branch without a lint-invalid manifes
   );
   assert.match(metainfo, /<id>run\.rosie\.snap<\/id>/);
   assert.match(metainfo, /MPL-2\.0/);
+  assert.match(metainfo, /<developer id="run\.rosie">/);
+  assert.match(metainfo, /<release version="[^"]+" date="\d{4}-\d{2}-\d{2}"/);
   const lintExceptions = JSON.parse(
     await readFile(
       join(root, "packaging/flatpak/lint-exceptions.json"),
