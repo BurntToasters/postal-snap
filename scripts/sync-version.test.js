@@ -7,7 +7,10 @@ import { root } from "./lib/paths.js";
 import {
   cargoTomlPackageName,
   replaceCargoLockPackageVersion,
+  replaceChangelogDownloadVersions,
+  replaceMetainfoReleaseVersion,
   replacePackageLockVersion,
+  replaceReleasingTagExamples,
   replaceCargoTomlVersion,
 } from "./sync-version.js";
 
@@ -71,12 +74,66 @@ test("replacePackageLockVersion updates both npm root version fields", () => {
   assert.equal(lock.version, "0.1.8");
 });
 
+test("replaceMetainfoReleaseVersion updates only the newest AppStream release", () => {
+  const xml = `<releases>
+    <release version="0.1.8" date="2026-08-01" />
+    <release version="0.1.7" />
+  </releases>`;
+  assert.equal(
+    replaceMetainfoReleaseVersion(xml, "0.1.9"),
+    `<releases>
+    <release version="0.1.9" date="2026-08-01" />
+    <release version="0.1.7" />
+  </releases>`,
+  );
+  assert.throws(
+    () => replaceMetainfoReleaseVersion("<component />", "0.1.9"),
+    /missing a <releases> block/,
+  );
+  assert.throws(
+    () => replaceMetainfoReleaseVersion("<releases></releases>", "0.1.9"),
+    /missing a <release version=/,
+  );
+});
+
+test("replaceChangelogDownloadVersions rewrites only the download table", () => {
+  const changelog = `# Downloads
+[exe](https://github.com/BurntToasters/postal-snap/releases/download/v0.1.8/Postal-Snap-Windows-x64.exe)
+
+## Changes in \`v0.1.8:\`
+- draft download links target \`v0.1.8\`.
+`;
+  const updated = replaceChangelogDownloadVersions(changelog, "0.1.9");
+  assert.match(updated, /\/download\/v0\.1\.9\/Postal-Snap-Windows-x64\.exe/);
+  assert.match(updated, /## Changes in `v0\.1\.8:`/);
+  assert.match(updated, /draft download links target `v0\.1\.8`/);
+  assert.throws(
+    () => replaceChangelogDownloadVersions("# Downloads\n", "0.1.9"),
+    /missing a Changes in section/,
+  );
+});
+
+test("replaceReleasingTagExamples rewrites the current signed-tag command", () => {
+  const docs =
+    'Tag it: `git tag -s v0.1.8 -m "Postal Snap v0.1.8"`, `git push origin v0.1.8`, then `git tag -v v0.1.8` done.';
+  assert.equal(
+    replaceReleasingTagExamples(docs, "0.1.9"),
+    'Tag it: `git tag -s v0.1.9 -m "Postal Snap v0.1.9"`, `git push origin v0.1.9`, then `git tag -v v0.1.9` done.',
+  );
+});
+
 test("committed package versions stay aligned for locked cargo commands", async () => {
   const pkg = await json(join(root, "package.json"));
   const packageLock = await json(join(root, "package-lock.json"));
   const tauri = await json(join(root, "src-tauri/tauri.conf.json"));
   const cargo = await readFile(join(root, "src-tauri/Cargo.toml"), "utf8");
   const lock = await readFile(join(root, "src-tauri/Cargo.lock"), "utf8");
+  const metainfo = await readFile(
+    join(root, "packaging/flatpak/run.rosie.snap.metainfo.xml"),
+    "utf8",
+  );
+  const changelog = await readFile(join(root, "CHANGELOG.md"), "utf8");
+  const releasing = await readFile(join(root, "docs/RELEASING.md"), "utf8");
   const packageName = cargoTomlPackageName(cargo);
   const cargoVersion = cargo.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
   const lockVersion = lock.match(
@@ -85,10 +142,26 @@ test("committed package versions stay aligned for locked cargo commands", async 
       "m",
     ),
   )?.[1];
+  const changelogHeader = changelog.slice(
+    0,
+    changelog.search(/^## Changes in /m),
+  );
 
   assert.equal(tauri.version, pkg.version);
   assert.equal(packageLock.version, pkg.version);
   assert.equal(packageLock.packages[""].version, pkg.version);
   assert.equal(cargoVersion, pkg.version);
   assert.equal(lockVersion, pkg.version);
+  assert.match(metainfo, new RegExp(`<release version="${pkg.version}"`));
+  assert.match(
+    changelogHeader,
+    new RegExp(`/releases/download/v${pkg.version}/`),
+  );
+  assert.match(releasing, new RegExp(`git tag -s v${pkg.version} `));
+  assert.equal(replaceMetainfoReleaseVersion(metainfo, pkg.version), metainfo);
+  assert.equal(
+    replaceChangelogDownloadVersions(changelog, pkg.version),
+    changelog,
+  );
+  assert.equal(replaceReleasingTagExamples(releasing, pkg.version), releasing);
 });

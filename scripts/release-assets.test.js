@@ -322,6 +322,8 @@ test("flatpak build-bundle uses the stable branch without a lint-invalid manifes
   assert.match(manifest, /^runtime-version:\s*"50"$/m);
   assert.match(manifest, /run\.rosie\.snap\.metainfo\.xml/);
   assert.match(script, /const branch = "stable";/);
+  assert.match(script, /await runFlatpakBuilderLint\(sourceManifest\)/);
+  assert.doesNotMatch(script, /runFlatpakBuilderLint\(generatedManifest\)/);
   assert.match(script, /"run\.rosie\.snap",\s*branch/);
   assert.match(script, /org\.flatpak\.Builder\/\/stable/);
   assert.match(script, /--command=\$\{flatpakBuilderCommand\}/);
