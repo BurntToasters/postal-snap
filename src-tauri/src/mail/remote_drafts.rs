@@ -7,6 +7,7 @@ use super::parse::{
     validate_mime_resource_shape,
 };
 use super::send::connect_imap;
+use super::sync::body_fetch_query;
 use super::{
     BodyBudget, ImapSession, RemoteDraftAttachment, RemoteDraftData, RemoteDraftLocation,
     RemoteDraftSnapshot, IMAP_COMMAND_TIMEOUT, MAX_ATTACHMENTS, MAX_MESSAGE_BYTES, MAX_MIME_PARTS,
@@ -216,10 +217,7 @@ pub async fn fetch_remote_drafts(
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join(",");
-        let body_query = format!(
-            "(UID INTERNALDATE BODY.PEEK[]<0.{}>)",
-            MAX_MESSAGE_BYTES + 1
-        );
+        let body_query = body_fetch_query("UID INTERNALDATE");
         let mut fetched = tokio::time::timeout(
             IMAP_COMMAND_TIMEOUT,
             session.uid_fetch(safe_set, body_query),
