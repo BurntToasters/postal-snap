@@ -312,13 +312,20 @@ test("flatpak build-bundle uses the stable branch without a lint-invalid manifes
     join(root, "packaging/flatpak/run.rosie.snap.yml"),
     "utf8",
   );
-  const script = await readFile(join(root, "scripts/build-flatpak.js"), "utf8");
+  const [script, setup, ci] = await Promise.all([
+    readFile(join(root, "scripts/build-flatpak.js"), "utf8"),
+    readFile(join(root, "scripts/setup-flatpak.js"), "utf8"),
+    readFile(join(root, ".github/workflows/ci.yml"), "utf8"),
+  ]);
   assert.doesNotMatch(manifest, /^branch:/m);
   assert.match(manifest, /org\.freedesktop\.Notifications/);
   assert.match(manifest, /^runtime-version:\s*"50"$/m);
   assert.match(manifest, /run\.rosie\.snap\.metainfo\.xml/);
   assert.match(script, /const branch = "stable";/);
   assert.match(script, /"run\.rosie\.snap",\s*branch/);
+  assert.match(script, /org\.flatpak\.Builder\/\/stable/);
+  assert.match(setup, /org\.flatpak\.Builder\/\/stable/);
+  assert.match(ci, /org\.flatpak\.Builder\/\/stable/);
   const metainfo = await readFile(
     join(root, "packaging/flatpak/run.rosie.snap.metainfo.xml"),
     "utf8",
