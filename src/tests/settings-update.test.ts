@@ -351,6 +351,27 @@ describe("update checks", () => {
     expect(mockedMessage).toHaveBeenCalledTimes(2);
   });
 
+  it("does not intercept window close until an update is ready", async () => {
+    document.documentElement.dataset.platform = "windows";
+    const stop = startDeferredUpdateOnQuit();
+    await Promise.resolve();
+    expect(onCloseRequested).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("attaches a close interceptor after a quiet download", async () => {
+    document.documentElement.dataset.platform = "linux";
+    const stop = startDeferredUpdateOnQuit();
+    await Promise.resolve();
+    expect(onCloseRequested).not.toHaveBeenCalled();
+
+    const update = fakeUpdate("0.2.1");
+    mockedCheck.mockResolvedValue(update as never);
+    await runUpdateSingleFlight();
+    await vi.waitFor(() => expect(onCloseRequested).toHaveBeenCalled());
+    stop();
+  });
+
   it("installs on Windows close after a quiet download", async () => {
     document.documentElement.dataset.platform = "windows";
     const update = fakeUpdate("0.2.2");

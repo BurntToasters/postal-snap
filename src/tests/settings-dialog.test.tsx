@@ -55,7 +55,10 @@ vi.mock("../api", () => ({
       kind: "direct",
       updatesManagedBy: "postalSnap",
     }),
-    getLicenseCredits: vi.fn().mockResolvedValue([]),
+    getLicenseCredits: vi.fn().mockResolvedValue({
+      notices: [],
+      packages: [],
+    }),
     showNativeConfirm: vi.fn().mockResolvedValue(true),
     showNativeMessage: vi.fn().mockResolvedValue(undefined),
   },

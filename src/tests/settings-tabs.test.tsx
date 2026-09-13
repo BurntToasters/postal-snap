@@ -41,14 +41,34 @@ describe("small settings tabs", () => {
       .spyOn(api, "openExternalUrl")
       .mockResolvedValue(undefined);
     vi.spyOn(api, "showNativeConfirm").mockResolvedValue(true);
-    vi.spyOn(api, "getLicenseCredits").mockResolvedValue([
-      {
-        id: "mpl",
-        title: "Mozilla Public License 2.0",
-        body: "MPL body text",
-      },
-      { id: "npm", title: "npm dependencies", body: "npm notice" },
-    ]);
+    vi.spyOn(api, "getLicenseCredits").mockResolvedValue({
+      notices: [
+        {
+          id: "mpl",
+          title: "Mozilla Public License 2.0",
+          body: "MPL body text",
+        },
+      ],
+      packages: [
+        {
+          id: "alpha@1.0.0",
+          licenses: "MIT",
+          repository: "https://example.test/alpha",
+          licenseText: "alpha license text",
+        },
+        {
+          id: "cargo:beta@2.0.0",
+          licenses: "Apache-2.0",
+          licenseTextStatus: "not-packaged",
+        },
+        {
+          id: "evil@1.0.0",
+          licenses: "MIT",
+          repository: "javascript:alert(1)",
+          licenseText: "should not open",
+        },
+      ],
+    });
     render(<AboutTab />);
     fireEvent.click(
       screen.getByRole("button", { name: strings.settings.aboutSource }),
@@ -69,14 +89,74 @@ describe("small settings tabs", () => {
     });
     expect(credits).toBeVisible();
     expect(screen.getByText("MPL body text")).toBeVisible();
-    expect(screen.getByText("npm notice")).toBeVisible();
+    fireEvent.click(screen.getByText("alpha@1.0.0"));
+    expect(screen.getByText("alpha license text")).toBeVisible();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: strings.settings.aboutCreditsOpenSource,
+      }),
+    );
+    await waitFor(() => {
+      expect(inspectExternalUrl).toHaveBeenCalledWith(
+        "https://example.test/alpha",
+      );
+    });
+    fireEvent.click(screen.getByText("evil@1.0.0"));
+    expect(
+      screen.getAllByRole("button", {
+        name: strings.settings.aboutCreditsOpenSource,
+      }),
+    ).toHaveLength(1);
+    fireEvent.click(screen.getByText("cargo:beta@2.0.0"));
+    expect(
+      screen.getByText(strings.settings.aboutCreditsMissingText("Apache-2.0")),
+    ).toBeVisible();
+    expect(credits.closest(".settings-window")).toBeNull();
+    expect(
+      credits.parentElement?.querySelector(".license-credits-dismiss"),
+    ).toBeTruthy();
     const close = within(credits).getByRole("button", {
       name: strings.common.close,
     });
     await waitFor(() => expect(close).toHaveFocus());
     fireEvent.keyDown(document, { key: "Escape" });
     await waitFor(() => expect(credits).not.toBeInTheDocument());
-    expect(inspectExternalUrl).toHaveBeenCalledTimes(1);
+    expect(inspectExternalUrl).toHaveBeenCalledTimes(2);
+  });
+
+  it("covers Settings with an opaque credits layer instead of a second dimmed overlay", async () => {
+    vi.spyOn(api, "getLicenseCredits").mockResolvedValue({
+      notices: [
+        {
+          id: "mpl",
+          title: "Mozilla Public License 2.0",
+          body: "MPL body text",
+        },
+      ],
+      packages: [],
+    });
+    render(
+      <section className="settings-window">
+        <header>
+          <button type="button">Close settings</button>
+        </header>
+        <div className="settings-layout">
+          <AboutTab />
+        </div>
+      </section>,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.settings.aboutLicense }),
+    );
+    const credits = await screen.findByRole("dialog", {
+      name: strings.settings.aboutCreditsTitle,
+    });
+    expect(credits.closest(".settings-window")).toBeNull();
+    expect(credits.parentElement).toHaveClass("license-credits-layer");
+    expect(
+      credits.parentElement?.querySelector(".license-credits-dismiss"),
+    ).toBeTruthy();
+    expect(document.querySelector(".settings-window")).toHaveAttribute("inert");
   });
 
   it("reports when bundled license credits cannot be loaded", async () => {
