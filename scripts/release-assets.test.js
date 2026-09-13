@@ -307,7 +307,7 @@ test("direct and Store builds keep separate capabilities", async () => {
   assert.equal(flatpak.plugins.updater, null);
 });
 
-test("flatpak sideload bundle exports the manifest stable branch", async () => {
+test("flatpak sideload bundle exports stable without a linted branch field", async () => {
   const manifest = await readFile(
     join(root, "packaging/flatpak/run.rosie.snap.yml"),
     "utf8",
@@ -317,18 +317,15 @@ test("flatpak sideload bundle exports the manifest stable branch", async () => {
     readFile(join(root, "scripts/setup-flatpak.js"), "utf8"),
     readFile(join(root, ".github/workflows/ci.yml"), "utf8"),
   ]);
-  assert.match(manifest, /^branch:\s*stable$/m);
+  assert.doesNotMatch(manifest, /^branch:/m);
   assert.match(manifest, /org\.freedesktop\.Notifications/);
   assert.match(manifest, /^runtime-version:\s*"50"$/m);
   assert.match(manifest, /run\.rosie\.snap\.metainfo\.xml/);
-  assert.match(
-    script,
-    /Flatpak manifest must set branch so build-bundle matches the exported ref/,
-  );
+  assert.match(script, /const branch = "stable";/);
+  assert.match(script, /function withSideloadBranch/);
   assert.match(script, /`--default-branch=\$\{branch\}`/);
   assert.match(script, /await runFlatpakBuilderLint\(sourceManifest\)/);
   assert.doesNotMatch(script, /runFlatpakBuilderLint\(generatedManifest\)/);
-  assert.doesNotMatch(script, /const branch = "stable";/);
   assert.match(script, /"run\.rosie\.snap",\s*branch/);
   assert.match(script, /org\.flatpak\.Builder\/\/stable/);
   assert.match(script, /--command=\$\{flatpakBuilderCommand\}/);

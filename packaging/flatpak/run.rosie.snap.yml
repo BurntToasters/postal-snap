@@ -1,5 +1,4 @@
 app-id: run.rosie.snap
-branch: stable
 runtime: org.gnome.Platform
 runtime-version: "50"
 sdk: org.gnome.Sdk
