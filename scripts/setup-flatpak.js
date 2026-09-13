@@ -7,6 +7,7 @@ import { compareVersions } from "./lib/versions.js";
 const MANIFEST = "packaging/flatpak/run.rosie.snap.yml";
 const MINIMUM_FLATPAK_BUILDER = "1.4.4";
 const FLATPAK_BUILDER_REF = "org.flatpak.Builder//stable";
+const FLATPAK_BUILDER_COMMAND = "flatpak-builder-wrapper";
 
 const manifest = await readFile(join(root, MANIFEST), "utf8");
 const runtimeVersion = manifest.match(
@@ -33,9 +34,13 @@ await run("flatpak", [
   FLATPAK_BUILDER_REF,
 ]);
 
-const builderVersion = await output("flatpak-builder", ["--version"]).catch(
-  () => "",
-);
+const builderVersion = await output("flatpak", [
+  "run",
+  "--user",
+  `--command=${FLATPAK_BUILDER_COMMAND}`,
+  FLATPAK_BUILDER_REF,
+  "--version",
+]).catch(() => "");
 const builderMatch = builderVersion.match(/(\d+)\.(\d+)\.(\d+)/);
 if (
   !builderMatch ||
@@ -48,7 +53,7 @@ if (
     `flatpak-builder >= ${MINIMUM_FLATPAK_BUILDER} is required. Install it with your distribution package manager before bundling.`,
   );
 }
-await output("flatpak", ["info", FLATPAK_BUILDER_REF]).catch(() => {
+await output("flatpak", ["info", "--user", FLATPAK_BUILDER_REF]).catch(() => {
   throw new Error(
     "org.flatpak.Builder (flatpak-builder-lint) is required for the release manifest gate. Run `npm run setup:flatpak` again.",
   );
