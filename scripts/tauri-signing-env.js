@@ -135,9 +135,8 @@ export function resolveNotarytoolKeychainProfile(env = process.env) {
   return String(env.NOTARYTOOL_KEYCHAIN_PROFILE ?? "").trim();
 }
 
-// notarytool deliberately does not support altool's "@env:" password syntax,
-// so the app-specific password must never be passed as an argument. Prefer the
-// documented keychain profile, then an App Store Connect API key.
+// Prefer the documented keychain profile or App Store Connect API key, then
+// support Apple's Apple ID plus app-specific password authentication.
 export function notarytoolSubmitArgs({
   path,
   keychainProfile,
@@ -145,6 +144,7 @@ export function notarytoolSubmitArgs({
   apiKeyId,
   apiIssuer,
   appleId,
+  applePassword,
   appleTeamId,
 } = {}) {
   if (!path) throw new Error("notarytool submit requires an artifact path.");
@@ -158,13 +158,19 @@ export function notarytoolSubmitArgs({
     args.push("--key", apiKeyPath, "--key-id", apiKeyId, "--issuer", apiIssuer);
     return args;
   }
-  if (appleId && appleTeamId) {
-    throw new Error(
-      "xcrun notarytool does not support passing the app-specific password as an argument. Run `xcrun notarytool store-credentials` once and set NOTARYTOOL_KEYCHAIN_PROFILE, or use an App Store Connect API key.",
+  if (appleId && applePassword && appleTeamId) {
+    args.push(
+      "--apple-id",
+      appleId,
+      "--password",
+      applePassword,
+      "--team-id",
+      appleTeamId,
     );
+    return args;
   }
   throw new Error(
-    "DMG notarization requires NOTARYTOOL_KEYCHAIN_PROFILE or an App Store Connect API key.",
+    "DMG notarization requires NOTARYTOOL_KEYCHAIN_PROFILE, an App Store Connect API key, or APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID.",
   );
 }
 
