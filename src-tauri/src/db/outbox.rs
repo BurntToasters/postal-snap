@@ -3,7 +3,13 @@ use super::{
 };
 use rusqlite::{params, OptionalExtension};
 
-use crate::models::{ComposeDraft, FilterRule, OutboxSummary, SnoozedSummary};
+use crate::models::{ComposeAttachment, ComposeDraft, FilterRule, OutboxSummary, SnoozedSummary};
+
+/// Failed sends are preserved for an explicit user retry, but the outbox does
+/// not silently grow without bound: once this many messages (or bytes of
+/// stored MIME) need attention, new sends queue behind a user decision.
+const MAX_NEEDS_ATTENTION_OUTBOX_MESSAGES: i64 = 25;
+const MAX_NEEDS_ATTENTION_OUTBOX_BYTES: i64 = 256 * 1024 * 1024;
 
 impl Database {
     pub fn queue_outbox(
@@ -20,6 +26,22 @@ impl Database {
             serde_json::to_string(draft).map_err(|_| "Could not queue message.".to_string())?;
         let mut conn = self.conn()?;
         let transaction = conn.transaction().map_err(db_error)?;
+        let (terminal_count, terminal_bytes): (i64, i64) = transaction
+            .query_row(
+                "SELECT COUNT(*), COALESCE(SUM(LENGTH(mime_bytes)),0) FROM outbox
+                 WHERE account_id=?1 AND state='needs_attention'",
+                [&draft.account_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(db_error)?;
+        if terminal_count >= MAX_NEEDS_ATTENTION_OUTBOX_MESSAGES
+            || terminal_bytes >= MAX_NEEDS_ATTENTION_OUTBOX_BYTES
+        {
+            return Err(
+                "Messages in the outbox need attention. Retry or delete them before sending more."
+                    .into(),
+            );
+        }
         transaction
             .execute(
                 "INSERT INTO outbox(id,account_id,draft_json,state,detail,message_id,mime_bytes,send_at,updated_at)
@@ -44,14 +66,15 @@ impl Database {
         account_id: &str,
         state: &str,
         detail: Option<&str>,
-    ) -> Result<(), String> {
-        self.conn()?
+    ) -> Result<bool, String> {
+        let changed = self
+            .conn()?
             .execute(
                 "UPDATE outbox SET state=?3,detail=?4,updated_at=CURRENT_TIMESTAMP WHERE id=?1 AND account_id=?2",
                 params![id, account_id, state, detail],
             )
             .map_err(db_error)?;
-        Ok(())
+        Ok(changed == 1)
     }
 
     pub fn remove_outbox(&self, id: &str, account_id: &str) -> Result<(), String> {
@@ -362,11 +385,13 @@ impl Database {
     }
 
     /// Unread inbox candidates for one rule. Bounded so a broad match cannot
-    /// flood the offline queue.
+    /// flood the offline queue. `newer_than_id` limits evaluation to rows
+    /// cached by the current sync pass.
     pub fn find_rule_matches(
         &self,
         account_id: &str,
         rule: &FilterRule,
+        newer_than_id: Option<i64>,
     ) -> Result<Vec<(i64, u32, String, i64)>, String> {
         let needle: String = rule
             .contains
@@ -393,11 +418,12 @@ impl Database {
             .prepare(&format!(
                 "SELECT m.id,m.uid,f.name,f.id FROM messages m JOIN mailboxes f ON f.id=m.mailbox_id
                  WHERE m.account_id=?1 AND f.role='inbox' AND m.is_read=0 AND m.pending_move_to IS NULL
+                 AND (?3 IS NULL OR m.id > ?3)
                  AND LOWER({column}) LIKE ?2 ESCAPE '\\' ORDER BY m.uid DESC LIMIT 100"
             ))
             .map_err(db_error)?;
         let rows = statement
-            .query_map(params![account_id, like], |row| {
+            .query_map(params![account_id, like, newer_than_id], |row| {
                 Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
             })
             .map_err(db_error)?
@@ -485,5 +511,39 @@ impl Database {
         }
         transaction.commit().map_err(db_error)?;
         Ok(())
+    }
+
+    /// Keep restored drafts' managed attachments alive across the age-based
+    /// cleanup until the composer saves the draft again. Missing grants are
+    /// skipped so a stale token cannot fail the restore.
+    pub fn retain_draft_attachment_refs(
+        &self,
+        account_id: &str,
+        draft_id: &str,
+        attachments: &[ComposeAttachment],
+    ) -> Result<(), String> {
+        if attachments.is_empty() {
+            return Ok(());
+        }
+        let mut conn = self.conn()?;
+        let transaction = conn.transaction().map_err(db_error)?;
+        for attachment in attachments {
+            let exists: bool = transaction
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM file_grants WHERE token=?1 AND account_id=?2)",
+                    params![attachment.token, account_id],
+                    |row| row.get(0),
+                )
+                .map_err(db_error)?;
+            if exists {
+                transaction
+                    .execute(
+                        "INSERT OR IGNORE INTO attachment_refs(token,owner_kind,owner_id) VALUES(?1,'draft',?2)",
+                        params![attachment.token, draft_id],
+                    )
+                    .map_err(db_error)?;
+            }
+        }
+        transaction.commit().map_err(db_error)
     }
 }

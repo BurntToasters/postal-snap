@@ -1,5 +1,6 @@
 use tauri::State;
 
+use super::sync::apply_filter_rules;
 use super::{command_result, AppState, CommandResult};
 use crate::models::{validate_filter_rule, FilterRule, SnoozedSummary};
 
@@ -47,7 +48,7 @@ pub fn list_filter_rules(
     command_result(state.db.list_filter_rules(&account_id))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn create_filter_rule(
     rule: FilterRule,
     state: State<'_, AppState>,
@@ -67,10 +68,15 @@ pub fn create_filter_rule(
             return Err("Choose the folder to move matching mail into.".into());
         }
     }
-    command_result(state.db.create_filter_rule(&rule))
+    let created = state.db.create_filter_rule(&rule)?;
+    // A new rule applies to existing unread mail immediately.
+    if let Ok(account) = state.db.account(&rule.account_id) {
+        apply_filter_rules(&state.db, &account, None);
+    }
+    Ok(created)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn update_filter_rule(
     rule: FilterRule,
     state: State<'_, AppState>,
@@ -90,7 +96,11 @@ pub fn update_filter_rule(
             return Err("Choose the folder to move matching mail into.".into());
         }
     }
-    command_result(state.db.update_filter_rule(&rule))
+    let updated = state.db.update_filter_rule(&rule)?;
+    if let Ok(account) = state.db.account(&rule.account_id) {
+        apply_filter_rules(&state.db, &account, None);
+    }
+    Ok(updated)
 }
 
 #[tauri::command]

@@ -91,6 +91,7 @@ pub struct AppState {
     watchers: Mutex<HashSet<String>>,
     startup_error: Mutex<Option<String>>,
     mail_shortcut_guard: AtomicBool,
+    app_nap: Mutex<Option<crate::app_nap::AppNapGuard>>,
 }
 
 struct AccountActor {
@@ -108,6 +109,7 @@ impl AppState {
             watchers: Mutex::new(HashSet::new()),
             startup_error: Mutex::new(None),
             mail_shortcut_guard: AtomicBool::new(false),
+            app_nap: Mutex::new(None),
         }
     }
 
@@ -174,9 +176,14 @@ impl AppState {
         if !watchers.insert(account_id.clone()) {
             return Ok(());
         }
+        let first_watcher = watchers.len() == 1;
         drop(watchers);
+        if first_watcher {
+            self.begin_background_activity();
+        }
         tauri::async_runtime::spawn(async move {
             let mut backoff = 2u64;
+            let mut attempt = 0u32;
             let mut first_sync = true;
             loop {
                 let state = app.state::<AppState>();
@@ -191,14 +198,17 @@ impl AppState {
                     .map(|message| message.id);
                 match sync_one_background(&account_id, &app, &state).await {
                     Ok(()) => {
+                        backoff = 2;
+                        attempt = 0;
                         if !first_sync {
                             notify_new_mail(&app, &state.db, &account_id, previous_message_id);
                         }
                         first_sync = false;
                     }
                     Err(_) => {
-                        tokio::time::sleep(reconnect_delay(&account_id, backoff)).await;
+                        tokio::time::sleep(reconnect_delay(&account_id, backoff, attempt)).await;
                         backoff = (backoff * 2).min(120);
+                        attempt = attempt.wrapping_add(1);
                         continue;
                     }
                 }
@@ -213,10 +223,27 @@ impl AppState {
                 };
                 let password = match credentials::load(&account_id) {
                     Ok(password) => password,
-                    Err(_) => break,
+                    Err(_) => {
+                        // A locked or transiently unavailable vault must not
+                        // stop background mail forever; retry with backoff and
+                        // surface an actionable account state.
+                        drop(_guard);
+                        let detail = "The saved password is unavailable. Reconnect this account.";
+                        let _ = state
+                            .db
+                            .set_account_state(&account_id, "offline", Some(detail));
+                        emit_sync(&app, &account_id, "offline", Some(detail), None);
+                        tokio::time::sleep(reconnect_delay(&account_id, backoff, attempt)).await;
+                        backoff = (backoff * 2).min(120);
+                        attempt = attempt.wrapping_add(1);
+                        continue;
+                    }
                 };
                 match mail::idle_inbox(&account, &password, &actor.wake).await {
-                    Ok(()) => backoff = 2,
+                    Ok(()) => {
+                        backoff = 2;
+                        attempt = 0;
+                    }
                     Err(_) => {
                         drop(_guard);
                         let _ = state.db.set_account_state(
@@ -231,16 +258,38 @@ impl AppState {
                             Some("Connection lost. Reconnecting…"),
                             None,
                         );
-                        tokio::time::sleep(reconnect_delay(&account_id, backoff)).await;
+                        tokio::time::sleep(reconnect_delay(&account_id, backoff, attempt)).await;
                         backoff = (backoff * 2).min(120);
+                        attempt = attempt.wrapping_add(1);
                     }
                 }
             }
-            if let Ok(mut watchers) = app.state::<AppState>().watchers.lock() {
+            let state = app.state::<AppState>();
+            if let Ok(mut watchers) = state.watchers.lock() {
                 watchers.remove(&account_id);
-            }
+                if watchers.is_empty() {
+                    drop(watchers);
+                    state.end_background_activity();
+                }
+            };
         });
         Ok(())
+    }
+
+    fn begin_background_activity(&self) {
+        if let Ok(mut guard) = self.app_nap.lock() {
+            if guard.is_none() {
+                *guard = Some(crate::app_nap::AppNapGuard::begin(
+                    "Postal Snap is keeping mail in sync",
+                ));
+            }
+        }
+    }
+
+    fn end_background_activity(&self) {
+        if let Ok(mut guard) = self.app_nap.lock() {
+            guard.take();
+        }
     }
 
     fn retire_actor(&self, account_id: &str) {
@@ -250,10 +299,18 @@ impl AppState {
     }
 }
 
-fn reconnect_delay(account_id: &str, seconds: u64) -> Duration {
-    let jitter = account_id.bytes().fold(0u64, |value, byte| {
-        value.wrapping_mul(31).wrapping_add(u64::from(byte))
-    }) % 1_000;
+fn reconnect_delay(account_id: &str, seconds: u64, attempt: u32) -> Duration {
+    let clock = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs() << 20 ^ u64::from(elapsed.subsec_nanos()))
+        .unwrap_or(0);
+    let account_hash = account_id
+        .bytes()
+        .fold(0xcbf29ce484222325u64, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+        });
+    let jitter =
+        (clock ^ account_hash ^ u64::from(attempt).wrapping_mul(0x9e3779b97f4a7c15)) % 1_000;
     Duration::from_secs(seconds) + Duration::from_millis(jitter)
 }
 
@@ -303,6 +360,13 @@ struct OutboxChanged {
     account_id: String,
     outbox_id: Option<String>,
     state: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OfflineOperationsDropped {
+    account_id: String,
+    count: u32,
 }
 
 fn emit_folder_counts(app: &AppHandle, account_id: &str) {
@@ -422,21 +486,25 @@ fn validate_queued_operation(
 }
 
 async fn replay_offline_operations(
+    app: &AppHandle,
     db: &Database,
     account: &AccountRecord,
     password: &str,
     policy: &CachePolicy,
 ) -> Result<bool, String> {
     let account_id = &account.summary.id;
+    let mut dropped = 0u32;
     for (id, kind, payload) in db.queued_operations(account_id)? {
         match validate_queued_operation(db, account_id, &kind, &payload)? {
             ValidatedReplay::Drop => {
                 db.remove_operation(account_id, id)?;
+                dropped = dropped.saturating_add(1);
                 continue;
             }
             ValidatedReplay::ClearPending(message_id) => {
                 let _ = db.clear_pending_move(message_id);
                 db.remove_operation(account_id, id)?;
+                dropped = dropped.saturating_add(1);
                 continue;
             }
             ValidatedReplay::Flags(operation) => {
@@ -459,13 +527,15 @@ async fn replay_offline_operations(
                     operation.is_starred,
                 )?;
                 if let Err(error) = &result {
-                    if is_terminal_mailbox_error(error) {
+                    if error.terminal {
                         db.remove_operation(account_id, id)?;
+                        dropped = dropped.saturating_add(1);
                     }
                     continue;
                 }
             }
             ValidatedReplay::Move(operation) => {
+                let remote_message_id = db.message_rfc_id(operation.message_id).ok().flatten();
                 let result = mail::move_remote(
                     account,
                     password,
@@ -473,6 +543,10 @@ async fn replay_offline_operations(
                     &operation.destination,
                     operation.uid,
                     operation.uid_validity,
+                    mail::MoveOptions {
+                        message_id: remote_message_id.as_deref(),
+                        dedupe_existing: true,
+                    },
                 )
                 .await;
                 match result {
@@ -488,9 +562,10 @@ async fn replay_offline_operations(
                         .await;
                     }
                     Err(error) => {
-                        if is_terminal_mailbox_error(&error) {
+                        if error.terminal {
                             let _ = db.clear_pending_move(operation.message_id);
                             db.remove_operation(account_id, id)?;
+                            dropped = dropped.saturating_add(1);
                         }
                         // Transient failure: keep the queued op and the
                         // pending-move hiding so a later sync retries it.
@@ -501,15 +576,16 @@ async fn replay_offline_operations(
         }
         db.remove_operation(account_id, id)?;
     }
+    if dropped > 0 {
+        let _ = app.emit(
+            "offline-operations-dropped",
+            OfflineOperationsDropped {
+                account_id: account_id.clone(),
+                count: dropped,
+            },
+        );
+    }
     Ok(!db.queued_operations(account_id)?.is_empty())
-}
-
-fn is_terminal_mailbox_error(error: &str) -> bool {
-    error.contains("mailbox changed")
-        || error.contains("cannot safely move")
-        || error.contains("does not belong")
-        || error.contains("message missing")
-        || error.contains("Message not found")
 }
 
 fn resolve_draft_files(db: &Database, draft: &ComposeDraft) -> Result<ComposeDraft, String> {
@@ -754,7 +830,7 @@ mod tests {
         let mut read_rule = db
             .create_filter_rule(&enabled_rule(account_id, "mark_read"))
             .unwrap();
-        apply_filter_rules(&db, &account);
+        apply_filter_rules(&db, &account, None);
         assert!(db
             .unread_message_ids(inbox)
             .unwrap()
@@ -778,7 +854,7 @@ mod tests {
         db.update_filter_rule(&read_rule).unwrap();
         db.create_filter_rule(&enabled_rule(account_id, "move_archive"))
             .unwrap();
-        apply_filter_rules(&db, &account);
+        apply_filter_rules(&db, &account, None);
         let move_ops: Vec<String> = db
             .queued_operations(account_id)
             .unwrap()
@@ -807,7 +883,7 @@ mod tests {
             .unwrap();
         db.create_filter_rule(&enabled_rule(&account_id, "move_archive"))
             .unwrap();
-        apply_filter_rules(&db, &account);
+        apply_filter_rules(&db, &account, None);
         let move_ops: Vec<String> = db
             .queued_operations(&account_id)
             .unwrap()

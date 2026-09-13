@@ -115,7 +115,7 @@
   border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
   border-radius: 10px;
   background: color-mix(in srgb, var(--danger) 10%, var(--surface));
-  color: var(--danger);
+  color: var(--danger-ink);
   font-weight: 600;
   line-height: 1.45;
 }
@@ -264,7 +264,7 @@
 }
 
 .settings-data-status {
-  color: var(--success) !important;
+  color: var(--success-ink) !important;
   font-weight: 700;
 }
 
@@ -444,7 +444,7 @@
 .alias-chip.primary {
   border-color: var(--accent);
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-ink);
   font-weight: 500;
 }
 

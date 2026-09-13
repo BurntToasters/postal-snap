@@ -241,7 +241,7 @@ impl Database {
         for id in stale_ids {
             transaction
                 .execute(
-                    "DELETE FROM message_fts WHERE message_id IN (SELECT id FROM messages WHERE mailbox_id=?1)",
+                    "DELETE FROM message_fts WHERE rowid IN (SELECT id FROM messages WHERE mailbox_id=?1)",
                     [id],
                 )
                 .map_err(db_error)?;
@@ -425,9 +425,10 @@ impl Database {
             )
             .map_err(db_error)?;
         let rows = statement
-            .query_map(params![mailbox_id, max_size, limit], |row| {
-                Ok((row.get(0)?, row.get(1)?))
-            })
+            .query_map(
+                params![mailbox_id, max_size.min(i64::MAX as u64) as i64, limit],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
             .map_err(db_error)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
     }

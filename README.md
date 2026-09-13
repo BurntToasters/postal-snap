@@ -12,6 +12,8 @@ Get the latest release from [GitHub Releases](https://github.com/BurntToasters/p
 
 First releases are GitHub-only. Microsoft Store and Mac App Store builds come later.
 
+Linux AppImages need FUSE 2 (`libfuse2` on Ubuntu 22.04, `libfuse2t64` on 24.04); run with `APPIMAGE_EXTRACT_AND_RUN=1` if it is unavailable. The Flatpak is a sideloaded bundle from the same GitHub release; update it by downloading the newest bundle.
+
 ## Accessibility highlights
 
 - **Guided iCloud setup:** step-by-step sign-in with an app-specific password; manual IMAP/SMTP for other providers.

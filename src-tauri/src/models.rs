@@ -838,7 +838,7 @@ pub fn validate_compose_draft(draft: &ComposeDraft) -> Result<(), String> {
                 || item
                     .content_id
                     .as_ref()
-                    .is_some_and(|value| value.len() > 998)
+                    .is_some_and(|value| value.len() > 998 || value.contains(char::is_control))
         })
     {
         return Err("The attachment list is too large or invalid.".into());

@@ -311,7 +311,7 @@
   align-items: center;
   gap: 9px;
   padding: 10px 18px;
-  color: var(--warning);
+  color: var(--warning-ink);
   background: var(--warning-soft);
   border-bottom: 1px solid color-mix(in srgb, var(--warning) 28%, var(--border));
 }
@@ -442,6 +442,8 @@
 
 .attachment-row .attachment-preview-button {
   flex: 0 0 auto;
+  min-width: 44px;
+  justify-content: center;
 }
 
 .attachment-preview-layer {

@@ -78,6 +78,11 @@ pub async fn restore_outbox(
     state
         .db
         .remove_outbox_for_account(&outbox_id, &account_id)?;
+    if let Some(draft_id) = draft.id.as_deref() {
+        state
+            .db
+            .retain_draft_attachment_refs(&account_id, draft_id, &draft.attachments)?;
+    }
     emit_outbox_change(&app, &account_id, Some(&outbox_id), Some("removed"));
     Ok(draft)
 }
@@ -89,6 +94,9 @@ pub async fn retry_outbox(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<SendOutcome> {
+    // Check the outbox state under the account lock so a concurrent retry or
+    // sync replay cannot flip the row between the check and the delivery try.
+    let _guard = state.lock_account(&account_id).await?;
     let (mut draft, outbox_state) = state.db.outbox(&outbox_id, &account_id)?;
     let account = state.db.account(&account_id)?;
     draft.html_body = crate::html_sanitize::sanitize_compose_html(&draft.html_body);
@@ -96,7 +104,7 @@ pub async fn retry_outbox(
     if outbox_state != "needs_attention" {
         return Err("Only messages needing attention can be retried.".into());
     }
-    command_result(deliver_outbox(&outbox_id, &draft.account_id, &app, &state).await)
+    command_result(deliver_outbox_locked(&outbox_id, &draft.account_id, &app, &state).await)
 }
 
 #[tauri::command]
@@ -323,9 +331,12 @@ fn outbox_preparation_failed(
 ) -> Result<SendOutcome, String> {
     const DETAIL: &str =
         "The message was not sent. Check its attachments and account, then try again.";
-    state
-        .db
-        .set_outbox_state(outbox_id, account_id, "needs_attention", Some(DETAIL))?;
-    emit_outbox_change(app, account_id, Some(outbox_id), Some("needs_attention"));
+    let changed =
+        state
+            .db
+            .set_outbox_state(outbox_id, account_id, "needs_attention", Some(DETAIL))?;
+    if changed {
+        emit_outbox_change(app, account_id, Some(outbox_id), Some("needs_attention"));
+    }
     Err(error)
 }

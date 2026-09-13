@@ -191,7 +191,7 @@
   width: fit-content;
   padding: 2px 7px;
   border-radius: var(--radius-pill);
-  color: var(--accent) !important;
+  color: var(--accent-ink) !important;
   background: var(--accent-soft);
   font-size: 0.7rem !important;
   font-weight: 750;
@@ -320,17 +320,18 @@
   gap: 9px;
   padding: 11px 13px;
   border-radius: 8px;
-  color: var(--accent);
+  color: var(--accent-ink);
   background: var(--accent-soft);
 }
 
 .connection-status.error {
-  color: var(--danger);
+  color: var(--danger-ink);
   background: color-mix(in srgb, var(--danger) 12%, var(--surface));
 }
 
 .connection-status.success {
-  color: var(--success);
+  color: var(--success-ink);
+  background: color-mix(in srgb, var(--success-soft) 70%, var(--surface));
 }
 
 .connection-status svg {

@@ -277,7 +277,7 @@
 
 .search-scope:hover,
 .search-scope[aria-pressed="true"] {
-  color: var(--accent);
+  color: var(--accent-ink);
   background: var(--accent-soft);
 }
 
@@ -290,7 +290,7 @@
   border: 1px solid var(--accent);
   border-radius: var(--radius-pill);
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-ink);
   font-size: 0.92rem;
   font-weight: 600;
   cursor: pointer;
@@ -534,7 +534,7 @@
   min-width: 26px;
   padding: 2px 8px;
   text-align: center;
-  color: var(--text-muted);
+  color: var(--text);
   background: color-mix(in srgb, var(--text-muted) 14%, transparent);
   border-radius: var(--radius-pill);
   font-size: 0.78rem;
@@ -543,7 +543,7 @@
 }
 
 .folder.active strong {
-  color: var(--accent);
+  color: var(--accent-ink);
   background: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
@@ -834,7 +834,7 @@
 }
 
 .message-row.unread .message-date {
-  color: var(--accent);
+  color: var(--accent-ink);
   font-weight: 650;
 }
 

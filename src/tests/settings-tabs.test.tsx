@@ -153,7 +153,7 @@ describe("small settings tabs", () => {
   it("renders platform-aware shortcut reference", () => {
     document.documentElement.dataset.platform = "macos";
     const { container } = render(<ShortcutsTab />);
-    expect(container.querySelectorAll("kbd")).toHaveLength(13);
+    expect(container.querySelectorAll("kbd")).toHaveLength(21);
     expect(container).toHaveTextContent("⌘ N");
     expect(container).toHaveTextContent("⌥⌘ F");
   });

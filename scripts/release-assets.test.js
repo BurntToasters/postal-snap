@@ -292,6 +292,8 @@ test("direct and Store builds keep separate capabilities", async () => {
     assert.ok(!capability.permissions.includes("core:window:allow-destroy"));
   }
   assert.equal(mas.app.macOSPrivateApi, false);
+  assert.equal(msstore.app.macOSPrivateApi, false);
+  assert.equal(flatpak.app.macOSPrivateApi, false);
   assert.equal(mas.app.windows[0].transparent, false);
   assert.equal(direct.app.macOSPrivateApi, false);
   const directOverlay = await readJson("src-tauri/tauri.direct.conf.json");
@@ -313,8 +315,16 @@ test("flatpak build-bundle uses the manifest branch, not a hardcoded mismatch", 
   const script = await readFile(join(root, "scripts/build-flatpak.js"), "utf8");
   assert.match(manifest, /^branch:\s*stable\s*$/m);
   assert.match(manifest, /org\.freedesktop\.Notifications/);
+  assert.match(manifest, /^runtime-version:\s*"50"$/m);
+  assert.match(manifest, /run\.rosie\.snap\.metainfo\.xml/);
   assert.match(script, /manifest\.match\(\/\^branch:/);
   assert.doesNotMatch(script, /"run\.rosie\.snap",\s*"stable"/);
+  const metainfo = await readFile(
+    join(root, "packaging/flatpak/run.rosie.snap.metainfo.xml"),
+    "utf8",
+  );
+  assert.match(metainfo, /<id>run\.rosie\.snap<\/id>/);
+  assert.match(metainfo, /MPL-2\.0/);
 });
 
 test("direct updater is GitHub-only and notices are bundled", async () => {
@@ -347,6 +357,24 @@ test("direct updater is GitHub-only and notices are bundled", async () => {
   );
   assert.notEqual(config.bundle.windows.webviewInstallMode?.type, "skip");
   assert.match(config.bundle.windows.signCommand, /windows-artifact-sign\.ps1/);
+  assert.match(config.bundle.windows.signCommand, /-NonInteractive/);
+  assert.equal(config.bundle.publisher, "Postal Snap");
+  assert.equal(
+    config.bundle.homepage,
+    "https://github.com/BurntToasters/postal-snap",
+  );
+  assert.equal(
+    config.bundle.windows.nsis.installerHooks,
+    "windows/installer-hooks.nsh",
+  );
+  const hooks = await readFile(
+    join(root, "src-tauri/windows/installer-hooks.nsh"),
+    "utf8",
+  );
+  assert.match(hooks, /NSIS_HOOK_PREINSTALL/);
+  assert.match(hooks, /NSIS_HOOK_PREUNINSTALL/);
+  assert.match(hooks, /POSTAL_SNAP_MIN_WINDOWS_BUILD 19045/);
+  assert.match(hooks, /--cleanup-credentials/);
 });
 
 test("secret scanning ignores only TweetFeed IOC snapshots", async () => {
@@ -504,13 +532,12 @@ test("Windows release signing uses Azure Artifact Signing, not a local PFX", asy
   assert.match(verify, /AZURE_ARTIFACT_SIGNING_PUBLISHER/);
   assert.match(verify, /POSTAL_SNAP_INSTALLED_EXE/);
   assert.doesNotMatch(verify, /zinnia_shell|ZinniaContextMenu/);
-  assert.match(verify, /try \{/);
-  assert.match(verify, /finally \{/);
-  assert.ok(
-    verify.indexOf("Remove-Item -LiteralPath $zipDir") >
-      verify.indexOf("finally {"),
-  );
-  assert.equal(verify.match(/Remove-Item -LiteralPath \$zipDir/g)?.length, 1);
+  assert.match(verify, /artifactSigningPublicTrustEku/);
+  assert.match(verify, /1\.3\.6\.1\.4\.1\.311\.97\.1\.0/);
+  assert.doesNotMatch(verify, /nsis\.zip|Expand-Archive/);
+  assert.match(sign, /1\.3\.6\.1\.4\.1\.311\.97\.1\.0/);
+  assert.match(tauriBuild, /NO_STRIP/);
+  assert.doesNotMatch(tauriBuild, /nsis\.zip/i);
 
   const ci = await readFile(join(root, ".github/workflows/ci.yml"), "utf8");
   assert.doesNotMatch(
@@ -674,10 +701,17 @@ test("test:all still includes Playwright e2e unless SKIP_E2E is set", async () =
   );
   assert.equal(
     packageJson.scripts["test:release-assets"],
-    "node --test scripts/*.test.js scripts/lib/*.test.js scripts/*.test.mjs",
+    "node scripts/run-release-asset-tests.js",
   );
+  const { collectReleaseAssetTestFiles } =
+    await import("./run-release-asset-tests.js");
+  const releaseTestFiles = collectReleaseAssetTestFiles(join(root, "scripts"));
   assert.ok(
-    !packageJson.scripts["test:release-assets"].includes("scripts/cargo/"),
+    releaseTestFiles.some((path) => path.endsWith("release-assets.test.js")),
+  );
+  assert.ok(releaseTestFiles.some((path) => path.endsWith("utils.test.js")));
+  assert.ok(
+    !releaseTestFiles.some((path) => path.endsWith("safe-update.test.mjs")),
     "cargo-safe-update tests stay on test:cargo-safe-update only",
   );
 
@@ -777,4 +811,56 @@ test("test-all and package.json include cargo safe update and policy check", asy
   const testAll = await readFile(join(root, "scripts/test-all.js"), "utf8");
   assert.ok(testAll.includes('["run", "check:cargo-update-policy"]'));
   assert.ok(testAll.includes('["run", "test:cargo-safe-update"]'));
+});
+
+test("MSIX manifest declares the WebView2 runtime dependency", async () => {
+  const pack = await readFile(join(root, "scripts/msstore-pack.js"), "utf8");
+  assert.match(pack, /Microsoft\.Win32WebView2/);
+});
+
+test("Linux release paths run the baseline and WebKit preflight", async () => {
+  const packageJson = JSON.parse(
+    await readFile(join(root, "package.json"), "utf8"),
+  );
+  for (const name of [
+    "build:linux:x64:prepared",
+    "build:linux:arm64:prepared",
+    "flatpak:bundle",
+    "flatpak:bundle:arm64",
+  ]) {
+    assert.match(
+      packageJson.scripts[name],
+      /npm run preflight:linux &&/,
+      `${name} must run the Linux release preflight`,
+    );
+  }
+  const { assertLinuxBuildBaseline } = await import("./linux-preflight.js");
+  assert.deepEqual(assertLinuxBuildBaseline({ platform: "darwin" }), {
+    skipped: true,
+  });
+  assert.throws(
+    () =>
+      assertLinuxBuildBaseline({
+        platform: "linux",
+        glibcVersion: "2.39",
+        webkitVersion: "2.52.6",
+      }),
+    /glibc 2\.39 is newer than the 2\.36 baseline/,
+  );
+  assert.throws(
+    () =>
+      assertLinuxBuildBaseline({
+        platform: "linux",
+        glibcVersion: "2.35",
+        webkitVersion: "2.52.5",
+      }),
+    /below the 2\.52\.6 security floor/,
+  );
+  const allowed = assertLinuxBuildBaseline({
+    platform: "linux",
+    glibcVersion: "2.39",
+    webkitVersion: "2.52.6",
+    allowNewerGlibc: true,
+  });
+  assert.equal(allowed.glibcVersion, "2.39");
 });

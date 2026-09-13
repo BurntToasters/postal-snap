@@ -326,13 +326,38 @@ pub(crate) fn validate_mime_resource_shape(raw: &[u8]) -> Result<(), String> {
     if raw.len() > MAX_MESSAGE_BYTES {
         return Err("This message is too large to process safely.".into());
     }
-    let multipart_count = raw
-        .windows(b"multipart/".len())
-        .filter(|window| window.eq_ignore_ascii_case(b"multipart/"))
-        .take(MAX_MULTIPART_DECLARATIONS + 1)
-        .count();
-    if multipart_count > MAX_MULTIPART_DECLARATIONS {
-        return Err("This message has too many nested MIME containers.".into());
+    // Count multipart declarations only inside header blocks (message start or
+    // just after a boundary line). Plain text that quotes MIME source, digests,
+    // and bug reports must not be rejected, while a genuinely deep tree still
+    // exceeds the cap before the parser recurses.
+    const CONTENT_TYPE: &[u8] = b"content-type:";
+    const MULTIPART: &[u8] = b"multipart/";
+    let mut declarations = 0usize;
+    let mut in_headers = true;
+    for line in raw.split(|byte| *byte == b'\n') {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        if in_headers {
+            if line.is_empty() {
+                in_headers = false;
+                continue;
+            }
+            if line.len() < CONTENT_TYPE.len()
+                || !line[..CONTENT_TYPE.len()].eq_ignore_ascii_case(CONTENT_TYPE)
+            {
+                continue;
+            }
+            let value = line[CONTENT_TYPE.len()..].trim_ascii_start();
+            if value.len() >= MULTIPART.len()
+                && value[..MULTIPART.len()].eq_ignore_ascii_case(MULTIPART)
+            {
+                declarations += 1;
+                if declarations > MAX_MULTIPART_DECLARATIONS {
+                    return Err("This message has too many nested MIME containers.".into());
+                }
+            }
+        } else if line.starts_with(b"--") {
+            in_headers = true;
+        }
     }
     Ok(())
 }

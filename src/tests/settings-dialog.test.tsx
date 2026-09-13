@@ -28,6 +28,8 @@ vi.mock("../api", () => ({
   api: {
     saveSettings: vi.fn(),
     listAccounts: vi.fn(),
+    testAccount: vi.fn(),
+    testSavedAccount: vi.fn(),
     updateAccountPassword: vi.fn(),
     updateAccountSignature: vi.fn(),
     updateAccountAliases: vi.fn(),
@@ -777,7 +779,7 @@ describe("SettingsDialog component", () => {
 
   it("tests an account and removes the final account", async () => {
     const onClose = vi.fn();
-    vi.mocked(api.syncAccount).mockResolvedValue(undefined);
+    vi.mocked(api.testSavedAccount).mockResolvedValue(undefined);
     vi.mocked(api.removeAccount).mockResolvedValue({ cleanupPending: false });
     vi.mocked(api.listAccounts).mockResolvedValueOnce([]);
     render(<SettingsDialog initialTab="accounts" onClose={onClose} />);
@@ -786,7 +788,7 @@ describe("SettingsDialog component", () => {
       await screen.findByRole("button", { name: "Test connection" }),
     );
     expect(await screen.findByText(/Connected and in sync/)).toBeVisible();
-    expect(api.syncAccount).toHaveBeenCalledWith("account-1");
+    expect(api.testSavedAccount).toHaveBeenCalledWith("account-1");
 
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
     await waitFor(() =>
@@ -914,7 +916,9 @@ describe("SettingsDialog component", () => {
       enabled: true,
     };
     vi.mocked(api.listFilterRules).mockResolvedValue([rule]);
-    vi.mocked(api.syncAccount).mockRejectedValueOnce(new Error("test failed"));
+    vi.mocked(api.testSavedAccount).mockRejectedValueOnce(
+      new Error("test failed"),
+    );
     vi.mocked(api.discoverAccountAliases).mockRejectedValueOnce(
       new Error("detect failed"),
     );

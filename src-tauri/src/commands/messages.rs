@@ -10,22 +10,24 @@ use crate::{
 };
 
 #[tauri::command]
-pub fn list_messages(
+pub async fn list_messages(
     account_id: String,
     mailbox_id: i64,
     cursor: Option<MessageCursor>,
     limit: u32,
     state: State<'_, AppState>,
 ) -> CommandResult<MessagePage> {
-    let (owner, _) = state.db.mailbox(mailbox_id)?;
-    if owner != account_id {
-        return Err("Mailbox does not belong to this account.".into());
-    }
-    command_result(
-        state
-            .db
-            .list_messages(mailbox_id, cursor.as_ref(), limit.clamp(1, 200)),
-    )
+    let db = state.db.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let (owner, _) = db.mailbox(mailbox_id)?;
+        if owner != account_id {
+            return Err("Mailbox does not belong to this account.".to_string());
+        }
+        db.list_messages(mailbox_id, cursor.as_ref(), limit.clamp(1, 200))
+    })
+    .await
+    .map_err(|_| "Postal Snap could not list messages.".to_string())?;
+    command_result(result)
 }
 
 pub(crate) async fn ensure_message_content(
@@ -269,6 +271,7 @@ async fn move_message_inner(
     };
     let account = state.db.account(&account_id)?;
     let password = credentials::load(&account_id)?;
+    let remote_message_id = state.db.message_rfc_id(message_id).ok().flatten();
     let remote_result = mail::move_remote(
         &account,
         &password,
@@ -276,6 +279,10 @@ async fn move_message_inner(
         &destination,
         uid,
         operation.uid_validity,
+        mail::MoveOptions {
+            message_id: remote_message_id.as_deref(),
+            dedupe_existing: false,
+        },
     )
     .await;
     if remote_result.is_err() {
@@ -285,10 +292,10 @@ async fn move_message_inner(
             .queue_operation(&account_id, "move", &operation, Some(&dedupe_key))?;
         state.db.mark_pending_move(message_id, destination_id)?;
     } else {
-        // UIDs are scoped to a mailbox. Remove the old cached row, then fetch
-        // dest envelopes so archive/trash is not empty until the next IDLE.
-        state.db.mark_pending_move(message_id, destination_id)?;
-        state.db.remove_message(message_id)?;
+        // The remote move committed; local bookkeeping is best effort so a
+        // database hiccup cannot report a completed move as failed.
+        let _ = state.db.mark_pending_move(message_id, destination_id);
+        let _ = state.db.remove_message(message_id);
         let policy = state
             .settings
             .get()
@@ -339,7 +346,14 @@ async fn bulk_apply_flags(
             failed += ids.len();
             continue;
         };
-        if state.db.set_flags_bulk(&ids, is_read, is_starred).is_err() {
+        let db = state.db.clone();
+        let ids_for_update = ids.clone();
+        let local_update = tauri::async_runtime::spawn_blocking(move || {
+            db.set_flags_bulk(&ids_for_update, is_read, is_starred)
+        })
+        .await
+        .map_err(|_| "Postal Snap could not update messages.".to_string())?;
+        if local_update.is_err() {
             failed += ids.len();
             continue;
         }
@@ -522,34 +536,47 @@ pub async fn mark_mailbox_read(
     }
     let _guard = state.lock_account(&account_id).await?;
     let unread = state.db.unread_message_ids(mailbox_id)?;
-    let items: Vec<(i64, String, u32)> = {
-        let (_, name) = state.db.mailbox(mailbox_id)?;
-        unread
-            .into_iter()
-            .take(200)
-            .map(|(id, uid)| (id, name.clone(), uid))
-            .collect()
+    let (_, name) = state.db.mailbox(mailbox_id)?;
+    let mut outcome = BulkOutcome {
+        updated: 0,
+        queued: 0,
+        failed: 0,
     };
-    let outcome = bulk_apply_flags(&state, &account_id, &items, Some(true), None).await?;
+    for chunk in unread.chunks(200) {
+        let items: Vec<(i64, String, u32)> = chunk
+            .iter()
+            .map(|(id, uid)| (*id, name.clone(), *uid))
+            .collect();
+        let batch = bulk_apply_flags(&state, &account_id, &items, Some(true), None).await?;
+        outcome.updated += batch.updated;
+        outcome.queued += batch.queued;
+        outcome.failed += batch.failed;
+    }
     emit_message_change(&app, &account_id, None, "flags");
     emit_folder_counts(&app, &account_id);
     Ok(outcome)
 }
 
 #[tauri::command]
-pub fn search_cached_messages(
+pub async fn search_cached_messages(
     query: SearchQuery,
     state: State<'_, AppState>,
 ) -> CommandResult<Vec<MessageSummary>> {
-    if let Some(mailbox_id) = query.mailbox_id {
-        let (owner, _) = state.db.mailbox(mailbox_id)?;
-        if owner != query.account_id {
-            return Err("Mailbox does not belong to this account.".into());
+    let db = state.db.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        if let Some(mailbox_id) = query.mailbox_id {
+            let (owner, _) = db.mailbox(mailbox_id)?;
+            if owner != query.account_id {
+                return Err("Mailbox does not belong to this account.".to_string());
+            }
+        } else {
+            db.account(&query.account_id)?;
         }
-    } else {
-        state.db.account(&query.account_id)?;
-    }
-    command_result(state.db.search(&query))
+        db.search(&query)
+    })
+    .await
+    .map_err(|_| "Postal Snap could not search the local cache.".to_string())?;
+    command_result(result)
 }
 
 #[tauri::command]

@@ -224,7 +224,7 @@ impl Database {
         let mut conn = self.conn()?;
         let tx = conn.transaction().map_err(db_error)?;
         tx.execute(
-            "DELETE FROM message_fts WHERE message_id IN (SELECT id FROM messages WHERE account_id=?1)",
+            "DELETE FROM message_fts WHERE rowid IN (SELECT id FROM messages WHERE account_id=?1)",
             [id],
         )
         .map_err(db_error)?;
@@ -242,9 +242,11 @@ impl Database {
     }
 
     pub fn account_count(&self) -> Result<usize, String> {
-        self.conn()?
+        let count: i64 = self
+            .conn()?
             .query_row("SELECT COUNT(*) FROM accounts", [], |row| row.get(0))
-            .map_err(db_error)
+            .map_err(db_error)?;
+        Ok(count.max(0) as usize)
     }
 
     pub fn set_account_state(

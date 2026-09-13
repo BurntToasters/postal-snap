@@ -87,7 +87,7 @@ pub struct RemoteDraftSnapshot {
 
 pub use folders::{
     create_folder, delete_folder, empty_folder, move_remote, move_remote_uids, rename_folder,
-    set_remote_flags, set_remote_uid_flags,
+    set_remote_flags, set_remote_uid_flags, MoveOptions,
 };
 pub use icloud::discover_icloud_aliases;
 pub use remote_drafts::{
@@ -274,8 +274,28 @@ mod tests {
 
     #[test]
     fn rejects_excessive_multipart_nesting_before_parsing() {
-        let raw = "multipart/".repeat(MAX_MULTIPART_DECLARATIONS + 1);
+        let mut raw = String::from("Content-Type: multipart/mixed; boundary=b0\r\n\r\n");
+        for index in 0..=MAX_MULTIPART_DECLARATIONS {
+            raw.push_str(&format!(
+                "--b{index}\r\nContent-Type: multipart/mixed; boundary=b{}\r\n\r\n",
+                index + 1
+            ));
+        }
         assert!(validate_mime_resource_shape(raw.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn accepts_mime_source_quoted_in_body_text() {
+        let body = "multipart/ encountered in quoted source or a digest. ".repeat(200);
+        let raw = format!("From: jane@example.com\r\nSubject: digest\r\n\r\n{body}");
+        assert!(validate_mime_resource_shape(raw.as_bytes()).is_ok());
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn mime_shape_scan_never_panics(input in proptest::collection::vec(0u8..=255, 0..4096)) {
+            let _ = validate_mime_resource_shape(&input);
+        }
     }
 
     #[test]
@@ -324,12 +344,22 @@ mod tests {
             set_remote_flags(&account, "secret", "INBOX", 1, None, Some(true), None)
                 .await
                 .unwrap_err()
+                .message
                 .contains("identity is unavailable")
         );
-        assert!(move_remote(&account, "secret", "INBOX", "Archive", 1, None)
-            .await
-            .unwrap_err()
-            .contains("identity is unavailable"));
+        assert!(move_remote(
+            &account,
+            "secret",
+            "INBOX",
+            "Archive",
+            1,
+            None,
+            MoveOptions::default(),
+        )
+        .await
+        .unwrap_err()
+        .message
+        .contains("identity is unavailable"));
         assert!(empty_folder(&account, "secret", "Trash", None, &[])
             .await
             .unwrap_err()
@@ -679,6 +709,7 @@ mod tests {
             summary.uid,
             db.mailbox_uid_validity(&account.summary.id, "INBOX")
                 .unwrap(),
+            MoveOptions::default(),
         )
         .await
         .unwrap();

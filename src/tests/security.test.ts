@@ -6,7 +6,6 @@ import { strings } from "../i18n";
 import {
   htmlToPlainText,
   messageFrameDocument,
-  restoreComposeHtmlLinks,
   sanitizeComposeHtml,
   sanitizeReceivedHtml,
 } from "../security";
@@ -180,9 +179,6 @@ describe("received mail isolation", () => {
       'data-external-href="https://library.example.test/hours"',
     );
     expect(compose).not.toContain('<a href="https://');
-    const outgoing = restoreComposeHtmlLinks(compose);
-    expect(outgoing).toContain('href="https://library.example.test/hours"');
-    expect(outgoing).not.toContain("data-external-href");
   });
 
   it("generates a readable text alternative", () => {

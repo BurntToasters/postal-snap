@@ -63,18 +63,21 @@
       "filters/LICENSE-CC0-1.0.txt": "LICENSE-CC0-1.0.txt"
     },
     "category": "Productivity",
+    "publisher": "Postal Snap",
+    "homepage": "https://github.com/BurntToasters/postal-snap",
     "shortDescription": "Easy, secure email without clutter.",
     "longDescription": "Postal Snap is a calm, accessible desktop email client with secure IMAP and SMTP support.",
     "windows": {
       "digestAlgorithm": "sha256",
-      "signCommand": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ../scripts/windows-artifact-sign.ps1 -FilePath %1",
+      "signCommand": "powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ../scripts/windows-artifact-sign.ps1 -FilePath %1",
       "webviewInstallMode": {
         "type": "embedBootstrapper",
         "silent": true
       },
       "nsis": {
         "installMode": "currentUser",
-        "installerIcon": "icons/icon.ico"
+        "installerIcon": "icons/icon.ico",
+        "installerHooks": "windows/installer-hooks.nsh"
       }
     },
     "macOS": {

@@ -24,7 +24,6 @@ export const reader = {
   from: "From:",
   to: "To:",
   cc: "Cc:",
-  bcc: "Bcc:",
   replyTo: "Reply-To:",
   subject: "Subject:",
   date: "Date:",

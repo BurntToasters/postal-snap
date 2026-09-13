@@ -57,6 +57,7 @@ vi.mock("../api", () => ({
     onMessageChanged: vi.fn(),
     onDraftSyncChanged: vi.fn().mockResolvedValue(() => undefined),
     onOutboxChanged: vi.fn().mockResolvedValue(() => undefined),
+    onOfflineOperationsDropped: vi.fn().mockResolvedValue(() => undefined),
     showNativeConfirm: vi.fn().mockResolvedValue(true),
   },
 }));
@@ -697,7 +698,7 @@ describe("mail shell", () => {
     });
     renderShell();
 
-    expect(await screen.findByText(strings.mail.messageSent)).toBeVisible();
+    expect(await screen.findByText(strings.composer.messageHeld)).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Undo" }));
     await waitFor(() =>
       expect(api.restoreOutbox).toHaveBeenCalledWith("outbox-2", "account-1"),

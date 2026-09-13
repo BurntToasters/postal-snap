@@ -83,7 +83,33 @@ html[data-platform="windows"] .global-window-caption-controls {
 }
 
 html[data-platform="macos"] .app-toolbar {
+  padding-left: 12px;
+}
+
+/* Traffic lights float over the sidebar, which starts the window's first row. */
+html[data-platform="macos"] .mail-shell.sidebar-collapsed .app-toolbar {
   padding-left: 84px;
+}
+
+html:is([data-platform="macos"], [data-platform="windows"]) .folder-pane {
+  padding-top: 0;
+}
+
+html:is([data-platform="macos"], [data-platform="windows"])
+  .sidebar-titlebar-drag {
+  display: block;
+  height: var(--native-chrome-height);
+  flex: 0 0 auto;
+  margin: 0 -10px 6px;
+}
+
+html[data-platform="macos"][data-window-fullscreen="true"] .folder-pane {
+  padding-top: 14px;
+}
+
+html[data-platform="macos"][data-window-fullscreen="true"]
+  .sidebar-titlebar-drag {
+  display: none;
 }
 
 html[data-platform="windows"] .app-toolbar {

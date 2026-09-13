@@ -47,7 +47,9 @@ export function UpdatesTab({
           <strong>
             {distribution?.updatesManagedBy === "store"
               ? strings.settings.storeUpdateTitle
-              : strings.settings.directUpdateTitle}
+              : distribution?.updatesManagedBy === "githubDownload"
+                ? strings.settings.githubUpdateTitle
+                : strings.settings.directUpdateTitle}
           </strong>
           <small>
             {distribution

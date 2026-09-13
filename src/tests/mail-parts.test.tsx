@@ -206,7 +206,7 @@ describe("sent notice", () => {
       lastSent: { outboxId: "third", accountId: "account-1", scheduled: false },
     });
     rerender(<SentNoticeToast />);
-    vi.advanceTimersByTime(15_000);
+    vi.advanceTimersByTime(17_000);
     expect(useAppStore.getState().lastSent).toBeUndefined();
   });
 });

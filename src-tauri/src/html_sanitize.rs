@@ -706,6 +706,20 @@ fn parse_attrs(inside: &str) -> Vec<(String, Option<String>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    proptest::proptest! {
+        #[test]
+        fn sanitized_output_never_keeps_active_syntax(input in ".{0,2000}") {
+            let result = sanitize_received_html(&input);
+            let lowered = result.html.to_ascii_lowercase();
+            prop_assert!(!lowered.contains("<script"));
+            prop_assert!(!lowered.contains("javascript:"));
+            prop_assert!(!lowered.contains("onerror="));
+            prop_assert!(!lowered.contains("onclick="));
+            prop_assert!(!lowered.contains("<iframe"));
+        }
+    }
 
     #[test]
     fn strips_active_content_and_rewrites_images() {

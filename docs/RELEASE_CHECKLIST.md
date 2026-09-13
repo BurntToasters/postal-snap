@@ -54,11 +54,16 @@ Required for GitHub 0.1.x. The live iCloud smoke is a signing-host gate; do not 
 
 Windows creates the GitHub draft. Mac and Linux wait for that draft and never create a second one. Run `release:linux` on the x64 signing host (required). An arm64 Linux host is optional. Each continue path uploads only that host's artifacts; do not run complete-set verification until the required architectures are present.
 
-- [ ] Windows x64 and arm64 NSIS installers have valid Azure Artifact Signing Authenticode signatures and updater signatures. Prove `Get-AuthenticodeSignature` on the installed `Postal Snap.exe`, not only setup.exe. Pass that path as `POSTAL_SNAP_INSTALLED_EXE` when running `scripts/verify-windows-authenticode.ps1`. Run `npm run setup:win:artifact-signing` once as Administrator on the VM before `release:win`.
+- [ ] Windows x64 and arm64 NSIS installers have valid Azure Artifact Signing Authenticode signatures (publisher CN plus the Artifact Signing Public Trust EKU `1.3.6.1.4.1.311.97.1.0`) and updater signatures. Prove `Get-AuthenticodeSignature` on the installed `postal-snap.exe`, not only setup.exe. Pass that path as `POSTAL_SNAP_INSTALLED_EXE` when running `scripts/verify-windows-authenticode.ps1`. On Windows, `npm run release:verify:local` runs the same verifier against the release set. Run `npm run setup:win:artifact-signing` once as Administrator on the VM before `release:win`.
+- [ ] A machine upgraded from a 0.1.8 roaming-profile install migrates the database, WAL files, and draft attachments to the local (non-roaming) app data directory and preserves drafts, outbox, and attachments. Keyring entries do not roam with the profile.
 - [ ] `npm run validate:macos-entitlements` passes before compilation; the universal macOS app passes `codesign` with Hardened Runtime and Developer ID Application, `lipo -archs` shows x86_64 and arm64, local app-ticket validation, and Gatekeeper; the DMG is notarized, stapled, and `spctl --assess --type install`; and the ZIP contains that same notarized, stapled app.
-- [ ] Linux x64 AppImage launches and `register_all` can claim mailto on a direct/AppImage host; Flatpak bundle passes sandbox smoke tests, including notifications via `org.freedesktop.Notifications`. Confirm the host-linked ELF starts inside bwrap. arm64 Linux is optional until a signing host ships it.
-- [ ] `mailto:` opens a prefilled Postal Snap composer on every platform. AppImage registration is runtime-only; do not register inside Flatpak.
-- [ ] A machine without WebView2, or with go.microsoft.com blocked, still gets a usable first-run installer (embedded bootstrapper). Do not ship `webviewInstallMode: skip`.
+- [ ] Linux x64 AppImage launches and `register_all` can claim mailto on a direct/AppImage host; Flatpak bundle passes sandbox smoke tests. Run `npm run preflight:linux` on the signing host (glibc at or below 2.36, `pkg-config webkit2gtk-4.1` at or above 2.52.6) and confirm the host-linked ELF starts inside bwrap. arm64 Linux is optional until a signing host ships it.
+- [ ] AppImage smoke on a clean host without FUSE 2: install `libfuse2`/`libfuse2t64` or run with `APPIMAGE_EXTRACT_AND_RUN=1`, and record which path worked. Also record host GStreamer availability for received-mail audio/video.
+- [ ] Flatpak portal smoke tests, one per flow: attachment save through the FileChooser portal, external http(s) link through the OpenURI portal, credential store/retrieval through `org.freedesktop.secrets` (gnome-keyring and KWallet), notification through `org.freedesktop.Notifications`, `mailto:` handling from the installed desktop entry, and native Wayland fractional scaling/HiDPI, clipboard, and IME (ibus/fcitx5) with CJK fallback rendering.
+- [ ] `npm run flatpak:bundle` runs `flatpak-builder-lint --exceptions manifest` and `appstreamcli validate` with no errors, and `org.flatpak.Builder` is installed via `npm run setup:flatpak`.
+- [ ] `mailto:` opens a prefilled Postal Snap composer on every platform. AppImage registration is runtime-only and needs host `xdg-utils`/`desktop-file-utils`; do not register inside Flatpak.
+- [ ] A machine without WebView2 gets a usable first-run installer; the embedded bootstrapper still downloads the Evergreen WebView2 runtime from Microsoft, so network access to `go.microsoft.com` is required. Do not ship `webviewInstallMode: skip`. Test `offlineInstaller` before claiming offline installs.
+- [ ] Download the Windows installer in a browser on a clean VM with SmartScreen enabled and record the SmartScreen state and any warning the user sees. Artifact Signing provides base reputation only and is not an EV certificate.
 - [ ] Direct builds update from the correct signed stable or beta GitHub manifest.
 - [ ] Install, upgrade, and uninstall preserve or remove user data exactly as documented.
 
@@ -71,6 +76,7 @@ Windows creates the GitHub draft. Mac and Linux wait for that draft and never cr
 
 ## Publish
 
+- [ ] The release commit is tagged with a signed annotated tag (`git tag -s`) and `git tag -v` verifies the signer before publishing.
 - [ ] Release session tag and remote tag resolve to the audited commit.
 - [ ] `GPG_KEY_ID` is the signer's full fingerprint; local and draft GPG verification compares it against `VALIDSIG` and rejects any other key.
 - [ ] Normalized artifacts, SHA-256 files, GPG signatures, updater payloads, and embedded updater signatures all verify.

@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod app_nap;
 mod commands;
 mod content_blocking;
 mod credentials;
@@ -12,6 +13,7 @@ mod models;
 mod oauth;
 mod security;
 mod settings;
+mod storage;
 mod threat_blocking;
 mod window_fx;
 mod window_snap;
@@ -65,8 +67,18 @@ fn main() {
                 use std::os::unix::fs::PermissionsExt;
                 std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(0o700))?;
             }
-            let database_path = data_dir.join("postal-snap.sqlite3");
-            let attachment_dir = data_dir.join("draft-attachments");
+            // Windows keeps the mail database in the local (non-roaming)
+            // profile; migrate any legacy roaming database first.
+            let mail_dir = storage::mail_data_dir(app.handle())?;
+            storage::migrate_legacy_mail_data(&data_dir, &mail_dir);
+            std::fs::create_dir_all(&mail_dir)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&mail_dir, std::fs::Permissions::from_mode(0o700))?;
+            }
+            let database_path = mail_dir.join("postal-snap.sqlite3");
+            let attachment_dir = mail_dir.join("draft-attachments");
             std::fs::create_dir_all(&attachment_dir)?;
             let orphan_cleanup_dir = attachment_dir.clone();
             let database = db::Database::open(&database_path).map_err(std::io::Error::other)?;
@@ -78,6 +90,15 @@ fn main() {
             let settings = settings::SettingsStore::load(data_dir.join("settings.json"), &database)
                 .map_err(std::io::Error::other)?;
             app.manage(AppState::new(database, settings, attachment_dir));
+            if std::env::args().any(|argument| argument == "--cleanup-credentials") {
+                if let Ok(accounts) = app.state::<AppState>().db.list_accounts() {
+                    for account in accounts {
+                        let _ = credentials::remove(&account.id);
+                    }
+                }
+                app.handle().exit(0);
+                return Ok(());
+            }
             tauri::async_runtime::spawn(content_blocking::warmup());
             tauri::async_runtime::spawn(threat_blocking::warmup());
 
@@ -159,6 +180,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::accounts::list_accounts,
             commands::accounts::test_account,
+            commands::accounts::test_saved_account,
             commands::accounts::update_account_password,
             commands::accounts::add_account,
             commands::accounts::remove_account,
@@ -233,6 +255,7 @@ fn main() {
             commands::settings_system::relaunch_app,
             window_fx::set_workspace_window_fx,
             window_fx::supports_workspace_window_fx,
+            window_fx::accessibility_reduce_transparency,
             window_snap::set_snap_overlay_bounds,
         ])
         .build(tauri::generate_context!())
@@ -495,7 +518,7 @@ pub fn update_mail_menu_or_warn<R: Runtime>(app: &tauri::AppHandle<R>, enabled: 
 
 fn allowed_webview_navigation(url: &url::Url) -> bool {
     match url.scheme() {
-        "tauri" | "ipc" | "asset" | "data" | "blob" => true,
+        "tauri" | "ipc" => true,
         "http" | "https" => matches!(
             url.host_str(),
             Some("localhost" | "127.0.0.1" | "tauri.localhost" | "ipc.localhost")

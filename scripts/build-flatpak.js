@@ -2,11 +2,12 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ensureReleaseDir } from "./lib/json.js";
 import { process, root } from "./lib/paths.js";
-import { run } from "./lib/spawn.js";
+import { run, output } from "./lib/spawn.js";
 
-// The binary is compiled on the host, then installed into GNOME Platform.
-// Confirm it starts inside bwrap on the signing host; an SDK rebuild is
-// the fallback if host glibc/WebKit symbols do not match runtime 49.
+// The binary is compiled on the host, then installed into the GNOME Platform
+// runtime selected by packaging/flatpak/run.rosie.snap.yml. Confirm it starts
+// inside bwrap on the signing host; an SDK rebuild is the fallback if host
+// glibc/WebKit symbols do not match the runtime.
 
 const arch = process.argv.includes("--arm64")
   ? "aarch64"
@@ -44,6 +45,8 @@ if (!branch) {
   );
 }
 await writeFile(generatedManifest, manifest);
+await runFlatpakBuilderLint(generatedManifest);
+await validateAppStreamMetadata();
 await mkdir(join(root, "flatpak-build"), { recursive: true });
 try {
   await run("flatpak-builder", [
@@ -67,4 +70,41 @@ try {
   ]);
 } finally {
   await rm(generatedManifest, { force: true });
+}
+
+async function runFlatpakBuilderLint(manifestPath) {
+  try {
+    await run("flatpak", [
+      "run",
+      "--command=flatpak-builder-lint",
+      "org.flatpak.Builder",
+      "--exceptions",
+      "manifest",
+      manifestPath,
+    ]);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      throw new Error(
+        "flatpak is required for the Flatpak release gate. Run `npm run setup:flatpak` on a Linux build host.",
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+}
+
+async function validateAppStreamMetadata() {
+  const available = await output("appstreamcli", ["--version"]).catch(
+    () => null,
+  );
+  if (!available) {
+    console.warn(
+      "[build-flatpak] appstreamcli not found; skipping metainfo validation.",
+    );
+    return;
+  }
+  await run("appstreamcli", [
+    "validate",
+    join(root, "packaging/flatpak/run.rosie.snap.metainfo.xml"),
+  ]);
 }
