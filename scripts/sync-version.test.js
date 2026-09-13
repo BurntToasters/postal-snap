@@ -9,6 +9,7 @@ import {
   replaceCargoLockPackageVersion,
   replaceChangelogDownloadVersions,
   replaceMetainfoReleaseVersion,
+  utcIsoDate,
   replacePackageLockVersion,
   replaceReleasingTagExamples,
   replaceCargoTomlVersion,
@@ -80,19 +81,41 @@ test("replaceMetainfoReleaseVersion updates only the newest AppStream release", 
     <release version="0.1.7" />
   </releases>`;
   assert.equal(
-    replaceMetainfoReleaseVersion(xml, "0.1.9"),
+    replaceMetainfoReleaseVersion(xml, "0.1.9", "2026-09-13"),
     `<releases>
-    <release version="0.1.9" date="2026-08-01" />
+    <release version="0.1.9" date="2026-09-13" />
     <release version="0.1.7" />
   </releases>`,
   );
+  assert.match(
+    replaceMetainfoReleaseVersion(xml, "0.1.8", "2026-09-13"),
+    /version="0\.1\.8" date="2026-08-01"/,
+  );
+  assert.equal(
+    replaceMetainfoReleaseVersion(
+      `<releases>\n    <release version="0.1.9" />\n  </releases>`,
+      "0.1.9",
+      "2026-09-13",
+    ),
+    `<releases>\n    <release version="0.1.9" date="2026-09-13" />\n  </releases>`,
+  );
+  assert.equal(utcIsoDate(new Date("2026-09-13T23:59:59.000Z")), "2026-09-13");
   assert.throws(
-    () => replaceMetainfoReleaseVersion("<component />", "0.1.9"),
+    () => replaceMetainfoReleaseVersion("<component />", "0.1.9", "2026-09-13"),
     /missing a <releases> block/,
   );
   assert.throws(
-    () => replaceMetainfoReleaseVersion("<releases></releases>", "0.1.9"),
+    () =>
+      replaceMetainfoReleaseVersion(
+        "<releases></releases>",
+        "0.1.9",
+        "2026-09-13",
+      ),
     /missing a <release version=/,
+  );
+  assert.throws(
+    () => replaceMetainfoReleaseVersion(xml, "0.1.9"),
+    /YYYY-MM-DD/,
   );
 });
 
@@ -152,13 +175,21 @@ test("committed package versions stay aligned for locked cargo commands", async 
   assert.equal(packageLock.packages[""].version, pkg.version);
   assert.equal(cargoVersion, pkg.version);
   assert.equal(lockVersion, pkg.version);
-  assert.match(metainfo, new RegExp(`<release version="${pkg.version}"`));
+  assert.match(
+    metainfo,
+    new RegExp(`<release version="${pkg.version}" date="\\d{4}-\\d{2}-\\d{2}"`),
+  );
+  assert.match(metainfo, /<developer id="run\.rosie">/);
+  assert.match(metainfo, /<name>BurntToasters<\/name>/);
   assert.match(
     changelogHeader,
     new RegExp(`/releases/download/v${pkg.version}/`),
   );
   assert.match(releasing, new RegExp(`git tag -s v${pkg.version} `));
-  assert.equal(replaceMetainfoReleaseVersion(metainfo, pkg.version), metainfo);
+  assert.equal(
+    replaceMetainfoReleaseVersion(metainfo, pkg.version, "2099-01-01"),
+    metainfo,
+  );
   assert.equal(
     replaceChangelogDownloadVersions(changelog, pkg.version),
     changelog,
