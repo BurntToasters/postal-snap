@@ -65,6 +65,45 @@
   border-top: 1px solid var(--border);
 }
 
+.license-credits-layer {
+  z-index: 40;
+}
+
+.license-credits-dialog {
+  width: min(780px, 94vw);
+}
+
+.license-credits-body {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  padding: 18px;
+  display: grid;
+  gap: 22px;
+}
+
+.license-credits-body p {
+  margin: 0;
+}
+
+.license-credits-body h3 {
+  margin: 0 0 8px;
+  font-size: 1rem;
+}
+
+.license-credits-body pre {
+  margin: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  line-height: 1.55;
+}
+
 .modal-layer {
   position: fixed;
   z-index: 30;

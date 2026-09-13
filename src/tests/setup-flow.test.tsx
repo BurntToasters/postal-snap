@@ -46,6 +46,8 @@ describe("first-run setup flow", () => {
   it("walks Welcome -> Appearance -> Comfort -> Account in order", async () => {
     render(<SetupFlow onComplete={vi.fn()} startupNotice={null} />);
     expect(screen.getByText(/Welcome to Postal Snap/i)).toBeVisible();
+    expect(document.querySelector(".setup-brand svg")).toBeNull();
+    expect(document.querySelector(".setup-brand img.app-mark")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
     expect(screen.getByText(/Choose how mail looks/i)).toHaveFocus();
     fireEvent.click(screen.getByRole("button", { name: /Continue/i }));

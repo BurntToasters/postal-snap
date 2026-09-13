@@ -116,6 +116,8 @@ describe("MessageReader", () => {
     useAppStore.setState({ selectedMessage: undefined });
     const { rerender } = render(<MessageReader />);
     expect(screen.getByText(strings.mail.noMessage)).toBeVisible();
+    expect(document.querySelector(".empty-reader img.app-mark")).toBeVisible();
+    expect(document.querySelector(".empty-reader svg")).toBeNull();
     useAppStore.setState({
       settings: { ...defaultSettings, readingPane: "hidden" },
     });

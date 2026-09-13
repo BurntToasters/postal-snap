@@ -7,6 +7,7 @@ import {
   useState,
 } from "react";
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
+import { AppMark } from "./components/AppMark";
 import { WindowChrome } from "./components/WindowChrome";
 import {
   isPermissionGranted,
@@ -24,6 +25,7 @@ import { applySettings } from "./settings";
 import {
   checkUpdateInteractive,
   runUpdateSingleFlight,
+  startDeferredUpdateOnQuit,
   startPeriodicUpdateCheck,
 } from "./update";
 
@@ -106,6 +108,7 @@ export default function App() {
         void runUpdateSingleFlight().catch(() => undefined);
       });
     const cancelPeriodicCheck = startPeriodicUpdateCheck();
+    const cancelQuitUpdate = startDeferredUpdateOnQuit();
     let active = true;
     const unsubscribers: Array<() => void> = [];
     void api.onSyncState(setSync).then((fn) => {
@@ -150,6 +153,7 @@ export default function App() {
     return () => {
       active = false;
       cancelPeriodicCheck();
+      cancelQuitUpdate();
       unsubscribers.forEach((fn) => fn());
     };
   }, [loadAccounts, openComposer, openSettings, setError, setSync]);
@@ -219,9 +223,7 @@ export default function App() {
   if (!inTauri()) {
     return (
       <main className="preview-notice">
-        <div className="brand-mark" aria-hidden="true">
-          ✉
-        </div>
+        <AppMark size={64} className="brand-mark" />
         <h1>{strings.appName}</h1>
         <p>{strings.app.preview}</p>
       </main>
@@ -230,9 +232,7 @@ export default function App() {
 
   const mainContent = startupError ? (
     <main className="startup-recovery" role="alert">
-      <div className="brand-mark" aria-hidden="true">
-        ✉
-      </div>
+      <AppMark size={64} className="brand-mark" />
       <h1>{strings.app.startupRecoveryTitle}</h1>
       <p>{startupError}</p>
       <button

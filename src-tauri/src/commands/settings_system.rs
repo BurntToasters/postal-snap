@@ -1,8 +1,10 @@
-use tauri::{AppHandle, State};
+use std::path::Path;
+
+use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 use super::{command_result, refresh_mail_menu, AppState, CommandResult};
-use crate::models::{AppSettings, CacheUsage, DistributionChannel};
+use crate::models::{AppSettings, CacheUsage, DistributionChannel, LicenseCredit};
 
 #[tauri::command(async)]
 pub fn get_settings(state: State<'_, AppState>) -> CommandResult<AppSettings> {
@@ -181,4 +183,106 @@ pub async fn show_native_message(
 #[tauri::command]
 pub fn relaunch_app(app: AppHandle) -> CommandResult<()> {
     app.restart();
+}
+
+const MAX_LICENSE_FILE_BYTES: usize = 1_048_576;
+const LICENSE_CREDIT_FILES: &[(&str, &str, &str)] = &[
+    ("mpl", "Mozilla Public License 2.0", "LICENSE"),
+    ("npm", "npm dependencies", "THIRD_PARTY_NOTICES.npm.txt"),
+    ("cargo", "Rust crates", "THIRD_PARTY_NOTICES.cargo.txt"),
+    (
+        "cc-by-sa",
+        "EasyList / EasyPrivacy (CC BY-SA 3.0)",
+        "LICENSE-CC-BY-SA-3.0.txt",
+    ),
+    (
+        "cc0",
+        "EasyList / EasyPrivacy / TweetFeed (CC0)",
+        "LICENSE-CC0-1.0.txt",
+    ),
+];
+
+fn read_named_license_file(dir: &Path, filename: &str) -> Result<String, String> {
+    if filename.is_empty()
+        || filename.contains('/')
+        || filename.contains('\\')
+        || filename.contains("..")
+    {
+        return Err("Could not read license credits.".into());
+    }
+    let path = dir.join(filename);
+    if path.file_name().and_then(|name| name.to_str()) != Some(filename) {
+        return Err("Could not read license credits.".into());
+    }
+    let bytes = std::fs::read(&path).map_err(|_| "Could not read license credits.".to_string())?;
+    if bytes.len() > MAX_LICENSE_FILE_BYTES {
+        return Err("Could not read license credits.".into());
+    }
+    String::from_utf8(bytes).map_err(|_| "Could not read license credits.".to_string())
+}
+
+pub(crate) fn read_license_credits_from(dir: &Path) -> Result<Vec<LicenseCredit>, String> {
+    LICENSE_CREDIT_FILES
+        .iter()
+        .map(|(id, title, filename)| {
+            Ok(LicenseCredit {
+                id: (*id).into(),
+                title: (*title).into(),
+                body: read_named_license_file(dir, filename)?,
+            })
+        })
+        .collect()
+}
+
+#[tauri::command]
+pub fn get_license_credits(app: AppHandle) -> CommandResult<Vec<LicenseCredit>> {
+    let dir = app
+        .path()
+        .resource_dir()
+        .map_err(|_| "Could not read license credits.".to_string())?;
+    command_result(read_license_credits_from(&dir))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{read_license_credits_from, LICENSE_CREDIT_FILES, MAX_LICENSE_FILE_BYTES};
+    use std::fs;
+
+    #[test]
+    fn reads_allowlisted_license_files_in_order() {
+        let directory = tempfile::tempdir().unwrap();
+        for (id, _, filename) in LICENSE_CREDIT_FILES {
+            fs::write(directory.path().join(filename), format!("{id} body")).unwrap();
+        }
+        fs::write(directory.path().join("secret.txt"), "ignore").unwrap();
+        let credits = read_license_credits_from(directory.path()).unwrap();
+        assert_eq!(credits.len(), LICENSE_CREDIT_FILES.len());
+        assert_eq!(credits[0].id, "mpl");
+        assert_eq!(credits[0].title, "Mozilla Public License 2.0");
+        assert_eq!(credits[0].body, "mpl body");
+        assert_eq!(credits[1].id, "npm");
+        assert!(!credits.iter().any(|credit| credit.body.contains("ignore")));
+    }
+
+    #[test]
+    fn fails_closed_when_a_license_file_is_missing() {
+        let directory = tempfile::tempdir().unwrap();
+        let error = read_license_credits_from(directory.path()).unwrap_err();
+        assert_eq!(error, "Could not read license credits.");
+    }
+
+    #[test]
+    fn fails_closed_when_a_license_file_is_too_large() {
+        let directory = tempfile::tempdir().unwrap();
+        for (_, _, filename) in LICENSE_CREDIT_FILES {
+            fs::write(directory.path().join(filename), "ok").unwrap();
+        }
+        fs::write(
+            directory.path().join("LICENSE"),
+            vec![b'x'; MAX_LICENSE_FILE_BYTES + 1],
+        )
+        .unwrap();
+        let error = read_license_credits_from(directory.path()).unwrap_err();
+        assert_eq!(error, "Could not read license credits.");
+    }
 }

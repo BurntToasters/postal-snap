@@ -306,6 +306,7 @@ describe("settings IPC serialization", () => {
       ["get_cache_usage", () => api.cacheUsage()],
       ["clear_downloaded_mail", () => api.clearCache()],
       ["get_distribution_channel", () => api.distribution()],
+      ["get_license_credits", () => api.getLicenseCredits()],
       ["discover_account_aliases", () => api.discoverAccountAliases("acc")],
       [
         "update_account_aliases",
