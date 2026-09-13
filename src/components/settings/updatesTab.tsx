@@ -1,8 +1,8 @@
 import { DownloadCloud } from "lucide-react";
-import { api } from "../../api";
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
 import type { DistributionChannel } from "../../types";
+import { applyPendingUpdate } from "../../update";
 import { editionName } from "./helpers";
 import { SettingsPanel } from "./primitives";
 
@@ -34,7 +34,7 @@ export function UpdatesTab({
             <button
               type="button"
               className="primary-button"
-              onClick={() => void api.relaunch()}
+              onClick={() => void applyPendingUpdate()}
             >
               {strings.settings.restartNow}
             </button>

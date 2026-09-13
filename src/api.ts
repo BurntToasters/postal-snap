@@ -22,6 +22,7 @@ import type {
   BulkOutcome,
   RecipientSuggestion,
   ExternalLinkCheck,
+  LicenseCredit,
   RemoteImageResult,
   MessageChangeEvent,
   MessagePage,
@@ -134,6 +135,7 @@ export type NativeCommand =
   | "get_cache_usage"
   | "clear_downloaded_mail"
   | "get_distribution_channel"
+  | "get_license_credits"
   | "discover_account_aliases"
   | "update_account_aliases"
   | "show_native_confirm"
@@ -377,6 +379,7 @@ export const api = {
   cacheUsage: () => call<CacheUsage>("get_cache_usage"),
   clearCache: () => call<void>("clear_downloaded_mail"),
   distribution: () => call<DistributionChannel>("get_distribution_channel"),
+  getLicenseCredits: () => call<LicenseCredit[]>("get_license_credits"),
   async onSyncState(handler: (state: SyncState) => void): Promise<UnlistenFn> {
     if (!inTauri()) return () => undefined;
     return listen<SyncState>("sync-state", ({ payload }) => handler(payload));

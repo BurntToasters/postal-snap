@@ -6,6 +6,7 @@ import { messageFrameDocument, sanitizeReceivedHtml } from "../security";
 import { useAppStore } from "../store";
 import type { Attachment, AttachmentPreview, MessageSummary } from "../types";
 import { useDialogFocus } from "./useDialogFocus";
+import { AppMark } from "./AppMark";
 import { AttachmentList } from "./reader/attachmentList";
 import { MessageBody } from "./reader/messageBody";
 import { MessageHeader } from "./reader/messageHeader";
@@ -910,9 +911,7 @@ export function MessageReader({
   if (!message)
     return (
       <section className="reader-pane empty-reader" id="reader-pane">
-        <div className="brand-watermark" aria-hidden="true">
-          ✉
-        </div>
+        <AppMark size={60} className="brand-watermark" />
         <p>{strings.mail.noMessage}</p>
       </section>
     );

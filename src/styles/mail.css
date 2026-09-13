@@ -199,10 +199,6 @@
   box-shadow: 0 1px 4px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
-.setup-brand > svg {
-  color: var(--accent);
-}
-
 .sidebar-toggle,
 .sidebar-mobile-header,
 .sidebar-scrim {

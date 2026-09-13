@@ -175,8 +175,12 @@ export const settings = {
   about: "About",
   aboutLead:
     "Postal Snap is free and open source under the Mozilla Public License 2.0.",
-  aboutSource: "Source code and license",
-  aboutLicense: "Mozilla Public License 2.0",
+  aboutSource: "Source code",
+  aboutLicense: "Licenses and credits",
+  aboutCreditsTitle: "Licenses and credits",
+  aboutCreditsLead:
+    "Postal Snap and the bundled third-party notices included with this copy.",
+  aboutCreditsError: "Postal Snap could not load the bundled license credits.",
   aboutFilters:
     "Remote-image checks use official EasyList and EasyPrivacy network rules (CC BY-SA 3.0 / CC0) and a local TweetFeed reported-address snapshot (CC0).",
   aboutVersion: (version: string) => `Version ${version}`,
@@ -197,7 +201,7 @@ export const settings = {
     "Account removed. Some downloaded draft files could not be cleaned up; you can remove them from Postal Snap’s data folder.",
   checkUpdates: "Check for updates",
   checking: "Checking…",
-  installing: (version: string) => `Installing ${version}…`,
+  installing: (version: string) => `Downloading ${version}…`,
   updateReadyCardTitle: "Update ready to install",
   updateReadyCardHelp: (version: string) =>
     `Postal Snap version ${version} has been downloaded and is ready to install.`,

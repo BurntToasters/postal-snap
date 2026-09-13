@@ -535,6 +535,14 @@ pub struct DistributionChannel {
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct LicenseCredit {
+    pub id: String,
+    pub title: String,
+    pub body: String,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct IpcError {
     pub code: String,
     pub message: String,
