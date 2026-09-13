@@ -7,7 +7,7 @@ import { compareVersions } from "./lib/versions.js";
 // Release AppImages must be built on the oldest supported base system so the
 // glibc floor stays low, and they bundle the build host's WebKitGTK. Both
 // baselines are release gates; see docs/RELEASING.md.
-export const LINUX_GLIBC_BASELINE = "2.36";
+export const LINUX_GLIBC_BASELINE = "2.39";
 export const LINUX_WEBKIT2GTK_FLOOR = "2.52.6";
 
 export function assertLinuxBuildBaseline({
@@ -24,7 +24,7 @@ export function assertLinuxBuildBaseline({
     !allowNewerGlibc
   ) {
     problems.push(
-      `host glibc ${glibcVersion} is newer than the ${LINUX_GLIBC_BASELINE} baseline (Ubuntu 22.04 / Debian 12). Build inside the pinned container image, or set POSTAL_SNAP_ALLOW_NEWER_GLIBC=1 for a deliberate newer-host build.`,
+      `host glibc ${glibcVersion} is newer than the ${LINUX_GLIBC_BASELINE} baseline (Ubuntu 24.04.4). Build inside the pinned container image, or set POSTAL_SNAP_ALLOW_NEWER_GLIBC=1 for a deliberate newer-host build.`,
     );
   }
   if (

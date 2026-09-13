@@ -324,7 +324,11 @@ test("flatpak build-bundle uses the stable branch without a lint-invalid manifes
   assert.match(script, /const branch = "stable";/);
   assert.match(script, /"run\.rosie\.snap",\s*branch/);
   assert.match(script, /org\.flatpak\.Builder\/\/stable/);
+  assert.match(script, /--command=\$\{flatpakBuilderCommand\}/);
+  assert.doesNotMatch(script, /run\("flatpak-builder"/);
   assert.match(setup, /org\.flatpak\.Builder\/\/stable/);
+  assert.match(setup, /--command=\$\{FLATPAK_BUILDER_COMMAND\}/);
+  assert.doesNotMatch(setup, /output\("flatpak-builder"/);
   assert.match(ci, /org\.flatpak\.Builder\/\/stable/);
   const metainfo = await readFile(
     join(root, "packaging/flatpak/run.rosie.snap.metainfo.xml"),
@@ -854,14 +858,20 @@ test("Linux release paths run the baseline and WebKit preflight", async () => {
   assert.deepEqual(assertLinuxBuildBaseline({ platform: "darwin" }), {
     skipped: true,
   });
+  const baseline = assertLinuxBuildBaseline({
+    platform: "linux",
+    glibcVersion: "2.39",
+    webkitVersion: "2.52.6",
+  });
+  assert.equal(baseline.glibcVersion, "2.39");
   assert.throws(
     () =>
       assertLinuxBuildBaseline({
         platform: "linux",
-        glibcVersion: "2.39",
+        glibcVersion: "2.40",
         webkitVersion: "2.52.6",
       }),
-    /glibc 2\.39 is newer than the 2\.36 baseline/,
+    /glibc 2\.40 is newer than the 2\.39 baseline/,
   );
   assert.throws(
     () =>
@@ -874,9 +884,9 @@ test("Linux release paths run the baseline and WebKit preflight", async () => {
   );
   const allowed = assertLinuxBuildBaseline({
     platform: "linux",
-    glibcVersion: "2.39",
+    glibcVersion: "2.40",
     webkitVersion: "2.52.6",
     allowNewerGlibc: true,
   });
-  assert.equal(allowed.glibcVersion, "2.39");
+  assert.equal(allowed.glibcVersion, "2.40");
 });
