@@ -285,6 +285,19 @@ export interface LicenseCredit {
   body: string;
 }
 
+export interface LicensePackage {
+  id: string;
+  licenses: string;
+  repository?: string | null;
+  licenseText?: string | null;
+  licenseTextStatus?: string | null;
+}
+
+export interface LicenseCredits {
+  notices: LicenseCredit[];
+  packages: LicensePackage[];
+}
+
 export interface OfflineOperationsDroppedEvent {
   accountId: string;
   count: number;
