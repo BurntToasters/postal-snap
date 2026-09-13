@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import { AboutTab } from "../components/settings/aboutTab";
@@ -47,24 +53,6 @@ describe("small settings tabs", () => {
     fireEvent.click(
       screen.getByRole("button", { name: strings.settings.aboutSource }),
     );
-    fireEvent.click(
-      screen.getByRole("button", { name: strings.settings.aboutLicense }),
-    );
-    expect(
-      await screen.findByRole("dialog", {
-        name: strings.settings.aboutCreditsTitle,
-      }),
-    ).toBeVisible();
-    expect(screen.getByText("MPL body text")).toBeVisible();
-    expect(screen.getByText("npm notice")).toBeVisible();
-    fireEvent.keyDown(document, { key: "Escape" });
-    await waitFor(() =>
-      expect(
-        screen.queryByRole("dialog", {
-          name: strings.settings.aboutCreditsTitle,
-        }),
-      ).not.toBeInTheDocument(),
-    );
     await waitFor(() => {
       expect(inspectExternalUrl.mock.calls).toEqual([
         ["https://github.com/BurntToasters/postal-snap"],
@@ -73,6 +61,22 @@ describe("small settings tabs", () => {
         ["https://github.com/BurntToasters/postal-snap", false],
       ]);
     });
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.settings.aboutLicense }),
+    );
+    const credits = await screen.findByRole("dialog", {
+      name: strings.settings.aboutCreditsTitle,
+    });
+    expect(credits).toBeVisible();
+    expect(screen.getByText("MPL body text")).toBeVisible();
+    expect(screen.getByText("npm notice")).toBeVisible();
+    const close = within(credits).getByRole("button", {
+      name: strings.common.close,
+    });
+    await waitFor(() => expect(close).toHaveFocus());
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(credits).not.toBeInTheDocument());
+    expect(inspectExternalUrl).toHaveBeenCalledTimes(1);
   });
 
   it("reports when bundled license credits cannot be loaded", async () => {
