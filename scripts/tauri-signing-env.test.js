@@ -265,7 +265,7 @@ test("envForChild removes release secrets the child does not consume", () => {
   assert.deepEqual(envForChild(env, []), { PATH: "/usr/bin" });
 });
 
-test("notarytool prefers the keychain profile and never passes the password in argv", () => {
+test("notarytool supports keychain, API key, and Apple ID credentials", () => {
   assert.equal(NOTARYTOOL_KEYCHAIN_PROFILE_ENV, "NOTARYTOOL_KEYCHAIN_PROFILE");
   assert.equal(
     resolveNotarytoolKeychainProfile({
@@ -308,18 +308,29 @@ test("notarytool prefers the keychain profile and never passes the password in a
     }),
     ["notarytool", "submit", "app.dmg", "--wait", "--keychain-profile", "prof"],
   );
-  assert.throws(
-    () =>
-      notarytoolSubmitArgs({
-        path: "app.dmg",
-        appleId: "person@example.com",
-        appleTeamId: "TEAMID",
-      }),
-    /does not support passing the app-specific password as an argument/,
+  assert.deepEqual(
+    notarytoolSubmitArgs({
+      path: "app.dmg",
+      appleId: "person@example.com",
+      applePassword: "app-specific-password",
+      appleTeamId: "TEAMID",
+    }),
+    [
+      "notarytool",
+      "submit",
+      "app.dmg",
+      "--wait",
+      "--apple-id",
+      "person@example.com",
+      "--password",
+      "app-specific-password",
+      "--team-id",
+      "TEAMID",
+    ],
   );
   assert.throws(
     () => notarytoolSubmitArgs({ path: "app.dmg" }),
-    /requires NOTARYTOOL_KEYCHAIN_PROFILE/,
+    /requires NOTARYTOOL_KEYCHAIN_PROFILE.*APPLE_ID\/APPLE_PASSWORD\/APPLE_TEAM_ID/,
   );
   assert.throws(() => notarytoolSubmitArgs({}), /artifact path/);
 });

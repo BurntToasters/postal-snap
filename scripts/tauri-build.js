@@ -127,12 +127,7 @@ if (requireMacosNotarization) {
     process.env.APPLE_TEAM_ID;
   if (!keychainProfile && !apiCredentials && !appleIdCredentials) {
     throw new Error(
-      "Set NOTARYTOOL_KEYCHAIN_PROFILE, or APPLE_API_KEY/APPLE_API_ISSUER/APPLE_API_KEY_PATH, for notarization.",
-    );
-  }
-  if (!keychainProfile && !apiCredentials && appleIdCredentials) {
-    throw new Error(
-      "APPLE_ID/APPLE_PASSWORD cannot notarize: notarytool does not accept the app-specific password as an argument. Run `xcrun notarytool store-credentials` once and set NOTARYTOOL_KEYCHAIN_PROFILE, or use an App Store Connect API key.",
+      "Set NOTARYTOOL_KEYCHAIN_PROFILE, APPLE_API_KEY/APPLE_API_ISSUER/APPLE_API_KEY_PATH, or APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID for notarization.",
     );
   }
 }
@@ -414,7 +409,7 @@ async function notarizeAppleArtifact(path) {
   );
   if (!keychainProfile && !hasApiKey && !hasAppleId) {
     throw new Error(
-      "DMG notarization requires NOTARYTOOL_KEYCHAIN_PROFILE or an App Store Connect API key.",
+      "DMG notarization requires NOTARYTOOL_KEYCHAIN_PROFILE, an App Store Connect API key, or APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID.",
     );
   }
   const args = notarytoolSubmitArgs({
@@ -424,6 +419,7 @@ async function notarizeAppleArtifact(path) {
     apiKeyId: process.env.APPLE_API_KEY,
     apiIssuer: process.env.APPLE_API_ISSUER,
     appleId: process.env.APPLE_ID,
+    applePassword: process.env.APPLE_PASSWORD,
     appleTeamId: process.env.APPLE_TEAM_ID,
   });
   console.log(`[tauri-build] Submitting ${path} to notarytool`);

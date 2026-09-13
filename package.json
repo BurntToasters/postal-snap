@@ -106,7 +106,7 @@
     "build:linux:x64": "npm run rust:target:linux:x64 && npm run sync-version && npm run licenses && npm run build:linux:x64:prepared",
     "build:linux:arm64": "npm run rust:target:linux:arm64 && npm run sync-version && npm run licenses && npm run build:linux:arm64:prepared",
     "build:linux": "npm run build:linux:x64 && npm run build:linux:arm64",
-    "preflight:linux": "node scripts/linux-preflight.js",
+    "preflight:linux": "node --env-file-if-exists=.env scripts/linux-preflight.js",
     "flatpak:bundle": "npm run preflight:linux && node scripts/build-flatpak.js",
     "flatpak:bundle:arm64": "npm run preflight:linux && node scripts/build-flatpak.js --arm64",
     "flatpak:clean": "node scripts/dist-tools.js clean-flatpak",
