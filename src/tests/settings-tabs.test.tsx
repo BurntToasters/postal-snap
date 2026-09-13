@@ -23,7 +23,7 @@ afterEach(() => {
 });
 
 describe("small settings tabs", () => {
-  it("opens project and license pages from About", () => {
+  it("opens source on GitHub and licenses in a local credits window", async () => {
     const inspectExternalUrl = vi
       .spyOn(api, "inspectExternalUrl")
       .mockImplementation(async (url) => ({
@@ -35,6 +35,14 @@ describe("small settings tabs", () => {
       .spyOn(api, "openExternalUrl")
       .mockResolvedValue(undefined);
     vi.spyOn(api, "showNativeConfirm").mockResolvedValue(true);
+    vi.spyOn(api, "getLicenseCredits").mockResolvedValue([
+      {
+        id: "mpl",
+        title: "Mozilla Public License 2.0",
+        body: "MPL body text",
+      },
+      { id: "npm", title: "npm dependencies", body: "npm notice" },
+    ]);
     render(<AboutTab />);
     fireEvent.click(
       screen.getByRole("button", { name: strings.settings.aboutSource }),
@@ -42,16 +50,49 @@ describe("small settings tabs", () => {
     fireEvent.click(
       screen.getByRole("button", { name: strings.settings.aboutLicense }),
     );
-    return waitFor(() => {
+    expect(
+      await screen.findByRole("dialog", {
+        name: strings.settings.aboutCreditsTitle,
+      }),
+    ).toBeVisible();
+    expect(screen.getByText("MPL body text")).toBeVisible();
+    expect(screen.getByText("npm notice")).toBeVisible();
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", {
+          name: strings.settings.aboutCreditsTitle,
+        }),
+      ).not.toBeInTheDocument(),
+    );
+    await waitFor(() => {
       expect(inspectExternalUrl.mock.calls).toEqual([
         ["https://github.com/BurntToasters/postal-snap"],
-        ["https://www.mozilla.org/MPL/2.0/"],
       ]);
       expect(openExternalUrl.mock.calls).toEqual([
         ["https://github.com/BurntToasters/postal-snap", false],
-        ["https://www.mozilla.org/MPL/2.0/", false],
       ]);
     });
+  });
+
+  it("reports when bundled license credits cannot be loaded", async () => {
+    vi.spyOn(api, "getLicenseCredits").mockRejectedValue(
+      new Error("missing notices"),
+    );
+    const showNativeMessage = vi
+      .spyOn(api, "showNativeMessage")
+      .mockResolvedValue(undefined);
+    render(<AboutTab />);
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.settings.aboutLicense }),
+    );
+    await waitFor(() =>
+      expect(showNativeMessage).toHaveBeenCalledWith(
+        strings.settings.aboutCreditsTitle,
+        strings.settings.aboutCreditsError,
+      ),
+    );
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("does not open an About link when confirmation is canceled", async () => {

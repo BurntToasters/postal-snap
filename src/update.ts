@@ -9,12 +9,20 @@ export interface UpdateCheckResult {
 
 export type UpdateFoundListener = (version?: string) => void;
 
+interface DownloadedUpdate {
+  version: string;
+  download: () => Promise<void>;
+  install: () => Promise<void>;
+}
+
 let updateInFlight: Promise<UpdateCheckResult> | undefined;
 let interactiveInFlight: Promise<void> | undefined;
+let applyInFlight: Promise<void> | undefined;
 const updateFoundListeners = new Set<UpdateFoundListener>();
 let updateFound = false;
 let updateVersion: string | undefined;
 let updateReadyVersion: string | undefined;
+let pendingPackage: DownloadedUpdate | undefined;
 
 export function addUpdateFoundListener(listener: UpdateFoundListener): void {
   updateFoundListeners.add(listener);
@@ -34,15 +42,35 @@ export function removeUpdateFoundListener(listener: UpdateFoundListener): void {
 export function resetUpdateStateForTesting(): void {
   updateInFlight = undefined;
   interactiveInFlight = undefined;
+  applyInFlight = undefined;
   updateFoundListeners.clear();
   updateFound = false;
   updateVersion = undefined;
   updateReadyVersion = undefined;
+  pendingPackage = undefined;
   useAppStore.getState().setUpdateReady(null);
 }
 
 export function getUpdateReadyVersion(): string | undefined {
   return updateReadyVersion ?? useAppStore.getState().updateReady ?? undefined;
+}
+
+function markUpdateReady(update: DownloadedUpdate): void {
+  pendingPackage = update;
+  updateReadyVersion = update.version;
+  useAppStore.getState().setUpdateReady(update.version);
+}
+
+function notifyUpdateFound(version: string): void {
+  updateFound = true;
+  updateVersion = version;
+  for (const listener of updateFoundListeners) {
+    try {
+      listener(version);
+    } catch {
+      // A status listener must never interrupt the update transaction.
+    }
+  }
 }
 
 export function runUpdateSingleFlight(
@@ -62,18 +90,9 @@ export function runUpdateSingleFlight(
     const { check } = await import("@tauri-apps/plugin-updater");
     const update = await check();
     if (!update) return { available: false };
-    updateFound = true;
-    updateVersion = update.version;
-    for (const listener of updateFoundListeners) {
-      try {
-        listener(update.version);
-      } catch {
-        // A status listener must never interrupt the update transaction.
-      }
-    }
-    await update.downloadAndInstall();
-    updateReadyVersion = update.version;
-    useAppStore.getState().setUpdateReady(update.version);
+    notifyUpdateFound(update.version);
+    await update.download();
+    markUpdateReady(update);
     return { available: true, version: update.version };
   })();
   updateInFlight = task;
@@ -89,6 +108,30 @@ export function runUpdateSingleFlight(
   return task;
 }
 
+export async function applyPendingUpdate(): Promise<void> {
+  if (applyInFlight) return applyInFlight;
+  const task = (async (): Promise<void> => {
+    try {
+      if (pendingPackage) {
+        await pendingPackage.install();
+        pendingPackage = undefined;
+      }
+      await api.relaunch();
+    } catch {
+      await api.showNativeMessage(
+        strings.update.installErrorTitle,
+        strings.update.installErrorMessage,
+      );
+    }
+  })();
+  applyInFlight = task;
+  try {
+    await task;
+  } finally {
+    if (applyInFlight === task) applyInFlight = undefined;
+  }
+}
+
 export async function promptToRestartForUpdate(
   version?: string,
 ): Promise<void> {
@@ -98,7 +141,7 @@ export async function promptToRestartForUpdate(
     strings.update.readyPrompt(ver ?? ""),
   );
   if (confirmed) {
-    await api.relaunch();
+    await applyPendingUpdate();
   }
 }
 
@@ -113,7 +156,10 @@ export async function checkUpdateInteractive(): Promise<void> {
     try {
       const result = await updateInFlight;
       if (result.available && result.version) {
-        await promptToRestartForUpdate(result.version);
+        await api.showNativeMessage(
+          strings.update.downloadedQuietlyTitle,
+          strings.update.downloadedQuietly(result.version),
+        );
       } else {
         await api.showNativeMessage(
           strings.update.upToDateTitle,
@@ -150,16 +196,10 @@ export async function checkUpdateInteractive(): Promise<void> {
         return;
       }
 
-      const shouldDownload = await api.showNativeConfirm(
-        strings.update.availableTitle,
-        strings.update.availablePrompt(update.version),
-      );
-      if (!shouldDownload) return;
-
+      notifyUpdateFound(update.version);
       try {
-        await update.downloadAndInstall();
-        updateReadyVersion = update.version;
-        useAppStore.getState().setUpdateReady(update.version);
+        await update.download();
+        markUpdateReady(update);
       } catch {
         await api.showNativeMessage(
           strings.update.downloadErrorTitle,
@@ -168,7 +208,10 @@ export async function checkUpdateInteractive(): Promise<void> {
         return;
       }
 
-      await promptToRestartForUpdate(update.version);
+      await api.showNativeMessage(
+        strings.update.downloadedQuietlyTitle,
+        strings.update.downloadedQuietly(update.version),
+      );
     } catch {
       await api.showNativeMessage(
         strings.update.checkErrorTitle,
@@ -202,4 +245,30 @@ export function startPeriodicUpdateCheck(
     }
   }, intervalMs);
   return () => window.clearInterval(timer);
+}
+
+export function startDeferredUpdateOnQuit(): () => void {
+  if (document.documentElement.dataset.platform === "macos") {
+    return () => undefined;
+  }
+  let unlisten: (() => void) | undefined;
+  let cancelled = false;
+  void import("@tauri-apps/api/window")
+    .then(async ({ getCurrentWindow }) => {
+      if (cancelled) return;
+      unlisten = await getCurrentWindow().onCloseRequested(async (event) => {
+        if (!pendingPackage && !applyInFlight) return;
+        event.preventDefault();
+        try {
+          await applyPendingUpdate();
+        } catch {
+          // Leave the window open so drafts and unsent mail are not lost.
+        }
+      });
+    })
+    .catch(() => undefined);
+  return () => {
+    cancelled = true;
+    unlisten?.();
+  };
 }

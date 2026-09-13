@@ -122,6 +122,15 @@ export async function registerMockSettingsSystem(page: Page): Promise<void> {
       get_distribution_channel() {
         return { kind: "direct", updatesManagedBy: "postalSnap" };
       },
+      get_license_credits() {
+        return [
+          {
+            id: "mpl",
+            title: "Mozilla Public License 2.0",
+            body: "Mock MPL license text.",
+          },
+        ];
+      },
     });
   });
 }

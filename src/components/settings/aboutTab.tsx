@@ -1,9 +1,32 @@
+import { useState } from "react";
+import { api } from "../../api";
 import { strings } from "../../i18n";
 import { version as appVersion } from "../../../package.json";
+import type { LicenseCredit } from "../../types";
 import { inspectAndOpenExternalLink } from "../externalLink";
+import { CreditsDialog } from "./creditsDialog";
 import { SettingsPanel } from "./primitives";
 
 export function AboutTab() {
+  const [credits, setCredits] = useState<LicenseCredit[] | null>(null);
+  const [loadingCredits, setLoadingCredits] = useState(false);
+
+  async function openCredits() {
+    if (loadingCredits) return;
+    setLoadingCredits(true);
+    try {
+      setCredits(await api.getLicenseCredits());
+    } catch {
+      setCredits(null);
+      await api.showNativeMessage(
+        strings.settings.aboutCreditsTitle,
+        strings.settings.aboutCreditsError,
+      );
+    } finally {
+      setLoadingCredits(false);
+    }
+  }
+
   return (
     <SettingsPanel id="about" title={strings.settings.about}>
       <p className="settings-lead">{strings.settings.aboutLead}</p>
@@ -25,9 +48,8 @@ export function AboutTab() {
         <button
           type="button"
           className="text-button"
-          onClick={() =>
-            void inspectAndOpenExternalLink("https://www.mozilla.org/MPL/2.0/")
-          }
+          disabled={loadingCredits}
+          onClick={() => void openCredits()}
         >
           {strings.settings.aboutLicense}
         </button>
@@ -35,6 +57,9 @@ export function AboutTab() {
       <p>
         <small>{strings.settings.aboutFilters}</small>
       </p>
+      {credits ? (
+        <CreditsDialog credits={credits} onClose={() => setCredits(null)} />
+      ) : null}
     </SettingsPanel>
   );
 }

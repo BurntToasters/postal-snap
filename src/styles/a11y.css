@@ -50,7 +50,8 @@ svg {
 
   .settings-window,
   .composer-window,
-  .setup-card {
+  .setup-card,
+  .attachment-preview-dialog {
     border: 2px solid CanvasText;
   }
 

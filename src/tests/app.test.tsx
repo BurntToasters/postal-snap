@@ -33,6 +33,7 @@ vi.mock("../update", () => ({
   checkUpdateInteractive: vi.fn(),
   runUpdateSingleFlight: vi.fn(),
   startPeriodicUpdateCheck: vi.fn(),
+  startDeferredUpdateOnQuit: vi.fn(),
 }));
 vi.mock("../components/WindowChrome", () => ({
   WindowChrome: () => <div data-testid="window-chrome" />,
@@ -108,6 +109,7 @@ import type { SyncState } from "../types";
 import {
   checkUpdateInteractive,
   runUpdateSingleFlight,
+  startDeferredUpdateOnQuit,
   startPeriodicUpdateCheck,
 } from "../update";
 import { makeAccount } from "./helpers/fixtures";
@@ -115,6 +117,7 @@ import { resetStore } from "./helpers/store";
 
 const account = makeAccount();
 const cancelPeriodic = vi.fn();
+const cancelQuitUpdate = vi.fn();
 const unlistenSync = vi.fn();
 const unlistenWarning = vi.fn();
 const unlistenMenu = vi.fn();
@@ -158,6 +161,7 @@ beforeEach(() => {
   vi.mocked(runUpdateSingleFlight).mockResolvedValue({ available: false });
   vi.mocked(checkUpdateInteractive).mockResolvedValue(undefined);
   vi.mocked(startPeriodicUpdateCheck).mockReturnValue(cancelPeriodic);
+  vi.mocked(startDeferredUpdateOnQuit).mockReturnValue(cancelQuitUpdate);
 });
 
 describe("App lifecycle", () => {
@@ -166,6 +170,10 @@ describe("App lifecycle", () => {
     render(<App />);
     expect(screen.getByRole("heading", { name: "Postal Snap" })).toBeVisible();
     expect(screen.getByText(/connect native mail services/i)).toBeVisible();
+    expect(
+      document.querySelector(".preview-notice img.app-mark"),
+    ).toBeVisible();
+    expect(document.querySelector(".preview-notice svg")).toBeNull();
     expect(api.listAccounts).not.toHaveBeenCalled();
   });
 
@@ -237,6 +245,7 @@ describe("App lifecycle", () => {
 
     view.unmount();
     expect(cancelPeriodic).toHaveBeenCalled();
+    expect(cancelQuitUpdate).toHaveBeenCalled();
     expect(unlistenSync).toHaveBeenCalled();
     expect(unlistenWarning).toHaveBeenCalled();
     expect(unlistenMenu).toHaveBeenCalled();
