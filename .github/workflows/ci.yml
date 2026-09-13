@@ -144,7 +144,7 @@ jobs:
           sudo apt-get install -y flatpak flatpak-builder
           sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
           RUNTIME=$(sed -n 's/^runtime-version: *"\{0,1\}\([0-9][0-9]*\)"\{0,1\}/\1/p' packaging/flatpak/run.rosie.snap.yml)
-          sudo flatpak install -y flathub "org.gnome.Platform//${RUNTIME}" "org.gnome.Sdk//${RUNTIME}" org.flatpak.Builder
+          sudo flatpak install -y flathub "org.gnome.Platform//${RUNTIME}" "org.gnome.Sdk//${RUNTIME}" org.flatpak.Builder//stable
       - name: Lint Flatpak manifest
         run: |
-          flatpak run --command=flatpak-builder-lint org.flatpak.Builder --exceptions --user-exceptions "$GITHUB_WORKSPACE/packaging/flatpak/lint-exceptions.json" manifest "$GITHUB_WORKSPACE/packaging/flatpak/run.rosie.snap.yml"
+          flatpak run --command=flatpak-builder-lint org.flatpak.Builder//stable --exceptions --user-exceptions "$GITHUB_WORKSPACE/packaging/flatpak/lint-exceptions.json" manifest "$GITHUB_WORKSPACE/packaging/flatpak/run.rosie.snap.yml"

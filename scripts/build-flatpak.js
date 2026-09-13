@@ -21,6 +21,7 @@ const generatedManifest = join(
   "packaging/flatpak/run.rosie.snap.generated.yml",
 );
 const lintExceptions = join(root, "packaging/flatpak/lint-exceptions.json");
+const flatpakBuilderRef = "org.flatpak.Builder//stable";
 await run("node", [
   "scripts/tauri-build.js",
   "--target",
@@ -73,7 +74,7 @@ async function runFlatpakBuilderLint(manifestPath) {
     await run("flatpak", [
       "run",
       "--command=flatpak-builder-lint",
-      "org.flatpak.Builder",
+      flatpakBuilderRef,
       "--exceptions",
       "--user-exceptions",
       lintExceptions,
