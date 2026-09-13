@@ -99,7 +99,8 @@ fn ensure_windows_local_persistence(account_id: &str, password: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    #[cfg(not(target_os = "windows"))]
+    use super::{Entry, SERVICE};
 
     // The Windows entry is cfg-gated, so compile-check its exact construction
     // shape on every host. Running on a host with a default store may succeed
