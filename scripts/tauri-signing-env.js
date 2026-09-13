@@ -16,6 +16,10 @@ export function skipWindowsCodeSigning(env = process.env) {
   return String(env.SKIP_WIN_CODESIGN ?? "").trim() === "1";
 }
 
+export function allowUnsignedWindows(env = process.env) {
+  return String(env.ALLOW_UNSIGNED_WINDOWS ?? "").trim() === "1";
+}
+
 export function missingAzureArtifactSigningVars(env = process.env) {
   return AZURE_ARTIFACT_SIGNING_ENV_VARS.filter(
     (name) => !String(env[name] ?? "").trim(),
@@ -45,6 +49,11 @@ export function assertWindowsSigningConfigured({
     throw new Error("Authenticode release builds must run on Windows.");
   }
   if (skipWindowsCodeSigning(env)) {
+    if (!allowUnsignedWindows(env)) {
+      throw new Error(
+        "SKIP_WIN_CODESIGN=1 is not allowed for signed Windows release builds. Unset SKIP_WIN_CODESIGN, or set ALLOW_UNSIGNED_WINDOWS=1 to explicitly produce unsigned Windows artifacts.",
+      );
+    }
     return { skipSigning: true };
   }
   const missing = missingAzureArtifactSigningVars(env);
@@ -93,6 +102,70 @@ export function applyApplePasswordCompatibility(env = process.env) {
   const legacy = env.APPLE_APP_SPECIFIC_PASSWORD?.trim();
   if (legacy) env.APPLE_PASSWORD = legacy;
   return env;
+}
+
+export const RELEASE_SECRET_ENV_VARS = [
+  "TAURI_SIGNING_PRIVATE_KEY",
+  "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+  "AZURE_CLIENT_SECRET",
+  "APPLE_PASSWORD",
+  "APPLE_APP_SPECIFIC_PASSWORD",
+  "APPLE_API_KEY",
+  "GPG_PASSPHRASE",
+  "SSH_USER_PWD",
+  "APPLE_CERTIFICATE_PASSWORD",
+  "APPLE_KEYCHAIN_PASSWORD",
+];
+
+// Children that sign or verify one artifact keep the ambient environment but
+// drop release secrets they do not consume, so a compromised helper cannot
+// read unrelated signing material.
+export function envForChild(env = process.env, allowed = []) {
+  const keep = new Set(allowed);
+  const result = { ...env };
+  for (const name of RELEASE_SECRET_ENV_VARS) {
+    if (!keep.has(name)) delete result[name];
+  }
+  return result;
+}
+
+export const NOTARYTOOL_KEYCHAIN_PROFILE_ENV = "NOTARYTOOL_KEYCHAIN_PROFILE";
+
+export function resolveNotarytoolKeychainProfile(env = process.env) {
+  return String(env.NOTARYTOOL_KEYCHAIN_PROFILE ?? "").trim();
+}
+
+// notarytool deliberately does not support altool's "@env:" password syntax,
+// so the app-specific password must never be passed as an argument. Prefer the
+// documented keychain profile, then an App Store Connect API key.
+export function notarytoolSubmitArgs({
+  path,
+  keychainProfile,
+  apiKeyPath,
+  apiKeyId,
+  apiIssuer,
+  appleId,
+  appleTeamId,
+} = {}) {
+  if (!path) throw new Error("notarytool submit requires an artifact path.");
+  const args = ["notarytool", "submit", path, "--wait"];
+  const profile = String(keychainProfile ?? "").trim();
+  if (profile) {
+    args.push("--keychain-profile", profile);
+    return args;
+  }
+  if (apiKeyPath && apiKeyId && apiIssuer) {
+    args.push("--key", apiKeyPath, "--key-id", apiKeyId, "--issuer", apiIssuer);
+    return args;
+  }
+  if (appleId && appleTeamId) {
+    throw new Error(
+      "xcrun notarytool does not support passing the app-specific password as an argument. Run `xcrun notarytool store-credentials` once and set NOTARYTOOL_KEYCHAIN_PROFILE, or use an App Store Connect API key.",
+    );
+  }
+  throw new Error(
+    "DMG notarization requires NOTARYTOOL_KEYCHAIN_PROFILE or an App Store Connect API key.",
+  );
 }
 
 // Zinnia zip-macos.js: codesign --display --verbose=4 writes

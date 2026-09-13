@@ -19,35 +19,40 @@ export function CopyButton({ text, title }: { text: string; title: string }) {
   }, []);
 
   return (
-    <button
-      type="button"
-      className="copy-mini-btn"
-      onClick={async (e) => {
-        e.stopPropagation();
-        try {
-          await navigator.clipboard.writeText(text);
-          setCopied(true);
-          if (timerRef.current) clearTimeout(timerRef.current);
-          timerRef.current = setTimeout(() => setCopied(false), 2000);
-        } catch {
-          // Safe fallback if clipboard write fails
-        }
-      }}
-      title={copied ? strings.reader.copied : title}
-      aria-label={copied ? strings.reader.copied : title}
-    >
-      {copied ? (
-        <>
-          <Check size={12} aria-hidden="true" />
-          <span>{strings.reader.copied}</span>
-        </>
-      ) : (
-        <>
-          <Copy size={12} aria-hidden="true" />
-          <span>{title}</span>
-        </>
-      )}
-    </button>
+    <>
+      <button
+        type="button"
+        className="copy-mini-btn"
+        onClick={async (e) => {
+          e.stopPropagation();
+          try {
+            await navigator.clipboard.writeText(text);
+            setCopied(true);
+            if (timerRef.current) clearTimeout(timerRef.current);
+            timerRef.current = setTimeout(() => setCopied(false), 2000);
+          } catch {
+            // Safe fallback if clipboard write fails
+          }
+        }}
+        title={copied ? strings.reader.copied : title}
+        aria-label={copied ? strings.reader.copied : title}
+      >
+        {copied ? (
+          <>
+            <Check size={12} aria-hidden="true" />
+            <span>{strings.reader.copied}</span>
+          </>
+        ) : (
+          <>
+            <Copy size={12} aria-hidden="true" />
+            <span>{title}</span>
+          </>
+        )}
+      </button>
+      <span className="visually-hidden" role="status">
+        {copied ? strings.reader.copied : ""}
+      </span>
+    </>
   );
 }
 
@@ -200,7 +205,7 @@ export function MessageHeader({
             <dt>{strings.reader.folder}</dt>
             <dd>
               {account ? `${account.displayName || account.email} › ` : ""}
-              {currentMailbox?.displayName || "Mailbox"}
+              {currentMailbox?.displayName || strings.mail.mailboxFallback}
             </dd>
             <dt>{strings.reader.security}</dt>
             <dd className="security-badge">

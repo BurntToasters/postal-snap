@@ -2,21 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 import { strings } from "../../i18n";
 import type { RecipientSuggestion } from "../../types";
-
-export function tokenAtCaret(
-  value: string,
-  caret: number,
-): { token: string; start: number } {
-  let start = caret;
-  while (start > 0 && value[start - 1] !== "," && value[start - 1] !== ";") {
-    start -= 1;
-  }
-  let end = caret;
-  while (end < value.length && value[end] !== "," && value[end] !== ";") {
-    end += 1;
-  }
-  return { token: value.slice(start, end).trim(), start };
-}
+import { tokenAtCaret } from "./recipientFieldUtils";
 
 export function RecipientField({
   id,
@@ -44,6 +30,7 @@ export function RecipientField({
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const fetchTimer = useRef(0);
+  const requestSequence = useRef(0);
   const listId = `${id}-suggestions`;
 
   useEffect(
@@ -55,6 +42,7 @@ export function RecipientField({
 
   function requestSuggestions(nextValue: string, caret: number | null) {
     window.clearTimeout(fetchTimer.current);
+    const requestId = ++requestSequence.current;
     const position = caret ?? nextValue.length;
     const { token } = tokenAtCaret(
       nextValue,
@@ -69,6 +57,7 @@ export function RecipientField({
       void api
         .suggestRecipients(accountId, token, 8)
         .then((results) => {
+          if (requestId !== requestSequence.current) return;
           setSuggestions(results);
           setActiveIndex(0);
           setOpen(results.length > 0);
@@ -117,6 +106,7 @@ export function RecipientField({
           requestSuggestions(event.target.value, event.target.selectionStart);
         }}
         onKeyDown={(event) => {
+          if (event.nativeEvent.isComposing || event.keyCode === 229) return;
           // Cmd/Ctrl+Enter sends; never swallow it as suggestion accept.
           if (event.metaKey || event.ctrlKey) return;
           if (!open) return;
@@ -139,6 +129,7 @@ export function RecipientField({
         }}
         onBlur={() => {
           window.clearTimeout(fetchTimer.current);
+          requestSequence.current += 1;
           setOpen(false);
           onBlur?.();
         }}

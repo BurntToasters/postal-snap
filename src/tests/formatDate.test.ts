@@ -80,10 +80,11 @@ describe("full dates and byte sizes", () => {
     ).not.toContain("(");
   });
 
-  it("formats bytes through B, KB, and MB", () => {
+  it("formats bytes through B, KB, MB, and GB", () => {
     expect(formatBytes(100)).toBe("100 B");
     expect(formatBytes(1536)).toBe("1.5 KB");
     expect(formatBytes(2 * 1024 * 1024)).toBe("2.0 MB");
+    expect(formatBytes(2 * 1024 * 1024 * 1024)).toBe("2.0 GB");
   });
 });
 

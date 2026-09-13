@@ -44,6 +44,7 @@ describe("native window effects", () => {
     );
     mockedInvoke.mockImplementation(async (command, args) => {
       if (command === "supports_workspace_window_fx") return true;
+      if (command === "accessibility_reduce_transparency") return false;
       return (args as { enabled: boolean }).enabled;
     });
 

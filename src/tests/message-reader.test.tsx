@@ -550,6 +550,65 @@ describe("MessageReader", () => {
     expect(context.defaultPrevented).toBe(true);
   });
 
+  it("keeps a newer selection when a snooze finishes late", async () => {
+    let releaseSnooze: () => void = () => undefined;
+    vi.mocked(api.snoozeMessage).mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseSnooze = resolve;
+        }),
+    );
+    const onSnoozed = vi.fn();
+    const newer = messageDetail(
+      makeMessage({ id: 2, subject: "Second message" }),
+    );
+    render(<MessageReader onSnoozed={onSnoozed} />);
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.reader.moreActions }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: strings.reader.snooze }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.reader.snoozeTomorrow }),
+    );
+    await waitFor(() => expect(api.snoozeMessage).toHaveBeenCalled());
+
+    act(() => {
+      useAppStore.getState().selectMessage(newer);
+    });
+    await act(async () => {
+      releaseSnooze();
+      await Promise.resolve();
+    });
+
+    expect(useAppStore.getState().selectedMessage?.id).toBe(newer.id);
+    expect(onSnoozed).toHaveBeenCalledWith("account-1", 1);
+  });
+
+  it("intercepts image-map areas and strips usemap references", async () => {
+    setReaderState(readerMessage({ htmlBody: "<p>Map</p>", textBody: "" }));
+    render(<MessageReader />);
+    const iframe = screen.getByTitle(strings.reader.messageContent);
+    const body = (iframe as HTMLIFrameElement).contentDocument!.body;
+    body.innerHTML =
+      '<img id="mapped" usemap="#links" alt="map"><map name="links"><area id="area" href="https://map.example/path" alt="map link"></map>';
+    fireEvent.load(iframe);
+
+    expect(body.querySelector("[usemap]")).toBeNull();
+    const area = body.querySelector("#area")!;
+    const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+    area.dispatchEvent(click);
+    expect(click.defaultPrevented).toBe(true);
+    await waitFor(() => expect(api.openExternalUrl).toHaveBeenCalled());
+    const context = new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+    });
+    area.dispatchEvent(context);
+    expect(context.defaultPrevented).toBe(true);
+  });
+
   it("honors canceled link confirmations and reports command failures", async () => {
     render(<MessageReader />);
     const link = () =>

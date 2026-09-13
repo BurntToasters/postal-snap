@@ -9,6 +9,10 @@ if ($env:SKIP_WIN_CODESIGN -eq '1') {
 }
 if ($env:OS -ne 'Windows_NT') { throw 'Azure Artifact Signing must run on Windows.' }
 
+# Azure Artifact Signing Public Trust certificates carry this EKU marker in
+# addition to the Code Signing EKU. The CN alone is not globally unique.
+$artifactSigningPublicTrustEku = '1.3.6.1.4.1.311.97.1.0'
+
 $required = @('AZURE_CLIENT_ID','AZURE_TENANT_ID','AZURE_CLIENT_SECRET','AZURE_ARTIFACT_SIGNING_ENDPOINT','AZURE_ARTIFACT_SIGNING_ACCOUNT','AZURE_ARTIFACT_SIGNING_PROFILE','AZURE_ARTIFACT_SIGNING_PUBLISHER')
 $missing = @($required | Where-Object { [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) })
 if ($missing.Count) {
@@ -52,5 +56,11 @@ if (-not [string]::IsNullOrWhiteSpace($env:AZURE_ARTIFACT_SIGNING_PUBLISHER_DN))
   $expectedSubject = $env:AZURE_ARTIFACT_SIGNING_PUBLISHER_DN.Trim()
   if ($subject -ne $expectedSubject) { throw "Unexpected Authenticode Subject for $resolved. Expected '$expectedSubject', got '$subject'." }
 }
+$ekuExtension = $signature.SignerCertificate.Extensions |
+  Where-Object { $_.Oid.Value -eq '2.5.29.37' } |
+  Select-Object -First 1
+if (-not $ekuExtension) { throw "Signer certificate has no Extended Key Usage extension: $resolved" }
+$ekus = @($ekuExtension.EnhancedKeyUsages | ForEach-Object { $_.Value })
+if ($ekus -notcontains $artifactSigningPublicTrustEku) { throw "Signer certificate for $resolved is not an Azure Artifact Signing Public Trust certificate (missing EKU $artifactSigningPublicTrustEku)." }
 if (-not $signature.TimeStamperCertificate) { throw "Missing RFC3161 timestamp: $resolved" }
 Write-Host "Verified Authenticode signature: $publisher ($resolved)"

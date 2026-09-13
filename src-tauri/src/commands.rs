@@ -31,7 +31,7 @@ use crate::{
     mail,
     models::{
         normalize_setup_password, validate_compose_draft, validate_compose_sender, AccountRecord,
-        ComposeDraft, IpcError, SyncState,
+        CachePolicy, ComposeDraft, IpcError, SyncState,
     },
     settings::SettingsStore,
 };
@@ -55,9 +55,8 @@ fn refresh_mail_menu(app: &AppHandle, state: &AppState) {
 
 fn take_normalized_account_password(
     provider: &crate::models::ProviderKind,
-    password: String,
+    mut password: Zeroizing<String>,
 ) -> Result<Zeroizing<String>, IpcError> {
-    let mut password = Zeroizing::new(password);
     let normalized = Zeroizing::new(normalize_setup_password(provider, &password));
     password.zeroize();
     if normalized.is_empty() || normalized.len() > 4096 {
@@ -92,6 +91,7 @@ pub struct AppState {
     watchers: Mutex<HashSet<String>>,
     startup_error: Mutex<Option<String>>,
     mail_shortcut_guard: AtomicBool,
+    app_nap: Mutex<Option<crate::app_nap::AppNapGuard>>,
 }
 
 struct AccountActor {
@@ -109,6 +109,7 @@ impl AppState {
             watchers: Mutex::new(HashSet::new()),
             startup_error: Mutex::new(None),
             mail_shortcut_guard: AtomicBool::new(false),
+            app_nap: Mutex::new(None),
         }
     }
 
@@ -175,9 +176,14 @@ impl AppState {
         if !watchers.insert(account_id.clone()) {
             return Ok(());
         }
+        let first_watcher = watchers.len() == 1;
         drop(watchers);
+        if first_watcher {
+            self.begin_background_activity();
+        }
         tauri::async_runtime::spawn(async move {
             let mut backoff = 2u64;
+            let mut attempt = 0u32;
             let mut first_sync = true;
             loop {
                 let state = app.state::<AppState>();
@@ -192,14 +198,17 @@ impl AppState {
                     .map(|message| message.id);
                 match sync_one_background(&account_id, &app, &state).await {
                     Ok(()) => {
+                        backoff = 2;
+                        attempt = 0;
                         if !first_sync {
                             notify_new_mail(&app, &state.db, &account_id, previous_message_id);
                         }
                         first_sync = false;
                     }
                     Err(_) => {
-                        tokio::time::sleep(reconnect_delay(&account_id, backoff)).await;
+                        tokio::time::sleep(reconnect_delay(&account_id, backoff, attempt)).await;
                         backoff = (backoff * 2).min(120);
+                        attempt = attempt.wrapping_add(1);
                         continue;
                     }
                 }
@@ -214,10 +223,27 @@ impl AppState {
                 };
                 let password = match credentials::load(&account_id) {
                     Ok(password) => password,
-                    Err(_) => break,
+                    Err(_) => {
+                        // A locked or transiently unavailable vault must not
+                        // stop background mail forever; retry with backoff and
+                        // surface an actionable account state.
+                        drop(_guard);
+                        let detail = "The saved password is unavailable. Reconnect this account.";
+                        let _ = state
+                            .db
+                            .set_account_state(&account_id, "offline", Some(detail));
+                        emit_sync(&app, &account_id, "offline", Some(detail), None);
+                        tokio::time::sleep(reconnect_delay(&account_id, backoff, attempt)).await;
+                        backoff = (backoff * 2).min(120);
+                        attempt = attempt.wrapping_add(1);
+                        continue;
+                    }
                 };
                 match mail::idle_inbox(&account, &password, &actor.wake).await {
-                    Ok(()) => backoff = 2,
+                    Ok(()) => {
+                        backoff = 2;
+                        attempt = 0;
+                    }
                     Err(_) => {
                         drop(_guard);
                         let _ = state.db.set_account_state(
@@ -232,16 +258,38 @@ impl AppState {
                             Some("Connection lost. Reconnecting…"),
                             None,
                         );
-                        tokio::time::sleep(reconnect_delay(&account_id, backoff)).await;
+                        tokio::time::sleep(reconnect_delay(&account_id, backoff, attempt)).await;
                         backoff = (backoff * 2).min(120);
+                        attempt = attempt.wrapping_add(1);
                     }
                 }
             }
-            if let Ok(mut watchers) = app.state::<AppState>().watchers.lock() {
+            let state = app.state::<AppState>();
+            if let Ok(mut watchers) = state.watchers.lock() {
                 watchers.remove(&account_id);
-            }
+                if watchers.is_empty() {
+                    drop(watchers);
+                    state.end_background_activity();
+                }
+            };
         });
         Ok(())
+    }
+
+    fn begin_background_activity(&self) {
+        if let Ok(mut guard) = self.app_nap.lock() {
+            if guard.is_none() {
+                *guard = Some(crate::app_nap::AppNapGuard::begin(
+                    "Postal Snap is keeping mail in sync",
+                ));
+            }
+        }
+    }
+
+    fn end_background_activity(&self) {
+        if let Ok(mut guard) = self.app_nap.lock() {
+            guard.take();
+        }
     }
 
     fn retire_actor(&self, account_id: &str) {
@@ -251,10 +299,18 @@ impl AppState {
     }
 }
 
-fn reconnect_delay(account_id: &str, seconds: u64) -> Duration {
-    let jitter = account_id.bytes().fold(0u64, |value, byte| {
-        value.wrapping_mul(31).wrapping_add(u64::from(byte))
-    }) % 1_000;
+fn reconnect_delay(account_id: &str, seconds: u64, attempt: u32) -> Duration {
+    let clock = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs() << 20 ^ u64::from(elapsed.subsec_nanos()))
+        .unwrap_or(0);
+    let account_hash = account_id
+        .bytes()
+        .fold(0xcbf29ce484222325u64, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+        });
+    let jitter =
+        (clock ^ account_hash ^ u64::from(attempt).wrapping_mul(0x9e3779b97f4a7c15)) % 1_000;
     Duration::from_secs(seconds) + Duration::from_millis(jitter)
 }
 
@@ -304,6 +360,13 @@ struct OutboxChanged {
     account_id: String,
     outbox_id: Option<String>,
     state: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OfflineOperationsDropped {
+    account_id: String,
+    count: u32,
 }
 
 fn emit_folder_counts(app: &AppHandle, account_id: &str) {
@@ -358,140 +421,171 @@ fn emit_outbox_change(
     );
 }
 
+enum ValidatedReplay {
+    Drop,
+    ClearPending(i64),
+    Flags(FlagOperation),
+    Move(MoveOperation),
+}
+
+/// Validate a queued operation against current local ownership and mailbox
+/// identity before any network call. Stale operations are removed; the
+/// decisions are DB-level and covered by tests without a mail server.
+fn validate_queued_operation(
+    db: &Database,
+    account_id: &str,
+    kind: &str,
+    payload: &str,
+) -> Result<ValidatedReplay, String> {
+    match kind {
+        "flags" => {
+            let Ok(operation) = serde_json::from_str::<FlagOperation>(payload) else {
+                return Ok(ValidatedReplay::Drop);
+            };
+            let Ok((owner, mailbox, uid)) = db.message_location(operation.message_id) else {
+                return Ok(ValidatedReplay::Drop);
+            };
+            if owner != account_id || mailbox != operation.mailbox || uid != operation.uid {
+                return Ok(ValidatedReplay::Drop);
+            }
+            let Some(expected_uid_validity) = operation.uid_validity else {
+                return Ok(ValidatedReplay::Drop);
+            };
+            if db.mailbox_uid_validity(account_id, &operation.mailbox)?
+                != Some(expected_uid_validity)
+            {
+                return Ok(ValidatedReplay::Drop);
+            }
+            Ok(ValidatedReplay::Flags(operation))
+        }
+        "move" => {
+            let Ok(operation) = serde_json::from_str::<MoveOperation>(payload) else {
+                return Ok(ValidatedReplay::Drop);
+            };
+            let Ok((owner, source, uid)) = db.message_location(operation.message_id) else {
+                return Ok(ValidatedReplay::Drop);
+            };
+            if owner != account_id || source != operation.source || uid != operation.uid {
+                return Ok(ValidatedReplay::Drop);
+            }
+            if operation.source == operation.destination {
+                return Ok(ValidatedReplay::ClearPending(operation.message_id));
+            }
+            let Some(expected_uid_validity) = operation.uid_validity else {
+                return Ok(ValidatedReplay::ClearPending(operation.message_id));
+            };
+            if db.mailbox_uid_validity(account_id, &operation.source)?
+                != Some(expected_uid_validity)
+            {
+                return Ok(ValidatedReplay::ClearPending(operation.message_id));
+            }
+            Ok(ValidatedReplay::Move(operation))
+        }
+        _ => Ok(ValidatedReplay::Drop),
+    }
+}
+
 async fn replay_offline_operations(
+    app: &AppHandle,
     db: &Database,
     account: &AccountRecord,
     password: &str,
+    policy: &CachePolicy,
 ) -> Result<bool, String> {
-    for (id, kind, payload) in db.queued_operations(&account.summary.id)? {
-        match kind.as_str() {
-            "flags" => match serde_json::from_str::<FlagOperation>(&payload) {
-                Ok(operation) => {
-                    let Ok((owner, mailbox, uid)) = db.message_location(operation.message_id)
-                    else {
-                        db.remove_operation(id)?;
-                        continue;
-                    };
-                    if owner != account.summary.id
-                        || mailbox != operation.mailbox
-                        || uid != operation.uid
-                    {
-                        db.remove_operation(id)?;
-                        continue;
+    let account_id = &account.summary.id;
+    let mut dropped = 0u32;
+    for (id, kind, payload) in db.queued_operations(account_id)? {
+        match validate_queued_operation(db, account_id, &kind, &payload)? {
+            ValidatedReplay::Drop => {
+                db.remove_operation(account_id, id)?;
+                dropped = dropped.saturating_add(1);
+                continue;
+            }
+            ValidatedReplay::ClearPending(message_id) => {
+                let _ = db.clear_pending_move(message_id);
+                db.remove_operation(account_id, id)?;
+                dropped = dropped.saturating_add(1);
+                continue;
+            }
+            ValidatedReplay::Flags(operation) => {
+                let result = mail::set_remote_flags(
+                    account,
+                    password,
+                    &operation.mailbox,
+                    operation.uid,
+                    operation.uid_validity,
+                    operation.is_read,
+                    operation.is_starred,
+                )
+                .await;
+                // Initial sync restored server flags and reset local count
+                // overlays. Reapply user's queued intent whether remote
+                // replay succeeds now or remains queued.
+                db.set_flags(
+                    operation.message_id,
+                    operation.is_read,
+                    operation.is_starred,
+                )?;
+                if let Err(error) = &result {
+                    if error.terminal {
+                        db.remove_operation(account_id, id)?;
+                        dropped = dropped.saturating_add(1);
                     }
-                    if operation.uid_validity.is_some()
-                        && db.mailbox_uid_validity(&account.summary.id, &operation.mailbox)?
-                            != operation.uid_validity
-                    {
-                        db.remove_operation(id)?;
-                        continue;
-                    }
-                    let result = mail::set_remote_flags(
-                        account,
-                        password,
-                        &operation.mailbox,
-                        operation.uid,
-                        operation.uid_validity,
-                        operation.is_read,
-                        operation.is_starred,
-                    )
-                    .await;
-                    // Initial sync restored server flags and reset local count
-                    // overlays. Reapply user's queued intent whether remote
-                    // replay succeeds now or remains queued.
-                    db.set_flags(
-                        operation.message_id,
-                        operation.is_read,
-                        operation.is_starred,
-                    )?;
-                    if let Err(error) = &result {
-                        if is_terminal_mailbox_error(error) {
-                            db.remove_operation(id)?;
-                        }
-                        continue;
-                    }
-                }
-                Err(_) => {
-                    db.remove_operation(id)?;
                     continue;
                 }
-            },
-            "move" => match serde_json::from_str::<MoveOperation>(&payload) {
-                Ok(operation) => {
-                    let Ok((owner, source, uid)) = db.message_location(operation.message_id) else {
-                        db.remove_operation(id)?;
-                        continue;
-                    };
-                    if owner != account.summary.id
-                        || source != operation.source
-                        || uid != operation.uid
-                    {
-                        db.remove_operation(id)?;
-                        continue;
-                    }
-                    if operation.source == operation.destination {
-                        let _ = db.clear_pending_move(operation.message_id);
-                        db.remove_operation(id)?;
-                        continue;
-                    }
-                    if operation.uid_validity.is_some()
-                        && db.mailbox_uid_validity(&account.summary.id, &operation.source)?
-                            != operation.uid_validity
-                    {
-                        let _ = db.clear_pending_move(operation.message_id);
-                        db.remove_operation(id)?;
-                        continue;
-                    }
-                    let result = mail::move_remote(
-                        account,
-                        password,
-                        &operation.source,
-                        &operation.destination,
-                        operation.uid,
-                        operation.uid_validity,
-                    )
-                    .await;
-                    if result.is_ok() {
+            }
+            ValidatedReplay::Move(operation) => {
+                let remote_message_id = db.message_rfc_id(operation.message_id).ok().flatten();
+                let result = mail::move_remote(
+                    account,
+                    password,
+                    &operation.source,
+                    &operation.destination,
+                    operation.uid,
+                    operation.uid_validity,
+                    mail::MoveOptions {
+                        message_id: remote_message_id.as_deref(),
+                        dedupe_existing: true,
+                    },
+                )
+                .await;
+                match result {
+                    Ok(()) => {
                         db.remove_message(operation.message_id)?;
                         let _ = mail::refresh_mailbox_envelopes(
                             account,
                             password,
                             &operation.destination,
                             db,
+                            policy,
                         )
                         .await;
-                    } else if let Err(error) = &result {
-                        if is_terminal_mailbox_error(error) {
+                    }
+                    Err(error) => {
+                        if error.terminal {
                             let _ = db.clear_pending_move(operation.message_id);
-                            db.remove_operation(id)?;
-                            continue;
+                            db.remove_operation(account_id, id)?;
+                            dropped = dropped.saturating_add(1);
                         }
                         // Transient failure: keep the queued op and the
                         // pending-move hiding so a later sync retries it.
                         continue;
                     }
                 }
-                Err(_) => {
-                    db.remove_operation(id)?;
-                    continue;
-                }
-            },
-            _ => {
-                db.remove_operation(id)?;
-                continue;
             }
-        };
-        db.remove_operation(id)?;
+        }
+        db.remove_operation(account_id, id)?;
     }
-    Ok(!db.queued_operations(&account.summary.id)?.is_empty())
-}
-
-fn is_terminal_mailbox_error(error: &str) -> bool {
-    error.contains("mailbox changed")
-        || error.contains("cannot safely move")
-        || error.contains("does not belong")
-        || error.contains("message missing")
-        || error.contains("Message not found")
+    if dropped > 0 {
+        let _ = app.emit(
+            "offline-operations-dropped",
+            OfflineOperationsDropped {
+                account_id: account_id.clone(),
+                count: dropped,
+            },
+        );
+    }
+    Ok(!db.queued_operations(account_id)?.is_empty())
 }
 
 fn resolve_draft_files(db: &Database, draft: &ComposeDraft) -> Result<ComposeDraft, String> {
@@ -736,7 +830,7 @@ mod tests {
         let mut read_rule = db
             .create_filter_rule(&enabled_rule(account_id, "mark_read"))
             .unwrap();
-        apply_filter_rules(&db, &account);
+        apply_filter_rules(&db, &account, None);
         assert!(db
             .unread_message_ids(inbox)
             .unwrap()
@@ -760,7 +854,7 @@ mod tests {
         db.update_filter_rule(&read_rule).unwrap();
         db.create_filter_rule(&enabled_rule(account_id, "move_archive"))
             .unwrap();
-        apply_filter_rules(&db, &account);
+        apply_filter_rules(&db, &account, None);
         let move_ops: Vec<String> = db
             .queued_operations(account_id)
             .unwrap()
@@ -789,7 +883,7 @@ mod tests {
             .unwrap();
         db.create_filter_rule(&enabled_rule(&account_id, "move_archive"))
             .unwrap();
-        apply_filter_rules(&db, &account);
+        apply_filter_rules(&db, &account, None);
         let move_ops: Vec<String> = db
             .queued_operations(&account_id)
             .unwrap()
@@ -803,9 +897,11 @@ mod tests {
 
     #[test]
     fn update_password_keeps_the_normalized_secret() {
-        let secret =
-            take_normalized_account_password(&ProviderKind::Icloud, "  family-secret  ".into())
-                .expect("normalized password");
+        let secret = take_normalized_account_password(
+            &ProviderKind::Icloud,
+            zeroize::Zeroizing::new("  family-secret  ".into()),
+        )
+        .expect("normalized password");
         assert_eq!(secret.as_str(), "family-secret");
     }
 
@@ -847,5 +943,132 @@ mod tests {
         let soon = (chrono::Utc::now() + chrono::Duration::hours(3)).to_rfc3339();
         let resolved = resolve_requested_send_at(Some(&soon)).unwrap().unwrap();
         assert!(resolved.contains("T"));
+    }
+
+    #[test]
+    fn queued_replay_validation_drops_stale_operations_before_network() {
+        use super::{validate_queued_operation, ValidatedReplay};
+
+        let db = Database::memory();
+        let account = rule_account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = rule_mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        rule_mailbox(&db, account_id, "Archive", &MailboxRole::Archive);
+        let id = bill(&db, account_id, inbox, 1);
+
+        let flag =
+            |mailbox: &str, uid: u32, validity: Option<u32>| super::messages::FlagOperation {
+                message_id: id,
+                uid,
+                mailbox: mailbox.into(),
+                uid_validity: validity,
+                is_read: Some(true),
+                is_starred: None,
+            };
+        let flags_payload =
+            |operation: &super::messages::FlagOperation| serde_json::to_string(operation).unwrap();
+
+        assert!(matches!(
+            validate_queued_operation(
+                &db,
+                account_id,
+                "flags",
+                &flags_payload(&flag("INBOX", 1, Some(1)))
+            ),
+            Ok(ValidatedReplay::Flags(_))
+        ));
+        assert!(matches!(
+            validate_queued_operation(
+                &db,
+                account_id,
+                "flags",
+                &flags_payload(&flag("INBOX", 1, Some(99)))
+            ),
+            Ok(ValidatedReplay::Drop)
+        ));
+        assert!(matches!(
+            validate_queued_operation(
+                &db,
+                account_id,
+                "flags",
+                &flags_payload(&flag("INBOX", 1, None))
+            ),
+            Ok(ValidatedReplay::Drop)
+        ));
+        assert!(matches!(
+            validate_queued_operation(
+                &db,
+                account_id,
+                "flags",
+                &flags_payload(&flag("Archive", 1, Some(1)))
+            ),
+            Ok(ValidatedReplay::Drop)
+        ));
+        assert!(matches!(
+            validate_queued_operation(
+                &db,
+                account_id,
+                "flags",
+                &flags_payload(&flag("INBOX", 42, Some(1)))
+            ),
+            Ok(ValidatedReplay::Drop)
+        ));
+        assert!(matches!(
+            validate_queued_operation(
+                &db,
+                "account-2",
+                "flags",
+                &flags_payload(&flag("INBOX", 1, Some(1)))
+            ),
+            Ok(ValidatedReplay::Drop)
+        ));
+        assert!(matches!(
+            validate_queued_operation(&db, account_id, "flags", "not json"),
+            Ok(ValidatedReplay::Drop)
+        ));
+        assert!(matches!(
+            validate_queued_operation(&db, account_id, "unknown", "{}"),
+            Ok(ValidatedReplay::Drop)
+        ));
+
+        let move_operation =
+            |destination: &str, validity: Option<u32>| super::messages::MoveOperation {
+                message_id: id,
+                uid: 1,
+                source: "INBOX".into(),
+                destination: destination.into(),
+                uid_validity: validity,
+            };
+        let move_payload =
+            |operation: &super::messages::MoveOperation| serde_json::to_string(operation).unwrap();
+
+        assert!(matches!(
+            validate_queued_operation(
+                &db,
+                account_id,
+                "move",
+                &move_payload(&move_operation("Archive", Some(1)))
+            ),
+            Ok(ValidatedReplay::Move(_))
+        ));
+        assert!(matches!(
+            validate_queued_operation(
+                &db,
+                account_id,
+                "move",
+                &move_payload(&move_operation("INBOX", Some(1)))
+            ),
+            Ok(ValidatedReplay::ClearPending(value)) if value == id
+        ));
+        assert!(matches!(
+            validate_queued_operation(
+                &db,
+                account_id,
+                "move",
+                &move_payload(&move_operation("Archive", Some(99)))
+            ),
+            Ok(ValidatedReplay::ClearPending(value)) if value == id
+        ));
     }
 }

@@ -23,8 +23,7 @@ export function preparePassword(
   provider: ProviderKind,
   password: string,
 ): string {
-  const trimmed = password.trim();
-  return provider === "icloud" ? trimmed.replace(/\s+/g, "") : trimmed;
+  return provider === "icloud" ? password.replace(/\s+/g, "") : password;
 }
 
 export function trimServer(server: ServerConfig): ServerConfig {

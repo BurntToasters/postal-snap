@@ -100,6 +100,7 @@ export function ReaderToolbar({
           type="button"
           onClick={onBack}
           aria-label={strings.reader.closeMessage}
+          title={strings.reader.closeMessage}
         >
           <X aria-hidden="true" />
         </button>

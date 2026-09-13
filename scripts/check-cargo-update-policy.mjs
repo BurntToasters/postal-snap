@@ -64,9 +64,9 @@ export const IGNORED_DIRECTORIES = new Set([
 export const EXCLUDED_FILES = new Set([
   "scripts/cargo-safe-update.mjs",
   "scripts/npm-safe-update.mjs",
-  "scripts/cargo-safe-update.test.mjs",
+  "scripts/cargo/safe-update.test.mjs",
+  "scripts/cargo/check-update-policy.test.mjs",
   "scripts/check-cargo-update-policy.mjs",
-  "scripts/check-cargo-update-policy.test.mjs",
 ]);
 
 // P0: raw shell-level Cargo mutation command

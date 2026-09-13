@@ -5,7 +5,7 @@ import { newestMatching } from "./lib/artifacts.js";
 import { ensureReleaseDir, json, requireEnv } from "./lib/json.js";
 import { process, root } from "./lib/paths.js";
 import { output, run } from "./lib/spawn.js";
-import { buildMasTauriArgs } from "./build-mas-args.js";
+import { altoolUploadArgs, buildMasTauriArgs } from "./build-mas-args.js";
 import { validateEntitlementsPlist } from "./validate-macos-entitlements.js";
 
 requireEnv([
@@ -86,37 +86,19 @@ try {
         "Set APPLE_API_KEY/APPLE_API_ISSUER or APPLE_ID/APPLE_PASSWORD for App Store upload.",
       );
     }
-    const auth = apiAuth
-      ? [
-          "--apiKey",
-          process.env.APPLE_API_KEY,
-          "--apiIssuer",
-          process.env.APPLE_API_ISSUER,
-        ]
-      : [
-          "--username",
-          process.env.APPLE_ID,
-          "--password",
-          process.env.APPLE_PASSWORD,
-        ];
-    await run("xcrun", [
-      "altool",
-      "--validate-app",
-      "--type",
-      "macos",
-      "--file",
-      outputPath,
-      ...auth,
-    ]);
-    await run("xcrun", [
-      "altool",
-      "--upload-app",
-      "--type",
-      "macos",
-      "--file",
-      outputPath,
-      ...auth,
-    ]);
+    const auth = {
+      apiKey: apiAuth ? process.env.APPLE_API_KEY : undefined,
+      apiIssuer: apiAuth ? process.env.APPLE_API_ISSUER : undefined,
+      appleId: apiAuth ? undefined : process.env.APPLE_ID,
+    };
+    await run(
+      "xcrun",
+      altoolUploadArgs({ action: "--validate-app", outputPath, ...auth }),
+    );
+    await run(
+      "xcrun",
+      altoolUploadArgs({ action: "--upload-app", outputPath, ...auth }),
+    );
   }
 } finally {
   await rm(temporary, { recursive: true, force: true });

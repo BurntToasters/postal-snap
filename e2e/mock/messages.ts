@@ -9,21 +9,38 @@ export async function registerMockMessages(page: Page): Promise<void> {
     const mock = window.__POSTAL_SNAP_MOCK__ as MockShared;
     const state = window.__POSTAL_SNAP_TEST__ as MockState;
     const { mailboxes, summary, olderSummary, params } = mock;
+    let paginatedCursorConsumed = false;
     Object.assign(mock.handlers, {
       list_messages(args: Record<string, unknown>) {
         if (state.moved || params.has("empty"))
           return { items: [], nextCursor: null, hasMore: false };
         if (location.search.includes("pagination")) {
-          return args.cursor
-            ? { items: [olderSummary], nextCursor: null, hasMore: false }
-            : {
-                items: [summary],
-                nextCursor: {
-                  receivedAt: summary.receivedAt,
-                  uid: summary.uid,
-                },
-                hasMore: true,
-              };
+          if (!args.cursor) {
+            return {
+              items: [summary],
+              nextCursor: {
+                receivedAt: summary.receivedAt,
+                uid: summary.uid,
+              },
+              hasMore: true,
+            };
+          }
+          const cursor = args.cursor as { receivedAt?: unknown; uid?: unknown };
+          if (paginatedCursorConsumed) {
+            throw new Error(
+              "The message list reused a spent pagination cursor.",
+            );
+          }
+          if (
+            cursor.receivedAt !== summary.receivedAt ||
+            cursor.uid !== summary.uid
+          ) {
+            throw new Error(
+              "The message list sent a cursor that did not round-trip from the previous page.",
+            );
+          }
+          paginatedCursorConsumed = true;
+          return { items: [olderSummary], nextCursor: null, hasMore: false };
         }
         return { items: [summary], nextCursor: null, hasMore: false };
       },
@@ -53,6 +70,7 @@ export async function registerMockMessages(page: Page): Promise<void> {
                     ? '<p>Photo:</p><img src="cid:family-photo@example.test">'
                     : "<p>Are we still meeting on Saturday?</p>",
           remoteImagesBlocked: false,
+          references: [],
           attachments: location.search.includes("inline")
             ? [
                 {

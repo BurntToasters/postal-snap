@@ -18,6 +18,8 @@ export interface SentNotice {
   accountId: string;
   /** True when the user picked Send Later vs the undo-send hold. */
   scheduled: boolean;
+  /** Undo-send hold length in seconds; undefined for explicit Send Later. */
+  undoSeconds?: number;
 }
 
 export interface ComposerSeed {
@@ -75,6 +77,7 @@ interface AppState {
   composerOpen: boolean;
   composerAccountId?: string;
   composeSeed?: ComposerSeed;
+  pendingComposeSeed?: ComposerSeed;
   composeNonce: number;
   busy: boolean;
   error?: string;
@@ -107,6 +110,20 @@ interface AppState {
   setBusy: (busy: boolean) => void;
   setError: (error?: string) => void;
   setLastSent: (notice?: SentNotice) => void;
+}
+
+function pendingComposerState(
+  state: AppState,
+  accountId: string | undefined,
+): Partial<AppState> {
+  if (!accountId || !state.pendingComposeSeed) return {};
+  return {
+    composerOpen: true,
+    composerAccountId: accountId,
+    composeSeed: state.pendingComposeSeed,
+    composeNonce: state.composeNonce + 1,
+    pendingComposeSeed: undefined,
+  };
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -169,10 +186,11 @@ export const useAppStore = create<AppState>((set) => ({
               composeSeed: undefined,
             }
           : {}),
+        ...pendingComposerState(state, activeAccountId),
       };
     }),
   selectAccount: (activeAccountId) =>
-    set({
+    set((state) => ({
       activeAccountId,
       activeMailboxId: undefined,
       activeLocalView: undefined,
@@ -184,7 +202,8 @@ export const useAppStore = create<AppState>((set) => ({
       outbox: [],
       snoozed: [],
       selectedMessage: undefined,
-    }),
+      ...pendingComposerState(state, activeAccountId),
+    })),
   setMailboxes: (mailboxes) =>
     set((state) => ({
       mailboxes,
@@ -244,23 +263,31 @@ export const useAppStore = create<AppState>((set) => ({
   setSync: (sync) =>
     set((state) => ({ sync: { ...state.sync, [sync.accountId]: sync } })),
   setSettings: (settings) =>
-    set((state) => ({
-      settings,
-      activeAccountId:
+    set((state) => {
+      const activeAccountId =
         state.activeAccountId ??
         state.accounts.find((account) => account.id === settings.lastAccountId)
-          ?.id,
-    })),
+          ?.id;
+      return {
+        settings,
+        activeAccountId,
+        ...pendingComposerState(state, activeAccountId),
+      };
+    }),
   openComposer: (composeSeed) =>
     set((state) => {
       const composerAccountId =
         composeSeed?.draft?.accountId ?? state.activeAccountId;
-      if (!composerAccountId) return state;
+      if (!composerAccountId) {
+        if (!composeSeed) return state;
+        return { pendingComposeSeed: composeSeed };
+      }
       return {
         composerOpen: true,
         composerAccountId,
         composeSeed,
         composeNonce: state.composeNonce + 1,
+        pendingComposeSeed: undefined,
       };
     }),
   closeComposer: () =>

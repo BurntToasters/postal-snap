@@ -3,8 +3,11 @@
 .setup-page {
   display: grid;
   min-height: 100%;
-  place-items: center;
   padding: 28px;
+}
+
+.app-loading {
+  place-items: center;
 }
 
 .setup-host {
@@ -15,8 +18,25 @@
 }
 
 .setup-page {
+  align-items: start;
+  justify-items: center;
   overflow: auto;
-  background: var(--canvas);
+  background:
+    radial-gradient(
+      circle at 18% 12%,
+      color-mix(in srgb, var(--accent) 13%, transparent),
+      transparent 34%
+    ),
+    radial-gradient(
+      circle at 86% 92%,
+      color-mix(in srgb, var(--accent) 7%, transparent),
+      transparent 30%
+    ),
+    var(--canvas);
+}
+
+.setup-page > .setup-card {
+  margin-block: auto;
 }
 
 .setup-brand {
@@ -27,7 +47,8 @@
 
 .setup-brand p,
 .setup-brand h1,
-.account-form h1 {
+.account-form h1,
+.account-form h2 {
   margin: 0;
 }
 
@@ -38,7 +59,8 @@
 }
 
 .setup-brand h1,
-.account-form h1 {
+.account-form h1,
+.account-form h2 {
   font-size: clamp(1.65rem, 4vw, 2.1rem);
   letter-spacing: -0.025em;
 }
@@ -57,7 +79,7 @@
   color: var(--text-muted);
 }
 
-.setup-progress span {
+.setup-progress > span {
   display: grid;
   width: 30px;
   height: 30px;
@@ -69,29 +91,29 @@
   font-weight: 800;
 }
 
-.setup-progress span.active,
-.setup-progress span.done {
+.setup-progress > span.active,
+.setup-progress > span.done {
   border-color: var(--accent);
   color: var(--accent-contrast);
   background: var(--accent);
 }
 
-.setup-progress span svg {
+.setup-progress > span svg {
   width: 15px;
 }
 
-.setup-progress i {
+.setup-progress > i {
   height: 1px;
   background: var(--border);
 }
 
-.setup-progress small {
+.setup-progress > small {
   padding-top: 7px;
   text-align: center;
   font-size: 0.76rem;
 }
 
-.setup-progress small:last-child {
+.setup-progress > small:last-child {
   grid-column: 3;
 }
 
@@ -112,7 +134,7 @@
 
 .provider-list {
   display: grid;
-  gap: 10px;
+  gap: 12px;
 }
 
 .provider-button {
@@ -125,14 +147,28 @@
   padding: 14px;
   text-align: left;
   border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--surface) 96%, var(--surface-muted));
+  border-radius: var(--radius-md);
+  background: linear-gradient(
+    145deg,
+    color-mix(in srgb, var(--surface-raised) 92%, var(--surface-highlight)),
+    color-mix(in srgb, var(--surface) 90%, var(--surface-muted))
+  );
+  box-shadow:
+    var(--shadow-card),
+    inset 0 1px 0 var(--surface-highlight);
+  transition:
+    transform 140ms ease,
+    border-color 140ms ease,
+    background-color 140ms ease,
+    box-shadow 140ms ease;
 }
 
 .provider-button:hover,
 .provider-button.provider-primary:hover {
   border-color: color-mix(in srgb, var(--accent) 54%, var(--border));
   background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--accent) 12%, transparent);
+  transform: translateY(-1px);
 }
 
 .provider-button.provider-primary {
@@ -142,6 +178,25 @@
 .provider-button > span:nth-child(2) {
   display: grid;
   gap: 3px;
+}
+
+.provider-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.provider-badge {
+  width: fit-content;
+  padding: 2px 7px;
+  border-radius: var(--radius-pill);
+  color: var(--accent-ink) !important;
+  background: var(--accent-soft);
+  font-size: 0.7rem !important;
+  font-weight: 750;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
 }
 
 .provider-button strong {
@@ -154,15 +209,28 @@
 }
 
 .provider-arrow {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 50%;
   color: var(--accent);
-  font-size: 1.35rem;
+  background: var(--accent-soft);
+}
+
+.provider-arrow svg {
+  width: 19px;
 }
 
 .privacy-note {
   display: flex;
   align-items: center;
   gap: 9px;
-  margin-top: 24px;
+  margin-top: 18px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--success) 24%, var(--border));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--success-soft) 72%, transparent);
   font-size: 0.88rem;
 }
 
@@ -252,17 +320,18 @@
   gap: 9px;
   padding: 11px 13px;
   border-radius: 8px;
-  color: var(--accent);
+  color: var(--accent-ink);
   background: var(--accent-soft);
 }
 
 .connection-status.error {
-  color: var(--danger);
+  color: var(--danger-ink);
   background: color-mix(in srgb, var(--danger) 12%, var(--surface));
 }
 
 .connection-status.success {
-  color: var(--success);
+  color: var(--success-ink);
+  background: color-mix(in srgb, var(--success-soft) 70%, var(--surface));
 }
 
 .connection-status svg {
@@ -292,13 +361,69 @@
 }
 
 .setup-flow-progress {
-  grid-template-columns: repeat(4, 30px);
-  justify-content: start;
-  gap: 8px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  margin: 26px 0 22px;
 }
 
-.setup-flow-progress span {
-  grid-row: 1;
+.setup-flow-progress > div {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: var(--text-muted);
+}
+
+.setup-flow-progress > div:not(:last-child)::after {
+  position: absolute;
+  z-index: 0;
+  top: 15px;
+  left: calc(50% + 20px);
+  width: calc(100% - 40px);
+  height: 2px;
+  content: "";
+  background: var(--border);
+}
+
+.setup-flow-progress > div.done:not(:last-child)::after {
+  background: color-mix(in srgb, var(--accent) 70%, var(--border));
+}
+
+.setup-flow-progress > div > span {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface);
+  font-size: 0.83rem;
+  font-weight: 800;
+}
+
+.setup-flow-progress > div > span svg {
+  width: 15px;
+}
+
+.setup-flow-progress > div:is(.active, .done) > span {
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+  background: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+
+.setup-flow-progress > div > small {
+  padding: 0 4px;
+  text-align: center;
+  font-size: 0.76rem;
+  font-weight: 650;
+}
+
+.setup-flow-progress > div.active > small {
+  color: var(--text);
 }
 
 .setup-step {
@@ -437,7 +562,7 @@
 }
 
 .setup-account-embed {
-  gap: 12px;
+  gap: 16px;
 }
 
 .setup-wizard-embedded {
@@ -449,8 +574,33 @@
 
 .setup-account-embed .setup-card {
   width: 100%;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  box-shadow: none;
+  min-height: auto;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--surface-raised) 78%, var(--surface));
+  box-shadow:
+    var(--shadow-card),
+    inset 0 1px 0 var(--surface-highlight);
+}
+
+.provider-picker-title {
+  margin: 0 0 12px;
+  font-size: 0.86rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.provider-picker-embedded .privacy-note {
+  margin-top: 12px;
+}
+
+.account-form-embedded .setup-form-header {
+  justify-content: flex-start;
+}
+
+.setup-account-actions {
+  margin-top: 0;
 }

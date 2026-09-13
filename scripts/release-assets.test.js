@@ -6,6 +6,11 @@ import { artifactArch, artifactPlatform } from "./lib/artifacts.js";
 import { root } from "./lib/paths.js";
 import { validateManifest } from "./validate-updater-manifest.js";
 import {
+  isDirectRun,
+  shouldSkipMissingTarget,
+  updaterManifestName,
+} from "./validate-updater-live.js";
+import {
   remoteTagCommit,
   verifyDraftReleaseCommit,
   verifyRemoteReleaseCommit,
@@ -30,6 +35,44 @@ test("signed GitHub updater manifest shape", () => {
     }),
     true,
   );
+});
+
+test("live updater validation selects published beta manifest names", () => {
+  assert.equal(
+    updaterManifestName("windows", "x86_64", "0.1.9"),
+    "latest-windows-x86_64.json",
+  );
+  assert.equal(
+    updaterManifestName("windows", "x86_64", "0.1.9-beta.1"),
+    "latest-windows-beta-x86_64.json",
+  );
+  assert.equal(
+    updaterManifestName("darwin", "aarch64", "0.1.9-beta.1"),
+    "latest-darwin-beta-aarch64.json",
+  );
+  assert.doesNotMatch(
+    updaterManifestName("windows", "x86_64", "0.1.9-beta.1"),
+    /x86_64-beta/,
+  );
+});
+
+test("live updater validation fails on missing required manifests", () => {
+  assert.equal(shouldSkipMissingTarget("windows", "x86_64", 404), false);
+  assert.equal(shouldSkipMissingTarget("linux", "x86_64", 404), false);
+  assert.equal(shouldSkipMissingTarget("windows", "x86_64", 500), false);
+  assert.equal(shouldSkipMissingTarget("linux", "aarch64", 500), false);
+  assert.equal(shouldSkipMissingTarget("linux", "aarch64", 404), true);
+});
+
+test("live updater validation runs when the entry path casing differs", () => {
+  assert.equal(isDirectRun("/repo/scripts/validate-updater-live.js"), true);
+  assert.equal(isDirectRun("/repo/scripts/VALIDATE-UPDATER-LIVE.JS"), true);
+  assert.equal(isDirectRun("/repo/scripts/Validate-Updater-Live.Js"), true);
+  assert.equal(
+    isDirectRun("/repo/scripts/validate-updater-live.test.js"),
+    false,
+  );
+  assert.equal(isDirectRun(undefined), false);
 });
 
 test("annotated release tags resolve to their commit", async () => {
@@ -163,23 +206,47 @@ test("hard finalize still requires the published git tag to match the session co
   );
 });
 
-test("finalize-release verifies drafts before upload and tags only after publish", async () => {
+test("finalize-release verifies drafts before upload and beta-syncs before publish", async () => {
   const finalize = await readFile(
     join(root, "scripts/finalize-release.js"),
     "utf8",
   );
   const draftIndex = finalize.indexOf("await verifyDraftReleaseCommit");
-  const uploadIndex = finalize.indexOf('runGitHub([\n  "release",\n  "upload"');
-  const remoteIndex = finalize.indexOf("await verifyRemoteReleaseCommit");
+  const uploadIndex = finalize.indexOf(
+    'runGitHub([\n    "release",\n    "upload",',
+  );
+  const hardIndex = finalize.indexOf("await runHardFinalize({");
   const publishIndex = finalize.indexOf('"--draft=false"');
   assert.ok(draftIndex >= 0);
   assert.ok(uploadIndex > draftIndex);
-  assert.ok(remoteIndex > publishIndex);
-  assert.ok(publishIndex > uploadIndex);
+  assert.ok(hardIndex > uploadIndex);
+  assert.ok(publishIndex > hardIndex);
   assert.doesNotMatch(
     finalize.slice(draftIndex, uploadIndex),
     /verifyRemoteReleaseCommit/,
   );
+  assert.match(
+    finalize,
+    /syncBetaManifests: \(\) => syncLocalBetaManifests\(directory\)/,
+  );
+  assert.match(
+    finalize,
+    /reconcileBetaManifests: \(\) =>\s*run\("node", \["scripts\/finalize-release\.js", "--sync-beta-manifests"\]\)/,
+  );
+
+  const hardFinalize = finalize.slice(
+    finalize.indexOf("export async function runHardFinalize"),
+  );
+  const verifyStep = hardFinalize.indexOf("await verifyDraft()");
+  const syncStep = hardFinalize.indexOf("await syncBetaManifests()");
+  const publishStep = hardFinalize.indexOf("await publish()");
+  const remoteStep = hardFinalize.indexOf("await verifyRemote()");
+  const reconcileStep = hardFinalize.indexOf("await reconcileBetaManifests()");
+  assert.ok(verifyStep >= 0);
+  assert.ok(syncStep > verifyStep);
+  assert.ok(publishStep > syncStep);
+  assert.ok(remoteStep > publishStep);
+  assert.ok(reconcileStep > remoteStep);
 });
 
 test("direct and Store builds keep separate capabilities", async () => {
@@ -201,7 +268,7 @@ test("direct and Store builds keep separate capabilities", async () => {
   assert.deepEqual(msstore.app.security.capabilities, ["store"]);
   assert.deepEqual(flatpak.app.security.capabilities, ["store"]);
   assert.ok(directCapability.permissions.includes("updater:default"));
-  assert.ok(directCapability.permissions.includes("process:allow-restart"));
+  assert.ok(!directCapability.permissions.includes("process:allow-restart"));
   assert.ok(!directCapability.permissions.includes("process:default"));
   assert.ok(!directCapability.permissions.includes("notification:default"));
   assert.ok(!directCapability.permissions.includes("deep-link:allow-register"));
@@ -225,6 +292,8 @@ test("direct and Store builds keep separate capabilities", async () => {
     assert.ok(!capability.permissions.includes("core:window:allow-destroy"));
   }
   assert.equal(mas.app.macOSPrivateApi, false);
+  assert.equal(msstore.app.macOSPrivateApi, false);
+  assert.equal(flatpak.app.macOSPrivateApi, false);
   assert.equal(mas.app.windows[0].transparent, false);
   assert.equal(direct.app.macOSPrivateApi, false);
   const directOverlay = await readJson("src-tauri/tauri.direct.conf.json");
@@ -238,16 +307,33 @@ test("direct and Store builds keep separate capabilities", async () => {
   assert.equal(flatpak.plugins.updater, null);
 });
 
-test("flatpak build-bundle uses the manifest branch, not a hardcoded mismatch", async () => {
+test("flatpak build-bundle uses the stable branch without a lint-invalid manifest branch", async () => {
   const manifest = await readFile(
     join(root, "packaging/flatpak/run.rosie.snap.yml"),
     "utf8",
   );
   const script = await readFile(join(root, "scripts/build-flatpak.js"), "utf8");
-  assert.match(manifest, /^branch:\s*stable\s*$/m);
+  assert.doesNotMatch(manifest, /^branch:/m);
   assert.match(manifest, /org\.freedesktop\.Notifications/);
-  assert.match(script, /manifest\.match\(\/\^branch:/);
-  assert.doesNotMatch(script, /"run\.rosie\.snap",\s*"stable"/);
+  assert.match(manifest, /^runtime-version:\s*"50"$/m);
+  assert.match(manifest, /run\.rosie\.snap\.metainfo\.xml/);
+  assert.match(script, /const branch = "stable";/);
+  assert.match(script, /"run\.rosie\.snap",\s*branch/);
+  const metainfo = await readFile(
+    join(root, "packaging/flatpak/run.rosie.snap.metainfo.xml"),
+    "utf8",
+  );
+  assert.match(metainfo, /<id>run\.rosie\.snap<\/id>/);
+  assert.match(metainfo, /MPL-2\.0/);
+  const lintExceptions = JSON.parse(
+    await readFile(
+      join(root, "packaging/flatpak/lint-exceptions.json"),
+      "utf8",
+    ),
+  );
+  assert.deepEqual(lintExceptions, {
+    "run.rosie.snap": ["appid-url-not-reachable"],
+  });
 });
 
 test("direct updater is GitHub-only and notices are bundled", async () => {
@@ -280,6 +366,24 @@ test("direct updater is GitHub-only and notices are bundled", async () => {
   );
   assert.notEqual(config.bundle.windows.webviewInstallMode?.type, "skip");
   assert.match(config.bundle.windows.signCommand, /windows-artifact-sign\.ps1/);
+  assert.match(config.bundle.windows.signCommand, /-NonInteractive/);
+  assert.equal(config.bundle.publisher, "Postal Snap");
+  assert.equal(
+    config.bundle.homepage,
+    "https://github.com/BurntToasters/postal-snap",
+  );
+  assert.equal(
+    config.bundle.windows.nsis.installerHooks,
+    "windows/installer-hooks.nsh",
+  );
+  const hooks = await readFile(
+    join(root, "src-tauri/windows/installer-hooks.nsh"),
+    "utf8",
+  );
+  assert.match(hooks, /NSIS_HOOK_PREINSTALL/);
+  assert.match(hooks, /NSIS_HOOK_PREUNINSTALL/);
+  assert.match(hooks, /POSTAL_SNAP_MIN_WINDOWS_BUILD 19045/);
+  assert.match(hooks, /--cleanup-credentials/);
 });
 
 test("secret scanning ignores only TweetFeed IOC snapshots", async () => {
@@ -404,10 +508,20 @@ test("Windows release signing uses Azure Artifact Signing, not a local PFX", asy
   assert.match(tauriBuild, /inspectCodesignDisplay/);
   assert.doesNotMatch(tauriBuild, /AppImage\.tar\.gz/);
   assert.doesNotMatch(tauriBuild, /Compress-Archive/);
-  assert.match(tauriBuild, /notarytool", "submit"/);
+  assert.match(signingEnv, /notarytool", "submit"/);
+  assert.match(tauriBuild, /notarytoolSubmitArgs/);
   assert.match(
     tauriBuild,
-    /DMG notarization requires APPLE_API_KEY \+ APPLE_API_ISSUER \+ APPLE_API_KEY_PATH/,
+    /DMG notarization requires NOTARYTOOL_KEYCHAIN_PROFILE or an App Store Connect API key/,
+  );
+  assert.doesNotMatch(
+    tauriBuild,
+    /"--password",\s*process\.env\.APPLE_PASSWORD/,
+  );
+  assert.match(signingEnv, /ALLOW_UNSIGNED_WINDOWS/);
+  assert.match(
+    signingEnv,
+    /SKIP_WIN_CODESIGN=1 is not allowed for signed Windows release builds/,
   );
   assert.match(tauriBuild, /stapler", "staple"/);
   assert.match(tauriBuild, /signer", "sign"/);
@@ -427,6 +541,12 @@ test("Windows release signing uses Azure Artifact Signing, not a local PFX", asy
   assert.match(verify, /AZURE_ARTIFACT_SIGNING_PUBLISHER/);
   assert.match(verify, /POSTAL_SNAP_INSTALLED_EXE/);
   assert.doesNotMatch(verify, /zinnia_shell|ZinniaContextMenu/);
+  assert.match(verify, /artifactSigningPublicTrustEku/);
+  assert.match(verify, /1\.3\.6\.1\.4\.1\.311\.97\.1\.0/);
+  assert.doesNotMatch(verify, /nsis\.zip|Expand-Archive/);
+  assert.match(sign, /1\.3\.6\.1\.4\.1\.311\.97\.1\.0/);
+  assert.match(tauriBuild, /NO_STRIP/);
+  assert.doesNotMatch(tauriBuild, /nsis\.zip/i);
 
   const ci = await readFile(join(root, ".github/workflows/ci.yml"), "utf8");
   assert.doesNotMatch(
@@ -434,6 +554,31 @@ test("Windows release signing uses Azure Artifact Signing, not a local PFX", asy
     /Microsoft\.Azure\.ArtifactSigningClientTools|ArtifactSigningClientTools\.msi/,
   );
   assert.match(ci, /Azure Artifact Signing/);
+});
+
+test("Apple credentials stay out of process arguments", async () => {
+  const [signingEnv, buildMas, masArgs, docs] = await Promise.all([
+    readFile(join(root, "scripts/tauri-signing-env.js"), "utf8"),
+    readFile(join(root, "scripts/build-mas.js"), "utf8"),
+    readFile(join(root, "scripts/build-mas-args.js"), "utf8"),
+    readFile(join(root, "docs/RELEASING.md"), "utf8"),
+  ]);
+  assert.match(signingEnv, /NOTARYTOOL_KEYCHAIN_PROFILE/);
+  assert.doesNotMatch(signingEnv, /--password/);
+  assert.match(masArgs, /@env:APPLE_PASSWORD/);
+  assert.doesNotMatch(buildMas, /"--password"/);
+  assert.match(docs, /NOTARYTOOL_KEYCHAIN_PROFILE/);
+  assert.match(docs, /mac-keychain-ssh/);
+});
+
+test("release docs match current automation behavior", async () => {
+  const docs = await readFile(join(root, "docs/RELEASING.md"), "utf8");
+  assert.doesNotMatch(docs, /test:all[^\n]*still install/);
+  assert.match(docs, /setup:e2e/);
+  assert.match(docs, /ALLOW_UNSIGNED_WINDOWS/);
+  assert.match(docs, /GPG_KEY_ID/);
+  assert.match(docs, /setup-macos-ci-keychain/);
+  assert.match(docs, /build:linux/);
 });
 
 test("release verification covers generated manifests after finalization", async () => {
@@ -446,6 +591,8 @@ test("release verification covers generated manifests after finalization", async
   );
   assert.ok(verifier.includes("latest-${platform}${channel}-${arch}.json"));
   assert.ok(verifier.includes("verifyTauriSignatureFile"));
+  assert.ok(verifier.includes("gpgVerifyStatusArgs"));
+  assert.ok(verifier.includes("assertGpgSignatureFingerprint"));
   assert.ok(verifier.includes("platformEntry.signature !== expectedSignature"));
   assert.match(
     packageJson.scripts["release:finalize:hard"],
@@ -556,14 +703,25 @@ test("test:all still includes Playwright e2e unless SKIP_E2E is set", async () =
     await readFile(join(root, "package.json"), "utf8"),
   );
   assert.equal(packageJson.scripts["test:all"], "node scripts/test-all.js");
-  assert.equal(packageJson.scripts["test:e2e"], "playwright test");
+  assert.equal(packageJson.scripts["test:e2e"], "node scripts/run-e2e.js");
   assert.equal(
     packageJson.scripts["test:cov"],
     "node scripts/headless-coverage.js",
   );
   assert.equal(
     packageJson.scripts["test:release-assets"],
-    "node --test scripts/*.test.js scripts/lib/*.test.js",
+    "node scripts/run-release-asset-tests.js",
+  );
+  const { collectReleaseAssetTestFiles } =
+    await import("./run-release-asset-tests.js");
+  const releaseTestFiles = collectReleaseAssetTestFiles(join(root, "scripts"));
+  assert.ok(
+    releaseTestFiles.some((path) => path.endsWith("release-assets.test.js")),
+  );
+  assert.ok(releaseTestFiles.some((path) => path.endsWith("utils.test.js")));
+  assert.ok(
+    !releaseTestFiles.some((path) => path.endsWith("safe-update.test.mjs")),
+    "cargo-safe-update tests stay on test:cargo-safe-update only",
   );
 
   const { qualityGateSteps } = await import("./test-all.js");
@@ -650,7 +808,7 @@ test("test-all and package.json include cargo safe update and policy check", asy
   );
   assert.equal(
     packageJson.scripts["test:cargo-safe-update"],
-    "node --test scripts/cargo-safe-update.test.mjs scripts/check-cargo-update-policy.test.mjs",
+    "node --test scripts/cargo/safe-update.test.mjs scripts/cargo/check-update-policy.test.mjs",
   );
   assert.equal(
     packageJson.scripts["check:cargo-update-policy"],
@@ -662,4 +820,56 @@ test("test-all and package.json include cargo safe update and policy check", asy
   const testAll = await readFile(join(root, "scripts/test-all.js"), "utf8");
   assert.ok(testAll.includes('["run", "check:cargo-update-policy"]'));
   assert.ok(testAll.includes('["run", "test:cargo-safe-update"]'));
+});
+
+test("MSIX manifest declares the WebView2 runtime dependency", async () => {
+  const pack = await readFile(join(root, "scripts/msstore-pack.js"), "utf8");
+  assert.match(pack, /Microsoft\.Win32WebView2/);
+});
+
+test("Linux release paths run the baseline and WebKit preflight", async () => {
+  const packageJson = JSON.parse(
+    await readFile(join(root, "package.json"), "utf8"),
+  );
+  for (const name of [
+    "build:linux:x64:prepared",
+    "build:linux:arm64:prepared",
+    "flatpak:bundle",
+    "flatpak:bundle:arm64",
+  ]) {
+    assert.match(
+      packageJson.scripts[name],
+      /npm run preflight:linux &&/,
+      `${name} must run the Linux release preflight`,
+    );
+  }
+  const { assertLinuxBuildBaseline } = await import("./linux-preflight.js");
+  assert.deepEqual(assertLinuxBuildBaseline({ platform: "darwin" }), {
+    skipped: true,
+  });
+  assert.throws(
+    () =>
+      assertLinuxBuildBaseline({
+        platform: "linux",
+        glibcVersion: "2.39",
+        webkitVersion: "2.52.6",
+      }),
+    /glibc 2\.39 is newer than the 2\.36 baseline/,
+  );
+  assert.throws(
+    () =>
+      assertLinuxBuildBaseline({
+        platform: "linux",
+        glibcVersion: "2.35",
+        webkitVersion: "2.52.5",
+      }),
+    /below the 2\.52\.6 security floor/,
+  );
+  const allowed = assertLinuxBuildBaseline({
+    platform: "linux",
+    glibcVersion: "2.39",
+    webkitVersion: "2.52.6",
+    allowNewerGlibc: true,
+  });
+  assert.equal(allowed.glibcVersion, "2.39");
 });

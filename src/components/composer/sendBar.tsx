@@ -1,4 +1,11 @@
-import type { Dispatch, RefObject, SetStateAction } from "react";
+import {
+  useEffect,
+  useRef,
+  type Dispatch,
+  type KeyboardEvent,
+  type RefObject,
+  type SetStateAction,
+} from "react";
 import {
   ChevronDown,
   Clock,
@@ -11,6 +18,7 @@ import {
 } from "lucide-react";
 import { shortcutMod } from "../../format";
 import { strings } from "../../i18n";
+import { moveMenuFocus } from "../toolbarNav";
 import { tonightAtNine, tomorrowAtEight } from "./schedule";
 
 export interface SendBarProps {
@@ -48,6 +56,22 @@ export function SendBar({
   addInlineImage,
   discardDraft,
 }: SendBarProps) {
+  const chevronRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!sendMenuOpen) return;
+    menuRef.current
+      ?.querySelector<HTMLElement>('[role="menuitem"]:not([disabled])')
+      ?.focus();
+  }, [sendMenuOpen]);
+
+  function closeMenu() {
+    setScheduleOpen(false);
+    setSendMenuOpen(false);
+    chevronRef.current?.focus();
+  }
+
   return (
     <footer>
       <div className="send-split" ref={sendMenuRef}>
@@ -71,6 +95,7 @@ export function SendBar({
         <button
           className="primary-button send-chevron"
           type="button"
+          ref={chevronRef}
           disabled={!canSend}
           aria-expanded={sendMenuOpen}
           aria-haspopup="menu"
@@ -86,8 +111,23 @@ export function SendBar({
         {sendMenuOpen ? (
           <div
             className="send-menu"
+            ref={menuRef}
             role="menu"
             aria-label={strings.composer.sendOptions}
+            onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
+              if (event.key === "Escape" || event.key === "Tab") {
+                event.preventDefault();
+                event.stopPropagation();
+                closeMenu();
+                return;
+              }
+              if (
+                event.target instanceof HTMLElement &&
+                event.target.matches("input, textarea")
+              )
+                return;
+              moveMenuFocus(event);
+            }}
           >
             <button
               type="button"

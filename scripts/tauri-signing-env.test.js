@@ -5,11 +5,16 @@ import { join } from "node:path";
 import test from "node:test";
 import {
   AZURE_ARTIFACT_SIGNING_ENV_VARS,
+  NOTARYTOOL_KEYCHAIN_PROFILE_ENV,
+  allowUnsignedWindows,
   artifactSigningPowershellArgs,
   assertWindowsSigningConfigured,
+  envForChild,
   inspectCodesignDisplay,
   macosBundleExecutablePath,
   missingAzureArtifactSigningVars,
+  notarytoolSubmitArgs,
+  resolveNotarytoolKeychainProfile,
   skipWindowsCodeSigning,
   windowsArtifactsToSign,
 } from "./tauri-signing-env.js";
@@ -30,10 +35,13 @@ test("Azure Artifact Signing env list matches IYERIS/Zinnia required vars", () =
   ]);
 });
 
-test("SKIP_WIN_CODESIGN=1 is the only unsigned Windows escape hatch", () => {
+test("SKIP_WIN_CODESIGN=1 needs an explicit unsigned override on release paths", () => {
   assert.equal(skipWindowsCodeSigning({}), false);
   assert.equal(skipWindowsCodeSigning({ SKIP_WIN_CODESIGN: "0" }), false);
   assert.equal(skipWindowsCodeSigning({ SKIP_WIN_CODESIGN: "1" }), true);
+  assert.equal(allowUnsignedWindows({}), false);
+  assert.equal(allowUnsignedWindows({ ALLOW_UNSIGNED_WINDOWS: "0" }), false);
+  assert.equal(allowUnsignedWindows({ ALLOW_UNSIGNED_WINDOWS: "1" }), true);
 });
 
 test("assertWindowsSigningConfigured requires Azure vars, not a thumbprint", () => {
@@ -74,10 +82,37 @@ test("assertWindowsSigningConfigured requires Azure vars, not a thumbprint", () 
   );
   assert.deepEqual(
     assertWindowsSigningConfigured({
+      requireWindowsSigning: false,
+      env: { SKIP_WIN_CODESIGN: "1" },
+    }),
+    { skipSigning: true },
+  );
+  assert.throws(
+    () =>
+      assertWindowsSigningConfigured({
+        requireWindowsSigning: true,
+        target: "x86_64-pc-windows-msvc",
+        platform: "win32",
+        env: { SKIP_WIN_CODESIGN: "1" },
+      }),
+    /SKIP_WIN_CODESIGN=1 is not allowed for signed Windows release builds/,
+  );
+  assert.throws(
+    () =>
+      assertWindowsSigningConfigured({
+        requireWindowsSigning: true,
+        target: "x86_64-pc-windows-msvc",
+        platform: "win32",
+        env: { SKIP_WIN_CODESIGN: "1", ALLOW_UNSIGNED_WINDOWS: "0" },
+      }),
+    /ALLOW_UNSIGNED_WINDOWS=1/,
+  );
+  assert.deepEqual(
+    assertWindowsSigningConfigured({
       requireWindowsSigning: true,
       target: "x86_64-pc-windows-msvc",
       platform: "win32",
-      env: { SKIP_WIN_CODESIGN: "1" },
+      env: { SKIP_WIN_CODESIGN: "1", ALLOW_UNSIGNED_WINDOWS: "1" },
     }),
     { skipSigning: true },
   );
@@ -205,4 +240,86 @@ test("artifactSigningPowershellArgs match Zinnia SignTool invocation flags", () 
       "app.exe",
     ],
   );
+});
+
+test("envForChild removes release secrets the child does not consume", () => {
+  const env = {
+    PATH: "/usr/bin",
+    TAURI_SIGNING_PRIVATE_KEY: "key",
+    TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "pw",
+    AZURE_CLIENT_SECRET: "secret",
+    APPLE_PASSWORD: "pw",
+    GPG_PASSPHRASE: "gpg",
+  };
+  assert.deepEqual(
+    envForChild(env, [
+      "TAURI_SIGNING_PRIVATE_KEY",
+      "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+    ]),
+    {
+      PATH: "/usr/bin",
+      TAURI_SIGNING_PRIVATE_KEY: "key",
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "pw",
+    },
+  );
+  assert.deepEqual(envForChild(env, []), { PATH: "/usr/bin" });
+});
+
+test("notarytool prefers the keychain profile and never passes the password in argv", () => {
+  assert.equal(NOTARYTOOL_KEYCHAIN_PROFILE_ENV, "NOTARYTOOL_KEYCHAIN_PROFILE");
+  assert.equal(
+    resolveNotarytoolKeychainProfile({
+      NOTARYTOOL_KEYCHAIN_PROFILE: " postal-snap-notary ",
+    }),
+    "postal-snap-notary",
+  );
+  assert.equal(resolveNotarytoolKeychainProfile({}), "");
+  assert.deepEqual(
+    notarytoolSubmitArgs({ path: "app.dmg", keychainProfile: "prof" }),
+    ["notarytool", "submit", "app.dmg", "--wait", "--keychain-profile", "prof"],
+  );
+  assert.deepEqual(
+    notarytoolSubmitArgs({
+      path: "app.dmg",
+      apiKeyPath: "/keys/AuthKey.p8",
+      apiKeyId: "KEYID",
+      apiIssuer: "ISSUER",
+    }),
+    [
+      "notarytool",
+      "submit",
+      "app.dmg",
+      "--wait",
+      "--key",
+      "/keys/AuthKey.p8",
+      "--key-id",
+      "KEYID",
+      "--issuer",
+      "ISSUER",
+    ],
+  );
+  assert.deepEqual(
+    notarytoolSubmitArgs({
+      path: "app.dmg",
+      keychainProfile: "prof",
+      apiKeyPath: "/keys/AuthKey.p8",
+      apiKeyId: "KEYID",
+      apiIssuer: "ISSUER",
+    }),
+    ["notarytool", "submit", "app.dmg", "--wait", "--keychain-profile", "prof"],
+  );
+  assert.throws(
+    () =>
+      notarytoolSubmitArgs({
+        path: "app.dmg",
+        appleId: "person@example.com",
+        appleTeamId: "TEAMID",
+      }),
+    /does not support passing the app-specific password as an argument/,
+  );
+  assert.throws(
+    () => notarytoolSubmitArgs({ path: "app.dmg" }),
+    /requires NOTARYTOOL_KEYCHAIN_PROFILE/,
+  );
+  assert.throws(() => notarytoolSubmitArgs({}), /artifact path/);
 });

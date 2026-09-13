@@ -44,6 +44,8 @@ if [[ -z "${KEYCHAIN_PASSWORD:-}" ]]; then
   fi
 fi
 
+# Signing-host constraint: `security` accepts the keychain password only as an
+# argument, so run this on a dedicated signing VM. See docs/RELEASING.md.
 echo "Preparing keychain for non-GUI codesign..."
 security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"

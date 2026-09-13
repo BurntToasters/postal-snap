@@ -1,8 +1,10 @@
 import { Download, Eye, X } from "lucide-react";
+import { createPortal } from "react-dom";
 import { formatBytes } from "../../format";
 import { strings } from "../../i18n";
 import type { Attachment, AttachmentPreview, MessageDetail } from "../../types";
 import { useDialogFocus } from "../useDialogFocus";
+import { useInertBackground } from "../useInertBackground";
 
 export function AttachmentPreviewDialog({
   preview,
@@ -14,7 +16,8 @@ export function AttachmentPreviewDialog({
   onClose: () => void;
 }) {
   const dialogRef = useDialogFocus(onClose);
-  return (
+  useInertBackground();
+  return createPortal(
     <div className="modal-layer attachment-preview-layer">
       <button
         type="button"
@@ -41,6 +44,7 @@ export function AttachmentPreviewDialog({
             className="icon-button"
             onClick={onClose}
             aria-label={strings.common.close}
+            title={strings.common.close}
           >
             <X aria-hidden="true" />
           </button>
@@ -65,7 +69,8 @@ export function AttachmentPreviewDialog({
           </button>
         </footer>
       </section>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -117,6 +122,7 @@ export function AttachmentList({
                     }
                     onClick={() => void onPreview(attachment.id)}
                     aria-label={`${strings.reader.preview}: ${attachment.filename}`}
+                    title={strings.reader.previewTitle(attachment.filename)}
                   >
                     <Eye aria-hidden="true" />
                   </button>

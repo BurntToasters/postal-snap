@@ -1,8 +1,10 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import { Composer } from "../components/Composer";
+import { strings } from "../i18n";
 import { useAppStore } from "../store";
+import type { DraftSyncEvent } from "../types";
 import { makeAccount } from "./helpers/fixtures";
 import { resetStore } from "./helpers/store";
 
@@ -16,6 +18,8 @@ vi.mock("../api", () => ({
     chooseAttachments: vi.fn(),
     suggestRecipients: vi.fn().mockResolvedValue([]),
     showNativeConfirm: vi.fn().mockResolvedValue(true),
+    onDraftSyncChanged: vi.fn().mockResolvedValue(() => undefined),
+    listDrafts: vi.fn().mockResolvedValue([]),
   },
 }));
 
@@ -37,6 +41,10 @@ beforeEach(() => {
     "data:image/png;base64,AA==",
   );
   vi.mocked(api.showNativeConfirm).mockResolvedValue(true);
+  vi.mocked(api.onDraftSyncChanged)
+    .mockReset()
+    .mockResolvedValue(() => undefined);
+  vi.mocked(api.listDrafts).mockReset().mockResolvedValue([]);
   resetStore({
     accounts: [account],
     activeAccountId: account.id,
@@ -114,16 +122,16 @@ describe("composer draft persistence", () => {
 
   it("minimizes into docked pill and restores back to full composer", () => {
     render(<Composer accountId={account.id} />);
-    expect(screen.getByRole("dialog", { name: /New message/i })).toBeDefined();
+    expect(screen.getByRole("dialog", { name: /New message/i })).toBeVisible();
 
     const minimizeBtn = screen.getByRole("button", { name: "Minimize draft" });
     fireEvent.click(minimizeBtn);
 
     const restoreBtn = screen.getByRole("button", { name: /Restore/i });
-    expect(restoreBtn).toBeDefined();
+    expect(restoreBtn).toBeVisible();
 
     fireEvent.click(restoreBtn);
-    expect(screen.getByRole("dialog", { name: /New message/i })).toBeDefined();
+    expect(screen.getByRole("dialog", { name: /New message/i })).toBeVisible();
   });
 
   it("renders from alias selector when account has aliases", () => {
@@ -138,7 +146,7 @@ describe("composer draft persistence", () => {
 
     render(<Composer accountId={account.id} />);
     const select = screen.getByLabelText("From") as HTMLSelectElement;
-    expect(select).toBeDefined();
+    expect(select).toBeVisible();
     expect(select.value).toBe("sam@example.test");
 
     fireEvent.change(select, { target: { value: "alias1@example.test" } });
@@ -154,7 +162,7 @@ describe("composer draft persistence", () => {
     fireEvent.click(ccToggle);
     expect(ccToggle.getAttribute("aria-expanded")).toBe("true");
     expect(bccToggle.getAttribute("aria-expanded")).toBe("false");
-    expect(screen.getByLabelText("Cc", { selector: "input" })).toBeDefined();
+    expect(screen.getByLabelText("Cc", { selector: "input" })).toBeVisible();
   });
 
   it("suggests previous recipients and completes on Enter", async () => {
@@ -217,11 +225,11 @@ describe("composer draft persistence", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(200);
     });
-    expect(screen.getByRole("listbox")).toBeDefined();
+    expect(screen.getByRole("listbox")).toBeVisible();
 
     fireEvent.keyDown(to, { key: "Escape" });
     expect(screen.queryByRole("listbox")).toBeNull();
-    expect(screen.getByRole("dialog", { name: /New message/i })).toBeDefined();
+    expect(screen.getByRole("dialog", { name: /New message/i })).toBeVisible();
   });
 
   it("does not send while Settings is open", async () => {
@@ -253,8 +261,8 @@ describe("composer draft persistence", () => {
     fireEvent.click(screen.getByRole("button", { name: "More formatting" }));
     fireEvent.click(screen.getByRole("button", { name: "Insert link" }));
     expect(prompt).not.toHaveBeenCalled();
-    expect(screen.getByRole("dialog", { name: "Insert link" })).toBeDefined();
-    expect(screen.getByLabelText("Web address")).toBeDefined();
+    expect(screen.getByRole("dialog", { name: "Insert link" })).toBeVisible();
+    expect(screen.getByLabelText("Web address")).toBeVisible();
     prompt.mockRestore();
   });
 
@@ -287,7 +295,7 @@ describe("composer draft persistence", () => {
       </div>,
     );
     fireEvent.keyDown(document, { key: "Escape" });
-    expect(screen.getByRole("dialog", { name: /New message/i })).toBeDefined();
+    expect(screen.getByRole("dialog", { name: /New message/i })).toBeVisible();
   });
 
   it("keeps the original message readable for reply and forward", () => {
@@ -555,7 +563,9 @@ describe("composer draft persistence", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(useAppStore.getState().error).toBe("Error: restore failed");
+    expect(useAppStore.getState().error).toBe(
+      strings.composer.inlineImageFailed(1),
+    );
   });
 
   it("validates, applies, cancels, and escapes the link dialog", () => {
@@ -905,5 +915,218 @@ describe("composer draft persistence", () => {
       screen.getByRole("button", { name: "Save draft and close" }),
     );
     expect(useAppStore.getState().composerOpen).toBe(false);
+  });
+
+  function seedSyncedBannerDraft() {
+    useAppStore.setState({
+      composeSeed: {
+        draft: {
+          id: "draft-sync",
+          accountId: account.id,
+          to: ["jane@example.test"],
+          cc: [],
+          bcc: [],
+          subject: "Stored",
+          htmlBody: "<p>Stored</p>",
+          textBody: "Stored",
+          attachments: [],
+        },
+        draftSummary: {
+          id: "draft-sync",
+          accountId: account.id,
+          recipients: "jane@example.test",
+          subject: "Stored",
+          updatedAt: "2026-09-01T12:00:00Z",
+          syncState: "localOnly",
+          syncDetail: "Saved locally.",
+        },
+      },
+    });
+  }
+
+  it("clears the draft-sync banner when a synced event lands", async () => {
+    let syncHandler: ((event: DraftSyncEvent) => void) | undefined;
+    vi.mocked(api.onDraftSyncChanged).mockImplementation(async (handler) => {
+      syncHandler = handler;
+      return () => undefined;
+    });
+    seedSyncedBannerDraft();
+    render(<Composer accountId={account.id} />);
+    expect(screen.getByText("Saved on this computer")).toBeVisible();
+
+    act(() => {
+      syncHandler?.({
+        accountId: account.id,
+        draftId: "draft-sync",
+        syncState: "synced",
+      });
+    });
+    expect(
+      screen.queryByText("Saved on this computer"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("refreshes the draft-sync banner from the saved summary after a sync pass", async () => {
+    let syncHandler: ((event: DraftSyncEvent) => void) | undefined;
+    vi.mocked(api.onDraftSyncChanged).mockImplementation(async (handler) => {
+      syncHandler = handler;
+      return () => undefined;
+    });
+    seedSyncedBannerDraft();
+    vi.mocked(api.listDrafts).mockResolvedValue([
+      {
+        id: "draft-sync",
+        accountId: account.id,
+        recipients: "jane@example.test",
+        subject: "Stored",
+        updatedAt: "2026-09-01T12:00:00Z",
+        syncState: "synced",
+        syncDetail: null,
+      },
+    ]);
+    render(<Composer accountId={account.id} />);
+    expect(screen.getByText("Saved on this computer")).toBeVisible();
+
+    await act(async () => {
+      syncHandler?.({ accountId: account.id, draftId: null, syncState: null });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(api.listDrafts).toHaveBeenCalledWith(account.id);
+    expect(
+      screen.queryByText("Saved on this computer"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("treats a localPending save as saved without a server banner", async () => {
+    render(<Composer accountId={account.id} />);
+    fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
+      target: { value: "jane@example.test" },
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(6_000);
+      await Promise.resolve();
+    });
+    expect(mockedSaveDraft).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Draft saved").length).toBeGreaterThan(0);
+  });
+
+  it("unsubscribes from draft sync events on unmount", async () => {
+    const unlisten = vi.fn();
+    vi.mocked(api.onDraftSyncChanged).mockResolvedValue(unlisten);
+    const view = render(<Composer accountId={account.id} />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    view.unmount();
+    expect(unlisten).toHaveBeenCalledTimes(1);
+  });
+
+  it("deletes the latest draft id and releases attachments only after deletion", async () => {
+    let releaseSave: () => void = () => undefined;
+    const pendingSave = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    mockedSaveDraft.mockImplementation(async () => {
+      await pendingSave;
+      return { id: "draft-latest", syncState: "localPending" };
+    });
+
+    let resolveConfirm: (value: boolean) => void = () => undefined;
+    vi.mocked(api.showNativeConfirm).mockImplementation(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveConfirm = resolve;
+        }),
+    );
+
+    let releaseDelete: () => void = () => undefined;
+    const pendingDelete = new Promise<void>((resolve) => {
+      releaseDelete = resolve;
+    });
+    vi.mocked(api.deleteDraft).mockImplementation(() => pendingDelete);
+
+    render(<Composer accountId={account.id} />);
+    fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
+      target: { value: "jane@example.test" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+
+    await act(async () => {
+      vi.advanceTimersByTime(6_000);
+      await Promise.resolve();
+    });
+    expect(mockedSaveDraft).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveConfirm(true);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(api.deleteDraft).not.toHaveBeenCalled();
+
+    releaseSave();
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(api.deleteDraft).toHaveBeenCalledWith("draft-latest", account.id);
+    expect(api.releaseComposeAttachments).not.toHaveBeenCalled();
+
+    releaseDelete();
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(api.releaseComposeAttachments).toHaveBeenCalledWith(account.id, []);
+
+    const saveCalls = mockedSaveDraft.mock.calls.length;
+    await act(async () => {
+      vi.advanceTimersByTime(6_000);
+      fireEvent.blur(window);
+      await Promise.resolve();
+    });
+    expect(mockedSaveDraft.mock.calls.length).toBe(saveCalls);
+  });
+
+  it("does not start a save after discard intent", async () => {
+    render(<Composer accountId={account.id} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Subject" }), {
+      target: { value: "Discard me" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(api.deleteDraft).not.toHaveBeenCalled();
+
+    const saveCalls = mockedSaveDraft.mock.calls.length;
+    await act(async () => {
+      vi.advanceTimersByTime(6_000);
+      fireEvent.blur(window);
+      await Promise.resolve();
+    });
+    expect(mockedSaveDraft.mock.calls.length).toBe(saveCalls);
+  });
+
+  it("keeps Tab focus inside the insert-link dialog", () => {
+    render(<Composer accountId={account.id} />);
+    fireEvent.click(screen.getByRole("button", { name: "Show formatting" }));
+    fireEvent.click(screen.getByRole("button", { name: "More formatting" }));
+    fireEvent.click(screen.getByRole("button", { name: "Insert link" }));
+    const dialog = screen.getByRole("dialog", { name: "Insert link" });
+    const input = within(dialog).getByRole("textbox", { name: "Web address" });
+    const submit = within(dialog).getByRole("button", { name: "Insert link" });
+
+    submit.focus();
+    fireEvent.keyDown(submit, { key: "Tab" });
+    expect(input).toHaveFocus();
+
+    input.focus();
+    fireEvent.keyDown(input, { key: "Tab", shiftKey: true });
+    expect(submit).toHaveFocus();
   });
 });

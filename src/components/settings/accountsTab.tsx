@@ -2,8 +2,36 @@ import type { Dispatch, SetStateAction } from "react";
 import { Mail } from "lucide-react";
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
-import type { FilterRule } from "../../types";
+import type { FilterRule, MailboxSummary } from "../../types";
 import { SettingsPanel, SettingsSection } from "./primitives";
+
+function ruleActionLabel(
+  rule: FilterRule,
+  mailboxes: MailboxSummary[],
+): string {
+  switch (rule.action) {
+    case "mark_read":
+      return strings.settings.actionMarkRead;
+    case "move_archive":
+      return strings.settings.actionArchive;
+    case "move_trash":
+      return strings.settings.actionTrash;
+    case "move_junk":
+      return strings.settings.actionJunk;
+    case "move_mailbox": {
+      const target = mailboxes.find(
+        (box) =>
+          box.accountId === rule.accountId &&
+          String(box.id) === (rule.targetMailbox ?? ""),
+      );
+      return target
+        ? strings.settings.actionMoveToFolder(target.displayName || target.name)
+        : strings.settings.actionFolder;
+    }
+    default:
+      return rule.action;
+  }
+}
 
 export interface AccountRuleDraft {
   name: string;
@@ -274,7 +302,7 @@ export function AccountsTab({
                               ? strings.settings.matchFrom
                               : strings.settings.matchSubject,
                             rule.contains,
-                            rule.action,
+                            ruleActionLabel(rule, mailboxes),
                           )}
                         </span>
                       </div>

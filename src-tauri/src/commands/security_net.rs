@@ -49,9 +49,12 @@ pub fn open_external_url(
 }
 
 #[tauri::command]
-pub fn open_help_url(app: AppHandle) -> CommandResult<()> {
+pub fn open_help_url(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
+    let policy = protection_policy(&state)?;
+    let inspected = security::inspect_external_link(APPLE_APP_PASSWORD_GUIDE, policy)?;
+    security::authorize_external_open(&inspected, false)?;
     app.opener()
-        .open_url(APPLE_APP_PASSWORD_GUIDE, None::<&str>)
+        .open_url(&inspected.url, None::<&str>)
         .map_err(|_| "Postal Snap could not open that help page.".to_string())?;
     Ok(())
 }

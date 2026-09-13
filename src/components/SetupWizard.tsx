@@ -1,7 +1,8 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   ArrowLeft,
   Check,
+  ChevronRight,
   Cloud,
   ExternalLink,
   Eye,
@@ -15,6 +16,10 @@ import { describeSetupError } from "../errors";
 import { strings } from "../i18n";
 import type { AccountSetupRequest, ProviderKind, ServerConfig } from "../types";
 import { AppMark } from "./AppMark";
+import {
+  APPLE_APP_PASSWORD_GUIDE_URL,
+  inspectAndOpenExternalLink,
+} from "./externalLink";
 import {
   defaultPort,
   emptyManualImap,
@@ -52,12 +57,15 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
   const [imap, setImap] = useState(emptyManualImap);
   const [smtp, setSmtp] = useState(emptyManualSmtp);
   const [testing, setTesting] = useState(false);
+  const wizardRef = useRef<HTMLDivElement>(null);
+  const previousProviderRef = useRef(provider);
   const [status, setStatus] = useState<{
     kind: "working" | "success" | "error";
     text: string;
     hint?: string;
     showAppPasswordLink?: boolean;
   }>();
+  const [helpLinkNotice, setHelpLinkNotice] = useState<string>();
 
   const normalizedEmail = useMemo(() => {
     const trimmed = email.trim();
@@ -79,12 +87,26 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
     [displayName, imap, normalizedEmail, password, provider, smtp],
   );
 
+  useEffect(() => {
+    const wizard = wizardRef.current;
+    if (!wizard) return;
+    const host = wizard.closest<HTMLElement>(".setup-host");
+    if (host) host.scrollTop = 0;
+    if (previousProviderRef.current !== provider) {
+      wizard
+        .querySelector<HTMLElement>("#setup-title, #setup-form-title")
+        ?.focus({ preventScroll: true });
+    }
+    previousProviderRef.current = provider;
+  }, [provider]);
+
   function chooseProvider(next: ProviderKind) {
     const username = email.trim();
     setProvider(next);
     setPassword("");
     setShowPassword(false);
     setStatus(undefined);
+    setHelpLinkNotice(undefined);
     if (next === "manual") {
       setImap((current) =>
         current.host ? current : emptyManualImap(username),
@@ -162,34 +184,63 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
     }
   }
 
+  async function openHelpLink() {
+    setHelpLinkNotice(undefined);
+    const outcome = await inspectAndOpenExternalLink(
+      APPLE_APP_PASSWORD_GUIDE_URL,
+    );
+    if (outcome === "failed") setHelpLinkNotice(strings.setup.helpLinkFailed);
+    else if (outcome === "declined")
+      setHelpLinkNotice(strings.setup.helpLinkDeclined);
+  }
+
   if (!provider) {
     return (
-      <div className={embedded ? "setup-wizard-embedded" : "setup-page"}>
+      <div
+        className={embedded ? "setup-wizard-embedded" : "setup-page"}
+        ref={wizardRef}
+      >
         <section
-          className="setup-card provider-picker"
+          className={`setup-card provider-picker${
+            embedded ? " provider-picker-embedded" : ""
+          }`}
           aria-labelledby="setup-title"
         >
-          <header className="setup-brand" data-tauri-drag-region="deep">
-            <AppMark size={52} />
-            <span>
-              <p>{strings.appName}</p>
-              <h1 id="setup-title">{strings.setup.title}</h1>
-            </span>
-          </header>
-          <p className="setup-intro">{strings.setup.intro}</p>
-          <div
-            className="setup-progress"
-            role="list"
-            aria-label={strings.setup.progress}
-          >
-            <span className="active" role="listitem" aria-current="step">
-              1
-            </span>
-            <i aria-hidden="true" />
-            <span role="listitem">2</span>
-            <small>{strings.setup.chooseAccount}</small>
-            <small>{strings.setup.signIn}</small>
-          </div>
+          {!embedded ? (
+            <>
+              <header className="setup-brand" data-tauri-drag-region="deep">
+                <AppMark size={52} />
+                <span>
+                  <p>{strings.appName}</p>
+                  <h1 id="setup-title" tabIndex={-1}>
+                    {strings.setup.title}
+                  </h1>
+                </span>
+              </header>
+              <p className="setup-intro">{strings.setup.intro}</p>
+              <div
+                className="setup-progress"
+                role="list"
+                aria-label={strings.setup.progress}
+              >
+                <span className="active" role="listitem" aria-current="step">
+                  1
+                </span>
+                <i aria-hidden="true" />
+                <span role="listitem">2</span>
+                <small>{strings.setup.chooseAccount}</small>
+                <small>{strings.setup.signIn}</small>
+              </div>
+            </>
+          ) : (
+            <h2
+              id="setup-title"
+              className="provider-picker-title"
+              tabIndex={-1}
+            >
+              {strings.setup.chooseAccount}
+            </h2>
+          )}
           <div className="provider-list">
             <button
               type="button"
@@ -199,12 +250,17 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
               <span className="provider-symbol" aria-hidden="true">
                 <Cloud />
               </span>
-              <span>
-                <strong>{strings.setup.icloud}</strong>
+              <span className="provider-copy">
+                <span className="provider-title">
+                  <strong>{strings.setup.icloud}</strong>
+                  <small className="provider-badge">
+                    {strings.setup.recommended}
+                  </small>
+                </span>
                 <small>{strings.setup.icloudRecommended}</small>
               </span>
               <span className="provider-arrow" aria-hidden="true">
-                →
+                <ChevronRight />
               </span>
             </button>
             <button
@@ -215,12 +271,12 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
               <span className="provider-symbol" aria-hidden="true">
                 <Server />
               </span>
-              <span>
+              <span className="provider-copy">
                 <strong>{strings.setup.other}</strong>
                 <small>{strings.setup.otherDetail}</small>
               </span>
               <span className="provider-arrow" aria-hidden="true">
-                →
+                <ChevronRight />
               </span>
             </button>
           </div>
@@ -242,10 +298,17 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
     );
   }
 
+  const FormTitle = embedded ? "h2" : "h1";
+
   return (
-    <div className={embedded ? "setup-wizard-embedded" : "setup-page"}>
+    <div
+      className={embedded ? "setup-wizard-embedded" : "setup-page"}
+      ref={wizardRef}
+    >
       <form
-        className="setup-card account-form"
+        className={`setup-card account-form${
+          embedded ? " account-form-embedded" : ""
+        }`}
         onSubmit={submit}
         aria-labelledby="setup-form-title"
       >
@@ -258,6 +321,7 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
               setPassword("");
               setShowPassword(false);
               setStatus(undefined);
+              setHelpLinkNotice(undefined);
             }}
           >
             <ArrowLeft aria-hidden="true" /> {strings.common.back}
@@ -271,26 +335,28 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
               {strings.setup.openSettings}
             </button>
           ) : null}
-          <div
-            className="setup-progress compact"
-            role="list"
-            aria-label={strings.setup.stepTwo}
-          >
-            <span className="done" role="listitem">
-              <Check aria-hidden="true" />
-            </span>
-            <i aria-hidden="true" />
-            <span className="active" role="listitem" aria-current="step">
-              2
-            </span>
-          </div>
+          {!embedded ? (
+            <div
+              className="setup-progress compact"
+              role="list"
+              aria-label={strings.setup.stepTwo}
+            >
+              <span className="done" role="listitem">
+                <Check aria-hidden="true" />
+              </span>
+              <i aria-hidden="true" />
+              <span className="active" role="listitem" aria-current="step">
+                2
+              </span>
+            </div>
+          ) : null}
         </header>
         <div>
-          <h1 id="setup-form-title">
+          <FormTitle id="setup-form-title" tabIndex={-1}>
             {provider === "icloud"
               ? strings.setup.connectIcloud
               : strings.setup.connectOther}
-          </h1>
+          </FormTitle>
           <p className="setup-intro">
             {provider === "icloud"
               ? strings.setup.icloudIntro
@@ -303,7 +369,7 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
             <button
               type="button"
               className="text-button"
-              onClick={() => void api.openHelpUrl()}
+              onClick={() => void openHelpLink()}
             >
               {strings.setup.createAppPassword}{" "}
               <ExternalLink aria-hidden="true" />
@@ -456,13 +522,19 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
                 <button
                   type="button"
                   className="text-button"
-                  onClick={() => void api.openHelpUrl()}
+                  onClick={() => void openHelpLink()}
                 >
-                  {strings.setup.createAppPassword} <ExternalLink />
+                  {strings.setup.createAppPassword}{" "}
+                  <ExternalLink aria-hidden="true" />
                 </button>
               ) : null}
             </span>
           </div>
+        ) : null}
+        {helpLinkNotice ? (
+          <p className="setup-field-hint" role="status">
+            {helpLinkNotice}
+          </p>
         ) : null}
         <button
           className="primary-button full-button"
