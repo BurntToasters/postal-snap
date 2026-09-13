@@ -22,6 +22,7 @@ const generatedManifest = join(
 );
 const lintExceptions = join(root, "packaging/flatpak/lint-exceptions.json");
 const flatpakBuilderRef = "org.flatpak.Builder//stable";
+const flatpakBuilderCommand = "flatpak-builder-wrapper";
 await run("node", [
   "scripts/tauri-build.js",
   "--target",
@@ -46,7 +47,11 @@ await runFlatpakBuilderLint(generatedManifest);
 await validateAppStreamMetadata();
 await mkdir(join(root, "flatpak-build"), { recursive: true });
 try {
-  await run("flatpak-builder", [
+  await run("flatpak", [
+    "run",
+    "--user",
+    `--command=${flatpakBuilderCommand}`,
+    flatpakBuilderRef,
     `--arch=${arch}`,
     "--force-clean",
     "--repo=flatpak-repo",
@@ -73,6 +78,7 @@ async function runFlatpakBuilderLint(manifestPath) {
   try {
     await run("flatpak", [
       "run",
+      "--user",
       "--command=flatpak-builder-lint",
       flatpakBuilderRef,
       "--exceptions",
