@@ -512,12 +512,10 @@ test("Windows release signing uses Azure Artifact Signing, not a local PFX", asy
   assert.match(tauriBuild, /notarytoolSubmitArgs/);
   assert.match(
     tauriBuild,
-    /DMG notarization requires NOTARYTOOL_KEYCHAIN_PROFILE or an App Store Connect API key/,
+    /APPLE_ID\/APPLE_PASSWORD\/APPLE_TEAM_ID for notarization/,
   );
-  assert.doesNotMatch(
-    tauriBuild,
-    /"--password",\s*process\.env\.APPLE_PASSWORD/,
-  );
+  assert.match(signingEnv, /"--apple-id"/);
+  assert.match(signingEnv, /"--password"/);
   assert.match(signingEnv, /ALLOW_UNSIGNED_WINDOWS/);
   assert.match(
     signingEnv,
@@ -556,18 +554,15 @@ test("Windows release signing uses Azure Artifact Signing, not a local PFX", asy
   assert.match(ci, /Azure Artifact Signing/);
 });
 
-test("Apple credentials stay out of process arguments", async () => {
-  const [signingEnv, buildMas, masArgs, docs] = await Promise.all([
-    readFile(join(root, "scripts/tauri-signing-env.js"), "utf8"),
+test("MAS uploads keep Apple passwords in the environment", async () => {
+  const [buildMas, masArgs, docs] = await Promise.all([
     readFile(join(root, "scripts/build-mas.js"), "utf8"),
     readFile(join(root, "scripts/build-mas-args.js"), "utf8"),
     readFile(join(root, "docs/RELEASING.md"), "utf8"),
   ]);
-  assert.match(signingEnv, /NOTARYTOOL_KEYCHAIN_PROFILE/);
-  assert.doesNotMatch(signingEnv, /--password/);
   assert.match(masArgs, /@env:APPLE_PASSWORD/);
   assert.doesNotMatch(buildMas, /"--password"/);
-  assert.match(docs, /NOTARYTOOL_KEYCHAIN_PROFILE/);
+  assert.match(docs, /APPLE_ID.*APPLE_PASSWORD.*APPLE_TEAM_ID/);
   assert.match(docs, /mac-keychain-ssh/);
 });
 
@@ -830,6 +825,11 @@ test("MSIX manifest declares the WebView2 runtime dependency", async () => {
 test("Linux release paths run the baseline and WebKit preflight", async () => {
   const packageJson = JSON.parse(
     await readFile(join(root, "package.json"), "utf8"),
+  );
+  assert.match(
+    packageJson.scripts["preflight:linux"],
+    /--env-file-if-exists=\.env/,
+    "Linux preflight must load the optional release environment override",
   );
   for (const name of [
     "build:linux:x64:prepared",
