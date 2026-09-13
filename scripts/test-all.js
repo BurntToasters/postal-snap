@@ -47,6 +47,10 @@ const STEP_INFO = {
   build: { name: "build", label: "Build" },
 };
 
+export function e2eEnabled(env = process.env) {
+  return String(env.SKIP_E2E ?? "").trim() !== "1";
+}
+
 export function qualityGateSteps(env = process.env) {
   return [
     ["run", "format:check"],
@@ -59,7 +63,7 @@ export function qualityGateSteps(env = process.env) {
     ["run", "typecheck"],
     ["run", "typecheck:test"],
     ["test"],
-    ...(env.SKIP_E2E ? [] : [["run", "test:e2e"]]),
+    ...(e2eEnabled(env) ? [["run", "test:e2e"]] : []),
     ["run", "test:rust"],
     ["run", "test:release-assets"],
     ["run", "build"],
@@ -194,13 +198,16 @@ export function printSummary(
   results,
   plan = createStepPlan(),
   log = console.log,
+  { e2eSkipped = false } = {},
 ) {
   log(`${colors.bold}${colors.blue}
 ╔══════════════════════════════════════╗
 ║               SUMMARY                ║
 ╚══════════════════════════════════════╝
 ${colors.reset}`);
-  const width = Math.max(...plan.map((step) => step.label.length)) + 2;
+  const labels = plan.map((step) => step.label);
+  if (e2eSkipped) labels.push("E2E");
+  const width = Math.max(...labels.map((label) => label.length)) + 2;
   for (const step of plan) {
     const result = results[step.name] ?? { status: "pending" };
     const mark =
@@ -210,6 +217,11 @@ ${colors.reset}`);
     const label = `${step.label}:`.padEnd(width, " ");
     const detail = step.detail ? step.detail(result) : "";
     log(`${colors.bold}${label}${colors.reset}${mark}${colors.reset}${detail}`);
+  }
+  if (e2eSkipped) {
+    log(
+      `${colors.bold}${"E2E:".padEnd(width, " ")}${colors.reset}${colors.blue}SKIPPED${colors.reset} (SKIP_E2E=1)`,
+    );
   }
   log("");
   if (isQualityGateClean(results)) {
@@ -223,16 +235,18 @@ ${colors.reset}`);
 }
 
 export function main({
-  plan = createStepPlan(),
+  plan,
   runStep = runCommand,
   log = console.log,
+  env = process.env,
 } = {}) {
-  const results = createInitialResults(plan);
+  const steps = plan ?? createStepPlan({ env });
+  const results = createInitialResults(steps);
   printBanner(log);
-  for (const step of plan) {
+  for (const step of steps) {
     runStep(step, results, { log });
   }
-  return printSummary(results, plan, log);
+  return printSummary(results, steps, log, { e2eSkipped: !e2eEnabled(env) });
 }
 
 export function isDirectExecution(argv = process.argv) {

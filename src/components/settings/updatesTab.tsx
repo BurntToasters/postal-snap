@@ -3,7 +3,8 @@ import { api } from "../../api";
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
 import type { DistributionChannel } from "../../types";
-import { SettingsPanel, editionName } from "./primitives";
+import { editionName } from "./helpers";
+import { SettingsPanel } from "./primitives";
 
 interface UpdatesTabProps {
   distribution?: DistributionChannel;
@@ -46,7 +47,9 @@ export function UpdatesTab({
           <strong>
             {distribution?.updatesManagedBy === "store"
               ? strings.settings.storeUpdateTitle
-              : strings.settings.directUpdateTitle}
+              : distribution?.updatesManagedBy === "githubDownload"
+                ? strings.settings.githubUpdateTitle
+                : strings.settings.directUpdateTitle}
           </strong>
           <small>
             {distribution

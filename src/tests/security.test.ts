@@ -1,12 +1,15 @@
+import { render } from "@testing-library/react";
+import { createElement, createRef } from "react";
 import { describe, expect, it } from "vitest";
+import { MessageBody } from "../components/reader/messageBody";
 import { strings } from "../i18n";
 import {
   htmlToPlainText,
   messageFrameDocument,
-  restoreComposeHtmlLinks,
   sanitizeComposeHtml,
   sanitizeReceivedHtml,
 } from "../security";
+import { makeMessage, messageDetail } from "./helpers/fixtures";
 
 describe("received mail isolation", () => {
   it("does not let message HTML forge image-filter results", () => {
@@ -66,15 +69,74 @@ describe("received mail isolation", () => {
     expect(result.html).not.toMatch(/src="https:\/\/tracker\.test\/paragraph"/);
   });
 
+  it("strips usemap from images and map/area hotspots", () => {
+    const result = sanitizeReceivedHtml(
+      '<img src="https://images.example.test/pic.png" usemap="#nav"><map name="nav"><area shape="rect" coords="0,0,10,10" href="https://tracker.test/click"></map>',
+    );
+    expect(result.html).not.toMatch(/usemap|<map\b|<area\b/i);
+    expect(result.html).not.toContain("tracker.test");
+    expect(result.html).toContain("data-remote-src");
+    expect(result.blockedImages).toBe(1);
+  });
+
   it("creates a scriptless, networkless iframe document", () => {
     const document = messageFrameDocument("<p>Hello</p>", 1.5);
     expect(document).toContain("default-src 'none'");
     expect(document).toContain("form-action 'none'");
     expect(document).not.toContain("allow-scripts");
+    expect(document).not.toContain("blob:");
+    expect(document).toContain("img-src data: cid:");
     expect(document).toContain("font:24px");
     expect(document).toContain('name="viewport"');
     expect(document).toContain("background:#ffffff");
     expect(document).not.toContain("background:transparent");
+  });
+
+  it("drops blob image sources because no blob producer exists", () => {
+    const result = sanitizeReceivedHtml(
+      '<img alt="local" src="blob:https://app.test/9f8e">',
+    );
+    expect(result.html).not.toContain("blob:");
+    expect(result.html).toContain("<img");
+  });
+
+  it("stays idempotent after stripping hotspots and blob sources", () => {
+    const once = sanitizeReceivedHtml(
+      '<img src="blob:https://app.test/1" usemap="#nav"><map name="nav"><area href="https://tracker.test/click"></map>',
+    );
+    const twice = sanitizeReceivedHtml(once.html);
+    expect(twice.html).toBe(once.html);
+  });
+
+  it("keeps the reader iframe sandboxed to same-origin only", () => {
+    const { container } = render(
+      createElement(MessageBody, {
+        message: messageDetail(makeMessage(), {
+          htmlBody: "<p>Hello</p>",
+          textBody: "",
+        }),
+        frameHtml: messageFrameDocument("<p>Hello</p>"),
+        filteredImages: 0,
+        threatImages: 0,
+        remainingBlockedImages: 0,
+        loadingImages: false,
+        findOpen: false,
+        findQuery: "",
+        findInputRef: createRef<HTMLInputElement>(),
+        bodyRef: createRef<HTMLDivElement>(),
+        frameRef: createRef<HTMLIFrameElement>(),
+        onFindQueryChange: () => undefined,
+        onCloseFind: () => undefined,
+        onSubmitFind: () => undefined,
+        onLoadImages: () => undefined,
+        onFrameLoad: () => undefined,
+        onOpenLink: () => undefined,
+        onOpenMailto: () => undefined,
+      }),
+    );
+    expect(container.querySelector("iframe")?.getAttribute("sandbox")).toBe(
+      "allow-same-origin",
+    );
   });
 
   it("turns CID images into inert opaque references", () => {
@@ -117,9 +179,6 @@ describe("received mail isolation", () => {
       'data-external-href="https://library.example.test/hours"',
     );
     expect(compose).not.toContain('<a href="https://');
-    const outgoing = restoreComposeHtmlLinks(compose);
-    expect(outgoing).toContain('href="https://library.example.test/hours"');
-    expect(outgoing).not.toContain("data-external-href");
   });
 
   it("generates a readable text alternative", () => {

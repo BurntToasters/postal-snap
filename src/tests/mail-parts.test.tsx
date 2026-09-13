@@ -206,7 +206,7 @@ describe("sent notice", () => {
       lastSent: { outboxId: "third", accountId: "account-1", scheduled: false },
     });
     rerender(<SentNoticeToast />);
-    vi.advanceTimersByTime(15_000);
+    vi.advanceTimersByTime(17_000);
     expect(useAppStore.getState().lastSent).toBeUndefined();
   });
 });
@@ -336,7 +336,7 @@ describe("message list states and keyboard", () => {
     ).toBeDisabled();
   });
 
-  it("expands and collapses grouped conversations", () => {
+  it("expands and collapses grouped conversations as a tree", () => {
     const threaded = [first, second].map((message) => ({
       ...message,
       subject: "Thread",
@@ -353,11 +353,98 @@ describe("message list states and keyboard", () => {
         onLoadMore={vi.fn()}
       />,
     );
-    const header = screen.getByRole("button", { name: /Conversation/ });
+    expect(
+      screen.getByRole("tree", { name: strings.mail.messages }),
+    ).toBeVisible();
+    const header = screen.getByRole("treeitem", { name: /Conversation/ });
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    expect(header).toHaveAttribute("tabindex", "0");
     fireEvent.click(header);
-    expect(screen.getAllByRole("option")).toHaveLength(2);
+    const expandedItems = screen.getAllByRole("treeitem");
+    expect(expandedItems).toHaveLength(3);
+    expect(header).toHaveAttribute("aria-expanded", "true");
+    expect(header.getAttribute("aria-owns")).toBe(
+      document.querySelector(".thread-children")?.id,
+    );
+    fireEvent.keyDown(header, { key: "ArrowDown" });
+    expect(expandedItems[1]).toHaveFocus();
+    expect(onChoose).toHaveBeenLastCalledWith(threaded[1]);
+    fireEvent.keyDown(expandedItems[1], { key: "Home" });
+    expect(header).toHaveFocus();
     fireEvent.click(header);
-    expect(screen.queryAllByRole("option")).toHaveLength(0);
-    expect(onChoose).toHaveBeenCalledTimes(2);
+    expect(screen.getAllByRole("treeitem")).toEqual([header]);
+    expect(header).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("exposes tree levels and supports arrow expand and collapse", () => {
+    const threaded = [first, second].map((message) => ({
+      ...message,
+      subject: "Thread",
+      threadRoot: "<thread@example.test>",
+    }));
+    const onChoose = vi.fn();
+    render(
+      <MessageList
+        messages={threaded}
+        selectedId={undefined}
+        loading={false}
+        onChoose={onChoose}
+        hasMore={false}
+        onLoadMore={vi.fn()}
+      />,
+    );
+    const header = screen.getByRole("treeitem", { name: /Conversation/ });
+    expect(header).toHaveAttribute("aria-level", "1");
+
+    fireEvent.keyDown(header, { key: "ArrowRight" });
+    expect(header).toHaveAttribute("aria-expanded", "true");
+    const children = screen
+      .getAllByRole("treeitem")
+      .filter((item) => item.dataset.optionKey?.startsWith("message:"));
+    expect(children).toHaveLength(2);
+    for (const child of children) {
+      expect(child).toHaveAttribute("aria-level", "2");
+    }
+
+    fireEvent.keyDown(header, { key: "ArrowRight" });
+    expect(children[0]).toHaveFocus();
+    fireEvent.keyDown(children[0], { key: "ArrowLeft" });
+    expect(header).toHaveFocus();
+    fireEvent.keyDown(header, { key: "ArrowLeft" });
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    expect(onChoose).not.toHaveBeenCalled();
+  });
+
+  it("keeps thread selection visuals aligned with aria-selected", () => {
+    const threaded = [first, second].map((message) => ({
+      ...message,
+      threadRoot: "<thread@example.test>",
+    }));
+    const props = {
+      messages: threaded,
+      loading: false,
+      onChoose: vi.fn(),
+      hasMore: false,
+      onLoadMore: vi.fn(),
+    };
+    const { rerender } = render(
+      <MessageList {...props} selectedId={second.id} />,
+    );
+    const header = screen.getByRole("treeitem", { name: /Conversation/ });
+    const newestChild = screen
+      .getAllByRole("treeitem")
+      .find((item) => item.dataset.optionKey === `message:${second.id}`);
+    expect(header).toHaveAttribute("aria-selected", "true");
+    expect(header).toHaveClass("selected");
+    expect(newestChild).toHaveAttribute("aria-selected", "false");
+    expect(newestChild).not.toHaveClass("selected");
+
+    rerender(<MessageList {...props} selectedId={first.id} />);
+    const olderChild = screen
+      .getAllByRole("treeitem")
+      .find((item) => item.dataset.optionKey === `message:${first.id}`);
+    expect(olderChild).toHaveAttribute("aria-selected", "true");
+    expect(olderChild).toHaveClass("selected");
+    expect(header).not.toHaveClass("selected");
   });
 });

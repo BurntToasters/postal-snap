@@ -18,11 +18,17 @@ function denyGitHubCliPassthrough(command) {
   }
 }
 
+// cmd.exe only parses & | ^ < > ( ) literally inside double quotes, and it
+// expands %VAR% before the child sees the argument. Doubling % neutralizes
+// expansion for the batch-file targets that use shell mode here (npm.cmd).
+const WINDOWS_CMD_META = /[\s"&|^<>%()]/;
+
 export function quoteWindowsCmdArg(value) {
   const text = String(value);
   if (text.length === 0) return '""';
-  if (!/[\s"]/.test(text)) return text;
-  return `"${text.replaceAll('"', '\\"')}"`;
+  if (!WINDOWS_CMD_META.test(text)) return text;
+  const escaped = text.replaceAll('"', '""').replaceAll("%", "%%");
+  return `"${escaped}"`;
 }
 
 export function windowsCmdLine(command, args = []) {

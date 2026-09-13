@@ -4,7 +4,7 @@ import { strings } from "../i18n";
 import { parseMailto } from "../mailto";
 import { messageFrameDocument, sanitizeReceivedHtml } from "../security";
 import { useAppStore } from "../store";
-import type { Attachment, AttachmentPreview } from "../types";
+import type { Attachment, AttachmentPreview, MessageSummary } from "../types";
 import { useDialogFocus } from "./useDialogFocus";
 import { AttachmentList } from "./reader/attachmentList";
 import { MessageBody } from "./reader/messageBody";
@@ -17,7 +17,36 @@ import {
   moveCounts,
 } from "./reader/readerUtils";
 
-export function MessageReader() {
+function restoreMovedMessage(
+  current: MessageSummary[],
+  expected: MessageSummary[],
+  message: MessageSummary,
+  previousIndex: number,
+): MessageSummary[] | undefined {
+  if (previousIndex < 0) return undefined;
+  if (current.some((summary) => summary.id === message.id)) return undefined;
+  if (current.length > expected.length) return undefined;
+  const expectedIndexes = new Map(
+    expected.map((summary, index) => [summary.id, index]),
+  );
+  let lastIndex = -1;
+  let insertAt = 0;
+  for (const summary of current) {
+    const index = expectedIndexes.get(summary.id);
+    if (index === undefined || index < lastIndex) return undefined;
+    if (index < previousIndex) insertAt += 1;
+    lastIndex = index;
+  }
+  const restored = [...current];
+  restored.splice(insertAt, 0, message);
+  return restored;
+}
+
+export function MessageReader({
+  onSnoozed,
+}: {
+  onSnoozed?: (accountId: string, messageId: number) => void | Promise<void>;
+}) {
   const message = useAppStore((state) => state.selectedMessage);
   const selectMessage = useAppStore((state) => state.selectMessage);
   const activeMailboxId = useAppStore((state) => state.activeMailboxId);
@@ -35,7 +64,7 @@ export function MessageReader() {
   const contentOperation = useRef(0);
   const starredOperation = useRef(0);
   const readOperation = useRef(0);
-  const moveOperation = useRef(0);
+  const moveOperations = useRef(new Map<number, number>());
   const forwardOperation = useRef(0);
   const [loadedHtml, setLoadedHtml] = useState<{
     messageId: number;
@@ -95,6 +124,12 @@ export function MessageReader() {
     if (!message) return;
     const html = buildPrintDocument(message, loadedHtml, settings.textScale);
     const printer = document.createElement("iframe");
+    // Intentionally unsandboxed: the parent calls contentWindow.print(), but a
+    // sandboxed srcdoc frame is cross-origin (print() is not exposed on the
+    // cross-origin WindowProxy) and its modals flag blocks window.print(), so
+    // sandbox="allow-modals" alone would break printing. buildPrintDocument
+    // wraps sanitized HTML in a restrictive CSP, and this frame is removed
+    // immediately after printing.
     printer.setAttribute("aria-hidden", "true");
     printer.style.position = "fixed";
     printer.style.width = "0";
@@ -153,10 +188,20 @@ export function MessageReader() {
 
   async function snoozeCurrentMessage(untilIso: string) {
     if (!message) return;
+    const target = message;
     try {
-      await api.snoozeMessage(message.accountId, message.id, untilIso);
-      setSnoozeOpen(false);
+      await api.snoozeMessage(target.accountId, target.id, untilIso);
+    } catch (cause) {
+      setError(String(cause));
+      return;
+    }
+    setSnoozeOpen(false);
+    const current = useAppStore.getState().selectedMessage;
+    if (current?.id === target.id && current.accountId === target.accountId) {
       selectMessage(undefined);
+    }
+    try {
+      await onSnoozed?.(target.accountId, target.id);
     } catch (cause) {
       setError(String(cause));
     }
@@ -401,6 +446,10 @@ export function MessageReader() {
   );
 
   useEffect(() => {
+    contentOperation.current += 1;
+  }, [messageId]);
+
+  useEffect(() => {
     const operation = ++contentOperation.current;
     if (
       !messageId ||
@@ -431,10 +480,14 @@ export function MessageReader() {
     frameLinkCleanup.current = undefined;
     const body = frame.current?.contentDocument?.body;
     if (!body) return;
+    body.querySelectorAll("[usemap]").forEach((element) => {
+      element.removeAttribute("usemap");
+    });
+    const linkSelector = "a[href], a[data-external-href], area[href]";
     const handleLink = (event: MouseEvent) => {
       if (event.button > 1) return;
-      const target = (event.target as HTMLElement).closest<HTMLAnchorElement>(
-        "a[href], a[data-external-href]",
+      const target = (event.target as HTMLElement).closest<HTMLElement>(
+        linkSelector,
       );
       if (!target) return;
       event.preventDefault();
@@ -455,9 +508,7 @@ export function MessageReader() {
       if (/^mailto:/i.test(url)) openComposer({ prefill: parseMailto(url) });
     };
     const blockNativeOpen = (event: Event) => {
-      if (
-        (event.target as HTMLElement).closest("a[href], a[data-external-href]")
-      ) {
+      if ((event.target as HTMLElement).closest(linkSelector)) {
         event.preventDefault();
       }
     };
@@ -658,7 +709,8 @@ export function MessageReader() {
       (destination && source?.name === destination.name)
     )
       return;
-    const operation = ++moveOperation.current;
+    const operation = (moveOperations.current.get(message.id) ?? 0) + 1;
+    moveOperations.current.set(message.id, operation);
     const viewMailboxId = activeMailboxId;
     const previousUnreadCounts = new Map(
       mailboxes.map((mailbox) => [mailbox.id, mailbox.unreadCount]),
@@ -678,7 +730,7 @@ export function MessageReader() {
     } catch (cause) {
       const current = useAppStore.getState();
       if (
-        operation !== moveOperation.current ||
+        moveOperations.current.get(message.id) !== operation ||
         current.activeAccountId !== message.accountId ||
         current.activeMailboxId !== viewMailboxId ||
         current.activeLocalView
@@ -687,23 +739,13 @@ export function MessageReader() {
       const expectedMessages = messages.filter(
         (summary) => summary.id !== message.id,
       );
-      const listStillOptimistic =
-        previousIndex >= 0 &&
-        !current.messages.some((summary) => summary.id === message.id) &&
-        current.messages.length === expectedMessages.length &&
-        current.messages.every(
-          (summary, index) => summary.id === expectedMessages[index]?.id,
-        );
-      if (listStillOptimistic) {
-        const restoredMessages = [...expectedMessages];
-        restoredMessages.splice(
-          Math.min(
-            previousIndex < 0 ? restoredMessages.length : previousIndex,
-            restoredMessages.length,
-          ),
-          0,
-          message,
-        );
+      const restoredMessages = restoreMovedMessage(
+        current.messages,
+        expectedMessages,
+        message,
+        previousIndex,
+      );
+      if (restoredMessages) {
         setMessages(
           restoredMessages,
           current.messageCursor,
@@ -729,8 +771,7 @@ export function MessageReader() {
             : mailbox;
         }),
       );
-      if (listStillOptimistic && !current.selectedMessage)
-        selectMessage(message);
+      if (restoredMessages && !current.selectedMessage) selectMessage(message);
       setError(String(cause));
     }
   }
@@ -738,7 +779,8 @@ export function MessageReader() {
   async function moveToMailbox(mailboxId: number) {
     if (!message) return;
     if (mailboxId === message.mailboxId) return;
-    const operation = ++moveOperation.current;
+    const operation = (moveOperations.current.get(message.id) ?? 0) + 1;
+    moveOperations.current.set(message.id, operation);
     const viewMailboxId = activeMailboxId;
     const previousUnreadCounts = new Map(
       mailboxes.map((mailbox) => [mailbox.id, mailbox.unreadCount]),
@@ -758,7 +800,7 @@ export function MessageReader() {
     } catch (cause) {
       const current = useAppStore.getState();
       if (
-        operation !== moveOperation.current ||
+        moveOperations.current.get(message.id) !== operation ||
         current.activeAccountId !== message.accountId ||
         current.activeMailboxId !== viewMailboxId ||
         current.activeLocalView
@@ -767,23 +809,13 @@ export function MessageReader() {
       const expectedMessages = messages.filter(
         (summary) => summary.id !== message.id,
       );
-      const listStillOptimistic =
-        previousIndex >= 0 &&
-        !current.messages.some((summary) => summary.id === message.id) &&
-        current.messages.length === expectedMessages.length &&
-        current.messages.every(
-          (summary, index) => summary.id === expectedMessages[index]?.id,
-        );
-      if (listStillOptimistic) {
-        const restoredMessages = [...expectedMessages];
-        restoredMessages.splice(
-          Math.min(
-            previousIndex < 0 ? restoredMessages.length : previousIndex,
-            restoredMessages.length,
-          ),
-          0,
-          message,
-        );
+      const restoredMessages = restoreMovedMessage(
+        current.messages,
+        expectedMessages,
+        message,
+        previousIndex,
+      );
+      if (restoredMessages) {
         setMessages(
           restoredMessages,
           current.messageCursor,
@@ -809,8 +841,7 @@ export function MessageReader() {
             : mailbox;
         }),
       );
-      if (listStillOptimistic && !current.selectedMessage)
-        selectMessage(message);
+      if (restoredMessages && !current.selectedMessage) selectMessage(message);
       setError(String(cause));
     }
   }

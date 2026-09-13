@@ -10,6 +10,10 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+# Azure Artifact Signing Public Trust certificates carry this EKU marker in
+# addition to the Code Signing EKU. The CN alone is not globally unique.
+$artifactSigningPublicTrustEku = '1.3.6.1.4.1.311.97.1.0'
+
 if ($env:SKIP_WIN_CODESIGN -eq '1') {
   Write-Host 'SKIP_WIN_CODESIGN=1; skipping Authenticode verification.'
   exit 0
@@ -30,20 +34,9 @@ $files = @()
 $files += Get-ChildItem -LiteralPath $releaseDir -File -Filter '*.exe'
 
 $bundleDir = Join-Path $releaseDir 'bundle'
-$zipDir = $null
 if (Test-Path -LiteralPath $bundleDir) {
   $files += Get-ChildItem -LiteralPath $bundleDir -File -Recurse |
     Where-Object { $_.Extension.ToLowerInvariant() -in @('.exe', '.msi') }
-  $zip = Get-ChildItem -LiteralPath $bundleDir -File -Recurse |
-    Where-Object { $_.Name -like '*.nsis.zip' } |
-    Select-Object -First 1
-  if ($zip) {
-    $zipDir = Join-Path ([System.IO.Path]::GetTempPath()) ("postal-snap-nsis-" + [guid]::NewGuid().ToString('N'))
-    New-Item -ItemType Directory -Path $zipDir | Out-Null
-    Expand-Archive -LiteralPath $zip.FullName -DestinationPath $zipDir -Force
-    $files += Get-ChildItem -LiteralPath $zipDir -File -Recurse |
-      Where-Object { $_.Extension.ToLowerInvariant() -eq '.exe' }
-  }
 }
 
 if (-not [string]::IsNullOrWhiteSpace($env:POSTAL_SNAP_INSTALLED_EXE)) {
@@ -67,6 +60,7 @@ if (-not [string]::IsNullOrWhiteSpace($expectedSubject)) {
   $expectedSubject = $expectedSubject.Trim()
 } else {
   $expectedSubject = $null
+  Write-Host 'AZURE_ARTIFACT_SIGNING_PUBLISHER_DN is not set; pinning the publisher CN and the Artifact Signing Public Trust EKU only.'
 }
 foreach ($file in $files) {
   $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
@@ -90,6 +84,18 @@ foreach ($file in $files) {
       throw "Unexpected certificate Subject for $($file.FullName). Expected '$expectedSubject', got '$subject'."
     }
   }
+
+  $ekuExtension = $signature.SignerCertificate.Extensions |
+    Where-Object { $_.Oid.Value -eq '2.5.29.37' } |
+    Select-Object -First 1
+  if (-not $ekuExtension) {
+    throw "Signer certificate has no Extended Key Usage extension: $($file.FullName)"
+  }
+  $ekus = @($ekuExtension.EnhancedKeyUsages | ForEach-Object { $_.Value })
+  if ($ekus -notcontains $artifactSigningPublicTrustEku) {
+    throw "Signer certificate for $($file.FullName) is not an Azure Artifact Signing Public Trust certificate (missing EKU $artifactSigningPublicTrustEku)."
+  }
+
   if (-not $signature.TimeStamperCertificate) {
     throw "Missing RFC3161 timestamp: $($file.FullName)"
   }
@@ -98,6 +104,3 @@ foreach ($file in $files) {
 }
 
 Write-Host "Verified $($files.Count) timestamped Windows artifact(s) from '$expectedPublisher'."
-if ($zipDir -and (Test-Path -LiteralPath $zipDir)) {
-  Remove-Item -LiteralPath $zipDir -Recurse -Force
-}

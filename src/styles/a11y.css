@@ -19,6 +19,19 @@ svg {
 }
 
 @media (forced-colors: active) {
+  .switch-row input {
+    width: 44px;
+    min-width: 44px;
+    appearance: auto;
+    border: 1px solid ButtonText;
+    accent-color: Highlight;
+  }
+
+  .switch-row input::before,
+  .switch-row input::after {
+    display: none;
+  }
+
   .folder.active,
   .message-row.selected,
   .primary-button,
@@ -87,6 +100,17 @@ svg {
 }
 
 @media (prefers-contrast: more) {
+  :root {
+    --text-muted: rgb(0 0 0 / 78%);
+    --border: rgb(0 0 0 / 30%);
+    --border-strong: rgb(0 0 0 / 45%);
+  }
+
+  .modal-backdrop {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
   html[data-window-fx="vibrant"] .app-toolbar,
   html[data-window-fx="vibrant"] .folder-pane,
   html[data-window-fx="vibrant"] .reader-actions {
@@ -96,7 +120,28 @@ svg {
   }
 }
 
+@media (prefers-contrast: more) and (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):not([data-theme="dark"]) {
+    --text-muted: rgb(255 255 255 / 78%);
+    --border: rgb(255 255 255 / 32%);
+    --border-strong: rgb(255 255 255 / 48%);
+  }
+}
+
+@media (prefers-contrast: more) {
+  :root[data-theme="dark"] {
+    --text-muted: rgb(255 255 255 / 78%);
+    --border: rgb(255 255 255 / 32%);
+    --border-strong: rgb(255 255 255 / 48%);
+  }
+}
+
 @media (prefers-reduced-transparency: reduce) {
+  .modal-backdrop {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
   html[data-window-fx="vibrant"] .app-toolbar,
   html[data-window-fx="vibrant"] .folder-pane,
   html[data-window-fx="vibrant"] .reader-actions {

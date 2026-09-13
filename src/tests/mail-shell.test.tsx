@@ -1,4 +1,5 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -56,6 +57,7 @@ vi.mock("../api", () => ({
     onMessageChanged: vi.fn(),
     onDraftSyncChanged: vi.fn().mockResolvedValue(() => undefined),
     onOutboxChanged: vi.fn().mockResolvedValue(() => undefined),
+    onOfflineOperationsDropped: vi.fn().mockResolvedValue(() => undefined),
     showNativeConfirm: vi.fn().mockResolvedValue(true),
   },
 }));
@@ -355,6 +357,37 @@ describe("mail shell", () => {
     await waitFor(() => expect(sendNow).not.toHaveBeenCalled());
   });
 
+  it("dispatches an overdue held message only once while its send is pending", async () => {
+    let finishSend: (() => void) | undefined;
+    const sendNow = vi.mocked(api.sendScheduledOutbox);
+    sendNow.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishSend = () =>
+            resolve({ id: "outbox-1", state: "sent", detail: null });
+        }),
+    );
+    const held = {
+      id: "outbox-1",
+      accountId: account.id,
+      recipients: "lee@example.com",
+      subject: "Held note",
+      state: "scheduled",
+      detail: "Held for review.",
+      createdAt: "2026-08-18T11:00:00Z",
+      sendAt: new Date(Date.now() - 1000).toISOString(),
+    } as const;
+    mockedListOutbox.mockResolvedValue([held]);
+    useAppStore.setState({ outbox: [held] });
+
+    renderShell();
+    await waitFor(() => expect(sendNow).toHaveBeenCalledTimes(1));
+    act(() => useAppStore.setState({ outbox: [{ ...held }] }));
+    await waitFor(() => expect(sendNow).toHaveBeenCalledTimes(1));
+
+    finishSend?.();
+  });
+
   it("sends a held message early on request", async () => {
     const sendNow = vi.mocked(api.sendScheduledOutbox);
     sendNow.mockResolvedValue({ id: "outbox-1", state: "sent", detail: null });
@@ -381,6 +414,68 @@ describe("mail shell", () => {
     );
   });
 
+  it("disables Send now and names the in-flight scheduled item", async () => {
+    let finishSend: (() => void) | undefined;
+    const sendNow = vi.mocked(api.sendScheduledOutbox);
+    sendNow.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishSend = () =>
+            resolve({ id: "outbox-1", state: "sent", detail: null });
+        }),
+    );
+    const held = {
+      id: "outbox-1",
+      accountId: account.id,
+      recipients: "lee@example.com",
+      subject: "Held note",
+      state: "scheduled",
+      detail: "Held for review.",
+      createdAt: "2026-08-18T11:00:00Z",
+      sendAt: new Date(Date.now() + 60_000).toISOString(),
+    } as const;
+    mockedListOutbox.mockResolvedValue([held]);
+    useAppStore.setState({ activeLocalView: "outbox", outbox: [held] });
+    renderShell();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Send now" }));
+    await waitFor(() => expect(sendNow).toHaveBeenCalledTimes(1));
+    const sending = await screen.findByRole("button", {
+      name: strings.mail.sendingNow("Held note"),
+    });
+    expect(sending).toBeDisabled();
+    expect(sending).toHaveTextContent(strings.mail.sending);
+    fireEvent.click(sending);
+    expect(sendNow).toHaveBeenCalledTimes(1);
+
+    act(() => finishSend?.());
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: strings.mail.sendNow }),
+      ).toBeEnabled(),
+    );
+  });
+
+  it("does not auto-send a stale scheduled item from another account", async () => {
+    const sendNow = vi.mocked(api.sendScheduledOutbox);
+    const foreign = {
+      id: "outbox-foreign",
+      accountId: "account-2",
+      recipients: "lee@example.com",
+      subject: "Other account note",
+      state: "scheduled",
+      detail: "Held for review.",
+      createdAt: "2026-08-18T11:00:00Z",
+      sendAt: new Date(Date.now() - 1000).toISOString(),
+    } as const;
+    mockedListOutbox.mockResolvedValue([foreign]);
+    useAppStore.setState({ outbox: [foreign] });
+    renderShell();
+
+    await screen.findByRole("option", { name: /First message/i });
+    await waitFor(() => expect(sendNow).not.toHaveBeenCalled());
+  });
+
   it("collapses threads until expanded", async () => {
     const threaded = [firstMessage, secondMessage].map((message) => ({
       ...message,
@@ -393,17 +488,19 @@ describe("mail shell", () => {
     });
     renderShell();
 
-    const header = await screen.findByRole("button", {
+    const header = await screen.findByRole("treeitem", {
       name: /Conversation.*2 messages/i,
     });
-    expect(screen.queryByRole("option", { name: /First message/i })).toBeNull();
+    expect(
+      screen.queryByRole("treeitem", { name: /First message/i }),
+    ).toBeNull();
     fireEvent.click(header);
     expect(
-      await screen.findByRole("option", { name: /First message/i }),
+      await screen.findByRole("treeitem", { name: /First message/i }),
     ).toBeVisible();
     expect(
-      screen.getByRole("option", { name: /Second message/i }),
-    ).toBeVisible();
+      screen.getAllByRole("treeitem", { name: /Second message/i }),
+    ).toHaveLength(2);
   });
 
   it("lists snoozed mail separately with a way back", async () => {
@@ -515,7 +612,7 @@ describe("mail shell", () => {
     expect(
       screen.getByRole("option", { name: /Second message/i }),
     ).toBeVisible();
-    expect(screen.queryByRole("button", { name: /Conversation/i })).toBeNull();
+    expect(screen.queryByRole("option", { name: /Conversation/i })).toBeNull();
   });
 
   it("opens the newest message from a conversation header", async () => {
@@ -531,7 +628,9 @@ describe("mail shell", () => {
     renderShell();
 
     fireEvent.click(
-      await screen.findByRole("button", { name: /Conversation.*2 messages/i }),
+      await screen.findByRole("treeitem", {
+        name: /Conversation.*2 messages/i,
+      }),
     );
     expect(
       await screen.findByRole("heading", { name: "Second message" }),
@@ -599,7 +698,7 @@ describe("mail shell", () => {
     });
     renderShell();
 
-    expect(await screen.findByText(strings.mail.messageSent)).toBeVisible();
+    expect(await screen.findByText(strings.composer.messageHeld)).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Undo" }));
     await waitFor(() =>
       expect(api.restoreOutbox).toHaveBeenCalledWith("outbox-2", "account-1"),
@@ -1066,6 +1165,34 @@ describe("mail shell", () => {
     expect(useAppStore.getState().composerOpen).toBe(true);
     window.removeEventListener("postal:menu-action", menuListener);
     window.removeEventListener("postal:scroll-reader", scrollListener);
+  });
+
+  it("leaves Space available for local-mail action buttons", async () => {
+    const held = {
+      id: "attention-space",
+      accountId: account.id,
+      recipients: "lee@example.com",
+      subject: "Needs retry",
+      state: "needs_attention" as const,
+      detail: "Held for review.",
+      createdAt: "2026-08-18T11:00:00Z",
+    };
+    mockedListOutbox.mockResolvedValue([held]);
+    useAppStore.setState({ activeLocalView: "outbox", outbox: [held] });
+    renderShell();
+
+    const retry = await screen.findByRole("button", {
+      name: "Retry sending",
+    });
+    const event = new KeyboardEvent("keydown", {
+      key: " ",
+      code: "Space",
+      bubbles: true,
+      cancelable: true,
+    });
+
+    expect(retry.dispatchEvent(event)).toBe(true);
+    expect(event.defaultPrevented).toBe(false);
   });
 
   it("automatically submits overdue scheduled mail while online", async () => {
@@ -1650,6 +1777,161 @@ describe("mail shell", () => {
     renderShell();
     await waitFor(() =>
       expect(useAppStore.getState().error).toMatch(/schedule send failed/i),
+    );
+  });
+
+  it("refreshes the list and account data after snoozing from the reader", async () => {
+    const snooze = vi.mocked(api.snoozeMessage);
+    snooze.mockResolvedValue(undefined);
+    renderShell();
+    await screen.findByRole("option", { name: /First message/i });
+    fireEvent.click(screen.getByRole("option", { name: /First message/i }));
+    await screen.findByRole("heading", { name: "First message" });
+    const listCalls = mockedListMessages.mock.calls.length;
+    const mailboxCalls = mockedListMailboxes.mock.calls.length;
+
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.reader.moreActions }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: strings.reader.snooze }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.reader.snoozeTomorrow }),
+    );
+
+    await waitFor(() =>
+      expect(snooze).toHaveBeenCalledWith("account-1", 1, expect.any(String)),
+    );
+    await waitFor(() =>
+      expect(mockedListMessages.mock.calls.length).toBeGreaterThan(listCalls),
+    );
+    expect(mockedListMailboxes.mock.calls.length).toBeGreaterThan(mailboxCalls);
+    expect(useAppStore.getState().selectedMessage).toBeUndefined();
+  });
+
+  it("restores the mailbox when a submitted search input is cleared", async () => {
+    mockedSearchCached.mockResolvedValue([
+      { ...firstMessage, subject: "Search hit" },
+    ]);
+    mockedSearchServer.mockResolvedValue([]);
+    renderShell();
+    await screen.findByRole("option", { name: /First message/i });
+
+    const search = screen.getByRole("searchbox", { name: "Search mail" });
+    fireEvent.change(search, { target: { value: "hit" } });
+    fireEvent.submit(screen.getByRole("search"));
+    await screen.findByRole("option", { name: /Search hit/i });
+
+    const listCalls = mockedListMessages.mock.calls.length;
+    fireEvent.change(search, { target: { value: "" } });
+    await waitFor(() =>
+      expect(mockedListMessages.mock.calls.length).toBeGreaterThan(listCalls),
+    );
+    expect(
+      await screen.findByRole("option", { name: /First message/i }),
+    ).toBeVisible();
+    expect(screen.queryByRole("option", { name: /Search hit/i })).toBeNull();
+  });
+
+  it("binds native change listeners once and follows the current account", async () => {
+    const secondAccount = makeAccount("account-2");
+    resetStore({
+      accounts: [account, secondAccount],
+      activeAccountId: account.id,
+      mailboxes: [inbox, trash],
+      activeMailboxId: inbox.id,
+    });
+    let folderChanged: ((event: { accountId: string }) => void) | undefined;
+    mockedOnFolderCountsChanged.mockImplementation(async (handler) => {
+      folderChanged = handler;
+      return () => undefined;
+    });
+    renderShell();
+    await screen.findByRole("option", { name: /First message/i });
+    expect(mockedOnFolderCountsChanged).toHaveBeenCalledTimes(1);
+
+    fireEvent.change(screen.getByRole("combobox", { name: "Account" }), {
+      target: { value: secondAccount.id },
+    });
+    await waitFor(() =>
+      expect(mockedListMailboxes).toHaveBeenCalledWith("account-2"),
+    );
+    expect(mockedOnFolderCountsChanged).toHaveBeenCalledTimes(1);
+
+    const before = mockedListMailboxes.mock.calls.length;
+    folderChanged?.({ accountId: secondAccount.id });
+    await waitFor(() =>
+      expect(mockedListMailboxes.mock.calls.length).toBeGreaterThan(before),
+    );
+  });
+
+  it("closes the folder dialog when the account changes", async () => {
+    const secondAccount = makeAccount("account-2");
+    resetStore({
+      accounts: [account, secondAccount],
+      activeAccountId: account.id,
+      mailboxes: [inbox, trash],
+      activeMailboxId: inbox.id,
+    });
+    renderShell();
+    fireEvent.click(await screen.findByRole("button", { name: "New folder" }));
+    expect(screen.getByPlaceholderText("Folder name")).toBeVisible();
+
+    fireEvent.change(screen.getByRole("combobox", { name: "Account" }), {
+      target: { value: secondAccount.id },
+    });
+    await waitFor(() =>
+      expect(screen.queryByPlaceholderText("Folder name")).toBeNull(),
+    );
+  });
+
+  it("clears loading when a mailbox switch leaves no fetch to run", async () => {
+    const secondAccount = makeAccount("account-2");
+    resetStore({
+      accounts: [account, secondAccount],
+      activeAccountId: account.id,
+      mailboxes: [inbox, trash],
+      activeMailboxId: inbox.id,
+    });
+    mockedListMessages.mockImplementation(() => new Promise(() => {}));
+    mockedListMailboxes.mockImplementation(async (accountId) =>
+      accountId === secondAccount.id ? [] : [inbox, trash],
+    );
+    renderShell();
+    expect(await screen.findByText(strings.mail.loadingMessages)).toBeVisible();
+
+    fireEvent.change(screen.getByRole("combobox", { name: "Account" }), {
+      target: { value: secondAccount.id },
+    });
+    await waitFor(() =>
+      expect(screen.queryByText(strings.mail.loadingMessages)).toBeNull(),
+    );
+  });
+
+  it("surfaces a Send now outcome that stays queued", async () => {
+    vi.mocked(api.sendScheduledOutbox).mockResolvedValue({
+      id: "outbox-1",
+      state: "scheduled",
+      detail: "Waiting for a secure mail connection.",
+    });
+    const held = {
+      id: "outbox-1",
+      accountId: account.id,
+      recipients: "lee@example.com",
+      subject: "Held note",
+      state: "scheduled",
+      detail: "Held for review.",
+      createdAt: "2026-08-18T11:00:00Z",
+      sendAt: new Date(Date.now() + 60_000).toISOString(),
+    } as const;
+    mockedListOutbox.mockResolvedValue([held]);
+    useAppStore.setState({ activeLocalView: "outbox", outbox: [held] });
+    renderShell();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Send now" }));
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toMatch(/secure mail connection/i),
     );
   });
 });

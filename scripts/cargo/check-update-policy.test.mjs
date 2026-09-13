@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { runPolicyCheck } from "./check-cargo-update-policy.mjs";
+import { runPolicyCheck } from "../check-cargo-update-policy.mjs";
 
 function createTempRepo() {
   const tempDir = mkdtempSync(path.join(os.tmpdir(), "policy-scan-test-"));

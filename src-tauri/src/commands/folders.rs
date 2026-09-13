@@ -163,9 +163,14 @@ async fn empty_role_folder(
     let _guard = state.lock_account(&account_id).await?;
     let account = state.db.account(&account_id)?;
     let password = credentials::load(&account_id)?;
-    let validity = state.db.mailbox_uid_validity(&account_id, &name)?;
+    let validity = state
+        .db
+        .mailbox_uid_validity(&account_id, &name)?
+        .ok_or_else(|| {
+            "Mailbox identity is unavailable; refresh mail and try again.".to_string()
+        })?;
     let protected = state.db.pending_move_uids(folder_id).unwrap_or_default();
-    let result = mail::empty_folder(&account, &password, &name, validity, &protected).await;
+    let result = mail::empty_folder(&account, &password, &name, Some(validity), &protected).await;
     drop(_guard);
     command_result(result)?;
     let _ = sync_one(&account_id, &app, &state).await;

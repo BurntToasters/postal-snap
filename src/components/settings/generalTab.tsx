@@ -1,10 +1,4 @@
-import {
-  DownloadCloud,
-  RotateCcw,
-  ShieldAlert,
-  ShieldCheck,
-  Upload,
-} from "lucide-react";
+import { DownloadCloud, ShieldAlert, ShieldCheck, Upload } from "lucide-react";
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
 import type { AppSettings } from "../../types";
@@ -20,7 +14,6 @@ interface GeneralTabProps {
   setTab: (tab: SettingsTab) => void;
   exportSettings: () => Promise<void>;
   importSettings: () => Promise<void>;
-  resetSettings: () => Promise<void>;
 }
 
 export function GeneralTab({
@@ -31,7 +24,6 @@ export function GeneralTab({
   setTab,
   exportSettings,
   importSettings,
-  resetSettings,
 }: GeneralTabProps) {
   const settings = useAppStore((state) => state.settings);
   const advertisingOn = settings.blockAdvertisingAndTracking;
@@ -196,14 +188,6 @@ export function GeneralTab({
             >
               <DownloadCloud aria-hidden="true" />{" "}
               {strings.settings.importSettings}
-            </button>
-            <button
-              className="danger-button"
-              type="button"
-              onClick={() => void resetSettings()}
-              disabled={dataBusy}
-            >
-              <RotateCcw aria-hidden="true" /> {strings.settings.resetSettings}
             </button>
           </div>
           {dataStatus ? (

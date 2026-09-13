@@ -40,9 +40,12 @@ impl Database {
         rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
     }
 
-    pub fn remove_operation(&self, id: i64) -> Result<(), String> {
+    pub fn remove_operation(&self, account_id: &str, id: i64) -> Result<(), String> {
         self.conn()?
-            .execute("DELETE FROM offline_ops WHERE id=?1", [id])
+            .execute(
+                "DELETE FROM offline_ops WHERE id=?1 AND account_id=?2",
+                params![id, account_id],
+            )
             .map_err(db_error)?;
         Ok(())
     }
@@ -58,7 +61,7 @@ impl Database {
         self.conn()?.execute(
             "INSERT INTO file_grants(token,account_id,path,size,created_at) VALUES(?1,?2,?3,?4,CURRENT_TIMESTAMP)
              ON CONFLICT(token) DO UPDATE SET path=excluded.path,size=excluded.size",
-            params![token, account_id, path.to_string_lossy(), size],
+            params![token, account_id, path.to_string_lossy(), size.min(i64::MAX as u64) as i64],
         ).map_err(db_error)?;
         Ok(())
     }
@@ -164,17 +167,26 @@ impl Database {
 
     pub fn cache_usage(&self, max_bytes: u64) -> Result<CacheUsage, String> {
         let conn = self.conn()?;
-        let (bytes, message_count): (u64, u64) = conn
+        let (bytes, message_count): (i64, i64) = conn
             .query_row(
                 "SELECT COALESCE(SUM(LENGTH(raw_message)),0), COALESCE(SUM(CASE WHEN LENGTH(raw_message) > 0 THEN 1 ELSE 0 END),0) FROM messages",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .map_err(db_error)?;
+        // Queued outbox MIME is real local storage even though it is exempt
+        // from cache eviction; surface it instead of hiding it.
+        let outbox_bytes: i64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(LENGTH(mime_bytes)),0) FROM outbox",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(db_error)?;
         Ok(CacheUsage {
-            bytes,
+            bytes: bytes.max(0) as u64 + outbox_bytes.max(0) as u64,
             max_bytes,
-            message_count,
+            message_count: message_count.max(0) as u64,
         })
     }
 
@@ -203,7 +215,7 @@ impl Database {
             let cutoff = format!("-{} days", policy.days);
             transaction
                 .execute(
-                    "UPDATE message_fts SET body='' WHERE message_id IN (
+                    "UPDATE message_fts SET body='' WHERE rowid IN (
                     SELECT id FROM messages WHERE received_at < datetime('now', ?1)
                     AND LENGTH(raw_message) > 0
                  )",
@@ -221,14 +233,14 @@ impl Database {
         }
         if policy.max_bytes > 0 {
             loop {
-                let bytes: u64 = conn
+                let bytes: i64 = conn
                     .query_row(
                         "SELECT COALESCE(SUM(LENGTH(raw_message)),0) FROM messages",
                         [],
                         |row| row.get(0),
                     )
                     .map_err(db_error)?;
-                if bytes <= policy.max_bytes {
+                if bytes <= policy.max_bytes.min(i64::MAX as u64) as i64 {
                     break;
                 }
                 let ids = {
@@ -251,7 +263,7 @@ impl Database {
                 let transaction = conn.transaction().map_err(db_error)?;
                 for id in ids {
                     transaction
-                        .execute("UPDATE message_fts SET body='' WHERE message_id=?1", [id])
+                        .execute("UPDATE message_fts SET body='' WHERE rowid=?1", [id])
                         .map_err(db_error)?;
                     transaction.execute(
                         "UPDATE messages SET text_body='',html_body=NULL,raw_message=X'' WHERE id=?1",

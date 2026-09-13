@@ -161,4 +161,36 @@ describe("pane splitter", () => {
     expect(onChange).toHaveBeenCalledWith(260, false);
     expect(onChange).toHaveBeenCalledWith(240, true);
   });
+
+  it("persists the last drag value and cleans up on pointer cancel", () => {
+    const onChange = vi.fn();
+    render(
+      <PaneSplitter
+        className="folders"
+        label="Resize folders"
+        orientation="vertical"
+        value={200}
+        min={100}
+        max={400}
+        onChange={onChange}
+      />,
+    );
+    const separator = screen.getByRole("separator");
+    const releasePointerCapture = vi.fn();
+    Object.assign(separator, {
+      setPointerCapture: vi.fn(),
+      releasePointerCapture,
+    });
+    fireEvent.pointerDown(separator, { pointerId: 7, clientX: 100 });
+    fireEvent.pointerMove(separator, { pointerId: 7, clientX: 150 });
+    fireEvent.pointerCancel(separator, { pointerId: 7 });
+
+    expect(onChange).toHaveBeenLastCalledWith(250, true);
+    expect(releasePointerCapture).not.toHaveBeenCalled();
+
+    onChange.mockClear();
+    fireEvent.pointerMove(separator, { pointerId: 7, clientX: 300 });
+    fireEvent.pointerUp(separator, { pointerId: 7, clientX: 300 });
+    expect(onChange).not.toHaveBeenCalled();
+  });
 });

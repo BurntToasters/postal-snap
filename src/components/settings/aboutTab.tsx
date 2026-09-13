@@ -1,6 +1,6 @@
-import { api } from "../../api";
 import { strings } from "../../i18n";
 import { version as appVersion } from "../../../package.json";
+import { inspectAndOpenExternalLink } from "../externalLink";
 import { SettingsPanel } from "./primitives";
 
 export function AboutTab() {
@@ -13,7 +13,7 @@ export function AboutTab() {
           type="button"
           className="text-button"
           onClick={() =>
-            void api.openExternalUrl(
+            void inspectAndOpenExternalLink(
               "https://github.com/BurntToasters/postal-snap",
             )
           }
@@ -26,7 +26,7 @@ export function AboutTab() {
           type="button"
           className="text-button"
           onClick={() =>
-            void api.openExternalUrl("https://www.mozilla.org/MPL/2.0/")
+            void inspectAndOpenExternalLink("https://www.mozilla.org/MPL/2.0/")
           }
         >
           {strings.settings.aboutLicense}

@@ -61,7 +61,13 @@ html[data-text-scale="large"] #root {
 
 body {
   color: var(--text);
-  background: var(--canvas);
+  background:
+    radial-gradient(
+      circle at 12% 8%,
+      color-mix(in srgb, var(--accent) 8%, transparent),
+      transparent 34%
+    ),
+    var(--canvas);
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
 }

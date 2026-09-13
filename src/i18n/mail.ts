@@ -5,7 +5,6 @@ export const mail = {
   getMail: "Get Mail",
   search: "Search mail",
   searchMailboxOnly: "Search this list",
-  allFolders: "All folders",
   thisMailbox: "This mailbox",
   thisAccount: "This account",
   settings: "Settings",
@@ -43,8 +42,11 @@ export const mail = {
   resizeReader: "Resize reading pane",
   closeAddAccount: "Close add account",
   addEmailAccount: "Add email account",
+  mailboxFallback: "Mailbox",
   noDrafts: "No saved drafts on this device.",
   noQueued: "No queued messages.",
+  offlineChangesDropped:
+    "Some offline changes could not be applied and were undone.",
   noSnoozed: "Nothing snoozed. Snoozed mail waits here until its time comes.",
   snoozed: "Snoozed",
   unsnooze: "Bring back",
@@ -67,7 +69,7 @@ export const mail = {
   sendIn: (seconds: number) =>
     seconds <= 0 ? "Sending…" : `Sending in ${seconds}s`,
   sendNow: "Send now",
-  messageSent: "Message sent",
+  sendingNow: (subject: string) => `Sending "${subject}" now`,
   messageScheduled: "Send scheduled",
   viewOutbox: "View Outbox",
   dismissNotice: "Dismiss",
@@ -99,7 +101,6 @@ export const mail = {
   newFolder: "New folder",
   folderName: "Folder name",
   createFolder: "Create folder",
-  renameFolder: "Rename folder",
   rename: "Rename",
   deleteFolder: "Delete folder",
   deleteFolderQuestion: (name: string) =>

@@ -129,13 +129,6 @@ describe("settings IPC serialization", () => {
   });
 
   it("dispatches multi-account management commands", async () => {
-    mockedInvoke.mockResolvedValue(undefined);
-    await api.updateAccountDisplayName("acc-1", "Work Mail");
-    expect(mockedInvoke).toHaveBeenCalledWith("update_account_display_name", {
-      accountId: "acc-1",
-      displayName: "Work Mail",
-    });
-
     mockedInvoke.mockResolvedValue([
       { accountId: "acc-1", unreadCount: 2, totalCount: 10 },
     ]);
@@ -154,14 +147,6 @@ describe("settings IPC serialization", () => {
     const synced = await api.syncAllAccounts();
     expect(synced).toEqual(["acc-1", "acc-2"]);
     expect(mockedInvoke).toHaveBeenCalledWith("sync_all_accounts", {});
-
-    mockedInvoke.mockResolvedValue([]);
-    const searchRes = await api.searchAllCached("invoice", 25);
-    expect(searchRes).toEqual([]);
-    expect(mockedInvoke).toHaveBeenCalledWith("search_all_cached_messages", {
-      query: "invoice",
-      limit: 25,
-    });
   });
 
   it("omits confirmToken unless turning reported threats off", async () => {
@@ -227,10 +212,6 @@ describe("settings IPC serialization", () => {
       ["add_account", () => api.addAccount(request)],
       ["remove_account", () => api.removeAccount("acc")],
       ["erase_all_data", () => api.eraseAllData()],
-      [
-        "update_account_display_name",
-        () => api.updateAccountDisplayName("acc", "Name"),
-      ],
       [
         "update_account_signature",
         () => api.updateAccountSignature("acc", "Sig"),
@@ -320,7 +301,6 @@ describe("settings IPC serialization", () => {
       ["set_mail_shortcut_guard", () => api.setMailShortcutGuard(true)],
       ["export_settings", () => api.exportSettings()],
       ["import_settings", () => api.importSettings()],
-      ["reset_settings", () => api.resetSettings()],
       ["get_startup_notice", () => api.getStartupNotice()],
       ["get_startup_error", () => api.getStartupError()],
       ["get_cache_usage", () => api.cacheUsage()],

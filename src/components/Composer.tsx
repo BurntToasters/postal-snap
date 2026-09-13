@@ -156,6 +156,9 @@ interface Props {
   accountId: string;
 }
 
+const linkDialogFocusable =
+  'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])';
+
 export function Composer({ accountId }: Props) {
   const seed = useAppStore((state) => state.composeSeed);
   const account = useAppStore((state) =>
@@ -249,12 +252,16 @@ export function Composer({ accountId }: Props) {
   const [draftSyncDetail, setDraftSyncDetail] = useState(
     seed?.draftSummary?.syncDetail,
   );
-  const restoredInlineImages = useRef(false);
+  const restoredInlineImages = useRef(new Set<string>());
   const isDiscarding = useRef(false);
   const isSending = useRef(false);
   const draftRevision = useRef(0);
   const saveInFlight = useRef(false);
   const pendingClose = useRef(false);
+  const draftIdRef = useRef<string | undefined>(
+    seed?.draft?.id ?? seed?.draftSummary?.id,
+  );
+  const savePromiseRef = useRef<Promise<unknown> | null>(null);
   const saveDraftRef = useRef<(showStatus?: boolean) => Promise<void>>(() =>
     Promise.resolve(),
   );
@@ -296,6 +303,8 @@ export function Composer({ accountId }: Props) {
     editorProps: {
       attributes: {
         class: "composer-editor",
+        role: "textbox",
+        "aria-multiline": "true",
         "aria-label": strings.composer.messageBody,
       },
       transformPastedHTML: (html) => sanitizeComposeHtml(html),
@@ -328,6 +337,7 @@ export function Composer({ accountId }: Props) {
       Boolean(
         editor &&
         !sending &&
+        !isDiscarding.current &&
         saveState !== "saving" &&
         [...splitAddresses(to), ...splitAddresses(cc), ...splitAddresses(bcc)]
           .length > 0 &&
@@ -338,34 +348,50 @@ export function Composer({ accountId }: Props) {
   );
 
   useEffect(() => {
-    if (!editor || restoredInlineImages.current) return;
-    restoredInlineImages.current = true;
+    if (!editor) return;
     const inline = attachments.filter(
-      (attachment) => attachment.inline && attachment.contentId,
+      (attachment) =>
+        attachment.inline &&
+        attachment.contentId &&
+        !restoredInlineImages.current.has(attachment.token),
     );
     if (inline.length === 0) return;
     let cancelled = false;
-    void Promise.all(
+    void Promise.allSettled(
       inline.map(async (attachment) => ({
         attachment,
         dataUrl: await api.readComposeImage(accountId, attachment.token),
       })),
-    )
-      .then((loaded) => {
-        if (cancelled) return;
+    ).then((results) => {
+      if (cancelled) return;
+      const loaded = results.flatMap((result) =>
+        result.status === "fulfilled" ? [result.value] : [],
+      );
+      for (const { attachment } of loaded)
+        restoredInlineImages.current.add(attachment.token);
+      if (loaded.length > 0) {
         let html = editor.getHTML();
-        const next = new Map<string, { dataUrl: string; contentId: string }>();
         for (const { attachment, dataUrl } of loaded) {
           const contentId = attachment.contentId!;
           html = html.split(`cid:${contentId}`).join(dataUrl);
-          next.set(attachment.token, { dataUrl, contentId });
         }
-        setInlineImages(next);
+        setInlineImages((items) => {
+          const next = new Map(items);
+          for (const { attachment, dataUrl } of loaded) {
+            next.set(attachment.token, {
+              dataUrl,
+              contentId: attachment.contentId!,
+            });
+          }
+          return next;
+        });
         editor.commands.setContent(sanitizeComposeHtml(html), {
           emitUpdate: false,
         });
-      })
-      .catch((cause) => setError(String(cause)));
+      }
+      const failed = results.length - loaded.length;
+      if (failed > 0) setError(strings.composer.inlineImageFailed(failed));
+    });
     return () => {
       cancelled = true;
     };
@@ -387,7 +413,10 @@ export function Composer({ accountId }: Props) {
       textBody: htmlToPlainText(htmlBody),
       attachments,
       inReplyTo:
-        seed?.draft?.inReplyTo ?? seed?.sourceMessage?.messageId ?? undefined,
+        seed?.draft?.inReplyTo ??
+        (seed?.composeMode === "forward"
+          ? undefined
+          : (seed?.sourceMessage?.messageId ?? undefined)),
       references: seedReferences(seed),
     };
   }, [
@@ -426,9 +455,10 @@ export function Composer({ accountId }: Props) {
         const revision = draftRevision.current;
         saveInFlight.current = true;
         setSaveState("saving");
-        void api
+        savePromiseRef.current = api
           .saveDraft(draft)
           .then((outcome) => {
+            draftIdRef.current = outcome.id;
             if (isDiscarding.current) return;
             setDraftId(outcome.id);
             if (draftRevision.current === revision) {
@@ -464,11 +494,18 @@ export function Composer({ accountId }: Props) {
     const onVisibility = () => {
       if (document.visibilityState === "hidden") tryAutosave();
     };
+    const flushDraft = () => {
+      void saveDraftRef.current(false);
+    };
     window.addEventListener("blur", onBlur);
+    window.addEventListener("pagehide", flushDraft);
+    window.addEventListener("beforeunload", flushDraft);
     document.addEventListener("visibilitychange", onVisibility);
     return () => {
       window.clearInterval(saveTimer);
       window.removeEventListener("blur", onBlur);
+      window.removeEventListener("pagehide", flushDraft);
+      window.removeEventListener("beforeunload", flushDraft);
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [accountId, editor, sending, setError]);
@@ -485,7 +522,12 @@ export function Composer({ accountId }: Props) {
       saveInFlight.current = true;
       setSaveState("saving");
       try {
-        const outcome = await api.saveDraft(draft);
+        const savePromise = api.saveDraft(draft).then((outcome) => {
+          draftIdRef.current = outcome.id;
+          return outcome;
+        });
+        savePromiseRef.current = savePromise;
+        const outcome = await savePromise;
         if (isDiscarding.current) return;
         setDraftId(outcome.id);
         if (draftRevision.current === revision) {
@@ -521,6 +563,50 @@ export function Composer({ accountId }: Props) {
     saveDraftRef.current = saveDraft;
   }, [saveDraft]);
 
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    void api
+      .onDraftSyncChanged((event) => {
+        if (event.accountId !== accountId) return;
+        const currentId = draftIdRef.current;
+        if (!currentId) return;
+        if (event.draftId && event.draftId !== currentId) return;
+        if (
+          event.syncState === "synced" ||
+          event.syncState === "localPending" ||
+          event.syncState === "localOnly" ||
+          event.syncState === "conflict"
+        ) {
+          setDraftSyncState(event.syncState);
+          if (event.syncState === "synced") setDraftSyncDetail(undefined);
+          return;
+        }
+        // A sync pass emits one event without a draft id or state. Reload
+        // the saved summary so the banner reflects the real server state.
+        void api
+          .listDrafts(accountId)
+          .then((drafts) => {
+            if (!active) return;
+            const summary = drafts.find(
+              (item) => item.id === draftIdRef.current,
+            );
+            if (!summary) return;
+            setDraftSyncState(summary.syncState);
+            setDraftSyncDetail(summary.syncDetail ?? undefined);
+          })
+          .catch(() => undefined);
+      })
+      .then((stop) => {
+        if (active) unlisten = stop;
+        else stop();
+      });
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, [accountId]);
+
   async function requestClose() {
     if (isDiscarding.current) return;
     if (sending || saveInFlight.current) {
@@ -547,7 +633,7 @@ export function Composer({ accountId }: Props) {
   }
 
   async function discardDraft() {
-    if (sending || isDiscarding.current || saveInFlight.current) return;
+    if (sending || isDiscarding.current) return;
     if (hasDraftContent(buildDraft(), editor?.getText() ?? "")) {
       const confirmed = await api.showNativeConfirm(
         strings.composer.discard,
@@ -556,8 +642,15 @@ export function Composer({ accountId }: Props) {
       if (!confirmed) return;
     }
     isDiscarding.current = true;
+    pendingClose.current = false;
     try {
-      if (draftId) await api.deleteDraft(draftId, accountId);
+      // A save may have started while the confirmation was open. Let it
+      // settle so its id is known, then delete the latest saved draft.
+      if (savePromiseRef.current) {
+        await savePromiseRef.current.catch(() => undefined);
+      }
+      const id = draftIdRef.current;
+      if (id) await api.deleteDraft(id, accountId);
       await api.releaseComposeAttachments(
         accountId,
         attachments.map((attachment) => attachment.token),
@@ -582,7 +675,13 @@ export function Composer({ accountId }: Props) {
       const subjectValidation = validateSubject(subject);
       setRecipientError(validation);
       setSubjectError(subjectValidation);
-      if (!canSend || validation || subjectValidation || isSending.current)
+      if (
+        !canSend ||
+        validation ||
+        subjectValidation ||
+        isSending.current ||
+        isDiscarding.current
+      )
         return;
       if (sendAt) {
         const when = new Date(sendAt).getTime();
@@ -609,6 +708,12 @@ export function Composer({ accountId }: Props) {
             outboxId: outcome.id,
             accountId,
             scheduled: Boolean(sendAt),
+            undoSeconds: sendAt
+              ? undefined
+              : Math.min(
+                  useAppStore.getState().settings.undoSendSeconds ?? 10,
+                  30,
+                ),
           });
         }
         close();
@@ -625,6 +730,7 @@ export function Composer({ accountId }: Props) {
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
+      if (event.isComposing || event.keyCode === 229) return;
       if (minimized) return;
       if (document.querySelector(".settings-window")) return;
       if (!(event.metaKey || event.ctrlKey)) return;
@@ -923,7 +1029,6 @@ export function Composer({ accountId }: Props) {
           <div
             className="settings-confirm-overlay"
             role="dialog"
-            aria-modal="true"
             aria-labelledby="composer-link-title"
           >
             <form
@@ -933,10 +1038,34 @@ export function Composer({ accountId }: Props) {
                 applyLink();
               }}
               onKeyDown={(event) => {
-                if (event.key !== "Escape") return;
-                event.preventDefault();
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setLinkDialogOpen(false);
+                  return;
+                }
+                if (event.key !== "Tab") return;
+                const form = event.currentTarget;
+                const controls = [
+                  ...form.querySelectorAll<HTMLElement>(linkDialogFocusable),
+                ];
+                if (controls.length === 0) return;
+                const first = controls[0];
+                const last = controls[controls.length - 1];
+                const active = document.activeElement as HTMLElement | null;
+                const inside = active ? form.contains(active) : false;
+                if (event.shiftKey) {
+                  if (!inside || active === first) {
+                    event.preventDefault();
+                    last.focus();
+                  }
+                } else if (!inside || active === last) {
+                  event.preventDefault();
+                  first.focus();
+                }
+                // The composer-wide trap listens on document. Keep this Tab
+                // inside the aria-modal link dialog instead.
                 event.stopPropagation();
-                setLinkDialogOpen(false);
               }}
             >
               <h2 id="composer-link-title">{strings.composer.insertLink}</h2>

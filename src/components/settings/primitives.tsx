@@ -1,6 +1,4 @@
 import type { ReactNode } from "react";
-import { strings } from "../../i18n";
-import type { DistributionChannel } from "../../types";
 
 export type SettingsTab =
   | "general"
@@ -68,20 +66,4 @@ export function SettingRow({
       {children}
     </label>
   );
-}
-
-export function editionName(kind: DistributionChannel["kind"]): string {
-  return {
-    direct: strings.settings.directEdition,
-    macAppStore: strings.settings.macStoreEdition,
-    microsoftStore: strings.settings.microsoftStoreEdition,
-    flatpak: strings.settings.flatpakEdition,
-  }[kind];
-}
-
-export function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
-  return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
 }

@@ -30,6 +30,7 @@ import {
   type UpdateFoundListener,
 } from "../update";
 import { useDialogFocus } from "./useDialogFocus";
+import { preparePassword } from "./setup/request";
 import type { SettingsTab } from "./settings/primitives";
 import { useSettingsSave } from "./settings/useSettingsSave";
 import { GeneralTab } from "./settings/generalTab";
@@ -113,6 +114,7 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
   );
   const [confirmToken, setConfirmToken] = useState("");
   const confirmInputRef = useRef<HTMLInputElement>(null);
+  const settingsContentRef = useRef<HTMLDivElement>(null);
   const [filterRules, setFilterRules] = useState<Record<string, FilterRule[]>>(
     {},
   );
@@ -213,6 +215,10 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
     return () => window.clearTimeout(timer);
   }, [confirmThreatOff]);
 
+  useEffect(() => {
+    if (settingsContentRef.current) settingsContentRef.current.scrollTop = 0;
+  }, [tab]);
+
   function cancelThreatOff() {
     setConfirmThreatOff(false);
     setConfirmToken("");
@@ -298,27 +304,6 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
     }
   }
 
-  async function resetSettings() {
-    if (dataBusy) return;
-    const confirmed = await api.showNativeConfirm(
-      strings.settings.resetSettings,
-      strings.settings.resetQuestion,
-    );
-    if (!confirmed) return;
-    setDataBusy(true);
-    setDataStatus(undefined);
-    try {
-      const reset = await api.resetSettings();
-      setSettings(reset);
-      applySettings(reset);
-      setDataStatus(strings.settings.resetApplied);
-    } catch (cause) {
-      setError(String(cause));
-    } finally {
-      setDataBusy(false);
-    }
-  }
-
   async function eraseAllData() {
     if (eraseBusy) return;
     const confirmed = await api.showNativeConfirm(
@@ -378,7 +363,7 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
     setTestingAccountId(id);
     setTestedHealthy(undefined);
     try {
-      await api.syncAccount(id);
+      await api.testSavedAccount(id);
       setTestedHealthy(id);
     } catch (cause) {
       setError(String(cause));
@@ -412,7 +397,7 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
       setError(strings.settings.aliasInvalid);
       return;
     }
-    const acc = accounts.find((a) => a.id === accountId);
+    const acc = useAppStore.getState().accounts.find((a) => a.id === accountId);
     if (!acc) return;
     const current = acc.aliases ?? [];
     if (current.includes(input) || acc.email.toLowerCase() === input) {
@@ -439,7 +424,7 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
       strings.settings.removeAliasConfirm(alias),
     );
     if (!confirmed) return;
-    const acc = accounts.find((a) => a.id === accountId);
+    const acc = useAppStore.getState().accounts.find((a) => a.id === accountId);
     if (!acc) return;
     const remainingAliases = (acc.aliases ?? []).filter((a) => a !== alias);
     try {
@@ -453,8 +438,13 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
 
   async function handleUpdatePassword(accountId: string) {
     if (updatingPasswordId) return;
-    const password = passwordInputs[accountId] ?? "";
-    if (!password) return;
+    const rawPassword = passwordInputs[accountId] ?? "";
+    if (!rawPassword) return;
+    const account = accounts.find((item) => item.id === accountId);
+    const password = preparePassword(
+      account?.provider ?? "manual",
+      rawPassword,
+    );
     setUpdatingPasswordId(accountId);
     try {
       await api.updateAccountPassword(accountId, password);
@@ -479,7 +469,9 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
       const value = signatureInputs[accountId] ?? fallback;
       const updated = await api.updateAccountSignature(accountId, value);
       setAccounts(
-        accounts.map((item) => (item.id === accountId ? updated : item)),
+        useAppStore
+          .getState()
+          .accounts.map((item) => (item.id === accountId ? updated : item)),
       );
       setSignatureInputs((prev) => ({
         ...prev,
@@ -663,7 +655,7 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
             className="icon-button"
             type="button"
             onClick={requestClose}
-            aria-label={strings.common.close}
+            aria-label={strings.settings.close}
           >
             <X aria-hidden="true" />
           </button>
@@ -700,7 +692,7 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
               </button>
             ))}
           </nav>
-          <div className="settings-content">
+          <div className="settings-content" ref={settingsContentRef}>
             {tab === "general" ? (
               <GeneralTab
                 update={update}
@@ -710,7 +702,6 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
                 setTab={setTab}
                 exportSettings={exportSettings}
                 importSettings={importSettings}
-                resetSettings={resetSettings}
               />
             ) : null}
             {tab === "reading" ? <ReadingTab update={update} /> : null}

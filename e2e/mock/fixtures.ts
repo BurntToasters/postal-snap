@@ -7,12 +7,13 @@ import type { MockShared } from "./context";
 // self-contained: type-only imports, locals, and browser globals only.
 export async function registerMockFixtures(page: Page): Promise<void> {
   await page.addInitScript(() => {
+    const params = new URLSearchParams(location.search);
     const account = {
       id: "account-1",
       provider: "icloud",
       email: "sam@icloud.com",
       displayName: "Sam",
-      syncState: "idle",
+      syncState: params.has("offline") ? "offline" : "idle",
       error: location.search.includes("authError")
         ? "Sign-in failed. Update the account password in Settings > Accounts."
         : null,
@@ -76,7 +77,6 @@ export async function registerMockFixtures(page: Page): Promise<void> {
       summary.threadRoot = "<weekend@example.com>";
       olderSummary.threadRoot = "<weekend@example.com>";
     }
-    const params = new URLSearchParams(location.search);
     const shared: MockShared = {
       account,
       mailboxes,

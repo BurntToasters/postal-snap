@@ -110,7 +110,7 @@ function manifest(arch, version) {
  IgnorableNamespaces="uap rescap">
  <Identity Name="${xml(process.env.MSSTORE_IDENTITY_NAME)}" Publisher="${xml(process.env.MSSTORE_PUBLISHER)}" Version="${version}" ProcessorArchitecture="${arch}" />
  <Properties><DisplayName>Postal Snap</DisplayName><PublisherDisplayName>${xml(process.env.MSSTORE_PUBLISHER_DISPLAY_NAME)}</PublisherDisplayName><Logo>Assets\\StoreLogo.png</Logo></Properties>
- <Dependencies><TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19045.0" MaxVersionTested="10.0.26100.0" /></Dependencies>
+ <Dependencies><TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19045.0" MaxVersionTested="10.0.26100.0" /><PackageDependency Name="Microsoft.Win32WebView2" MinVersion="92.0.451.0" Publisher="CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US" /></Dependencies>
  <Resources><Resource Language="en-US" /></Resources>
  <Applications><Application Id="PostalSnap" Executable="PostalSnap.exe" EntryPoint="Windows.FullTrustApplication">
   <uap:VisualElements DisplayName="Postal Snap" Description="Easy, secure email without clutter" BackgroundColor="#176caa" Square44x44Logo="Assets\\Square44x44Logo.png" Square150x150Logo="Assets\\Square150x150Logo.png" />

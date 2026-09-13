@@ -20,16 +20,24 @@ use crate::{
 };
 
 #[tauri::command]
-pub fn list_all_mailboxes(state: State<'_, AppState>) -> CommandResult<Vec<MailboxSummary>> {
-    command_result(state.db.list_all_mailboxes())
+pub async fn list_all_mailboxes(state: State<'_, AppState>) -> CommandResult<Vec<MailboxSummary>> {
+    let db = state.db.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || db.list_all_mailboxes())
+        .await
+        .map_err(|_| "Postal Snap could not list folders.".to_string())?;
+    command_result(result)
 }
 
 #[tauri::command]
-pub fn list_mailboxes(
+pub async fn list_mailboxes(
     account_id: String,
     state: State<'_, AppState>,
 ) -> CommandResult<Vec<MailboxSummary>> {
-    command_result(state.db.list_mailboxes(&account_id))
+    let db = state.db.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || db.list_mailboxes(&account_id))
+        .await
+        .map_err(|_| "Postal Snap could not list folders.".to_string())?;
+    command_result(result)
 }
 
 #[tauri::command]
@@ -46,18 +54,27 @@ pub async fn sync_all_accounts(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<Vec<String>> {
+    use futures_util::StreamExt;
+
     let accounts = state.db.list_accounts()?;
-    let mut futures = Vec::new();
-    for account in &accounts {
-        futures.push(sync_one(&account.id, &app, &state));
-    }
-    let results = futures_util::future::join_all(futures).await;
-    let mut synced_ids = Vec::new();
-    for (account, result) in accounts.iter().zip(results) {
-        if result.is_ok() {
-            synced_ids.push(account.id.clone());
-        }
-    }
+    let account_ids: Vec<String> = accounts.iter().map(|account| account.id.clone()).collect();
+    let results = futures_util::stream::iter(account_ids)
+        .map(|account_id| async {
+            let result = sync_one(&account_id, &app, &state).await;
+            (account_id, result)
+        })
+        .buffer_unordered(3)
+        .collect::<Vec<_>>()
+        .await;
+    let synced = results
+        .into_iter()
+        .filter_map(|(account_id, result)| result.ok().map(|()| account_id))
+        .collect::<std::collections::HashSet<_>>();
+    let synced_ids = accounts
+        .iter()
+        .filter(|account| synced.contains(&account.id))
+        .map(|account| account.id.clone())
+        .collect();
     Ok(synced_ids)
 }
 
@@ -92,10 +109,18 @@ async fn sync_one_locked(
     state.db.set_account_state(account_id, "syncing", None)?;
     emit_sync(app, account_id, "syncing", Some("Checking mail…"), None);
     let settings = state.settings.get()?;
+    let filter_watermark = state.db.latest_message_rowid().ok();
     match mail::sync_account(&state.db, &account, &password, &settings.cache_policy).await {
         Ok(()) => {
-            apply_filter_rules(&state.db, &account);
-            let pending_changes = replay_offline_operations(&state.db, &account, &password).await?;
+            apply_filter_rules(&state.db, &account, filter_watermark);
+            let pending_changes = replay_offline_operations(
+                app,
+                &state.db,
+                &account,
+                &password,
+                &settings.cache_policy,
+            )
+            .await?;
             sync_drafts_locked(state, &account, &password).await;
             replay_outbox_locked(account_id, app, state).await;
             let now = chrono::Utc::now().to_rfc3339();
@@ -149,7 +174,13 @@ async fn sync_one_locked(
 /// File newly synced inbox mail through enabled filter rules. Actions
 /// reuse the offline queue (local apply + queued op), so the replay later
 /// in this sync delivers them and failures stay queued, never half-applied.
-pub(crate) fn apply_filter_rules(db: &Database, account: &AccountRecord) {
+/// `newer_than_id` bounds the scan to rows cached by the current sync pass;
+/// `None` evaluates every unread inbox message (rule creation/update).
+pub(crate) fn apply_filter_rules(
+    db: &Database,
+    account: &AccountRecord,
+    newer_than_id: Option<i64>,
+) {
     let account_id = &account.summary.id;
     let Ok(rules) = db.list_filter_rules(account_id) else {
         return;
@@ -179,26 +210,25 @@ pub(crate) fn apply_filter_rules(db: &Database, account: &AccountRecord) {
         if rule.action != "mark_read" && destination.is_none() {
             continue;
         }
-        let Ok(matches) = db.find_rule_matches(account_id, rule) else {
+        let Ok(matches) = db.find_rule_matches(account_id, rule, newer_than_id) else {
             continue;
         };
         planned.push((rule, destination, matches));
     }
     for (rule, destination, matches) in planned {
         if rule.action == "mark_read" {
-            let ids: Vec<i64> = matches.iter().map(|(id, _, _, _)| *id).collect();
-            if db.set_flags_bulk(&ids, Some(true), None).is_err() {
-                continue;
-            }
             for (id, uid, mailbox, _) in &matches {
-                let Ok(validity) = db.mailbox_uid_validity(account_id, mailbox) else {
+                let Ok(Some(validity)) = db.mailbox_uid_validity(account_id, mailbox) else {
+                    continue;
+                };
+                if db.set_flags(*id, Some(true), None).is_err() {
                     continue;
                 };
                 let operation = FlagOperation {
                     message_id: *id,
                     uid: *uid,
                     mailbox: mailbox.clone(),
-                    uid_validity: validity,
+                    uid_validity: Some(validity),
                     is_read: Some(true),
                     is_starred: None,
                 };
@@ -214,7 +244,7 @@ pub(crate) fn apply_filter_rules(db: &Database, account: &AccountRecord) {
             if source == &destination {
                 continue;
             }
-            let Ok(validity) = db.mailbox_uid_validity(account_id, source) else {
+            let Ok(Some(validity)) = db.mailbox_uid_validity(account_id, source) else {
                 continue;
             };
             let operation = MoveOperation {
@@ -222,7 +252,7 @@ pub(crate) fn apply_filter_rules(db: &Database, account: &AccountRecord) {
                 uid: *uid,
                 source: source.clone(),
                 destination: destination.clone(),
-                uid_validity: validity,
+                uid_validity: Some(validity),
             };
             let dedupe_key = format!("move:{id}");
             if db

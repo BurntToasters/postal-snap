@@ -1,6 +1,7 @@
 import { join } from "node:path";
+import { assertTopChangelogVersion } from "./lib/changelog.js";
 import { json } from "./lib/json.js";
-import { process, root } from "./lib/paths.js";
+import { process, readFile, root } from "./lib/paths.js";
 import { output, run } from "./lib/spawn.js";
 import { resolveUpdaterPublicKey } from "./updater-pubkey.js";
 import { validateRepositoryMacosEntitlements } from "./validate-macos-entitlements.js";
@@ -66,6 +67,11 @@ if (head !== upstreamHead) {
     `HEAD ${head.slice(0, 12)} does not match pushed ${expectedUpstream} ${upstreamHead.slice(0, 12)}.`,
   );
 }
+
+assertTopChangelogVersion(
+  await readFile(join(root, "CHANGELOG.md"), "utf8"),
+  pkg.version,
+);
 
 await run("npm", ["run", "sync-version"]);
 assertClean(

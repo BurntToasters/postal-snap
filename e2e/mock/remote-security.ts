@@ -9,6 +9,25 @@ export async function registerMockRemoteSecurity(page: Page): Promise<void> {
   await page.addInitScript(() => {
     const mock = window.__POSTAL_SNAP_MOCK__ as MockShared;
     const state = window.__POSTAL_SNAP_TEST__ as MockState;
+    function inspectExternalUrl(raw: string) {
+      if (raw.length > 16 * 1024) {
+        throw new Error("That link is too long.");
+      }
+      let parsed: URL;
+      try {
+        parsed = new URL(raw);
+      } catch {
+        throw new Error("That link is not a valid web address.");
+      }
+      if (
+        parsed.username ||
+        parsed.password ||
+        !/^https?:$/.test(parsed.protocol)
+      ) {
+        throw new Error("Postal Snap can only open ordinary web links.");
+      }
+      return parsed;
+    }
     Object.assign(mock.handlers, {
       fetch_remote_image() {
         state.remoteFetches += 1;
@@ -24,20 +43,7 @@ export async function registerMockRemoteSecurity(page: Page): Promise<void> {
         };
       },
       inspect_external_url(args: Record<string, unknown>) {
-        const raw = String(args.url);
-        let parsed: URL;
-        try {
-          parsed = new URL(raw);
-        } catch {
-          throw new Error("That link is not a valid web address.");
-        }
-        if (
-          parsed.username ||
-          parsed.password ||
-          !/^https?:$/.test(parsed.protocol)
-        ) {
-          throw new Error("Postal Snap can only open ordinary web links.");
-        }
+        const parsed = inspectExternalUrl(String(args.url));
         return {
           url: parsed.href,
           hostname: parsed.hostname,
@@ -45,7 +51,14 @@ export async function registerMockRemoteSecurity(page: Page): Promise<void> {
         };
       },
       open_external_url(args: Record<string, unknown>) {
-        state.openedUrls.push(String(args.url));
+        const parsed = inspectExternalUrl(String(args.url));
+        const reportedThreat = location.search.includes("threatLink");
+        if (reportedThreat && args.openAnyway !== true) {
+          throw new Error(
+            "That address was reported as potentially dangerous. Confirm again if you still want to open it.",
+          );
+        }
+        state.openedUrls.push(parsed.href);
         return undefined;
       },
       open_help_url() {

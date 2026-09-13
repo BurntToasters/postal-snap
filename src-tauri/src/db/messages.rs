@@ -75,7 +75,7 @@ impl Database {
                 account_id, mailbox_id, message.uid, message.message_id, message.subject, message.sender_name,
                 message.sender_address, message.recipients, message.received_at, message.preview,
                 message.is_read as i32, message.is_starred as i32, (!message.attachments.is_empty()) as i32,
-                message.size, to_json, cc_json, message.reply_to, thread_parent, thread_root,
+                message.size.min(i64::MAX as u64) as i64, to_json, cc_json, message.reply_to, thread_parent, thread_root,
                 message.text_body, message.html_body,
                 attachments, message.raw_message,
             ],
@@ -88,10 +88,10 @@ impl Database {
             )
             .map_err(db_error)?;
         transaction
-            .execute("DELETE FROM message_fts WHERE message_id = ?1", [id])
+            .execute("DELETE FROM message_fts WHERE rowid = ?1", [id])
             .map_err(db_error)?;
         transaction.execute(
-            "INSERT INTO message_fts(message_id, subject, sender, recipients, body) VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO message_fts(rowid, subject, sender, recipients, body) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![id, message.subject, format!("{} {}", message.sender_name, message.sender_address), message.recipients, message.text_body],
         ).map_err(db_error)?;
         transaction.commit().map_err(db_error)
@@ -137,7 +137,7 @@ impl Database {
                 message.is_read as i32,
                 message.is_starred as i32,
                 i32::from(message.has_attachments || !message.attachments.is_empty()),
-                message.size,
+                message.size.min(i64::MAX as u64) as i64,
                 to_json,
                 cc_json,
                 message.reply_to,
@@ -153,10 +153,10 @@ impl Database {
             )
             .map_err(db_error)?;
         transaction
-            .execute("DELETE FROM message_fts WHERE message_id=?1", [id])
+            .execute("DELETE FROM message_fts WHERE rowid=?1", [id])
             .map_err(db_error)?;
         transaction.execute(
-            "INSERT INTO message_fts(message_id,subject,sender,recipients,body)
+            "INSERT INTO message_fts(rowid,subject,sender,recipients,body)
              SELECT id,subject,sender_name || ' ' || sender_address,recipients,text_body FROM messages WHERE id=?1",
             [id],
         ).map_err(db_error)?;
@@ -506,7 +506,7 @@ impl Database {
         let transaction = conn.transaction().map_err(db_error)?;
         transaction
             .execute(
-                "DELETE FROM message_fts WHERE message_id IN (SELECT id FROM messages WHERE mailbox_id=?1)",
+                "DELETE FROM message_fts WHERE rowid IN (SELECT id FROM messages WHERE mailbox_id=?1)",
                 [mailbox_id],
             )
             .map_err(db_error)?;
@@ -710,6 +710,16 @@ impl Database {
         ).optional().map_err(db_error)?.ok_or_else(|| "Message not found.".into())
     }
 
+    pub fn message_rfc_id(&self, id: i64) -> Result<Option<String>, String> {
+        self.conn()?
+            .query_row("SELECT message_id FROM messages WHERE id=?1", [id], |row| {
+                row.get(0)
+            })
+            .optional()
+            .map_err(db_error)
+            .map(Option::flatten)
+    }
+
     pub fn mailbox_uid_validity(
         &self,
         account_id: &str,
@@ -784,8 +794,16 @@ impl Database {
     ) -> Result<(String, i64, String, u32, u64), String> {
         self.conn()?.query_row(
             "SELECT m.account_id, m.mailbox_id, f.name, m.uid, m.size FROM messages m JOIN mailboxes f ON f.id=m.mailbox_id WHERE m.id=?1",
-            [id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+            [id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get::<_, i64>(4)?.max(0) as u64)),
         ).optional().map_err(db_error)?.ok_or_else(|| "Message not found.".into())
+    }
+
+    pub fn latest_message_rowid(&self) -> Result<i64, String> {
+        self.conn()?
+            .query_row("SELECT COALESCE(MAX(id), 0) FROM messages", [], |row| {
+                row.get(0)
+            })
+            .map_err(db_error)
     }
 
     pub fn search(&self, query: &SearchQuery) -> Result<Vec<MessageSummary>, String> {
@@ -800,7 +818,7 @@ impl Database {
             " AND (?3 IS NULL OR m.mailbox_id = ?3)"
         };
         let sql = format!(
-            "{} JOIN message_fts fts ON fts.message_id=m.id WHERE m.account_id=?1 AND m.pending_move_to IS NULL AND message_fts MATCH ?2 {} ORDER BY bm25(message_fts), m.received_at DESC LIMIT ?4",
+            "{} JOIN message_fts fts ON fts.rowid=m.id WHERE m.account_id=?1 AND m.pending_move_to IS NULL AND message_fts MATCH ?2 {} ORDER BY bm25(message_fts), m.received_at DESC LIMIT ?4",
             MESSAGE_SUMMARY_SELECT, mailbox_filter,
         );
         let mut statement = conn.prepare(&sql).map_err(db_error)?;
@@ -818,6 +836,9 @@ impl Database {
         rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
     }
 
+    /// Parked for the planned unified-inbox search; no command or mailbox UI
+    /// calls this yet (see `docs/partially_implemented.md`).
+    #[allow(dead_code)]
     pub fn search_all_accounts(
         &self,
         text: &str,
@@ -829,7 +850,7 @@ impl Database {
             return Ok(Vec::new());
         }
         let sql = format!(
-            "{} JOIN message_fts fts ON fts.message_id=m.id WHERE m.pending_move_to IS NULL AND message_fts MATCH ?1 ORDER BY bm25(message_fts), m.received_at DESC LIMIT ?2",
+            "{} JOIN message_fts fts ON fts.rowid=m.id WHERE m.pending_move_to IS NULL AND message_fts MATCH ?1 ORDER BY bm25(message_fts), m.received_at DESC LIMIT ?2",
             MESSAGE_SUMMARY_SELECT,
         );
         let mut statement = conn.prepare(&sql).map_err(db_error)?;
