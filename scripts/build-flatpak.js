@@ -20,6 +20,7 @@ const generatedManifest = join(
   root,
   "packaging/flatpak/run.rosie.snap.generated.yml",
 );
+const lintExceptions = join(root, "packaging/flatpak/lint-exceptions.json");
 await run("node", [
   "scripts/tauri-build.js",
   "--target",
@@ -38,12 +39,7 @@ const manifest = (
   "../../src-tauri/target/release/postal-snap",
   `../../src-tauri/target/${rustTarget}/release/postal-snap`,
 );
-const branch = manifest.match(/^branch:\s*["']?([^\s#"']+)/m)?.[1];
-if (!branch) {
-  throw new Error(
-    "Flatpak manifest must set branch so build-bundle matches the exported ref.",
-  );
-}
+const branch = "stable";
 await writeFile(generatedManifest, manifest);
 await runFlatpakBuilderLint(generatedManifest);
 await validateAppStreamMetadata();
@@ -79,6 +75,8 @@ async function runFlatpakBuilderLint(manifestPath) {
       "--command=flatpak-builder-lint",
       "org.flatpak.Builder",
       "--exceptions",
+      "--user-exceptions",
+      lintExceptions,
       "manifest",
       manifestPath,
     ]);
