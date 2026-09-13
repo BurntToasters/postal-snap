@@ -658,10 +658,7 @@ pub async fn download_message(
     if selected.uid_validity != Some(expected_uid_validity) {
         return Err("This mailbox changed; refresh mail and try again.".into());
     }
-    let body_query = format!(
-        "(UID FLAGS RFC822.SIZE INTERNALDATE BODY.PEEK[]<0.{}>)",
-        MAX_MESSAGE_BYTES + 1
-    );
+    let body_query = body_fetch_query("UID FLAGS RFC822.SIZE INTERNALDATE");
     let mut rows = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
         session
             .uid_fetch(uid.to_string(), body_query)
@@ -720,10 +717,7 @@ async fn download_uncached_bodies(
         .map(|(uid, _)| uid.to_string())
         .collect::<Vec<_>>()
         .join(",");
-    let body_query = format!(
-        "(UID FLAGS RFC822.SIZE INTERNALDATE BODY.PEEK[]<0.{}>)",
-        MAX_MESSAGE_BYTES + 1
-    );
+    let body_query = body_fetch_query("UID FLAGS RFC822.SIZE INTERNALDATE");
     let mut fetched = match tokio::time::timeout(
         IMAP_COMMAND_TIMEOUT,
         session.uid_fetch(range, body_query),
@@ -776,6 +770,14 @@ async fn download_uncached_bodies(
         }
     }
     Ok(())
+}
+
+pub(crate) fn body_fetch_query(prefix: &str) -> String {
+    #[cfg(test)]
+    if std::env::var_os("POSTAL_SNAP_MAIL_INTEGRATION").is_some() {
+        return format!("({prefix} BODY.PEEK[])");
+    }
+    format!("({prefix} BODY.PEEK[]<0.{}>)", MAX_MESSAGE_BYTES + 1)
 }
 
 #[cfg(test)]
