@@ -1144,6 +1144,26 @@ describe("mail shell", () => {
       shiftKey: true,
     });
     fireEvent.keyDown(document.body, {
+      key: "j",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    fireEvent.keyDown(document.body, {
+      key: "ArrowRight",
+      ctrlKey: true,
+      altKey: true,
+    });
+    fireEvent.keyDown(document.body, {
+      key: "ArrowDown",
+      ctrlKey: true,
+      altKey: true,
+    });
+    fireEvent.keyDown(document.body, {
+      key: "ArrowUp",
+      ctrlKey: true,
+      altKey: true,
+    });
+    fireEvent.keyDown(document.body, {
       key: "f",
       ctrlKey: true,
       altKey: true,
@@ -1157,6 +1177,10 @@ describe("mail shell", () => {
         "archive",
         "toggle-read",
         "toggle-star",
+        "junk",
+        "reading-pane-right",
+        "reading-pane-bottom",
+        "reading-pane-hidden",
         "trash",
       ]),
     );

@@ -1015,6 +1015,52 @@ export function MailShell({ onOpenSettings }: Props) {
         );
         return;
       }
+      if (mod && event.shiftKey && key === "j") {
+        event.preventDefault();
+        window.dispatchEvent(
+          new CustomEvent("postal:menu-action", { detail: "junk" }),
+        );
+        return;
+      }
+      if (
+        mod &&
+        event.altKey &&
+        (event.key === "ArrowRight" || event.key === "Right")
+      ) {
+        event.preventDefault();
+        window.dispatchEvent(
+          new CustomEvent("postal:menu-action", {
+            detail: "reading-pane-right",
+          }),
+        );
+        return;
+      }
+      if (
+        mod &&
+        event.altKey &&
+        (event.key === "ArrowDown" || event.key === "Down")
+      ) {
+        event.preventDefault();
+        window.dispatchEvent(
+          new CustomEvent("postal:menu-action", {
+            detail: "reading-pane-bottom",
+          }),
+        );
+        return;
+      }
+      if (
+        mod &&
+        event.altKey &&
+        (event.key === "ArrowUp" || event.key === "Up")
+      ) {
+        event.preventDefault();
+        window.dispatchEvent(
+          new CustomEvent("postal:menu-action", {
+            detail: "reading-pane-hidden",
+          }),
+        );
+        return;
+      }
       if (mod && event.altKey && key === "f") {
         event.preventDefault();
         window.dispatchEvent(new Event("postal:find-in-message"));
