@@ -22,6 +22,7 @@ Postal Snap is a calm, accessible desktop email client. Mail stays on your compu
 
 ## Changes in `v0.1.15:`
 
+- **FIX - macOS launch crash on legacy databases:** Fixed startup migration ordering so existing unversioned mail databases gain thread columns before the related index is created. Postal Snap no longer aborts on launch when opening an older local database.
 - **UI - Update Ready restarts now:** The mailbox badge installs the downloaded update and relaunches immediately. Settings → Check for updates still confirms when a package is already ready.
 - **UI - Update check interval:** Direct-download Settings can check on startup and every 6 hours (default), every 12 or 24 hours, on startup only, or only when you ask. Store and Flatpak editions keep store-managed updates.
 - **UI - Product context menus:** Right-click on messages, folders, the reader, links, attachments, and the composer shows Postal Snap actions instead of the empty WebView menu. External links still use the existing confirm and reported-threat path.
