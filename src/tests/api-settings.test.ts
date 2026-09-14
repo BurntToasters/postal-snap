@@ -318,6 +318,7 @@ describe("settings IPC serialization", () => {
       ["show_native_message", () => api.showNativeMessage("Title", "Message")],
       ["relaunch_app", () => api.relaunch()],
       ["quit_app", () => api.quitApp()],
+      ["tray_is_active", () => api.trayIsActive()],
     ];
 
     for (const [command, operation] of operations) {
@@ -383,6 +384,7 @@ describe("settings IPC serialization", () => {
     vi.stubGlobal("location", { reload });
     await expect(api.relaunch()).resolves.toBeUndefined();
     expect(reload).toHaveBeenCalled();
+    await expect(api.trayIsActive()).resolves.toBe(false);
     await expect(api.listAccounts()).rejects.toThrow(
       /native service is unavailable/i,
     );

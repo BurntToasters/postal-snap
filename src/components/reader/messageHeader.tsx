@@ -88,7 +88,11 @@ export function MessageHeader({
           .toUpperCase()}
       </div>
       <div className="sender-details">
-        <div className="sender-primary-line">
+        <div
+          className="sender-primary-line"
+          data-context="address"
+          data-address={message.senderAddress}
+        >
           <strong className="sender-name">
             {message.senderName || message.senderAddress}
           </strong>

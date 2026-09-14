@@ -218,6 +218,10 @@
   z-index: 1100;
   min-width: 220px;
   max-width: min(360px, calc(100vw - 16px));
+  max-height: min(80vh, calc(100dvh - 16px));
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 6px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);

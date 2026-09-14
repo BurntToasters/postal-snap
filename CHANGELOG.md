@@ -22,7 +22,7 @@ Postal Snap is a calm, accessible desktop email client. Mail stays on your compu
 
 ## Changes in `v0.1.15:`
 
-- **UI - Update Ready restarts now:** The mailbox badge installs the downloaded update and relaunches immediately. Settings → Check for updates still confirms when a package is already ready. Quiet install-on-quit on Windows and Linux is unchanged.
+- **UI - Update Ready restarts now:** The mailbox badge installs the downloaded update and relaunches immediately. Settings → Check for updates still confirms when a package is already ready.
 - **UI - Update check interval:** Direct-download Settings can check on startup and every 6 hours (default), every 12 or 24 hours, on startup only, or only when you ask. Store and Flatpak editions keep store-managed updates.
 - **UI - Product context menus:** Right-click on messages, folders, the reader, links, attachments, and the composer shows Postal Snap actions instead of the empty WebView menu. External links still use the existing confirm and reported-threat path.
 - **UI - Close to tray / menu bar:** On Windows and macOS, closing the window keeps Postal Snap running in the notification area or menu bar (on by default, including first-run setup). Open it from that icon, or quit from its menu. Turn the option off in Settings to quit on close. Linux still quits when the window closes. Quiet update install still runs when Postal Snap actually quits.

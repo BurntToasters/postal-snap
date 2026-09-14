@@ -17,10 +17,21 @@ import { UpdatesTab } from "../components/settings/updatesTab";
 import { formatBytes } from "../format";
 import { strings } from "../i18n";
 import { defaultSettings, useAppStore } from "../store";
+import { applyPendingUpdate } from "../update";
 import { resetStore } from "./helpers/store";
+
+vi.mock("../update", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../update")>();
+  return {
+    ...actual,
+    applyPendingUpdate: vi.fn().mockResolvedValue(undefined),
+  };
+});
 
 beforeEach(() => {
   resetStore({ updateReady: null });
+  vi.mocked(applyPendingUpdate).mockClear();
+  vi.mocked(applyPendingUpdate).mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -316,7 +327,6 @@ describe("small settings tabs", () => {
 describe("updates tab", () => {
   it("restarts a downloaded update and checks direct releases", () => {
     useAppStore.setState({ updateReady: "0.2.0" });
-    const relaunch = vi.spyOn(api, "relaunch").mockResolvedValue(undefined);
     const checkForUpdates = vi.fn().mockResolvedValue(undefined);
     render(
       <UpdatesTab
@@ -331,7 +341,7 @@ describe("updates tab", () => {
       screen.getByRole("button", { name: strings.settings.restartNow }),
     );
     fireEvent.click(screen.getByRole("button", { name: "Check now" }));
-    expect(relaunch).toHaveBeenCalled();
+    expect(applyPendingUpdate).toHaveBeenCalled();
     expect(checkForUpdates).toHaveBeenCalled();
     expect(screen.getByText(strings.settings.directEdition)).toBeVisible();
   });

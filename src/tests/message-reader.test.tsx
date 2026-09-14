@@ -550,6 +550,14 @@ describe("MessageReader", () => {
     });
     web.dispatchEvent(context);
     expect(context.defaultPrevented).toBe(true);
+    const padding = new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+    });
+    (
+      iframe as HTMLIFrameElement
+    ).contentDocument!.documentElement.dispatchEvent(padding);
+    expect(padding.defaultPrevented).toBe(true);
   });
 
   it("keeps a newer selection when a snooze finishes late", async () => {
@@ -805,5 +813,25 @@ describe("MessageReader", () => {
     );
     expect(api.moveMessage).not.toHaveBeenCalled();
     window.removeEventListener("postal:print-message", printed);
+  });
+
+  it("trashes the store-selected message before the reader re-renders", async () => {
+    const first = readerMessage();
+    const second = readerMessage({ id: 2, subject: "Second message" });
+    setReaderState(first);
+    useAppStore.setState({
+      messages: [first, second],
+      selectedMessage: first,
+    });
+    render(<MessageReader />);
+    useAppStore.setState({ selectedMessage: second });
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("postal:menu-action", { detail: "trash" }),
+      );
+    });
+    await waitFor(() =>
+      expect(api.moveMessage).toHaveBeenCalledWith("account-1", 2, "trash"),
+    );
   });
 });

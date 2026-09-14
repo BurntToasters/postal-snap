@@ -665,7 +665,7 @@ export function MailShell({ onOpenSettings }: Props) {
     async (summary: MessageSummary) => {
       const accountId = activeAccountId;
       const mailboxId = activeMailboxId;
-      if (!accountId || !mailboxId) return;
+      if (!accountId || !mailboxId) return false;
       const request = ++detailRequest.current;
       setLoadingMessageId(summary.id);
       try {
@@ -676,7 +676,7 @@ export function MailShell({ onOpenSettings }: Props) {
           current.activeAccountId !== accountId ||
           current.activeMailboxId !== mailboxId
         )
-          return;
+          return false;
         selectMessage(detail);
         if (!summary.isRead) {
           await api.setMessageFlags(accountId, summary.id, true, undefined);
@@ -702,7 +702,7 @@ export function MailShell({ onOpenSettings }: Props) {
           }
         }
       } catch (cause) {
-        if (request !== detailRequest.current) return;
+        if (request !== detailRequest.current) return false;
         const detail = String(cause);
         setError(detail);
         if (isOversizeError(cause)) {
@@ -720,6 +720,7 @@ export function MailShell({ onOpenSettings }: Props) {
       } finally {
         if (request === detailRequest.current) setLoadingMessageId(undefined);
       }
+      return useAppStore.getState().selectedMessage?.id === summary.id;
     },
     [
       activeAccountId,
@@ -1378,7 +1379,9 @@ export function MailShell({ onOpenSettings }: Props) {
         );
         if (!summary) return;
         void (async () => {
-          await chooseMessage(summary);
+          const opened = await chooseMessage(summary);
+          if (!opened) return;
+          if (id === "toggle-read" && !summary.isRead) return;
           if (id === "snooze") {
             window.dispatchEvent(new Event("postal:open-snooze"));
             return;
@@ -1456,7 +1459,11 @@ export function MailShell({ onOpenSettings }: Props) {
         if (id === "retry") void retryQueued(row.id);
         if (id === "retry-copy") void retrySentCopy(row.id);
         if (id === "send-now") void sendScheduledNow(row.id);
-        if (id === "discard") void discardQueued(row.id, row.state);
+        if (id === "discard") {
+          if (row.state === "sending") return;
+          if (scheduledSendInFlight?.has(`${row.accountId}:${row.id}`)) return;
+          void discardQueued(row.id, row.state);
+        }
         return;
       }
       if (target.kind === "snoozed") {
@@ -2214,7 +2221,9 @@ export function MailShell({ onOpenSettings }: Props) {
             selectedId={selectedMessage?.id}
             loading={loadingMessages}
             loadingMessageId={loadingMessageId}
-            onChoose={chooseMessage}
+            onChoose={async (summary) => {
+              await chooseMessage(summary);
+            }}
             hasMore={hasMoreMessages}
             onLoadMore={loadMoreMessages}
             searchQuery={submittedQuery}

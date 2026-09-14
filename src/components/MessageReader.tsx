@@ -56,12 +56,8 @@ export function MessageReader({
 }) {
   const message = useAppStore((state) => state.selectedMessage);
   const selectMessage = useAppStore((state) => state.selectMessage);
-  const activeMailboxId = useAppStore((state) => state.activeMailboxId);
   const mailboxes = useAppStore((state) => state.mailboxes);
   const setMailboxes = useAppStore((state) => state.setMailboxes);
-  const messages = useAppStore((state) => state.messages);
-  const messageCursor = useAppStore((state) => state.messageCursor);
-  const hasMoreMessages = useAppStore((state) => state.hasMoreMessages);
   const setMessages = useAppStore((state) => state.setMessages);
   const openComposer = useAppStore((state) => state.openComposer);
   const settings = useAppStore((state) => state.settings);
@@ -344,7 +340,6 @@ export function MessageReader({
   }
 
   const menuHandlersRef = useRef({
-    message,
     openComposer,
     forwardMessage,
     move,
@@ -357,7 +352,6 @@ export function MessageReader({
 
   useEffect(() => {
     menuHandlersRef.current = {
-      message,
       openComposer,
       forwardMessage,
       move,
@@ -372,7 +366,7 @@ export function MessageReader({
   useEffect(() => {
     const menuAction = (event: Event) => {
       const h = menuHandlersRef.current;
-      const selected = useAppStore.getState().selectedMessage ?? h.message;
+      const selected = useAppStore.getState().selectedMessage;
       if (!selected) return;
       const action = (event as CustomEvent<string>).detail;
       if (action === "reply")
@@ -431,6 +425,15 @@ export function MessageReader({
       }
       if (detail.id === "print" && detail.target.kind === "reader") {
         print();
+        return;
+      }
+      if (detail.id === "copy" && detail.target.kind === "reader") {
+        const iframeText =
+          frame.current?.contentDocument?.getSelection()?.toString() ?? "";
+        const parentText = window.getSelection()?.toString() ?? "";
+        const text = iframeText || parentText;
+        if (text)
+          void navigator.clipboard.writeText(text).catch(() => undefined);
         return;
       }
       if (detail.target.kind !== "attachment") return;
@@ -533,8 +536,9 @@ export function MessageReader({
   function wireFrameLinks() {
     frameLinkCleanup.current?.();
     frameLinkCleanup.current = undefined;
-    const body = frame.current?.contentDocument?.body;
-    if (!body) return;
+    const doc = frame.current?.contentDocument;
+    const body = doc?.body;
+    if (!doc || !body) return;
     body.querySelectorAll("[usemap]").forEach((element) => {
       element.removeAttribute("usemap");
     });
@@ -595,11 +599,11 @@ export function MessageReader({
     };
     body.addEventListener("click", handleLink);
     body.addEventListener("auxclick", handleLink);
-    body.addEventListener("contextmenu", blockNativeOpen);
+    doc.addEventListener("contextmenu", blockNativeOpen, true);
     frameLinkCleanup.current = () => {
       body.removeEventListener("click", handleLink);
       body.removeEventListener("auxclick", handleLink);
-      body.removeEventListener("contextmenu", blockNativeOpen);
+      doc.removeEventListener("contextmenu", blockNativeOpen, true);
     };
   }
 
@@ -669,17 +673,19 @@ export function MessageReader({
   }
 
   async function setStarred() {
+    const current = useAppStore.getState();
+    const message = current.selectedMessage;
     if (!message) return;
     const operation = ++starredOperation.current;
-    const viewMailboxId = activeMailboxId;
+    const viewMailboxId = current.activeMailboxId;
     const next = !message.isStarred;
     selectMessage({ ...message, isStarred: next });
     setMessages(
-      messages.map((summary) =>
+      current.messages.map((summary) =>
         summary.id === message.id ? { ...summary, isStarred: next } : summary,
       ),
-      messageCursor,
-      hasMoreMessages,
+      current.messageCursor,
+      current.hasMoreMessages,
     );
     try {
       await api.setMessageFlags(message.accountId, message.id, undefined, next);
@@ -714,16 +720,18 @@ export function MessageReader({
   }
 
   async function setRead() {
+    const current = useAppStore.getState();
+    const message = current.selectedMessage;
     if (!message) return;
     const operation = ++readOperation.current;
-    const viewMailboxId = activeMailboxId;
+    const viewMailboxId = current.activeMailboxId;
     const next = !message.isRead;
-    const previousUnreadCount = mailboxes.find(
+    const previousUnreadCount = current.mailboxes.find(
       (mailbox) => mailbox.id === message.mailboxId,
     )?.unreadCount;
     selectMessage({ ...message, isRead: next });
     setMailboxes(
-      mailboxes.map((mailbox) =>
+      current.mailboxes.map((mailbox) =>
         mailbox.id === message.mailboxId
           ? {
               ...mailbox,
@@ -733,11 +741,11 @@ export function MessageReader({
       ),
     );
     setMessages(
-      messages.map((summary) =>
+      current.messages.map((summary) =>
         summary.id === message.id ? { ...summary, isRead: next } : summary,
       ),
-      messageCursor,
-      hasMoreMessages,
+      current.messageCursor,
+      current.hasMoreMessages,
     );
     try {
       await api.setMessageFlags(message.accountId, message.id, next, undefined);
@@ -780,7 +788,13 @@ export function MessageReader({
   }
 
   async function move(role: "archive" | "trash" | "junk") {
+    const snapshot = useAppStore.getState();
+    const message = snapshot.selectedMessage;
     if (!message) return;
+    const mailboxes = snapshot.mailboxes;
+    const messages = snapshot.messages;
+    const messageCursor = snapshot.messageCursor;
+    const hasMoreMessages = snapshot.hasMoreMessages;
     const destination = mailboxes.find((mailbox) => mailbox.role === role);
     const source = mailboxes.find(
       (mailbox) => mailbox.id === message.mailboxId,
@@ -792,7 +806,7 @@ export function MessageReader({
       return;
     const operation = (moveOperations.current.get(message.id) ?? 0) + 1;
     moveOperations.current.set(message.id, operation);
-    const viewMailboxId = activeMailboxId;
+    const viewMailboxId = snapshot.activeMailboxId;
     const previousUnreadCounts = new Map(
       mailboxes.map((mailbox) => [mailbox.id, mailbox.unreadCount]),
     );
@@ -858,11 +872,17 @@ export function MessageReader({
   }
 
   async function moveToMailbox(mailboxId: number) {
+    const snapshot = useAppStore.getState();
+    const message = snapshot.selectedMessage;
     if (!message) return;
     if (mailboxId === message.mailboxId) return;
+    const mailboxes = snapshot.mailboxes;
+    const messages = snapshot.messages;
+    const messageCursor = snapshot.messageCursor;
+    const hasMoreMessages = snapshot.hasMoreMessages;
     const operation = (moveOperations.current.get(message.id) ?? 0) + 1;
     moveOperations.current.set(message.id, operation);
-    const viewMailboxId = activeMailboxId;
+    const viewMailboxId = snapshot.activeMailboxId;
     const previousUnreadCounts = new Map(
       mailboxes.map((mailbox) => [mailbox.id, mailbox.unreadCount]),
     );
@@ -945,6 +965,7 @@ export function MessageReader({
   }
 
   async function forwardMessage() {
+    const message = useAppStore.getState().selectedMessage;
     if (!message || preparingForward) return;
     const operation = ++forwardOperation.current;
     const messageId = message.id;

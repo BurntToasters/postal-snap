@@ -254,6 +254,33 @@ describe("SettingsDialog component", () => {
     delete document.documentElement.dataset.platform;
   });
 
+  it("offers close-to-tray on macOS with menu bar copy", async () => {
+    document.documentElement.dataset.platform = "macos";
+    render(<SettingsDialog initialTab="general" onClose={vi.fn()} />);
+    const toggle = await screen.findByRole("checkbox", {
+      name: /Keep running in the menu bar/,
+    });
+    expect(toggle).toBeChecked();
+    delete document.documentElement.dataset.platform;
+  });
+
+  it("does not offer close-to-tray on Linux", async () => {
+    document.documentElement.dataset.platform = "linux";
+    render(<SettingsDialog initialTab="general" onClose={vi.fn()} />);
+    expect(
+      await screen.findByRole("combobox", { name: /Appearance/i }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("checkbox", {
+        name: /Keep running in the notification area/,
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("checkbox", { name: /Keep running in the menu bar/ }),
+    ).not.toBeInTheDocument();
+    delete document.documentElement.dataset.platform;
+  });
+
   it("keeps overlapping preference saves instead of dropping the second", async () => {
     let releaseFirst: () => void = () => undefined;
     const firstBlocked = new Promise<void>((resolve) => {

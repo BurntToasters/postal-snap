@@ -8,6 +8,7 @@ import {
 import { createPortal } from "react-dom";
 import {
   CONTEXT_ACTION_EVENT,
+  CONTEXT_DISMISS_EVENT,
   IFRAME_CONTEXT_EVENT,
   iframeTargetFromDetail,
   itemsForTarget,
@@ -30,6 +31,77 @@ interface OpenMenu {
   items: ContextMenuItem[];
 }
 
+interface SavedFieldSelection {
+  field: HTMLInputElement | HTMLTextAreaElement;
+  start: number;
+  end: number;
+}
+
+interface SavedDomSelection {
+  ranges: Range[];
+  editable: HTMLElement | null;
+}
+
+type SavedEditSelection = SavedFieldSelection | SavedDomSelection;
+
+function snapshotEditSelection(
+  start: EventTarget | null,
+): SavedEditSelection | null {
+  const field =
+    start instanceof HTMLInputElement || start instanceof HTMLTextAreaElement
+      ? start
+      : start instanceof Element
+        ? start.closest("input, textarea")
+        : null;
+  if (
+    field instanceof HTMLInputElement ||
+    field instanceof HTMLTextAreaElement
+  ) {
+    return {
+      field,
+      start: field.selectionStart ?? 0,
+      end: field.selectionEnd ?? 0,
+    };
+  }
+  const selection = document.getSelection();
+  if (!selection || selection.rangeCount === 0) return null;
+  const ranges = Array.from({ length: selection.rangeCount }, (_, index) =>
+    selection.getRangeAt(index).cloneRange(),
+  );
+  const node = ranges[0]?.startContainer;
+  const element =
+    node instanceof Element ? node : (node?.parentElement ?? null);
+  return {
+    ranges,
+    editable: element?.closest<HTMLElement>("[contenteditable='true']") ?? null,
+  };
+}
+
+function restoreEditSelection(saved: SavedEditSelection | null): boolean {
+  if (!saved) return false;
+  if ("field" in saved) {
+    saved.field.focus();
+    try {
+      saved.field.setSelectionRange(saved.start, saved.end);
+    } catch {
+      // Some input types reject setSelectionRange.
+    }
+    return true;
+  }
+  saved.editable?.focus();
+  const selection = document.getSelection();
+  if (!selection) return false;
+  selection.removeAllRanges();
+  for (const range of saved.ranges) {
+    try {
+      selection.addRange(range);
+    } catch {
+      return false;
+    }
+  }
+  return selection.rangeCount > 0;
+}
+
 function dispatchContextAction(id: string, target: ContextMenuTarget) {
   window.dispatchEvent(
     new CustomEvent<ContextMenuActionDetail>(CONTEXT_ACTION_EVENT, {
@@ -38,7 +110,11 @@ function dispatchContextAction(id: string, target: ContextMenuTarget) {
   );
 }
 
-async function runHostAction(id: string, target: ContextMenuTarget) {
+async function runHostAction(
+  id: string,
+  target: ContextMenuTarget,
+  savedEdit: SavedEditSelection | null,
+) {
   if (id === "copy-link" && target.kind === "link") {
     await navigator.clipboard.writeText(target.href).catch(() => undefined);
     return true;
@@ -63,11 +139,24 @@ async function runHostAction(id: string, target: ContextMenuTarget) {
     useAppStore.getState().openComposer({ prefill: parseMailto(target.href) });
     return true;
   }
-  if (id === "cut" || id === "copy" || id === "paste" || id === "select-all") {
-    document.execCommand(id === "select-all" ? "selectAll" : id);
+  if (id === "copy" && target.kind === "reader") return false;
+  if (id === "cut" || id === "copy" || id === "paste") {
+    restoreEditSelection(savedEdit);
+    document.execCommand(id);
+    return true;
+  }
+  if (id === "select-all") {
+    if (target.kind === "composer") return false;
+    restoreEditSelection(savedEdit);
+    if (savedEdit && "field" in savedEdit) {
+      savedEdit.field.select();
+      return true;
+    }
+    document.execCommand("selectAll");
     return true;
   }
   if ((id === "undo" || id === "redo") && target.kind === "editable") {
+    restoreEditSelection(savedEdit);
     document.execCommand(id);
     return true;
   }
@@ -77,16 +166,24 @@ async function runHostAction(id: string, target: ContextMenuTarget) {
 export function ContextMenuHost() {
   const [menu, setMenu] = useState<OpenMenu | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const savedEditRef = useRef<SavedEditSelection | null>(null);
 
   const close = useCallback(() => setMenu(null), []);
 
   const openAt = useCallback(
-    (x: number, y: number, target: ContextMenuTarget) => {
+    (
+      x: number,
+      y: number,
+      target: ContextMenuTarget,
+      savedEdit: SavedEditSelection | null = null,
+    ) => {
       const items = itemsForTarget(target);
       if (items.length === 0) {
+        savedEditRef.current = null;
         setMenu(null);
         return;
       }
+      savedEditRef.current = savedEdit;
       setMenu({ x, y, target, items });
     },
     [],
@@ -101,20 +198,28 @@ export function ContextMenuHost() {
       ) {
         return;
       }
-      openAt(event.clientX, event.clientY, resolveContextTarget(event.target));
+      openAt(
+        event.clientX,
+        event.clientY,
+        resolveContextTarget(event.target),
+        snapshotEditSelection(event.target),
+      );
     };
     const onIframe = (event: Event) => {
       const detail = (event as CustomEvent<IframeContextMenuDetail>).detail;
       if (!detail) return;
-      openAt(detail.x, detail.y, iframeTargetFromDetail(detail));
+      openAt(detail.x, detail.y, iframeTargetFromDetail(detail), null);
     };
+    const onDismiss = () => close();
     document.addEventListener("contextmenu", onContextMenu, true);
     window.addEventListener(IFRAME_CONTEXT_EVENT, onIframe);
+    window.addEventListener(CONTEXT_DISMISS_EVENT, onDismiss);
     return () => {
       document.removeEventListener("contextmenu", onContextMenu, true);
       window.removeEventListener(IFRAME_CONTEXT_EVENT, onIframe);
+      window.removeEventListener(CONTEXT_DISMISS_EVENT, onDismiss);
     };
-  }, [openAt]);
+  }, [close, openAt]);
 
   useEffect(() => {
     if (!menu) return;
@@ -186,8 +291,9 @@ export function ContextMenuHost() {
             className={entry.danger ? "danger" : undefined}
             onClick={() => {
               const { id, target } = { id: entry.id, target: menu.target };
+              const savedEdit = savedEditRef.current;
               close();
-              void runHostAction(id, target).then((handled) => {
+              void runHostAction(id, target, savedEdit).then((handled) => {
                 if (!handled) dispatchContextAction(id, target);
               });
             }}
