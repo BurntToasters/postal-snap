@@ -19,6 +19,7 @@ vi.mock("../api", () => ({
     showNativeConfirm: vi.fn().mockResolvedValue(true),
     showNativeMessage: vi.fn().mockResolvedValue(undefined),
     relaunch: vi.fn().mockResolvedValue(undefined),
+    quitApp: vi.fn().mockResolvedValue(undefined),
     distribution: vi.fn().mockResolvedValue({ updatesManagedBy: "postalSnap" }),
   },
 }));
@@ -31,10 +32,13 @@ import {
   addUpdateFoundListener,
   applyPendingUpdate,
   checkUpdateInteractive,
+  checksUpdatesOnStartup,
+  periodicUpdateIntervalMs,
   promptToRestartForUpdate,
   removeUpdateFoundListener,
   resetUpdateStateForTesting,
   runUpdateSingleFlight,
+  quitOrApplyPendingUpdate,
   startDeferredUpdateOnQuit,
   startPeriodicUpdateCheck,
 } from "../update";
@@ -67,6 +71,7 @@ describe("update checks", () => {
     onCloseRequested.mockReset();
     onCloseRequested.mockResolvedValue(vi.fn());
     vi.mocked(api.relaunch).mockClear();
+    vi.mocked(api.quitApp).mockClear();
     vi.mocked(api.distribution).mockResolvedValue({
       updatesManagedBy: "postalSnap",
     } as never);
@@ -245,14 +250,27 @@ describe("update checks", () => {
   it("runs and stops periodic background checks", async () => {
     vi.useFakeTimers();
     mockedCheck.mockResolvedValue(null);
-    const stop = startPeriodicUpdateCheck(1000);
+    const stop = startPeriodicUpdateCheck("startupAnd6h");
 
-    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(
+      periodicUpdateIntervalMs("startupAnd6h")!,
+    );
     expect(mockedCheck).toHaveBeenCalledTimes(1);
     stop();
-    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(
+      periodicUpdateIntervalMs("startupAnd6h")!,
+    );
     expect(mockedCheck).toHaveBeenCalledTimes(1);
     vi.useRealTimers();
+  });
+
+  it("skips periodic and startup checks for manual updates", () => {
+    expect(checksUpdatesOnStartup("manual")).toBe(false);
+    expect(periodicUpdateIntervalMs("manual")).toBeNull();
+    expect(periodicUpdateIntervalMs("startup")).toBeNull();
+    expect(checksUpdatesOnStartup("startup")).toBe(true);
+    const stop = startPeriodicUpdateCheck("manual");
+    stop();
   });
 
   it("short-circuits checks when an update is already downloaded", async () => {
@@ -374,6 +392,12 @@ describe("update checks", () => {
 
   it("installs on Windows close after a quiet download", async () => {
     document.documentElement.dataset.platform = "windows";
+    useAppStore.setState({
+      settings: {
+        ...useAppStore.getState().settings,
+        closeToTray: false,
+      },
+    });
     const update = fakeUpdate("0.2.2");
     mockedCheck.mockResolvedValue(update as never);
     await runUpdateSingleFlight();
@@ -391,6 +415,34 @@ describe("update checks", () => {
     expect(preventDefault).toHaveBeenCalled();
     expect(update.install).toHaveBeenCalledTimes(1);
     expect(api.relaunch).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it("does not install a quiet update when Windows close hides to the tray", async () => {
+    document.documentElement.dataset.platform = "windows";
+    useAppStore.setState({
+      settings: {
+        ...useAppStore.getState().settings,
+        closeToTray: true,
+      },
+    });
+    const update = fakeUpdate("0.2.5");
+    mockedCheck.mockResolvedValue(update as never);
+    await runUpdateSingleFlight();
+
+    let closeHandler:
+      ((event: { preventDefault: () => void }) => Promise<void>) | undefined;
+    onCloseRequested.mockImplementation(async (handler) => {
+      closeHandler = handler;
+      return vi.fn();
+    });
+    const stop = startDeferredUpdateOnQuit();
+    await vi.waitFor(() => expect(onCloseRequested).toHaveBeenCalled());
+    const preventDefault = vi.fn();
+    await closeHandler?.({ preventDefault });
+    expect(preventDefault).toHaveBeenCalled();
+    expect(update.install).not.toHaveBeenCalled();
+    expect(api.relaunch).not.toHaveBeenCalled();
     stop();
   });
 
@@ -436,5 +488,21 @@ describe("update checks", () => {
     await applyPendingUpdate();
     expect(update.install).toHaveBeenCalledTimes(1);
     expect(api.relaunch).toHaveBeenCalledTimes(1);
+  });
+
+  it("quits from the tray when no update is ready", async () => {
+    await quitOrApplyPendingUpdate();
+    expect(api.quitApp).toHaveBeenCalledTimes(1);
+    expect(api.relaunch).not.toHaveBeenCalled();
+  });
+
+  it("applies a pending update instead of quitting from the tray", async () => {
+    const update = fakeUpdate("0.2.6");
+    mockedCheck.mockResolvedValue(update as never);
+    await runUpdateSingleFlight();
+    await quitOrApplyPendingUpdate();
+    expect(update.install).toHaveBeenCalledTimes(1);
+    expect(api.relaunch).toHaveBeenCalledTimes(1);
+    expect(api.quitApp).not.toHaveBeenCalled();
   });
 });

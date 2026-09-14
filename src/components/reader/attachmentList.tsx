@@ -111,7 +111,14 @@ export function AttachmentList({
               {strings.reader.attachments} ({regularAttachments.length})
             </h2>
             {regularAttachments.map((attachment) => (
-              <div key={attachment.id} className="attachment-row">
+              <div
+                key={attachment.id}
+                className="attachment-row"
+                data-context="attachment"
+                data-attachment-id={attachment.id}
+                data-previewable={String(isPreviewable(attachment))}
+                data-filename={attachment.filename}
+              >
                 {isPreviewable(attachment) ? (
                   <button
                     type="button"

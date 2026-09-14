@@ -9,9 +9,10 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import { MailShell } from "../components/MailShell";
+import { ContextMenuHost } from "../components/ContextMenu";
 import { strings } from "../i18n";
 import { defaultSettings, useAppStore } from "../store";
-import { promptToRestartForUpdate } from "../update";
+import { applyPendingUpdate } from "../update";
 import type { MessageChangeEvent, MessageSummary } from "../types";
 import { mockSaveSettingsPassthrough } from "./helpers/api-mocks";
 import {
@@ -50,6 +51,7 @@ vi.mock("../api", () => ({
     setMessagesFlags: vi.fn(),
     moveMessagesToMailbox: vi.fn(),
     markMailboxRead: vi.fn(),
+    moveMessage: vi.fn().mockRejectedValue(new Error("move unavailable")),
     searchCached: vi.fn(),
     searchServer: vi.fn(),
     saveSettings: vi.fn(),
@@ -63,7 +65,7 @@ vi.mock("../api", () => ({
 }));
 
 vi.mock("../update", () => ({
-  promptToRestartForUpdate: vi.fn().mockResolvedValue(undefined),
+  applyPendingUpdate: vi.fn().mockResolvedValue(undefined),
 }));
 
 const account = makeAccount();
@@ -119,7 +121,12 @@ function detail(summary: MessageSummary) {
 }
 
 function renderShell(onOpenSettings = vi.fn()) {
-  return render(<MailShell onOpenSettings={onOpenSettings} />);
+  return render(
+    <>
+      <ContextMenuHost />
+      <MailShell onOpenSettings={onOpenSettings} />
+    </>,
+  );
 }
 
 describe("mail shell", () => {
@@ -152,6 +159,7 @@ describe("mail shell", () => {
       return detail(summary);
     });
     mockedSetMessageFlags.mockResolvedValue(undefined);
+    vi.mocked(api.moveMessage).mockRejectedValue(new Error("move unavailable"));
     mockSaveSettingsPassthrough();
     mockedOnFolderCountsChanged.mockResolvedValue(() => undefined);
     mockedOnMessageChanged.mockResolvedValue(() => undefined);
@@ -1109,6 +1117,7 @@ describe("mail shell", () => {
     expect(
       await screen.findByRole("heading", { name: "First message" }),
     ).toBeVisible();
+    fireEvent.keyDown(document.body, { key: "Delete" });
 
     fireEvent.keyDown(document.body, { key: " " });
     fireEvent.keyDown(document.body, { key: " ", shiftKey: true });
@@ -1168,7 +1177,6 @@ describe("mail shell", () => {
       ctrlKey: true,
       altKey: true,
     });
-    fireEvent.keyDown(document.body, { key: "Delete" });
     expect(actions).toEqual(
       expect.arrayContaining([
         "reply",
@@ -1676,7 +1684,7 @@ describe("mail shell", () => {
         name: strings.mail.updateReadyBadge,
       }),
     );
-    expect(promptToRestartForUpdate).toHaveBeenCalledWith("0.2.0");
+    expect(applyPendingUpdate).toHaveBeenCalled();
     fireEvent.keyDown(
       screen.getByRole("separator", { name: strings.mail.resizeFolders }),
       { key: "End" },
@@ -1956,6 +1964,69 @@ describe("mail shell", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Send now" }));
     await waitFor(() =>
       expect(useAppStore.getState().error).toMatch(/secure mail connection/i),
+    );
+  });
+
+  it("replies and moves a message from the product context menu", async () => {
+    renderShell();
+    const row = await screen.findByRole("option", { name: /First message/i });
+    fireEvent.contextMenu(row);
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: strings.reader.reply }),
+    );
+    await waitFor(() => expect(useAppStore.getState().composerOpen).toBe(true));
+    expect(useAppStore.getState().composeSeed?.composeMode).toBe("reply");
+
+    fireEvent.contextMenu(
+      screen.getByRole("option", { name: /Second message/i }),
+    );
+    vi.mocked(api.moveMessage).mockResolvedValue(undefined);
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: strings.reader.trash }),
+    );
+    await waitFor(() => expect(api.moveMessage).toHaveBeenCalled());
+  });
+
+  it("empties trash and still confirms folder delete from the context menu", async () => {
+    const projects = makeMailbox({
+      id: 4,
+      name: "Projects",
+      displayName: "Projects",
+      role: "other",
+      unreadCount: 0,
+      totalCount: 0,
+    });
+    const fullTrash = { ...trash, totalCount: 4 };
+    resetStore({
+      accounts: [account],
+      activeAccountId: account.id,
+      mailboxes: [inbox, fullTrash, projects],
+      activeMailboxId: inbox.id,
+    });
+    mockedListMailboxes.mockResolvedValue([inbox, fullTrash, projects]);
+    vi.mocked(api.emptyTrash).mockResolvedValue(undefined);
+    renderShell();
+    await screen.findByRole("button", { name: "Projects" });
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: /Trash/i }));
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: strings.mail.emptyTrash }),
+    );
+    await waitFor(() =>
+      expect(api.emptyTrash).toHaveBeenCalledWith("account-1"),
+    );
+    expect(api.showNativeConfirm).toHaveBeenCalled();
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Projects" }));
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: strings.mail.deleteFolder }),
+    );
+    await waitFor(() =>
+      expect(mockedDeleteFolder).toHaveBeenCalledWith("account-1", 4),
+    );
+    expect(api.showNativeConfirm).toHaveBeenCalledWith(
+      strings.appName,
+      strings.mail.deleteFolderQuestion("Projects"),
     );
   });
 });

@@ -1,16 +1,18 @@
 import { DownloadCloud } from "lucide-react";
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
-import type { DistributionChannel } from "../../types";
+import type { DistributionChannel, UpdateCheckInterval } from "../../types";
 import { applyPendingUpdate } from "../../update";
 import { editionName } from "./helpers";
-import { SettingsPanel } from "./primitives";
+import { SettingRow, SettingsPanel } from "./primitives";
+import type { SettingsSaveUpdate } from "./useSettingsSave";
 
 interface UpdatesTabProps {
   distribution?: DistributionChannel;
   updateStatus: string;
   checkingUpdate: boolean;
   checkForUpdates: () => Promise<void>;
+  update: SettingsSaveUpdate;
 }
 
 export function UpdatesTab({
@@ -18,8 +20,11 @@ export function UpdatesTab({
   updateStatus,
   checkingUpdate,
   checkForUpdates,
+  update,
 }: UpdatesTabProps) {
+  const settings = useAppStore((state) => state.settings);
   const updateReady = useAppStore((state) => state.updateReady);
+  const postalSnapUpdates = distribution?.updatesManagedBy === "postalSnap";
 
   return (
     <SettingsPanel id="updates" title={strings.settings.updates}>
@@ -58,15 +63,48 @@ export function UpdatesTab({
           </small>
         </span>
       </div>
-      {distribution?.updatesManagedBy === "postalSnap" ? (
-        <button
-          className="secondary-button"
-          type="button"
-          onClick={() => void checkForUpdates()}
-          disabled={checkingUpdate}
-        >
-          {updateStatus}
-        </button>
+      {postalSnapUpdates ? (
+        <>
+          <SettingRow
+            title={strings.settings.updateCheckInterval}
+            help={strings.settings.updateCheckIntervalHelp}
+          >
+            <select
+              aria-label={strings.settings.updateCheckInterval}
+              value={settings.updateCheckInterval}
+              onChange={(event) =>
+                void update({
+                  updateCheckInterval: event.target
+                    .value as UpdateCheckInterval,
+                })
+              }
+            >
+              <option value="startupAnd6h">
+                {strings.settings.updateCheckStartupAnd6h}
+              </option>
+              <option value="startupAnd12h">
+                {strings.settings.updateCheckStartupAnd12h}
+              </option>
+              <option value="startupAnd24h">
+                {strings.settings.updateCheckStartupAnd24h}
+              </option>
+              <option value="startup">
+                {strings.settings.updateCheckStartup}
+              </option>
+              <option value="manual">
+                {strings.settings.updateCheckManual}
+              </option>
+            </select>
+          </SettingRow>
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() => void checkForUpdates()}
+            disabled={checkingUpdate}
+          >
+            {updateStatus}
+          </button>
+        </>
       ) : null}
     </SettingsPanel>
   );

@@ -292,6 +292,8 @@ export function MessageList({
           aria-selected={isSelected}
           aria-level={rowRole === "treeitem" ? (treeLevel ?? 1) : undefined}
           data-option-key={optionKey}
+          data-context="message"
+          data-message-id={message.id}
           tabIndex={activeOptionKey === optionKey ? 0 : -1}
           aria-label={rowLabel}
           className={`message-row ${message.isRead ? "read" : "unread"} ${!selecting && isSelected ? "selected" : ""} ${checked ? "checked" : ""}`}
@@ -358,6 +360,8 @@ export function MessageList({
                       activeOptionKey === `thread:${group.key}` ? 0 : -1
                     }
                     className={`message-row thread-header ${group.newest.id === selectedId ? "selected" : ""} ${group.unread > 0 ? "unread" : "read"}`}
+                    data-context="message"
+                    data-message-id={group.newest.id}
                     aria-expanded={expanded}
                     aria-owns={expanded ? childrenId : undefined}
                     onClick={() => {

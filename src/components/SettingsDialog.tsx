@@ -758,6 +758,7 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
                 updateStatus={updateStatus}
                 checkingUpdate={checkingUpdate}
                 checkForUpdates={checkForUpdates}
+                update={update}
               />
             ) : null}
             {tab === "advanced" ? (

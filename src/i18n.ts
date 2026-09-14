@@ -3,6 +3,7 @@
 // Namespace content lives in src/i18n/*.ts with zero text changes.
 import { app, appName, common, window } from "./i18n/common";
 import { composer } from "./i18n/composer";
+import { contextMenu } from "./i18n/contextMenu";
 import { errors } from "./i18n/errors";
 import { mail } from "./i18n/mail";
 import { reader } from "./i18n/reader";
@@ -22,4 +23,5 @@ export const strings = {
   setup,
   settings,
   errors,
+  contextMenu,
 } as const;

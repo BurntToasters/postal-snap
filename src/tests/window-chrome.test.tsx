@@ -183,4 +183,27 @@ describe("custom window chrome", () => {
     await waitFor(() => expect(stopResize).toHaveBeenCalled());
     expect(useAppStore.getState().error).toBeUndefined();
   });
+
+  it("names the close button as hide when Windows close-to-tray is on", async () => {
+    document.documentElement.dataset.platform = "windows";
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe = vi.fn();
+        disconnect = vi.fn();
+      },
+    );
+    const appWindow = makeWindow();
+    mockedGetCurrentWindow.mockReturnValue(appWindow as never);
+    mockedListen.mockResolvedValue(vi.fn());
+    mockedInvoke.mockResolvedValue(undefined);
+    render(<WindowChrome />);
+    expect(
+      await screen.findByRole("button", { name: strings.window.hideToTray }),
+    ).toBeVisible();
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.window.hideToTray }),
+    );
+    await waitFor(() => expect(appWindow.close).toHaveBeenCalled());
+  });
 });

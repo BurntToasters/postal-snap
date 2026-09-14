@@ -189,6 +189,40 @@ describe("first-run setup flow", () => {
     expect(screen.getByText(/Make it comfortable/i)).toBeVisible();
   });
 
+  it("lets Windows first-run setup keep the tray option on by default", async () => {
+    document.documentElement.dataset.platform = "windows";
+    render(<SetupFlow onComplete={vi.fn()} startupNotice={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
+    const tray = screen.getByRole("checkbox", {
+      name: /Keep running in the notification area/,
+    });
+    expect(tray).toBeChecked();
+    fireEvent.click(tray);
+    await waitFor(() =>
+      expect(saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ closeToTray: false }),
+      ),
+    );
+    delete document.documentElement.dataset.platform;
+  });
+
+  it("does not offer close-to-tray during Linux setup", () => {
+    document.documentElement.dataset.platform = "linux";
+    render(<SetupFlow onComplete={vi.fn()} startupNotice={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
+    expect(
+      screen.queryByRole("checkbox", {
+        name: /Keep running in the notification area/,
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("checkbox", { name: /Keep running in the menu bar/ }),
+    ).not.toBeInTheDocument();
+    delete document.documentElement.dataset.platform;
+  });
+
   it("keeps setup usable when a live preference save fails", async () => {
     saveSettings.mockImplementation(async (next) => {
       if (next.theme === "dark") throw new Error("offline");
