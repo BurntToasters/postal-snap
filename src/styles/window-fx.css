@@ -105,8 +105,8 @@ html:not([data-window-fx]) body {
   background: var(--canvas);
 }
 
-/* Nested backdrop-filter over a transparent WebView2 window leaves native
-   caption/menu ghosts after the overlay unmounts. Keep the scrim opaque. */
+/* Nested backdrop-filter over a transparent WebView2 window can leave a
+   compositor ghost. Keep modal scrims opaque on Windows. */
 html[data-platform="windows"] .modal-backdrop {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;

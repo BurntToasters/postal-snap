@@ -16,4 +16,6 @@ Received HTML is sanitized in Rust with ammonia before it is stored or returned 
 
 Distribution features are compile-time/runtime detected. Direct packages use signed GitHub updater manifests. Microsoft Store, Mac App Store, and Flatpak editions report store-managed updates and do not initialize or expose the Tauri updater.
 
+On Windows the mailbox window is frameless with HTML caption controls and a native Snap-layout hit-test overlay over Maximize (the same WebView2 `HTMAXBUTTON` approach as IYERIS). Native application menus stay on macOS (system menu bar) and Linux (decorated GTK window). Windows must not call `app.set_menu`: muda's Win32 menubar is painted on `WM_NCACTIVATE` and shows through the transparent WebView2 as Postal Snap / File / Edit / Message / View. Mail keyboard shortcuts on Windows are handled in the React shell.
+
 The typed event boundary includes sync state, folder-count, message-change, draft-sync, and outbox events. Event payloads contain opaque IDs and safe states, never message content or credentials.
