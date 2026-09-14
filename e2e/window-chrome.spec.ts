@@ -232,6 +232,10 @@ for (const [platform, userAgent] of Object.entries(platforms)) {
       );
       if (platform === "windows") {
         const caption = page.getByRole("group", { name: "Window controls" });
+        const hideButton = caption.getByRole("button", {
+          name: "Hide Postal Snap",
+          exact: true,
+        });
         await caption
           .getByRole("button", { name: "Minimize", exact: true })
           .click();
@@ -247,15 +251,11 @@ for (const [platform, userAgent] of Object.entries(platforms)) {
         await caption
           .getByRole("button", { name: "Restore", exact: true })
           .click();
-        await caption
-          .getByRole("button", { name: "Close", exact: true })
-          .focus();
+        await hideButton.focus();
         await page.keyboard.press("Tab");
         await expect(page.locator(".settings-window :focus")).toHaveCount(1);
         await page.keyboard.press("Shift+Tab");
-        await expect(
-          caption.getByRole("button", { name: "Close", exact: true }),
-        ).toBeFocused();
+        await expect(hideButton).toBeFocused();
       }
       await page
         .locator(".settings-window")
@@ -591,7 +591,9 @@ test.describe("Windows Store caption lifecycle", () => {
     await installMockIpc(page, "store");
     await page.goto("/");
     const caption = page.getByRole("group", { name: "Window controls" });
-    await caption.getByRole("button", { name: "Close", exact: true }).click();
+    await caption
+      .getByRole("button", { name: "Hide Postal Snap", exact: true })
+      .click();
     expect((await windowState(page)).windowCommands).toEqual(["close"]);
     await page.evaluate(() => {
       (
