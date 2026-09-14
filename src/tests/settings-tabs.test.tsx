@@ -17,10 +17,21 @@ import { UpdatesTab } from "../components/settings/updatesTab";
 import { formatBytes } from "../format";
 import { strings } from "../i18n";
 import { defaultSettings, useAppStore } from "../store";
+import { applyPendingUpdate } from "../update";
 import { resetStore } from "./helpers/store";
+
+vi.mock("../update", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../update")>();
+  return {
+    ...actual,
+    applyPendingUpdate: vi.fn().mockResolvedValue(undefined),
+  };
+});
 
 beforeEach(() => {
   resetStore({ updateReady: null });
+  vi.mocked(applyPendingUpdate).mockClear();
+  vi.mocked(applyPendingUpdate).mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -316,7 +327,6 @@ describe("small settings tabs", () => {
 describe("updates tab", () => {
   it("restarts a downloaded update and checks direct releases", () => {
     useAppStore.setState({ updateReady: "0.2.0" });
-    const relaunch = vi.spyOn(api, "relaunch").mockResolvedValue(undefined);
     const checkForUpdates = vi.fn().mockResolvedValue(undefined);
     render(
       <UpdatesTab
@@ -324,13 +334,14 @@ describe("updates tab", () => {
         updateStatus="Check now"
         checkingUpdate={false}
         checkForUpdates={checkForUpdates}
+        update={vi.fn()}
       />,
     );
     fireEvent.click(
       screen.getByRole("button", { name: strings.settings.restartNow }),
     );
     fireEvent.click(screen.getByRole("button", { name: "Check now" }));
-    expect(relaunch).toHaveBeenCalled();
+    expect(applyPendingUpdate).toHaveBeenCalled();
     expect(checkForUpdates).toHaveBeenCalled();
     expect(screen.getByText(strings.settings.directEdition)).toBeVisible();
   });
@@ -342,20 +353,42 @@ describe("updates tab", () => {
         updateStatus="Check now"
         checkingUpdate
         checkForUpdates={vi.fn()}
+        update={vi.fn()}
       />,
     );
     expect(screen.getByText(strings.settings.storeUpdateTitle)).toBeVisible();
     expect(screen.getByText(strings.settings.flatpakEdition)).toBeVisible();
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
     rerender(
       <UpdatesTab
         distribution={undefined}
         updateStatus="Check now"
         checkingUpdate={false}
         checkForUpdates={vi.fn()}
+        update={vi.fn()}
       />,
     );
     expect(screen.getByText(strings.settings.checkingEdition)).toBeVisible();
+  });
+
+  it("lets the direct edition choose how often to check", () => {
+    const update = vi.fn();
+    render(
+      <UpdatesTab
+        distribution={{ kind: "direct", updatesManagedBy: "postalSnap" }}
+        updateStatus="Check now"
+        checkingUpdate={false}
+        checkForUpdates={vi.fn()}
+        update={update}
+      />,
+    );
+    const interval = screen.getByRole("combobox", {
+      name: strings.settings.updateCheckInterval,
+    });
+    expect(interval).toHaveValue("startupAnd6h");
+    fireEvent.change(interval, { target: { value: "manual" } });
+    expect(update).toHaveBeenCalledWith({ updateCheckInterval: "manual" });
   });
 });
 

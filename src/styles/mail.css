@@ -776,6 +776,8 @@
 }
 
 .message-row.selected {
+  /* Text changes immediately, so the selected background must not lag behind. */
+  transition: none;
   color: var(--accent-contrast);
   background: var(--accent);
   box-shadow: inset 0 0 0 1px

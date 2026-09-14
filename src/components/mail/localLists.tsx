@@ -27,6 +27,8 @@ export function SnoozedList({
           <button
             type="button"
             className="local-mail-row snoozed-row"
+            data-context="snoozed"
+            data-message-id={item.message.id}
             onClick={() => void onOpen(item.message)}
             aria-label={[
               item.message.isRead ? strings.mail.read : strings.mail.unread,
@@ -88,6 +90,8 @@ export function DraftList({
           key={draft.id}
           type="button"
           className="local-mail-row"
+          data-context="draft"
+          data-draft-id={draft.id}
           onClick={() => void onOpen(draft.id)}
           aria-label={
             draft.syncDetail
@@ -158,7 +162,13 @@ export function OutboxList({
         const sending =
           sendingIds?.has(`${item.accountId}:${item.id}`) ?? false;
         return (
-          <article key={item.id} className="attention-row">
+          <article
+            key={item.id}
+            className="attention-row"
+            data-context="outbox"
+            data-outbox-id={item.id}
+            data-busy={sending ? "true" : undefined}
+          >
             {item.state === "needs_attention" ? (
               <TriangleAlert aria-hidden="true" />
             ) : (

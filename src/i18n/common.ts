@@ -22,6 +22,7 @@ export const window = {
   maximize: "Maximize",
   restore: "Restore",
   close: "Close",
+  hideToTray: "Hide Postal Snap",
   actionFailed: "The window action could not finish. Try again.",
 } as const;
 

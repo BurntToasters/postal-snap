@@ -83,6 +83,7 @@ export function ReaderToolbar({
       className="reader-actions"
       role="toolbar"
       aria-label={strings.reader.actions}
+      data-context="chrome"
       onKeyDown={moveToolbarFocus}
     >
       <button

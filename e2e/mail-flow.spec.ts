@@ -1458,3 +1458,14 @@ test("keeps chrome opaque when the platform cannot provide native glass", async 
     page.getByRole("checkbox", { name: /Translucent window background/ }),
   ).toHaveCount(0);
 });
+
+test("right-click reply uses the product context menu", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("option", { name: /Weekend plans/i }).click({
+    button: "right",
+  });
+  await page.getByRole("menuitem", { name: "Reply", exact: true }).click();
+  await expect(
+    page.getByRole("combobox", { name: "To", exact: true }),
+  ).toHaveValue("jane@example.com");
+});

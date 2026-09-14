@@ -15,26 +15,26 @@ mod security;
 mod settings;
 mod storage;
 mod threat_blocking;
+mod tray;
 mod window_fx;
 mod window_snap;
 
 use commands::AppState;
 use tauri::{
     menu::{Menu, MenuBuilder, MenuItemBuilder, MenuItemKind, SubmenuBuilder},
-    Emitter, Manager, Runtime,
+    Emitter, Manager, Runtime, WindowEvent,
 };
-#[cfg(target_os = "macos")]
-use tauri::{RunEvent, WindowEvent};
 
 fn main() {
     let builder = tauri::Builder::default()
         .on_menu_event(|app, event| {
             let action = event.id().as_ref();
-            if matches!(action, "settings" | "check-for-updates") {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
+            if action == "tray-quit" {
+                let _ = app.emit("tray-quit", ());
+                return;
+            }
+            if matches!(action, "settings" | "check-for-updates" | "tray-open") {
+                tray::show_main(app);
             }
             let _ = app.emit("menu-action", action);
         })
@@ -137,6 +137,13 @@ fn main() {
             #[cfg(target_os = "windows")]
             let window_builder = window_builder.decorations(false);
             window_builder.build().map_err(|error| error.to_string())?;
+            let close_to_tray = app
+                .state::<AppState>()
+                .settings
+                .get()
+                .map(|settings| settings.close_to_tray)
+                .unwrap_or(true);
+            tray::sync(app.handle(), close_to_tray);
             install_menu(
                 app,
                 !has_startup_error && mail_actions_enabled(accounts.len()),
@@ -175,7 +182,20 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if matches!(event, tauri::WindowEvent::Destroyed) {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    let enabled = window
+                        .try_state::<AppState>()
+                        .and_then(|state| state.settings.get().ok())
+                        .map(|settings| settings.close_to_tray)
+                        .unwrap_or(true);
+                    if tray::should_hide_on_close(enabled, tray::tray_is_active()) {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
+                }
+            }
+            if matches!(event, WindowEvent::Destroyed) {
                 window_snap::on_window_destroyed(window);
             }
         })
@@ -256,6 +276,8 @@ fn main() {
             commands::settings_system::show_native_confirm,
             commands::settings_system::show_native_message,
             commands::settings_system::relaunch_app,
+            commands::settings_system::quit_app,
+            commands::settings_system::tray_is_active,
             window_fx::set_workspace_window_fx,
             window_fx::supports_workspace_window_fx,
             window_fx::accessibility_reduce_transparency,
@@ -266,21 +288,7 @@ fn main() {
 
     app.run(|app, event| {
         #[cfg(target_os = "macos")]
-        if let RunEvent::WindowEvent {
-            label,
-            event: WindowEvent::CloseRequested { api, .. },
-            ..
-        } = &event
-        {
-            if label == "main" {
-                api.prevent_close();
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.hide();
-                }
-            }
-        }
-        #[cfg(target_os = "macos")]
-        if let RunEvent::Reopen {
+        if let tauri::RunEvent::Reopen {
             has_visible_windows: false,
             ..
         } = &event

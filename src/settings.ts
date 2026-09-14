@@ -1,6 +1,19 @@
 import type { AppSettings, SettingsPatch } from "./types";
 import { syncWorkspaceWindowFx } from "./window-fx";
 
+export function offersCloseToTray(
+  platform = document.documentElement.dataset.platform,
+): boolean {
+  return platform === "windows" || platform === "macos";
+}
+
+export function closesToTrayOnClose(
+  settings: Pick<AppSettings, "closeToTray">,
+  platform = document.documentElement.dataset.platform,
+): boolean {
+  return offersCloseToTray(platform) && settings.closeToTray;
+}
+
 let systemThemeMedia: MediaQueryList | undefined;
 let systemThemeListener: (() => void) | undefined;
 

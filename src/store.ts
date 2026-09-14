@@ -55,6 +55,8 @@ export const defaultSettings: AppSettings = {
   blockReportedThreats: true,
   groupThreads: true,
   notifyNewMail: true,
+  closeToTray: true,
+  updateCheckInterval: "startupAnd6h",
   setupCompleted: false,
   setupStep: null,
 };

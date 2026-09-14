@@ -23,6 +23,8 @@ export function makeSettings(
     blockReportedThreats: true,
     groupThreads: true,
     notifyNewMail: true,
+    closeToTray: true,
+    updateCheckInterval: "startupAnd6h",
     setupCompleted: true,
     setupStep: null,
   };

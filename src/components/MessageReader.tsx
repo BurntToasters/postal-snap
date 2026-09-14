@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
+import {
+  CONTEXT_ACTION_EVENT,
+  IFRAME_CONTEXT_EVENT,
+  type ContextMenuActionDetail,
+  type IframeContextMenuDetail,
+} from "../contextMenu";
 import { strings } from "../i18n";
 import { parseMailto } from "../mailto";
 import { messageFrameDocument, sanitizeReceivedHtml } from "../security";
@@ -50,12 +56,8 @@ export function MessageReader({
 }) {
   const message = useAppStore((state) => state.selectedMessage);
   const selectMessage = useAppStore((state) => state.selectMessage);
-  const activeMailboxId = useAppStore((state) => state.activeMailboxId);
   const mailboxes = useAppStore((state) => state.mailboxes);
   const setMailboxes = useAppStore((state) => state.setMailboxes);
-  const messages = useAppStore((state) => state.messages);
-  const messageCursor = useAppStore((state) => state.messageCursor);
-  const hasMoreMessages = useAppStore((state) => state.hasMoreMessages);
   const setMessages = useAppStore((state) => state.setMessages);
   const openComposer = useAppStore((state) => state.openComposer);
   const settings = useAppStore((state) => state.settings);
@@ -338,40 +340,51 @@ export function MessageReader({
   }
 
   const menuHandlersRef = useRef({
-    message,
     openComposer,
     forwardMessage,
     move,
+    moveToMailbox,
     setRead,
     setStarred,
+    previewFile,
+    download,
   });
 
   useEffect(() => {
     menuHandlersRef.current = {
-      message,
       openComposer,
       forwardMessage,
       move,
+      moveToMailbox,
       setRead,
       setStarred,
+      previewFile,
+      download,
     };
   });
 
   useEffect(() => {
     const menuAction = (event: Event) => {
       const h = menuHandlersRef.current;
-      if (!h.message) return;
+      const selected = useAppStore.getState().selectedMessage;
+      if (!selected) return;
       const action = (event as CustomEvent<string>).detail;
       if (action === "reply")
-        h.openComposer({ sourceMessage: h.message, composeMode: "reply" });
+        h.openComposer({ sourceMessage: selected, composeMode: "reply" });
       if (action === "reply-all")
-        h.openComposer({ sourceMessage: h.message, composeMode: "replyAll" });
+        h.openComposer({ sourceMessage: selected, composeMode: "replyAll" });
       if (action === "forward") void h.forwardMessage();
       if (action === "archive") void h.move("archive");
       if (action === "trash") void h.move("trash");
       if (action === "toggle-read") void h.setRead();
       if (action === "toggle-star") void h.setStarred();
       if (action === "junk") void h.move("junk");
+      if (action === "not-junk") {
+        const inbox = useAppStore
+          .getState()
+          .mailboxes.find((box) => box.role === "inbox");
+        if (inbox) void h.moveToMailbox(inbox.id);
+      }
       if (action === "print" || action === "file-print") {
         window.dispatchEvent(new Event("postal:print-message"));
       }
@@ -396,10 +409,54 @@ export function MessageReader({
     window.addEventListener("postal:print-message", print);
     window.addEventListener("postal:find-in-message", find);
     window.addEventListener("postal:scroll-reader", scroll);
+    const openSnooze = () => setSnoozeOpen(true);
+    const moveMailbox = (event: Event) => {
+      const mailboxId = (event as CustomEvent<number>).detail;
+      if (typeof mailboxId === "number") {
+        void menuHandlersRef.current.moveToMailbox(mailboxId);
+      }
+    };
+    const contextAction = (event: Event) => {
+      const detail = (event as CustomEvent<ContextMenuActionDetail>).detail;
+      if (!detail) return;
+      if (detail.id === "find-in-message" && detail.target.kind === "reader") {
+        find();
+        return;
+      }
+      if (detail.id === "print" && detail.target.kind === "reader") {
+        print();
+        return;
+      }
+      if (detail.id === "copy" && detail.target.kind === "reader") {
+        const iframeText =
+          frame.current?.contentDocument?.getSelection()?.toString() ?? "";
+        const parentText = window.getSelection()?.toString() ?? "";
+        const text = iframeText || parentText;
+        if (text)
+          void navigator.clipboard.writeText(text).catch(() => undefined);
+        return;
+      }
+      if (detail.target.kind !== "attachment") return;
+      if (detail.id === "preview") {
+        void menuHandlersRef.current.previewFile(detail.target.attachmentId);
+      }
+      if (detail.id === "download") {
+        void menuHandlersRef.current.download(
+          detail.target.attachmentId,
+          detail.target.filename,
+        );
+      }
+    };
+    window.addEventListener("postal:open-snooze", openSnooze);
+    window.addEventListener("postal:move-mailbox", moveMailbox);
+    window.addEventListener(CONTEXT_ACTION_EVENT, contextAction);
     return () => {
       window.removeEventListener("postal:print-message", print);
       window.removeEventListener("postal:find-in-message", find);
       window.removeEventListener("postal:scroll-reader", scroll);
+      window.removeEventListener("postal:open-snooze", openSnooze);
+      window.removeEventListener("postal:move-mailbox", moveMailbox);
+      window.removeEventListener(CONTEXT_ACTION_EVENT, contextAction);
     };
   }, []);
 
@@ -479,8 +536,9 @@ export function MessageReader({
   function wireFrameLinks() {
     frameLinkCleanup.current?.();
     frameLinkCleanup.current = undefined;
-    const body = frame.current?.contentDocument?.body;
-    if (!body) return;
+    const doc = frame.current?.contentDocument;
+    const body = doc?.body;
+    if (!doc || !body) return;
     body.querySelectorAll("[usemap]").forEach((element) => {
       element.removeAttribute("usemap");
     });
@@ -508,18 +566,44 @@ export function MessageReader({
       }
       if (/^mailto:/i.test(url)) openComposer({ prefill: parseMailto(url) });
     };
-    const blockNativeOpen = (event: Event) => {
-      if ((event.target as HTMLElement).closest(linkSelector)) {
-        event.preventDefault();
-      }
+    const blockNativeOpen = (event: MouseEvent) => {
+      event.preventDefault();
+      const iframe = frame.current;
+      if (!iframe) return;
+      const rect = iframe.getBoundingClientRect();
+      const target = (event.target as HTMLElement | null)?.closest<HTMLElement>(
+        linkSelector,
+      );
+      const marked = target?.getAttribute("data-external-href")?.trim() ?? "";
+      const href = target?.getAttribute("href")?.trim() ?? "";
+      const url = /^https?:/i.test(marked)
+        ? marked
+        : /^https?:/i.test(href)
+          ? href
+          : /^mailto:/i.test(href)
+            ? href
+            : /^mailto:/i.test(marked)
+              ? marked
+              : "";
+      const detail: IframeContextMenuDetail = {
+        x: event.clientX + rect.left,
+        y: event.clientY + rect.top,
+      };
+      if (/^https?:/i.test(url)) detail.href = url;
+      else if (/^mailto:/i.test(url)) detail.mailto = url;
+      window.dispatchEvent(
+        new CustomEvent<IframeContextMenuDetail>(IFRAME_CONTEXT_EVENT, {
+          detail,
+        }),
+      );
     };
     body.addEventListener("click", handleLink);
     body.addEventListener("auxclick", handleLink);
-    body.addEventListener("contextmenu", blockNativeOpen);
+    doc.addEventListener("contextmenu", blockNativeOpen, true);
     frameLinkCleanup.current = () => {
       body.removeEventListener("click", handleLink);
       body.removeEventListener("auxclick", handleLink);
-      body.removeEventListener("contextmenu", blockNativeOpen);
+      doc.removeEventListener("contextmenu", blockNativeOpen, true);
     };
   }
 
@@ -589,17 +673,19 @@ export function MessageReader({
   }
 
   async function setStarred() {
+    const current = useAppStore.getState();
+    const message = current.selectedMessage;
     if (!message) return;
     const operation = ++starredOperation.current;
-    const viewMailboxId = activeMailboxId;
+    const viewMailboxId = current.activeMailboxId;
     const next = !message.isStarred;
     selectMessage({ ...message, isStarred: next });
     setMessages(
-      messages.map((summary) =>
+      current.messages.map((summary) =>
         summary.id === message.id ? { ...summary, isStarred: next } : summary,
       ),
-      messageCursor,
-      hasMoreMessages,
+      current.messageCursor,
+      current.hasMoreMessages,
     );
     try {
       await api.setMessageFlags(message.accountId, message.id, undefined, next);
@@ -634,16 +720,18 @@ export function MessageReader({
   }
 
   async function setRead() {
+    const current = useAppStore.getState();
+    const message = current.selectedMessage;
     if (!message) return;
     const operation = ++readOperation.current;
-    const viewMailboxId = activeMailboxId;
+    const viewMailboxId = current.activeMailboxId;
     const next = !message.isRead;
-    const previousUnreadCount = mailboxes.find(
+    const previousUnreadCount = current.mailboxes.find(
       (mailbox) => mailbox.id === message.mailboxId,
     )?.unreadCount;
     selectMessage({ ...message, isRead: next });
     setMailboxes(
-      mailboxes.map((mailbox) =>
+      current.mailboxes.map((mailbox) =>
         mailbox.id === message.mailboxId
           ? {
               ...mailbox,
@@ -653,11 +741,11 @@ export function MessageReader({
       ),
     );
     setMessages(
-      messages.map((summary) =>
+      current.messages.map((summary) =>
         summary.id === message.id ? { ...summary, isRead: next } : summary,
       ),
-      messageCursor,
-      hasMoreMessages,
+      current.messageCursor,
+      current.hasMoreMessages,
     );
     try {
       await api.setMessageFlags(message.accountId, message.id, next, undefined);
@@ -700,7 +788,13 @@ export function MessageReader({
   }
 
   async function move(role: "archive" | "trash" | "junk") {
+    const snapshot = useAppStore.getState();
+    const message = snapshot.selectedMessage;
     if (!message) return;
+    const mailboxes = snapshot.mailboxes;
+    const messages = snapshot.messages;
+    const messageCursor = snapshot.messageCursor;
+    const hasMoreMessages = snapshot.hasMoreMessages;
     const destination = mailboxes.find((mailbox) => mailbox.role === role);
     const source = mailboxes.find(
       (mailbox) => mailbox.id === message.mailboxId,
@@ -712,7 +806,7 @@ export function MessageReader({
       return;
     const operation = (moveOperations.current.get(message.id) ?? 0) + 1;
     moveOperations.current.set(message.id, operation);
-    const viewMailboxId = activeMailboxId;
+    const viewMailboxId = snapshot.activeMailboxId;
     const previousUnreadCounts = new Map(
       mailboxes.map((mailbox) => [mailbox.id, mailbox.unreadCount]),
     );
@@ -778,11 +872,17 @@ export function MessageReader({
   }
 
   async function moveToMailbox(mailboxId: number) {
+    const snapshot = useAppStore.getState();
+    const message = snapshot.selectedMessage;
     if (!message) return;
     if (mailboxId === message.mailboxId) return;
+    const mailboxes = snapshot.mailboxes;
+    const messages = snapshot.messages;
+    const messageCursor = snapshot.messageCursor;
+    const hasMoreMessages = snapshot.hasMoreMessages;
     const operation = (moveOperations.current.get(message.id) ?? 0) + 1;
     moveOperations.current.set(message.id, operation);
-    const viewMailboxId = activeMailboxId;
+    const viewMailboxId = snapshot.activeMailboxId;
     const previousUnreadCounts = new Map(
       mailboxes.map((mailbox) => [mailbox.id, mailbox.unreadCount]),
     );
@@ -865,6 +965,7 @@ export function MessageReader({
   }
 
   async function forwardMessage() {
+    const message = useAppStore.getState().selectedMessage;
     if (!message || preparingForward) return;
     const operation = ++forwardOperation.current;
     const messageId = message.id;

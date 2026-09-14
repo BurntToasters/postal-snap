@@ -5,6 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Copy, Square, Minus, X } from "lucide-react";
 import { inTauri } from "../api";
 import { strings } from "../i18n";
+import { closesToTrayOnClose } from "../settings";
 import { useAppStore } from "../store";
 
 /** Native caption actions stay outside the application's modal/inert layers. */
@@ -18,6 +19,9 @@ export function WindowChrome() {
     close: () => Promise<void>;
   } | null>(null);
   const setError = useAppStore((state) => state.setError);
+  const hideOnClose = useAppStore((state) =>
+    closesToTrayOnClose(state.settings),
+  );
 
   useEffect(() => {
     if (!inTauri()) return;
@@ -133,7 +137,7 @@ export function WindowChrome() {
     );
   };
   return (
-    <div className="window-chrome">
+    <div className="window-chrome" data-context="chrome">
       <div
         className="window-drag-strip"
         data-tauri-drag-region="deep"
@@ -173,8 +177,10 @@ export function WindowChrome() {
         <button
           type="button"
           className="window-close-button"
-          aria-label={strings.window.close}
-          title={strings.window.close}
+          aria-label={
+            hideOnClose ? strings.window.hideToTray : strings.window.close
+          }
+          title={hideOnClose ? strings.window.hideToTray : strings.window.close}
           onClick={() => run("close")}
         >
           <X aria-hidden="true" />
