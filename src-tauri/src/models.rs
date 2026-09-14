@@ -688,7 +688,11 @@ fn classify_ipc_message(lower: &str) -> (&'static str, bool) {
     {
         return ("invalidInput", false);
     }
-    if lower.contains("database") {
+    if lower.contains("database")
+        || lower.contains("password vault")
+        || lower.contains("account password store")
+        || lower.contains("password is unavailable")
+    {
         return ("localStorageFailed", true);
     }
     ("operationFailed", true)
@@ -1167,6 +1171,21 @@ mod tests {
         );
         assert_eq!(
             IpcError::from("Could not create application data directory.").code,
+            "localStorageFailed"
+        );
+        assert_eq!(
+            IpcError::from("The system password vault is unavailable.").code,
+            "localStorageFailed"
+        );
+        assert_eq!(
+            IpcError::from("The system password vault could not save this account.").code,
+            "localStorageFailed"
+        );
+        assert_eq!(
+            IpcError::from(
+                "The password is unavailable. Remove and add this account again.".to_string()
+            )
+            .code,
             "localStorageFailed"
         );
     }
