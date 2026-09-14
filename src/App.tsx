@@ -55,7 +55,6 @@ export default function App() {
   const [startupNotice, setStartupNotice] = useState<string | null>(null);
   const [ready, setReady] = useState(!inTauri());
   const loadRequest = useRef(0);
-  const overlayChromeWasOpen = useRef(false);
 
   const openSettings = useCallback((tab: SettingsTab = "general") => {
     setSettingsTab(tab);
@@ -210,20 +209,6 @@ export default function App() {
       void api.setMailShortcutGuard(false).catch(() => undefined);
     };
   }, [composerOpen, settingsOpen]);
-
-  useEffect(() => {
-    const root = document.documentElement;
-    if (settingsOpen) {
-      overlayChromeWasOpen.current = true;
-      root.dataset.overlayChrome = "true";
-      return;
-    }
-    delete root.dataset.overlayChrome;
-    if (!overlayChromeWasOpen.current) return;
-    overlayChromeWasOpen.current = false;
-    applySettings(useAppStore.getState().settings);
-    window.dispatchEvent(new Event("resize"));
-  }, [settingsOpen]);
 
   if (!ready)
     return (

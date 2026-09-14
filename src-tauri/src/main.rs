@@ -20,7 +20,7 @@ mod window_snap;
 
 use commands::AppState;
 use tauri::{
-    menu::{MenuBuilder, MenuItemBuilder, MenuItemKind, SubmenuBuilder},
+    menu::{Menu, MenuBuilder, MenuItemBuilder, MenuItemKind, SubmenuBuilder},
     Emitter, Manager, Runtime,
 };
 #[cfg(target_os = "macos")]
@@ -132,6 +132,8 @@ fn main() {
             let window_builder = window_builder
                 .title_bar_style(tauri::TitleBarStyle::Overlay)
                 .hidden_title(true);
+            // Frameless custom caption (IYERIS/Zinnia). Do not attach a Win32
+            // menubar onto this HWND — muda paints it through glass on activate.
             #[cfg(target_os = "windows")]
             let window_builder = window_builder.decorations(false);
             window_builder.build().map_err(|error| error.to_string())?;
@@ -293,7 +295,34 @@ fn main() {
     });
 }
 
+/// Custom Windows chrome is frameless + transparent. Attaching muda's Win32
+/// menubar (`SetMenu`) makes File / Edit / Message / View paint through the
+/// WebView2 caption on `WM_NCACTIVATE`. Zinnia never installs a Windows app
+/// menu; IYERIS keeps native menus optional. Postal Snap follows that: macOS
+/// keeps the system menu bar, Linux keeps a decorated GTK menu, Windows uses
+/// frontend shortcuts only.
+fn attaches_native_window_menu() -> bool {
+    !cfg!(target_os = "windows")
+}
+
 fn install_menu<R: Runtime>(app: &tauri::App<R>, has_accounts: bool) -> tauri::Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = (app, has_accounts);
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        app.set_menu(build_application_menu(app, has_accounts)?)?;
+        Ok(())
+    }
+}
+
+#[cfg_attr(all(target_os = "windows", not(test)), expect(dead_code))]
+fn build_application_menu<R: Runtime>(
+    app: &tauri::App<R>,
+    has_accounts: bool,
+) -> tauri::Result<Menu<R>> {
     let handle = app.handle();
     let settings = MenuItemBuilder::with_id("settings", "Settings…")
         .accelerator("CmdOrCtrl+Comma")
@@ -445,18 +474,19 @@ fn install_menu<R: Runtime>(app: &tauri::App<R>, has_accounts: bool) -> tauri::R
             &window_menu,
         ])
         .build()?;
-    app.set_menu(menu)?;
-    Ok(())
+    Ok(menu)
 }
 
 pub(crate) fn mail_actions_enabled(account_count: usize) -> bool {
     account_count > 0
 }
 
+#[cfg_attr(all(target_os = "windows", not(test)), expect(dead_code))]
 fn updater_menu_policy(target_is_macos: bool, direct_updater: bool, store_build: bool) -> bool {
     target_is_macos && direct_updater && !store_build
 }
 
+#[cfg_attr(all(target_os = "windows", not(test)), expect(dead_code))]
 fn compiled_updater_menu_visible() -> bool {
     updater_menu_policy(
         cfg!(target_os = "macos"),
@@ -473,9 +503,17 @@ pub fn set_mail_menu_enabled<R: Runtime>(
     app: &tauri::AppHandle<R>,
     enabled: bool,
 ) -> Result<(), String> {
+    if !attaches_native_window_menu() {
+        let _ = (app, enabled);
+        return Ok(());
+    }
     let Some(menu) = app.menu() else {
         return Err("Application menu is unavailable.".into());
     };
+    set_mail_menu_items_enabled(&menu, enabled)
+}
+
+fn set_mail_menu_items_enabled<R: Runtime>(menu: &Menu<R>, enabled: bool) -> Result<(), String> {
     for (submenu_id, item_ids) in [
         ("file", &["compose", "get-mail", "file-print"][..]),
         (
@@ -530,8 +568,13 @@ fn allowed_webview_navigation(url: &url::Url) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{allowed_webview_navigation, mail_actions_enabled, updater_menu_policy};
+    use super::{
+        allowed_webview_navigation, attaches_native_window_menu, mail_actions_enabled,
+        updater_menu_policy,
+    };
     #[cfg(not(target_os = "macos"))]
+    use super::{build_application_menu, set_mail_menu_items_enabled};
+    #[cfg(target_os = "windows")]
     use super::{install_menu, set_mail_menu_enabled};
     #[cfg(not(target_os = "macos"))]
     use tauri::menu::MenuItemKind;
@@ -563,6 +606,11 @@ mod tests {
     }
 
     #[test]
+    fn native_window_menu_follows_custom_chrome() {
+        assert_eq!(attaches_native_window_menu(), !cfg!(target_os = "windows"));
+    }
+
+    #[test]
     fn updater_menu_policy_is_direct_macos_only() {
         assert!(updater_menu_policy(true, true, false));
         assert!(!updater_menu_policy(true, true, true));
@@ -571,16 +619,23 @@ mod tests {
     }
 
     #[cfg(not(target_os = "macos"))]
+    fn attach_test_menu(app: &tauri::App<tauri::test::MockRuntime>, has_accounts: bool) {
+        let menu = build_application_menu(app, has_accounts).unwrap();
+        app.set_menu(menu).unwrap();
+    }
+
+    #[cfg(not(target_os = "macos"))]
     #[test]
     fn actual_mail_menu_items_follow_account_lifecycle() {
         let app = tauri::test::mock_app();
-        install_menu(&app, false).unwrap();
+        attach_test_menu(&app, false);
         assert_mail_items_enabled(&app, false);
 
-        set_mail_menu_enabled(app.handle(), true).unwrap();
+        let menu = app.menu().unwrap();
+        set_mail_menu_items_enabled(&menu, true).unwrap();
         assert_mail_items_enabled(&app, true);
 
-        set_mail_menu_enabled(app.handle(), false).unwrap();
+        set_mail_menu_items_enabled(&menu, false).unwrap();
         assert_mail_items_enabled(&app, false);
     }
 
@@ -588,7 +643,7 @@ mod tests {
     #[test]
     fn updater_menu_visibility_matches_distribution_features() {
         let app = tauri::test::mock_app();
-        install_menu(&app, false).unwrap();
+        attach_test_menu(&app, false);
         let menu = app.menu().unwrap();
         let Some(MenuItemKind::Submenu(app_menu)) = menu.get("app") else {
             panic!("app menu missing");
@@ -603,6 +658,16 @@ mod tests {
             ))
         ));
         assert_eq!(app_menu.get("check-for-updates").is_some(), expected);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_install_menu_does_not_attach_a_native_menubar() {
+        let app = tauri::test::mock_app();
+        install_menu(&app, true).unwrap();
+        assert!(app.menu().is_none());
+        set_mail_menu_enabled(app.handle(), true).unwrap();
+        assert!(app.menu().is_none());
     }
 
     #[cfg(not(target_os = "macos"))]

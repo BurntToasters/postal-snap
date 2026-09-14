@@ -130,7 +130,6 @@ let urlHandler: ((urls: string[]) => void) | undefined;
 beforeEach(() => {
   vi.clearAllMocks();
   resetStore();
-  delete document.documentElement.dataset.overlayChrome;
   vi.mocked(inTauri).mockReturnValue(true);
   vi.mocked(api.listAccounts).mockResolvedValue([account]);
   vi.mocked(api.getSettings).mockResolvedValue({
@@ -228,14 +227,8 @@ describe("App lifecycle", () => {
     fireEvent.keyDown(window, { key: ",", ctrlKey: true });
     expect(screen.getByText("Settings general")).toBeVisible();
     expect(document.querySelector(".app-viewport")).toHaveAttribute("inert");
-    expect(document.documentElement.dataset.overlayChrome).toBe("true");
-    const settingsApplied = vi.mocked(applySettings).mock.calls.length;
     fireEvent.click(
       screen.getByRole("button", { name: "Close mocked settings" }),
-    );
-    expect(document.documentElement.dataset.overlayChrome).toBeUndefined();
-    expect(vi.mocked(applySettings).mock.calls.length).toBeGreaterThan(
-      settingsApplied,
     );
     fireEvent.click(
       screen.getByRole("button", { name: "Open mocked settings" }),
