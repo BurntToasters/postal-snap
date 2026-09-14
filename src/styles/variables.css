@@ -7,7 +7,7 @@
   line-height: 1.45;
   letter-spacing: -0.01em;
 
-  /* macOS 27 Golden Gate / Tahoe light. Semantic mapping:
+  /* macOS 27 design language (Golden Gate / Tahoe light). Semantic mapping:
      canvas = grouped background, surface = windowBackground,
      muted/hover = system fills, text = label/secondaryLabel,
      border = separator, accent = controlAccent/link. */
@@ -76,7 +76,7 @@
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  /* macOS 27 Golden Gate dark. Darkened edge + frosted fills:
+  /* macOS 27 design language (Golden Gate dark). Darkened edge + frosted fills:
      canvas = near-black base, surface = elevated card,
      muted/hover = secondary fills, text = label/secondaryLabel dark. */
   --accent: #0a84ff;

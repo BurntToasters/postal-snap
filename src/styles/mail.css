@@ -504,8 +504,8 @@
   color: var(--warning);
 }
 
-/* Role-tinted sidebar icons (macOS Mail). Active rows stay accent
-   monochrome so the selected state reads as one unit. */
+/* Role-tinted sidebar icons (macOS 27 design language). Active rows stay
+   accent monochrome so the selected state reads as one unit. */
 .folder.sent:not(.active) svg {
   color: var(--folder-sent);
 }

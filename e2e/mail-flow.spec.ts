@@ -1049,7 +1049,7 @@ test("hides message previews in compact density", async ({ page }) => {
   ).toBeHidden();
 });
 
-test("lists Mail-like shortcuts instead of using R for Get Mail", async ({
+test("lists desktop-style shortcuts instead of using R for Get Mail", async ({
   page,
 }) => {
   await page.goto("/");

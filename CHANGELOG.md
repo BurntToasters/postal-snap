@@ -39,7 +39,7 @@ Postal Snap is a calm, accessible desktop email client. Mail stays on your compu
 
 ## Changes in `v0.1.9:`
 
-- **UI - Mail-inspired depth and hierarchy:** Refined setup, Settings, toolbar, message, reader, and form surfaces with calmer layered materials, restrained highlights, clearer selected states, and stronger dark/light contrast.
+- **UI - macOS 27 design language depth and hierarchy:** Refined setup, Settings, toolbar, message, reader, and form surfaces with calmer layered materials, restrained highlights, clearer selected states, and stronger dark/light contrast.
 - **UI - Setup flow:** Reworked account choice and setup presentation, improved 200% text behavior, resets each step to the top, and moves keyboard focus to the new heading without scrolling it away.
 - **UI - Settings cleanup:** Removed the duplicate preference-only reset from General. The complete Reset & Restart action remains in Accounts as the single reset path.
 - **Accessibility:** Conversation headers participate in roving keyboard navigation, local Drafts/Outbox/Snoozed actions keep Space activation, and focus remains visible through setup transitions.
@@ -50,8 +50,8 @@ Postal Snap is a calm, accessible desktop email client. Mail stays on your compu
 
 ## Changes in `v0.1.8:`
 
-- **UI - macOS 27 Mail-inspired shell:** The mailbox sidebar now reaches the window edges, the main toolbar is quieter and consistently grouped, Compose and Get Mail remain explicit at normal desktop widths, and search sits in the trailing toolbar cluster with mailbox/account scoping.
-- **UI - Mailbox and reader hierarchy:** Message rows use tighter Mail-like spacing and selection treatment, sidebar symbols use the app accent, Mark All Read moves into the mailbox More menu, and reader actions are grouped into compact pill controls.
+- **UI - macOS 27 design language shell:** The mailbox sidebar now reaches the window edges, the main toolbar is quieter and consistently grouped, Compose and Get Mail remain explicit at normal desktop widths, and search sits in the trailing toolbar cluster with mailbox/account scoping.
+- **UI - Mailbox and reader hierarchy:** Message rows use tighter spacing and selection treatment inspired by the macOS 27 design language, sidebar symbols use the app accent, Mark All Read moves into the mailbox More menu, and reader actions are grouped into compact pill controls.
 - **UI - Liquid Glass restraint:** Glass is reserved for navigation and interactive chrome while message lists, readers, rendered email, composer, Settings, setup, and attachment previews stay opaque for legibility. macOS now requests semantic Sidebar vibrancy instead of HUD material.
 - **UI - Composer, setup, and settings polish:** Dialog chrome, grouped controls, selected settings navigation, and setup provider cards use flatter surfaces, quieter borders, and more consistent rounded geometry.
 - **FIX - Native appearance sync:** When theme follows the system, native window-effect tint now tracks live light/dark appearance changes instead of staying at the launch appearance.
