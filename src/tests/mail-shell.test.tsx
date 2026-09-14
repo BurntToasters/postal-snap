@@ -2153,11 +2153,20 @@ describe("mail shell", () => {
       textBody: "Draft",
       attachments: [],
     });
-    vi.mocked(api.retryOutbox).mockResolvedValue(undefined);
-    vi.mocked(api.retrySentCopy).mockResolvedValue(undefined);
+    vi.mocked(api.retryOutbox).mockResolvedValue({
+      id: "retry-ctx",
+      state: "sent",
+      detail: null,
+    });
+    vi.mocked(api.retrySentCopy).mockResolvedValue({
+      id: "copy-ctx",
+      state: "sent",
+      detail: null,
+    });
     vi.mocked(api.sendScheduledOutbox).mockResolvedValue({
       id: "later-ctx",
       state: "sent",
+      detail: null,
     });
     vi.mocked(api.emptyJunk).mockResolvedValue(undefined);
     mockedUnsnoozeMessage.mockResolvedValue(undefined);
