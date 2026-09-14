@@ -63,6 +63,7 @@ Important files:
 - System light/dark mode is the default. Postal blue is the restrained accent.
 - Avoid icon-only actions unless they have an accessible name and tooltip where useful.
 - Keep destructive and uncertain-send states explicit. Never imply delivery when SMTP outcome is uncertain.
+- Windows uses a frameless custom caption plus the Snap maximize overlay. Do not attach a native Win32 menubar (`app.set_menu` / muda `SetMenu`); activation would paint File/Edit/Message/View through the transparent WebView2. Mail shortcuts on Windows live in the frontend. macOS keeps the system menu bar; Linux keeps a decorated GTK menu.
 
 ## Security invariants
 
