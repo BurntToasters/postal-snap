@@ -1,7 +1,7 @@
 //! Windows notification-area icon and macOS menu bar extra for close-to-tray.
 //! Linux ignores the preference and still quits when the window closes.
 
-use tauri::{AppHandle, Emitter, Manager, Runtime};
+use tauri::{AppHandle, Manager, Runtime};
 
 pub fn should_hide_on_close(close_to_tray: bool, tray_active: bool) -> bool {
     if !close_to_tray {
@@ -41,10 +41,11 @@ pub fn show_main<R: Runtime>(app: &AppHandle<R>) {
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 mod native {
-    use super::{show_main, AppHandle, Emitter, Runtime};
+    use super::{show_main, AppHandle, Runtime};
     use std::sync::atomic::{AtomicBool, Ordering};
     use tauri::menu::{MenuBuilder, MenuItemBuilder};
     use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+    use tauri::Emitter;
 
     const TRAY_ID: &str = "postal-snap";
     static TRAY_ACTIVE: AtomicBool = AtomicBool::new(false);
