@@ -3,6 +3,7 @@ import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
 import type { AppSettings, SetupStep } from "../../types";
 import { SetupWizard } from "../SetupWizard";
+import { CloseToTraySwitch } from "../settings/closeToTray";
 
 export type SetupGo = (next: SetupStep) => void;
 export type SetupPersist = (patch: Partial<AppSettings>) => Promise<void>;
@@ -257,6 +258,10 @@ export function ComfortStep({ saving, persist, go }: ComfortStepProps) {
             }
           />
         </label>
+        <CloseToTraySwitch
+          checked={settings.closeToTray}
+          onChecked={(checked) => void persist({ closeToTray: checked })}
+        />
         <label className="switch-row">
           <span>
             <strong>{strings.settings.blockAds}</strong>

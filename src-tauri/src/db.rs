@@ -958,6 +958,9 @@ pub(crate) fn adjust_mailbox_counts(
     Ok(())
 }
 
+// This batch also runs against unversioned legacy databases. Indexes that use
+// columns added by later migrations must stay in those migrations, after the
+// corresponding `ensure_column` calls.
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS accounts (
   id TEXT PRIMARY KEY, provider TEXT NOT NULL, email TEXT NOT NULL, display_name TEXT NOT NULL,
@@ -996,7 +999,6 @@ CREATE TABLE IF NOT EXISTS file_grants (token TEXT PRIMARY KEY, path TEXT NOT NU
 CREATE INDEX IF NOT EXISTS messages_mailbox_date ON messages(mailbox_id,received_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS accounts_email_unique ON accounts(email);
 CREATE INDEX IF NOT EXISTS messages_mailbox_date_uid ON messages(mailbox_id,received_at DESC,uid DESC);
-CREATE INDEX IF NOT EXISTS messages_thread ON messages(account_id,thread_root);
 CREATE INDEX IF NOT EXISTS messages_account ON messages(account_id);
 CREATE TRIGGER IF NOT EXISTS messages_after_delete AFTER DELETE ON messages BEGIN DELETE FROM message_fts WHERE rowid=OLD.id; END;
 "#;
@@ -1671,6 +1673,58 @@ mod tests {
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
         assert_eq!(version, CURRENT_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn migrates_unversioned_pre_thread_schema_without_data_loss() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("mail.sqlite3");
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection.execute_batch(SCHEMA_V1).unwrap();
+            connection
+                .execute_batch(
+                    "DROP INDEX IF EXISTS messages_thread;
+                     ALTER TABLE messages DROP COLUMN thread_root;
+                     ALTER TABLE messages DROP COLUMN thread_parent;
+                     INSERT INTO accounts(id,provider,email,display_name,imap_host,imap_port,imap_tls,imap_username,smtp_host,smtp_port,smtp_tls,smtp_username)
+                       VALUES('account-1','manual','sam@example.com','Sam','imap.example.com',993,'tls','sam@example.com','smtp.example.com',587,'startTls','sam@example.com');
+                     INSERT INTO mailboxes(id,account_id,name,display_name,role)
+                       VALUES(1,'account-1','INBOX','Inbox','inbox');
+                     INSERT INTO messages(account_id,mailbox_id,uid,subject,received_at)
+                       VALUES('account-1',1,1,'Existing message','2026-08-18T12:00:00Z');
+                     PRAGMA user_version=0;",
+                )
+                .unwrap();
+        }
+
+        let migrated = Database::open(&path).unwrap();
+        let connection = migrated.conn().unwrap();
+        let version: u32 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
+        assert!(column_exists(&connection, "messages", "thread_root").unwrap());
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='messages_thread'",
+                    [],
+                    |row| row.get::<_, u32>(0),
+                )
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT subject FROM messages WHERE account_id='account-1' AND uid=1",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "Existing message"
+        );
     }
 
     #[test]

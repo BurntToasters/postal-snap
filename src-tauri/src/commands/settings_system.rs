@@ -17,11 +17,14 @@ pub fn get_settings(state: State<'_, AppState>) -> CommandResult<AppSettings> {
 pub fn save_settings(
     settings: AppSettings,
     confirm_token: Option<String>,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<AppSettings> {
     let current = state.settings.get()?;
     crate::settings::require_threat_off_confirm(&current, &settings, confirm_token.as_deref())?;
-    command_result(state.settings.save(settings))
+    let saved = state.settings.save(settings)?;
+    crate::tray::sync(&app, saved.close_to_tray);
+    Ok(saved)
 }
 
 #[tauri::command]
@@ -78,7 +81,9 @@ pub async fn import_settings(
     let source = source
         .into_path()
         .map_err(|_| "Choose a valid settings file.".to_string())?;
-    command_result(state.settings.import_from(&source).map(Some))
+    let imported = state.settings.import_from(&source)?;
+    crate::tray::sync(&app, imported.close_to_tray);
+    Ok(Some(imported))
 }
 
 #[tauri::command]
@@ -185,6 +190,17 @@ pub async fn show_native_message(
 #[tauri::command]
 pub fn relaunch_app(app: AppHandle) -> CommandResult<()> {
     app.restart();
+}
+
+#[tauri::command]
+pub fn quit_app(app: AppHandle) -> CommandResult<()> {
+    app.exit(0);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn tray_is_active() -> bool {
+    crate::tray::tray_is_active()
 }
 
 const MAX_LICENSE_NOTICE_BYTES: usize = 1_048_576;

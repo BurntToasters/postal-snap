@@ -1,6 +1,8 @@
 import { api } from "./api";
 import { strings } from "./i18n";
+import { closesToTrayOnClose } from "./settings";
 import { useAppStore } from "./store";
+import type { AppSettings, UpdateCheckInterval } from "./types";
 
 export interface UpdateCheckResult {
   available: boolean;
@@ -239,15 +241,50 @@ async function updatesManagedByPostalSnap(): Promise<boolean> {
   }
 }
 
+export function checksUpdatesOnStartup(interval: UpdateCheckInterval): boolean {
+  return interval !== "manual";
+}
+
+export function periodicUpdateIntervalMs(
+  interval: UpdateCheckInterval,
+): number | null {
+  switch (interval) {
+    case "startupAnd6h":
+      return 6 * 60 * 60 * 1000;
+    case "startupAnd12h":
+      return 12 * 60 * 60 * 1000;
+    case "startupAnd24h":
+      return 24 * 60 * 60 * 1000;
+    default:
+      return null;
+  }
+}
+
 export function startPeriodicUpdateCheck(
-  intervalMs = 4 * 60 * 60 * 1000,
+  interval: UpdateCheckInterval,
 ): () => void {
+  const intervalMs = periodicUpdateIntervalMs(interval);
+  if (intervalMs == null) return () => undefined;
   const timer = window.setInterval(() => {
     if (!getUpdateReadyVersion() && !interactiveInFlight && !updateInFlight) {
       void runUpdateSingleFlight().catch(() => undefined);
     }
   }, intervalMs);
   return () => window.clearInterval(timer);
+}
+
+export async function windowWouldHideInsteadOfQuit(
+  settings: Pick<AppSettings, "closeToTray"> = useAppStore.getState().settings,
+  platform = document.documentElement.dataset.platform,
+): Promise<boolean> {
+  if (!closesToTrayOnClose(settings, platform)) return false;
+  if (platform === "macos") return true;
+  if (platform !== "windows") return false;
+  try {
+    return await api.trayIsActive();
+  } catch {
+    return false;
+  }
 }
 
 export function startDeferredUpdateOnQuit(): () => void {
@@ -265,6 +302,9 @@ export function startDeferredUpdateOnQuit(): () => void {
         // window, and Postal Snap does not grant allow-destroy.
         unlisten = await getCurrentWindow().onCloseRequested(async (event) => {
           event.preventDefault();
+          if (await windowWouldHideInsteadOfQuit()) {
+            return;
+          }
           try {
             await applyPendingUpdate();
           } catch {
@@ -281,4 +321,12 @@ export function startDeferredUpdateOnQuit(): () => void {
     quitUpdateListeners.delete(attach);
     unlisten?.();
   };
+}
+
+export async function quitOrApplyPendingUpdate(): Promise<void> {
+  if (getUpdateReadyVersion()) {
+    await applyPendingUpdate();
+    return;
+  }
+  await api.quitApp();
 }

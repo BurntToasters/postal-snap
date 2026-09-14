@@ -25,15 +25,18 @@ vi.mock("../api", () => ({
     onSyncState: vi.fn(),
     onAppWarning: vi.fn(),
     onMenuAction: vi.fn(),
+    onTrayQuit: vi.fn(),
     setMailShortcutGuard: vi.fn(),
   },
 }));
 vi.mock("../settings", () => ({ applySettings: vi.fn() }));
 vi.mock("../update", () => ({
   checkUpdateInteractive: vi.fn(),
+  checksUpdatesOnStartup: vi.fn(() => true),
   runUpdateSingleFlight: vi.fn(),
   startPeriodicUpdateCheck: vi.fn(),
   startDeferredUpdateOnQuit: vi.fn(),
+  quitOrApplyPendingUpdate: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("../components/WindowChrome", () => ({
   WindowChrome: () => <div data-testid="window-chrome" />,
@@ -108,6 +111,8 @@ import { defaultSettings, useAppStore } from "../store";
 import type { SyncState } from "../types";
 import {
   checkUpdateInteractive,
+  checksUpdatesOnStartup,
+  quitOrApplyPendingUpdate,
   runUpdateSingleFlight,
   startDeferredUpdateOnQuit,
   startPeriodicUpdateCheck,
@@ -150,6 +155,7 @@ beforeEach(() => {
     menuHandler = handler;
     return unlistenMenu;
   });
+  vi.mocked(api.onTrayQuit).mockResolvedValue(() => undefined);
   vi.mocked(api.setMailShortcutGuard).mockResolvedValue(undefined);
   vi.mocked(getCurrent).mockResolvedValue(null);
   vi.mocked(onOpenUrl).mockImplementation(async (handler) => {
@@ -253,6 +259,19 @@ describe("App lifecycle", () => {
     expect(api.setMailShortcutGuard).toHaveBeenLastCalledWith(false);
     window.removeEventListener("postal:menu-action", capture);
     window.removeEventListener("postal:print-message", capture);
+  });
+
+  it("skips startup update checks when the interval is manual", async () => {
+    vi.mocked(checksUpdatesOnStartup).mockReturnValue(false);
+    vi.mocked(api.getSettings).mockResolvedValue({
+      ...defaultSettings,
+      setupCompleted: true,
+      updateCheckInterval: "manual",
+    });
+    render(<App />);
+    expect(await screen.findByText("Mail shell")).toBeVisible();
+    expect(runUpdateSingleFlight).not.toHaveBeenCalled();
+    expect(startPeriodicUpdateCheck).toHaveBeenCalledWith("manual");
   });
 
   it("opens a cold-start mailto once accounts finish loading", async () => {
@@ -378,5 +397,21 @@ describe("App lifecycle", () => {
       await Promise.resolve();
     });
     expect(unlistenSync).toHaveBeenCalled();
+  });
+
+  it("quits from the tray through the pending-update helper", async () => {
+    let trayQuit: (() => void) | undefined;
+    const unlistenTray = vi.fn();
+    vi.mocked(api.onTrayQuit).mockImplementation(async (handler) => {
+      trayQuit = handler;
+      return unlistenTray;
+    });
+    const view = render(<App />);
+    expect(await screen.findByText("Mail shell")).toBeVisible();
+    await waitFor(() => expect(trayQuit).toEqual(expect.any(Function)));
+    trayQuit?.();
+    expect(quitOrApplyPendingUpdate).toHaveBeenCalled();
+    view.unmount();
+    expect(unlistenTray).toHaveBeenCalled();
   });
 });

@@ -2,7 +2,8 @@ import { DownloadCloud, ShieldAlert, ShieldCheck, Upload } from "lucide-react";
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
 import type { AppSettings } from "../../types";
-import { SettingsPanel, SettingsSection, SettingRow } from "./primitives";
+import { CloseToTraySwitch } from "./closeToTray";
+import { SettingRow, SettingsPanel, SettingsSection } from "./primitives";
 import type { SettingsSaveUpdate } from "./useSettingsSave";
 import type { SettingsTab } from "./primitives";
 
@@ -96,6 +97,10 @@ export function GeneralTab({
             />
           </label>
         ) : null}
+        <CloseToTraySwitch
+          checked={settings.closeToTray}
+          onChecked={(checked) => void update({ closeToTray: checked })}
+        />
       </SettingsSection>
       <SettingsSection title={strings.settings.sendingSection}>
         <SettingRow

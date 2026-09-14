@@ -1,6 +1,6 @@
 [package]
 name = "postal-snap"
-version = "0.1.14"
+version = "0.1.15"
 description = "A calm, accessible desktop email client."
 authors = ["BurntToasters <code@rosie.run>"]
 edition = "2021"
@@ -57,7 +57,11 @@ zeroize = { version = "1", features = ["derive"] }
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
+tauri = { version = "2", features = ["image-png"] }
 # Reads NSWorkspace.accessibilityDisplayShouldReduceTransparency; WKWebView does
 # not implement the prefers-reduced-transparency media query.
 objc2 = "0.6"

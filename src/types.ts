@@ -250,6 +250,9 @@ export type SettingsPatch = Partial<Omit<AppSettings, "cachePolicy">> & {
 
 export type SetupStep = "welcome" | "appearance" | "comfort" | "account";
 
+export type UpdateCheckInterval =
+  "startupAnd6h" | "startupAnd12h" | "startupAnd24h" | "startup" | "manual";
+
 export interface AppSettings {
   schemaVersion: 2;
   readingPane: ReadingPane;
@@ -270,6 +273,8 @@ export interface AppSettings {
   blockReportedThreats: boolean;
   groupThreads: boolean;
   notifyNewMail: boolean;
+  closeToTray: boolean;
+  updateCheckInterval: UpdateCheckInterval;
   setupCompleted: boolean;
   setupStep?: SetupStep | null;
 }

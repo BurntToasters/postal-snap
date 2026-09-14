@@ -12,7 +12,7 @@ The v0.1 scope is deliberately focused:
 - Secure manual IMAP/SMTP setup.
 - Multiple isolated accounts; no unified inbox.
 - Familiar folders, message list, reader, search, drafts, outbox, attachments, and rich compose.
-- Shipped extras already in the tree: per-account signatures, filter rules, optional thread grouping, undo-send / scheduled outbox, snooze, iCloud aliases, recipient suggestions, and optional window glass.
+- Shipped extras already in the tree: per-account signatures, filter rules, optional thread grouping, undo-send / scheduled outbox, snooze, iCloud aliases, recipient suggestions, optional window glass, and close-to-tray on Windows/macOS.
 - No telemetry, analytics, licensing server, trial logic, or Postal Snap cloud.
 - English-US first, with UI strings kept central for later localization.
 
@@ -35,6 +35,7 @@ Do not add Gmail/Outlook OAuth UI, POP, plaintext transport, contacts, templates
 Important files:
 
 - `src/components/MailShell.tsx`: main mailbox UI.
+- `src/components/ContextMenu.tsx`: HTML product context menus (Windows has no native app menubar).
 - `src/components/MessageReader.tsx`: safe received-mail reader.
 - `src/components/Composer.tsx`: rich composer and draft behavior.
 - `src/components/SetupWizard.tsx`: iCloud/manual account setup.
@@ -46,7 +47,8 @@ Important files:
 - `src-tauri/src/security.rs`: remote-image SSRF defenses, redaction, and shared external-link inspection.
 - `src-tauri/src/content_blocking.rs`: Brave `adblock` network-rule checks for remote images.
 - `src-tauri/src/threat_blocking.rs`: local TweetFeed domain/URL reported-threat checks.
-- `src-tauri/src/settings.rs`: validated atomic `settings.json` storage.
+- `src-tauri/src/settings.rs`: validated atomic `settings.json` storage, including the direct-edition `updateCheckInterval` cadence and `closeToTray`.
+- `src-tauri/src/tray.rs`: Windows notification-area / macOS menu bar extra for close-to-tray.
 - `docs/ARCHITECTURE.md`: architecture overview.
 - `docs/CONTENT_BLOCKING.md`: official EasyList/EasyPrivacy verification and snapshot updates.
 - `docs/THREAT_BLOCKING.md`: official TweetFeed snapshot verification and reported-threat policy.
@@ -63,7 +65,7 @@ Important files:
 - System light/dark mode is the default. Postal blue is the restrained accent.
 - Avoid icon-only actions unless they have an accessible name and tooltip where useful.
 - Keep destructive and uncertain-send states explicit. Never imply delivery when SMTP outcome is uncertain.
-- Windows uses a frameless custom caption plus the Snap maximize overlay. Do not attach a native Win32 menubar (`app.set_menu` / muda `SetMenu`); activation would paint File/Edit/Message/View through the transparent WebView2. Mail shortcuts on Windows live in the frontend. macOS keeps the system menu bar; Linux keeps a decorated GTK menu.
+- Windows uses a frameless custom caption plus the Snap maximize overlay. Do not attach a native Win32 menubar (`app.set_menu` / muda `SetMenu`); activation would paint File/Edit/Message/View through the transparent WebView2. Mail shortcuts on Windows live in the frontend. macOS keeps the system menu bar; Linux keeps a decorated GTK menu. Product right-click menus are HTML portals, not a native app menubar. Closing the window on Windows and macOS hides to the notification area / menu bar extra when `closeToTray` is on (default). Linux still quits on close.
 
 ## Security invariants
 

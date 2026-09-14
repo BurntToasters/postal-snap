@@ -18,6 +18,10 @@ import {
 } from "@tiptap/extension-table";
 import { Maximize2, TriangleAlert, X } from "lucide-react";
 import { api } from "../api";
+import {
+  CONTEXT_ACTION_EVENT,
+  type ContextMenuActionDetail,
+} from "../contextMenu";
 import { strings } from "../i18n";
 import { htmlToPlainText, sanitizeComposeHtml } from "../security";
 import { useAppStore } from "../store";
@@ -310,11 +314,8 @@ export function Composer({ accountId }: Props) {
       transformPastedHTML: (html) => sanitizeComposeHtml(html),
       handleDOMEvents: {
         contextmenu: (_view, event) => {
-          if ((event.target as HTMLElement | null)?.closest("a")) {
-            event.preventDefault();
-            return true;
-          }
-          return false;
+          event.preventDefault();
+          return true;
         },
         auxclick: (_view, event) => {
           if (
@@ -862,6 +863,28 @@ export function Composer({ accountId }: Props) {
         .catch((cause) => setError(String(cause)));
   }
 
+  useEffect(() => {
+    const onAction = (event: Event) => {
+      const detail = (event as CustomEvent<ContextMenuActionDetail>).detail;
+      if (!detail) return;
+      if (detail.target.kind === "composer") {
+        if (detail.id === "undo") editor?.chain().focus().undo().run();
+        if (detail.id === "redo") editor?.chain().focus().redo().run();
+        if (detail.id === "select-all")
+          editor?.chain().focus().selectAll().run();
+        return;
+      }
+      if (
+        detail.target.kind === "composer-attachment" &&
+        detail.id === "remove-attachment"
+      ) {
+        removeAttachment(detail.target.index);
+      }
+    };
+    window.addEventListener(CONTEXT_ACTION_EVENT, onAction);
+    return () => window.removeEventListener(CONTEXT_ACTION_EVENT, onAction);
+  });
+
   if (minimized) {
     return (
       <div
@@ -975,7 +998,9 @@ export function Composer({ accountId }: Props) {
           adjustIndent={adjustIndent}
           addLink={addLink}
         />
-        <EditorContent editor={editor} />
+        <div data-context="composer">
+          <EditorContent editor={editor} />
+        </div>
         {account?.signature && !seed?.draft ? (
           <aside className="composer-signature-preview">
             <strong>{strings.composer.signaturePreview}</strong>
@@ -985,7 +1010,11 @@ export function Composer({ accountId }: Props) {
         {attachments.length > 0 ? (
           <div className="compose-attachments">
             {attachments.map((item, index) => (
-              <span key={`${item.token}-${index}`}>
+              <span
+                key={`${item.token}-${index}`}
+                data-context="composer-attachment"
+                data-attachment-index={index}
+              >
                 {item.inline ? strings.composer.imagePrefix : ""}
                 {item.filename}
                 <button

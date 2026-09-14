@@ -87,6 +87,9 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
       relaunch_app() {
         return undefined;
       },
+      quit_app() {
+        return undefined;
+      },
       erase_all_data() {
         state.added = false;
         return 1;

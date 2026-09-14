@@ -88,7 +88,11 @@ export function MessageHeader({
           .toUpperCase()}
       </div>
       <div className="sender-details">
-        <div className="sender-primary-line">
+        <div
+          className="sender-primary-line"
+          data-context="address"
+          data-address={message.senderAddress}
+        >
           <strong className="sender-name">
             {message.senderName || message.senderAddress}
           </strong>
@@ -148,7 +152,11 @@ export function MessageHeader({
           <dl className="details-grid">
             <dt>{strings.reader.from}</dt>
             <dd className="address-row">
-              <span className="address-chip">
+              <span
+                className="address-chip"
+                data-context="address"
+                data-address={message.senderAddress}
+              >
                 <strong>{message.senderName || message.senderAddress}</strong>
                 {message.senderName &&
                 message.senderName !== message.senderAddress ? (
@@ -166,7 +174,13 @@ export function MessageHeader({
               <>
                 <dt>{strings.reader.replyTo}</dt>
                 <dd className="address-row reply-to-highlight">
-                  <span className="address-chip">{message.replyTo}</span>
+                  <span
+                    className="address-chip"
+                    data-context="address"
+                    data-address={message.replyTo}
+                  >
+                    {message.replyTo}
+                  </span>
                   <CopyButton
                     text={message.replyTo}
                     title={strings.reader.copyAddress}
@@ -178,7 +192,12 @@ export function MessageHeader({
             <dd className="recipients-list">
               {message.to.length > 0 ? (
                 message.to.map((addr) => (
-                  <span key={addr} className="address-chip">
+                  <span
+                    key={addr}
+                    className="address-chip"
+                    data-context="address"
+                    data-address={addr}
+                  >
                     {addr}
                   </span>
                 ))
@@ -191,7 +210,12 @@ export function MessageHeader({
                 <dt>{strings.reader.cc}</dt>
                 <dd className="recipients-list">
                   {message.cc.map((addr) => (
-                    <span key={addr} className="address-chip">
+                    <span
+                      key={addr}
+                      className="address-chip"
+                      data-context="address"
+                      data-address={addr}
+                    >
                       {addr}
                     </span>
                   ))}

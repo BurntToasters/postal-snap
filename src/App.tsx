@@ -8,12 +8,14 @@ import {
 } from "react";
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { AppMark } from "./components/AppMark";
+import { ContextMenuHost } from "./components/ContextMenu";
 import { WindowChrome } from "./components/WindowChrome";
 import {
   isPermissionGranted,
   requestPermission,
 } from "@tauri-apps/plugin-notification";
 import { api, inTauri } from "./api";
+import { CONTEXT_DISMISS_EVENT } from "./contextMenu";
 import { strings } from "./i18n";
 import { parseMailto } from "./mailto";
 import { SetupWizard } from "./components/SetupWizard";
@@ -24,9 +26,11 @@ import { useAppStore } from "./store";
 import { applySettings } from "./settings";
 import {
   checkUpdateInteractive,
+  checksUpdatesOnStartup,
   runUpdateSingleFlight,
   startDeferredUpdateOnQuit,
   startPeriodicUpdateCheck,
+  quitOrApplyPendingUpdate,
 } from "./update";
 
 const Composer = lazy(() =>
@@ -105,9 +109,14 @@ export default function App() {
     void Promise.resolve()
       .then(() => loadAccounts())
       .then(() => {
-        void runUpdateSingleFlight().catch(() => undefined);
+        if (
+          checksUpdatesOnStartup(
+            useAppStore.getState().settings.updateCheckInterval,
+          )
+        ) {
+          void runUpdateSingleFlight().catch(() => undefined);
+        }
       });
-    const cancelPeriodicCheck = startPeriodicUpdateCheck();
     const cancelQuitUpdate = startDeferredUpdateOnQuit();
     let active = true;
     const unsubscribers: Array<() => void> = [];
@@ -137,6 +146,14 @@ export default function App() {
         if (active) unsubscribers.push(fn);
         else fn();
       });
+    void api
+      .onTrayQuit(() => {
+        void quitOrApplyPendingUpdate().catch(() => undefined);
+      })
+      .then((fn) => {
+        if (active) unsubscribers.push(fn);
+        else fn();
+      });
     const handleUrls = (urls: string[]) =>
       urls
         .filter((url) => /^mailto:/i.test(url))
@@ -152,11 +169,15 @@ export default function App() {
     });
     return () => {
       active = false;
-      cancelPeriodicCheck();
       cancelQuitUpdate();
       unsubscribers.forEach((fn) => fn());
     };
   }, [loadAccounts, openComposer, openSettings, setError, setSync]);
+
+  useEffect(() => {
+    if (!inTauri()) return;
+    return startPeriodicUpdateCheck(settings.updateCheckInterval);
+  }, [settings.updateCheckInterval]);
 
   useEffect(() => {
     const keyboard = (event: KeyboardEvent) => {
@@ -210,9 +231,15 @@ export default function App() {
     };
   }, [composerOpen, settingsOpen]);
 
+  useEffect(() => {
+    if (!settingsOpen) return;
+    window.dispatchEvent(new Event(CONTEXT_DISMISS_EVENT));
+  }, [settingsOpen]);
+
   if (!ready)
     return (
       <>
+        <ContextMenuHost />
         <WindowChrome />
         <div className="splash" role="status">
           {strings.app.starting}
@@ -222,11 +249,14 @@ export default function App() {
 
   if (!inTauri()) {
     return (
-      <main className="preview-notice">
-        <AppMark size={64} className="brand-mark" />
-        <h1>{strings.appName}</h1>
-        <p>{strings.app.preview}</p>
-      </main>
+      <>
+        <ContextMenuHost />
+        <main className="preview-notice">
+          <AppMark size={64} className="brand-mark" />
+          <h1>{strings.appName}</h1>
+          <p>{strings.app.preview}</p>
+        </main>
+      </>
     );
   }
 
@@ -264,6 +294,7 @@ export default function App() {
 
   return (
     <>
+      <ContextMenuHost />
       <div className="app-viewport" inert={settingsOpen || undefined}>
         {mainContent}
         {composerOpen && composerAccountId ? (

@@ -41,6 +41,8 @@ const settings = (theme: AppSettings["theme"]): AppSettings => ({
   blockReportedThreats: true,
   groupThreads: true,
   notifyNewMail: true,
+  closeToTray: true,
+  updateCheckInterval: "startupAnd6h",
   setupCompleted: true,
   setupStep: null,
 });
@@ -315,6 +317,8 @@ describe("settings IPC serialization", () => {
       ["show_native_confirm", () => api.showNativeConfirm("Title", "Message")],
       ["show_native_message", () => api.showNativeMessage("Title", "Message")],
       ["relaunch_app", () => api.relaunch()],
+      ["quit_app", () => api.quitApp()],
+      ["tray_is_active", () => api.trayIsActive()],
     ];
 
     for (const [command, operation] of operations) {
@@ -333,6 +337,7 @@ describe("settings IPC serialization", () => {
       "outbox-changed": { accountId: "acc", outboxId: "outbox" },
       "menu-action": "compose",
       "app-warning": "warning",
+      "tray-quit": undefined,
     } as const;
     mockedListen.mockImplementation(((
       event: keyof typeof payloads,
@@ -341,7 +346,7 @@ describe("settings IPC serialization", () => {
       handler({ payload: payloads[event] });
       return Promise.resolve(vi.fn());
     }) as unknown as typeof listen);
-    const handlers = Array.from({ length: 7 }, () => vi.fn());
+    const handlers = Array.from({ length: 8 }, () => vi.fn());
     await api.onSyncState(handlers[0]);
     await api.onFolderCountsChanged(handlers[1]);
     await api.onMessageChanged(handlers[2]);
@@ -349,6 +354,7 @@ describe("settings IPC serialization", () => {
     await api.onOutboxChanged(handlers[4]);
     await api.onMenuAction(handlers[5]);
     await api.onAppWarning(handlers[6]);
+    await api.onTrayQuit(handlers[7]);
 
     expect(mockedListen.mock.calls.map((call) => call[0])).toEqual(
       Object.keys(payloads),
@@ -378,6 +384,7 @@ describe("settings IPC serialization", () => {
     vi.stubGlobal("location", { reload });
     await expect(api.relaunch()).resolves.toBeUndefined();
     expect(reload).toHaveBeenCalled();
+    await expect(api.trayIsActive()).resolves.toBe(false);
     await expect(api.listAccounts()).rejects.toThrow(
       /native service is unavailable/i,
     );

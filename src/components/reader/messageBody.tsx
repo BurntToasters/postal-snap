@@ -63,6 +63,7 @@ export function PlainTextContent({
               key={idx}
               href="#"
               data-external-href={part.content}
+              data-context="link"
               onClick={(e) => {
                 e.preventDefault();
                 onOpenLink(part.content);
@@ -81,6 +82,8 @@ export function PlainTextContent({
           <a
             key={idx}
             href="#"
+            data-context="link"
+            data-external-href={part.content}
             onClick={(e) => {
               e.preventDefault();
               onOpenMailto(part.content);
@@ -193,7 +196,7 @@ export function MessageBody({
           </button>
         </form>
       ) : null}
-      <div className="message-body" ref={bodyRef}>
+      <div className="message-body" ref={bodyRef} data-context="reader">
         {!message.htmlBody && !message.textBody ? (
           <p className="plain-text-body" role="note">
             {message.size > 50 * 1024 * 1024

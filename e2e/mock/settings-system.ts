@@ -36,6 +36,8 @@ export async function registerMockSettingsSystem(page: Page): Promise<void> {
       blockReportedThreats: true,
       groupThreads: true,
       notifyNewMail: true,
+      closeToTray: true,
+      updateCheckInterval: "startupAnd6h",
       setupCompleted: !location.search.includes("firstRun"),
       setupStep: null,
     };
@@ -103,6 +105,8 @@ export async function registerMockSettingsSystem(page: Page): Promise<void> {
           blockReportedThreats: true,
           groupThreads: true,
           notifyNewMail: true,
+          closeToTray: true,
+          updateCheckInterval: "startupAnd6h",
           setupCompleted: true,
           setupStep: null,
         };
@@ -139,6 +143,9 @@ export async function registerMockSettingsSystem(page: Page): Promise<void> {
             },
           ],
         };
+      },
+      tray_is_active() {
+        return true;
       },
     });
   });
