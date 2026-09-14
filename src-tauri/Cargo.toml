@@ -90,3 +90,8 @@ panic = "abort"
 codegen-units = 16
 lto = "thin"
 strip = true
+
+# macOS 27 rejects proc-macro dylibs stripped by affected Rust toolchains.
+# Build-time artifacts are not shipped, so leave them unstripped.
+[profile.release.build-override]
+strip = false

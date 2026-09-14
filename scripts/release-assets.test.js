@@ -695,6 +695,15 @@ test("rust:update passes clippy and rustfmt as one --component value", async () 
   }
 });
 
+test("release builds keep host build dependencies unstripped", async () => {
+  const cargo = await readFile(join(root, "src-tauri/Cargo.toml"), "utf8");
+  assert.match(cargo, /\[profile\.release\][\s\S]*?^strip = true$/m);
+  assert.match(
+    cargo,
+    /\[profile\.release\.build-override\]\s*\r?\nstrip = false/,
+  );
+});
+
 test("vi.js is the IYERIS/Zinnia VM setup path used by r and b", async () => {
   const packageJson = JSON.parse(
     await readFile(join(root, "package.json"), "utf8"),
