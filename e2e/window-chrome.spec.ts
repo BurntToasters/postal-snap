@@ -264,6 +264,11 @@ for (const [platform, userAgent] of Object.entries(platforms)) {
       await expect(
         page.getByRole("button", { name: "Settings", exact: true }),
       ).toBeFocused();
+      await expect(page.locator("html")).not.toHaveAttribute(
+        "data-overlay-chrome",
+        "true",
+      );
+      await expect(page.locator(".window-drag-strip")).toBeHidden();
       await page.getByRole("button", { name: "Compose", exact: true }).click();
       await page
         .locator(".composer-window")
