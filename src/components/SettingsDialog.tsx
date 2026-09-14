@@ -628,7 +628,7 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
 
   return (
     <div
-      className="modal-layer"
+      className="modal-layer settings-layer"
       role="dialog"
       aria-modal="true"
       aria-labelledby="settings-title"

@@ -30,6 +30,7 @@ html:is([data-platform="macos"], [data-platform="windows"]) .window-chrome {
 }
 
 /* Retain a drag surface when a dialog makes the mail toolbar inert. */
+html[data-overlay-chrome="true"] .window-drag-strip,
 html:not(:has(.mail-shell)) .window-drag-strip,
 html:has(
     .modal-layer:not(.composer-layer-followup),
@@ -130,6 +131,20 @@ html[data-platform="windows"] .app-toolbar {
 
 .modal-layer {
   top: var(--native-chrome-height);
+}
+
+/* Settings paints one overlay through the caption row so WebView2 does not
+   keep a second compositor region after the dialog unmounts. Caption buttons
+   stay above the scrim via .window-chrome. */
+.modal-layer.settings-layer {
+  top: 0;
+  padding-top: calc(var(--native-chrome-height) + 18px);
+}
+
+@media (max-width: 760px) {
+  .modal-layer.settings-layer {
+    padding-top: var(--native-chrome-height);
+  }
 }
 
 .composer-layer-maximized {

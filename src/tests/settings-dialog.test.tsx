@@ -97,6 +97,7 @@ describe("SettingsDialog component", () => {
     });
 
     expect(screen.getByText("alias@icloud.com")).toBeVisible();
+    expect(document.querySelector(".modal-layer.settings-layer")).toBeTruthy();
 
     const input = screen.getByPlaceholderText("alias@yourdomain.com");
     fireEvent.change(input, { target: { value: "family@icloud.com" } });
