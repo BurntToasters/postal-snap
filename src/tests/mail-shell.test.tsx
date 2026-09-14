@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import { MailShell } from "../components/MailShell";
 import { ContextMenuHost } from "../components/ContextMenu";
+import { CONTEXT_ACTION_EVENT } from "../contextMenu";
 import { strings } from "../i18n";
 import { defaultSettings, useAppStore } from "../store";
 import { applyPendingUpdate } from "../update";
@@ -2069,6 +2070,257 @@ describe("mail shell", () => {
     expect(api.showNativeConfirm).toHaveBeenCalledWith(
       strings.appName,
       strings.mail.deleteFolderQuestion("Projects"),
+    );
+  });
+
+  it("routes folder, local-list, and outbox context actions", async () => {
+    const junk = makeMailbox({
+      id: 5,
+      name: "Junk",
+      displayName: "Junk",
+      role: "junk",
+      unreadCount: 0,
+      totalCount: 2,
+    });
+    const projects = makeMailbox({
+      id: 4,
+      name: "Projects",
+      displayName: "Projects",
+      role: "other",
+      unreadCount: 0,
+      totalCount: 0,
+    });
+    const draft = {
+      id: "draft-ctx",
+      accountId: account.id,
+      recipients: "lee@example.com",
+      subject: "Context draft",
+      updatedAt: "2026-08-18T11:00:00Z",
+      syncState: "synced" as const,
+    };
+    const outbox = [
+      {
+        id: "retry-ctx",
+        accountId: account.id,
+        recipients: "lee@example.com",
+        subject: "Retry",
+        state: "needs_attention" as const,
+        createdAt: "2026-08-18T11:00:00Z",
+      },
+      {
+        id: "copy-ctx",
+        accountId: account.id,
+        recipients: "lee@example.com",
+        subject: "Copy",
+        state: "sent_copy_pending" as const,
+        createdAt: "2026-08-18T11:00:00Z",
+      },
+      {
+        id: "later-ctx",
+        accountId: account.id,
+        recipients: "lee@example.com",
+        subject: "Later",
+        state: "scheduled" as const,
+        createdAt: "2026-08-18T11:00:00Z",
+        sendAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+    ];
+    const snoozed = {
+      message: firstMessage,
+      snoozedUntil: "2026-09-01T08:00:00+00:00",
+    };
+    resetStore({
+      accounts: [account],
+      activeAccountId: account.id,
+      mailboxes: [inbox, trash, junk, projects],
+      activeMailboxId: inbox.id,
+      drafts: [draft],
+      outbox,
+      snoozed: [snoozed],
+    });
+    mockedListMailboxes.mockResolvedValue([inbox, trash, junk, projects]);
+    mockedListDrafts.mockResolvedValue([draft]);
+    mockedListOutbox.mockResolvedValue(outbox);
+    mockedListSnoozed.mockResolvedValue([snoozed]);
+    mockedGetDraft.mockResolvedValue({
+      id: draft.id,
+      accountId: account.id,
+      to: ["lee@example.com"],
+      cc: [],
+      bcc: [],
+      subject: draft.subject,
+      htmlBody: "<p>Draft</p>",
+      textBody: "Draft",
+      attachments: [],
+    });
+    vi.mocked(api.retryOutbox).mockResolvedValue(undefined);
+    vi.mocked(api.retrySentCopy).mockResolvedValue(undefined);
+    vi.mocked(api.sendScheduledOutbox).mockResolvedValue({
+      id: "later-ctx",
+      state: "sent",
+    });
+    vi.mocked(api.emptyJunk).mockResolvedValue(undefined);
+    mockedUnsnoozeMessage.mockResolvedValue(undefined);
+    renderShell();
+    await screen.findByRole("option", { name: /First message/i });
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(CONTEXT_ACTION_EVENT, {
+          detail: { id: "open", target: { kind: "folder", mailboxId: 99 } },
+        }),
+      );
+      window.dispatchEvent(
+        new CustomEvent(CONTEXT_ACTION_EVENT, {
+          detail: {
+            id: "open",
+            target: { kind: "folder", mailboxId: inbox.id },
+          },
+        }),
+      );
+      window.dispatchEvent(
+        new CustomEvent(CONTEXT_ACTION_EVENT, {
+          detail: {
+            id: "open",
+            target: { kind: "folder", mailboxId: trash.id },
+          },
+        }),
+      );
+    });
+    await waitFor(() =>
+      expect(useAppStore.getState().activeMailboxId).toBe(trash.id),
+    );
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(CONTEXT_ACTION_EVENT, {
+          detail: {
+            id: "empty-junk",
+            target: { kind: "folder", mailboxId: junk.id },
+          },
+        }),
+      );
+      window.dispatchEvent(
+        new CustomEvent(CONTEXT_ACTION_EVENT, {
+          detail: {
+            id: "rename-folder",
+            target: { kind: "folder", mailboxId: projects.id },
+          },
+        }),
+      );
+    });
+    await waitFor(() =>
+      expect(api.emptyJunk).toHaveBeenCalledWith("account-1"),
+    );
+    expect(screen.getByPlaceholderText("Folder name")).toBeVisible();
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(CONTEXT_ACTION_EVENT, {
+          detail: { id: "open", target: { kind: "local-nav", view: "drafts" } },
+        }),
+      );
+    });
+    await waitFor(() =>
+      expect(useAppStore.getState().activeLocalView).toBe("drafts"),
+    );
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(CONTEXT_ACTION_EVENT, {
+          detail: {
+            id: "open",
+            target: { kind: "draft", draftId: "draft-ctx" },
+          },
+        }),
+      );
+      window.dispatchEvent(
+        new CustomEvent(CONTEXT_ACTION_EVENT, {
+          detail: {
+            id: "retry",
+            target: { kind: "outbox", outboxId: "retry-ctx" },
+          },
+        }),
+      );
+      window.dispatchEvent(
+        new CustomEvent(CONTEXT_ACTION_EVENT, {
+          detail: {
+            id: "retry-copy",
+            target: { kind: "outbox", outboxId: "copy-ctx" },
+          },
+        }),
+      );
+      window.dispatchEvent(
+        new CustomEvent(CONTEXT_ACTION_EVENT, {
+          detail: {
+            id: "send-now",
+            target: { kind: "outbox", outboxId: "later-ctx" },
+          },
+        }),
+      );
+      window.dispatchEvent(
+        new CustomEvent(CONTEXT_ACTION_EVENT, {
+          detail: {
+            id: "discard",
+            target: { kind: "outbox", outboxId: "missing" },
+          },
+        }),
+      );
+      window.dispatchEvent(
+        new CustomEvent(CONTEXT_ACTION_EVENT, {
+          detail: {
+            id: "discard",
+            target: { kind: "outbox", outboxId: "copy-ctx" },
+          },
+        }),
+      );
+      window.dispatchEvent(
+        new CustomEvent(CONTEXT_ACTION_EVENT, {
+          detail: {
+            id: "snooze",
+            target: { kind: "message", messageId: firstMessage.id },
+          },
+        }),
+      );
+      window.dispatchEvent(
+        new CustomEvent(CONTEXT_ACTION_EVENT, {
+          detail: {
+            id: "move-mailbox:3",
+            target: { kind: "message", messageId: firstMessage.id },
+          },
+        }),
+      );
+      window.dispatchEvent(
+        new CustomEvent(CONTEXT_ACTION_EVENT, {
+          detail: { id: "open", target: { kind: "snoozed", messageId: 99 } },
+        }),
+      );
+      window.dispatchEvent(
+        new CustomEvent(CONTEXT_ACTION_EVENT, {
+          detail: {
+            id: "unsnooze",
+            target: { kind: "snoozed", messageId: firstMessage.id },
+          },
+        }),
+      );
+      window.dispatchEvent(
+        new CustomEvent(CONTEXT_ACTION_EVENT, { detail: undefined }),
+      );
+    });
+    await waitFor(() =>
+      expect(mockedGetDraft).toHaveBeenCalledWith("draft-ctx", "account-1"),
+    );
+    await waitFor(() =>
+      expect(api.retryOutbox).toHaveBeenCalledWith("retry-ctx", "account-1"),
+    );
+    expect(api.retrySentCopy).toHaveBeenCalledWith("copy-ctx", "account-1");
+    expect(api.sendScheduledOutbox).toHaveBeenCalledWith(
+      "later-ctx",
+      "account-1",
+    );
+    expect(mockedUnsnoozeMessage).toHaveBeenCalledWith(
+      "account-1",
+      firstMessage.id,
     );
   });
 });
