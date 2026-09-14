@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import { Composer } from "../components/Composer";
 import { strings } from "../i18n";
+import { CONTEXT_ACTION_EVENT } from "../contextMenu";
 import { useAppStore } from "../store";
 import type { DraftSyncEvent } from "../types";
 import { makeAccount } from "./helpers/fixtures";
@@ -462,6 +463,54 @@ describe("composer draft persistence", () => {
       "large-file",
     ]);
     expect(screen.queryByText("archive.zip")).not.toBeInTheDocument();
+  });
+
+  it("runs composer undo, select-all, and attachment context actions", async () => {
+    vi.mocked(api.chooseAttachments).mockResolvedValue([
+      {
+        token: "ctx-file",
+        filename: "note.txt",
+        contentType: "text/plain",
+        inline: false,
+        size: 12,
+      },
+    ]);
+    render(<Composer accountId={account.id} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Attach" }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent(CONTEXT_ACTION_EVENT));
+      window.dispatchEvent(
+        new CustomEvent(CONTEXT_ACTION_EVENT, {
+          detail: { id: "select-all", target: { kind: "composer" } },
+        }),
+      );
+      window.dispatchEvent(
+        new CustomEvent(CONTEXT_ACTION_EVENT, {
+          detail: { id: "undo", target: { kind: "composer" } },
+        }),
+      );
+      window.dispatchEvent(
+        new CustomEvent(CONTEXT_ACTION_EVENT, {
+          detail: { id: "redo", target: { kind: "composer" } },
+        }),
+      );
+      window.dispatchEvent(
+        new CustomEvent(CONTEXT_ACTION_EVENT, {
+          detail: {
+            id: "remove-attachment",
+            target: { kind: "composer-attachment", index: 0 },
+          },
+        }),
+      );
+      await Promise.resolve();
+    });
+    expect(api.releaseComposeAttachments).toHaveBeenCalledWith(account.id, [
+      "ctx-file",
+    ]);
+    expect(screen.queryByText("note.txt")).not.toBeInTheDocument();
   });
 
   it("adds inline images and releases their token when removed", async () => {

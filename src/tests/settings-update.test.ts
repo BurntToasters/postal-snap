@@ -42,6 +42,7 @@ import {
   quitOrApplyPendingUpdate,
   startDeferredUpdateOnQuit,
   startPeriodicUpdateCheck,
+  windowWouldHideInsteadOfQuit,
 } from "../update";
 
 const mockedCheck = vi.mocked(check);
@@ -538,5 +539,37 @@ describe("update checks", () => {
     expect(update.install).toHaveBeenCalledTimes(1);
     expect(api.relaunch).toHaveBeenCalledTimes(1);
     expect(api.quitApp).not.toHaveBeenCalled();
+  });
+
+  it("hides to tray only on macOS or an active Windows tray", async () => {
+    await expect(
+      windowWouldHideInsteadOfQuit({ closeToTray: false }, "windows"),
+    ).resolves.toBe(false);
+    await expect(
+      windowWouldHideInsteadOfQuit({ closeToTray: true }, "linux"),
+    ).resolves.toBe(false);
+    await expect(
+      windowWouldHideInsteadOfQuit({ closeToTray: true }, "macos"),
+    ).resolves.toBe(true);
+    vi.mocked(api.trayIsActive).mockRejectedValueOnce(new Error("tray down"));
+    await expect(
+      windowWouldHideInsteadOfQuit({ closeToTray: true }, "windows"),
+    ).resolves.toBe(false);
+    vi.mocked(api.trayIsActive).mockResolvedValueOnce(true);
+    await expect(
+      windowWouldHideInsteadOfQuit({ closeToTray: true }, "windows"),
+    ).resolves.toBe(true);
+  });
+
+  it("skips periodic checks while an update is already ready", async () => {
+    vi.useFakeTimers();
+    useAppStore.getState().setUpdateReady("0.3.0");
+    const stop = startPeriodicUpdateCheck("startupAnd6h");
+    await vi.advanceTimersByTimeAsync(
+      periodicUpdateIntervalMs("startupAnd6h")!,
+    );
+    expect(mockedCheck).not.toHaveBeenCalled();
+    stop();
+    vi.useRealTimers();
   });
 });
