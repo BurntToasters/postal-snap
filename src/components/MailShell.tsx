@@ -31,11 +31,15 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../api";
+import {
+  CONTEXT_ACTION_EVENT,
+  type ContextMenuActionDetail,
+} from "../contextMenu";
 import { strings } from "../i18n";
 import { applySettings } from "../settings";
 import { useAppStore } from "../store";
 import type { MailboxRole, MessageSummary, ReadingPane } from "../types";
-import { promptToRestartForUpdate } from "../update";
+import { applyPendingUpdate } from "../update";
 import { MessageReader } from "./MessageReader";
 import { AddAccountDialog, SentNoticeToast } from "./mail/mailDialogs";
 import { FolderButton } from "./mail/folderButton";
@@ -1363,6 +1367,112 @@ export function MailShell({ onOpenSettings }: Props) {
   }
 
   useEffect(() => {
+    const onAction = (event: Event) => {
+      const detail = (event as CustomEvent<ContextMenuActionDetail>).detail;
+      if (!detail) return;
+      const { id, target } = detail;
+      const current = useAppStore.getState();
+      if (target.kind === "message") {
+        const summary = current.messages.find(
+          (row) => row.id === target.messageId,
+        );
+        if (!summary) return;
+        void (async () => {
+          await chooseMessage(summary);
+          if (id === "snooze") {
+            window.dispatchEvent(new Event("postal:open-snooze"));
+            return;
+          }
+          if (id.startsWith("move-mailbox:")) {
+            window.dispatchEvent(
+              new CustomEvent("postal:move-mailbox", {
+                detail: Number(id.slice("move-mailbox:".length)),
+              }),
+            );
+            return;
+          }
+          window.dispatchEvent(
+            new CustomEvent("postal:menu-action", { detail: id }),
+          );
+        })();
+        return;
+      }
+      if (target.kind === "folder") {
+        const mailbox = current.mailboxes.find(
+          (box) => box.id === target.mailboxId,
+        );
+        if (!mailbox) return;
+        if (id === "open") {
+          const sameMailbox =
+            mailbox.id === current.activeMailboxId && !current.activeLocalView;
+          if (!sameMailbox) messageRequest.current += 1;
+          searchRequest.current += 1;
+          clearQuery();
+          resetListState();
+          selectMailbox(mailbox.id);
+          setSidebarOpen(false);
+          if (sameMailbox) void loadMessages();
+          return;
+        }
+        if (id === "empty-trash") {
+          void emptyTrashFolders();
+          return;
+        }
+        if (id === "empty-junk") {
+          void emptyJunkFolders();
+          return;
+        }
+        if (id === "rename-folder") {
+          openFolderDialog({
+            mode: "rename",
+            id: mailbox.id,
+            name: mailbox.displayName,
+          });
+          return;
+        }
+        if (id === "delete-folder") {
+          void deleteFolderById(mailbox.id, mailbox.displayName);
+        }
+        return;
+      }
+      if (target.kind === "local-nav" && id === "open") {
+        messageRequest.current += 1;
+        searchRequest.current += 1;
+        clearQuery();
+        resetListState();
+        selectLocalView(target.view);
+        setSidebarOpen(false);
+        return;
+      }
+      if (target.kind === "draft" && id === "open") {
+        void openDraft(target.draftId);
+        return;
+      }
+      if (target.kind === "outbox") {
+        const row = current.outbox.find(
+          (entry) => entry.id === target.outboxId,
+        );
+        if (!row) return;
+        if (id === "retry") void retryQueued(row.id);
+        if (id === "retry-copy") void retrySentCopy(row.id);
+        if (id === "send-now") void sendScheduledNow(row.id);
+        if (id === "discard") void discardQueued(row.id, row.state);
+        return;
+      }
+      if (target.kind === "snoozed") {
+        const row = current.snoozed.find(
+          (entry) => entry.message.id === target.messageId,
+        );
+        if (!row) return;
+        if (id === "open") void chooseSnoozed(row.message);
+        if (id === "unsnooze") void unsnoozeById(row.message.id);
+      }
+    };
+    window.addEventListener(CONTEXT_ACTION_EVENT, onAction);
+    return () => window.removeEventListener(CONTEXT_ACTION_EVENT, onAction);
+  });
+
+  useEffect(() => {
     if (typeof window.matchMedia !== "function") return;
     const media = window.matchMedia(SIDEBAR_DRAWER_QUERY);
     const update = () => {
@@ -1488,6 +1598,7 @@ export function MailShell({ onOpenSettings }: Props) {
         ref={toolbarRef}
         className="app-toolbar"
         data-tauri-drag-region="deep"
+        data-context="chrome"
       >
         <div className="toolbar-cluster toolbar-leading">
           <button
@@ -1599,7 +1710,7 @@ export function MailShell({ onOpenSettings }: Props) {
             <button
               type="button"
               className="update-ready-badge"
-              onClick={() => void promptToRestartForUpdate(updateReady)}
+              onClick={() => void applyPendingUpdate()}
               title={strings.mail.updateReadyTooltip(updateReady)}
               aria-label={strings.mail.updateReadyBadge}
             >
@@ -1704,6 +1815,7 @@ export function MailShell({ onOpenSettings }: Props) {
             count={drafts.length}
             active={activeLocalView === "drafts"}
             tone="drafts"
+            localView="drafts"
             onClick={() => {
               messageRequest.current += 1;
               searchRequest.current += 1;
@@ -1719,6 +1831,7 @@ export function MailShell({ onOpenSettings }: Props) {
             count={outbox.length}
             active={activeLocalView === "outbox"}
             tone={outbox.length ? "warning" : undefined}
+            localView="outbox"
             onClick={() => {
               messageRequest.current += 1;
               searchRequest.current += 1;
@@ -1734,6 +1847,7 @@ export function MailShell({ onOpenSettings }: Props) {
             count={snoozed.length}
             active={activeLocalView === "snoozed"}
             tone="archive"
+            localView="snoozed"
             onClick={() => {
               messageRequest.current += 1;
               searchRequest.current += 1;
@@ -1798,6 +1912,7 @@ export function MailShell({ onOpenSettings }: Props) {
                 count={mailbox.unreadCount}
                 active={mailbox.id === activeMailboxId}
                 tone={mailbox.role}
+                mailboxId={mailbox.id}
                 onClick={() => {
                   const sameMailbox =
                     mailbox.id === activeMailboxId && !activeLocalView;

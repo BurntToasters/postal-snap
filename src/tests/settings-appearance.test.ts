@@ -4,7 +4,11 @@ vi.mock("../window-fx", () => ({
   syncWorkspaceWindowFx: vi.fn(),
 }));
 
-import { applySettings } from "../settings";
+import {
+  applySettings,
+  closesToTrayOnClose,
+  offersCloseToTray,
+} from "../settings";
 import { defaultSettings } from "../store";
 import { syncWorkspaceWindowFx } from "../window-fx";
 
@@ -59,5 +63,21 @@ describe("settings appearance", () => {
       expect.any(Function),
     );
     expect(mockedSyncWorkspaceWindowFx).toHaveBeenLastCalledWith(true, false);
+  });
+
+  it("offers close-to-tray only on Windows and macOS", () => {
+    document.documentElement.dataset.platform = "windows";
+    expect(offersCloseToTray()).toBe(true);
+    expect(closesToTrayOnClose({ closeToTray: true })).toBe(true);
+    expect(closesToTrayOnClose({ closeToTray: false })).toBe(false);
+
+    document.documentElement.dataset.platform = "macos";
+    expect(offersCloseToTray()).toBe(true);
+    expect(closesToTrayOnClose({ closeToTray: true })).toBe(true);
+
+    document.documentElement.dataset.platform = "linux";
+    expect(offersCloseToTray()).toBe(false);
+    expect(closesToTrayOnClose({ closeToTray: true })).toBe(false);
+    delete document.documentElement.dataset.platform;
   });
 });

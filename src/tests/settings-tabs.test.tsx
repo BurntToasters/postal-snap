@@ -324,6 +324,7 @@ describe("updates tab", () => {
         updateStatus="Check now"
         checkingUpdate={false}
         checkForUpdates={checkForUpdates}
+        update={vi.fn()}
       />,
     );
     fireEvent.click(
@@ -342,20 +343,42 @@ describe("updates tab", () => {
         updateStatus="Check now"
         checkingUpdate
         checkForUpdates={vi.fn()}
+        update={vi.fn()}
       />,
     );
     expect(screen.getByText(strings.settings.storeUpdateTitle)).toBeVisible();
     expect(screen.getByText(strings.settings.flatpakEdition)).toBeVisible();
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
     rerender(
       <UpdatesTab
         distribution={undefined}
         updateStatus="Check now"
         checkingUpdate={false}
         checkForUpdates={vi.fn()}
+        update={vi.fn()}
       />,
     );
     expect(screen.getByText(strings.settings.checkingEdition)).toBeVisible();
+  });
+
+  it("lets the direct edition choose how often to check", () => {
+    const update = vi.fn();
+    render(
+      <UpdatesTab
+        distribution={{ kind: "direct", updatesManagedBy: "postalSnap" }}
+        updateStatus="Check now"
+        checkingUpdate={false}
+        checkForUpdates={vi.fn()}
+        update={update}
+      />,
+    );
+    const interval = screen.getByRole("combobox", {
+      name: strings.settings.updateCheckInterval,
+    });
+    expect(interval).toHaveValue("startupAnd6h");
+    fireEvent.change(interval, { target: { value: "manual" } });
+    expect(update).toHaveBeenCalledWith({ updateCheckInterval: "manual" });
   });
 });
 

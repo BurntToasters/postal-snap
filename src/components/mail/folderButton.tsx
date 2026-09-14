@@ -11,6 +11,8 @@ export function FolderButton({
   onClick,
   onRename,
   onDelete,
+  mailboxId,
+  localView,
 }: {
   icon: typeof Inbox;
   label: string;
@@ -20,9 +22,18 @@ export function FolderButton({
   onClick: () => void;
   onRename?: () => void;
   onDelete?: () => void;
+  mailboxId?: number;
+  localView?: "drafts" | "outbox" | "snoozed";
 }) {
   return (
-    <div className="folder-row">
+    <div
+      className="folder-row"
+      data-context={
+        mailboxId != null ? "folder" : localView ? "local-nav" : undefined
+      }
+      data-mailbox-id={mailboxId}
+      data-local-view={localView}
+    >
       <button
         type="button"
         className={`folder ${active ? "active" : ""} ${tone ?? ""}`}

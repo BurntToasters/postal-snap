@@ -191,6 +191,8 @@ impl From<&AppSettings> for PortableSettings {
             block_reported_threats: settings.block_reported_threats,
             group_threads: settings.group_threads,
             notify_new_mail: settings.notify_new_mail,
+            close_to_tray: settings.close_to_tray,
+            update_check_interval: settings.update_check_interval.clone(),
         }
     }
 }
@@ -217,6 +219,8 @@ impl PortableSettings {
             block_reported_threats: true,
             group_threads: self.group_threads,
             notify_new_mail: self.notify_new_mail,
+            close_to_tray: self.close_to_tray,
+            update_check_interval: self.update_check_interval.clone(),
             setup_completed: current.setup_completed,
             setup_step: current.setup_step.clone(),
         }
@@ -305,6 +309,10 @@ fn validate(settings: &AppSettings) -> Result<(), String> {
         || !matches!(settings.theme.as_str(), "system" | "light" | "dark")
         || !matches!(settings.density.as_str(), "comfortable" | "compact")
         || !matches!(settings.cache_policy.mode.as_str(), "recent" | "full")
+        || !matches!(
+            settings.update_check_interval.as_str(),
+            "startupAnd6h" | "startupAnd12h" | "startupAnd24h" | "startup" | "manual"
+        )
         || !(210..=420).contains(&settings.folder_pane_width)
         || !(300..=720).contains(&settings.message_pane_width)
         || !(240..=800).contains(&settings.reader_pane_height)
@@ -829,11 +837,83 @@ mod tests {
         let legacy_raw = "{\"schemaVersion\":2,\"readingPane\":\"right\",\"textScale\":1,\"privateNotifications\":false,\"theme\":\"system\",\"density\":\"comfortable\",\"cachePolicy\":{\"mode\":\"recent\",\"days\":90,\"maxBytes\":1073741824},\"lastAccountId\":null,\"lastMailboxId\":null,\"folderPaneWidth\":264,\"messagePaneWidth\":400,\"readerPaneHeight\":360}";
         let legacy_direct: AppSettings = serde_json::from_str(legacy_raw).unwrap();
         assert!(!legacy_direct.setup_completed);
+        assert_eq!(
+            legacy_direct.update_check_interval,
+            AppSettings::default().update_check_interval
+        );
         // parse_and_validate migrates pre-existing files to completed so
         // current users are not forced through setup again.
         let legacy = parse_and_validate(legacy_raw).unwrap();
         assert!(legacy.setup_completed);
         assert_eq!(legacy.setup_step, None);
+        assert_eq!(legacy.update_check_interval, "startupAnd6h");
+        assert!(legacy.close_to_tray);
+    }
+
+    #[test]
+    fn close_to_tray_defaults_on() {
+        assert!(AppSettings::default().close_to_tray);
+        let legacy_raw = "{\"schemaVersion\":2,\"readingPane\":\"right\",\"textScale\":1,\"privateNotifications\":false,\"theme\":\"system\",\"density\":\"comfortable\",\"cachePolicy\":{\"mode\":\"recent\",\"days\":90,\"maxBytes\":1073741824},\"lastAccountId\":null,\"lastMailboxId\":null,\"folderPaneWidth\":264,\"messagePaneWidth\":400,\"readerPaneHeight\":360}";
+        let parsed: AppSettings = serde_json::from_str(legacy_raw).unwrap();
+        assert!(parsed.close_to_tray);
+        assert!(validate(&parsed).is_ok());
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let export_path = directory.path().join("export.json");
+        let store = SettingsStore::load(path, &Database::memory()).unwrap();
+        store
+            .save(AppSettings {
+                close_to_tray: false,
+                ..AppSettings::default()
+            })
+            .unwrap();
+        store.export_to(&export_path).unwrap();
+        let raw = fs::read_to_string(&export_path).unwrap();
+        assert!(raw.contains("closeToTray"));
+        store.save(AppSettings::default()).unwrap();
+        let imported = store.import_from(&export_path).unwrap();
+        assert!(!imported.close_to_tray);
+    }
+
+    #[test]
+    fn update_check_interval_defaults_and_validates() {
+        assert_eq!(AppSettings::default().update_check_interval, "startupAnd6h");
+        for interval in [
+            "startupAnd6h",
+            "startupAnd12h",
+            "startupAnd24h",
+            "startup",
+            "manual",
+        ] {
+            let ok = AppSettings {
+                update_check_interval: interval.into(),
+                ..AppSettings::default()
+            };
+            assert!(validate(&ok).is_ok());
+        }
+        let bad = AppSettings {
+            update_check_interval: "hourly".into(),
+            ..AppSettings::default()
+        };
+        assert!(validate(&bad).is_err());
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let export_path = directory.path().join("export.json");
+        let store = SettingsStore::load(path, &Database::memory()).unwrap();
+        store
+            .save(AppSettings {
+                update_check_interval: "manual".into(),
+                ..AppSettings::default()
+            })
+            .unwrap();
+        store.export_to(&export_path).unwrap();
+        let raw = fs::read_to_string(&export_path).unwrap();
+        assert!(raw.contains("updateCheckInterval"));
+        store.save(AppSettings::default()).unwrap();
+        let imported = store.import_from(&export_path).unwrap();
+        assert_eq!(imported.update_check_interval, "manual");
     }
 
     #[test]

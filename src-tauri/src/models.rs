@@ -37,6 +37,10 @@ fn default_notify_new_mail() -> bool {
     true
 }
 
+fn default_update_check_interval() -> String {
+    "startupAnd6h".into()
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum TlsMode {
@@ -370,6 +374,10 @@ pub struct AppSettings {
     pub group_threads: bool,
     #[serde(default = "default_notify_new_mail")]
     pub notify_new_mail: bool,
+    #[serde(default = "default_true")]
+    pub close_to_tray: bool,
+    #[serde(default = "default_update_check_interval")]
+    pub update_check_interval: String,
     #[serde(default)]
     pub setup_completed: bool,
     #[serde(default)]
@@ -410,6 +418,10 @@ pub struct PortableSettings {
     pub group_threads: bool,
     #[serde(default = "default_notify_new_mail")]
     pub notify_new_mail: bool,
+    #[serde(default = "default_true")]
+    pub close_to_tray: bool,
+    #[serde(default = "default_update_check_interval")]
+    pub update_check_interval: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -442,6 +454,8 @@ impl Default for AppSettings {
             block_reported_threats: true,
             group_threads: true,
             notify_new_mail: true,
+            close_to_tray: true,
+            update_check_interval: default_update_check_interval(),
             setup_completed: false,
             setup_step: None,
         }

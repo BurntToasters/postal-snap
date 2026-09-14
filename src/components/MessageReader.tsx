@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
+import {
+  CONTEXT_ACTION_EVENT,
+  IFRAME_CONTEXT_EVENT,
+  type ContextMenuActionDetail,
+  type IframeContextMenuDetail,
+} from "../contextMenu";
 import { strings } from "../i18n";
 import { parseMailto } from "../mailto";
 import { messageFrameDocument, sanitizeReceivedHtml } from "../security";
@@ -342,8 +348,11 @@ export function MessageReader({
     openComposer,
     forwardMessage,
     move,
+    moveToMailbox,
     setRead,
     setStarred,
+    previewFile,
+    download,
   });
 
   useEffect(() => {
@@ -352,26 +361,36 @@ export function MessageReader({
       openComposer,
       forwardMessage,
       move,
+      moveToMailbox,
       setRead,
       setStarred,
+      previewFile,
+      download,
     };
   });
 
   useEffect(() => {
     const menuAction = (event: Event) => {
       const h = menuHandlersRef.current;
-      if (!h.message) return;
+      const selected = useAppStore.getState().selectedMessage ?? h.message;
+      if (!selected) return;
       const action = (event as CustomEvent<string>).detail;
       if (action === "reply")
-        h.openComposer({ sourceMessage: h.message, composeMode: "reply" });
+        h.openComposer({ sourceMessage: selected, composeMode: "reply" });
       if (action === "reply-all")
-        h.openComposer({ sourceMessage: h.message, composeMode: "replyAll" });
+        h.openComposer({ sourceMessage: selected, composeMode: "replyAll" });
       if (action === "forward") void h.forwardMessage();
       if (action === "archive") void h.move("archive");
       if (action === "trash") void h.move("trash");
       if (action === "toggle-read") void h.setRead();
       if (action === "toggle-star") void h.setStarred();
       if (action === "junk") void h.move("junk");
+      if (action === "not-junk") {
+        const inbox = useAppStore
+          .getState()
+          .mailboxes.find((box) => box.role === "inbox");
+        if (inbox) void h.moveToMailbox(inbox.id);
+      }
       if (action === "print" || action === "file-print") {
         window.dispatchEvent(new Event("postal:print-message"));
       }
@@ -396,10 +415,45 @@ export function MessageReader({
     window.addEventListener("postal:print-message", print);
     window.addEventListener("postal:find-in-message", find);
     window.addEventListener("postal:scroll-reader", scroll);
+    const openSnooze = () => setSnoozeOpen(true);
+    const moveMailbox = (event: Event) => {
+      const mailboxId = (event as CustomEvent<number>).detail;
+      if (typeof mailboxId === "number") {
+        void menuHandlersRef.current.moveToMailbox(mailboxId);
+      }
+    };
+    const contextAction = (event: Event) => {
+      const detail = (event as CustomEvent<ContextMenuActionDetail>).detail;
+      if (!detail) return;
+      if (detail.id === "find-in-message" && detail.target.kind === "reader") {
+        find();
+        return;
+      }
+      if (detail.id === "print" && detail.target.kind === "reader") {
+        print();
+        return;
+      }
+      if (detail.target.kind !== "attachment") return;
+      if (detail.id === "preview") {
+        void menuHandlersRef.current.previewFile(detail.target.attachmentId);
+      }
+      if (detail.id === "download") {
+        void menuHandlersRef.current.download(
+          detail.target.attachmentId,
+          detail.target.filename,
+        );
+      }
+    };
+    window.addEventListener("postal:open-snooze", openSnooze);
+    window.addEventListener("postal:move-mailbox", moveMailbox);
+    window.addEventListener(CONTEXT_ACTION_EVENT, contextAction);
     return () => {
       window.removeEventListener("postal:print-message", print);
       window.removeEventListener("postal:find-in-message", find);
       window.removeEventListener("postal:scroll-reader", scroll);
+      window.removeEventListener("postal:open-snooze", openSnooze);
+      window.removeEventListener("postal:move-mailbox", moveMailbox);
+      window.removeEventListener(CONTEXT_ACTION_EVENT, contextAction);
     };
   }, []);
 
@@ -508,10 +562,36 @@ export function MessageReader({
       }
       if (/^mailto:/i.test(url)) openComposer({ prefill: parseMailto(url) });
     };
-    const blockNativeOpen = (event: Event) => {
-      if ((event.target as HTMLElement).closest(linkSelector)) {
-        event.preventDefault();
-      }
+    const blockNativeOpen = (event: MouseEvent) => {
+      event.preventDefault();
+      const iframe = frame.current;
+      if (!iframe) return;
+      const rect = iframe.getBoundingClientRect();
+      const target = (event.target as HTMLElement | null)?.closest<HTMLElement>(
+        linkSelector,
+      );
+      const marked = target?.getAttribute("data-external-href")?.trim() ?? "";
+      const href = target?.getAttribute("href")?.trim() ?? "";
+      const url = /^https?:/i.test(marked)
+        ? marked
+        : /^https?:/i.test(href)
+          ? href
+          : /^mailto:/i.test(href)
+            ? href
+            : /^mailto:/i.test(marked)
+              ? marked
+              : "";
+      const detail: IframeContextMenuDetail = {
+        x: event.clientX + rect.left,
+        y: event.clientY + rect.top,
+      };
+      if (/^https?:/i.test(url)) detail.href = url;
+      else if (/^mailto:/i.test(url)) detail.mailto = url;
+      window.dispatchEvent(
+        new CustomEvent<IframeContextMenuDetail>(IFRAME_CONTEXT_EVENT, {
+          detail,
+        }),
+      );
     };
     body.addEventListener("click", handleLink);
     body.addEventListener("auxclick", handleLink);

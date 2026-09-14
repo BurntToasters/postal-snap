@@ -236,6 +236,24 @@ describe("SettingsDialog component", () => {
     );
   });
 
+  it("offers close-to-tray on Windows and persists the choice", async () => {
+    document.documentElement.dataset.platform = "windows";
+    const onClose = vi.fn();
+    render(<SettingsDialog initialTab="general" onClose={onClose} />);
+
+    const toggle = await screen.findByRole("checkbox", {
+      name: /Keep running in the notification area/,
+    });
+    expect(toggle).toBeChecked();
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+    expect(api.saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ closeToTray: false }),
+    );
+    delete document.documentElement.dataset.platform;
+  });
+
   it("keeps overlapping preference saves instead of dropping the second", async () => {
     let releaseFirst: () => void = () => undefined;
     const firstBlocked = new Promise<void>((resolve) => {

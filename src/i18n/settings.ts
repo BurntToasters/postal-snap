@@ -50,6 +50,12 @@ export const settings = {
   windowEffects: "Translucent window background",
   windowEffectsHelp:
     "Softly blurs the desktop behind Postal Snap. Email itself always stays solid and readable.",
+  closeToTrayWindows: "Keep running in the notification area",
+  closeToTrayWindowsHelp:
+    "Closing the window hides Postal Snap instead of quitting. Open it from the tray icon, or quit from that menu.",
+  closeToTrayMac: "Keep running in the menu bar",
+  closeToTrayMacHelp:
+    "Closing the window hides Postal Snap instead of quitting. Open it from the menu bar icon, or quit from that menu.",
   vaultTitle: "Passwords use your system vault.",
   vaultHelp: "Postal Snap never stores passwords in settings or logs.",
   protectionOn: "Mail protection is on",
@@ -218,4 +224,12 @@ export const settings = {
   macStoreEdition: "Mac App Store edition",
   microsoftStoreEdition: "Microsoft Store edition",
   flatpakEdition: "Flatpak edition",
+  updateCheckInterval: "Check for updates",
+  updateCheckIntervalHelp:
+    "Postal Snap looks for signed updates when it starts, and can keep checking while it stays open. Store and Flatpak editions use their own update tools.",
+  updateCheckStartupAnd6h: "On startup and every 6 hours",
+  updateCheckStartupAnd12h: "On startup and every 12 hours",
+  updateCheckStartupAnd24h: "On startup and every 24 hours",
+  updateCheckStartup: "On startup only",
+  updateCheckManual: "Only when I check",
 } as const;
