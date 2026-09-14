@@ -167,6 +167,7 @@ export function OutboxList({
             className="attention-row"
             data-context="outbox"
             data-outbox-id={item.id}
+            data-busy={sending ? "true" : undefined}
           >
             {item.state === "needs_attention" ? (
               <TriangleAlert aria-hidden="true" />

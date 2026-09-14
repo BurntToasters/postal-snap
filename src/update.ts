@@ -2,7 +2,7 @@ import { api } from "./api";
 import { strings } from "./i18n";
 import { closesToTrayOnClose } from "./settings";
 import { useAppStore } from "./store";
-import type { UpdateCheckInterval } from "./types";
+import type { AppSettings, UpdateCheckInterval } from "./types";
 
 export interface UpdateCheckResult {
   available: boolean;
@@ -273,6 +273,20 @@ export function startPeriodicUpdateCheck(
   return () => window.clearInterval(timer);
 }
 
+export async function windowWouldHideInsteadOfQuit(
+  settings: Pick<AppSettings, "closeToTray"> = useAppStore.getState().settings,
+  platform = document.documentElement.dataset.platform,
+): Promise<boolean> {
+  if (!closesToTrayOnClose(settings, platform)) return false;
+  if (platform === "macos") return true;
+  if (platform !== "windows") return false;
+  try {
+    return await api.trayIsActive();
+  } catch {
+    return false;
+  }
+}
+
 export function startDeferredUpdateOnQuit(): () => void {
   if (document.documentElement.dataset.platform === "macos") {
     return () => undefined;
@@ -288,7 +302,7 @@ export function startDeferredUpdateOnQuit(): () => void {
         // window, and Postal Snap does not grant allow-destroy.
         unlisten = await getCurrentWindow().onCloseRequested(async (event) => {
           event.preventDefault();
-          if (closesToTrayOnClose(useAppStore.getState().settings)) {
+          if (await windowWouldHideInsteadOfQuit()) {
             return;
           }
           try {

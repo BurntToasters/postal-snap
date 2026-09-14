@@ -198,6 +198,11 @@ pub fn quit_app(app: AppHandle) -> CommandResult<()> {
     Ok(())
 }
 
+#[tauri::command]
+pub fn tray_is_active() -> bool {
+    crate::tray::tray_is_active()
+}
+
 const MAX_LICENSE_NOTICE_BYTES: usize = 1_048_576;
 const MAX_LICENSE_PACKAGE_BYTES: usize = 16_777_216;
 const LICENSE_NOTICE_FILES: &[(&str, &str, &str)] = &[

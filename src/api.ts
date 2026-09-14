@@ -142,6 +142,7 @@ export type NativeCommand =
   | "show_native_message"
   | "relaunch_app"
   | "quit_app"
+  | "tray_is_active"
   | "supports_workspace_window_fx"
   | "accessibility_reduce_transparency"
   | "set_workspace_window_fx";
@@ -463,6 +464,10 @@ export const api = {
       return Promise.resolve();
     }
     return call<void>("quit_app");
+  },
+  trayIsActive: () => {
+    if (!inTauri()) return Promise.resolve(false);
+    return call<boolean>("tray_is_active");
   },
   async onTrayQuit(handler: () => void): Promise<UnlistenFn> {
     if (!inTauri()) return () => undefined;

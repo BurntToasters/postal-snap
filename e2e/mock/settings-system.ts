@@ -144,6 +144,9 @@ export async function registerMockSettingsSystem(page: Page): Promise<void> {
           ],
         };
       },
+      tray_is_active() {
+        return true;
+      },
     });
   });
 }

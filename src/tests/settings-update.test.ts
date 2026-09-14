@@ -20,6 +20,7 @@ vi.mock("../api", () => ({
     showNativeMessage: vi.fn().mockResolvedValue(undefined),
     relaunch: vi.fn().mockResolvedValue(undefined),
     quitApp: vi.fn().mockResolvedValue(undefined),
+    trayIsActive: vi.fn().mockResolvedValue(true),
     distribution: vi.fn().mockResolvedValue({ updatesManagedBy: "postalSnap" }),
   },
 }));
@@ -72,6 +73,8 @@ describe("update checks", () => {
     onCloseRequested.mockResolvedValue(vi.fn());
     vi.mocked(api.relaunch).mockClear();
     vi.mocked(api.quitApp).mockClear();
+    vi.mocked(api.trayIsActive).mockReset();
+    vi.mocked(api.trayIsActive).mockResolvedValue(true);
     vi.mocked(api.distribution).mockResolvedValue({
       updatesManagedBy: "postalSnap",
     } as never);
@@ -269,6 +272,8 @@ describe("update checks", () => {
     expect(periodicUpdateIntervalMs("manual")).toBeNull();
     expect(periodicUpdateIntervalMs("startup")).toBeNull();
     expect(checksUpdatesOnStartup("startup")).toBe(true);
+    expect(periodicUpdateIntervalMs("startupAnd12h")).toBe(12 * 60 * 60 * 1000);
+    expect(periodicUpdateIntervalMs("startupAnd24h")).toBe(24 * 60 * 60 * 1000);
     const stop = startPeriodicUpdateCheck("manual");
     stop();
   });
@@ -443,6 +448,35 @@ describe("update checks", () => {
     expect(preventDefault).toHaveBeenCalled();
     expect(update.install).not.toHaveBeenCalled();
     expect(api.relaunch).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("installs a quiet update when Windows close-to-tray is on but the tray icon is missing", async () => {
+    document.documentElement.dataset.platform = "windows";
+    vi.mocked(api.trayIsActive).mockResolvedValue(false);
+    useAppStore.setState({
+      settings: {
+        ...useAppStore.getState().settings,
+        closeToTray: true,
+      },
+    });
+    const update = fakeUpdate("0.2.7");
+    mockedCheck.mockResolvedValue(update as never);
+    await runUpdateSingleFlight();
+
+    let closeHandler:
+      ((event: { preventDefault: () => void }) => Promise<void>) | undefined;
+    onCloseRequested.mockImplementation(async (handler) => {
+      closeHandler = handler;
+      return vi.fn();
+    });
+    const stop = startDeferredUpdateOnQuit();
+    await vi.waitFor(() => expect(onCloseRequested).toHaveBeenCalled());
+    const preventDefault = vi.fn();
+    await closeHandler?.({ preventDefault });
+    expect(preventDefault).toHaveBeenCalled();
+    expect(update.install).toHaveBeenCalledTimes(1);
+    expect(api.relaunch).toHaveBeenCalledTimes(1);
     stop();
   });
 

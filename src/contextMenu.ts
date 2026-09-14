@@ -4,6 +4,7 @@ import type { MailboxSummary, MessageSummary, OutboxSummary } from "./types";
 
 export const CONTEXT_ACTION_EVENT = "postal:context-action";
 export const IFRAME_CONTEXT_EVENT = "postal:iframe-contextmenu";
+export const CONTEXT_DISMISS_EVENT = "postal:context-dismiss";
 
 export type LocalMailView = "drafts" | "outbox" | "snoozed";
 
@@ -215,14 +216,26 @@ function folderItems(mailbox: MailboxSummary): ContextMenuItem[] {
   return items;
 }
 
+function outboxRowBusy(outboxId: string): boolean {
+  const escaped =
+    typeof CSS !== "undefined" && typeof CSS.escape === "function"
+      ? CSS.escape(outboxId)
+      : outboxId.replace(/["\\]/g, "");
+  const node = document.querySelector(
+    `[data-context="outbox"][data-outbox-id="${escaped}"]`,
+  );
+  return node?.getAttribute("data-busy") === "true";
+}
+
 function outboxItems(row: OutboxSummary): ContextMenuItem[] {
   const items: ContextMenuItem[] = [];
+  const busy = row.state === "sending" || outboxRowBusy(row.id);
   if (row.state === "needs_attention") {
     items.push(item("retry", strings.mail.retrySending));
   } else if (row.state === "sent_copy_pending") {
     items.push(item("retry-copy", strings.mail.saveSentCopy));
   } else if (row.state === "scheduled") {
-    items.push(item("send-now", strings.mail.sendNow));
+    items.push(item("send-now", strings.mail.sendNow, { disabled: busy }));
   }
   items.push(
     item(
@@ -232,7 +245,7 @@ function outboxItems(row: OutboxSummary): ContextMenuItem[] {
         : row.state === "scheduled"
           ? strings.mail.undoSend
           : strings.common.discard,
-      { danger: row.state !== "sent_copy_pending" },
+      { danger: row.state !== "sent_copy_pending", disabled: busy },
     ),
   );
   return items;
@@ -281,6 +294,7 @@ export function itemsForTarget(target: ContextMenuTarget): ContextMenuItem[] {
       ];
     case "reader":
       return [
+        item("copy", strings.contextMenu.copy),
         item("find-in-message", strings.reader.findInMessage),
         item("print", strings.reader.print),
       ];

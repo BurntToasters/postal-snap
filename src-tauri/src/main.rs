@@ -277,6 +277,7 @@ fn main() {
             commands::settings_system::show_native_message,
             commands::settings_system::relaunch_app,
             commands::settings_system::quit_app,
+            commands::settings_system::tray_is_active,
             window_fx::set_workspace_window_fx,
             window_fx::supports_workspace_window_fx,
             window_fx::accessibility_reduce_transparency,

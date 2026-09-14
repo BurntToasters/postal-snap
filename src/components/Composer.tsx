@@ -870,6 +870,8 @@ export function Composer({ accountId }: Props) {
       if (detail.target.kind === "composer") {
         if (detail.id === "undo") editor?.chain().focus().undo().run();
         if (detail.id === "redo") editor?.chain().focus().redo().run();
+        if (detail.id === "select-all")
+          editor?.chain().focus().selectAll().run();
         return;
       }
       if (

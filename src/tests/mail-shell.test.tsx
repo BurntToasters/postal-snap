@@ -1984,7 +1984,49 @@ describe("mail shell", () => {
     fireEvent.click(
       screen.getByRole("menuitem", { name: strings.reader.trash }),
     );
-    await waitFor(() => expect(api.moveMessage).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(api.moveMessage).toHaveBeenCalledWith("account-1", 2, "trash"),
+    );
+  });
+
+  it("marks unread mail read from the context menu without flipping it back", async () => {
+    renderShell();
+    const row = await screen.findByRole("option", { name: /First message/i });
+    fireEvent.contextMenu(row);
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: strings.reader.markRead }),
+    );
+    await waitFor(() =>
+      expect(mockedSetMessageFlags).toHaveBeenCalledWith(
+        account.id,
+        firstMessage.id,
+        true,
+        undefined,
+      ),
+    );
+    await waitFor(() =>
+      expect(useAppStore.getState().selectedMessage?.isRead).toBe(true),
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(
+      mockedSetMessageFlags.mock.calls.some((call) => call[2] === false),
+    ).toBe(false);
+  });
+
+  it("does not run a message action when opening the clicked row fails", async () => {
+    mockedGetMessage.mockRejectedValue(new Error("offline"));
+    renderShell();
+    const row = await screen.findByRole("option", { name: /First message/i });
+    fireEvent.contextMenu(row);
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: strings.reader.trash }),
+    );
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toMatch(/offline/i),
+    );
+    expect(api.moveMessage).not.toHaveBeenCalled();
   });
 
   it("empties trash and still confirms folder delete from the context menu", async () => {

@@ -15,6 +15,7 @@ import {
   requestPermission,
 } from "@tauri-apps/plugin-notification";
 import { api, inTauri } from "./api";
+import { CONTEXT_DISMISS_EVENT } from "./contextMenu";
 import { strings } from "./i18n";
 import { parseMailto } from "./mailto";
 import { SetupWizard } from "./components/SetupWizard";
@@ -229,6 +230,11 @@ export default function App() {
       void api.setMailShortcutGuard(false).catch(() => undefined);
     };
   }, [composerOpen, settingsOpen]);
+
+  useEffect(() => {
+    if (!settingsOpen) return;
+    window.dispatchEvent(new Event(CONTEXT_DISMISS_EVENT));
+  }, [settingsOpen]);
 
   if (!ready)
     return (

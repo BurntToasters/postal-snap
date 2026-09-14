@@ -36,7 +36,7 @@ vi.mock("../update", () => ({
   runUpdateSingleFlight: vi.fn(),
   startPeriodicUpdateCheck: vi.fn(),
   startDeferredUpdateOnQuit: vi.fn(),
-  quitOrApplyPendingUpdate: vi.fn(),
+  quitOrApplyPendingUpdate: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("../components/WindowChrome", () => ({
   WindowChrome: () => <div data-testid="window-chrome" />,
@@ -112,6 +112,7 @@ import type { SyncState } from "../types";
 import {
   checkUpdateInteractive,
   checksUpdatesOnStartup,
+  quitOrApplyPendingUpdate,
   runUpdateSingleFlight,
   startDeferredUpdateOnQuit,
   startPeriodicUpdateCheck,
@@ -396,5 +397,21 @@ describe("App lifecycle", () => {
       await Promise.resolve();
     });
     expect(unlistenSync).toHaveBeenCalled();
+  });
+
+  it("quits from the tray through the pending-update helper", async () => {
+    let trayQuit: (() => void) | undefined;
+    const unlistenTray = vi.fn();
+    vi.mocked(api.onTrayQuit).mockImplementation(async (handler) => {
+      trayQuit = handler;
+      return unlistenTray;
+    });
+    const view = render(<App />);
+    expect(await screen.findByText("Mail shell")).toBeVisible();
+    await waitFor(() => expect(trayQuit).toEqual(expect.any(Function)));
+    trayQuit?.();
+    expect(quitOrApplyPendingUpdate).toHaveBeenCalled();
+    view.unmount();
+    expect(unlistenTray).toHaveBeenCalled();
   });
 });
