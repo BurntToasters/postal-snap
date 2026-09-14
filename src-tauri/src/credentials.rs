@@ -55,6 +55,12 @@ fn entry(account_id: &str) -> Result<Entry, String> {
 /// DPAPI-encrypted; it is not machine-wide.
 #[cfg(target_os = "windows")]
 fn windows_local_entry(user: &str) -> Result<Entry, String> {
+    // keyring v1 installs the Windows Credential Manager store lazily inside
+    // `Entry::new` / `store_status`. `new_with_modifiers` talks to keyring-core
+    // directly and returns `NoDefaultStore` unless that init has already run.
+    if Entry::store_status().is_err() {
+        return Err("The system password vault is unavailable.".into());
+    }
     let modifiers = std::collections::HashMap::from([("persistence", "local")]);
     let inner = keyring_core::Entry::new_with_modifiers(SERVICE, user, &modifiers)
         .map_err(|_| "The system password vault is unavailable.".to_string())?;
@@ -116,5 +122,33 @@ mod tests {
             let _ = entry.inner.get_attributes();
             let _ = entry.inner.set_password("shape-check");
         }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_local_vault_round_trip_after_store_init() {
+        use super::{load, remove, store, windows_local_entry};
+
+        let account_id = uuid::Uuid::new_v4().hyphenated().to_string();
+        let result: Result<(), String> = (|| {
+            store(&account_id, "round-trip-secret")?;
+            let loaded = load(&account_id)?;
+            if loaded.as_str() != "round-trip-secret" {
+                return Err("loaded mailbox secret did not match".into());
+            }
+            let attributes = windows_local_entry(&account_id)?
+                .inner
+                .get_attributes()
+                .map_err(|_| "Windows local vault entry should expose persistence".to_string())?;
+            if !attributes
+                .get("persistence")
+                .is_some_and(|value| value.eq_ignore_ascii_case("local"))
+            {
+                return Err("Windows mailbox secrets must stay device-local".into());
+            }
+            Ok(())
+        })();
+        let _ = remove(&account_id);
+        result.expect("Windows Credential Manager should save a mailbox secret");
     }
 }
