@@ -8,6 +8,7 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import { MessageReader } from "../components/MessageReader";
+import { CONTEXT_ACTION_EVENT } from "../contextMenu";
 import { strings } from "../i18n";
 import { defaultSettings, useAppStore } from "../store";
 import type { MessageDetail } from "../types";
@@ -125,6 +126,84 @@ describe("MessageReader", () => {
     expect(document.getElementById("reader-pane")).toHaveAttribute(
       "aria-hidden",
       "true",
+    );
+  });
+
+  it("handles reader and attachment context actions", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    render(<MessageReader />);
+    act(() => {
+      window.dispatchEvent(new CustomEvent(CONTEXT_ACTION_EVENT));
+      window.dispatchEvent(
+        new CustomEvent(CONTEXT_ACTION_EVENT, {
+          detail: { id: "find-in-message", target: { kind: "reader" } },
+        }),
+      );
+    });
+    expect(
+      screen.getByRole("textbox", { name: strings.reader.findInMessage }),
+    ).toBeVisible();
+
+    act(() => {
+      window.getSelection()?.removeAllRanges();
+      window.dispatchEvent(
+        new CustomEvent(CONTEXT_ACTION_EVENT, {
+          detail: { id: "copy", target: { kind: "reader" } },
+        }),
+      );
+    });
+    expect(writeText).not.toHaveBeenCalled();
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(CONTEXT_ACTION_EVENT, {
+          detail: {
+            id: "preview",
+            target: {
+              kind: "attachment",
+              attachmentId: "photo",
+              previewable: true,
+              filename: "photo.png",
+            },
+          },
+        }),
+      );
+    });
+    expect(
+      await screen.findByRole("dialog", {
+        name: strings.reader.previewTitle("photo.png"),
+      }),
+    ).toBeVisible();
+    fireEvent.click(screen.getByTitle(strings.common.close));
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(CONTEXT_ACTION_EVENT, {
+          detail: {
+            id: "download",
+            target: {
+              kind: "attachment",
+              attachmentId: "photo",
+              previewable: true,
+              filename: "photo.png",
+            },
+          },
+        }),
+      );
+      window.dispatchEvent(
+        new CustomEvent(CONTEXT_ACTION_EVENT, {
+          detail: { id: "print", target: { kind: "reader" } },
+        }),
+      );
+    });
+    await waitFor(() =>
+      expect(api.saveAttachment).toHaveBeenCalledWith(
+        "account-1",
+        1,
+        "photo",
+        "photo.png",
+      ),
     );
   });
 
