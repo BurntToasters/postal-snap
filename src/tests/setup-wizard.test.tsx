@@ -8,6 +8,9 @@ import { strings } from "../i18n";
 vi.mock("../api", () => ({
   api: {
     addAccount: vi.fn(),
+    discoverMailSettings: vi.fn(),
+    getSyncProgress: vi.fn(),
+    onSyncProgress: vi.fn(),
     inspectExternalUrl: vi.fn(),
     openExternalUrl: vi.fn(),
     showNativeConfirm: vi.fn(),
@@ -50,6 +53,16 @@ describe("account setup", () => {
     vi.mocked(api.openExternalUrl).mockResolvedValue(undefined);
     vi.mocked(api.showNativeConfirm).mockReset();
     vi.mocked(api.showNativeConfirm).mockResolvedValue(true);
+    vi.mocked(api.getSyncProgress).mockResolvedValue({
+      accountId: "account-1",
+      folder: "INBOX",
+      envelopesDone: 1,
+      envelopesTotal: 2,
+      bodiesDone: 0,
+      bodiesTotal: 1,
+      backfilling: true,
+    });
+    vi.mocked(api.onSyncProgress).mockResolvedValue(() => undefined);
   });
 
   it("starts with guided iCloud and secure manual choices", () => {
@@ -162,7 +175,15 @@ describe("account setup", () => {
       password: "abcdefghijklmnop",
       imap: undefined,
       smtp: undefined,
+      cachePolicy: {
+        mode: "recent",
+        days: 90,
+        maxBytes: 1_073_741_824,
+      },
     });
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Open mailbox/i }),
+    );
     await waitFor(() => expect(onComplete).toHaveBeenCalled());
   });
 
@@ -207,6 +228,11 @@ describe("account setup", () => {
         port: 587,
         tlsMode: "startTls",
         username: "sam@example.com",
+      },
+      cachePolicy: {
+        mode: "recent",
+        days: 90,
+        maxBytes: 1_073_741_824,
       },
     });
   });

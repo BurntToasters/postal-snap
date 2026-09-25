@@ -9,8 +9,9 @@ use super::{
 use crate::{
     credentials, mail,
     models::{
-        take_validated_setup, AccountInboxCount, AccountRecord, AccountRemovalOutcome,
-        AccountSetupRequest, AccountSummary, AppSettings, ProviderKind,
+        take_validated_setup, AccountInboxCount, AccountRecord, AccountRemovalImpact,
+        AccountRemovalOutcome, AccountSetupRequest, AccountSummary, AppSettings, ProviderKind,
+        ACCOUNT_COLORS,
     },
 };
 
@@ -44,6 +45,7 @@ pub async fn test_saved_account(
         password: String::new(),
         imap: None,
         smtp: None,
+        cache_policy: None,
     };
     mail::test_account(&request, &account.imap, &account.smtp, &password).await?;
     Ok(())
@@ -71,6 +73,7 @@ pub async fn update_account_password(
             password: String::new(),
             imap: None,
             smtp: None,
+            cache_policy: None,
         },
         &account.imap,
         &account.smtp,
@@ -79,6 +82,8 @@ pub async fn update_account_password(
     .await?;
     let previous_password = credentials::load_for_removal(&account_id)?;
     credentials::store(&account_id, &normalized)?;
+    // The parked session was authenticated with the old password.
+    mail::pool::forget(&account_id);
     if let Err(error) = state.db.update_account_servers(&account_id, &imap, &smtp) {
         let restored = match previous_password.as_deref() {
             Some(previous) => credentials::store(&account_id, previous),
@@ -111,6 +116,13 @@ pub async fn add_account(
     state: State<'_, AppState>,
 ) -> CommandResult<AccountSummary> {
     let (imap, smtp, password) = take_validated_setup(&mut request)?;
+    if request
+        .cache_policy
+        .as_ref()
+        .is_some_and(|policy| !policy.is_valid())
+    {
+        return Err("Choose a valid download setting.".into());
+    }
     let (imap, smtp) = mail::test_account(&request, &imap, &smtp, &password).await?;
     let mut aliases = Vec::new();
     if request.provider == ProviderKind::Icloud {
@@ -129,6 +141,9 @@ pub async fn add_account(
         aliases,
         auth_method: "password".into(),
         signature: String::new(),
+        color: Some(
+            ACCOUNT_COLORS[state.db.account_count().unwrap_or(0) % ACCOUNT_COLORS.len()].into(),
+        ),
     };
     if state.db.email_taken(&summary.email)? {
         return Err("An account with this email address is already set up.".into());
@@ -143,6 +158,14 @@ pub async fn add_account(
         let _ = credentials::remove(&id);
         return Err(error.into());
     }
+    let default_policy = state.settings.get()?.cache_policy;
+    let policy = request
+        .cache_policy
+        .clone()
+        .unwrap_or(default_policy.clone());
+    let _ = state
+        .db
+        .set_account_cache_policy(&id, &policy, &default_policy);
     refresh_mail_menu(&app, &state);
     // The account is already durably saved. A transient watcher setup failure
     // must not make setup look unsuccessful or roll back the account.
@@ -317,4 +340,42 @@ pub fn get_account_inbox_counts(
     state: State<'_, AppState>,
 ) -> CommandResult<Vec<AccountInboxCount>> {
     command_result(state.db.list_account_inbox_counts())
+}
+
+#[tauri::command]
+pub fn update_account_color(
+    account_id: String,
+    color: Option<String>,
+    state: State<'_, AppState>,
+) -> CommandResult<AccountSummary> {
+    if color
+        .as_deref()
+        .is_some_and(|color| !ACCOUNT_COLORS.contains(&color))
+    {
+        return Err("Choose one of the listed colors.".into());
+    }
+    state
+        .db
+        .update_account_color(&account_id, color.as_deref())?;
+    Ok(state.db.account(&account_id)?.summary)
+}
+
+#[tauri::command]
+pub fn reorder_accounts(
+    account_ids: Vec<String>,
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<AccountSummary>> {
+    state.db.reorder_accounts(&account_ids)?;
+    command_result(state.db.list_accounts())
+}
+
+/// Counts of local-only work that removing the account would discard, shown
+/// in the removal confirmation.
+#[tauri::command]
+pub fn get_account_removal_impact(
+    account_id: String,
+    state: State<'_, AppState>,
+) -> CommandResult<AccountRemovalImpact> {
+    state.db.account(&account_id)?;
+    command_result(state.db.account_removal_impact(&account_id))
 }

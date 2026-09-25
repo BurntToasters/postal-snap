@@ -457,15 +457,45 @@ impl Database {
         Ok(rows)
     }
 
-    pub fn claim_outbox_delivery(&self, id: &str, account_id: &str) -> Result<bool, String> {
-        let changed = self
-            .conn()?
-            .execute(
-                "UPDATE outbox SET state='sending',attempt_started_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP
-                 WHERE id=?1 AND account_id=?2 AND state IN ('queued','scheduled','needs_attention')",
-                params![id, account_id],
+    /// Earliest `send_at` among held or scheduled messages, so the account
+    /// worker can wake exactly when the next one is due.
+    pub fn next_scheduled_send_at(&self, account_id: &str) -> Result<Option<String>, String> {
+        self.conn()?
+            .query_row(
+                "SELECT MIN(send_at) FROM outbox WHERE account_id=?1 AND state='scheduled' AND send_at IS NOT NULL",
+                [account_id],
+                |row| row.get(0),
             )
+            .map_err(db_error)
+    }
+
+    /// Move one row from `from_state` to `sending`. `from_state` must be the
+    /// state the caller checked under the account lock: accepting any
+    /// sendable state would let a stale caller resend a message another
+    /// delivery just left in `needs_attention`.
+    pub fn claim_outbox_delivery(
+        &self,
+        id: &str,
+        account_id: &str,
+        from_state: &str,
+    ) -> Result<bool, String> {
+        if !matches!(from_state, "queued" | "scheduled" | "needs_attention") {
+            return Ok(false);
+        }
+        let conn = self.conn()?;
+        // The database runs with synchronous=NORMAL for sync throughput. This
+        // one commit must survive power loss: rolling back to `queued` would
+        // let a restart resend a message SMTP may already have accepted.
+        conn.pragma_update(None, "synchronous", "FULL")
             .map_err(db_error)?;
+        let changed = conn.execute(
+            "UPDATE outbox SET state='sending',attempt_started_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP
+                 WHERE id=?1 AND account_id=?2 AND state=?3",
+            params![id, account_id, from_state],
+        );
+        let restored = conn.pragma_update(None, "synchronous", "NORMAL");
+        let changed = changed.map_err(db_error)?;
+        restored.map_err(db_error)?;
         Ok(changed == 1)
     }
 

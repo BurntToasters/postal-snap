@@ -26,6 +26,34 @@
   font-weight: 700;
 }
 
+.account-avatar[data-color="teal"] {
+  background: #00868a;
+}
+
+.account-avatar[data-color="green"] {
+  background: #27843c;
+}
+
+.account-avatar[data-color="amber"] {
+  background: #9a6700;
+}
+
+.account-avatar[data-color="orange"] {
+  background: #c65300;
+}
+
+.account-avatar[data-color="red"] {
+  background: #c42b1c;
+}
+
+.account-avatar[data-color="pink"] {
+  background: #bd3975;
+}
+
+.account-avatar[data-color="purple"] {
+  background: #7651c9;
+}
+
 .sender-avatar {
   display: grid;
   width: 42px;

@@ -1,21 +1,26 @@
-use std::collections::HashSet;
-use tauri::{AppHandle, State};
+use std::{
+    collections::HashSet,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+use tauri::{AppHandle, Emitter, State};
+use tokio::sync::OwnedMutexGuard;
 
 use super::messages::{FlagOperation, MoveOperation};
 use super::outbox::{deliver_outbox_locked, retry_sent_copy_locked};
 use super::{
     cleanup_unreferenced_attachments, command_result, emit_draft_change, emit_folder_counts,
     emit_message_change, emit_outbox_change, emit_sync, managed_account_dir,
-    release_attachment_tokens, replay_offline_operations, resolve_draft_files, AppState,
-    CommandResult,
+    release_attachment_tokens, replay_offline_operations, resolve_draft_files, wake, AccountActor,
+    AppState, CommandResult,
 };
 use crate::{
     credentials,
     db::Database,
     mail,
     models::{
-        validate_filter_rule, AccountRecord, ComposeAttachment, ComposeDraft, IpcError,
-        MailboxSummary,
+        validate_filter_rule, AccountRecord, CachePolicy, ComposeAttachment, ComposeDraft,
+        IpcError, MailboxSummary,
     },
 };
 
@@ -78,27 +83,110 @@ pub async fn sync_all_accounts(
     Ok(synced_ids)
 }
 
+/// Get Mail: run a full pass now, ahead of the background worker.
 pub async fn sync_one(account_id: &str, app: &AppHandle, state: &AppState) -> Result<(), String> {
-    let _guard = state.lock_account(account_id).await?;
-    sync_one_locked(account_id, app, state).await
+    let actor = state.actor(account_id)?;
+    actor.request(wake::OPERATION);
+    let guard = actor.acquire().await;
+    match run_sync_pass(account_id, app, state, &actor, guard).await {
+        Ok(_) => {
+            // A successful manual pass proves the credentials work again.
+            actor.request(wake::RESUME);
+            Ok(())
+        }
+        Err(PassError::AuthenticationFailed(error) | PassError::Other(error)) => Err(error),
+    }
 }
 
-pub(crate) async fn sync_one_background(
+pub(crate) enum PassError {
+    /// The server rejected the saved credentials; the worker pauses until the
+    /// password changes or the user asks for mail.
+    AuthenticationFailed(String),
+    Other(String),
+}
+
+/// Lets user actions preempt a background pass and reports progress.
+struct WorkerHooks<'a> {
+    actor: Arc<AccountActor>,
+    guard: Option<OwnedMutexGuard<()>>,
+    app: &'a AppHandle,
+    db: Database,
+    account_id: String,
+    policy: CachePolicy,
+    last_progress: Option<Instant>,
+}
+
+impl mail::SyncHooks for WorkerHooks<'_> {
+    fn contended(&self) -> bool {
+        self.actor.contended()
+    }
+
+    async fn yield_account(&mut self) {
+        // tokio's Mutex is FIFO: the waiting action runs before we get the
+        // account back.
+        self.guard.take();
+        tokio::task::yield_now().await;
+        self.guard = Some(self.actor.acquire().await);
+    }
+
+    fn progress(&mut self, folder: &str) {
+        if self
+            .last_progress
+            .is_some_and(|last| last.elapsed() < Duration::from_millis(500))
+        {
+            return;
+        }
+        self.last_progress = Some(Instant::now());
+        emit_progress(
+            self.app,
+            &self.db,
+            &self.account_id,
+            &self.policy,
+            Some(folder),
+        );
+    }
+}
+
+pub(crate) fn emit_progress(
+    app: &AppHandle,
+    db: &Database,
+    account_id: &str,
+    policy: &CachePolicy,
+    folder: Option<&str>,
+) {
+    if let Ok(mut progress) = db.account_sync_progress(account_id, policy) {
+        progress.folder = folder.map(ToOwned::to_owned);
+        let _ = app.emit("sync-progress", progress);
+    }
+}
+
+pub(crate) fn account_policy(state: &AppState, account_id: &str) -> Result<CachePolicy, String> {
+    let default = state.settings.get()?.cache_policy;
+    state.db.account_cache_policy(account_id, &default)
+}
+
+/// One full sync pass plus the jobs that depend on fresh server state: rules,
+/// queued offline changes, drafts and the outbox. Takes the account guard and
+/// may hand it to waiting user actions between folders.
+pub(crate) async fn run_sync_pass(
     account_id: &str,
     app: &AppHandle,
     state: &AppState,
-) -> Result<(), String> {
-    let _guard = state.lock_account_quiet(account_id).await?;
-    sync_one_locked(account_id, app, state).await
-}
-
-async fn sync_one_locked(
-    account_id: &str,
-    app: &AppHandle,
-    state: &AppState,
-) -> Result<(), String> {
-    let account = state.db.account(account_id)?;
-    let password = credentials::load(account_id)?;
+    actor: &Arc<AccountActor>,
+    guard: OwnedMutexGuard<()>,
+) -> Result<mail::SyncOutcome, PassError> {
+    let account = state.db.account(account_id).map_err(PassError::Other)?;
+    let password = match credentials::load(account_id) {
+        Ok(password) => password,
+        Err(error) => {
+            let _ = state
+                .db
+                .set_account_state(account_id, "offline", Some(&error));
+            emit_sync(app, account_id, "offline", Some(&error), None);
+            return Err(PassError::Other(error));
+        }
+    };
+    let policy = account_policy(state, account_id).map_err(PassError::Other)?;
     emit_sync(
         app,
         account_id,
@@ -106,68 +194,102 @@ async fn sync_one_locked(
         Some("Connecting securely…"),
         None,
     );
-    state.db.set_account_state(account_id, "syncing", None)?;
+    let _ = state.db.set_account_state(account_id, "syncing", None);
     emit_sync(app, account_id, "syncing", Some("Checking mail…"), None);
-    let settings = state.settings.get()?;
     let filter_watermark = state.db.latest_message_rowid().ok();
-    match mail::sync_account(&state.db, &account, &password, &settings.cache_policy).await {
-        Ok(()) => {
+    let mut hooks = WorkerHooks {
+        actor: actor.clone(),
+        guard: Some(guard),
+        app,
+        db: state.db.clone(),
+        account_id: account_id.to_string(),
+        policy: policy.clone(),
+        last_progress: None,
+    };
+    let result = mail::sync_account(&state.db, &account, &password, &policy, &mut hooks).await;
+    // Everything below needs the account; the hooks hold it again after any
+    // yield.
+    let _guard = hooks.guard.take();
+    match result {
+        Ok(outcome) => {
             apply_filter_rules(&state.db, &account, filter_watermark);
-            let pending_changes = replay_offline_operations(
-                app,
-                &state.db,
-                &account,
-                &password,
-                &settings.cache_policy,
-            )
-            .await?;
+            let pending_changes =
+                replay_offline_operations(app, &state.db, &account, &password, &policy)
+                    .await
+                    .unwrap_or(true);
             sync_drafts_locked(state, &account, &password).await;
             replay_outbox_locked(account_id, app, state).await;
             let now = chrono::Utc::now().to_rfc3339();
-            state.db.set_account_state(account_id, "idle", None)?;
-            emit_sync(
-                app,
-                account_id,
-                "idle",
-                Some(if pending_changes {
-                    "Some changes are waiting to sync"
-                } else {
-                    "Mail is up to date"
-                }),
-                Some(now),
-            );
+            let _ = state.db.set_account_state(account_id, "idle", None);
+            let detail = if pending_changes {
+                "Some changes are waiting to sync"
+            } else if outcome.folder_errors > 0 {
+                "Some folders could not be checked"
+            } else if outcome.more_work {
+                "Downloading mail…"
+            } else {
+                "Mail is up to date"
+            };
+            emit_sync(app, account_id, "idle", Some(detail), Some(now));
+            emit_progress(app, &state.db, account_id, &policy, None);
             emit_folder_counts(app, account_id);
             emit_message_change(app, account_id, None, "synced");
             emit_draft_change(app, account_id, None, None);
             emit_outbox_change(app, account_id, None, None);
-            Ok(())
+            Ok(outcome)
         }
         Err(error) => {
             // Sign-in failures (expired app password, revoked access) need a
             // different message than a dead connection: the fix is a new
             // password, not waiting for retry.
             let auth_failed = IpcError::from(error.as_str()).code == "authenticationFailed";
-            let detail = if auth_failed {
-                "Sign-in failed. Update the account password in Settings > Accounts."
+            if auth_failed {
+                mail::pool::forget(account_id);
+                let detail = "Sign-in failed. Update the account password in Settings > Accounts.";
+                let _ = state
+                    .db
+                    .set_account_state(account_id, "authFailed", Some(detail));
+                emit_sync(app, account_id, "authFailed", Some("Sign-in failed"), None);
+                Err(PassError::AuthenticationFailed(error))
             } else {
-                "Mail sync is temporarily unavailable."
-            };
-            state
-                .db
-                .set_account_state(account_id, "offline", Some(detail))?;
-            emit_sync(
-                app,
-                account_id,
-                "offline",
-                Some(if auth_failed {
-                    "Sign-in failed"
-                } else {
-                    "Will try again automatically"
-                }),
-                None,
-            );
-            Err(error)
+                let _ = state.db.set_account_state(
+                    account_id,
+                    "offline",
+                    Some("Mail sync is temporarily unavailable."),
+                );
+                emit_sync(
+                    app,
+                    account_id,
+                    "offline",
+                    Some("Will try again automatically"),
+                    None,
+                );
+                Err(PassError::Other(error))
+            }
         }
+    }
+}
+
+/// Draft and outbox work that does not need a full pass. The caller holds
+/// the account.
+pub(crate) async fn run_targeted_jobs(
+    account_id: &str,
+    app: &AppHandle,
+    state: &AppState,
+    reasons: u8,
+) {
+    let Ok(account) = state.db.account(account_id) else {
+        return;
+    };
+    if reasons & wake::DRAFTS != 0 {
+        if let Ok(password) = credentials::load(account_id) {
+            sync_drafts_locked(state, &account, &password).await;
+            emit_draft_change(app, account_id, None, None);
+        }
+    }
+    if reasons & wake::OUTBOX != 0 {
+        replay_outbox_locked(account_id, app, state).await;
+        emit_outbox_change(app, account_id, None, None);
     }
 }
 
@@ -574,13 +696,13 @@ pub(crate) async fn replay_outbox_locked(account_id: &str, app: &AppHandle, stat
     }
     if let Ok(ids) = state.db.outbox_ids_in_state(account_id, &["queued"]) {
         for id in ids {
-            let _ = deliver_outbox_locked(&id, account_id, app, state).await;
+            let _ = deliver_outbox_locked(&id, account_id, "queued", app, state).await;
         }
     }
     let now = chrono::Utc::now().to_rfc3339();
     if let Ok(ids) = state.db.scheduled_due_outbox_ids(account_id, &now) {
         for id in ids {
-            let _ = deliver_outbox_locked(&id, account_id, app, state).await;
+            let _ = deliver_outbox_locked(&id, account_id, "scheduled", app, state).await;
         }
     }
 }

@@ -11,6 +11,7 @@ mod models;
 // Background OAuth groundwork (no UI yet): consumed by a future setup flow.
 #[allow(dead_code)]
 mod oauth;
+mod providers;
 mod security;
 mod settings;
 mod storage;
@@ -166,6 +167,14 @@ fn main() {
                     account_ids,
                 ));
             }
+            {
+                // Schema v18 added per-account download policies; accounts
+                // that predate it inherit the app-wide setting exactly once.
+                let state = app.state::<AppState>();
+                if let Ok(settings) = state.settings.get() {
+                    let _ = state.db.seed_account_cache_policies(&settings.cache_policy);
+                }
+            }
             for account in accounts {
                 let state = app.state::<AppState>();
                 if state
@@ -202,6 +211,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::accounts::list_accounts,
             commands::accounts::test_account,
+            providers::discover_mail_settings,
             commands::accounts::test_saved_account,
             commands::accounts::update_account_password,
             commands::accounts::add_account,
@@ -271,6 +281,15 @@ fn main() {
             commands::accounts::update_account_display_name,
             commands::accounts::update_account_signature,
             commands::accounts::get_account_inbox_counts,
+            commands::accounts::update_account_color,
+            commands::accounts::reorder_accounts,
+            commands::accounts::get_account_removal_impact,
+            commands::cache_policy::get_account_cache_policy,
+            commands::cache_policy::set_account_cache_policy,
+            commands::cache_policy::get_account_cache_usage,
+            commands::cache_policy::clear_account_downloads,
+            commands::cache_policy::get_sync_progress,
+            commands::messages::load_older_messages,
             commands::sync::list_all_mailboxes,
             commands::sync::sync_all_accounts,
             commands::settings_system::show_native_confirm,

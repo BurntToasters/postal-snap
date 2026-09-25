@@ -41,125 +41,91 @@ impl Database {
         transaction.commit().map_err(db_error)
     }
 
+    #[cfg(test)]
     pub fn upsert_message(
         &self,
         account_id: &str,
         mailbox_id: i64,
         message: &CachedMessage,
     ) -> Result<(), String> {
-        let attachments = serde_json::to_string(&message.attachments)
-            .map_err(|_| "Could not index attachments.".to_string())?;
-        let to_json = serde_json::to_string(&message.to)
-            .map_err(|_| "Could not index recipients.".to_string())?;
-        let cc_json = serde_json::to_string(&message.cc)
-            .map_err(|_| "Could not index recipients.".to_string())?;
         let mut conn = self.conn()?;
         let transaction = conn.transaction().map_err(db_error)?;
-        let (thread_parent, thread_root) =
-            provisional_thread_root(&transaction, account_id, mailbox_id, message)?;
-        transaction.execute(
-            "INSERT INTO messages (
-                account_id, mailbox_id, uid, message_id, subject, sender_name, sender_address, recipients,
-                received_at, preview, is_read, is_starred, has_attachments, size, to_json, cc_json,
-                reply_to, thread_parent, thread_root, text_body, html_body, attachments_json, raw_message, accessed_at
-             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,CURRENT_TIMESTAMP)
-             ON CONFLICT(mailbox_id, uid) DO UPDATE SET
-                message_id=excluded.message_id, subject=excluded.subject, sender_name=excluded.sender_name,
-                sender_address=excluded.sender_address, recipients=excluded.recipients, received_at=excluded.received_at,
-                preview=excluded.preview, is_read=excluded.is_read, is_starred=excluded.is_starred,
-                has_attachments=excluded.has_attachments, size=excluded.size, to_json=excluded.to_json,
-                cc_json=excluded.cc_json, reply_to=excluded.reply_to, thread_parent=excluded.thread_parent,
-                thread_root=excluded.thread_root, text_body=excluded.text_body,
-                html_body=excluded.html_body, attachments_json=excluded.attachments_json, raw_message=excluded.raw_message",
-            params![
-                account_id, mailbox_id, message.uid, message.message_id, message.subject, message.sender_name,
-                message.sender_address, message.recipients, message.received_at, message.preview,
-                message.is_read as i32, message.is_starred as i32, (!message.attachments.is_empty()) as i32,
-                message.size.min(i64::MAX as u64) as i64, to_json, cc_json, message.reply_to, thread_parent, thread_root,
-                message.text_body, message.html_body,
-                attachments, message.raw_message,
-            ],
-        ).map_err(db_error)?;
-        let id: i64 = transaction
-            .query_row(
-                "SELECT id FROM messages WHERE mailbox_id = ?1 AND uid = ?2",
-                params![mailbox_id, message.uid],
-                |row| row.get(0),
-            )
-            .map_err(db_error)?;
-        transaction
-            .execute("DELETE FROM message_fts WHERE rowid = ?1", [id])
-            .map_err(db_error)?;
-        transaction.execute(
-            "INSERT INTO message_fts(rowid, subject, sender, recipients, body) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![id, message.subject, format!("{} {}", message.sender_name, message.sender_address), message.recipients, message.text_body],
-        ).map_err(db_error)?;
+        write_full_message(&transaction, account_id, mailbox_id, message)?;
         transaction.commit().map_err(db_error)
     }
 
+    /// Store a downloaded body only when the envelope row still exists in the
+    /// same mailbox generation. A body fetched while a UIDVALIDITY purge or an
+    /// expunge ran must never resurrect the row under a recycled UID.
+    pub fn attach_body_if_current(
+        &self,
+        mailbox_id: i64,
+        expected_uid_validity: u32,
+        message: &CachedMessage,
+    ) -> Result<bool, String> {
+        let mut conn = self.conn()?;
+        let transaction = conn.transaction().map_err(db_error)?;
+        let current: Option<(String, Option<u32>)> = transaction
+            .query_row(
+                "SELECT m.account_id, box.uid_validity FROM messages m JOIN mailboxes box ON box.id=m.mailbox_id
+                 WHERE m.mailbox_id=?1 AND m.uid=?2",
+                params![mailbox_id, message.uid],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(db_error)?;
+        let Some((account_id, uid_validity)) = current else {
+            return Ok(false);
+        };
+        if uid_validity != Some(expected_uid_validity) {
+            return Ok(false);
+        }
+        write_full_message(&transaction, &account_id, mailbox_id, message)?;
+        transaction.commit().map_err(db_error)?;
+        Ok(true)
+    }
+
+    /// Record a failed background body download so poison messages back off
+    /// exponentially instead of being re-selected first on every pass.
+    pub fn record_prefetch_failure(&self, mailbox_id: i64, uid: u32) -> Result<(), String> {
+        self.conn()?
+            .execute(
+                "UPDATE messages SET prefetch_failures=prefetch_failures+1,
+                 prefetch_retry_at=strftime('%Y-%m-%dT%H:%M:%S+00:00','now',
+                   '+' || (15 * (1 << MIN(prefetch_failures, 8))) || ' minutes')
+                 WHERE mailbox_id=?1 AND uid=?2",
+                params![mailbox_id, uid],
+            )
+            .map_err(db_error)?;
+        Ok(())
+    }
+
+    #[cfg(test)]
     pub fn upsert_envelope(
         &self,
         account_id: &str,
         mailbox_id: i64,
         message: &CachedMessage,
     ) -> Result<(), String> {
-        let to_json = serde_json::to_string(&message.to)
-            .map_err(|_| "Could not index recipients.".to_string())?;
-        let cc_json = serde_json::to_string(&message.cc)
-            .map_err(|_| "Could not index recipients.".to_string())?;
+        self.upsert_envelopes(account_id, mailbox_id, std::slice::from_ref(message))
+    }
+
+    /// Write a fetched envelope chunk in one transaction: all rows and their
+    /// FTS entries land together or not at all.
+    pub fn upsert_envelopes(
+        &self,
+        account_id: &str,
+        mailbox_id: i64,
+        messages: &[CachedMessage],
+    ) -> Result<(), String> {
+        if messages.is_empty() {
+            return Ok(());
+        }
         let mut conn = self.conn()?;
         let transaction = conn.transaction().map_err(db_error)?;
-        let (thread_parent, thread_root) =
-            provisional_thread_root(&transaction, account_id, mailbox_id, message)?;
-        transaction.execute(
-            "INSERT INTO messages (
-                account_id, mailbox_id, uid, message_id, subject, sender_name, sender_address, recipients,
-                received_at, preview, is_read, is_starred, has_attachments, size, to_json, cc_json,
-                reply_to, thread_parent, thread_root, text_body, html_body, attachments_json, raw_message, accessed_at
-             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,'',?10,?11,?12,?13,?14,?15,?16,?17,?18,'',NULL,'[]',X'',CURRENT_TIMESTAMP)
-             ON CONFLICT(mailbox_id, uid) DO UPDATE SET
-                message_id=excluded.message_id, subject=excluded.subject, sender_name=excluded.sender_name,
-                sender_address=excluded.sender_address, recipients=excluded.recipients, received_at=excluded.received_at,
-                is_read=excluded.is_read, is_starred=excluded.is_starred, size=excluded.size,
-                to_json=excluded.to_json, cc_json=excluded.cc_json, reply_to=excluded.reply_to,
-                thread_parent=excluded.thread_parent, thread_root=excluded.thread_root,
-                has_attachments=CASE WHEN excluded.has_attachments=1 THEN 1 ELSE has_attachments END",
-            params![
-                account_id,
-                mailbox_id,
-                message.uid,
-                message.message_id,
-                message.subject,
-                message.sender_name,
-                message.sender_address,
-                message.recipients,
-                message.received_at,
-                message.is_read as i32,
-                message.is_starred as i32,
-                i32::from(message.has_attachments || !message.attachments.is_empty()),
-                message.size.min(i64::MAX as u64) as i64,
-                to_json,
-                cc_json,
-                message.reply_to,
-                thread_parent,
-                thread_root,
-            ],
-        ).map_err(db_error)?;
-        let id: i64 = transaction
-            .query_row(
-                "SELECT id FROM messages WHERE mailbox_id=?1 AND uid=?2",
-                params![mailbox_id, message.uid],
-                |row| row.get(0),
-            )
-            .map_err(db_error)?;
-        transaction
-            .execute("DELETE FROM message_fts WHERE rowid=?1", [id])
-            .map_err(db_error)?;
-        transaction.execute(
-            "INSERT INTO message_fts(rowid,subject,sender,recipients,body)
-             SELECT id,subject,sender_name || ' ' || sender_address,recipients,text_body FROM messages WHERE id=?1",
-            [id],
-        ).map_err(db_error)?;
+        for message in messages {
+            write_envelope(&transaction, account_id, mailbox_id, message)?;
+        }
         transaction.commit().map_err(db_error)
     }
 
@@ -344,6 +310,7 @@ impl Database {
                     html_body: sanitized.map(|item| item.html),
                     attachments: json_or_default(row.get::<_, String>(20)?),
                     references: Vec::new(),
+                    body_status: "available".into(),
                 })
             },
         )
@@ -491,7 +458,7 @@ impl Database {
     pub fn pending_move_uids(&self, mailbox_id: i64) -> Result<Vec<u32>, String> {
         let conn = self.conn()?;
         let mut statement = conn
-            .prepare("SELECT uid FROM messages WHERE mailbox_id=?1 AND pending_move_to IS NOT NULL")
+            .prepare("SELECT uid FROM messages WHERE mailbox_id=?1 AND pending_move_to IS NOT NULL ORDER BY uid DESC")
             .map_err(db_error)?;
         let rows = statement
             .query_map([mailbox_id], |row| row.get(0))
@@ -512,6 +479,12 @@ impl Database {
             .map_err(db_error)?;
         transaction
             .execute("DELETE FROM messages WHERE mailbox_id=?1", [mailbox_id])
+            .map_err(db_error)?;
+        transaction
+            .execute(
+                "UPDATE mailboxes SET backfill_uid=NULL,backfill_state='active',highest_modseq=NULL,last_flag_scan_at=NULL WHERE id=?1",
+                [mailbox_id],
+            )
             .map_err(db_error)?;
         transaction.commit().map_err(db_error)
     }
@@ -859,4 +832,140 @@ impl Database {
             .map_err(db_error)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
     }
+}
+
+fn write_full_message(
+    transaction: &rusqlite::Transaction,
+    account_id: &str,
+    mailbox_id: i64,
+    message: &CachedMessage,
+) -> Result<i64, String> {
+    let attachments = serde_json::to_string(&message.attachments)
+        .map_err(|_| "Could not index attachments.".to_string())?;
+    let to_json = serde_json::to_string(&message.to)
+        .map_err(|_| "Could not index recipients.".to_string())?;
+    let cc_json = serde_json::to_string(&message.cc)
+        .map_err(|_| "Could not index recipients.".to_string())?;
+    // Bodies are cached as a unit with the raw MIME; without it nothing counts
+    // toward the cache and the row stays a prefetch candidate.
+    let body_bytes = if message.raw_message.is_empty() {
+        0
+    } else {
+        message.raw_message.len()
+            + message.text_body.len()
+            + message.html_body.as_deref().map_or(0, str::len)
+    };
+    let (thread_parent, thread_root) =
+        provisional_thread_root(transaction, account_id, mailbox_id, message)?;
+    transaction.execute(
+        "INSERT INTO messages (
+            account_id, mailbox_id, uid, message_id, subject, sender_name, sender_address, recipients,
+            received_at, preview, is_read, is_starred, has_attachments, size, to_json, cc_json,
+            reply_to, thread_parent, thread_root, text_body, html_body, attachments_json, raw_message, accessed_at,
+            internal_at, body_bytes, prefetch_failures, prefetch_retry_at
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,'1970-01-01 00:00:00',
+            COALESCE(?24,?9),?25,0,NULL)
+         ON CONFLICT(mailbox_id, uid) DO UPDATE SET
+            message_id=excluded.message_id, subject=excluded.subject, sender_name=excluded.sender_name,
+            sender_address=excluded.sender_address, recipients=excluded.recipients, received_at=excluded.received_at,
+            preview=excluded.preview, is_read=excluded.is_read, is_starred=excluded.is_starred,
+            has_attachments=excluded.has_attachments, size=excluded.size, to_json=excluded.to_json,
+            cc_json=excluded.cc_json, reply_to=excluded.reply_to, thread_parent=excluded.thread_parent,
+            thread_root=excluded.thread_root, text_body=excluded.text_body,
+            html_body=excluded.html_body, attachments_json=excluded.attachments_json, raw_message=excluded.raw_message,
+            internal_at=COALESCE(?24, messages.internal_at, excluded.received_at),
+            body_bytes=excluded.body_bytes, prefetch_failures=0, prefetch_retry_at=NULL",
+        params![
+            account_id, mailbox_id, message.uid, message.message_id, message.subject, message.sender_name,
+            message.sender_address, message.recipients, message.received_at, message.preview,
+            message.is_read as i32, message.is_starred as i32, (!message.attachments.is_empty()) as i32,
+            message.size.min(i64::MAX as u64) as i64, to_json, cc_json, message.reply_to, thread_parent, thread_root,
+            message.text_body, message.html_body,
+            attachments, message.raw_message, message.internal_at,
+            body_bytes.min(i64::MAX as usize) as i64,
+        ],
+    ).map_err(db_error)?;
+    let id: i64 = transaction
+        .query_row(
+            "SELECT id FROM messages WHERE mailbox_id = ?1 AND uid = ?2",
+            params![mailbox_id, message.uid],
+            |row| row.get(0),
+        )
+        .map_err(db_error)?;
+    transaction
+        .execute("DELETE FROM message_fts WHERE rowid = ?1", [id])
+        .map_err(db_error)?;
+    transaction.execute(
+        "INSERT INTO message_fts(rowid, subject, sender, recipients, body) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![id, message.subject, format!("{} {}", message.sender_name, message.sender_address), message.recipients, message.text_body],
+    ).map_err(db_error)?;
+    Ok(id)
+}
+
+fn write_envelope(
+    transaction: &rusqlite::Transaction,
+    account_id: &str,
+    mailbox_id: i64,
+    message: &CachedMessage,
+) -> Result<i64, String> {
+    let to_json = serde_json::to_string(&message.to)
+        .map_err(|_| "Could not index recipients.".to_string())?;
+    let cc_json = serde_json::to_string(&message.cc)
+        .map_err(|_| "Could not index recipients.".to_string())?;
+    let (thread_parent, thread_root) =
+        provisional_thread_root(transaction, account_id, mailbox_id, message)?;
+    transaction.execute(
+        "INSERT INTO messages (
+            account_id, mailbox_id, uid, message_id, subject, sender_name, sender_address, recipients,
+            received_at, preview, is_read, is_starred, has_attachments, size, to_json, cc_json,
+            reply_to, thread_parent, thread_root, text_body, html_body, attachments_json, raw_message, accessed_at,
+            internal_at
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,'',?10,?11,?12,?13,?14,?15,?16,?17,?18,'',NULL,'[]',X'','1970-01-01 00:00:00',
+            COALESCE(?19,?9))
+         ON CONFLICT(mailbox_id, uid) DO UPDATE SET
+            message_id=excluded.message_id, subject=excluded.subject, sender_name=excluded.sender_name,
+            sender_address=excluded.sender_address, recipients=excluded.recipients, received_at=excluded.received_at,
+            is_read=excluded.is_read, is_starred=excluded.is_starred, size=excluded.size,
+            to_json=excluded.to_json, cc_json=excluded.cc_json, reply_to=excluded.reply_to,
+            thread_parent=excluded.thread_parent, thread_root=excluded.thread_root,
+            internal_at=COALESCE(?19, messages.internal_at, excluded.received_at),
+            has_attachments=CASE WHEN excluded.has_attachments=1 THEN 1 ELSE has_attachments END",
+        params![
+            account_id,
+            mailbox_id,
+            message.uid,
+            message.message_id,
+            message.subject,
+            message.sender_name,
+            message.sender_address,
+            message.recipients,
+            message.received_at,
+            message.is_read as i32,
+            message.is_starred as i32,
+            i32::from(message.has_attachments || !message.attachments.is_empty()),
+            message.size.min(i64::MAX as u64) as i64,
+            to_json,
+            cc_json,
+            message.reply_to,
+            thread_parent,
+            thread_root,
+            message.internal_at,
+        ],
+    ).map_err(db_error)?;
+    let id: i64 = transaction
+        .query_row(
+            "SELECT id FROM messages WHERE mailbox_id=?1 AND uid=?2",
+            params![mailbox_id, message.uid],
+            |row| row.get(0),
+        )
+        .map_err(db_error)?;
+    transaction
+        .execute("DELETE FROM message_fts WHERE rowid=?1", [id])
+        .map_err(db_error)?;
+    transaction.execute(
+        "INSERT INTO message_fts(rowid,subject,sender,recipients,body)
+         SELECT id,subject,sender_name || ' ' || sender_address,recipients,text_body FROM messages WHERE id=?1",
+        [id],
+    ).map_err(db_error)?;
+    Ok(id)
 }

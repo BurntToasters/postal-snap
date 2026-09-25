@@ -1,4 +1,15 @@
 use super::{db_error, parse_role, Database};
+
+#[derive(Clone, Debug, Default)]
+pub struct MailboxSyncMeta {
+    pub uid_validity: Option<u32>,
+    pub uid_next: Option<u32>,
+    pub server_total: Option<u32>,
+    pub server_unread: Option<u32>,
+    pub highest_modseq: Option<u64>,
+    pub backfill_state: String,
+    pub last_flag_scan_at: Option<String>,
+}
 use rusqlite::{params, OptionalExtension};
 
 use crate::models::{AccountInboxCount, MailboxRole, MailboxSummary, ROLE_SOURCE_NAME};
@@ -69,7 +80,10 @@ impl Database {
                 .execute("DELETE FROM messages WHERE mailbox_id = ?1", [id])
                 .map_err(db_error)?;
             transaction
-                .execute("UPDATE mailboxes SET backfill_uid=NULL WHERE id=?1", [id])
+                .execute(
+                    "UPDATE mailboxes SET backfill_uid=NULL,backfill_state='active',highest_modseq=NULL,last_flag_scan_at=NULL WHERE id=?1",
+                    [id],
+                )
                 .map_err(db_error)?;
             // UIDs from the old generation are meaningless: queued flag and
             // move operations that name this mailbox can never apply. Drop
@@ -90,7 +104,8 @@ impl Database {
         let mut statement = conn.prepare(
             "SELECT f.id, f.account_id, f.name, f.display_name, f.role,
                     MAX(0, COALESCE(f.server_unread, SUM(CASE WHEN m.is_read = 0 AND m.pending_move_to IS NULL THEN 1 ELSE 0 END)) + f.local_unread_delta),
-                    MAX(0, COALESCE(f.server_total, SUM(CASE WHEN m.pending_move_to IS NULL AND m.id IS NOT NULL THEN 1 ELSE 0 END)) + f.local_total_delta)
+                    MAX(0, COALESCE(f.server_total, SUM(CASE WHEN m.pending_move_to IS NULL AND m.id IS NOT NULL THEN 1 ELSE 0 END)) + f.local_total_delta),
+                    f.delimiter
              FROM mailboxes f LEFT JOIN messages m ON m.mailbox_id = f.id
              WHERE f.account_id = ?1 GROUP BY f.id
              ORDER BY CASE f.role WHEN 'inbox' THEN 0 WHEN 'starred' THEN 1 WHEN 'drafts' THEN 2 WHEN 'sent' THEN 3 WHEN 'archive' THEN 4 WHEN 'junk' THEN 5 WHEN 'trash' THEN 6 ELSE 7 END, f.display_name COLLATE NOCASE",
@@ -105,6 +120,7 @@ impl Database {
                     role: parse_role(&row.get::<_, String>(4)?),
                     unread_count: row.get::<_, u32>(5)?,
                     total_count: row.get::<_, u32>(6)?,
+                    delimiter: row.get(7)?,
                 })
             })
             .map_err(db_error)?;
@@ -116,7 +132,8 @@ impl Database {
         let mut statement = conn.prepare(
             "SELECT f.id, f.account_id, f.name, f.display_name, f.role,
                     MAX(0, COALESCE(f.server_unread, SUM(CASE WHEN m.is_read = 0 AND m.pending_move_to IS NULL THEN 1 ELSE 0 END)) + f.local_unread_delta),
-                    MAX(0, COALESCE(f.server_total, SUM(CASE WHEN m.pending_move_to IS NULL AND m.id IS NOT NULL THEN 1 ELSE 0 END)) + f.local_total_delta)
+                    MAX(0, COALESCE(f.server_total, SUM(CASE WHEN m.pending_move_to IS NULL AND m.id IS NOT NULL THEN 1 ELSE 0 END)) + f.local_total_delta),
+                    f.delimiter
              FROM mailboxes f LEFT JOIN messages m ON m.mailbox_id = f.id
              GROUP BY f.id
              ORDER BY f.account_id, CASE f.role WHEN 'inbox' THEN 0 WHEN 'starred' THEN 1 WHEN 'drafts' THEN 2 WHEN 'sent' THEN 3 WHEN 'archive' THEN 4 WHEN 'junk' THEN 5 WHEN 'trash' THEN 6 ELSE 7 END, f.display_name COLLATE NOCASE",
@@ -131,6 +148,7 @@ impl Database {
                     role: parse_role(&row.get::<_, String>(4)?),
                     unread_count: row.get::<_, u32>(5)?,
                     total_count: row.get::<_, u32>(6)?,
+                    delimiter: row.get(7)?,
                 })
             })
             .map_err(db_error)?;
@@ -273,22 +291,51 @@ impl Database {
         if collision {
             return Err("A folder with that name already exists.".into());
         }
-        let changed = transaction
-            .execute(
-                "UPDATE mailboxes SET name=?3, display_name=?3 WHERE account_id=?1 AND name=?2",
-                params![account_id, old_name, new_name],
+        let delimiter: Option<Option<String>> = transaction
+            .query_row(
+                "SELECT delimiter FROM mailboxes WHERE account_id=?1 AND name=?2",
+                params![account_id, old_name],
+                |row| row.get(0),
             )
+            .optional()
             .map_err(db_error)?;
-        if changed == 0 {
+        let Some(delimiter) = delimiter else {
             return Err("That folder is no longer available.".into());
+        };
+        // Servers rename the whole subtree; follow it locally so children keep
+        // their cached mail instead of being dropped and downloaded again.
+        let mut renames = vec![(old_name.to_string(), new_name.to_string())];
+        if let Some(delimiter) = delimiter.filter(|value| !value.is_empty()) {
+            let prefix = format!("{old_name}{delimiter}");
+            let mut statement = transaction
+                .prepare("SELECT name FROM mailboxes WHERE account_id=?1 AND substr(name,1,length(?2))=?2")
+                .map_err(db_error)?;
+            let children = statement
+                .query_map(params![account_id, prefix], |row| row.get::<_, String>(0))
+                .map_err(db_error)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(db_error)?;
+            drop(statement);
+            for child in children {
+                let suffix = &child[prefix.len()..];
+                renames.push((child.clone(), format!("{new_name}{delimiter}{suffix}")));
+            }
         }
-        transaction
-            .execute(
-                "UPDATE drafts SET remote_mailbox=?3 WHERE account_id=?1 AND remote_mailbox=?2",
-                params![account_id, old_name, new_name],
-            )
-            .map_err(db_error)?;
-        Self::rewrite_queued_mailbox_names(&transaction, account_id, old_name, new_name)?;
+        for (from, to) in &renames {
+            transaction
+                .execute(
+                    "UPDATE mailboxes SET name=?3, display_name=?3 WHERE account_id=?1 AND name=?2",
+                    params![account_id, from, to],
+                )
+                .map_err(db_error)?;
+            transaction
+                .execute(
+                    "UPDATE drafts SET remote_mailbox=?3 WHERE account_id=?1 AND remote_mailbox=?2",
+                    params![account_id, from, to],
+                )
+                .map_err(db_error)?;
+            Self::rewrite_queued_mailbox_names(&transaction, account_id, from, to)?;
+        }
         transaction.commit().map_err(db_error)
     }
 
@@ -378,26 +425,6 @@ impl Database {
             .map_err(db_error)
     }
 
-    pub fn backfill_cursor(&self, mailbox_id: i64) -> Result<Option<u32>, String> {
-        self.conn()?
-            .query_row(
-                "SELECT backfill_uid FROM mailboxes WHERE id=?1",
-                [mailbox_id],
-                |row| row.get(0),
-            )
-            .map_err(db_error)
-    }
-
-    pub fn set_backfill_cursor(&self, mailbox_id: i64, uid: u32) -> Result<(), String> {
-        self.conn()?
-            .execute(
-                "UPDATE mailboxes SET backfill_uid=?2 WHERE id=?1",
-                params![mailbox_id, uid],
-            )
-            .map_err(db_error)?;
-        Ok(())
-    }
-
     pub fn cached_uids(&self, mailbox_id: i64) -> Result<Vec<u32>, String> {
         let conn = self.conn()?;
         let mut statement = conn
@@ -405,30 +432,6 @@ impl Database {
             .map_err(db_error)?;
         let rows = statement
             .query_map([mailbox_id], |row| row.get(0))
-            .map_err(db_error)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
-    }
-
-    pub fn uncached_message_uids(
-        &self,
-        mailbox_id: i64,
-        limit: u32,
-        max_size: u64,
-    ) -> Result<Vec<(u32, String)>, String> {
-        let conn = self.conn()?;
-        let mut statement = conn
-            .prepare(
-                "SELECT uid, received_at FROM messages
-                 WHERE mailbox_id = ?1 AND LENGTH(raw_message) = 0 AND size <= ?2
-                 ORDER BY received_at DESC, uid DESC
-                 LIMIT ?3",
-            )
-            .map_err(db_error)?;
-        let rows = statement
-            .query_map(
-                params![mailbox_id, max_size.min(i64::MAX as u64) as i64, limit],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
             .map_err(db_error)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
     }
@@ -442,5 +445,187 @@ impl Database {
             )
             .optional()
             .map_err(db_error)
+    }
+
+    pub fn mailbox_sync_meta(&self, mailbox_id: i64) -> Result<MailboxSyncMeta, String> {
+        self.conn()?
+            .query_row(
+                "SELECT uid_validity, uid_next, server_total, server_unread, highest_modseq,
+                        backfill_state, last_flag_scan_at
+                 FROM mailboxes WHERE id=?1",
+                [mailbox_id],
+                |row| {
+                    Ok(MailboxSyncMeta {
+                        uid_validity: row.get(0)?,
+                        uid_next: row.get(1)?,
+                        server_total: row.get(2)?,
+                        server_unread: row.get(3)?,
+                        highest_modseq: row
+                            .get::<_, Option<i64>>(4)?
+                            .map(|value| value.max(0) as u64),
+                        backfill_state: row.get(5)?,
+                        last_flag_scan_at: row.get(6)?,
+                    })
+                },
+            )
+            .map_err(db_error)
+    }
+
+    pub fn set_backfill(
+        &self,
+        mailbox_id: i64,
+        cursor: Option<u32>,
+        state: &str,
+    ) -> Result<(), String> {
+        self.conn()?
+            .execute(
+                "UPDATE mailboxes SET backfill_uid=?2, backfill_state=?3 WHERE id=?1",
+                params![mailbox_id, cursor, state],
+            )
+            .map_err(db_error)?;
+        Ok(())
+    }
+
+    pub fn set_mailbox_listing(
+        &self,
+        mailbox_id: i64,
+        delimiter: Option<&str>,
+    ) -> Result<(), String> {
+        self.conn()?
+            .execute(
+                "UPDATE mailboxes SET delimiter=?2 WHERE id=?1",
+                params![mailbox_id, delimiter],
+            )
+            .map_err(db_error)?;
+        Ok(())
+    }
+
+    pub fn set_mailbox_sync_error(
+        &self,
+        account_id: &str,
+        name: &str,
+        error: Option<&str>,
+    ) -> Result<(), String> {
+        self.conn()?
+            .execute(
+                "UPDATE mailboxes SET sync_error=?3 WHERE account_id=?1 AND name=?2",
+                params![account_id, name, error],
+            )
+            .map_err(db_error)?;
+        Ok(())
+    }
+
+    pub fn set_highest_modseq(&self, mailbox_id: i64, modseq: Option<u64>) -> Result<(), String> {
+        self.conn()?
+            .execute(
+                "UPDATE mailboxes SET highest_modseq=?2 WHERE id=?1",
+                params![
+                    mailbox_id,
+                    modseq.map(|value| value.min(i64::MAX as u64) as i64)
+                ],
+            )
+            .map_err(db_error)?;
+        Ok(())
+    }
+
+    pub fn mark_flag_scan(&self, mailbox_id: i64) -> Result<(), String> {
+        self.conn()?
+            .execute(
+                "UPDATE mailboxes SET last_flag_scan_at=strftime('%Y-%m-%dT%H:%M:%S+00:00','now') WHERE id=?1",
+                [mailbox_id],
+            )
+            .map_err(db_error)?;
+        Ok(())
+    }
+
+    /// Delete cached rows in `[low, high]` that the server no longer lists.
+    /// Rows hidden by a pending local move stay: the queued move owns them.
+    pub fn reconcile_expunged(
+        &self,
+        mailbox_id: i64,
+        low: u32,
+        high: u32,
+        server_uids: &std::collections::HashSet<u32>,
+    ) -> Result<u32, String> {
+        let mut conn = self.conn()?;
+        let transaction = conn.transaction().map_err(db_error)?;
+        let cached = {
+            let mut statement = transaction
+                .prepare(
+                    "SELECT uid FROM messages WHERE mailbox_id=?1 AND uid BETWEEN ?2 AND ?3 AND pending_move_to IS NULL",
+                )
+                .map_err(db_error)?;
+            let rows = statement
+                .query_map(params![mailbox_id, low, high], |row| row.get::<_, u32>(0))
+                .map_err(db_error)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(db_error)?;
+            rows
+        };
+        let mut removed = 0u32;
+        for uid in cached.into_iter().filter(|uid| !server_uids.contains(uid)) {
+            removed += transaction
+                .execute(
+                    "DELETE FROM messages WHERE mailbox_id=?1 AND uid=?2 AND pending_move_to IS NULL",
+                    params![mailbox_id, uid],
+                )
+                .map_err(db_error)? as u32;
+        }
+        transaction.commit().map_err(db_error)?;
+        Ok(removed)
+    }
+
+    pub fn cached_message_count(&self, mailbox_id: i64) -> Result<u32, String> {
+        self.conn()?
+            .query_row(
+                "SELECT COUNT(*) FROM messages WHERE mailbox_id=?1",
+                [mailbox_id],
+                |row| row.get(0),
+            )
+            .map_err(db_error)
+    }
+
+    /// Envelope and body download totals for one account, recomputed from the
+    /// database so progress survives restarts.
+    pub fn account_sync_progress(
+        &self,
+        account_id: &str,
+        policy: &crate::models::CachePolicy,
+    ) -> Result<crate::models::SyncProgress, String> {
+        let cutoff = policy.cutoff().map(crate::mail::parse::canonical_time);
+        let conn = self.conn()?;
+        let (server_total, backfilling): (i64, i64) = conn
+            .query_row(
+                "SELECT COALESCE(SUM(server_total),0),
+                        COALESCE(SUM(CASE WHEN backfill_state='active' THEN 1 ELSE 0 END),0)
+                 FROM mailboxes WHERE account_id=?1 AND role NOT IN ('junk','trash')",
+                [account_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(db_error)?;
+        let (cached, bodies_wanted, bodies_done): (i64, i64, i64) = conn
+            .query_row(
+                "SELECT COUNT(*),
+                        COALESCE(SUM(CASE WHEN m.prefetch_failures<5 AND (?2 IS NULL OR julianday(COALESCE(m.internal_at,m.received_at)) >= julianday(?2)) THEN 1 ELSE 0 END),0),
+                        COALESCE(SUM(CASE WHEN m.body_bytes>0 AND (?2 IS NULL OR julianday(COALESCE(m.internal_at,m.received_at)) >= julianday(?2)) THEN 1 ELSE 0 END),0)
+                 FROM messages m JOIN mailboxes box ON box.id=m.mailbox_id
+                 WHERE m.account_id=?1 AND box.role NOT IN ('junk','trash')",
+                params![account_id, cutoff],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .map_err(db_error)?;
+        Ok(crate::models::SyncProgress {
+            account_id: account_id.to_string(),
+            folder: None,
+            envelopes_done: cached.max(0) as u64,
+            envelopes_total: if policy.mode == "full" {
+                (server_total.max(cached)).max(0) as u64
+            } else {
+                cached.max(0) as u64
+            },
+            bodies_done: bodies_done.max(0) as u64,
+            bodies_total: bodies_wanted.max(bodies_done).max(0) as u64,
+            backfilling: backfilling > 0,
+        })
     }
 }

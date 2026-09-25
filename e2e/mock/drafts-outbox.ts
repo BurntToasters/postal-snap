@@ -12,6 +12,7 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
     const { account, summary, params } = mock;
     let lastSendOutcome: string | undefined;
     let lastSendDetail: string | null = null;
+    let lastSendAccountId: string | undefined;
     Object.assign(mock.handlers, {
       list_drafts() {
         return location.search.includes("localMail")
@@ -59,10 +60,12 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
           sendAt: null,
         };
       },
-      list_outbox() {
+      list_outbox(args: Record<string, unknown>) {
         if (!location.search.includes("localMail") || state.discarded) {
           return [];
         }
+        if (lastSendAccountId && args.accountId !== lastSendAccountId)
+          return [];
         const outcome =
           lastSendOutcome ??
           (location.search.includes("sentCopy")
@@ -76,7 +79,7 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
         return [
           {
             id: "outbox-1",
-            accountId: account.id,
+            accountId: lastSendAccountId ?? account.id,
             recipients: "lee@example.com",
             subject: "Could not confirm",
             state: outcome,
@@ -180,7 +183,9 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
       },
       send_message(args: Record<string, unknown>) {
         state.sentDraft = args.draft;
-        const draft = args.draft as { sendAt?: string | null } | undefined;
+        const draft = args.draft as
+          { accountId?: string; sendAt?: string | null } | undefined;
+        lastSendAccountId = draft?.accountId;
         const requested = params.get("sendOutcome");
         const settings = mock.handlers.get_settings?.({}) as
           { undoSendSeconds?: number } | undefined;

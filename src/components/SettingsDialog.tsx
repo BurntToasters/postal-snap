@@ -22,7 +22,12 @@ import { strings } from "../i18n";
 import { applySettings } from "../settings";
 import { useAppStore } from "../store";
 import { supportsWorkspaceWindowFx } from "../window-fx";
-import type { CacheUsage, DistributionChannel, FilterRule } from "../types";
+import type {
+  CacheUsage,
+  DistributionChannel,
+  FilterRule,
+  MailboxSummary,
+} from "../types";
 import {
   addUpdateFoundListener,
   checkUpdateInteractive,
@@ -118,6 +123,9 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
   const [filterRules, setFilterRules] = useState<Record<string, FilterRule[]>>(
     {},
   );
+  const [accountMailboxes, setAccountMailboxes] = useState<MailboxSummary[]>(
+    [],
+  );
   const [newRuleInputs, setNewRuleInputs] = useState<
     Record<
       string,
@@ -162,6 +170,12 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
   useEffect(() => {
     if (tab !== "accounts") return;
     let active = true;
+    void api
+      .listAllMailboxes()
+      .then((mailboxes) => {
+        if (active) setAccountMailboxes(mailboxes);
+      })
+      .catch(() => undefined);
     void (async () => {
       for (const account of accounts) {
         try {
@@ -340,12 +354,24 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
   }, [checkingUpdate, distribution, setError]);
 
   async function removeAccount(id: string, name: string) {
-    const confirmed = await api.showNativeConfirm(
-      strings.common.remove,
-      strings.settings.removeAccount(name),
-    );
-    if (!confirmed) return;
     try {
+      const impact = await api.getAccountRemovalImpact(id);
+      const hasLocalWork =
+        impact.unsentMessages > 0 ||
+        impact.unsyncedDrafts > 0 ||
+        impact.queuedChanges > 0;
+      const confirmed = await api.showNativeConfirm(
+        strings.common.remove,
+        hasLocalWork
+          ? strings.settings.removeAccountWithImpact(
+              name,
+              impact.unsentMessages,
+              impact.unsyncedDrafts,
+              impact.queuedChanges,
+            )
+          : strings.settings.removeAccount(name),
+      );
+      if (!confirmed) return;
       const result = await api.removeAccount(id);
       const remaining = await api.listAccounts();
       setAccounts(remaining);
@@ -718,6 +744,7 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
             {tab === "accounts" ? (
               <AccountsTab
                 onClose={onClose}
+                mailboxes={accountMailboxes}
                 testingAccountId={testingAccountId}
                 testedHealthy={testedHealthy}
                 testAccount={testAccount}

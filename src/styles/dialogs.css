@@ -216,6 +216,14 @@
   overflow: auto;
 }
 
+.setup-dialog-close {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  float: right;
+  margin: 0 0 10px 10px;
+}
+
 .setup-modal .setup-card {
   max-height: 100%;
   overflow: auto;

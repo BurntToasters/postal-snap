@@ -1,0 +1,76 @@
+# Sync engine failure modes (0.2.0)
+
+AGENTS.md requires listing how an isolated system can fail before changing it.
+These lists were written before the 0.2.0 sync, worker, download-policy and
+provider-discovery code. Every item names the guard that prevents it and the
+test that shows the guard works. "GreenMail" means an ignored integration test
+in `src-tauri/src/mail.rs`, run by `npm run test:mail-integration`. "db test"
+means a Rust test in `src-tauri/src/db.rs`.
+
+## Per-account download policy and eviction
+
+| # | Failure | Guard | Proof |
+|---|---|---|---|
+| E1 | Eviction clears a draft, an outbox item, or an envelope (subject, sender, date, flags). | Eviction only changes body columns and FTS body text, never `drafts`, `outbox` or envelope columns. | db test `per_account_eviction_keeps_envelopes_drafts_and_outbox` |
+| E2 | After switching Recent → Download all, older mail never downloads because the backfill cursor is stuck. | The cutoff is stored as `backfill_state='cutoff'` with the cursor kept. Widening the policy sets it back to `active`. Migration v18 turns legacy `backfill_uid=0` into NULL. | db test `widening_policy_reactivates_cutoff_backfill`; GreenMail `greenmail_protocol_integration_history` |
+| E3 | Raising Recent from 90 to 365 days doesn't resume backfill. | Same reactivation as E2 whenever the new cutoff is earlier. | db test `widening_policy_reactivates_cutoff_backfill` |
+| E4 | The size cap evicts a message the user just opened before older, unread-but-cached mail. | The size rule ranks by `MAX(internal date, accessed_at)`, newest kept. | db test `size_cap_keeps_recently_opened_bodies` |
+| E5 | Prefetch downloads a body that the date rule evicts at the end of the same pass, every pass. | In Recent mode, prefetch only picks rows with `internal_at >= cutoff`. | db test `prefetch_candidates_respect_recent_cutoff` |
+| E6 | One account's cap evicts another account's bodies. | Eviction and usage are filtered by `account_id`. | db test `per_account_eviction_is_isolated` |
+| E7 | Download all with no cap (`max_bytes=0`) evicts something. | Unlimited policy returns before any eviction statement. | db test `unlimited_policy_never_evicts` |
+| E8 | Seeding the per-account policy from settings.json runs again and overwrites a choice the user made for one account. | Seeding updates only rows `WHERE cache_mode IS NULL`. | db test `policy_seed_is_idempotent` |
+| E9 | Migration v18 fails partway on a large database and leaves a half-migrated schema. | The whole migration runs in the existing single transaction; `ensure_column` is idempotent. | db test `migrates_v17_to_v18_preserving_rows` |
+
+## Account worker and session reuse
+
+| # | Failure | Guard | Proof |
+|---|---|---|---|
+| W1 | A user action (open, flag, move) waits for a whole multi-folder sync. | Background sync yields the account lock between folders and chunks whenever a caller is waiting. | GreenMail `greenmail_protocol_integration_history` (a pass yields, another client changes the server, the pass continues) |
+| W2 | A user action interrupts IDLE and the watcher then re-syncs every folder. | Wake reasons: an `OPERATION` wake returns to IDLE after a cheap INBOX check, not a full sync. | Code review of `run_account_worker`: only `SYNC`, `POLICY`, `CREDENTIALS`, IDLE changes or remaining work start a full pass. Manual check in the release checklist. |
+| W3 | A wake-up sent while IDLE is starting is lost, delaying the action by up to 20 minutes. | `Notify::notify_one` keeps a permit; wake reasons are also kept in an atomic bitset. | Existing IDLE-interrupt step in `greenmail_protocol_integration` |
+| W4 | A pooled session that the server silently dropped is reused and the action fails. | Sessions idle for more than 60 s are checked with NOOP before reuse; a failed NOOP reconnects once. | Code review of `pool::checkout`. A dead socket cannot be produced reliably in GreenMail. |
+| W5 | A wrong or revoked password is retried forever, locking the account at the provider. | A rejected LOGIN (IMAP NO/BAD) parks the worker in `authFailed` until the password changes or the user asks for Get Mail. | GreenMail `greenmail_protocol_integration_history` (a rejected login is classified `authenticationFailed`); the worker parks on that code (code review of `run_account_worker`) |
+| W6 | A slow network is reported as "Sign-in failed". | A timeout no longer mentions sign-in, and only NO/BAD login replies count as auth failures. | Rust test `timeouts_are_not_authentication_failures` |
+| W7 | The outbox timer fires while offline and marks the send uncertain. | Delivery only runs after a successful connection; connect failures leave items `queued`. Uncertain SMTP outcomes stay in `needs_attention` and are never retried automatically. | Existing outbox tests; the timer only schedules `replay_outbox_locked`, which keeps these rules |
+| W8 | Undo happens while delivery is in progress. | The `queued→sending` transition happens under the account lock and is committed with `synchronous=FULL`; undo only removes `queued` rows. | existing outbox tests |
+| W9 | Removing an account while its worker runs brings the actor back. | Actor creation re-checks the account under the actor-map lock; removal marks the account retired first. | Rust test `retired_account_cannot_recreate_actor` |
+| W10 | A pooled session outlives an account removal or a password change and keeps using old credentials. | `forget` drops the parked session and bumps a generation so an outstanding `release` cannot re-park. After a yield the pass reloads the vault password before checkout. | Rust test `forget_invalidates_outstanding_lease_generation`; GreenMail `greenmail_protocol_integration_history` (after `forget`, a wrong password is really sent) |
+| W11 | Notifications from two accounts are mixed up or unlabeled. | The notification title includes the account name; the payload carries `accountId`. | Playwright `accounts.spec.ts` |
+| W12 | The worker's outbox timer and the window's undo-send timer fire together. The window's request passes its "still held" check, waits for the account, and then claims the row after the worker's SMTP attempt left it in `needs_attention`, so an uncertain send goes out a second time. | Each delivery claims the row only from the one state its caller checked under the account lock (`queued`, `scheduled`, or `needs_attention` for an explicit retry). `send_scheduled_outbox` reads the state under the lock and returns the current state without sending when the message is no longer held. | db test `outbox_claim_requires_the_checked_state` |
+
+## Incremental folder sync
+
+| # | Failure | Guard | Proof |
+|---|---|---|---|
+| S1 | The CONDSTORE modseq is saved after a fetch, so changes made during the fetch are missed. | The modseq read from STATUS/SELECT before the fetch is the one stored. | GreenMail prints whether CONDSTORE is advertised; the iCloud smoke test covers the CONDSTORE path when iCloud advertises it |
+| S2 | A miscounted expunge deletes a flagged or pending-move row. | Expunge detection uses a `UID SEARCH` diff, never counts alone, and never deletes `pending_move_to` rows. | db test `expunge_reconcile_keeps_pending_moves` |
+| S3 | A custom keyword such as `unseen` or `$NotFlagged` is read as `\Seen` or `\Flagged`. | Flags are matched on the `Flag::Seen` / `Flag::Flagged` enum variants. | Code review: `system_flags` matches enum variants only, and every flag read goes through it |
+| S4 | One folder's STATUS or EXAMINE error aborts the whole account sync. | Folder errors are stored in `mailboxes.sync_error` and the loop continues; only a failed NOOP afterwards ends the pass. | GreenMail `greenmail_protocol_integration_history` (a folder deleted after LIST gives one folder error and the pass finishes) |
+| S5 | Sparse UIDs (oldest UID around 500,000) make backfill take thousands of empty fetches. | Backfill uses a sequence-number window below the oldest cached message. | GreenMail `greenmail_protocol_integration_history` (backfill by sequence window reaches message 1) |
+| S6 | The client sends STATUS `HIGHESTMODSEQ` to a server without CONDSTORE and gets BAD. | `HIGHESTMODSEQ` is requested only when the capability is advertised. | GreenMail runs whichever path it advertises |
+| S7 | UIDVALIDITY changes between STATUS and EXAMINE. | The purge decision uses the SELECT/EXAMINE result, the same as today. | db test `uidvalidity_change_resets_messages_and_backfill` |
+| S8 | A poison message that always fails to parse or fetch is retried every pass and blocks prefetch for that folder. | Failure count with exponential `prefetch_retry_at`; the message is skipped after 5 failures. | db test `prefetch_failures_back_off`; GreenMail poison message is not retried on the next pass |
+| S9 | Prefetch transfers much more than its budget and discards the rest. | Candidates are chosen by declared size to fit the budget before fetching; the delivered-size budget stays as a second check. | db test `prefetch_candidates_fit_budget` |
+| S10 | New mail sits above a UID gap wider than the per-pass fetch budget (for example after thousands of messages were filed away by server rules), so the pass walks empty UID ranges and never reaches the newest messages. | New UIDs are listed with `UID SEARCH` and fetched by the UIDs that exist, oldest first, so empty ranges cost nothing. | Rust test `new_mail_chunks_skip_uid_gaps`; GreenMail `greenmail_protocol_integration_history` (mail above an expunged gap is cached) |
+| S11 | A folder fails after its STATUS was stored, or stops at the new-mail cap, and the next pass skips it as unchanged, so its new mail waits for an unrelated change. | The stored UIDNEXT is the "fully synced" marker: a folder error or a capped new-mail fetch clears it, so the next pass examines the folder again. | db test `failed_folder_is_rechecked_next_pass` |
+| S12 | "Mark all read" also marks mail that reached the server after the last sync, which the user never saw. | The server-side `UID STORE` stops at the newest cached UID, not the server's UIDNEXT. | GreenMail `greenmail_protocol_integration_history` (an unsynced message stays unread) |
+
+## Database
+
+| # | Failure | Guard | Proof |
+|---|---|---|---|
+| D1 | A power loss after `queued→sending` is committed rolls it back to `queued`, which resends automatically. | That commit runs with `synchronous=FULL`. | outbox code review note plus existing restart test (`sending` becomes `needs_attention`) |
+| D2 | A batched envelope insert fails partway and leaves half a chunk. | One transaction per chunk; an error rolls back the whole chunk. | db test `envelope_batch_is_atomic` |
+| D3 | A long blocking DB call stalls the async runtime. | Heavy sync-path calls run through `Database::blocking` (`spawn_blocking`). | Code review: eviction and envelope batches run in `spawn_blocking` |
+| D4 | The FTS row count drifts from `messages` after batched writes. | Batched upserts write FTS in the same transaction; the startup FTS check stays. | db test `envelope_batch_keeps_fts_in_step` |
+
+## Provider discovery (setup)
+
+| # | Failure | Guard | Proof |
+|---|---|---|---|
+| P1 | An autoconfig file offers only plaintext or POP servers, and setup uses them. | Only IMAP with SSL/STARTTLS and SMTP with SSL/STARTTLS and password auth are accepted; otherwise the result is "not found". | Rust test `autoconfig_rejects_plaintext_and_pop` |
+| P2 | An autoconfig host redirects to a private or loopback address (SSRF). | The fetch uses the SSRF-safe resolver with pinned public addresses and doesn't follow redirects. | Rust test `autoconfig_blocks_private_targets` |
+| P3 | An oversized or deeply nested XML file uses up memory. | Size cap of 64 KiB and a bounded streaming parser. | Rust test `autoconfig_rejects_oversized_documents` |
+| P4 | An MX record points at an unknown host, and discovery guesses a server name. | MX results only map to bundled presets; an unknown MX falls through to autoconfig. | Rust test `mx_maps_only_to_known_presets` |
+| P5 | A preset domain collides with a user's own domain (for example `me.com` versus a custom domain). | Exact-match domain lists only; no suffix matching except explicit regional lists. | Rust test `preset_domains_match_exactly` |
+| P6 | Discovery pre-fills the form and saves without a live test. | `add_account` still tests IMAP and SMTP before saving; discovery only fills the form. | Playwright `onboarding.spec.ts` |
