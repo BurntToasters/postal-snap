@@ -80,7 +80,6 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
   const [discoveredDomain, setDiscoveredDomain] = useState<string>();
   const [discovering, setDiscovering] = useState(false);
   const emailRef = useRef(email);
-  emailRef.current = email;
   const [cacheMode, setCacheMode] = useState<"recent" | "full">("recent");
   const [savedAccount, setSavedAccount] = useState<AccountSummary>();
   const [syncProgress, setSyncProgress] = useState<SyncProgress>();
@@ -132,6 +131,10 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
     provider,
     smtp,
   ]);
+
+  useEffect(() => {
+    emailRef.current = email;
+  }, [email]);
 
   useEffect(() => {
     if (!savedAccount) return;
