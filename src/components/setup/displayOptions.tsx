@@ -1,4 +1,10 @@
 import { strings } from "../../i18n";
+import {
+  DENSITY_CHOICES,
+  READING_PANE_CHOICES,
+  TEXT_SCALE_CHOICES,
+  THEME_CHOICES,
+} from "../settings/displayChoices";
 import { useSettingsSave } from "../settings/useSettingsSave";
 import { useAppStore } from "../../store";
 import type { AppSettings } from "../../types";
@@ -26,9 +32,11 @@ export function DisplayOptions({ onChange }: Props) {
             onChange({ theme: event.target.value as AppSettings["theme"] })
           }
         >
-          <option value="system">{strings.settings.autoDefault}</option>
-          <option value="light">{strings.settings.light}</option>
-          <option value="dark">{strings.settings.dark}</option>
+          {THEME_CHOICES.map((choice) => (
+            <option key={choice.value} value={choice.value}>
+              {choice.label}
+            </option>
+          ))}
         </select>
         <small>{strings.settings.appearanceHelp}</small>
       </label>
@@ -43,8 +51,11 @@ export function DisplayOptions({ onChange }: Props) {
             })
           }
         >
-          <option value="comfortable">{strings.settings.comfortable}</option>
-          <option value="compact">{strings.settings.compact}</option>
+          {DENSITY_CHOICES.map((choice) => (
+            <option key={choice.value} value={choice.value}>
+              {choice.label}
+            </option>
+          ))}
         </select>
         <small>{strings.settings.spacingHelp}</small>
       </label>
@@ -57,12 +68,11 @@ export function DisplayOptions({ onChange }: Props) {
             onChange({ textScale: Number(event.target.value) })
           }
         >
-          <option value={0.85}>{strings.settings.small}</option>
-          <option value={1}>{strings.settings.normal}</option>
-          <option value={1.15}>{strings.settings.large}</option>
-          <option value={1.3}>{strings.settings.extraLarge}</option>
-          <option value={1.5}>{strings.settings.veryLarge}</option>
-          <option value={2}>{strings.settings.largest}</option>
+          {TEXT_SCALE_CHOICES.map((choice) => (
+            <option key={choice.value} value={choice.value}>
+              {choice.label}
+            </option>
+          ))}
         </select>
         <small>{strings.settings.textSizeHelp}</small>
       </label>
@@ -77,9 +87,11 @@ export function DisplayOptions({ onChange }: Props) {
             })
           }
         >
-          <option value="right">{strings.settings.paneRight}</option>
-          <option value="bottom">{strings.settings.paneBottom}</option>
-          <option value="hidden">{strings.settings.paneHidden}</option>
+          {READING_PANE_CHOICES.map((choice) => (
+            <option key={choice.value} value={choice.value}>
+              {choice.label}
+            </option>
+          ))}
         </select>
         <small>{strings.settings.readingPaneHelp}</small>
       </label>

@@ -18,7 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { strings } from "../../i18n";
-import { folderLabel } from "../../i18n/mail";
+import { folderPathLabel } from "../../i18n/mail";
 import type { MailboxSummary, MessageDetail, ReadingPane } from "../../types";
 import { moveMenuFocus, moveToolbarFocus } from "../toolbarNav";
 
@@ -268,7 +268,7 @@ export function ReaderToolbar({
                     )
                     .map((mailbox) => (
                       <option key={mailbox.id} value={mailbox.id}>
-                        {folderLabel(mailbox)}
+                        {folderPathLabel(mailbox)}
                       </option>
                     ))}
                 </select>

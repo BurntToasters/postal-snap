@@ -1,5 +1,5 @@
 import { strings } from "./i18n";
-import { folderLabel } from "./i18n/mail";
+import { folderPathLabel } from "./i18n/mail";
 import { useAppStore } from "./store";
 import type {
   MailboxRole,
@@ -255,7 +255,7 @@ function messageItems(
     items.push({ type: "separator" });
     items.push({ type: "heading", label: strings.contextMenu.moveTo });
     for (const box of destinations) {
-      const name = folderLabel(box);
+      const name = folderPathLabel(box);
       items.push(
         item(`move-mailbox:${box.id}`, name, {
           icon: `folder:${box.role}`,

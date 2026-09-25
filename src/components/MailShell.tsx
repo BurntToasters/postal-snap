@@ -35,6 +35,7 @@ import { MessageList } from "./mail/messageList";
 import { MailToolbar } from "./mail/mailToolbar";
 import { BulkBar, MessagePaneHeader } from "./mail/messagePaneChrome";
 import { PaneSplitter } from "./mail/paneSplitter";
+import { useSettingsSave } from "./settings/useSettingsSave";
 
 import { MEDIA_QUERIES } from "../breakpoints";
 
@@ -87,6 +88,7 @@ export function MailShell({ onOpenSettings }: Props) {
   const settings = useAppStore((state) => state.settings);
   const setSettings = useAppStore((state) => state.setSettings);
   const setError = useAppStore((state) => state.setError);
+  const { update: updateSettings } = useSettingsSave();
   const sync = useAppStore((state) =>
     activeAccountId ? state.sync[activeAccountId] : undefined,
   );
@@ -128,6 +130,16 @@ export function MailShell({ onOpenSettings }: Props) {
   const toolbarRef = useRef<HTMLElement>(null);
   const newFolderButtonRef = useRef<HTMLButtonElement>(null);
   const lastFolderInvoker = useRef<HTMLElement | null>(null);
+  const lastAccountRoute = useRef<string | null>(null);
+  const lastAccountRouteAttempt = useRef<string | null>(null);
+  const paneResizeStartValues = useRef<
+    Partial<
+      Record<
+        "folderPaneWidth" | "messagePaneWidth" | "readerPaneHeight",
+        number
+      >
+    >
+  >({});
 
   const sidebarVisible = settings.sidebarVisible !== false;
 
@@ -184,15 +196,7 @@ export function MailShell({ onOpenSettings }: Props) {
   }, []);
 
   function toggleSidebar() {
-    const next = {
-      ...useAppStore.getState().settings,
-      sidebarVisible: !sidebarVisible,
-    };
-    setSettings(next);
-    void api
-      .saveSettings(next)
-      .then(setSettings)
-      .catch((cause) => setError(String(cause)));
+    void updateSettings({ sidebarVisible: !sidebarVisible });
   }
 
   function openFolderDialog(
@@ -842,9 +846,7 @@ export function MailShell({ onOpenSettings }: Props) {
     openComposer,
     refresh,
     onOpenSettings,
-    settings,
-    setSettings,
-    setError,
+    updateSettings,
     searchInput,
     chooseMessage,
     relativeMessage,
@@ -852,24 +854,31 @@ export function MailShell({ onOpenSettings }: Props) {
 
   useEffect(() => {
     if (!activeAccountId) return;
+    const routeKey = JSON.stringify([activeAccountId, activeMailboxId ?? null]);
+    if (lastAccountRoute.current !== routeKey) {
+      lastAccountRoute.current = routeKey;
+      lastAccountRouteAttempt.current = null;
+    }
     if (
       settings.lastAccountId === activeAccountId &&
       settings.lastMailboxId === (activeMailboxId ?? null)
     )
       return;
+    const attemptKey = JSON.stringify([
+      routeKey,
+      settings.lastAccountId ?? null,
+      settings.lastMailboxId ?? null,
+    ]);
+    if (lastAccountRouteAttempt.current === attemptKey) return;
     const timer = window.setTimeout(() => {
-      const next = {
-        ...useAppStore.getState().settings,
+      lastAccountRouteAttempt.current = attemptKey;
+      void updateSettings({
         lastAccountId: activeAccountId,
         lastMailboxId: activeMailboxId ?? null,
-      };
-      void api
-        .saveSettings(next)
-        .then(setSettings)
-        .catch((cause) => setError(String(cause)));
+      });
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [activeAccountId, activeMailboxId, setError, setSettings, settings]);
+  }, [activeAccountId, activeMailboxId, settings, updateSettings]);
 
   function resizePane(
     key: "folderPaneWidth" | "messagePaneWidth" | "readerPaneHeight",
@@ -887,15 +896,18 @@ export function MailShell({ onOpenSettings }: Props) {
       ...previous,
       [key]: Math.round(Math.min(maximum, Math.max(minimum, value))),
     };
+    if (!persist) {
+      paneResizeStartValues.current[key] ??= previous[key];
+      setSettings(next);
+      return;
+    }
+
+    const rollbackValue = paneResizeStartValues.current[key] ?? previous[key];
+    delete paneResizeStartValues.current[key];
     setSettings(next);
-    if (persist)
-      void api
-        .saveSettings(next)
-        .then(setSettings)
-        .catch((cause) => {
-          setSettings(previous);
-          setError(String(cause));
-        });
+    void updateSettings({ [key]: next[key] }, undefined, {
+      rollback: { [key]: rollbackValue },
+    });
   }
 
   async function openDraft(id: string) {
