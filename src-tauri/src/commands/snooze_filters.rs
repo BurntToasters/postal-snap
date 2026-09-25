@@ -1,7 +1,7 @@
 use tauri::State;
 
 use super::sync::apply_filter_rules;
-use super::{command_result, AppState, CommandResult};
+use super::{command_result, wake, AppState, CommandResult};
 use crate::models::{validate_filter_rule, FilterRule, SnoozedSummary};
 
 #[tauri::command]
@@ -73,6 +73,8 @@ pub fn create_filter_rule(
     if let Ok(account) = state.db.account(&rule.account_id) {
         apply_filter_rules(&state.db, &account, None);
     }
+    // Queued rule moves replay on the next pass; run it now.
+    let _ = state.request(&rule.account_id, wake::SYNC);
     Ok(created)
 }
 
@@ -100,6 +102,8 @@ pub fn update_filter_rule(
     if let Ok(account) = state.db.account(&rule.account_id) {
         apply_filter_rules(&state.db, &account, None);
     }
+    // Queued rule moves replay on the next pass; run it now.
+    let _ = state.request(&rule.account_id, wake::SYNC);
     Ok(updated)
 }
 

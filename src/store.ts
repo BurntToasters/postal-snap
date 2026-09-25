@@ -64,6 +64,7 @@ export const defaultSettings: AppSettings = {
 interface AppState {
   accounts: AccountSummary[];
   activeAccountId?: string;
+  lastMailboxByAccount: Record<string, number>;
   mailboxes: MailboxSummary[];
   activeMailboxId?: number;
   activeLocalView?: "drafts" | "outbox" | "snoozed";
@@ -130,6 +131,7 @@ function pendingComposerState(
 
 export const useAppStore = create<AppState>((set) => ({
   accounts: [],
+  lastMailboxByAccount: {},
   mailboxes: [],
   messages: [],
   hasMoreMessages: false,
@@ -161,11 +163,20 @@ export const useAppStore = create<AppState>((set) => ({
           accountIds.has(accountId),
         ),
       );
+      const lastMailboxByAccount = Object.fromEntries(
+        Object.entries(state.lastMailboxByAccount).filter(([accountId]) =>
+          accountIds.has(accountId),
+        ),
+      );
+      if (state.activeAccountId && state.activeMailboxId) {
+        lastMailboxByAccount[state.activeAccountId] = state.activeMailboxId;
+      }
 
       return {
         accounts,
         activeAccountId,
         sync,
+        lastMailboxByAccount,
         ...(activeAccountChanged
           ? {
               activeMailboxId: undefined,
@@ -192,20 +203,27 @@ export const useAppStore = create<AppState>((set) => ({
       };
     }),
   selectAccount: (activeAccountId) =>
-    set((state) => ({
-      activeAccountId,
-      activeMailboxId: undefined,
-      activeLocalView: undefined,
-      mailboxes: [],
-      messages: [],
-      messageCursor: undefined,
-      hasMoreMessages: false,
-      drafts: [],
-      outbox: [],
-      snoozed: [],
-      selectedMessage: undefined,
-      ...pendingComposerState(state, activeAccountId),
-    })),
+    set((state) => {
+      const lastMailboxByAccount = { ...state.lastMailboxByAccount };
+      if (state.activeAccountId && state.activeMailboxId) {
+        lastMailboxByAccount[state.activeAccountId] = state.activeMailboxId;
+      }
+      return {
+        activeAccountId,
+        lastMailboxByAccount,
+        activeMailboxId: undefined,
+        activeLocalView: undefined,
+        mailboxes: [],
+        messages: [],
+        messageCursor: undefined,
+        hasMoreMessages: false,
+        drafts: [],
+        outbox: [],
+        snoozed: [],
+        selectedMessage: undefined,
+        ...pendingComposerState(state, activeAccountId),
+      };
+    }),
   setMailboxes: (mailboxes) =>
     set((state) => ({
       mailboxes,
@@ -216,7 +234,16 @@ export const useAppStore = create<AppState>((set) => ({
           ? state.activeMailboxId
           : (
               mailboxes.find(
-                (box) => box.id === state.settings.lastMailboxId,
+                (box) =>
+                  box.id ===
+                  (state.activeAccountId
+                    ? state.lastMailboxByAccount[state.activeAccountId]
+                    : undefined),
+              ) ??
+              mailboxes.find(
+                (box) =>
+                  state.settings.lastAccountId === state.activeAccountId &&
+                  box.id === state.settings.lastMailboxId,
               ) ??
               mailboxes.find((box) => box.role === "inbox") ??
               mailboxes[0]
@@ -228,6 +255,12 @@ export const useAppStore = create<AppState>((set) => ({
         ? {}
         : {
             activeMailboxId,
+            lastMailboxByAccount: state.activeAccountId
+              ? {
+                  ...state.lastMailboxByAccount,
+                  [state.activeAccountId]: activeMailboxId,
+                }
+              : state.lastMailboxByAccount,
             activeLocalView: undefined,
             messages: [],
             messageCursor: undefined,
@@ -279,7 +312,9 @@ export const useAppStore = create<AppState>((set) => ({
   openComposer: (composeSeed) =>
     set((state) => {
       const composerAccountId =
-        composeSeed?.draft?.accountId ?? state.activeAccountId;
+        composeSeed?.draft?.accountId ??
+        composeSeed?.sourceMessage?.accountId ??
+        state.activeAccountId;
       if (!composerAccountId) {
         if (!composeSeed) return state;
         return { pendingComposeSeed: composeSeed };

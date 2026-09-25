@@ -4,7 +4,8 @@ export type MailboxRole =
   "inbox" | "sent" | "drafts" | "archive" | "trash" | "junk" | "other";
 export type ReadingPane = "right" | "bottom" | "hidden";
 export type UiDensity = "comfortable" | "compact";
-export type SyncPhase = "idle" | "connecting" | "syncing" | "offline" | "error";
+export type SyncPhase =
+  "idle" | "connecting" | "syncing" | "offline" | "authFailed" | "error";
 
 export interface ServerConfig {
   host: string;
@@ -20,7 +21,27 @@ export interface AccountSetupRequest {
   password: string;
   imap?: ServerConfig;
   smtp?: ServerConfig;
+  cachePolicy?: CachePolicy;
 }
+
+export type MailSettingsDiscovery =
+  | {
+      status: "found";
+      providerId: string;
+      providerName: string;
+      accountProvider: ProviderKind;
+      source: "preset" | "mx" | "autoconfig";
+      imap: ServerConfig;
+      smtp: ServerConfig;
+      appPasswordUrl?: string | null;
+    }
+  | {
+      status: "unsupported";
+      providerId: string;
+      providerName: string;
+      message: string;
+    }
+  | { status: "notFound"; domain: string };
 
 export interface AccountSummary {
   id: string;
@@ -32,10 +53,17 @@ export interface AccountSummary {
   aliases?: string[];
   authMethod?: string;
   signature?: string;
+  color?: string | null;
 }
 
 export interface AccountRemovalOutcome {
   cleanupPending: boolean;
+}
+
+export interface AccountRemovalImpact {
+  unsentMessages: number;
+  unsyncedDrafts: number;
+  queuedChanges: number;
 }
 
 export interface AccountInboxCount {
@@ -52,6 +80,7 @@ export interface MailboxSummary {
   role: MailboxRole;
   unreadCount: number;
   totalCount: number;
+  delimiter?: string | null;
 }
 
 export interface MessageSummary {
@@ -242,6 +271,16 @@ export interface CachePolicy {
   mode: "recent" | "full";
   days: number;
   maxBytes: number;
+}
+
+export interface SyncProgress {
+  accountId: string;
+  folder?: string | null;
+  envelopesDone: number;
+  envelopesTotal: number;
+  bodiesDone: number;
+  bodiesTotal: number;
+  backfilling: boolean;
 }
 
 export type SettingsPatch = Partial<Omit<AppSettings, "cachePolicy">> & {

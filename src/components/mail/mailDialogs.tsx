@@ -11,6 +11,7 @@ export function SentNoticeToast() {
   const lastSent = useAppStore((state) => state.lastSent);
   const setLastSent = useAppStore((state) => state.setLastSent);
   const openComposer = useAppStore((state) => state.openComposer);
+  const selectAccount = useAppStore((state) => state.selectAccount);
   const selectLocalView = useAppStore((state) => state.selectLocalView);
   const setError = useAppStore((state) => state.setError);
   const [expiredNoticeId, setExpiredNoticeId] = useState<string>();
@@ -67,6 +68,7 @@ export function SentNoticeToast() {
         type="button"
         onClick={() => {
           setLastSent(undefined);
+          selectAccount(notice.accountId);
           selectLocalView("outbox");
         }}
       >
@@ -107,7 +109,14 @@ export function AddAccountDialog({
         aria-label={strings.mail.addEmailAccount}
         ref={dialogRef}
       >
-        <SetupWizard onComplete={onComplete} />
+        <button
+          type="button"
+          className="secondary-button setup-dialog-close"
+          onClick={onClose}
+        >
+          {strings.common.close}
+        </button>
+        <SetupWizard embedded onComplete={onComplete} />
       </section>
     </div>,
     document.body,

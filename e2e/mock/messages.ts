@@ -8,7 +8,7 @@ export async function registerMockMessages(page: Page): Promise<void> {
   await page.addInitScript(() => {
     const mock = window.__POSTAL_SNAP_MOCK__ as MockShared;
     const state = window.__POSTAL_SNAP_TEST__ as MockState;
-    const { mailboxes, summary, olderSummary, params } = mock;
+    const { mailboxes, summary, olderSummary, secondSummary, params } = mock;
     let paginatedCursorConsumed = false;
     Object.assign(mock.handlers, {
       list_messages(args: Record<string, unknown>) {
@@ -42,9 +42,17 @@ export async function registerMockMessages(page: Page): Promise<void> {
           paginatedCursorConsumed = true;
           return { items: [olderSummary], nextCursor: null, hasMore: false };
         }
-        return { items: [summary], nextCursor: null, hasMore: false };
+        return {
+          items: [
+            args.accountId === secondSummary.accountId
+              ? secondSummary
+              : summary,
+          ],
+          nextCursor: null,
+          hasMore: false,
+        };
       },
-      get_message() {
+      get_message(args: Record<string, unknown>) {
         if (params.has("oversize")) {
           throw {
             code: "limitExceeded",
@@ -52,9 +60,11 @@ export async function registerMockMessages(page: Page): Promise<void> {
             retryable: false,
           };
         }
+        const selected =
+          args.accountId === secondSummary.accountId ? secondSummary : summary;
         return {
-          ...summary,
-          to: ["sam@icloud.com"],
+          ...selected,
+          to: [selected.recipients],
           cc: [],
           replyTo: null,
           textBody: "Are we still meeting on Saturday?",
@@ -138,6 +148,9 @@ export async function registerMockMessages(page: Page): Promise<void> {
       },
       sync_account() {
         return undefined;
+      },
+      sync_all_accounts() {
+        return mock.accounts.map((account) => account.id);
       },
       release_compose_attachments() {
         return undefined;

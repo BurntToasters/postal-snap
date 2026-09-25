@@ -120,10 +120,22 @@ export default function App() {
     const cancelQuitUpdate = startDeferredUpdateOnQuit();
     let active = true;
     const unsubscribers: Array<() => void> = [];
-    void api.onSyncState(setSync).then((fn) => {
-      if (active) unsubscribers.push(fn);
-      else fn();
-    });
+    void api
+      .onSyncState((syncState) => {
+        setSync(syncState);
+        if (syncState.phase === "authFailed" || syncState.phase === "offline") {
+          void api
+            .listAccounts()
+            .then((loadedAccounts) => {
+              if (active) setAccounts(loadedAccounts);
+            })
+            .catch(() => undefined);
+        }
+      })
+      .then((fn) => {
+        if (active) unsubscribers.push(fn);
+        else fn();
+      });
     void api.onAppWarning(setError).then((fn) => {
       if (active) unsubscribers.push(fn);
       else fn();
@@ -172,7 +184,14 @@ export default function App() {
       cancelQuitUpdate();
       unsubscribers.forEach((fn) => fn());
     };
-  }, [loadAccounts, openComposer, openSettings, setError, setSync]);
+  }, [
+    loadAccounts,
+    openComposer,
+    openSettings,
+    setAccounts,
+    setError,
+    setSync,
+  ]);
 
   useEffect(() => {
     if (!inTauri()) return;
@@ -289,7 +308,11 @@ export default function App() {
       />
     </main>
   ) : (
-    <MailShell onOpenSettings={() => openSettings()} />
+    <MailShell
+      onOpenSettings={(tab) =>
+        openSettings(tab === "accounts" ? "accounts" : "general")
+      }
+    />
   );
 
   return (

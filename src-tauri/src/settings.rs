@@ -285,22 +285,13 @@ fn parse_and_validate(raw: &str) -> Result<AppSettings, String> {
 }
 
 fn validate(settings: &AppSettings) -> Result<(), String> {
-    let valid_cache_max_bytes = settings.cache_policy.max_bytes == 0
-        || (100 * 1024 * 1024..=100 * 1024 * 1024 * 1024)
-            .contains(&settings.cache_policy.max_bytes);
-    let valid_cache_days = if settings.cache_policy.mode == "full" {
-        true
-    } else {
-        (1..=3650).contains(&settings.cache_policy.days)
-    };
     let valid_setup_step = settings
         .setup_step
         .as_deref()
         .is_none_or(|step| matches!(step, "welcome" | "appearance" | "comfort" | "account"));
     if settings.schema_version != 2
         || !(0.85..=2.0).contains(&settings.text_scale)
-        || !valid_cache_max_bytes
-        || !valid_cache_days
+        || !settings.cache_policy.is_valid()
         || !valid_setup_step
         || !matches!(
             settings.reading_pane.as_str(),
@@ -308,7 +299,6 @@ fn validate(settings: &AppSettings) -> Result<(), String> {
         )
         || !matches!(settings.theme.as_str(), "system" | "light" | "dark")
         || !matches!(settings.density.as_str(), "comfortable" | "compact")
-        || !matches!(settings.cache_policy.mode.as_str(), "recent" | "full")
         || !matches!(
             settings.update_check_interval.as_str(),
             "startupAnd6h" | "startupAnd12h" | "startupAnd24h" | "startup" | "manual"

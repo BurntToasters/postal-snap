@@ -53,6 +53,8 @@ uuid = { version = "1", features = ["v4", "serde"] }
 # private API feature, store builds keep it off.
 window-vibrancy = "0.6"
 zeroize = { version = "1", features = ["derive"] }
+quick-xml = { version = "0.42", default-features = false }
+hickory-resolver = { version = "0.26.3", default-features = false, features = ["system-config", "tokio"] }
 
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
