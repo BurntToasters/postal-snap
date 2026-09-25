@@ -72,7 +72,7 @@ pub async fn ensure_sent_copy(
     message_id: &str,
     bytes: &[u8],
 ) -> Result<(), String> {
-    let mut session = connect_imap(&account.imap, password).await?;
+    let mut session = super::pool::checkout(account, password).await?;
     tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(mailbox))
         .await
         .map_err(|_| "Sent folder timed out.".to_string())?
@@ -97,7 +97,7 @@ pub async fn ensure_sent_copy(
             return Err("The message was sent, but its Sent copy could not be confirmed.".into());
         }
     }
-    let _ = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.logout()).await;
+    session.release();
     Ok(())
 }
 
@@ -155,10 +155,18 @@ pub(crate) async fn connect_imap(
             async_imap::Client::new(tls)
         }
     };
+    // Only an explicit NO/BAD answer to LOGIN means the credentials were
+    // rejected. Timeouts and dropped connections are transient and must not
+    // park the account as "Sign-in failed".
     tokio::time::timeout(CONNECT_TIMEOUT, client.login(&server.username, password))
         .await
-        .map_err(|_| "Incoming sign-in timed out.".to_string())?
-        .map_err(|(error, _)| redact_error(&error, "Incoming sign-in"))
+        .map_err(|_| "Incoming server timed out.".to_string())?
+        .map_err(|(error, _)| match error {
+            async_imap::error::Error::No(_) | async_imap::error::Error::Bad(_) => {
+                redact_error(&error, "Incoming sign-in")
+            }
+            _ => redact_error(&error, "Incoming connection"),
+        })
 }
 
 #[cfg(test)]

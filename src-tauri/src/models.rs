@@ -57,7 +57,7 @@ impl TlsMode {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerConfig {
     pub host: String,
@@ -75,6 +75,9 @@ pub struct AccountSetupRequest {
     pub password: String,
     pub imap: Option<ServerConfig>,
     pub smtp: Option<ServerConfig>,
+    /// Download policy chosen during setup; `None` uses the app default.
+    #[serde(default)]
+    pub cache_policy: Option<CachePolicy>,
 }
 
 impl std::fmt::Debug for AccountSetupRequest {
@@ -105,6 +108,9 @@ pub struct AccountSummary {
     pub auth_method: String,
     #[serde(default)]
     pub signature: String,
+    /// Avatar color token chosen by the user; `None` uses the automatic color.
+    #[serde(default)]
+    pub color: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -112,6 +118,21 @@ pub struct AccountSummary {
 pub struct AccountRemovalOutcome {
     pub cleanup_pending: bool,
 }
+
+/// Local-only work that removing an account would discard. Mail on the server
+/// is unaffected; these items exist only on this computer.
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountRemovalImpact {
+    pub unsent_messages: u32,
+    pub unsynced_drafts: u32,
+    pub queued_changes: u32,
+}
+
+/// Avatar colors an account may use. Kept in sync with the frontend tokens.
+pub const ACCOUNT_COLORS: [&str; 8] = [
+    "blue", "teal", "green", "amber", "orange", "red", "pink", "purple",
+];
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -164,6 +185,8 @@ pub struct MailboxSummary {
     pub role: MailboxRole,
     pub unread_count: u32,
     pub total_count: u32,
+    /// IMAP hierarchy delimiter from LIST, when the server reported one.
+    pub delimiter: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -228,6 +251,14 @@ pub struct MessageDetail {
     pub attachments: Vec<Attachment>,
     #[serde(default)]
     pub references: Vec<String>,
+    /// `available`, or why the body is missing: `offline`, `signInNeeded`,
+    /// `tooLarge`.
+    #[serde(default = "default_body_status")]
+    pub body_status: String,
+}
+
+fn default_body_status() -> String {
+    "available".into()
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -321,6 +352,20 @@ pub struct SyncState {
     pub last_success_at: Option<String>,
 }
 
+/// Download progress for one account. Envelope totals are only known for
+/// "Download all"; Recent mode reports the envelopes already cached.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncProgress {
+    pub account_id: String,
+    pub folder: Option<String>,
+    pub envelopes_done: u64,
+    pub envelopes_total: u64,
+    pub bodies_done: u64,
+    pub bodies_total: u64,
+    pub backfilling: bool,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct CachePolicy {
@@ -342,6 +387,35 @@ impl Default for CachePolicy {
 impl CachePolicy {
     pub fn is_unlimited(&self) -> bool {
         self.mode == "full" && self.max_bytes == 0
+    }
+
+    /// Valid policies: `recent` keeps 1..=3650 days, `full` ignores days, and
+    /// the size cap is either off (0) or 100 MiB..=100 GiB.
+    pub fn is_valid(&self) -> bool {
+        let valid_max_bytes = self.max_bytes == 0
+            || (100 * 1024 * 1024..=100 * 1024 * 1024 * 1024).contains(&self.max_bytes);
+        let valid_days = match self.mode.as_str() {
+            "full" => true,
+            "recent" => (1..=3650).contains(&self.days),
+            _ => false,
+        };
+        valid_max_bytes && valid_days
+    }
+
+    /// Oldest server arrival time whose body belongs in the cache, if any.
+    pub fn cutoff(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        (self.mode == "recent")
+            .then(|| chrono::Utc::now() - chrono::Duration::days(i64::from(self.days)))
+    }
+
+    /// True when `self` keeps mail that `previous` did not, so backfill that
+    /// stopped at the old cutoff has to resume.
+    pub fn widens(&self, previous: &CachePolicy) -> bool {
+        match (previous.mode.as_str(), self.mode.as_str()) {
+            ("recent", "full") => true,
+            ("recent", "recent") => self.days > previous.days,
+            _ => false,
+        }
     }
 }
 
@@ -813,7 +887,7 @@ pub fn take_validated_setup(
     Ok((imap, smtp, password))
 }
 
-fn validate_server(server: &ServerConfig) -> Result<(), String> {
+pub(crate) fn validate_server(server: &ServerConfig) -> Result<(), String> {
     let host = server.host.trim();
     let host_ok = !host.is_empty()
         && host.len() <= 253
@@ -1020,6 +1094,7 @@ mod tests {
             password: "secret".into(),
             imap: None,
             smtp: None,
+            cache_policy: None,
         };
         let (imap, smtp) = validated_setup(&request).unwrap();
         assert_eq!(imap.username, "jane");
@@ -1053,6 +1128,7 @@ mod tests {
                 tls_mode: TlsMode::StartTls,
                 username: "sam".into(),
             }),
+            cache_policy: None,
         };
         assert!(validated_setup(&request).is_err());
     }
@@ -1214,6 +1290,7 @@ mod tests {
                 password: "secret".into(),
                 imap: None,
                 smtp: None,
+                cache_policy: None,
             };
             let (imap, smtp) = validated_setup(&request).unwrap();
             assert_eq!(imap.username, "pat");
@@ -1232,6 +1309,7 @@ mod tests {
             password: "abcd efgh ijkl mnop".into(),
             imap: None,
             smtp: None,
+            cache_policy: None,
         };
         let (_, _, password) = take_validated_setup(&mut request).unwrap();
         assert_eq!(password.as_str(), "abcdefghijklmnop");
@@ -1247,6 +1325,7 @@ mod tests {
             password: " \t  ".into(),
             imap: None,
             smtp: None,
+            cache_policy: None,
         };
         assert!(take_validated_setup(&mut request).is_err());
     }
@@ -1260,6 +1339,7 @@ mod tests {
             password: "secret".into(),
             imap: None,
             smtp: None,
+            cache_policy: None,
         };
         let _taken = std::mem::take(&mut request.password);
         assert!(validated_setup(&request).is_err());
@@ -1284,6 +1364,7 @@ mod tests {
                 tls_mode: TlsMode::StartTls,
                 username: "sam@example.com".into(),
             }),
+            cache_policy: None,
         };
         let (_, _, password) = take_validated_setup(&mut request).unwrap();
         assert_eq!(password.as_str(), "phrase with spaces");
@@ -1357,5 +1438,28 @@ mod tests {
         rule = valid_rule();
         rule.contains = "   ".into();
         assert!(validate_filter_rule(&rule, "account-1").is_err());
+    }
+
+    #[test]
+    fn timeouts_are_not_authentication_failures() {
+        // W6: a slow network must never park the account as "Sign-in failed".
+        for transient in [
+            "Incoming server timed out.",
+            "Incoming connection failed. Check the mail server, password, and internet connection.",
+            "Incoming TLS negotiation timed out.",
+        ] {
+            assert_eq!(
+                IpcError::from(transient).code,
+                "connectionFailed",
+                "{transient}"
+            );
+        }
+        assert_eq!(
+            IpcError::from(
+                "Incoming sign-in failed. Check the mail server, password, and internet connection."
+            )
+            .code,
+            "authenticationFailed"
+        );
     }
 }

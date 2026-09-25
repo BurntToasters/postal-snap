@@ -7,6 +7,7 @@ import {
   ExternalLink,
   Eye,
   EyeOff,
+  LoaderCircle,
   Server,
   ShieldCheck,
   TriangleAlert,
@@ -14,7 +15,14 @@ import {
 import { api } from "../api";
 import { describeSetupError } from "../errors";
 import { strings } from "../i18n";
-import type { AccountSetupRequest, ProviderKind, ServerConfig } from "../types";
+import type {
+  AccountSetupRequest,
+  AccountSummary,
+  MailSettingsDiscovery,
+  ProviderKind,
+  ServerConfig,
+  SyncProgress,
+} from "../types";
 import { AppMark } from "./AppMark";
 import {
   APPLE_APP_PASSWORD_GUIDE_URL,
@@ -34,6 +42,16 @@ interface Props {
   onComplete: () => Promise<void>;
   onOpenSettings?: () => void;
   embedded?: boolean;
+}
+
+function emailDomain(address: string) {
+  const at = address.lastIndexOf("@");
+  return at < 0
+    ? ""
+    : address
+        .slice(at + 1)
+        .trim()
+        .toLowerCase();
 }
 
 const iCloudImapSummary = {
@@ -56,6 +74,17 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
   const [showPassword, setShowPassword] = useState(false);
   const [imap, setImap] = useState(emptyManualImap);
   const [smtp, setSmtp] = useState(emptyManualSmtp);
+  const [discovery, setDiscovery] = useState<MailSettingsDiscovery>();
+  // Domain whose discovered servers fill the IMAP/SMTP fields. A password must
+  // never go to servers found for a different (for example mistyped) domain.
+  const [discoveredDomain, setDiscoveredDomain] = useState<string>();
+  const [discovering, setDiscovering] = useState(false);
+  const emailRef = useRef(email);
+  emailRef.current = email;
+  const [cacheMode, setCacheMode] = useState<"recent" | "full">("recent");
+  const [savedAccount, setSavedAccount] = useState<AccountSummary>();
+  const [syncProgress, setSyncProgress] = useState<SyncProgress>();
+  const [openingMailbox, setOpeningMailbox] = useState(false);
   const [testing, setTesting] = useState(false);
   const wizardRef = useRef<HTMLDivElement>(null);
   const previousProviderRef = useRef(provider);
@@ -75,17 +104,59 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
     return trimmed;
   }, [email, provider]);
 
-  const request = useMemo<AccountSetupRequest>(
-    () => ({
-      provider: provider ?? "icloud",
+  const request = useMemo<AccountSetupRequest>(() => {
+    const accountProvider =
+      discovery?.status === "found"
+        ? discovery.accountProvider
+        : (provider ?? "icloud");
+    return {
+      provider: accountProvider,
       displayName: displayName.trim(),
       email: normalizedEmail,
       password: preparePassword(provider ?? "icloud", password),
-      imap: provider === "manual" ? trimServer(imap) : undefined,
-      smtp: provider === "manual" ? trimServer(smtp) : undefined,
-    }),
-    [displayName, imap, normalizedEmail, password, provider, smtp],
-  );
+      imap: accountProvider === "manual" ? trimServer(imap) : undefined,
+      smtp: accountProvider === "manual" ? trimServer(smtp) : undefined,
+      cachePolicy: {
+        mode: cacheMode,
+        days: 90,
+        maxBytes: cacheMode === "full" ? 0 : 1_073_741_824,
+      },
+    };
+  }, [
+    cacheMode,
+    discovery,
+    displayName,
+    imap,
+    normalizedEmail,
+    password,
+    provider,
+    smtp,
+  ]);
+
+  useEffect(() => {
+    if (!savedAccount) return;
+    let disposed = false;
+    let unlisten: () => void = () => undefined;
+    void api
+      .getSyncProgress(savedAccount.id)
+      .then((progress) => {
+        if (!disposed) setSyncProgress(progress);
+      })
+      .catch(() => undefined);
+    void api
+      .onSyncProgress((progress) => {
+        if (!disposed && progress.accountId === savedAccount.id)
+          setSyncProgress(progress);
+      })
+      .then((stop) => {
+        if (disposed) stop();
+        else unlisten = stop;
+      });
+    return () => {
+      disposed = true;
+      unlisten();
+    };
+  }, [savedAccount]);
 
   useEffect(() => {
     const wizard = wizardRef.current;
@@ -100,6 +171,14 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
     previousProviderRef.current = provider;
   }, [provider]);
 
+  function forgetDiscoveredServers(username: string) {
+    setDiscovery(undefined);
+    if (discoveredDomain === undefined) return;
+    setDiscoveredDomain(undefined);
+    setImap(emptyManualImap(username));
+    setSmtp(emptyManualSmtp(username));
+  }
+
   function chooseProvider(next: ProviderKind) {
     const username = email.trim();
     setProvider(next);
@@ -107,7 +186,8 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
     setShowPassword(false);
     setStatus(undefined);
     setHelpLinkNotice(undefined);
-    if (next === "manual") {
+    forgetDiscoveredServers(username);
+    if (next === "manual" && discoveredDomain === undefined) {
       setImap((current) =>
         current.host ? current : emptyManualImap(username),
       );
@@ -117,11 +197,59 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
     }
   }
 
+  function returnToProviderPicker() {
+    setProvider(undefined);
+    forgetDiscoveredServers(email.trim());
+    setPassword("");
+    setShowPassword(false);
+    setStatus(undefined);
+    setHelpLinkNotice(undefined);
+  }
+
+  async function discoverSettings() {
+    if (discovering) return;
+    setDiscovering(true);
+    setStatus(undefined);
+    setDiscovery(undefined);
+    const query = email.trim();
+    try {
+      const found = await api.discoverMailSettings(query);
+      if (emailRef.current.trim() !== query) return;
+      setDiscovery(found);
+      if (found.status === "found") {
+        setDiscoveredDomain(emailDomain(query));
+        setImap(found.imap);
+        setSmtp(found.smtp);
+      } else {
+        setDiscoveredDomain(undefined);
+        setImap(emptyManualImap(query));
+        setSmtp(emptyManualSmtp(query));
+      }
+    } catch (cause) {
+      if (emailRef.current.trim() !== query) return;
+      const described = describeSetupError(cause, "manual");
+      setStatus({
+        kind: "error",
+        text: described.text,
+        hint: described.hint,
+      });
+    } finally {
+      setDiscovering(false);
+    }
+  }
+
   function updateEmail(value: string) {
     const previous = email.trim();
     setEmail(value);
     if (provider !== "manual") return;
     const next = value.trim();
+    if (
+      discoveredDomain !== undefined &&
+      emailDomain(next) !== discoveredDomain
+    ) {
+      forgetDiscoveredServers(next);
+      return;
+    }
     setImap((server) => ({
       ...server,
       username:
@@ -157,20 +285,23 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!provider || testing) return;
+    if (
+      discovery?.status === "found" &&
+      emailDomain(normalizedEmail) !== discoveredDomain
+    ) {
+      forgetDiscoveredServers(normalizedEmail);
+      return;
+    }
     setTesting(true);
     setStatus({
       kind: "working",
       text: strings.setup.testing,
     });
     try {
-      await api.addAccount(request);
+      const account = await api.addAccount(request);
       setStatus({ kind: "success", text: strings.setup.connected });
       setPassword("");
-      try {
-        await onComplete();
-      } catch {
-        // The account is already saved. Listing accounts is best-effort.
-      }
+      setSavedAccount(account);
     } catch (cause) {
       const described = describeSetupError(cause, provider);
       setStatus({
@@ -186,12 +317,66 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
 
   async function openHelpLink() {
     setHelpLinkNotice(undefined);
-    const outcome = await inspectAndOpenExternalLink(
-      APPLE_APP_PASSWORD_GUIDE_URL,
-    );
-    if (outcome === "failed") setHelpLinkNotice(strings.setup.helpLinkFailed);
+    const url =
+      discovery?.status === "found" && discovery.appPasswordUrl
+        ? discovery.appPasswordUrl
+        : APPLE_APP_PASSWORD_GUIDE_URL;
+    const outcome = await inspectAndOpenExternalLink(url);
+    if (outcome === "failed")
+      setHelpLinkNotice(
+        provider === "icloud"
+          ? strings.setup.helpLinkFailed
+          : strings.setup.providerHelpLinkFailed,
+      );
     else if (outcome === "declined")
       setHelpLinkNotice(strings.setup.helpLinkDeclined);
+  }
+
+  if (savedAccount) {
+    const total = Math.max(
+      1,
+      syncProgress?.envelopesTotal ?? syncProgress?.bodiesTotal ?? 1,
+    );
+    const done = Math.min(
+      total,
+      syncProgress?.envelopesTotal
+        ? syncProgress.envelopesDone
+        : (syncProgress?.bodiesDone ?? 0),
+    );
+    return (
+      <div
+        className={embedded ? "setup-wizard-embedded" : "setup-page"}
+        ref={wizardRef}
+      >
+        <section
+          className={`setup-card first-sync${embedded ? " first-sync-embedded" : ""}`}
+          aria-labelledby="first-sync-title"
+        >
+          {!embedded ? <AppMark size={52} /> : null}
+          <LoaderCircle className="first-sync-spinner" aria-hidden="true" />
+          <h2 id="first-sync-title" tabIndex={-1}>
+            {strings.setup.gettingMail}
+          </h2>
+          <p className="setup-intro">{strings.setup.gettingMailIntro}</p>
+          <progress
+            aria-label={strings.setup.mailDownloadProgress}
+            value={done}
+            max={total}
+          />
+          <button
+            type="button"
+            className="primary-button full-button"
+            disabled={openingMailbox}
+            onClick={() => {
+              setOpeningMailbox(true);
+              void onComplete().catch(() => setOpeningMailbox(false));
+            }}
+          >
+            {strings.setup.openMailbox}
+          </button>
+        </section>
+      </div>
+    );
   }
 
   if (!provider) {
@@ -274,6 +459,7 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
               <span className="provider-copy">
                 <strong>{strings.setup.other}</strong>
                 <small>{strings.setup.otherDetail}</small>
+                <small>{strings.setup.supportedProviders}</small>
               </span>
               <span className="provider-arrow" aria-hidden="true">
                 <ChevronRight />
@@ -298,7 +484,84 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
     );
   }
 
+  if (provider === "manual" && discovery?.status === "unsupported") {
+    return (
+      <div
+        className={embedded ? "setup-wizard-embedded" : "setup-page"}
+        ref={wizardRef}
+      >
+        <form
+          className={`setup-card account-form${
+            embedded ? " account-form-embedded" : ""
+          }`}
+          onSubmit={(event) => {
+            event.preventDefault();
+            void discoverSettings();
+          }}
+          aria-labelledby="setup-form-title"
+        >
+          <header className="setup-form-header" data-tauri-drag-region="deep">
+            <button
+              className="back-button"
+              type="button"
+              onClick={returnToProviderPicker}
+            >
+              <ArrowLeft aria-hidden="true" /> {strings.common.back}
+            </button>
+          </header>
+          <div>
+            <h2 id="setup-form-title" tabIndex={-1}>
+              {strings.setup.connectOther}
+            </h2>
+            <p className="setup-intro">{strings.setup.discoverIntro}</p>
+          </div>
+          <label>
+            {strings.setup.email}
+            <input
+              required
+              type="email"
+              autoComplete="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              placeholder={strings.setup.emailPlaceholder}
+            />
+          </label>
+          {discovery?.status === "unsupported" ? (
+            <div className="connection-status error" role="alert">
+              <TriangleAlert aria-hidden="true" />
+              <span>
+                <strong>{discovery.providerName}</strong>
+                <small>{discovery.message}</small>
+              </span>
+            </div>
+          ) : null}
+          {status?.kind === "error" ? (
+            <div className="connection-status error" role="alert">
+              <TriangleAlert aria-hidden="true" />
+              <span>
+                {status.text}
+                {status.hint ? <small>{status.hint}</small> : null}
+              </span>
+            </div>
+          ) : null}
+          <button
+            className="primary-button full-button"
+            type="submit"
+            disabled={discovering}
+          >
+            {discovering
+              ? strings.setup.findingSettings
+              : strings.setup.findSettings}
+          </button>
+        </form>
+      </div>
+    );
+  }
+
   const FormTitle = embedded ? "h2" : "h1";
+  const foundProvider = discovery?.status === "found" ? discovery : undefined;
+  const requiresAppPassword =
+    provider === "icloud" || Boolean(foundProvider?.appPasswordUrl);
 
   return (
     <div
@@ -316,13 +579,7 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
           <button
             className="back-button"
             type="button"
-            onClick={() => {
-              setProvider(undefined);
-              setPassword("");
-              setShowPassword(false);
-              setStatus(undefined);
-              setHelpLinkNotice(undefined);
-            }}
+            onClick={returnToProviderPicker}
           >
             <ArrowLeft aria-hidden="true" /> {strings.common.back}
           </button>
@@ -355,17 +612,29 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
           <FormTitle id="setup-form-title" tabIndex={-1}>
             {provider === "icloud"
               ? strings.setup.connectIcloud
-              : strings.setup.connectOther}
+              : foundProvider
+                ? strings.setup.connectProvider(foundProvider.providerName)
+                : strings.setup.connectOther}
           </FormTitle>
           <p className="setup-intro">
             {provider === "icloud"
               ? strings.setup.icloudIntro
-              : strings.setup.manualIntro}
+              : foundProvider
+                ? strings.setup.settingsFound(foundProvider.providerName)
+                : discovery?.status === "notFound"
+                  ? strings.setup.settingsNotFound
+                  : strings.setup.discoverIntro}
           </p>
         </div>
-        {provider === "icloud" ? (
+        {requiresAppPassword ? (
           <div className="setup-help">
-            <span>{strings.setup.normalPasswordWarning}</span>
+            <span>
+              {provider === "icloud"
+                ? strings.setup.normalPasswordWarning
+                : strings.setup.providerPasswordWarning(
+                    foundProvider?.providerName ?? "This provider",
+                  )}
+            </span>
             <button
               type="button"
               className="text-button"
@@ -416,6 +685,18 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
             />
           </label>
         </div>
+        {provider === "manual" ? (
+          <button
+            type="button"
+            className="secondary-button full-button"
+            disabled={discovering || !email.trim()}
+            onClick={() => void discoverSettings()}
+          >
+            {discovering
+              ? strings.setup.findingSettings
+              : strings.setup.findSettings}
+          </button>
+        ) : null}
         {provider === "icloud" ? (
           <p className="setup-field-hint" id="setup-email-hint">
             {strings.setup.icloudEmailHint}
@@ -423,7 +704,7 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
         ) : null}
         <div className="field-label">
           <label htmlFor="setup-password">
-            {provider === "icloud"
+            {requiresAppPassword
               ? strings.setup.appPassword
               : strings.setup.emailPassword}
           </label>
@@ -436,11 +717,11 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
               spellCheck={false}
               value={password}
               aria-describedby={
-                provider === "icloud" ? "setup-password-hint" : undefined
+                requiresAppPassword ? "setup-password-hint" : undefined
               }
               onChange={(event) => setPassword(event.target.value)}
               placeholder={
-                provider === "icloud"
+                requiresAppPassword
                   ? strings.setup.appPasswordPlaceholder
                   : undefined
               }
@@ -462,12 +743,17 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
             </button>
           </span>
         </div>
-        {provider === "icloud" ? (
+        {requiresAppPassword ? (
           <p className="setup-field-hint" id="setup-password-hint">
-            {strings.setup.appPasswordHint}
+            {provider === "icloud"
+              ? strings.setup.appPasswordHint
+              : strings.setup.providerAppPasswordHint(
+                  foundProvider?.providerName ?? "provider",
+                )}
           </p>
         ) : null}
-        {provider === "icloud" ? (
+        {provider === "icloud" ||
+        foundProvider?.accountProvider === "icloud" ? (
           <div
             className="server-summary"
             aria-label={strings.setup.icloudServers}
@@ -502,6 +788,36 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
             />
           </div>
         )}
+        <fieldset className="download-choice">
+          <legend>{strings.setup.downloadMail}</legend>
+          <label>
+            <input
+              type="radio"
+              name="setup-cache-mode"
+              value="recent"
+              checked={cacheMode === "recent"}
+              onChange={() => setCacheMode("recent")}
+            />
+            <span>
+              <strong>{strings.setup.downloadRecent}</strong>
+              <small>{strings.setup.downloadRecentHelp}</small>
+            </span>
+          </label>
+          <label>
+            <input
+              type="radio"
+              name="setup-cache-mode"
+              value="full"
+              checked={cacheMode === "full"}
+              onChange={() => setCacheMode("full")}
+              aria-label={strings.setup.downloadAll}
+            />
+            <span>
+              <strong>{strings.setup.downloadAll}</strong>
+              <small>{strings.setup.downloadAllHelp}</small>
+            </span>
+          </label>
+        </fieldset>
         {status ? (
           <div
             className={`connection-status ${status.kind}`}

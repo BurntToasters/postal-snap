@@ -17,6 +17,7 @@ export function resetStore(overrides: StoreOverrides = {}): void {
   useAppStore.setState({
     accounts: [account],
     activeAccountId: account.id,
+    lastMailboxByAccount: {},
     mailboxes: [inbox, trash],
     activeMailboxId: inbox.id,
     activeLocalView: undefined,

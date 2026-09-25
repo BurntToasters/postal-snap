@@ -28,6 +28,8 @@ vi.mock("../api", () => ({
   api: {
     saveSettings: vi.fn(),
     listAccounts: vi.fn(),
+    listAllMailboxes: vi.fn(),
+    getAccountRemovalImpact: vi.fn(),
     testAccount: vi.fn(),
     testSavedAccount: vi.fn(),
     updateAccountPassword: vi.fn(),
@@ -74,6 +76,14 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockSaveSettingsPassthrough();
   vi.mocked(api.listAccounts).mockResolvedValue([account]);
+  vi.mocked(api.listAllMailboxes).mockImplementation(async () =>
+    useAppStore.getState().mailboxes.map((mailbox) => ({ ...mailbox })),
+  );
+  vi.mocked(api.getAccountRemovalImpact).mockResolvedValue({
+    unsentMessages: 0,
+    unsyncedDrafts: 0,
+    queuedChanges: 0,
+  });
   vi.mocked(api.listFilterRules).mockResolvedValue([]);
   vi.mocked(api.updateAccountAliases).mockResolvedValue(account);
   vi.mocked(api.discoverAccountAliases).mockResolvedValue({

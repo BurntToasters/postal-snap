@@ -316,13 +316,27 @@ impl Database {
         updated_at: &str,
         sync_state: &str,
         sync_detail: Option<&str>,
-    ) -> Result<(), String> {
+    ) -> Result<String, String> {
+        let mut conn = self.conn()?;
+        let transaction = conn.transaction().map_err(db_error)?;
+        // Draft IDs come from a Message-ID the server returned. The same ID in
+        // another account's Drafts folder (shared mailbox, copied draft) must
+        // never overwrite that account's row; import it as a new draft.
+        let owner: Option<String> = transaction
+            .query_row("SELECT account_id FROM drafts WHERE id=?1", [id], |row| {
+                row.get(0)
+            })
+            .optional()
+            .map_err(db_error)?;
+        let id = match owner {
+            Some(owner) if owner != draft.account_id => uuid::Uuid::new_v4().to_string(),
+            _ => id.to_string(),
+        };
+        let id = id.as_str();
         let mut stored = draft.clone();
         stored.id = Some(id.to_string());
         let json = serde_json::to_string(&stored)
             .map_err(|_| "Could not save a server draft.".to_string())?;
-        let mut conn = self.conn()?;
-        let transaction = conn.transaction().map_err(db_error)?;
         transaction
             .execute(
                 "INSERT INTO drafts(id,account_id,draft_json,updated_at,sync_state,sync_detail,
@@ -332,7 +346,8 @@ impl Database {
                  sync_state=excluded.sync_state,sync_detail=excluded.sync_detail,
                  remote_mailbox=excluded.remote_mailbox,remote_uid=excluded.remote_uid,
                  remote_uid_validity=excluded.remote_uid_validity,
-                 remote_message_id=excluded.remote_message_id,revision=excluded.revision,deleted_at=NULL",
+                 remote_message_id=excluded.remote_message_id,revision=excluded.revision,deleted_at=NULL
+                 WHERE drafts.account_id=excluded.account_id",
                 params![
                     id,
                     draft.account_id,
@@ -355,7 +370,8 @@ impl Database {
             id,
             &stored.attachments,
         )?;
-        transaction.commit().map_err(db_error)
+        transaction.commit().map_err(db_error)?;
+        Ok(id.to_string())
     }
 
     pub fn update_remote_draft_tracking(

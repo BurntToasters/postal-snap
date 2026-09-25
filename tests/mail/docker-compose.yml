@@ -6,7 +6,7 @@ services:
         -Dgreenmail.setup.test.smtps
         -Dgreenmail.setup.test.imaps
         -Dgreenmail.hostname=0.0.0.0
-        -Dgreenmail.users=user:mail-test-password@example.test
+        -Dgreenmail.users=user:mail-test-password@example.test,history:mail-test-password@example.test
         -Dgreenmail.users.login=email
         -Dgreenmail.tls.keystore.file=/home/greenmail/postal-snap.p12
         -Dgreenmail.tls.keystore.password=changeit

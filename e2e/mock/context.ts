@@ -24,6 +24,7 @@ export interface MockMailbox {
   role: string;
   unreadCount: number;
   totalCount: number;
+  delimiter?: string | null;
 }
 
 export interface MockMessageSummary {
@@ -78,9 +79,11 @@ export type MockInvokeHandler = (
 
 export interface MockShared {
   account: MockAccount;
+  accounts: MockAccount[];
   mailboxes: MockMailbox[];
   summary: MockMessageSummary;
   olderSummary: MockMessageSummary;
+  secondSummary: MockMessageSummary;
   params: URLSearchParams;
   handlers: Record<string, MockInvokeHandler>;
 }

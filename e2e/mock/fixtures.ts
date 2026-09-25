@@ -17,16 +17,28 @@ export async function registerMockFixtures(page: Page): Promise<void> {
       error: location.search.includes("authError")
         ? "Sign-in failed. Update the account password in Settings > Accounts."
         : null,
+      color: "blue",
+      aliases: params.has("aliasCollision") ? ["alias@example.test"] : [],
+    };
+    const secondAccount = {
+      id: "account-2",
+      provider: "manual",
+      email: "reader@fastmail.com",
+      displayName: "Work",
+      syncState: params.has("secondOffline") ? "offline" : "idle",
+      error: null,
+      color: "green",
     };
     const mailboxes = [
       {
         id: 1,
         accountId: account.id,
         name: "INBOX",
-        displayName: "Inbox",
+        displayName: "INBOX",
         role: "inbox",
         unreadCount: 1,
         totalCount: 1,
+        delimiter: "/",
       },
       {
         id: 2,
@@ -36,6 +48,7 @@ export async function registerMockFixtures(page: Page): Promise<void> {
         role: "archive",
         unreadCount: 0,
         totalCount: 0,
+        delimiter: "/",
       },
       {
         id: 3,
@@ -45,8 +58,63 @@ export async function registerMockFixtures(page: Page): Promise<void> {
         role: "trash",
         unreadCount: 0,
         totalCount: 2,
+        delimiter: "/",
+      },
+      {
+        id: 21,
+        accountId: secondAccount.id,
+        name: "INBOX",
+        displayName: "Inbox",
+        role: "inbox",
+        unreadCount: 3,
+        totalCount: 7,
+        delimiter: "/",
+      },
+      {
+        id: 22,
+        accountId: secondAccount.id,
+        name: "Archive",
+        displayName: "Archive",
+        role: "archive",
+        unreadCount: 0,
+        totalCount: 2,
+        delimiter: "/",
       },
     ];
+    if (params.has("nestedFolders")) {
+      mailboxes.push(
+        {
+          id: 4,
+          accountId: account.id,
+          name: "Projects",
+          displayName: "Projects",
+          role: "other",
+          unreadCount: 0,
+          totalCount: 0,
+          delimiter: "/",
+        },
+        {
+          id: 5,
+          accountId: account.id,
+          name: "Projects/2026",
+          displayName: "Projects/2026",
+          role: "other",
+          unreadCount: 1,
+          totalCount: 1,
+          delimiter: "/",
+        },
+        {
+          id: 6,
+          accountId: account.id,
+          name: "Projects/2026/Launch",
+          displayName: "Projects/2026/Launch",
+          role: "other",
+          unreadCount: 1,
+          totalCount: 1,
+          delimiter: "/",
+        },
+      );
+    }
     const summary = {
       id: 10,
       accountId: account.id,
@@ -65,6 +133,9 @@ export async function registerMockFixtures(page: Page): Promise<void> {
       size: 512,
       threadRoot: null as string | null,
     };
+    if (params.has("aliasCollision")) {
+      summary.recipients = "notalias@example.test";
+    }
     const olderSummary = {
       ...summary,
       id: 9,
@@ -73,15 +144,31 @@ export async function registerMockFixtures(page: Page): Promise<void> {
       subject: "Older family note",
       receivedAt: "2026-08-17T12:00:00Z",
     };
+    const secondSummary = {
+      ...summary,
+      id: 20,
+      accountId: secondAccount.id,
+      mailboxId: 21,
+      uid: 144,
+      messageId: "<launch@fastmail.com>",
+      subject: "Team launch",
+      senderName: "Morgan",
+      senderAddress: "morgan@fastmail.com",
+      recipients: "reader@fastmail.com",
+      receivedAt: "2026-08-19T12:00:00Z",
+      preview: "The release candidate is ready.",
+    };
     if (location.search.includes("threaded")) {
       summary.threadRoot = "<weekend@example.com>";
       olderSummary.threadRoot = "<weekend@example.com>";
     }
     const shared: MockShared = {
       account,
+      accounts: [account, secondAccount],
       mailboxes,
       summary,
       olderSummary,
+      secondSummary,
       params,
       handlers: {},
     };

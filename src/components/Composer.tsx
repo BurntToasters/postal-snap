@@ -203,9 +203,14 @@ export function Composer({ accountId }: Props) {
   const [fromAddress, setFromAddress] = useState(() => {
     if (seed?.draft?.from) return seed.draft.from;
     if (seed?.sourceMessage) {
-      const rec = seed.sourceMessage.recipients.toLowerCase();
+      const recipients = splitAddresses(seed.sourceMessage.recipients).map(
+        (recipient) =>
+          (recipient.match(/<([^<>]+)>$/)?.[1] ?? recipient)
+            .trim()
+            .toLowerCase(),
+      );
       for (const alias of account?.aliases ?? []) {
-        if (rec.includes(alias.toLowerCase())) {
+        if (recipients.includes(alias.toLowerCase())) {
           return alias;
         }
       }

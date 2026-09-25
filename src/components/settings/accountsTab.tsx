@@ -43,6 +43,7 @@ export interface AccountRuleDraft {
 
 interface AccountsTabProps {
   onClose: () => void;
+  mailboxes: MailboxSummary[];
   testingAccountId?: string;
   testedHealthy?: string;
   testAccount: (id: string) => Promise<void>;
@@ -78,6 +79,7 @@ interface AccountsTabProps {
 
 export function AccountsTab({
   onClose,
+  mailboxes,
   testingAccountId,
   testedHealthy,
   testAccount,
@@ -111,7 +113,6 @@ export function AccountsTab({
   eraseAllData,
 }: AccountsTabProps) {
   const accounts = useAppStore((state) => state.accounts);
-  const mailboxes = useAppStore((state) => state.mailboxes);
 
   return (
     <SettingsPanel id="accounts" title={strings.settings.accounts}>

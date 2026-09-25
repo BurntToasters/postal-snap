@@ -207,6 +207,13 @@ export const settings = {
     "Keeps message lists, accounts, drafts, and unsent mail. Bodies download again when opened.",
   removeAccount: (name: string) =>
     `Remove ${name} from Postal Snap? Mail stays on server.`,
+  removeAccountWithImpact: (
+    name: string,
+    unsent: number,
+    drafts: number,
+    changes: number,
+  ) =>
+    `Remove ${name} from Postal Snap? Mail stays on server. This computer will lose ${unsent} unsent message${unsent === 1 ? "" : "s"}, ${drafts} unsynced draft${drafts === 1 ? "" : "s"}, and ${changes} queued change${changes === 1 ? "" : "s"}.`,
   accountCleanupWarning:
     "Account removed. Some downloaded draft files could not be cleaned up; you can remove them from Postal Snap’s data folder.",
   checkUpdates: "Check for updates",

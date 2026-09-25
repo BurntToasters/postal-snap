@@ -1,6 +1,7 @@
 pub mod folders;
 pub mod icloud;
 pub mod parse;
+pub mod pool;
 pub mod remote_drafts;
 pub mod send;
 pub mod sync;
@@ -86,8 +87,8 @@ pub struct RemoteDraftSnapshot {
 }
 
 pub use folders::{
-    create_folder, delete_folder, empty_folder, move_remote, move_remote_uids, rename_folder,
-    set_remote_flags, set_remote_uid_flags, MoveOptions,
+    create_folder, delete_folder, empty_folder, mark_folder_read, move_remote, move_remote_uids,
+    rename_folder, set_remote_flags, set_remote_uid_flags, MoveOptions,
 };
 pub use icloud::discover_icloud_aliases;
 pub use remote_drafts::{
@@ -96,9 +97,11 @@ pub use remote_drafts::{
 pub use send::{
     apply_signature, ensure_sent_copy, prepare_draft_message, prepare_message, send_prepared,
 };
+#[cfg(test)]
+pub use sync::Uncontended;
 pub use sync::{
-    download_message, idle_inbox, refresh_mailbox_envelopes, server_search, sync_account,
-    test_account,
+    download_message, idle_inbox, load_older_messages, refresh_mailbox_envelopes, server_search,
+    sync_account, test_account, IdleOutcome, SyncHooks, SyncOutcome,
 };
 
 #[cfg(test)]
@@ -118,6 +121,7 @@ mod tests {
         AccountRecord, AccountSetupRequest, AccountSummary, CachePolicy, ComposeAttachment,
         ComposeDraft, ProviderKind, SearchQuery, ServerConfig, TlsMode,
     };
+    use futures_util::TryStreamExt;
     use std::time::Duration;
     use tokio::sync::Notify;
 
@@ -158,6 +162,7 @@ mod tests {
                 aliases: vec![],
                 auth_method: "password".into(),
                 signature: String::new(),
+                color: None,
             },
             imap: ServerConfig {
                 host: "imap.example.com".into(),
@@ -325,6 +330,7 @@ mod tests {
                 aliases: vec![],
                 auth_method: "password".into(),
                 signature: String::new(),
+                color: None,
             },
             imap: ServerConfig {
                 host: "127.0.0.1".into(),
@@ -389,6 +395,7 @@ mod tests {
                 aliases: vec![],
                 auth_method: "password".into(),
                 signature: String::new(),
+                color: None,
             },
             imap: ServerConfig {
                 host: "imap.example.com".into(),
@@ -439,6 +446,7 @@ mod tests {
                 aliases: vec![],
                 auth_method: "password".into(),
                 signature: String::new(),
+                color: None,
             },
             imap: ServerConfig {
                 host: "imap.example.com".into(),
@@ -498,6 +506,7 @@ mod tests {
                 aliases: vec![],
                 auth_method: "password".into(),
                 signature: String::new(),
+                color: None,
             },
             imap: ServerConfig {
                 host: "localhost".into(),
@@ -519,6 +528,7 @@ mod tests {
             password: password.into(),
             imap: Some(account.imap.clone()),
             smtp: Some(account.smtp.clone()),
+            cache_policy: None,
         };
         test_account(&setup, &account.imap, &account.smtp, password)
             .await
@@ -566,9 +576,15 @@ mod tests {
         let mut inbox_message = None;
         let mut inbox_counts = None;
         for _ in 0..20 {
-            sync_account(&db, &account, password, &CachePolicy::default())
-                .await
-                .unwrap();
+            sync_account(
+                &db,
+                &account,
+                password,
+                &CachePolicy::default(),
+                &mut Uncontended,
+            )
+            .await
+            .unwrap();
             let inbox = db
                 .list_mailboxes(&account.summary.id)
                 .unwrap()
@@ -613,9 +629,15 @@ mod tests {
         )
         .await
         .unwrap();
-        sync_account(&db, &account, password, &CachePolicy::default())
-            .await
-            .unwrap();
+        sync_account(
+            &db,
+            &account,
+            password,
+            &CachePolicy::default(),
+            &mut Uncontended,
+        )
+        .await
+        .unwrap();
         let inbox = db
             .list_mailboxes(&account.summary.id)
             .unwrap()
@@ -696,7 +718,7 @@ mod tests {
         wake.notify_one();
         tokio::time::timeout(
             Duration::from_secs(5),
-            idle_inbox(&account, password, &wake),
+            idle_inbox(&account, password, &wake, Duration::from_secs(120)),
         )
         .await
         .expect("IDLE interruption timed out")
@@ -721,6 +743,301 @@ mod tests {
         reconnected.logout().await.unwrap();
     }
 
+    /// Hooks that delete a folder on the server at the first yield point, after
+    /// LIST but before that folder's STATUS, to prove one missing folder does
+    /// not end the pass (S4) and that yielding reacquires the account (W1).
+    struct DeleteFolderAtFirstYield {
+        account: AccountRecord,
+        password: &'static str,
+        folder: &'static str,
+        pending: bool,
+        visited: Vec<String>,
+    }
+
+    impl SyncHooks for DeleteFolderAtFirstYield {
+        fn contended(&self) -> bool {
+            self.pending
+        }
+
+        async fn yield_account(&mut self) {
+            self.pending = false;
+            let mut session = connect_imap(&self.account.imap, self.password)
+                .await
+                .unwrap();
+            session.delete(self.folder).await.unwrap();
+            session.logout().await.unwrap();
+        }
+
+        fn progress(&mut self, folder: &str) {
+            self.visited.push(folder.to_string());
+        }
+    }
+
+    fn imap_date(days_ago: i64, offset_minutes: i64) -> String {
+        (chrono::Utc::now() - chrono::Duration::days(days_ago)
+            + chrono::Duration::minutes(offset_minutes))
+        .format("\"%d-%b-%Y %H:%M:%S +0000\"")
+        .to_string()
+    }
+
+    async fn run_until_settled(
+        db: &Database,
+        account: &AccountRecord,
+        password: &str,
+        policy: &CachePolicy,
+    ) {
+        for _ in 0..60 {
+            let outcome = sync_account(db, account, password, policy, &mut Uncontended)
+                .await
+                .unwrap();
+            if !outcome.more_work {
+                return;
+            }
+        }
+        panic!("sync never settled");
+    }
+
+    /// Download policy, backfill, prefetch, expunge and pool behaviour against
+    /// a real IMAP server. Covers E2, E3, E5, S2, S4, S5, S8, W1, W6 and W10
+    /// from docs/SYNC_FAILURE_MODES.md.
+    #[tokio::test]
+    #[ignore = "requires npm run test:mail-integration"]
+    async fn greenmail_protocol_integration_history() {
+        assert_eq!(
+            std::env::var("POSTAL_SNAP_MAIL_INTEGRATION").as_deref(),
+            Ok("1")
+        );
+        let password = "mail-test-password";
+        let account = AccountRecord {
+            summary: AccountSummary {
+                id: "44444444-4444-4444-8444-444444444444".into(),
+                provider: ProviderKind::Manual,
+                email: "history@example.test".into(),
+                display_name: "History".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+                color: None,
+            },
+            imap: ServerConfig {
+                host: "localhost".into(),
+                port: 3993,
+                tls_mode: TlsMode::Tls,
+                username: "history@example.test".into(),
+            },
+            smtp: ServerConfig {
+                host: "localhost".into(),
+                port: 3465,
+                tls_mode: TlsMode::Tls,
+                username: "history@example.test".into(),
+            },
+        };
+
+        // W6: a rejected password is an authentication failure, not a
+        // connection problem, so the worker parks instead of retrying.
+        let mut wrong = account.clone();
+        wrong.summary.id = "55555555-5555-4555-8555-555555555555".into();
+        let rejected = sync_account(
+            &Database::memory(),
+            &wrong,
+            "wrong-password",
+            &CachePolicy::default(),
+            &mut Uncontended,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            crate::models::IpcError::from(rejected.as_str()).code,
+            "authenticationFailed"
+        );
+
+        // 300 messages older than a year, then 100 from the last ten days,
+        // appended oldest first so UID order matches arrival order.
+        let mut session = connect_imap(&account.imap, password).await.unwrap();
+        for folder in ["Doomed", "Zeta"] {
+            let _ = session.create(folder).await;
+        }
+        for index in 0..400i64 {
+            let (days, label) = if index < 300 {
+                (400 - index / 10, "old")
+            } else {
+                (10 - (index - 300) / 10, "recent")
+            };
+            let body = format!(
+                "From: Sender <sender@example.test>\r\nTo: history@example.test\r\nSubject: {label} {index}\r\nMessage-ID: <history-{index}@example.test>\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nBody {index}\r\n"
+            );
+            session
+                .append(
+                    "INBOX",
+                    Some("(\\Seen)"),
+                    Some(&imap_date(days, index)),
+                    body,
+                )
+                .await
+                .unwrap();
+        }
+        // S8: a message whose MIME exceeds safe limits always fails to parse.
+        let mut poison = String::from(
+            "From: Sender <sender@example.test>\r\nTo: history@example.test\r\nSubject: poison\r\nMessage-ID: <poison@example.test>\r\n",
+        );
+        for depth in 0..70 {
+            poison.push_str(&format!(
+                "Content-Type: multipart/mixed; boundary=\"b{depth}\"\r\n\r\n--b{depth}\r\n"
+            ));
+        }
+        session
+            .append("INBOX", None, Some(&imap_date(1, 0)), poison)
+            .await
+            .unwrap();
+        session
+            .append(
+                "Zeta",
+                None,
+                Some(&imap_date(1, 0)),
+                "From: a@example.test\r\nSubject: zeta\r\n\r\nzeta\r\n",
+            )
+            .await
+            .unwrap();
+        let capabilities = session.capabilities().await.unwrap();
+        println!(
+            "GreenMail CONDSTORE advertised: {}",
+            capabilities.has_str("CONDSTORE")
+        );
+        session.logout().await.unwrap();
+
+        let db = Database::memory();
+        db.insert_account(&account).unwrap();
+        let account_id = account.summary.id.clone();
+        let recent = CachePolicy {
+            mode: "recent".into(),
+            days: 90,
+            max_bytes: 0,
+        };
+        db.set_account_cache_policy(&account_id, &recent, &CachePolicy::default())
+            .unwrap();
+
+        // S4 and W1: the first pass yields before INBOX; "Doomed" vanishes in
+        // between. The pass records one folder error and still syncs Zeta.
+        let mut hooks = DeleteFolderAtFirstYield {
+            account: account.clone(),
+            password,
+            folder: "Doomed",
+            pending: true,
+            visited: Vec::new(),
+        };
+        let first = sync_account(&db, &account, password, &recent, &mut hooks)
+            .await
+            .unwrap();
+        assert_eq!(first.folder_errors, 1);
+        assert!(hooks.visited.iter().any(|folder| folder == "Zeta"));
+        let zeta = db
+            .mailbox_id_for_name(&account_id, "Zeta")
+            .unwrap()
+            .unwrap();
+        assert_eq!(db.cached_message_count(zeta).unwrap(), 1);
+
+        // E5 and S5: Recent mode stops backfill at the cutoff and downloads
+        // bodies only inside it.
+        run_until_settled(&db, &account, password, &recent).await;
+        let inbox = db
+            .mailbox_id_for_name(&account_id, "INBOX")
+            .unwrap()
+            .unwrap();
+        let meta = db.mailbox_sync_meta(inbox).unwrap();
+        assert_eq!(meta.backfill_state, "cutoff");
+        let cached_recent = db.cached_message_count(inbox).unwrap();
+        assert!(
+            (101..300).contains(&cached_recent),
+            "cached {cached_recent} envelopes"
+        );
+        let progress = db.account_sync_progress(&account_id, &recent).unwrap();
+        assert_eq!(progress.bodies_done, 101, "100 recent bodies plus Zeta");
+
+        // S8: the poison message failed once and is not retried every pass.
+        let failures = || -> i64 {
+            db.conn()
+                .unwrap()
+                .query_row(
+                    "SELECT prefetch_failures FROM messages WHERE subject='poison'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(failures(), 1);
+        sync_account(&db, &account, password, &recent, &mut Uncontended)
+            .await
+            .unwrap();
+        assert_eq!(failures(), 1);
+
+        // "Load older messages" reaches past the cutoff without changing it.
+        let (added, has_more) = load_older_messages(&db, &account, password, "INBOX")
+            .await
+            .unwrap();
+        assert!(added > 0 && has_more);
+        assert_eq!(
+            db.mailbox_sync_meta(inbox).unwrap().backfill_state,
+            "cutoff"
+        );
+
+        // E2: switching to Download all resumes backfill to the first message
+        // and downloads every body.
+        assert!(db
+            .set_account_cache_policy(
+                &account_id,
+                &CachePolicy {
+                    mode: "full".into(),
+                    days: 0,
+                    max_bytes: 0,
+                },
+                &CachePolicy::default()
+            )
+            .unwrap());
+        let full = db
+            .account_cache_policy(&account_id, &CachePolicy::default())
+            .unwrap();
+        run_until_settled(&db, &account, password, &full).await;
+        assert_eq!(db.cached_message_count(inbox).unwrap(), 401);
+        assert_eq!(
+            db.mailbox_sync_meta(inbox).unwrap().backfill_state,
+            "complete"
+        );
+        let progress = db.account_sync_progress(&account_id, &full).unwrap();
+        assert_eq!(progress.envelopes_done, progress.envelopes_total);
+        assert_eq!(progress.bodies_done, 401, "every parseable body");
+
+        // S2: messages expunged by another client disappear locally.
+        let mut other = connect_imap(&account.imap, password).await.unwrap();
+        other.select("INBOX").await.unwrap();
+        other
+            .store("1:5", "+FLAGS.SILENT (\\Deleted)")
+            .await
+            .unwrap()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        other
+            .expunge()
+            .await
+            .unwrap()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        other.logout().await.unwrap();
+        sync_account(&db, &account, password, &full, &mut Uncontended)
+            .await
+            .unwrap();
+        assert_eq!(db.cached_message_count(inbox).unwrap(), 396);
+
+        // W10: after forgetting the pooled session, a changed password is
+        // really used; the parked login is not silently reused.
+        pool::checkout(&account, password).await.unwrap().release();
+        pool::forget(&account_id);
+        assert!(pool::checkout(&account, "wrong-password").await.is_err());
+    }
+
     #[tokio::test]
     #[ignore = "requires POSTAL_SNAP_TEST_ICLOUD_EMAIL and POSTAL_SNAP_TEST_ICLOUD_PASSWORD"]
     async fn icloud_live_connection_smoke() {
@@ -735,6 +1052,7 @@ mod tests {
             password,
             imap: None,
             smtp: None,
+            cache_policy: None,
         };
         let (imap, smtp) = crate::models::validated_setup(&request).unwrap();
         test_account(&request, &imap, &smtp, &request.password)

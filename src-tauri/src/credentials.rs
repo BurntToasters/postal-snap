@@ -12,7 +12,7 @@ pub fn store(account_id: &str, password: &str) -> Result<(), String> {
 pub fn load(account_id: &str) -> Result<Zeroizing<String>, String> {
     let entry = entry(account_id)?;
     let password = entry.get_password().map_err(|_| {
-        "The password is unavailable. Remove and add this account again.".to_string()
+        "The saved password is unavailable. Update the password in Settings > Accounts.".to_string()
     })?;
     #[cfg(target_os = "windows")]
     ensure_windows_local_persistence(account_id, &password);

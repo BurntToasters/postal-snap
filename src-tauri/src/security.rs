@@ -49,6 +49,67 @@ enum PublicImageTarget {
     ReportedThreat,
 }
 
+pub(crate) struct PublicHttpsTarget {
+    pub url: Url,
+    pub host: String,
+    pub addresses: Vec<SocketAddr>,
+}
+
+/// Resolve and pin an HTTPS target before a non-image request. This is the
+/// shared SSRF boundary for provider autoconfig.
+pub(crate) async fn validate_public_https_url(raw_url: &str) -> Result<PublicHttpsTarget, String> {
+    validate_public_https_url_with_resolver(raw_url, |host, port| async move {
+        lookup_host((host.as_str(), port))
+            .await
+            .map(|addresses| addresses.collect())
+            .map_err(|_| "Could not resolve the settings server.".to_string())
+    })
+    .await
+}
+
+pub(crate) async fn validate_public_https_url_with_resolver<F, Fut>(
+    raw_url: &str,
+    resolve: F,
+) -> Result<PublicHttpsTarget, String>
+where
+    F: FnOnce(String, u16) -> Fut,
+    Fut: std::future::Future<Output = Result<Vec<SocketAddr>, String>>,
+{
+    if raw_url.len() > 16 * 1024 {
+        return Err("The settings address is too long.".into());
+    }
+    let url = Url::parse(raw_url).map_err(|_| "Invalid settings address.".to_string())?;
+    if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() {
+        return Err("Only public HTTPS settings can be loaded.".into());
+    }
+    let host = url
+        .host_str()
+        .ok_or_else(|| "Invalid settings address.".to_string())?
+        .to_string();
+    if host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost") {
+        return Err("Private-network settings addresses are blocked.".into());
+    }
+    if url.port_or_known_default() != Some(443) {
+        return Err("Settings may only be loaded from the standard HTTPS port.".into());
+    }
+    let resolved = resolve(host.clone(), 443).await?;
+    let mut addresses = Vec::new();
+    for address in resolved {
+        if !is_public_ip(address.ip()) {
+            return Err("Private-network settings addresses are blocked.".into());
+        }
+        addresses.push(address);
+    }
+    if addresses.is_empty() {
+        return Err("Could not resolve the settings server.".into());
+    }
+    Ok(PublicHttpsTarget {
+        url,
+        host,
+        addresses,
+    })
+}
+
 pub async fn fetch_public_image(
     raw_url: &str,
     policy: ProtectionPolicy,

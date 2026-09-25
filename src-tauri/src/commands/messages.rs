@@ -1,12 +1,11 @@
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 
-use super::{
-    command_result, emit_folder_counts, emit_message_change, emit_sync, AppState, CommandResult,
-};
+use super::sync::account_policy;
+use super::{command_result, emit_folder_counts, emit_message_change, AppState, CommandResult};
 use crate::{
     credentials, mail,
-    models::{MessageCursor, MessageDetail, MessagePage, MessageSummary, SearchQuery},
+    models::{IpcError, MessageCursor, MessageDetail, MessagePage, MessageSummary, SearchQuery},
 };
 
 #[tauri::command]
@@ -64,7 +63,15 @@ pub(crate) async fn ensure_message_content(
         cached_received_at.as_deref(),
     )
     .await?;
-    state.db.upsert_message(account_id, mailbox_id, &message)?;
+    let uid_validity = uid_validity.ok_or_else(|| {
+        "Mailbox identity is unavailable; refresh mail and try again.".to_string()
+    })?;
+    if !state
+        .db
+        .attach_body_if_current(mailbox_id, uid_validity, &message)?
+    {
+        return Err("This message is no longer available on the server.".into());
+    }
     let id = message
         .message_id
         .clone()
@@ -79,7 +86,18 @@ pub async fn get_message(
     message_id: i64,
     state: State<'_, AppState>,
 ) -> CommandResult<MessageDetail> {
-    ensure_message_content(&account_id, message_id, &state).await?;
+    // When the body cannot be downloaded right now (offline, sign-in needed,
+    // too large), still open the envelope and say why the body is missing
+    // instead of failing the whole message.
+    let body_status = match ensure_message_content(&account_id, message_id, &state).await {
+        Ok(()) => "available",
+        Err(error) => match IpcError::from(error.as_str()).code.as_str() {
+            "connectionFailed" | "localStorageFailed" => "offline",
+            "authenticationFailed" => "signInNeeded",
+            "limitExceeded" => "tooLarge",
+            _ => return Err(error.into()),
+        },
+    };
     let db = state.db.clone();
     let account_id_for_detail = account_id.clone();
     let mut detail =
@@ -87,7 +105,38 @@ pub async fn get_message(
             .await
             .map_err(|_| "Postal Snap could not read this message.".to_string())??;
     detail.references = state.db.message_references(message_id, &account_id)?;
+    detail.body_status = body_status.into();
     Ok(detail)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadOlderOutcome {
+    pub added: u32,
+    pub has_more: bool,
+}
+
+/// Fetch one batch of envelopes older than anything cached in a folder, past
+/// the Recent cutoff if needed. Bodies still download on open.
+#[tauri::command]
+pub async fn load_older_messages(
+    account_id: String,
+    mailbox_id: i64,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<LoadOlderOutcome> {
+    let (owner, _) = state.db.mailbox(mailbox_id)?;
+    if owner != account_id {
+        return Err("Mailbox does not belong to this account.".into());
+    }
+    let _guard = state.lock_account(&account_id).await?;
+    let (_, name) = state.db.mailbox(mailbox_id)?;
+    let account = state.db.account(&account_id)?;
+    let password = credentials::load(&account_id)?;
+    let (added, has_more) =
+        mail::load_older_messages(&state.db, &account, &password, &name).await?;
+    emit_message_change(&app, &account_id, None, "synced");
+    Ok(LoadOlderOutcome { added, has_more })
 }
 
 #[derive(Deserialize, Serialize)]
@@ -296,11 +345,7 @@ async fn move_message_inner(
         // database hiccup cannot report a completed move as failed.
         let _ = state.db.mark_pending_move(message_id, destination_id);
         let _ = state.db.remove_message(message_id);
-        let policy = state
-            .settings
-            .get()
-            .map(|settings| settings.cache_policy)
-            .unwrap_or_default();
+        let policy = account_policy(state, &account_id).unwrap_or_default();
         let _ =
             mail::refresh_mailbox_envelopes(&account, &password, &destination, &state.db, &policy)
                 .await;
@@ -505,11 +550,7 @@ pub async fn move_messages_to_mailbox(
         }
     }
     if updated > 0 {
-        let policy = state
-            .settings
-            .get()
-            .map(|settings| settings.cache_policy)
-            .unwrap_or_default();
+        let policy = account_policy(&state, &account_id).unwrap_or_default();
         let _ =
             mail::refresh_mailbox_envelopes(&account, &password, &destination, &state.db, &policy)
                 .await;
@@ -552,6 +593,25 @@ pub async fn mark_mailbox_read(
         outcome.queued += batch.queued;
         outcome.failed += batch.failed;
     }
+    // Only cached rows were flagged above; older unread mail exists only on
+    // the server. Mark everything up to the current UIDNEXT there too, so the
+    // authoritative STATUS count agrees on the next refresh.
+    if let (Ok(account), Ok(password)) = (
+        state.db.account(&account_id),
+        credentials::load(&account_id),
+    ) {
+        if let Some(validity) = state.db.mailbox_uid_validity(&account_id, &name)? {
+            if mail::mark_folder_read(&account, &password, &name, validity)
+                .await
+                .is_ok()
+            {
+                let policy = account_policy(&state, &account_id).unwrap_or_default();
+                let _ =
+                    mail::refresh_mailbox_envelopes(&account, &password, &name, &state.db, &policy)
+                        .await;
+            }
+        }
+    }
     emit_message_change(&app, &account_id, None, "flags");
     emit_folder_counts(&app, &account_id);
     Ok(outcome)
@@ -582,39 +642,12 @@ pub async fn search_cached_messages(
 #[tauri::command]
 pub async fn search_server_messages(
     query: SearchQuery,
-    app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<Vec<MessageSummary>> {
+    // Search progress is shown by the search UI. It must not overwrite the
+    // account's sync state, which may be reporting "Sign-in failed".
     let _guard = state.lock_account(&query.account_id).await?;
     let account = state.db.account(&query.account_id)?;
     let password = credentials::load(&query.account_id)?;
-    emit_sync(
-        &app,
-        &query.account_id,
-        "syncing",
-        Some("Searching the mail server…"),
-        None,
-    );
-    match mail::server_search(&state.db, &account, &password, &query).await {
-        Ok(results) => {
-            emit_sync(
-                &app,
-                &query.account_id,
-                "idle",
-                Some("Search complete"),
-                None,
-            );
-            Ok(results)
-        }
-        Err(error) => {
-            emit_sync(
-                &app,
-                &query.account_id,
-                "error",
-                Some("Server search failed"),
-                None,
-            );
-            Err(error.into())
-        }
-    }
+    command_result(mail::server_search(&state.db, &account, &password, &query).await)
 }

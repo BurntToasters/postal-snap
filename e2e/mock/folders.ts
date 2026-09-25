@@ -9,8 +9,13 @@ export async function registerMockFolders(page: Page): Promise<void> {
     const mock = window.__POSTAL_SNAP_MOCK__ as MockShared;
     const { mailboxes } = mock;
     Object.assign(mock.handlers, {
-      list_mailboxes() {
-        return mailboxes;
+      list_mailboxes(args: Record<string, unknown>) {
+        return mailboxes.filter(
+          (mailbox) => mailbox.accountId === String(args.accountId),
+        );
+      },
+      list_all_mailboxes() {
+        return mailboxes.map((mailbox) => ({ ...mailbox }));
       },
       create_folder(args: Record<string, unknown>) {
         const name = String(args.name);

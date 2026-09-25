@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
         Arc, Mutex,
     },
     time::Duration,
@@ -10,6 +10,7 @@ use std::{
 
 pub mod accounts;
 pub mod attachments;
+pub mod cache_policy;
 pub mod drafts_send;
 pub mod folders;
 pub mod messages;
@@ -37,7 +38,6 @@ use crate::{
 };
 
 use messages::{FlagOperation, MoveOperation};
-use sync::sync_one_background;
 
 type CommandResult<T> = Result<T, IpcError>;
 
@@ -94,9 +94,62 @@ pub struct AppState {
     app_nap: Mutex<Option<crate::app_nap::AppNapGuard>>,
 }
 
-struct AccountActor {
+/// Why an account worker was woken. Reasons accumulate until the worker
+/// takes them, so a wake-up sent while IDLE is starting is never lost.
+pub(crate) mod wake {
+    /// A user action needs the account; resume IDLE afterwards without a sync.
+    pub const OPERATION: u8 = 1;
+    /// Run a full sync pass (Get Mail, rule changes, folder changes).
+    pub const SYNC: u8 = 2;
+    /// Push local draft changes to the server.
+    pub const DRAFTS: u8 = 4;
+    /// Deliver queued or due outbox items.
+    pub const OUTBOX: u8 = 8;
+    /// Credentials changed; leave the sign-in-failed pause and sync.
+    pub const CREDENTIALS: u8 = 16;
+    /// The download policy changed; backfill or evict and sync.
+    pub const POLICY: u8 = 32;
+    /// A manual sync succeeded; leave the sign-in-failed pause without
+    /// another pass.
+    pub const RESUME: u8 = 64;
+}
+
+pub(crate) struct AccountActor {
     operation: Arc<AsyncMutex<()>>,
     wake: Notify,
+    reasons: AtomicU8,
+    /// Callers queued for the account lock. Background sync yields between
+    /// folders and batches while this is non-zero.
+    waiting: AtomicUsize,
+}
+
+impl AccountActor {
+    pub(crate) fn request(&self, reason: u8) {
+        self.reasons.fetch_or(reason, Ordering::SeqCst);
+        // notify_one stores a permit when IDLE is between setup and waiting,
+        // avoiding a lost wake-up.
+        self.wake.notify_one();
+    }
+
+    fn take_reasons(&self) -> u8 {
+        self.reasons.swap(0, Ordering::SeqCst)
+    }
+
+    fn contended(&self) -> bool {
+        self.waiting.load(Ordering::SeqCst) > 0
+    }
+
+    async fn acquire(self: &Arc<Self>) -> OwnedMutexGuard<()> {
+        struct Waiting<'a>(&'a AtomicUsize);
+        impl Drop for Waiting<'_> {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
+        self.waiting.fetch_add(1, Ordering::SeqCst);
+        let _waiting = Waiting(&self.waiting);
+        self.operation.clone().lock_owned().await
+    }
 }
 
 impl AppState {
@@ -137,35 +190,43 @@ impl AppState {
         self.mail_shortcut_guard.load(Ordering::Relaxed)
     }
 
-    fn actor(&self, account_id: &str) -> Result<Arc<AccountActor>, String> {
+    pub(crate) fn actor(&self, account_id: &str) -> Result<Arc<AccountActor>, String> {
         // Validate before touching the map so arbitrary IDs cannot grow it.
         uuid::Uuid::parse_str(account_id).map_err(|_| "Account not found.".to_string())?;
-        self.db.account(account_id)?;
-        let actor = self
+        let mut actors = self
             .account_actors
             .lock()
-            .map_err(|_| "Account worker is unavailable.".to_string())?
+            .map_err(|_| "Account worker is unavailable.".to_string())?;
+        // Checked under the map lock: removal retires the actor while holding
+        // the same lock after deleting the row, so a racing caller cannot
+        // recreate a worker for a removed account.
+        self.db.account(account_id)?;
+        let actor = actors
             .entry(account_id.to_string())
             .or_insert_with(|| {
                 Arc::new(AccountActor {
                     operation: Arc::new(AsyncMutex::new(())),
                     wake: Notify::new(),
+                    reasons: AtomicU8::new(0),
+                    waiting: AtomicUsize::new(0),
                 })
             })
             .clone();
         Ok(actor)
     }
 
-    async fn lock_account(&self, account_id: &str) -> Result<OwnedMutexGuard<()>, String> {
-        let actor = self.actor(account_id)?;
-        // notify_one stores a permit when IDLE is between setup and waiting,
-        // avoiding a lost wake-up and a two-minute operation delay.
-        actor.wake.notify_one();
-        Ok(actor.operation.clone().lock_owned().await)
+    /// Wake the account worker for `reason` without taking the account.
+    pub(crate) fn request(&self, account_id: &str, reason: u8) -> Result<(), String> {
+        self.actor(account_id)?.request(reason);
+        Ok(())
     }
 
-    async fn lock_account_quiet(&self, account_id: &str) -> Result<OwnedMutexGuard<()>, String> {
-        Ok(self.actor(account_id)?.operation.clone().lock_owned().await)
+    /// Take the account for a user action, interrupting IDLE and preempting
+    /// background sync at its next yield point.
+    async fn lock_account(&self, account_id: &str) -> Result<OwnedMutexGuard<()>, String> {
+        let actor = self.actor(account_id)?;
+        actor.request(wake::OPERATION);
+        Ok(actor.acquire().await)
     }
 
     pub fn ensure_watcher(&self, account_id: String, app: AppHandle) -> Result<(), String> {
@@ -182,88 +243,7 @@ impl AppState {
             self.begin_background_activity();
         }
         tauri::async_runtime::spawn(async move {
-            let mut backoff = 2u64;
-            let mut attempt = 0u32;
-            let mut first_sync = true;
-            loop {
-                let state = app.state::<AppState>();
-                if state.db.account(&account_id).is_err() {
-                    break;
-                }
-                let previous_message_id = state
-                    .db
-                    .latest_inbox_message(&account_id)
-                    .ok()
-                    .flatten()
-                    .map(|message| message.id);
-                match sync_one_background(&account_id, &app, &state).await {
-                    Ok(()) => {
-                        backoff = 2;
-                        attempt = 0;
-                        if !first_sync {
-                            notify_new_mail(&app, &state.db, &account_id, previous_message_id);
-                        }
-                        first_sync = false;
-                    }
-                    Err(_) => {
-                        tokio::time::sleep(reconnect_delay(&account_id, backoff, attempt)).await;
-                        backoff = (backoff * 2).min(120);
-                        attempt = attempt.wrapping_add(1);
-                        continue;
-                    }
-                }
-                let actor = match state.actor(&account_id) {
-                    Ok(actor) => actor,
-                    Err(_) => break,
-                };
-                let _guard = actor.operation.lock().await;
-                let account = match state.db.account(&account_id) {
-                    Ok(account) => account,
-                    Err(_) => break,
-                };
-                let password = match credentials::load(&account_id) {
-                    Ok(password) => password,
-                    Err(_) => {
-                        // A locked or transiently unavailable vault must not
-                        // stop background mail forever; retry with backoff and
-                        // surface an actionable account state.
-                        drop(_guard);
-                        let detail = "The saved password is unavailable. Reconnect this account.";
-                        let _ = state
-                            .db
-                            .set_account_state(&account_id, "offline", Some(detail));
-                        emit_sync(&app, &account_id, "offline", Some(detail), None);
-                        tokio::time::sleep(reconnect_delay(&account_id, backoff, attempt)).await;
-                        backoff = (backoff * 2).min(120);
-                        attempt = attempt.wrapping_add(1);
-                        continue;
-                    }
-                };
-                match mail::idle_inbox(&account, &password, &actor.wake).await {
-                    Ok(()) => {
-                        backoff = 2;
-                        attempt = 0;
-                    }
-                    Err(_) => {
-                        drop(_guard);
-                        let _ = state.db.set_account_state(
-                            &account_id,
-                            "offline",
-                            Some("Connection lost. Reconnecting…"),
-                        );
-                        emit_sync(
-                            &app,
-                            &account_id,
-                            "offline",
-                            Some("Connection lost. Reconnecting…"),
-                            None,
-                        );
-                        tokio::time::sleep(reconnect_delay(&account_id, backoff, attempt)).await;
-                        backoff = (backoff * 2).min(120);
-                        attempt = attempt.wrapping_add(1);
-                    }
-                }
-            }
+            run_account_worker(&account_id, &app).await;
             let state = app.state::<AppState>();
             if let Ok(mut watchers) = state.watchers.lock() {
                 watchers.remove(&account_id);
@@ -293,8 +273,15 @@ impl AppState {
     }
 
     fn retire_actor(&self, account_id: &str) {
-        if let Ok(mut actors) = self.account_actors.lock() {
-            actors.remove(account_id);
+        let retired = self
+            .account_actors
+            .lock()
+            .ok()
+            .and_then(|mut actors| actors.remove(account_id));
+        mail::pool::forget(account_id);
+        // Wake a parked or idle worker so it notices the removal and exits.
+        if let Some(actor) = retired {
+            actor.request(wake::SYNC);
         }
     }
 }
@@ -312,6 +299,181 @@ fn reconnect_delay(account_id: &str, seconds: u64, attempt: u32) -> Duration {
     let jitter =
         (clock ^ account_hash ^ u64::from(attempt).wrapping_mul(0x9e3779b97f4a7c15)) % 1_000;
     Duration::from_secs(seconds) + Duration::from_millis(jitter)
+}
+
+/// How long IDLE waits before a cheap all-folder STATUS pass. Other folders
+/// change without IDLE notifications, so this bounds their staleness.
+const IDLE_REFRESH: Duration = Duration::from_secs(5 * 60);
+
+/// Quiet period before locally saved drafts are pushed to the server.
+const DRAFT_PUSH_DELAY: Duration = Duration::from_secs(60);
+
+/// Long-lived loop for one account: sync passes, targeted jobs, IDLE, and
+/// the outbox timer. Exits when the account is removed.
+async fn run_account_worker(account_id: &str, app: &AppHandle) {
+    let mut backoff = 2u64;
+    let mut attempt = 0u32;
+    let mut first_pass = true;
+    let mut parked = false;
+    let mut pending_full = true;
+    let mut more_work = false;
+    loop {
+        let state = app.state::<AppState>();
+        let Ok(actor) = state.actor(account_id) else {
+            break;
+        };
+        let reasons = actor.take_reasons();
+        if parked {
+            if reasons & (wake::CREDENTIALS | wake::SYNC | wake::RESUME) == 0 {
+                actor.wake.notified().await;
+                continue;
+            }
+            parked = false;
+        }
+        if reasons & (wake::SYNC | wake::POLICY | wake::CREDENTIALS) != 0 {
+            pending_full = true;
+        }
+        let guard = actor.acquire().await;
+        if pending_full || more_work {
+            let previous_message_id = state
+                .db
+                .latest_inbox_message(account_id)
+                .ok()
+                .flatten()
+                .map(|message| message.id);
+            match sync::run_sync_pass(account_id, app, &state, &actor, guard).await {
+                Ok(outcome) => {
+                    backoff = 2;
+                    attempt = 0;
+                    pending_full = false;
+                    more_work = outcome.more_work;
+                    if !first_pass {
+                        notify_new_mail(app, &state.db, account_id, previous_message_id);
+                    }
+                    first_pass = false;
+                }
+                Err(sync::PassError::AuthenticationFailed(_)) => {
+                    parked = true;
+                    more_work = false;
+                    continue;
+                }
+                Err(sync::PassError::Other(_)) => {
+                    more_work = false;
+                    tokio::select! {
+                        _ = tokio::time::sleep(reconnect_delay(account_id, backoff, attempt)) => {},
+                        _ = wait_for(&actor, wake::SYNC | wake::CREDENTIALS) => {},
+                    }
+                    backoff = (backoff * 2).min(120);
+                    attempt = attempt.wrapping_add(1);
+                    continue;
+                }
+            }
+            if more_work {
+                // Keep downloading history, but let queued user actions and
+                // other accounts run between passes.
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                continue;
+            }
+            continue;
+        }
+        if reasons & (wake::DRAFTS | wake::OUTBOX) != 0 {
+            sync::run_targeted_jobs(account_id, app, &state, reasons).await;
+        }
+        let Ok(account) = state.db.account(account_id) else {
+            break;
+        };
+        let Ok(password) = credentials::load(account_id) else {
+            drop(guard);
+            let detail =
+                "The saved password is unavailable. Update the password in Settings > Accounts.";
+            // A locked vault can unlock later (for example after sign-in on
+            // macOS), so retry with backoff instead of parking.
+            let _ = state
+                .db
+                .set_account_state(account_id, "offline", Some(detail));
+            emit_sync(app, account_id, "offline", Some(detail), None);
+            tokio::select! {
+                _ = tokio::time::sleep(reconnect_delay(account_id, backoff, attempt)) => {},
+                _ = wait_for(&actor, wake::SYNC | wake::CREDENTIALS) => {},
+            }
+            backoff = (backoff * 2).min(120);
+            attempt = attempt.wrapping_add(1);
+            continue;
+        };
+        let next_send = state
+            .db
+            .next_scheduled_send_at(account_id)
+            .ok()
+            .flatten()
+            .and_then(|value| chrono::DateTime::parse_from_rfc3339(&value).ok())
+            .map(|when| {
+                (when.with_timezone(&chrono::Utc) - chrono::Utc::now())
+                    .to_std()
+                    .unwrap_or(Duration::ZERO)
+            });
+        // Autosave does not wake the worker; push pending drafts after a
+        // short quiet period instead of on every keystroke-driven save.
+        let drafts_pending = state
+            .db
+            .pending_draft_sync(account_id)
+            .is_ok_and(|records| !records.is_empty());
+        let next_job = [next_send, drafts_pending.then_some(DRAFT_PUSH_DELAY)]
+            .into_iter()
+            .flatten()
+            .min();
+        let limit = next_job.map_or(IDLE_REFRESH, |due| {
+            due.max(Duration::from_millis(200)).min(IDLE_REFRESH)
+        });
+        let job_due_first = next_job.is_some_and(|due| due < IDLE_REFRESH);
+        match mail::idle_inbox(&account, &password, &actor.wake, limit).await {
+            Ok(mail::IdleOutcome::Changed) => pending_full = true,
+            Ok(mail::IdleOutcome::Timeout) if job_due_first => {
+                let mut jobs = 0;
+                if next_send.is_some_and(|due| due <= limit) {
+                    jobs |= wake::OUTBOX;
+                }
+                if drafts_pending {
+                    jobs |= wake::DRAFTS;
+                }
+                actor.reasons.fetch_or(jobs, Ordering::SeqCst);
+            }
+            Ok(mail::IdleOutcome::Timeout) => pending_full = true,
+            Ok(mail::IdleOutcome::Interrupted) => {}
+            Err(_) => {
+                drop(guard);
+                let _ = state.db.set_account_state(
+                    account_id,
+                    "offline",
+                    Some("Connection lost. Reconnecting…"),
+                );
+                emit_sync(
+                    app,
+                    account_id,
+                    "offline",
+                    Some("Connection lost. Reconnecting…"),
+                    None,
+                );
+                tokio::select! {
+                    _ = tokio::time::sleep(reconnect_delay(account_id, backoff, attempt)) => {},
+                    _ = wait_for(&actor, wake::SYNC | wake::CREDENTIALS) => {},
+                }
+                backoff = (backoff * 2).min(120);
+                attempt = attempt.wrapping_add(1);
+                pending_full = true;
+            }
+        }
+    }
+}
+
+/// Resolve once a wake-up carrying one of `mask` arrives. Other reasons are
+/// kept for the worker loop.
+async fn wait_for(actor: &AccountActor, mask: u8) {
+    loop {
+        if actor.reasons.load(Ordering::SeqCst) & mask != 0 {
+            return;
+        }
+        actor.wake.notified().await;
+    }
 }
 
 fn emit_sync(
@@ -713,19 +875,37 @@ fn notify_new_mail(
     let private = settings
         .map(|settings| settings.private_notifications)
         .unwrap_or(true);
+    // With several accounts, say which one received the mail. The account's
+    // own display name is shown, never its address, even in private mode.
+    let account_label = (db.account_count().unwrap_or(0) > 1)
+        .then(|| db.account(account_id).ok())
+        .flatten()
+        .map(|account| account.summary.display_name)
+        .filter(|name| !name.trim().is_empty());
     let (title, body) = if private {
         (
-            "New mail".to_string(),
+            account_label.as_deref().map_or_else(
+                || "New mail".to_string(),
+                |name| format!("New mail for {name}"),
+            ),
             "Open Postal Snap to read it.".to_string(),
         )
     } else {
+        let sender = if message.sender_name.is_empty() {
+            message.sender_address.clone()
+        } else {
+            message.sender_name.clone()
+        };
         (
-            if message.sender_name.is_empty() {
-                message.sender_address.clone()
-            } else {
-                message.sender_name.clone()
+            sender,
+            match account_label {
+                Some(name) => format!(
+                    "{}
+{name}",
+                    message.subject
+                ),
+                None => message.subject.clone(),
             },
-            message.subject.clone(),
         )
     };
     let _ = app.notification().builder().title(title).body(body).show();
@@ -754,6 +934,7 @@ mod tests {
                 aliases: vec![],
                 auth_method: "password".into(),
                 signature: String::new(),
+                color: None,
             },
             imap: ServerConfig {
                 host: "imap.example.com".into(),
@@ -778,6 +959,7 @@ mod tests {
     fn bill(db: &Database, account_id: &str, inbox: i64, uid: u32) -> i64 {
         let mut message = CachedMessage {
             uid,
+            internal_at: None,
             message_id: Some(format!("<{uid}@bills.example.com>")),
             subject: "Power bill".into(),
             sender_name: "Power Co".into(),
@@ -1070,5 +1252,30 @@ mod tests {
             ),
             Ok(ValidatedReplay::ClearPending(value)) if value == id
         ));
+    }
+
+    #[test]
+    fn retired_account_cannot_recreate_actor() {
+        // W9: once the row is gone, no caller may bring a worker back.
+        let directory =
+            std::env::temp_dir().join(format!("postal-snap-actor-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let db = Database::memory();
+        let settings =
+            crate::settings::SettingsStore::load(directory.join("settings.json"), &db).unwrap();
+        let state = super::AppState::new(db.clone(), settings, directory.clone());
+        let mut account = rule_account();
+        account.summary.id = uuid::Uuid::new_v4().to_string();
+        db.insert_account(&account).unwrap();
+
+        assert!(state.actor(&account.summary.id).is_ok());
+        db.remove_account(&account.summary.id).unwrap();
+        state.retire_actor(&account.summary.id);
+
+        assert!(state.actor(&account.summary.id).is_err());
+        assert!(state
+            .request(&account.summary.id, super::wake::SYNC)
+            .is_err());
+        let _ = std::fs::remove_dir_all(directory);
     }
 }

@@ -20,7 +20,7 @@ use crate::models::{
 };
 use crate::models::{Attachment, ComposeDraft, MailboxRole, MessageSummary, ProviderKind, TlsMode};
 
-const CURRENT_SCHEMA_VERSION: u32 = 17;
+const CURRENT_SCHEMA_VERSION: u32 = 18;
 
 pub type MailboxSyncState = (Option<u32>, Option<u32>, u32, Option<u32>);
 
@@ -32,6 +32,8 @@ pub struct Database {
 #[derive(Debug)]
 pub struct CachedMessage {
     pub uid: u32,
+    /// Server INTERNALDATE, canonical RFC 3339. `None` keeps the stored value.
+    pub internal_at: Option<String>,
     pub message_id: Option<String>,
     pub subject: String,
     pub sender_name: String,
@@ -74,6 +76,12 @@ impl Database {
         connection
             .pragma_update(None, "foreign_keys", "ON")
             .map_err(db_error)?;
+        // WAL + NORMAL keeps the database consistent after a crash while
+        // avoiding an fsync per envelope batch; the outbox claim opts back
+        // into FULL for its single must-not-roll-back commit.
+        connection
+            .pragma_update(None, "synchronous", "NORMAL")
+            .map_err(db_error)?;
         connection
             .busy_timeout(Duration::from_secs(5))
             .map_err(db_error)?;
@@ -107,7 +115,7 @@ impl Database {
         }
     }
 
-    fn conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>, String> {
+    pub(crate) fn conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>, String> {
         self.connection
             .lock()
             .map_err(|_| "Local mail database is unavailable.".into())
@@ -759,10 +767,112 @@ fn migrate_schema(connection: &mut Connection) -> Result<(), String> {
             .pragma_update(None, "user_version", 17)
             .map_err(db_error)?;
     }
+    if version < 18 {
+        migrate_v18(&transaction)?;
+        transaction
+            .pragma_update(None, "user_version", 18)
+            .map_err(db_error)?;
+    }
     transaction
         .pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)
         .map_err(db_error)?;
     transaction.commit().map_err(db_error)
+}
+
+/// Schema v18: per-account download policy, account presentation, resumable
+/// backfill state, CONDSTORE bookkeeping, INTERNALDATE, body accounting and
+/// prefetch backoff. Nullable policy columns mean "inherit the app default"
+/// until startup seeds them once.
+fn migrate_v18(transaction: &rusqlite::Transaction) -> Result<(), String> {
+    for (table, column, sql) in [
+        (
+            "accounts",
+            "cache_mode",
+            "ALTER TABLE accounts ADD COLUMN cache_mode TEXT",
+        ),
+        (
+            "accounts",
+            "cache_days",
+            "ALTER TABLE accounts ADD COLUMN cache_days INTEGER",
+        ),
+        (
+            "accounts",
+            "cache_max_bytes",
+            "ALTER TABLE accounts ADD COLUMN cache_max_bytes INTEGER",
+        ),
+        (
+            "accounts",
+            "color",
+            "ALTER TABLE accounts ADD COLUMN color TEXT",
+        ),
+        (
+            "accounts",
+            "sort_order",
+            "ALTER TABLE accounts ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "mailboxes",
+            "highest_modseq",
+            "ALTER TABLE mailboxes ADD COLUMN highest_modseq INTEGER",
+        ),
+        (
+            "mailboxes",
+            "backfill_state",
+            "ALTER TABLE mailboxes ADD COLUMN backfill_state TEXT NOT NULL DEFAULT 'active'",
+        ),
+        (
+            "mailboxes",
+            "last_flag_scan_at",
+            "ALTER TABLE mailboxes ADD COLUMN last_flag_scan_at TEXT",
+        ),
+        (
+            "mailboxes",
+            "sync_error",
+            "ALTER TABLE mailboxes ADD COLUMN sync_error TEXT",
+        ),
+        (
+            "mailboxes",
+            "delimiter",
+            "ALTER TABLE mailboxes ADD COLUMN delimiter TEXT",
+        ),
+        (
+            "messages",
+            "internal_at",
+            "ALTER TABLE messages ADD COLUMN internal_at TEXT",
+        ),
+        (
+            "messages",
+            "body_bytes",
+            "ALTER TABLE messages ADD COLUMN body_bytes INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "messages",
+            "prefetch_failures",
+            "ALTER TABLE messages ADD COLUMN prefetch_failures INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "messages",
+            "prefetch_retry_at",
+            "ALTER TABLE messages ADD COLUMN prefetch_retry_at TEXT",
+        ),
+    ] {
+        ensure_column(transaction, table, column, sql)?;
+    }
+    transaction
+        .execute_batch(
+            "UPDATE mailboxes SET backfill_state='cutoff' WHERE backfill_uid=0;
+             UPDATE mailboxes SET backfill_uid=NULL WHERE backfill_uid=0;
+             UPDATE messages SET internal_at=received_at WHERE internal_at IS NULL;
+             UPDATE messages SET body_bytes=LENGTH(raw_message)+LENGTH(text_body)+LENGTH(COALESCE(html_body,''))
+               WHERE LENGTH(raw_message)>0 AND body_bytes=0;
+             UPDATE accounts SET sort_order=(SELECT COUNT(*) FROM accounts older WHERE older.created_at<accounts.created_at OR (older.created_at=accounts.created_at AND older.id<accounts.id))
+               WHERE sort_order=0;
+             CREATE INDEX IF NOT EXISTS messages_account_message_id ON messages(account_id,message_id);
+             CREATE INDEX IF NOT EXISTS messages_account_thread_parent ON messages(account_id,thread_parent);
+             CREATE INDEX IF NOT EXISTS messages_mailbox_internal ON messages(mailbox_id,internal_at DESC);
+             CREATE INDEX IF NOT EXISTS messages_account_bodies ON messages(account_id,body_bytes) WHERE body_bytes>0;",
+        )
+        .map_err(db_error)
 }
 
 /// Restore the database-level unique email guarantee. This is a no-op when the
@@ -1019,6 +1129,7 @@ mod tests {
                 aliases: vec![],
                 auth_method: "password".into(),
                 signature: String::new(),
+                color: None,
             },
             imap: ServerConfig {
                 host: "imap.example.com".into(),
@@ -1048,6 +1159,7 @@ mod tests {
     fn message(uid: u32, received_at: &str) -> CachedMessage {
         CachedMessage {
             uid,
+            internal_at: None,
             message_id: Some(format!("<{uid}@example.com>")),
             subject: "Family picnic".into(),
             sender_name: "Jane".into(),
@@ -1154,7 +1266,7 @@ mod tests {
             &message(1, "2026-08-18T12:00:00Z"),
         )
         .unwrap();
-        db.set_backfill_cursor(mailbox, 40).unwrap();
+        db.set_backfill(mailbox, Some(40), "cutoff").unwrap();
 
         db.upsert_mailbox(
             &account.summary.id,
@@ -1168,7 +1280,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(db.max_uid(mailbox).unwrap(), 0);
-        assert_eq!(db.backfill_cursor(mailbox).unwrap(), None);
+        assert_eq!(
+            db.mailbox_sync_meta(mailbox).unwrap().backfill_state,
+            "active"
+        );
     }
 
     #[test]
@@ -1418,7 +1533,8 @@ mod tests {
             &message(1, "2000-01-01T00:00:00Z"),
         )
         .unwrap();
-        db.evict_to_policy(&CachePolicy::default()).unwrap();
+        db.evict_account_to_policy(&account.summary.id, &CachePolicy::default())
+            .unwrap();
         let messages = db.list_messages(mailbox, None, 10).unwrap();
         assert_eq!(messages.items.len(), 1);
         assert!(!db
@@ -2082,6 +2198,42 @@ mod tests {
     }
 
     #[test]
+    fn outbox_claim_requires_the_checked_state() {
+        // W12: a caller that checked "scheduled" must not send a row that
+        // another delivery already left needing attention.
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let id = db
+            .queue_outbox(
+                &draft(&account.summary.id),
+                "scheduled",
+                None,
+                "",
+                b"",
+                Some("2000-01-01T00:00:00Z"),
+            )
+            .unwrap();
+        db.set_outbox_state(&id, &account.summary.id, "needs_attention", None)
+            .unwrap();
+        assert!(!db
+            .claim_outbox_delivery(&id, &account.summary.id, "scheduled")
+            .unwrap());
+        assert!(!db
+            .claim_outbox_delivery(&id, &account.summary.id, "queued")
+            .unwrap());
+        assert!(!db
+            .claim_outbox_delivery(&id, "other-account", "needs_attention")
+            .unwrap());
+        assert!(db
+            .claim_outbox_delivery(&id, &account.summary.id, "needs_attention")
+            .unwrap());
+        assert!(!db
+            .claim_outbox_delivery(&id, &account.summary.id, "needs_attention")
+            .unwrap());
+    }
+
+    #[test]
     fn snoozed_messages_hide_until_due_then_return() {
         let db = Database::memory();
         let account = account();
@@ -2636,7 +2788,14 @@ mod tests {
                 .unwrap();
         }
 
-        let uncached = db.uncached_message_uids(mailbox_id, 10, 1000).unwrap();
+        let full = CachePolicy {
+            mode: "full".into(),
+            days: 0,
+            max_bytes: 0,
+        };
+        let uncached = db
+            .prefetch_candidates(mailbox_id, &full, 10, u64::MAX, 1000)
+            .unwrap();
         assert_eq!(
             uncached.iter().map(|(uid, _)| *uid).collect::<Vec<_>>(),
             vec![4, 3, 1]
@@ -2905,5 +3064,443 @@ mod tests {
         );
         assert!(db.email_taken("sam@example.com").unwrap());
         assert_eq!(db.list_accounts().unwrap().len(), 1);
+    }
+
+    // Failure modes E1-E9, S2, S8, S9, D2 and D4 from docs/SYNC_FAILURE_MODES.md.
+
+    fn recent(days: u32) -> CachePolicy {
+        CachePolicy {
+            mode: "recent".into(),
+            days,
+            max_bytes: 0,
+        }
+    }
+
+    fn full(max_bytes: u64) -> CachePolicy {
+        CachePolicy {
+            mode: "full".into(),
+            days: 0,
+            max_bytes,
+        }
+    }
+
+    fn envelope_only(uid: u32, received_at: &str) -> CachedMessage {
+        let mut value = message(uid, received_at);
+        value.raw_message = Vec::new();
+        value.text_body = String::new();
+        value
+    }
+
+    fn days_ago(days: i64) -> String {
+        crate::mail::parse::canonical_time(Utc::now() - chrono::Duration::days(days))
+    }
+
+    fn cached(db: &Database, mailbox: i64, uid: u32, account_id: &str) -> bool {
+        let id = db.message_summary_by_uid(mailbox, uid).unwrap().unwrap().id;
+        db.message_content_cached(id, account_id).unwrap()
+    }
+
+    #[test]
+    fn per_account_eviction_keeps_envelopes_drafts_and_outbox() {
+        let db = Database::memory();
+        let account = account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        db.upsert_message(account_id, inbox, &message(1, "2000-01-01T00:00:00+00:00"))
+            .unwrap();
+        let draft_id = db.save_draft(&draft(account_id)).unwrap();
+        db.queue_outbox(
+            &draft(account_id),
+            "queued",
+            None,
+            "<q@example.com>",
+            b"MIME",
+            None,
+        )
+        .unwrap();
+
+        db.evict_account_to_policy(account_id, &recent(90)).unwrap();
+
+        let page = db.list_messages(inbox, None, 10).unwrap();
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].subject, "Family picnic");
+        assert!(!cached(&db, inbox, 1, account_id));
+        assert!(db.draft(&draft_id, account_id).is_ok());
+        assert_eq!(db.list_outbox(account_id).unwrap().len(), 1);
+        let (fts_rows, message_rows): (i64, i64) = db
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM message_fts), (SELECT COUNT(*) FROM messages)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(fts_rows, message_rows);
+    }
+
+    #[test]
+    fn widening_policy_reactivates_cutoff_backfill() {
+        let db = Database::memory();
+        let account = account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        let default = CachePolicy::default();
+        db.set_account_cache_policy(account_id, &recent(90), &default)
+            .unwrap();
+        db.set_backfill(inbox, Some(40), "cutoff").unwrap();
+
+        assert!(!db
+            .set_account_cache_policy(account_id, &recent(30), &default)
+            .unwrap());
+        assert_eq!(
+            db.mailbox_sync_meta(inbox).unwrap().backfill_state,
+            "cutoff"
+        );
+
+        assert!(db
+            .set_account_cache_policy(account_id, &recent(365), &default)
+            .unwrap());
+        assert_eq!(
+            db.mailbox_sync_meta(inbox).unwrap().backfill_state,
+            "active"
+        );
+
+        db.set_backfill(inbox, Some(40), "cutoff").unwrap();
+        assert!(db
+            .set_account_cache_policy(account_id, &full(0), &default)
+            .unwrap());
+        assert_eq!(
+            db.mailbox_sync_meta(inbox).unwrap().backfill_state,
+            "active"
+        );
+        assert_eq!(
+            db.account_cache_policy(account_id, &default).unwrap().mode,
+            "full"
+        );
+    }
+
+    #[test]
+    fn size_cap_keeps_recently_opened_bodies() {
+        let db = Database::memory();
+        let account = account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        for (uid, date) in [(1, days_ago(30)), (2, days_ago(20)), (3, days_ago(10))] {
+            db.upsert_message(account_id, inbox, &message(uid, &date))
+                .unwrap();
+        }
+        let oldest = db.message_summary_by_uid(inbox, 1).unwrap().unwrap().id;
+        db.message_detail(oldest, account_id).unwrap();
+        let one_body = message(1, "").raw_message.len() + message(1, "").text_body.len();
+
+        db.evict_account_to_policy(account_id, &full((one_body * 2) as u64))
+            .unwrap();
+
+        assert!(cached(&db, inbox, 1, account_id), "opened today");
+        assert!(cached(&db, inbox, 3, account_id), "newest");
+        assert!(!cached(&db, inbox, 2, account_id));
+    }
+
+    #[test]
+    fn prefetch_candidates_respect_recent_cutoff() {
+        let db = Database::memory();
+        let account = account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        db.upsert_envelope(account_id, inbox, &envelope_only(1, &days_ago(200)))
+            .unwrap();
+        db.upsert_envelope(account_id, inbox, &envelope_only(2, &days_ago(5)))
+            .unwrap();
+
+        let candidates = db
+            .prefetch_candidates(inbox, &recent(90), 10, u64::MAX, u64::MAX)
+            .unwrap();
+        assert_eq!(
+            candidates.iter().map(|(uid, _)| *uid).collect::<Vec<_>>(),
+            vec![2]
+        );
+        let everything = db
+            .prefetch_candidates(inbox, &full(0), 10, u64::MAX, u64::MAX)
+            .unwrap();
+        assert_eq!(everything.len(), 2);
+    }
+
+    #[test]
+    fn per_account_eviction_is_isolated() {
+        let db = Database::memory();
+        let first = account();
+        let second = account_with_id("22222222-2222-4222-8222-222222222222", "kim@example.com");
+        db.insert_account(&first).unwrap();
+        db.insert_account(&second).unwrap();
+        let first_inbox = mailbox(&db, &first.summary.id, "INBOX", &MailboxRole::Inbox);
+        let second_inbox = mailbox(&db, &second.summary.id, "INBOX", &MailboxRole::Inbox);
+        let old = "2000-01-01T00:00:00+00:00";
+        db.upsert_message(&first.summary.id, first_inbox, &message(1, old))
+            .unwrap();
+        db.upsert_message(&second.summary.id, second_inbox, &message(1, old))
+            .unwrap();
+
+        db.evict_account_to_policy(&first.summary.id, &recent(90))
+            .unwrap();
+        db.evict_account_to_policy(&first.summary.id, &full(1))
+            .unwrap();
+
+        assert!(!cached(&db, first_inbox, 1, &first.summary.id));
+        assert!(cached(&db, second_inbox, 1, &second.summary.id));
+        assert_eq!(
+            db.account_cache_usage(&first.summary.id, 0).unwrap().bytes,
+            0
+        );
+        assert!(db.account_cache_usage(&second.summary.id, 0).unwrap().bytes > 0);
+    }
+
+    #[test]
+    fn unlimited_policy_never_evicts() {
+        let db = Database::memory();
+        let account = account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        db.upsert_message(account_id, inbox, &message(1, "1990-01-01T00:00:00+00:00"))
+            .unwrap();
+
+        db.evict_account_to_policy(account_id, &full(0)).unwrap();
+
+        assert!(cached(&db, inbox, 1, account_id));
+    }
+
+    #[test]
+    fn policy_seed_is_idempotent() {
+        let db = Database::memory();
+        let first = account();
+        let second = account_with_id("33333333-3333-4333-8333-333333333333", "lee@example.com");
+        db.insert_account(&first).unwrap();
+        db.insert_account(&second).unwrap();
+        db.seed_account_cache_policies(&recent(90)).unwrap();
+        db.set_account_cache_policy(&first.summary.id, &full(0), &recent(90))
+            .unwrap();
+
+        db.seed_account_cache_policies(&recent(30)).unwrap();
+
+        assert_eq!(
+            db.account_cache_policy(&first.summary.id, &recent(7))
+                .unwrap()
+                .mode,
+            "full"
+        );
+        assert_eq!(
+            db.account_cache_policy(&second.summary.id, &recent(7))
+                .unwrap()
+                .days,
+            90
+        );
+    }
+
+    #[test]
+    fn migrates_v17_to_v18_preserving_rows() {
+        let db = Database::memory();
+        let account = account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        db.upsert_message(account_id, inbox, &message(1, "2026-08-18T12:00:00+00:00"))
+            .unwrap();
+        {
+            let mut connection = db.conn().unwrap();
+            connection
+                .execute_batch(
+                    "DROP INDEX messages_account_message_id;
+                     DROP INDEX messages_account_thread_parent;
+                     DROP INDEX messages_mailbox_internal;
+                     DROP INDEX messages_account_bodies;
+                     ALTER TABLE accounts DROP COLUMN cache_mode;
+                     ALTER TABLE accounts DROP COLUMN cache_days;
+                     ALTER TABLE accounts DROP COLUMN cache_max_bytes;
+                     ALTER TABLE accounts DROP COLUMN color;
+                     ALTER TABLE accounts DROP COLUMN sort_order;
+                     ALTER TABLE mailboxes DROP COLUMN highest_modseq;
+                     ALTER TABLE mailboxes DROP COLUMN backfill_state;
+                     ALTER TABLE mailboxes DROP COLUMN last_flag_scan_at;
+                     ALTER TABLE mailboxes DROP COLUMN sync_error;
+                     ALTER TABLE mailboxes DROP COLUMN delimiter;
+                     ALTER TABLE messages DROP COLUMN internal_at;
+                     ALTER TABLE messages DROP COLUMN body_bytes;
+                     ALTER TABLE messages DROP COLUMN prefetch_failures;
+                     ALTER TABLE messages DROP COLUMN prefetch_retry_at;
+                     UPDATE mailboxes SET backfill_uid=0;
+                     PRAGMA user_version=17;",
+                )
+                .unwrap();
+            migrate_schema(&mut connection).unwrap();
+            let version: u32 = connection
+                .pragma_query_value(None, "user_version", |row| row.get(0))
+                .unwrap();
+            assert_eq!(version, CURRENT_SCHEMA_VERSION);
+        }
+        let meta = db.mailbox_sync_meta(inbox).unwrap();
+        assert_eq!(meta.backfill_state, "cutoff");
+        assert!(cached(&db, inbox, 1, account_id));
+        assert!(db.account_cache_usage(account_id, 0).unwrap().bytes > 0);
+        let internal_at: Option<String> = db
+            .conn()
+            .unwrap()
+            .query_row("SELECT internal_at FROM messages", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(internal_at.as_deref(), Some("2026-08-18T12:00:00+00:00"));
+        assert_eq!(
+            db.account_cache_policy(account_id, &recent(45))
+                .unwrap()
+                .days,
+            45
+        );
+    }
+
+    #[test]
+    fn expunge_reconcile_keeps_pending_moves() {
+        let db = Database::memory();
+        let account = account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        let archive = mailbox(&db, account_id, "Archive", &MailboxRole::Archive);
+        for uid in 1..=3 {
+            db.upsert_envelope(
+                account_id,
+                inbox,
+                &envelope_only(uid, "2026-08-18T12:00:00+00:00"),
+            )
+            .unwrap();
+        }
+        let moving = db.message_summary_by_uid(inbox, 2).unwrap().unwrap().id;
+        db.mark_pending_move(moving, archive).unwrap();
+
+        let server = [3u32].into_iter().collect::<std::collections::HashSet<_>>();
+        let removed = db.reconcile_expunged(inbox, 1, 3, &server).unwrap();
+
+        assert_eq!(removed, 1);
+        assert_eq!(db.cached_message_count(inbox).unwrap(), 2);
+        assert_eq!(db.pending_move_uids(inbox).unwrap(), vec![2]);
+    }
+
+    #[test]
+    fn prefetch_failures_back_off() {
+        let db = Database::memory();
+        let account = account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        db.upsert_envelope(account_id, inbox, &envelope_only(1, &days_ago(1)))
+            .unwrap();
+        db.upsert_envelope(account_id, inbox, &envelope_only(2, &days_ago(2)))
+            .unwrap();
+
+        db.record_prefetch_failure(inbox, 1).unwrap();
+        let candidates = db
+            .prefetch_candidates(inbox, &full(0), 10, u64::MAX, u64::MAX)
+            .unwrap();
+        assert_eq!(
+            candidates.iter().map(|(uid, _)| *uid).collect::<Vec<_>>(),
+            vec![2]
+        );
+
+        db.conn()
+            .unwrap()
+            .execute(
+                "UPDATE messages SET prefetch_failures=5, prefetch_retry_at=NULL WHERE uid=1",
+                [],
+            )
+            .unwrap();
+        let candidates = db
+            .prefetch_candidates(inbox, &full(0), 10, u64::MAX, u64::MAX)
+            .unwrap();
+        assert!(candidates.iter().all(|(uid, _)| *uid != 1));
+    }
+
+    #[test]
+    fn prefetch_candidates_fit_budget() {
+        let db = Database::memory();
+        let account = account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        for (uid, size) in [(1u32, 400u64), (2, 300), (3, 200)] {
+            let mut value = envelope_only(uid, &days_ago(i64::from(uid)));
+            value.size = size;
+            db.upsert_envelope(account_id, inbox, &value).unwrap();
+        }
+
+        let batch = db
+            .prefetch_candidates(inbox, &full(0), 10, 550, u64::MAX)
+            .unwrap();
+        assert_eq!(
+            batch.iter().map(|(uid, _)| *uid).collect::<Vec<_>>(),
+            vec![1]
+        );
+        let oversized_first = db
+            .prefetch_candidates(inbox, &full(0), 10, 100, u64::MAX)
+            .unwrap();
+        assert_eq!(oversized_first.len(), 1, "one item always makes progress");
+        let capped = db
+            .prefetch_candidates(inbox, &full(0), 10, u64::MAX, 250)
+            .unwrap();
+        assert_eq!(
+            capped.iter().map(|(uid, _)| *uid).collect::<Vec<_>>(),
+            vec![3]
+        );
+    }
+
+    #[test]
+    fn envelope_batch_is_atomic() {
+        let db = Database::memory();
+        let account = account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        db.conn()
+            .unwrap()
+            .execute_batch(
+                "CREATE TEMP TRIGGER fail_second BEFORE INSERT ON messages WHEN NEW.uid=2
+                 BEGIN SELECT RAISE(ABORT, 'simulated failure'); END;",
+            )
+            .unwrap();
+
+        let batch = vec![
+            envelope_only(1, "2026-08-18T12:00:00+00:00"),
+            envelope_only(2, "2026-08-18T12:00:00+00:00"),
+        ];
+        assert!(db.upsert_envelopes(account_id, inbox, &batch).is_err());
+
+        assert_eq!(db.cached_message_count(inbox).unwrap(), 0);
+    }
+
+    #[test]
+    fn envelope_batch_keeps_fts_in_step() {
+        let db = Database::memory();
+        let account = account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        let batch = (1..=40)
+            .map(|uid| envelope_only(uid, "2026-08-18T12:00:00+00:00"))
+            .collect::<Vec<_>>();
+        db.upsert_envelopes(account_id, inbox, &batch).unwrap();
+        db.upsert_envelopes(account_id, inbox, &batch).unwrap();
+
+        let (fts_rows, message_rows): (i64, i64) = db
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM message_fts), (SELECT COUNT(*) FROM messages)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(message_rows, 40);
+        assert_eq!(fts_rows, message_rows);
     }
 }

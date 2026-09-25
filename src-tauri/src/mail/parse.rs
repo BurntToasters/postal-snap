@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 use lettre::message::Mailbox;
 use mail_parser::{MessageParser, MimeHeaders};
 use sha2::{Digest, Sha256};
@@ -44,13 +44,13 @@ pub(crate) fn parse_envelope(
         .as_deref()
         .and_then(|raw| std::str::from_utf8(raw).ok())
         .and_then(|date| DateTime::parse_from_rfc2822(date).ok())
-        .map(|date| date.with_timezone(&Utc).to_rfc3339())
+        .map(|date| canonical_time(date.with_timezone(&Utc)))
         .or_else(|| {
             fetch
                 .internal_date()
-                .map(|date| date.with_timezone(&Utc).to_rfc3339())
+                .map(|date| canonical_time(date.with_timezone(&Utc)))
         })
-        .unwrap_or_else(|| Utc::now().to_rfc3339());
+        .unwrap_or_else(|| canonical_time(Utc::now()));
     let recipients = to
         .iter()
         .chain(cc.iter())
@@ -58,6 +58,7 @@ pub(crate) fn parse_envelope(
         .collect::<Vec<_>>()
         .join(", ");
     Ok(CachedMessage {
+        internal_at: internal_date(fetch),
         uid,
         message_id: envelope
             .message_id
@@ -86,10 +87,46 @@ pub(crate) fn parse_envelope(
         html_body: None,
         attachments: Vec::new(),
         raw_message: Vec::new(),
-        has_attachments: fetch
-            .bodystructure()
-            .is_some_and(bodystructure_has_attachments),
+        has_attachments: fetch.bodystructure().map_or_else(
+            || header_suggests_attachments(fetch),
+            bodystructure_has_attachments,
+        ),
     })
+}
+
+/// Attachment hint for the message list from the top-level Content-Type,
+/// used instead of BODYSTRUCTURE: a hostile, deeply nested structure can make
+/// the whole envelope batch unparseable. The downloaded body corrects it.
+fn header_suggests_attachments(fetch: &async_imap::types::Fetch) -> bool {
+    let Some(text) = fetch.header().and_then(|raw| std::str::from_utf8(raw).ok()) else {
+        return false;
+    };
+    let mut content_type = String::new();
+    let mut in_content_type = false;
+    for line in text.lines() {
+        if line.starts_with([' ', '\t']) {
+            if in_content_type {
+                content_type.push(' ');
+                content_type.push_str(line.trim());
+            }
+            continue;
+        }
+        in_content_type = false;
+        if let Some((name, value)) = line.split_once(':') {
+            if name.trim().eq_ignore_ascii_case("content-type") {
+                content_type = value.trim().to_string();
+                in_content_type = true;
+            }
+        }
+    }
+    let media = content_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    media == "multipart/mixed"
+        || (!media.is_empty() && !media.starts_with("text/") && !media.starts_with("multipart/"))
 }
 
 fn part_is_inline(part: &mail_parser::MessagePart<'_>) -> bool {
@@ -201,12 +238,36 @@ fn imap_addresses(addresses: Option<&[async_imap::imap_proto::types::Address<'_>
         .collect()
 }
 
+/// Canonical stored timestamp: whole seconds and an explicit UTC offset, so
+/// text comparison matches time order (see `normalize_received_at`).
+pub(crate) fn canonical_time(date: DateTime<Utc>) -> String {
+    date.to_rfc3339_opts(SecondsFormat::Secs, false)
+}
+
+/// Server arrival time. Unlike the sender-controlled Date header it cannot be
+/// forged into the future, so retention and backfill cutoffs use it.
+pub(crate) fn internal_date(item: &async_imap::types::Fetch) -> Option<String> {
+    item.internal_date()
+        .map(|date| canonical_time(date.with_timezone(&Utc)))
+}
+
+/// Match system flags by variant. Keywords are free-form atoms, so a
+/// substring test would read `$Unseen` or `NotFlagged` as a system flag.
+pub(crate) fn system_flags(item: &async_imap::types::Fetch) -> (bool, bool) {
+    item.flags()
+        .fold((false, false), |(seen, flagged), flag| match flag {
+            async_imap::types::Flag::Seen => (true, flagged),
+            async_imap::types::Flag::Flagged => (seen, true),
+            _ => (seen, flagged),
+        })
+}
+
 pub(crate) fn received_at_fallback(
     item: &async_imap::types::Fetch,
     cached_received_at: Option<&str>,
 ) -> Option<String> {
     item.internal_date()
-        .map(|date| date.with_timezone(&Utc).to_rfc3339())
+        .map(|date| canonical_time(date.with_timezone(&Utc)))
         .or_else(|| cached_received_at.map(ToOwned::to_owned))
 }
 
@@ -250,9 +311,9 @@ pub(crate) fn parse_message(
     let received_at = message
         .date()
         .and_then(|date| DateTime::<Utc>::from_timestamp(date.to_timestamp(), 0))
-        .map(|date| date.to_rfc3339())
+        .map(canonical_time)
         .or_else(|| fallback_received_at.map(ToOwned::to_owned))
-        .unwrap_or_else(|| Utc::now().to_rfc3339());
+        .unwrap_or_else(|| canonical_time(Utc::now()));
     let attachments = message
         .attachments()
         .take(MAX_ATTACHMENTS)
@@ -288,6 +349,7 @@ pub(crate) fn parse_message(
         .collect::<Vec<_>>()
         .join(", ");
     Ok(CachedMessage {
+        internal_at: None,
         uid,
         message_id: message.message_id().and_then(normalize_rfc_message_id),
         subject: message.subject().unwrap_or_default().to_string(),

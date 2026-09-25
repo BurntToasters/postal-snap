@@ -198,81 +198,259 @@ impl Database {
             .map_err(db_error)?;
         transaction
             .execute(
-                "UPDATE messages SET preview='',text_body='',html_body=NULL,raw_message=X''",
+                "UPDATE messages SET preview='',text_body='',html_body=NULL,raw_message=X'',body_bytes=0,
+                 prefetch_failures=0,prefetch_retry_at=NULL",
                 [],
             )
             .map_err(db_error)?;
         transaction.commit().map_err(db_error)
     }
 
-    pub fn evict_to_policy(&self, policy: &CachePolicy) -> Result<(), String> {
+    /// Drop downloaded bodies for one account; envelopes, drafts and outbox
+    /// rows are untouched so the account keeps its full message list.
+    pub fn clear_account_downloads(&self, account_id: &str) -> Result<(), String> {
+        let mut conn = self.conn()?;
+        let transaction = conn.transaction().map_err(db_error)?;
+        clear_bodies(
+            &transaction,
+            "account_id=?1 AND body_bytes>0",
+            params![account_id],
+        )?;
+        transaction.commit().map_err(db_error)
+    }
+
+    /// Fill per-account download policy columns that are still NULL (new
+    /// accounts and databases migrated to v18) from the app default. Rows
+    /// that already carry a policy are never overwritten.
+    pub fn seed_account_cache_policies(&self, default: &CachePolicy) -> Result<(), String> {
+        self.conn()?
+            .execute(
+                "UPDATE accounts SET cache_mode=?1,cache_days=?2,cache_max_bytes=?3 WHERE cache_mode IS NULL",
+                params![
+                    default.mode,
+                    default.days,
+                    default.max_bytes.min(i64::MAX as u64) as i64
+                ],
+            )
+            .map_err(db_error)?;
+        Ok(())
+    }
+
+    pub fn account_cache_policy(
+        &self,
+        account_id: &str,
+        default: &CachePolicy,
+    ) -> Result<CachePolicy, String> {
+        let row: Option<(Option<String>, Option<u32>, Option<i64>)> = self
+            .conn()?
+            .query_row(
+                "SELECT cache_mode,cache_days,cache_max_bytes FROM accounts WHERE id=?1",
+                [account_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .map_err(db_error)?;
+        let Some((mode, days, max_bytes)) = row else {
+            return Err("Account not found.".into());
+        };
+        let policy = match mode {
+            Some(mode) => CachePolicy {
+                mode,
+                days: days.unwrap_or(default.days),
+                max_bytes: max_bytes.unwrap_or(0).max(0) as u64,
+            },
+            None => default.clone(),
+        };
+        Ok(if policy.is_valid() {
+            policy
+        } else {
+            default.clone()
+        })
+    }
+
+    /// Store a validated per-account policy. When the new policy keeps mail
+    /// the old one did not, folders whose backfill stopped at the old cutoff
+    /// resume. Returns whether that happened.
+    pub fn set_account_cache_policy(
+        &self,
+        account_id: &str,
+        policy: &CachePolicy,
+        default: &CachePolicy,
+    ) -> Result<bool, String> {
+        if !policy.is_valid() {
+            return Err("Choose a valid download setting.".into());
+        }
+        let previous = self.account_cache_policy(account_id, default)?;
+        let mut conn = self.conn()?;
+        let transaction = conn.transaction().map_err(db_error)?;
+        let changed = transaction
+            .execute(
+                "UPDATE accounts SET cache_mode=?2,cache_days=?3,cache_max_bytes=?4 WHERE id=?1",
+                params![
+                    account_id,
+                    policy.mode,
+                    policy.days,
+                    policy.max_bytes.min(i64::MAX as u64) as i64
+                ],
+            )
+            .map_err(db_error)?;
+        if changed == 0 {
+            return Err("Account not found.".into());
+        }
+        let widened = policy.widens(&previous);
+        if widened {
+            transaction
+                .execute(
+                    "UPDATE mailboxes SET backfill_state='active' WHERE account_id=?1 AND backfill_state='cutoff'",
+                    [account_id],
+                )
+                .map_err(db_error)?;
+        }
+        transaction.commit().map_err(db_error)?;
+        Ok(widened)
+    }
+
+    pub fn account_cache_usage(
+        &self,
+        account_id: &str,
+        max_bytes: u64,
+    ) -> Result<CacheUsage, String> {
+        let (bytes, message_count): (i64, i64) = self
+            .conn()?
+            .query_row(
+                "SELECT COALESCE(SUM(body_bytes),0), COUNT(*) FROM messages WHERE account_id=?1 AND body_bytes>0",
+                [account_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(db_error)?;
+        Ok(CacheUsage {
+            bytes: bytes.max(0) as u64,
+            max_bytes,
+            message_count: message_count.max(0) as u64,
+        })
+    }
+
+    /// Apply one account's policy. The date rule keeps anything opened in the
+    /// last seven days; the size rule keeps the newest-or-most-recently-read
+    /// bodies whose running total fits the cap. Only body columns change.
+    pub fn evict_account_to_policy(
+        &self,
+        account_id: &str,
+        policy: &CachePolicy,
+    ) -> Result<(), String> {
         if policy.is_unlimited() {
             return Ok(());
         }
         let mut conn = self.conn()?;
-        if policy.mode == "recent" && policy.days > 0 {
-            let transaction = conn.transaction().map_err(db_error)?;
-            let cutoff = format!("-{} days", policy.days);
-            transaction
-                .execute(
-                    "UPDATE message_fts SET body='' WHERE rowid IN (
-                    SELECT id FROM messages WHERE received_at < datetime('now', ?1)
-                    AND LENGTH(raw_message) > 0
-                 )",
-                    [&cutoff],
-                )
-                .map_err(db_error)?;
-            transaction
-                .execute(
-                    "UPDATE messages SET text_body='',html_body=NULL,raw_message=X''
-                 WHERE received_at < datetime('now', ?1) AND LENGTH(raw_message) > 0",
-                    [&cutoff],
-                )
-                .map_err(db_error)?;
-            transaction.commit().map_err(db_error)?;
+        let transaction = conn.transaction().map_err(db_error)?;
+        if let Some(cutoff) = policy.cutoff() {
+            let cutoff = crate::mail::parse::canonical_time(cutoff);
+            clear_bodies(
+                &transaction,
+                "account_id=?1 AND body_bytes>0
+                 AND julianday(COALESCE(internal_at,received_at)) < julianday(?2)
+                 AND julianday(accessed_at) < julianday('now','-7 days')",
+                params![account_id, cutoff],
+            )?;
         }
         if policy.max_bytes > 0 {
-            loop {
-                let bytes: i64 = conn
-                    .query_row(
-                        "SELECT COALESCE(SUM(LENGTH(raw_message)),0) FROM messages",
-                        [],
-                        |row| row.get(0),
-                    )
-                    .map_err(db_error)?;
-                if bytes <= policy.max_bytes.min(i64::MAX as u64) as i64 {
-                    break;
-                }
-                let ids = {
-                    let mut statement = conn
-                        .prepare(
-                            "SELECT id FROM messages WHERE LENGTH(raw_message) > 0
-                         ORDER BY accessed_at ASC LIMIT 25",
-                        )
-                        .map_err(db_error)?;
-                    let ids = statement
-                        .query_map([], |row| row.get::<_, i64>(0))
-                        .map_err(db_error)?
-                        .collect::<Result<Vec<_>, _>>()
-                        .map_err(db_error)?;
-                    ids
-                };
-                if ids.is_empty() {
-                    break;
-                }
-                let transaction = conn.transaction().map_err(db_error)?;
-                for id in ids {
-                    transaction
-                        .execute("UPDATE message_fts SET body='' WHERE rowid=?1", [id])
-                        .map_err(db_error)?;
-                    transaction.execute(
-                        "UPDATE messages SET text_body='',html_body=NULL,raw_message=X'' WHERE id=?1",
-                        [id],
-                    ).map_err(db_error)?;
-                }
-                transaction.commit().map_err(db_error)?;
-            }
+            clear_bodies(
+                &transaction,
+                "id IN (
+                   SELECT id FROM (
+                     SELECT id, SUM(body_bytes) OVER (
+                       ORDER BY MAX(julianday(COALESCE(internal_at,received_at)), julianday(accessed_at)) DESC, id DESC
+                     ) AS running
+                     FROM messages WHERE account_id=?1 AND body_bytes>0
+                   ) WHERE running > ?2
+                 )",
+                params![account_id, policy.max_bytes.min(i64::MAX as u64) as i64],
+            )?;
         }
-        Ok(())
+        transaction.commit().map_err(db_error)
     }
+
+    /// Bodies that background prefetch should download next for one folder,
+    /// newest first. Candidates respect the Recent cutoff, skip rows backing
+    /// off after failures, and are chosen by declared size so the batch fits
+    /// `budget_bytes` before anything is fetched.
+    pub fn prefetch_candidates(
+        &self,
+        mailbox_id: i64,
+        policy: &CachePolicy,
+        limit: u32,
+        budget_bytes: u64,
+        max_item_bytes: u64,
+    ) -> Result<Vec<(u32, String)>, String> {
+        let cutoff = policy.cutoff().map(crate::mail::parse::canonical_time);
+        let conn = self.conn()?;
+        let mut statement = conn
+            .prepare(
+                "SELECT uid, received_at, size FROM messages
+                 WHERE mailbox_id=?1 AND body_bytes=0 AND LENGTH(raw_message)=0 AND size<=?2
+                 AND prefetch_failures<5
+                 AND (prefetch_retry_at IS NULL OR prefetch_retry_at<=strftime('%Y-%m-%dT%H:%M:%S+00:00','now'))
+                 AND (?3 IS NULL OR julianday(COALESCE(internal_at,received_at)) >= julianday(?3))
+                 ORDER BY COALESCE(internal_at,received_at) DESC, uid DESC
+                 LIMIT ?4",
+            )
+            .map_err(db_error)?;
+        let rows = statement
+            .query_map(
+                params![
+                    mailbox_id,
+                    max_item_bytes.min(i64::MAX as u64) as i64,
+                    cutoff,
+                    limit
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, u32>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .map_err(db_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_error)?;
+        let mut selected = Vec::new();
+        let mut total = 0u64;
+        for (uid, received_at, size) in rows {
+            let size = size.max(0) as u64;
+            if total.saturating_add(size) > budget_bytes {
+                if selected.is_empty() {
+                    selected.push((uid, received_at));
+                }
+                break;
+            }
+            total = total.saturating_add(size);
+            selected.push((uid, received_at));
+        }
+        Ok(selected)
+    }
+}
+
+/// Clear body columns and FTS body text for the rows matched by `filter`
+/// (a `WHERE` clause over `messages`). Envelope columns stay.
+fn clear_bodies(
+    transaction: &rusqlite::Transaction,
+    filter: &str,
+    parameters: impl rusqlite::Params + Clone,
+) -> Result<(), String> {
+    transaction
+        .execute(
+            &format!("UPDATE message_fts SET body='' WHERE rowid IN (SELECT id FROM messages WHERE {filter})"),
+            parameters.clone(),
+        )
+        .map_err(db_error)?;
+    transaction
+        .execute(
+            &format!(
+                "UPDATE messages SET text_body='',html_body=NULL,raw_message=X'',body_bytes=0 WHERE {filter}"
+            ),
+            parameters,
+        )
+        .map_err(db_error)?;
+    Ok(())
 }
