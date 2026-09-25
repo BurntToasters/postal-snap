@@ -38,7 +38,8 @@ export async function registerMockSettingsSystem(page: Page): Promise<void> {
       notifyNewMail: true,
       closeToTray: true,
       updateCheckInterval: "startupAnd6h",
-      setupCompleted: !location.search.includes("firstRun"),
+      setupCompleted:
+        !location.search.includes("firstRun") && !params.has("setupIncomplete"),
       setupStep: null,
     };
     const copySettings = () => ({
@@ -66,6 +67,12 @@ export async function registerMockSettingsSystem(page: Page): Promise<void> {
           throw new Error(
             "Type CONFIRM to turn off reported-threat protection.",
           );
+        }
+        if (params.has("failStepSave") && next.setupStep) {
+          throw new Error("Could not write settings.");
+        }
+        if (params.has("failDarkSave") && next.theme === "dark") {
+          throw new Error("Could not write settings.");
         }
         state.savedSettings.push(args.settings);
         currentSettings = {

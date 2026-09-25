@@ -115,6 +115,40 @@ export async function registerMockFixtures(page: Page): Promise<void> {
         },
       );
     }
+    if (params.has("nestedRoleFolders")) {
+      mailboxes.push(
+        {
+          id: 7,
+          accountId: account.id,
+          name: "Sent",
+          displayName: "Sent",
+          role: "sent",
+          unreadCount: 0,
+          totalCount: 0,
+          delimiter: "/",
+        },
+        {
+          id: 8,
+          accountId: account.id,
+          name: "Work/Sent",
+          displayName: "Work/Sent",
+          role: "sent",
+          unreadCount: 0,
+          totalCount: 0,
+          delimiter: "/",
+        },
+        {
+          id: 9,
+          accountId: account.id,
+          name: "Personal/Sent",
+          displayName: "Personal/Sent",
+          role: "sent",
+          unreadCount: 0,
+          totalCount: 0,
+          delimiter: "/",
+        },
+      );
+    }
     const summary = {
       id: 10,
       accountId: account.id,

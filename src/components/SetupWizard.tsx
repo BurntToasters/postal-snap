@@ -37,11 +37,13 @@ import {
   trimServer,
 } from "./setup/request";
 import { ServerFields } from "./setup/serverFields";
+import { SetupDisplaySection } from "./setup/displayOptions";
 
 interface Props {
   onComplete: () => Promise<void>;
   onOpenSettings?: () => void;
   embedded?: boolean;
+  onAccountSaved?: () => void;
 }
 
 function emailDomain(address: string) {
@@ -66,7 +68,12 @@ const iCloudSmtpSummary = {
   security: strings.setup.startTls,
 };
 
-export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
+export function SetupWizard({
+  onComplete,
+  onOpenSettings,
+  embedded,
+  onAccountSaved,
+}: Props) {
   const [provider, setProvider] = useState<ProviderKind>();
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
@@ -305,6 +312,7 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
       setStatus({ kind: "success", text: strings.setup.connected });
       setPassword("");
       setSavedAccount(account);
+      onAccountSaved?.();
     } catch (cause) {
       const described = describeSetupError(cause, provider);
       setStatus({
@@ -469,6 +477,7 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
               </span>
             </button>
           </div>
+          {!embedded ? <SetupDisplaySection /> : null}
           <div className="privacy-note">
             <ShieldCheck aria-hidden="true" />
             <span>{strings.setup.privacy}</span>
@@ -599,7 +608,7 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
             <div
               className="setup-progress compact"
               role="list"
-              aria-label={strings.setup.stepTwo}
+              aria-label={strings.setup.progress}
             >
               <span className="done" role="listitem">
                 <Check aria-hidden="true" />

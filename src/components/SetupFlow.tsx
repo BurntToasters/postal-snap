@@ -1,10 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Check } from "lucide-react";
-import { api } from "../api";
 import { strings } from "../i18n";
-import { applySettings } from "../settings";
 import { useAppStore } from "../store";
-import type { SetupStep } from "../types";
+import type { SettingsPatch, SetupStep } from "../types";
 import { AppMark } from "./AppMark";
 import {
   AccountStep,
@@ -13,6 +11,7 @@ import {
   WelcomeStep,
 } from "./setupFlow/steps";
 import { useSetupProgress } from "./setupFlow/useSetupProgress";
+import { useSettingsSave } from "./settings/useSettingsSave";
 
 interface Props {
   startupNotice?: string | null;
@@ -38,19 +37,20 @@ export function SetupFlow({
   onComplete,
   onOpenSettings,
 }: Props) {
-  const settings = useAppStore((state) => state.settings);
-  const setSettings = useAppStore((state) => state.setSettings);
   const [step, setStep] = useState<SetupStep>(() => {
-    const saved = settings.setupStep;
+    const saved = useAppStore.getState().settings.setupStep;
     return saved && STEPS.includes(saved) ? saved : "welcome";
   });
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
+  // One queued writer for every setup save, so quick changes cannot race.
+  const { saving, update } = useSettingsSave(() =>
+    setError(strings.setup.saveFailed),
+  );
   const pageRef = useRef<HTMLDivElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const previousStepRef = useRef(step);
 
-  useSetupProgress(step);
+  useSetupProgress(step, update);
 
   useEffect(() => {
     const page = pageRef.current;
@@ -63,57 +63,14 @@ export function SetupFlow({
     previousStepRef.current = step;
   }, [step]);
 
-  async function persist(patch: Partial<typeof settings>) {
-    const current = useAppStore.getState().settings;
-    const next = { ...current, ...patch };
-    setSettings(next);
-    applySettings(next);
-    setSaving(true);
-    try {
-      const saved = await api.saveSettings(next);
-      setSettings(saved);
-      applySettings(saved);
-    } catch {
-      setError(strings.settings.saving);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function finish() {
-    setSaving(true);
-    try {
-      const current = useAppStore.getState().settings;
-      const next = {
-        ...current,
-        setupCompleted: true,
-        setupStep: null,
-      };
-      const saved = await api.saveSettings(next);
-      setSettings(saved);
-      applySettings(saved);
-      await onComplete();
-    } catch {
-      setError(strings.settings.saving);
-    } finally {
-      setSaving(false);
-    }
+  async function persist(patch: SettingsPatch) {
+    setError(undefined);
+    await update(patch);
   }
 
   async function handleAccountAdded() {
-    // Account already saved by SetupWizard. Mark first-run done, then reload.
-    try {
-      const current = useAppStore.getState().settings;
-      const saved = await api.saveSettings({
-        ...current,
-        setupCompleted: true,
-        setupStep: null,
-      });
-      setSettings(saved);
-      applySettings(saved);
-    } catch {
-      // Best-effort: mailbox still works, flag retries on next save.
-    }
+    // App reloads accounts and repairs setupCompleted once an account exists.
+    // Setting the flag here first would briefly show the standalone wizard.
     await onComplete();
   }
 
@@ -189,10 +146,9 @@ export function SetupFlow({
 
         {step === "account" ? (
           <AccountStep
-            saving={saving}
             go={go}
-            finish={finish}
             handleAccountAdded={handleAccountAdded}
+            onOpenSettings={onOpenSettings}
             error={error}
           />
         ) : null}

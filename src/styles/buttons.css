@@ -24,31 +24,21 @@
 .toolbar-button,
 .secondary-button,
 .icon-button {
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--surface-raised) 88%, var(--surface-highlight)),
-    color-mix(in srgb, var(--surface) 82%, var(--surface-muted))
-  );
-  box-shadow:
-    var(--shadow-control),
-    inset 0 1px 0 var(--surface-highlight);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-control);
 }
 
 .primary-button {
   border-color: var(--accent);
   color: var(--accent-contrast);
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--accent) 88%, white),
-    var(--accent)
-  );
+  background: var(--accent);
   font-weight: 700;
-  box-shadow: 0 2px 5px color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow: var(--shadow-control);
 }
 
 .primary-button:hover {
+  border-color: var(--accent-hover);
   background: var(--accent-hover);
-  transform: translateY(-1px);
 }
 
 .secondary-button:hover,
@@ -57,7 +47,6 @@
 .add-account-button:hover {
   border-color: var(--border-strong);
   background: var(--surface-hover);
-  transform: translateY(-1px);
 }
 
 .icon-button {
@@ -76,11 +65,9 @@
 
 .danger-button {
   border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
-  color: var(--danger);
+  color: var(--danger-ink);
   background: color-mix(in srgb, var(--danger-soft) 70%, transparent);
-  box-shadow:
-    var(--shadow-control),
-    inset 0 1px 0 var(--surface-highlight);
+  box-shadow: var(--shadow-control);
 }
 
 .danger-button:hover {

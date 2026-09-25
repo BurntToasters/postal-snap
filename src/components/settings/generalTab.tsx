@@ -1,5 +1,6 @@
 import { DownloadCloud, ShieldAlert, ShieldCheck, Upload } from "lucide-react";
 import { strings } from "../../i18n";
+import { DENSITY_CHOICES, THEME_CHOICES } from "./displayChoices";
 import { useAppStore } from "../../store";
 import type { AppSettings } from "../../types";
 import { CloseToTraySwitch } from "./closeToTray";
@@ -47,9 +48,11 @@ export function GeneralTab({
               })
             }
           >
-            <option value="system">{strings.settings.autoDefault}</option>
-            <option value="light">{strings.settings.light}</option>
-            <option value="dark">{strings.settings.dark}</option>
+            {THEME_CHOICES.map((choice) => (
+              <option key={choice.value} value={choice.value}>
+                {choice.label}
+              </option>
+            ))}
           </select>
         </SettingRow>
         <SettingRow
@@ -65,8 +68,11 @@ export function GeneralTab({
               })
             }
           >
-            <option value="comfortable">{strings.settings.comfortable}</option>
-            <option value="compact">{strings.settings.compact}</option>
+            {DENSITY_CHOICES.map((choice) => (
+              <option key={choice.value} value={choice.value}>
+                {choice.label}
+              </option>
+            ))}
           </select>
         </SettingRow>
         <label className="switch-row">

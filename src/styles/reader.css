@@ -22,7 +22,7 @@
   inset: calc(var(--mail-toolbar-height, var(--toolbar-height)) + 14px)
     clamp(18px, 5vw, 72px) 18px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   box-shadow: var(--shadow);
 }
 
@@ -327,7 +327,7 @@
 .remote-content-banner button {
   min-height: 44px;
   border: 1px solid currentColor;
-  border-radius: 7px;
+  border-radius: var(--radius-xs);
   color: inherit;
   background: transparent;
 }
@@ -463,14 +463,14 @@
 .attachment-preview-body img {
   max-width: 100%;
   height: auto;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
 }
 
 .attachment-preview-body pre {
   width: 100%;
   margin: 0;
   padding: 16px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--text);
   white-space: pre-wrap;
@@ -497,7 +497,7 @@
   align-items: center;
   padding: 7px 12px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--radius-xs);
   background: var(--surface);
   white-space: nowrap;
 }

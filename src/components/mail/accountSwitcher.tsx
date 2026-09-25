@@ -112,7 +112,7 @@ export function AccountSwitcher({
       </button>
       {open ? (
         <div
-          className="account-switcher-menu"
+          className="account-switcher-menu app-menu"
           role="menu"
           aria-label={strings.mail.emailAccounts}
         >

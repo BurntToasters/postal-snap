@@ -1,6 +1,12 @@
 import { strings } from "./i18n";
+import { folderPathLabel } from "./i18n/mail";
 import { useAppStore } from "./store";
-import type { MailboxSummary, MessageSummary, OutboxSummary } from "./types";
+import type {
+  MailboxRole,
+  MailboxSummary,
+  MessageSummary,
+  OutboxSummary,
+} from "./types";
 
 export const CONTEXT_ACTION_EVENT = "postal:context-action";
 export const IFRAME_CONTEXT_EVENT = "postal:iframe-contextmenu";
@@ -31,12 +37,56 @@ export type ContextMenuTarget =
   | { kind: "composer-attachment"; index: number }
   | { kind: "editable" };
 
+export type ContextMenuIcon =
+  | "reply"
+  | "reply-all"
+  | "forward"
+  | "mark-read"
+  | "mark-unread"
+  | "star"
+  | "unstar"
+  | "archive"
+  | "junk"
+  | "not-junk"
+  | "trash"
+  | "snooze"
+  | "unsnooze"
+  | "open"
+  | "refresh"
+  | "mark-all-read"
+  | "new-folder"
+  | "rename"
+  | "delete"
+  | "retry"
+  | "send"
+  | "discard"
+  | "undo"
+  | "redo"
+  | "cut"
+  | "copy"
+  | "paste"
+  | "select-all"
+  | "find"
+  | "print"
+  | "open-link"
+  | "copy-link"
+  | "copy-address"
+  | "compose"
+  | "preview"
+  | "download"
+  | "remove"
+  | "settings"
+  | `folder:${MailboxRole}`;
+
 export type ContextMenuItem =
   | { type: "separator" }
+  | { type: "heading"; label: string }
   | {
       type: "item";
       id: string;
       label: string;
+      icon?: ContextMenuIcon;
+      ariaLabel?: string;
       disabled?: boolean;
       danger?: boolean;
     };
@@ -58,7 +108,12 @@ const LOCAL_VIEWS = new Set<string>(["drafts", "outbox", "snoozed"]);
 export function item(
   id: string,
   label: string,
-  extra?: { disabled?: boolean; danger?: boolean },
+  extra?: {
+    icon?: ContextMenuIcon;
+    ariaLabel?: string;
+    disabled?: boolean;
+    danger?: boolean;
+  },
 ): ContextMenuItem {
   return { type: "item", id, label, ...extra };
 }
@@ -164,39 +219,48 @@ function messageItems(
   mailboxes: MailboxSummary[],
 ): ContextMenuItem[] {
   const items: ContextMenuItem[] = [
-    item("reply", strings.reader.reply),
-    item("reply-all", strings.reader.replyAll),
-    item("forward", strings.reader.forward),
+    item("reply", strings.reader.reply, { icon: "reply" }),
+    item("reply-all", strings.reader.replyAll, { icon: "reply-all" }),
+    item("forward", strings.reader.forward, { icon: "forward" }),
     { type: "separator" },
-    item(
-      "toggle-read",
-      message.isRead ? strings.reader.markUnread : strings.reader.markRead,
-    ),
-    item(
-      "toggle-star",
-      message.isStarred ? strings.reader.removeStar : strings.reader.addStar,
-    ),
+    message.isRead
+      ? item("toggle-read", strings.reader.markUnread, { icon: "mark-unread" })
+      : item("toggle-read", strings.reader.markRead, { icon: "mark-read" }),
+    message.isStarred
+      ? item("toggle-star", strings.reader.removeStar, { icon: "unstar" })
+      : item("toggle-star", strings.reader.addStar, { icon: "star" }),
+    item("snooze", strings.reader.snooze, { icon: "snooze" }),
+    { type: "separator" },
     item("archive", strings.reader.archive, {
+      icon: "archive",
       disabled: mailbox?.role === "archive",
     }),
-    item(
-      mailbox?.role === "junk" ? "not-junk" : "junk",
-      mailbox?.role === "junk" ? strings.reader.notJunk : strings.reader.junk,
-    ),
+    mailbox?.role === "junk"
+      ? item("not-junk", strings.reader.notJunk, { icon: "not-junk" })
+      : item("junk", strings.reader.junk, { icon: "junk" }),
     item("trash", strings.reader.trash, {
+      icon: "trash",
       disabled: mailbox?.role === "trash",
     }),
-    item("snooze", strings.reader.snooze),
   ];
-  const destinations = mailboxes.filter((box) => box.id !== message.mailboxId);
+  // Archive, Junk, and Trash already have direct actions above.
+  const destinations = mailboxes.filter(
+    (box) =>
+      box.id !== message.mailboxId &&
+      box.role !== "archive" &&
+      box.role !== "junk" &&
+      box.role !== "trash",
+  );
   if (destinations.length > 0) {
     items.push({ type: "separator" });
+    items.push({ type: "heading", label: strings.contextMenu.moveTo });
     for (const box of destinations) {
+      const name = folderPathLabel(box);
       items.push(
-        item(
-          `move-mailbox:${box.id}`,
-          `${strings.reader.move} ${box.displayName}`,
-        ),
+        item(`move-mailbox:${box.id}`, name, {
+          icon: `folder:${box.role}`,
+          ariaLabel: strings.contextMenu.moveToFolder(name),
+        }),
       );
     }
   }
@@ -205,24 +269,42 @@ function messageItems(
 
 function folderItems(mailbox: MailboxSummary): ContextMenuItem[] {
   const items: ContextMenuItem[] = [
-    item("open", strings.contextMenu.open),
-    item("get-mail", strings.mail.getMail),
+    item("open", strings.contextMenu.open, { icon: `folder:${mailbox.role}` }),
+    item("get-mail", strings.mail.getMail, { icon: "refresh" }),
     item("mark-all-read", strings.mail.markAllRead, {
+      icon: "mark-all-read",
       disabled: mailbox.unreadCount === 0,
     }),
-    item("new-subfolder", strings.mail.newFolder),
+    item("new-subfolder", strings.mail.newFolder, { icon: "new-folder" }),
   ];
+  const destructive: ContextMenuItem[] = [];
   if (mailbox.role === "trash" && mailbox.totalCount > 0) {
-    items.push(item("empty-trash", strings.mail.emptyTrash, { danger: true }));
+    destructive.push(
+      item("empty-trash", strings.mail.emptyTrash, {
+        icon: "delete",
+        danger: true,
+      }),
+    );
   }
   if (mailbox.role === "junk" && mailbox.totalCount > 0) {
-    items.push(item("empty-junk", strings.mail.emptyJunk, { danger: true }));
+    destructive.push(
+      item("empty-junk", strings.mail.emptyJunk, {
+        icon: "delete",
+        danger: true,
+      }),
+    );
   }
   if (mailbox.role === "other") {
-    items.push(item("rename-folder", strings.mail.rename));
-    items.push(
-      item("delete-folder", strings.mail.deleteFolder, { danger: true }),
+    items.push(item("rename-folder", strings.mail.rename, { icon: "rename" }));
+    destructive.push(
+      item("delete-folder", strings.mail.deleteFolder, {
+        icon: "delete",
+        danger: true,
+      }),
     );
+  }
+  if (destructive.length > 0) {
+    items.push({ type: "separator" }, ...destructive);
   }
   return items;
 }
@@ -242,11 +324,15 @@ function outboxItems(row: OutboxSummary): ContextMenuItem[] {
   const items: ContextMenuItem[] = [];
   const busy = row.state === "sending" || outboxRowBusy(row.id);
   if (row.state === "needs_attention") {
-    items.push(item("retry", strings.mail.retrySending));
+    items.push(item("retry", strings.mail.retrySending, { icon: "retry" }));
   } else if (row.state === "sent_copy_pending") {
-    items.push(item("retry-copy", strings.mail.saveSentCopy));
+    items.push(
+      item("retry-copy", strings.mail.saveSentCopy, { icon: "retry" }),
+    );
   } else if (row.state === "scheduled") {
-    items.push(item("send-now", strings.mail.sendNow, { disabled: busy }));
+    items.push(
+      item("send-now", strings.mail.sendNow, { icon: "send", disabled: busy }),
+    );
   }
   items.push(
     item(
@@ -256,19 +342,25 @@ function outboxItems(row: OutboxSummary): ContextMenuItem[] {
         : row.state === "scheduled"
           ? strings.mail.undoSend
           : strings.common.discard,
-      { danger: row.state !== "sent_copy_pending", disabled: busy },
+      {
+        icon: row.state === "scheduled" ? "undo" : "discard",
+        danger: row.state !== "sent_copy_pending",
+        disabled: busy,
+      },
     ),
   );
   return items;
 }
 
 const editItems: ContextMenuItem[] = [
-  item("undo", strings.composer.undo),
-  item("redo", strings.composer.redo),
-  item("cut", strings.contextMenu.cut),
-  item("copy", strings.contextMenu.copy),
-  item("paste", strings.contextMenu.paste),
-  item("select-all", strings.contextMenu.selectAll),
+  item("undo", strings.composer.undo, { icon: "undo" }),
+  item("redo", strings.composer.redo, { icon: "redo" }),
+  { type: "separator" },
+  item("cut", strings.contextMenu.cut, { icon: "cut" }),
+  item("copy", strings.contextMenu.copy, { icon: "copy" }),
+  item("paste", strings.contextMenu.paste, { icon: "paste" }),
+  { type: "separator" },
+  item("select-all", strings.contextMenu.selectAll, { icon: "select-all" }),
 ];
 
 export function itemsForTarget(target: ContextMenuTarget): ContextMenuItem[] {
@@ -279,8 +371,10 @@ export function itemsForTarget(target: ContextMenuTarget): ContextMenuItem[] {
     case "account":
       return state.accounts.some((account) => account.id === target.accountId)
         ? [
-            item("get-mail", strings.mail.getMail),
-            item("account-settings", strings.mail.accountSettings),
+            item("get-mail", strings.mail.getMail, { icon: "refresh" }),
+            item("account-settings", strings.mail.accountSettings, {
+              icon: "settings",
+            }),
           ]
         : [];
     case "message": {
@@ -298,11 +392,14 @@ export function itemsForTarget(target: ContextMenuTarget): ContextMenuItem[] {
       return mailbox ? folderItems(mailbox) : [];
     }
     case "local-nav":
-      return [item("open", strings.contextMenu.open)];
+      return [item("open", strings.contextMenu.open, { icon: "open" })];
     case "draft":
       return [
-        item("open", strings.contextMenu.open),
-        item("delete-draft", strings.common.discard, { danger: true }),
+        item("open", strings.contextMenu.open, { icon: "open" }),
+        item("delete-draft", strings.common.discard, {
+          icon: "discard",
+          danger: true,
+        }),
       ];
     case "outbox": {
       const row = state.outbox.find((entry) => entry.id === target.outboxId);
@@ -310,40 +407,56 @@ export function itemsForTarget(target: ContextMenuTarget): ContextMenuItem[] {
     }
     case "snoozed":
       return [
-        item("open", strings.contextMenu.open),
-        item("unsnooze", strings.mail.unsnooze),
+        item("open", strings.contextMenu.open, { icon: "open" }),
+        item("unsnooze", strings.mail.unsnooze, { icon: "unsnooze" }),
       ];
     case "reader":
       return [
-        item("copy", strings.contextMenu.copy),
-        item("find-in-message", strings.reader.findInMessage),
-        item("print", strings.reader.print),
+        item("copy", strings.contextMenu.copy, { icon: "copy" }),
+        item("find-in-message", strings.reader.findInMessage, {
+          icon: "find",
+        }),
+        item("print", strings.reader.print, { icon: "print" }),
       ];
     case "link":
       return [
-        item("open-link", strings.contextMenu.openLink),
-        item("copy-link", strings.contextMenu.copyLink),
+        item("open-link", strings.contextMenu.openLink, { icon: "open-link" }),
+        item("copy-link", strings.contextMenu.copyLink, { icon: "copy-link" }),
       ];
     case "mailto":
       return [
-        item("open", strings.contextMenu.open),
-        item("copy-address", strings.reader.copyAddress),
+        item("open", strings.contextMenu.open, { icon: "compose" }),
+        item("copy-address", strings.reader.copyAddress, {
+          icon: "copy-address",
+        }),
       ];
     case "attachment": {
       const items: ContextMenuItem[] = [];
       if (target.previewable) {
-        items.push(item("preview", strings.reader.preview));
+        items.push(
+          item("preview", strings.reader.preview, { icon: "preview" }),
+        );
       }
-      items.push(item("download", strings.reader.downloadFile));
+      items.push(
+        item("download", strings.reader.downloadFile, { icon: "download" }),
+      );
       return items;
     }
     case "address":
-      return [item("copy-address", strings.reader.copyAddress)];
+      return [
+        item("copy-address", strings.reader.copyAddress, {
+          icon: "copy-address",
+        }),
+      ];
     case "composer":
     case "editable":
       return editItems;
     case "composer-attachment":
-      return [item("remove-attachment", strings.common.remove)];
+      return [
+        item("remove-attachment", strings.common.remove, {
+          icon: "remove",
+        }),
+      ];
   }
 }
 

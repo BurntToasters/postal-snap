@@ -1,13 +1,8 @@
-import { useEffect, type RefObject } from "react";
-import { api } from "../api";
-import { applySettings } from "../settings";
+import { useEffect, useRef, type RefObject } from "react";
+import { TEXT_SCALES } from "../components/settings/displayChoices";
+import type { SettingsSaveUpdate } from "../components/settings/useSettingsSave";
 import { useAppStore } from "../store";
-import type {
-  AccountSummary,
-  AppSettings,
-  MessageSummary,
-  ReadingPane,
-} from "../types";
+import type { AccountSummary, MessageSummary, ReadingPane } from "../types";
 
 export interface MailShortcutsOptions {
   accounts: AccountSummary[];
@@ -16,9 +11,7 @@ export interface MailShortcutsOptions {
   openComposer: () => void;
   refresh: () => Promise<void>;
   onOpenSettings: (tab?: "accounts") => void;
-  settings: AppSettings;
-  setSettings: (settings: AppSettings) => void;
-  setError: (error: string) => void;
+  updateSettings: SettingsSaveUpdate;
   searchInput: RefObject<HTMLInputElement | null>;
   chooseMessage: (msg: MessageSummary) => Promise<unknown>;
   relativeMessage: (delta: number) => MessageSummary | undefined;
@@ -31,13 +24,13 @@ export function useMailShortcuts({
   openComposer,
   refresh,
   onOpenSettings,
-  settings,
-  setSettings,
-  setError,
+  updateSettings,
   searchInput,
   chooseMessage,
   relativeMessage,
 }: MailShortcutsOptions) {
+  const pendingTextScale = useRef<number | null>(null);
+
   useEffect(() => {
     const menuAction = (event: Event) => {
       const action = (event as CustomEvent<string>).detail;
@@ -50,11 +43,13 @@ export function useMailShortcuts({
         action === "text-size-larger" ||
         action === "text-size-smaller"
       ) {
-        const scales = [0.85, 1, 1.15, 1.3, 1.5, 1.75, 2];
+        const scales = TEXT_SCALES;
+        const requestedScale = pendingTextScale.current;
+        const currentScale =
+          requestedScale ?? useAppStore.getState().settings.textScale;
         const current = scales.reduce(
           (closest, value) =>
-            Math.abs(value - settings.textScale) <
-            Math.abs(closest - settings.textScale)
+            Math.abs(value - currentScale) < Math.abs(closest - currentScale)
               ? value
               : closest,
           1,
@@ -66,17 +61,13 @@ export function useMailShortcuts({
           0,
           Math.min(scales.length - 1, currentIndex + delta),
         );
-        const next: AppSettings = {
-          ...settings,
-          textScale: scales[nextIndex],
-        };
-        void api
-          .saveSettings(next)
-          .then((saved) => {
-            setSettings(saved);
-            applySettings(saved);
-          })
-          .catch((cause) => setError(String(cause)));
+        const nextScale = scales[nextIndex];
+        pendingTextScale.current = nextScale;
+        void updateSettings({ textScale: nextScale }).finally(() => {
+          if (pendingTextScale.current === nextScale) {
+            pendingTextScale.current = null;
+          }
+        });
       }
       if (
         action === "reading-pane-right" ||
@@ -89,14 +80,7 @@ export function useMailShortcuts({
             : action === "reading-pane-bottom"
               ? "bottom"
               : "hidden";
-        const next = { ...settings, readingPane };
-        void api
-          .saveSettings(next)
-          .then((saved) => {
-            setSettings(saved);
-            applySettings(saved);
-          })
-          .catch((cause) => setError(String(cause)));
+        void updateSettings({ readingPane });
       }
     };
 
@@ -331,8 +315,6 @@ export function useMailShortcuts({
     searchInput,
     selectAccount,
     setAccountSwitcherOpen,
-    setError,
-    setSettings,
-    settings,
+    updateSettings,
   ]);
 }
