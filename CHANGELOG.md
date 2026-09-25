@@ -20,6 +20,15 @@
 
 Postal Snap is a calm, accessible desktop email client. Mail stays on your computer. There is no Postal Snap cloud, telemetry, or account of mine to log into.
 
+## Changes in `v0.2.0:`
+
+- **Multi-Account Support:** Add and manage multiple isolated email accounts with individual credentials, folder structures, outboxes, and signatures.
+- **Account Switcher Popover:** Rapidly switch between accounts using the sidebar popover or `Ctrl+1` through `Ctrl+9` keyboard shortcuts.
+- **Provider Discovery & Setup:** Automatic configuration lookup for major providers (Fastmail, Yahoo, AOL, Zoho, mailbox.org, GMX) with DNS MX and autoconfig resolution, and secure iCloud Mail setup.
+- **Performance & Batching:** Database write batching, synchronous optimizations, and reader lane separation for snappy responsiveness.
+- **Incremental Sync & CONDSTORE:** Fast incremental folder synchronization using IMAP CONDSTORE / HIGHESTMODSEQ and configurable per-account caching policies.
+- **Modularized UI Architecture:** Streamlined MailShell with localized folder hierarchies, collapsible nested folders, dedicated SyncStatus progress indicator, and unified keyboard shortcut registry.
+
 ## Changes in `v0.1.15:`
 
 - **FIX - macOS launch crash on legacy databases:** Fixed startup migration ordering so existing unversioned mail databases gain thread columns before the related index is created. Postal Snap no longer aborts on launch when opening an older local database.

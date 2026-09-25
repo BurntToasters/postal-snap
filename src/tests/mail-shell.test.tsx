@@ -130,6 +130,19 @@ function renderShell(onOpenSettings = vi.fn()) {
   );
 }
 
+function switchToAccount(accountId: string) {
+  const account = useAppStore
+    .getState()
+    .accounts.find((item) => item.id === accountId);
+  if (!account) throw new Error(`Missing account ${accountId}`);
+  fireEvent.click(document.querySelector(".account-switcher-trigger")!);
+  fireEvent.click(
+    screen.getByRole("menuitem", {
+      name: new RegExp(account.displayName || account.email, "i"),
+    }),
+  );
+}
+
 describe("mail shell", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -1348,9 +1361,7 @@ describe("mail shell", () => {
       expect(useAppStore.getState().error).toMatch(/settings read-only/i),
     );
 
-    fireEvent.change(screen.getByRole("combobox", { name: "Account" }), {
-      target: { value: secondAccount.id },
-    });
+    switchToAccount(secondAccount.id);
     await waitFor(() =>
       expect(useAppStore.getState().activeAccountId).toBe(secondAccount.id),
     );
@@ -1884,9 +1895,7 @@ describe("mail shell", () => {
     await screen.findByRole("option", { name: /First message/i });
     expect(mockedOnFolderCountsChanged).toHaveBeenCalledTimes(1);
 
-    fireEvent.change(screen.getByRole("combobox", { name: "Account" }), {
-      target: { value: secondAccount.id },
-    });
+    switchToAccount(secondAccount.id);
     await waitFor(() =>
       expect(mockedListMailboxes).toHaveBeenCalledWith("account-2"),
     );
@@ -1911,9 +1920,7 @@ describe("mail shell", () => {
     fireEvent.click(await screen.findByRole("button", { name: "New folder" }));
     expect(screen.getByPlaceholderText("Folder name")).toBeVisible();
 
-    fireEvent.change(screen.getByRole("combobox", { name: "Account" }), {
-      target: { value: secondAccount.id },
-    });
+    switchToAccount(secondAccount.id);
     await waitFor(() =>
       expect(screen.queryByPlaceholderText("Folder name")).toBeNull(),
     );
@@ -1934,9 +1941,7 @@ describe("mail shell", () => {
     renderShell();
     expect(await screen.findByText(strings.mail.loadingMessages)).toBeVisible();
 
-    fireEvent.change(screen.getByRole("combobox", { name: "Account" }), {
-      target: { value: secondAccount.id },
-    });
+    switchToAccount(secondAccount.id);
     await waitFor(() =>
       expect(screen.queryByText(strings.mail.loadingMessages)).toBeNull(),
     );

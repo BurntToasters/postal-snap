@@ -7,7 +7,7 @@ impl Database {
     pub fn list_accounts(&self) -> Result<Vec<AccountSummary>, String> {
         let conn = self.conn()?;
         let mut statement = conn.prepare(
-            "SELECT id, provider, email, display_name, sync_state, error, aliases_json, auth_method, signature FROM accounts ORDER BY created_at",
+            "SELECT id, provider, email, display_name, sync_state, error, aliases_json, auth_method, signature, color FROM accounts ORDER BY sort_order, created_at",
         ).map_err(db_error)?;
         let rows = statement
             .query_map([], |row| {
@@ -25,6 +25,7 @@ impl Database {
                         .get::<_, Option<String>>(7)?
                         .unwrap_or_else(|| "password".into()),
                     signature: row.get::<_, Option<String>>(8)?.unwrap_or_default(),
+                    color: row.get(9)?,
                 })
             })
             .map_err(db_error)?;
@@ -37,7 +38,7 @@ impl Database {
             "SELECT id, provider, email, display_name, sync_state, error,
                     imap_host, imap_port, imap_tls, imap_username,
                     smtp_host, smtp_port, smtp_tls, smtp_username,
-                    aliases_json, auth_method, signature
+                    aliases_json, auth_method, signature, color
              FROM accounts WHERE id = ?1",
             [id],
             |row| {
@@ -56,6 +57,7 @@ impl Database {
                             .get::<_, Option<String>>(15)?
                             .unwrap_or_else(|| "password".into()),
                         signature: row.get::<_, Option<String>>(16)?.unwrap_or_default(),
+                        color: row.get(17)?,
                     },
                     imap: ServerConfig {
                         host: row.get(6)?,
@@ -86,8 +88,9 @@ impl Database {
                 id, provider, email, display_name, sync_state,
                 imap_host, imap_port, imap_tls, imap_username,
                 smtp_host, smtp_port, smtp_tls, smtp_username,
-                aliases_json, auth_method
-             ) VALUES (?1, ?2, ?3, ?4, 'idle', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                aliases_json, auth_method, color, sort_order
+             ) VALUES (?1, ?2, ?3, ?4, 'idle', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
+                (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM accounts))",
             params![
                 account.summary.id,
                 account.summary.provider.as_str(),
@@ -103,6 +106,7 @@ impl Database {
                 account.smtp.username,
                 aliases_json,
                 account.summary.auth_method,
+                account.summary.color,
             ],
         )
         .map_err(|error| {
@@ -262,6 +266,73 @@ impl Database {
             )
             .map_err(db_error)?;
         Ok(())
+    }
+
+    pub fn update_account_color(&self, id: &str, color: Option<&str>) -> Result<(), String> {
+        let changed = self
+            .conn()?
+            .execute(
+                "UPDATE accounts SET color=?2 WHERE id=?1",
+                params![id, color],
+            )
+            .map_err(db_error)?;
+        if changed == 0 {
+            return Err("Account not found.".into());
+        }
+        Ok(())
+    }
+
+    /// Persist the user's account order. `ordered_ids` must list every
+    /// account exactly once.
+    pub fn reorder_accounts(&self, ordered_ids: &[String]) -> Result<(), String> {
+        let mut conn = self.conn()?;
+        let transaction = conn.transaction().map_err(db_error)?;
+        let existing: std::collections::HashSet<String> = {
+            let mut statement = transaction
+                .prepare("SELECT id FROM accounts")
+                .map_err(db_error)?;
+            let rows = statement
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(db_error)?
+                .collect::<Result<_, _>>()
+                .map_err(db_error)?;
+            rows
+        };
+        let requested: std::collections::HashSet<String> = ordered_ids.iter().cloned().collect();
+        if requested.len() != ordered_ids.len() || requested != existing {
+            return Err("Account order is invalid.".into());
+        }
+        for (position, id) in ordered_ids.iter().enumerate() {
+            transaction
+                .execute(
+                    "UPDATE accounts SET sort_order=?2 WHERE id=?1",
+                    params![id, position as i64],
+                )
+                .map_err(db_error)?;
+        }
+        transaction.commit().map_err(db_error)
+    }
+
+    pub fn account_removal_impact(
+        &self,
+        account_id: &str,
+    ) -> Result<crate::models::AccountRemovalImpact, String> {
+        self.conn()?
+            .query_row(
+                "SELECT
+                   (SELECT COUNT(*) FROM outbox WHERE account_id=?1),
+                   (SELECT COUNT(*) FROM drafts WHERE account_id=?1 AND sync_state<>'synced' AND deleted_at IS NULL),
+                   (SELECT COUNT(*) FROM offline_ops WHERE account_id=?1)",
+                [account_id],
+                |row| {
+                    Ok(crate::models::AccountRemovalImpact {
+                        unsent_messages: row.get(0)?,
+                        unsynced_drafts: row.get(1)?,
+                        queued_changes: row.get(2)?,
+                    })
+                },
+            )
+            .map_err(db_error)
     }
 }
 

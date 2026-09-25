@@ -10,6 +10,7 @@ export type LocalMailView = "drafts" | "outbox" | "snoozed";
 
 export type ContextMenuTarget =
   | { kind: "suppress" }
+  | { kind: "account"; accountId: string }
   | { kind: "message"; messageId: number }
   | { kind: "folder"; mailboxId: number }
   | { kind: "local-nav"; view: LocalMailView }
@@ -97,6 +98,9 @@ export function resolveContextTarget(
   if (marked) {
     const kind = marked.dataset.context;
     if (kind === "chrome") return { kind: "suppress" };
+    if (kind === "account" && marked.dataset.accountId) {
+      return { kind: "account", accountId: marked.dataset.accountId };
+    }
     if (kind === "message") {
       const messageId = Number(marked.dataset.messageId);
       if (Number.isFinite(messageId)) return { kind: "message", messageId };
@@ -200,7 +204,14 @@ function messageItems(
 }
 
 function folderItems(mailbox: MailboxSummary): ContextMenuItem[] {
-  const items: ContextMenuItem[] = [item("open", strings.contextMenu.open)];
+  const items: ContextMenuItem[] = [
+    item("open", strings.contextMenu.open),
+    item("get-mail", strings.mail.getMail),
+    item("mark-all-read", strings.mail.markAllRead, {
+      disabled: mailbox.unreadCount === 0,
+    }),
+    item("new-subfolder", strings.mail.newFolder),
+  ];
   if (mailbox.role === "trash" && mailbox.totalCount > 0) {
     items.push(item("empty-trash", strings.mail.emptyTrash, { danger: true }));
   }
@@ -265,6 +276,13 @@ export function itemsForTarget(target: ContextMenuTarget): ContextMenuItem[] {
   switch (target.kind) {
     case "suppress":
       return [];
+    case "account":
+      return state.accounts.some((account) => account.id === target.accountId)
+        ? [
+            item("get-mail", strings.mail.getMail),
+            item("account-settings", strings.mail.accountSettings),
+          ]
+        : [];
     case "message": {
       const message = state.messages.find((row) => row.id === target.messageId);
       if (!message) return [];
@@ -282,7 +300,10 @@ export function itemsForTarget(target: ContextMenuTarget): ContextMenuItem[] {
     case "local-nav":
       return [item("open", strings.contextMenu.open)];
     case "draft":
-      return [item("open", strings.contextMenu.open)];
+      return [
+        item("open", strings.contextMenu.open),
+        item("delete-draft", strings.common.discard, { danger: true }),
+      ];
     case "outbox": {
       const row = state.outbox.find((entry) => entry.id === target.outboxId);
       return row ? outboxItems(row) : [];

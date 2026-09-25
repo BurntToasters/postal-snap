@@ -6,7 +6,6 @@ use super::parse::{
     attachment_id, legacy_attachment_id, normalize_rfc_message_id, parsed_addresses,
     validate_mime_resource_shape,
 };
-use super::send::connect_imap;
 use super::sync::body_fetch_query;
 use super::{
     BodyBudget, ImapSession, RemoteDraftAttachment, RemoteDraftData, RemoteDraftLocation,
@@ -32,7 +31,7 @@ pub async fn upsert_remote_draft(
     previous_uid: Option<u32>,
     previous_uid_validity: Option<u32>,
 ) -> Result<RemoteDraftLocation, String> {
-    let mut session = connect_imap(&account.imap, password).await?;
+    let mut session = super::pool::checkout(account, password).await?;
     let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(mailbox))
         .await
         .map_err(|_| "Draft synchronization timed out.".to_string())?
@@ -98,7 +97,7 @@ pub async fn upsert_remote_draft(
             .map_err(|_| "Draft replacement timed out.".to_string())??;
         }
     }
-    let _ = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.logout()).await;
+    session.release();
     Ok(RemoteDraftLocation {
         uid,
         uid_validity: Some(selected_uid_validity),
@@ -116,7 +115,7 @@ pub async fn delete_remote_draft(
         "The Drafts folder identity is unavailable; Postal Snap kept the local draft safely."
             .to_string()
     })?;
-    let mut session = connect_imap(&account.imap, password).await?;
+    let mut session = super::pool::checkout(account, password).await?;
     let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(mailbox))
         .await
         .map_err(|_| "Draft deletion timed out.".to_string())?
@@ -153,7 +152,7 @@ pub async fn delete_remote_draft(
     })
     .await
     .map_err(|_| "Draft deletion timed out.".to_string())??;
-    let _ = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.logout()).await;
+    session.release();
     Ok(())
 }
 
@@ -163,7 +162,7 @@ pub async fn fetch_remote_drafts(
     mailbox: &str,
     known_uids: &std::collections::HashSet<u32>,
 ) -> Result<RemoteDraftSnapshot, String> {
-    let mut session = connect_imap(&account.imap, password).await?;
+    let mut session = super::pool::checkout(account, password).await?;
     let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.examine(mailbox))
         .await
         .map_err(|_| "Draft download timed out.".to_string())?
@@ -247,7 +246,7 @@ pub async fn fetch_remote_drafts(
             }
         }
     }
-    let _ = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.logout()).await;
+    session.release();
     Ok(RemoteDraftSnapshot {
         uid_validity: Some(selected_uid_validity),
         uids,

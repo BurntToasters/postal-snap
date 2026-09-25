@@ -190,6 +190,10 @@ test("completes guided iCloud first run", async ({ page }) => {
   await page.getByLabel("Email address").fill("sam@icloud.com");
   await page.getByLabel("App-specific password").fill("app-password");
   await page.getByRole("button", { name: "Connect securely" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Getting your mail…" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Open mailbox" }).click();
 
   await expect(page.getByRole("button", { name: "Compose" })).toBeVisible();
   await expect(
@@ -416,14 +420,16 @@ test("completes secure manual first run", async ({ page }) => {
   await page.getByRole("button", { name: "Continue", exact: true }).click();
   await page.getByRole("button", { name: /Other email/i }).click();
   await expect(page.getByText("imap.mail.me.com")).toHaveCount(0);
-  await page.getByLabel("Your name").fill("Sam");
   await page.getByLabel("Email address").fill("sam@example.com");
+  await page.getByRole("button", { name: "Find settings" }).click();
+  await page.getByLabel("Your name").fill("Sam");
   await page.getByLabel("Email password").fill("secret");
   const incoming = page.getByRole("group", { name: "Incoming IMAP" });
   const outgoing = page.getByRole("group", { name: "Outgoing SMTP" });
   await incoming.getByLabel("Server").fill("imap.example.com");
   await outgoing.getByLabel("Server").fill("smtp.example.com");
   await page.getByRole("button", { name: "Connect securely" }).click();
+  await page.getByRole("button", { name: "Open mailbox" }).click();
 
   await expect(page.getByRole("button", { name: "Compose" })).toBeVisible();
   const setup = await page.evaluate(
@@ -1252,7 +1258,7 @@ test("empties trash only after confirmation", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Empty trash" })).toHaveCount(
     0,
   );
-  await page.getByRole("button", { name: /^Deleted Messages/ }).click();
+  await page.getByRole("button", { name: /^Trash/ }).click();
   page.once("dialog", (dialog) => void dialog.accept());
   await page.getByRole("button", { name: "Empty trash" }).click();
   await expect(page.getByRole("button", { name: "Empty trash" })).toBeHidden();

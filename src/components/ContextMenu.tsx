@@ -167,8 +167,16 @@ export function ContextMenuHost() {
   const [menu, setMenu] = useState<OpenMenu | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const savedEditRef = useRef<SavedEditSelection | null>(null);
+  const openerRef = useRef<HTMLElement | null>(null);
 
-  const close = useCallback(() => setMenu(null), []);
+  const close = useCallback(() => {
+    savedEditRef.current = null;
+    setMenu(null);
+    if (openerRef.current && document.contains(openerRef.current)) {
+      openerRef.current.focus();
+      openerRef.current = null;
+    }
+  }, []);
 
   const openAt = useCallback(
     (
@@ -198,6 +206,8 @@ export function ContextMenuHost() {
       ) {
         return;
       }
+      openerRef.current =
+        event.target instanceof HTMLElement ? event.target : null;
       openAt(
         event.clientX,
         event.clientY,
@@ -210,12 +220,32 @@ export function ContextMenuHost() {
       if (!detail) return;
       openAt(detail.x, detail.y, iframeTargetFromDetail(detail), null);
     };
+    const onKeyOpen = (event: KeyboardEvent) => {
+      if (
+        event.key === "ContextMenu" ||
+        (event.shiftKey && (event.key === "F10" || event.key === "f10"))
+      ) {
+        const active = document.activeElement as HTMLElement | null;
+        if (!active || active.closest(".context-menu")) return;
+        event.preventDefault();
+        const rect = active.getBoundingClientRect();
+        openerRef.current = active;
+        openAt(
+          rect.left + rect.width / 2,
+          rect.bottom,
+          resolveContextTarget(active),
+          snapshotEditSelection(active),
+        );
+      }
+    };
     const onDismiss = () => close();
     document.addEventListener("contextmenu", onContextMenu, true);
+    window.addEventListener("keydown", onKeyOpen, true);
     window.addEventListener(IFRAME_CONTEXT_EVENT, onIframe);
     window.addEventListener(CONTEXT_DISMISS_EVENT, onDismiss);
     return () => {
       document.removeEventListener("contextmenu", onContextMenu, true);
+      window.removeEventListener("keydown", onKeyOpen, true);
       window.removeEventListener(IFRAME_CONTEXT_EVENT, onIframe);
       window.removeEventListener(CONTEXT_DISMISS_EVENT, onDismiss);
     };
@@ -224,7 +254,12 @@ export function ContextMenuHost() {
   useEffect(() => {
     if (!menu) return;
     const onPointer = (event: MouseEvent) => {
-      if (menuRef.current?.contains(event.target as Node)) return;
+      if (
+        event.target instanceof Node &&
+        menuRef.current?.contains(event.target)
+      ) {
+        return;
+      }
       close();
     };
     const onKey = (event: KeyboardEvent) => {
@@ -233,7 +268,15 @@ export function ContextMenuHost() {
         close();
       }
     };
-    const onScroll = () => close();
+    const onScroll = (event: Event) => {
+      if (
+        event.target instanceof Node &&
+        menuRef.current?.contains(event.target)
+      ) {
+        return;
+      }
+      close();
+    };
     window.addEventListener("mousedown", onPointer, true);
     window.addEventListener("keydown", onKey, true);
     window.addEventListener("scroll", onScroll, true);

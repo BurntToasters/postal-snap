@@ -9,7 +9,7 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
   await page.addInitScript(() => {
     const mock = window.__POSTAL_SNAP_MOCK__ as MockShared;
     const state = window.__POSTAL_SNAP_TEST__ as MockState;
-    const { account } = mock;
+    const { account, accounts, params } = mock;
     Object.assign(mock.handlers, {
       list_accounts() {
         if (location.search.includes("startupFail")) {
@@ -20,13 +20,75 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
             retryable: true,
           };
         }
-        return location.search.includes("firstRun") && !state.added
-          ? []
-          : [account];
+        if (location.search.includes("firstRun") && !state.added) return [];
+        return (params.has("multiAccount") ? accounts : [account]).map(
+          (item) => ({ ...item, aliases: [...(item.aliases ?? [])] }),
+        );
       },
       test_account(args: Record<string, unknown>) {
         state.setupRequest = args.request;
         return undefined;
+      },
+      discover_mail_settings(args: Record<string, unknown>) {
+        const email = String(args.email ?? "").toLowerCase();
+        if (email.endsWith("@gmail.com")) {
+          return {
+            status: "unsupported",
+            providerId: "gmail",
+            providerName: "Gmail",
+            message:
+              "Gmail requires OAuth for new third-party mail connections. Postal Snap does not support Gmail sign-in yet.",
+          };
+        }
+        if (email.endsWith("@fastmail.com")) {
+          return {
+            status: "found",
+            providerId: "fastmail",
+            providerName: "Fastmail",
+            accountProvider: "manual",
+            source: "preset",
+            imap: {
+              host: "imap.fastmail.com",
+              port: 993,
+              tlsMode: "tls",
+              username: email,
+            },
+            smtp: {
+              host: "smtp.fastmail.com",
+              port: 465,
+              tlsMode: "tls",
+              username: email,
+            },
+            appPasswordUrl:
+              "https://www.fastmail.help/hc/en-us/articles/360058752854-App-passwords",
+          };
+        }
+        if (email.endsWith("@autodetect.example")) {
+          return {
+            status: "found",
+            providerId: "autoconfig",
+            providerName: "autodetect.example",
+            accountProvider: "manual",
+            source: "autoconfig",
+            imap: {
+              host: "imap.autodetect.example",
+              port: 993,
+              tlsMode: "tls",
+              username: email,
+            },
+            smtp: {
+              host: "smtp.autodetect.example",
+              port: 587,
+              tlsMode: "startTls",
+              username: email,
+            },
+            appPasswordUrl: null,
+          };
+        }
+        return {
+          status: "notFound",
+          domain: email.split("@").at(-1) ?? "example.com",
+        };
       },
       update_account_password(args: Record<string, unknown>) {
         state.setupRequest = args.password;
@@ -72,6 +134,35 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
         state.added = true;
         state.setupRequest = args.request;
         return account;
+      },
+      get_sync_progress() {
+        return {
+          accountId: account.id,
+          folder: "INBOX",
+          envelopesDone: 24,
+          envelopesTotal: 100,
+          bodiesDone: 8,
+          bodiesTotal: 90,
+          backfilling: true,
+        };
+      },
+      get_account_inbox_counts() {
+        return accounts.map((item) => {
+          const inbox = mock.mailboxes.find(
+            (mailbox) =>
+              mailbox.accountId === item.id && mailbox.role === "inbox",
+          );
+          return {
+            accountId: item.id,
+            unreadCount: inbox?.unreadCount ?? 0,
+            totalCount: inbox?.totalCount ?? 0,
+          };
+        });
+      },
+      get_account_removal_impact() {
+        return params.has("removalImpact")
+          ? { unsentMessages: 2, unsyncedDrafts: 1, queuedChanges: 3 }
+          : { unsentMessages: 0, unsyncedDrafts: 0, queuedChanges: 0 };
       },
       discover_account_aliases() {
         (account as { aliases?: string[] }).aliases = [

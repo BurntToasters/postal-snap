@@ -5,8 +5,10 @@ import type {
   AccountChangeEvent,
   AccountInboxCount,
   AccountRemovalOutcome,
+  AccountRemovalImpact,
   AccountSetupRequest,
   AccountSummary,
+  MailSettingsDiscovery,
   AppSettings,
   CacheUsage,
   ComposeAttachment,
@@ -34,6 +36,7 @@ import type {
   FilterRule,
   SearchQuery,
   SyncState,
+  SyncProgress,
   SendOutcome,
 } from "./types";
 
@@ -68,10 +71,12 @@ function inTauri(): boolean {
 export type NativeCommand =
   | "list_accounts"
   | "test_account"
+  | "discover_mail_settings"
   | "test_saved_account"
   | "update_account_password"
   | "add_account"
   | "remove_account"
+  | "get_account_removal_impact"
   | "erase_all_data"
   | "update_account_signature"
   | "get_account_inbox_counts"
@@ -136,6 +141,7 @@ export type NativeCommand =
   | "clear_downloaded_mail"
   | "get_distribution_channel"
   | "get_license_credits"
+  | "get_sync_progress"
   | "discover_account_aliases"
   | "update_account_aliases"
   | "show_native_confirm"
@@ -166,6 +172,8 @@ export const api = {
   listAccounts: () => call<AccountSummary[]>("list_accounts"),
   testAccount: (request: AccountSetupRequest) =>
     call<void>("test_account", { request }),
+  discoverMailSettings: (email: string) =>
+    call<MailSettingsDiscovery>("discover_mail_settings", { email }),
   testSavedAccount: (accountId: string) =>
     call<void>("test_saved_account", { accountId }),
   updateAccountPassword: (accountId: string, password: string) =>
@@ -174,6 +182,8 @@ export const api = {
     call<AccountSummary>("add_account", { request }),
   removeAccount: (accountId: string) =>
     call<AccountRemovalOutcome>("remove_account", { accountId }),
+  getAccountRemovalImpact: (accountId: string) =>
+    call<AccountRemovalImpact>("get_account_removal_impact", { accountId }),
   eraseAllData: () => {
     return queueSettings(async () => {
       const removed = await call<number>("erase_all_data");
@@ -382,9 +392,19 @@ export const api = {
   clearCache: () => call<void>("clear_downloaded_mail"),
   distribution: () => call<DistributionChannel>("get_distribution_channel"),
   getLicenseCredits: () => call<LicenseCredits>("get_license_credits"),
+  getSyncProgress: (accountId: string) =>
+    call<SyncProgress>("get_sync_progress", { accountId }),
   async onSyncState(handler: (state: SyncState) => void): Promise<UnlistenFn> {
     if (!inTauri()) return () => undefined;
     return listen<SyncState>("sync-state", ({ payload }) => handler(payload));
+  },
+  async onSyncProgress(
+    handler: (progress: SyncProgress) => void,
+  ): Promise<UnlistenFn> {
+    if (!inTauri()) return () => undefined;
+    return listen<SyncProgress>("sync-progress", ({ payload }) =>
+      handler(payload),
+    );
   },
   async onFolderCountsChanged(
     handler: (event: AccountChangeEvent) => void,

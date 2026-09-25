@@ -753,9 +753,9 @@ describe("context menu items", () => {
       ]),
     );
 
-    expect(itemsForTarget({ kind: "folder", mailboxId: inbox.id })).toEqual([
-      expect.objectContaining({ id: "open" }),
-    ]);
+    expect(itemsForTarget({ kind: "folder", mailboxId: inbox.id })).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "open" })]),
+    );
     expect(itemsForTarget({ kind: "folder", mailboxId: trash.id })).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: "empty-trash", danger: true }),
@@ -776,9 +776,9 @@ describe("context menu items", () => {
     expect(itemsForTarget({ kind: "local-nav", view: "drafts" })).toEqual([
       expect.objectContaining({ id: "open" }),
     ]);
-    expect(itemsForTarget({ kind: "draft", draftId: "d1" })).toEqual([
-      expect.objectContaining({ id: "open" }),
-    ]);
+    expect(itemsForTarget({ kind: "draft", draftId: "d1" })).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "open" })]),
+    );
     expect(itemsForTarget({ kind: "snoozed", messageId: 1 })).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: "open" }),

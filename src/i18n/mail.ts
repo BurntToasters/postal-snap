@@ -1,3 +1,27 @@
+import type { MailboxRole, MailboxSummary } from "../types";
+
+const roleLabels: Record<MailboxRole, string> = {
+  inbox: "Inbox",
+  sent: "Sent",
+  drafts: "Drafts",
+  archive: "Archive",
+  trash: "Trash",
+  junk: "Junk",
+  other: "",
+};
+
+/** Localized display label for a mailbox. Role folders get the i18n name;
+ *  custom folders get the leaf segment after the last delimiter. */
+export function folderLabel(mailbox: MailboxSummary): string {
+  const label = roleLabels[mailbox.role];
+  if (label) return label;
+  const name = mailbox.displayName || mailbox.name;
+  if (mailbox.delimiter && name.includes(mailbox.delimiter)) {
+    return name.slice(name.lastIndexOf(mailbox.delimiter) + 1);
+  }
+  return name;
+}
+
 // English source catalog namespace: mail section.
 // Split from src/i18n.ts with zero text changes.
 export const mail = {
@@ -14,6 +38,13 @@ export const mail = {
   drafts: "Drafts",
   outbox: "Outbox",
   account: "Account",
+  emailAccounts: "Email accounts",
+  accountSettings: "Account settings",
+  getMailAllAccounts: "Get mail for all accounts",
+  accountReady: "Ready",
+  accountSyncing: "Syncing",
+  accountOffline: "Offline",
+  accountSignInNeeded: "Sign-in needed",
   addAccount: "Add account",
   mailboxes: "Mailboxes",
   accountsAndMailboxes: "Accounts and mailboxes",
@@ -23,6 +54,7 @@ export const mail = {
   localFolders: "On This Computer",
   checkingMail: "Checking mail…",
   mailUpToDate: "Mail is up to date",
+  mailSyncError: "Mail could not sync",
   clearSearch: "Clear search",
   messages: "Messages",
   loadingMessages: "Loading messages…",
