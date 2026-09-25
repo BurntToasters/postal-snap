@@ -53,6 +53,7 @@ export type { SettingsTab } from "./settings/primitives";
 interface Props {
   onClose: () => void;
   initialTab?: SettingsTab;
+  onLastAccountRemoved?: () => void;
 }
 
 const tabs: Array<{
@@ -71,7 +72,11 @@ const tabs: Array<{
   { id: "about", label: strings.settings.about, icon: Info },
 ];
 
-export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
+export function SettingsDialog({
+  onClose,
+  initialTab = "general",
+  onLastAccountRemoved,
+}: Props) {
   const accounts = useAppStore((state) => state.accounts);
   const setAccounts = useAppStore((state) => state.setAccounts);
   const setSettings = useAppStore((state) => state.setSettings);
@@ -378,7 +383,10 @@ export function SettingsDialog({ onClose, initialTab = "general" }: Props) {
       if (result?.cleanupPending) {
         setError(strings.settings.accountCleanupWarning);
       }
-      if (remaining.length === 0) onClose();
+      if (remaining.length === 0) {
+        onLastAccountRemoved?.();
+        onClose();
+      }
     } catch (cause) {
       setError(String(cause));
     }

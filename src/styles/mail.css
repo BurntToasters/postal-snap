@@ -152,7 +152,7 @@
   );
   box-shadow:
     inset 0 1px 0 var(--surface-highlight),
-    0 2px 10px rgb(0 0 0 / 5%);
+    var(--shadow-control);
   user-select: none;
 }
 
@@ -228,8 +228,7 @@
   border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
   border-radius: var(--radius-pill);
   background: color-mix(in srgb, var(--surface) 92%, transparent);
-  box-shadow: inset 0 1px 0
-    color-mix(in srgb, var(--accent-contrast) 40%, transparent);
+  box-shadow: inset 0 1px 0 var(--surface-highlight);
 }
 
 .search-box:focus-within {
@@ -432,40 +431,20 @@
   z-index: 30;
   top: calc(100% + 4px);
   left: 0;
-  display: grid;
   width: min(300px, calc(100vw - 24px));
-  gap: 2px;
-  padding: 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-  box-shadow: var(--shadow-soft);
 }
 
-.account-switcher-menu > button {
+/* Account rows hold an avatar and two lines, so they keep a taller grid. */
+.app-menu.account-switcher-menu > [data-context="account"] {
   display: grid;
-  width: 100%;
   min-height: 44px;
   grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  padding: 7px 9px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  color: var(--text);
-  background: transparent;
-  text-align: left;
+  padding: 6px 9px 6px 6px;
+  white-space: normal;
 }
 
-.account-switcher-menu > button:hover,
-.account-switcher-menu > button:focus-visible,
-.account-switcher-menu > button[aria-current="true"] {
+.account-switcher-menu > [aria-current="true"] {
   background: var(--surface-hover);
-}
-
-.account-switcher-menu > button > svg {
-  width: 19px;
-  color: var(--accent);
 }
 
 .account-switcher-copy {
@@ -523,12 +502,6 @@
   font-weight: 700;
   text-align: center;
   font-variant-numeric: tabular-nums;
-}
-
-.account-switcher-separator {
-  height: 1px;
-  margin: 4px 6px;
-  background: var(--border);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -673,7 +646,7 @@
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   font-weight: 650;
   box-shadow:
-    inset 0 1px 0 color-mix(in srgb, white 8%, transparent),
+    inset 0 1px 0 var(--surface-highlight),
     var(--shadow-control);
 }
 

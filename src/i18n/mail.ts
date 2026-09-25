@@ -1,6 +1,6 @@
 import type { MailboxRole, MailboxSummary } from "../types";
 
-const roleLabels: Record<MailboxRole, string> = {
+export const roleLabels: Record<MailboxRole, string> = {
   inbox: "Inbox",
   sent: "Sent",
   drafts: "Drafts",
@@ -20,6 +20,22 @@ export function folderLabel(mailbox: MailboxSummary): string {
     return name.slice(name.lastIndexOf(mailbox.delimiter) + 1);
   }
   return name;
+}
+
+// Flat lists (move menus) need the parent path so "Work/Receipts" and
+// "Personal/Receipts" stay distinguishable.
+export function folderPathLabel(mailbox: MailboxSummary): string {
+  const name = mailbox.displayName || mailbox.name;
+  const segments = mailbox.delimiter
+    ? name.split(mailbox.delimiter).filter(Boolean)
+    : [name];
+  const roleLabel = roleLabels[mailbox.role];
+  if (roleLabel) {
+    return segments.length > 1
+      ? [...segments.slice(0, -1), roleLabel].join(" / ")
+      : roleLabel;
+  }
+  return mailbox.delimiter ? segments.join(" / ") : name;
 }
 
 // English source catalog namespace: mail section.

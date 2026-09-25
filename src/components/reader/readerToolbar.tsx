@@ -18,6 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { strings } from "../../i18n";
+import { folderPathLabel } from "../../i18n/mail";
 import type { MailboxSummary, MessageDetail, ReadingPane } from "../../types";
 import { moveMenuFocus, moveToolbarFocus } from "../toolbarNav";
 
@@ -160,7 +161,7 @@ export function ReaderToolbar({
           {moreOpen ? (
             <div
               id="reader-more-menu"
-              className="reader-more-menu"
+              className="reader-more-menu app-menu"
               role="menu"
               aria-label={strings.reader.moreActions}
               onKeyDownCapture={moveMenuFocus}
@@ -267,7 +268,7 @@ export function ReaderToolbar({
                     )
                     .map((mailbox) => (
                       <option key={mailbox.id} value={mailbox.id}>
-                        {mailbox.displayName}
+                        {folderPathLabel(mailbox)}
                       </option>
                     ))}
                 </select>

@@ -23,6 +23,7 @@ import { SetupFlow } from "./components/SetupFlow";
 import { MailShell } from "./components/MailShell";
 import { SettingsDialog, type SettingsTab } from "./components/SettingsDialog";
 import { useAppStore } from "./store";
+import { useSettingsSave } from "./components/settings/useSettingsSave";
 import { applySettings } from "./settings";
 import {
   checkUpdateInteractive,
@@ -32,6 +33,8 @@ import {
   startPeriodicUpdateCheck,
   quitOrApplyPendingUpdate,
 } from "./update";
+
+type SetupScreen = "flow" | "wizard";
 
 const Composer = lazy(() =>
   import("./components/Composer").then((module) => ({
@@ -59,6 +62,22 @@ export default function App() {
   const [startupNotice, setStartupNotice] = useState<string | null>(null);
   const [ready, setReady] = useState(!inTauri());
   const loadRequest = useRef(0);
+  // Own setup route until user opens the mailbox. Sync events can list an
+  // account before add_account returns to its setup component.
+  const [setupSession, setSetupSession] = useState<SetupScreen | null>(null);
+  const setupScreen: SetupScreen | null =
+    setupSession ??
+    (accounts.length > 0 ? null : settings.setupCompleted ? "wizard" : "flow");
+
+  const claimAccountlessSetup = useCallback(() => {
+    const setupCompleted = useAppStore.getState().settings.setupCompleted;
+    setSetupSession(
+      (current) => current ?? (setupCompleted ? "wizard" : "flow"),
+    );
+  }, []);
+
+  // Best-effort: routing already trusts the accounts, so ignore failures.
+  const { update: repairSettings } = useSettingsSave();
 
   const openSettings = useCallback((tab: SettingsTab = "general") => {
     setSettingsTab(tab);
@@ -88,6 +107,21 @@ export default function App() {
       setSettings(loadedSettings);
       setAccounts(loadedAccounts);
       applySettings(loadedSettings);
+      if (loadedAccounts.length === 0) {
+        setSetupSession(
+          (current) =>
+            current ?? (loadedSettings.setupCompleted ? "wizard" : "flow"),
+        );
+      }
+      if (loadedAccounts.length > 0 && !loadedSettings.setupCompleted) {
+        // Accounts prove setup finished; repair a lost or reset flag. A
+        // queued patch merges onto the latest settings, never a stale copy.
+        void repairSettings(
+          { setupCompleted: true, setupStep: null },
+          undefined,
+          { quiet: true },
+        );
+      }
       setStartupNotice(startupNotice);
       if (startupNotice) setError(startupNotice);
       if (loadedAccounts.length > 0) {
@@ -102,7 +136,12 @@ export default function App() {
     } finally {
       setReady(true);
     }
-  }, [setAccounts, setError, setSettings]);
+  }, [repairSettings, setAccounts, setError, setSettings]);
+
+  const finishSetup = useCallback(async () => {
+    await loadAccounts();
+    setSetupSession(null);
+  }, [loadAccounts]);
 
   useEffect(() => {
     if (!inTauri()) return;
@@ -127,7 +166,10 @@ export default function App() {
           void api
             .listAccounts()
             .then((loadedAccounts) => {
-              if (active) setAccounts(loadedAccounts);
+              if (active) {
+                setAccounts(loadedAccounts);
+                if (loadedAccounts.length === 0) claimAccountlessSetup();
+              }
             })
             .catch(() => undefined);
         }
@@ -186,6 +228,7 @@ export default function App() {
     };
   }, [
     loadAccounts,
+    claimAccountlessSetup,
     openComposer,
     openSettings,
     setAccounts,
@@ -292,18 +335,18 @@ export default function App() {
         {strings.mail.settings}
       </button>
     </main>
-  ) : !settings.setupCompleted ? (
+  ) : setupScreen === "flow" ? (
     <main className="setup-host">
       <SetupFlow
         startupNotice={startupNotice}
-        onComplete={loadAccounts}
+        onComplete={finishSetup}
         onOpenSettings={() => openSettings()}
       />
     </main>
-  ) : accounts.length === 0 ? (
+  ) : setupScreen === "wizard" ? (
     <main className="setup-host">
       <SetupWizard
-        onComplete={loadAccounts}
+        onComplete={finishSetup}
         onOpenSettings={() => openSettings()}
       />
     </main>
@@ -340,6 +383,7 @@ export default function App() {
           key={`${settingsTab}:${settingsRouteRequest}`}
           initialTab={settingsTab}
           onClose={() => setSettingsOpen(false)}
+          onLastAccountRemoved={claimAccountlessSetup}
         />
       ) : null}
       {error ? (

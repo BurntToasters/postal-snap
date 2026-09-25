@@ -15,6 +15,18 @@ textarea {
     box-shadow 120ms ease;
 }
 
+/* Radios and checkboxes keep native size; the global width/padding above
+   otherwise stretches them across flex rows. */
+input:where([type="radio"], [type="checkbox"]) {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  margin: 0;
+  padding: 0;
+  box-shadow: none;
+  accent-color: var(--accent);
+}
+
 input:hover,
 select:hover,
 textarea:hover {
@@ -50,13 +62,13 @@ textarea:focus-visible {
 }
 
 .password-field input {
-  border-radius: 8px 0 0 8px;
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
 }
 
 .password-field button {
   border: 1px solid var(--border);
   border-left: 0;
-  border-radius: 0 8px 8px 0;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   background: var(--surface-muted);
 }
 
@@ -69,7 +81,7 @@ fieldset {
   margin: 0;
   padding: 14px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
 }
 
 legend {
@@ -128,7 +140,7 @@ legend {
   font-weight: 500;
   color: var(--text);
   padding: 4px 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-xs);
   cursor: pointer;
   max-width: calc(100% - 20px);
 }
@@ -165,16 +177,9 @@ legend {
   justify-content: space-between;
   gap: 18px;
   padding: 10px 14px;
-  border: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
+  border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: linear-gradient(
-    145deg,
-    color-mix(in srgb, var(--surface-raised) 92%, var(--surface-highlight)),
-    color-mix(in srgb, var(--surface) 92%, var(--surface-muted))
-  );
-  box-shadow:
-    var(--shadow-card),
-    inset 0 1px 0 var(--surface-highlight);
+  background: var(--surface-muted);
 }
 
 .settings-row > span,

@@ -65,6 +65,22 @@ svg {
     border: 2px solid Highlight;
   }
 
+  /* Hover and selection use backgrounds, which forced colors remove. */
+  .app-menu [role="menuitem"]:hover:not(:disabled),
+  .recipient-suggestions li:is(:hover, .active) {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  .download-choice label:has(input:checked) {
+    border: 2px solid Highlight;
+  }
+
+  .app-menu [role="separator"] {
+    height: 0;
+    border-top: 1px solid CanvasText;
+  }
+
   .composer-window .tiptap:focus-visible {
     outline: 2px solid Highlight !important;
     outline-offset: -2px;

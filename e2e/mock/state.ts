@@ -14,6 +14,8 @@ export async function registerMockState(page: Page): Promise<void> {
       failWindowAction: false,
       savedSettings: [] as unknown[],
       added: false,
+      accountRemoved: false,
+      accountLoads: 0,
       discarded: false,
       snoozed: false,
       sentDraft: undefined as unknown,

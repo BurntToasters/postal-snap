@@ -103,6 +103,7 @@ export const settings = {
   large: "Large",
   extraLarge: "Extra large",
   veryLarge: "Very large",
+  evenLarger: "Even larger (175%)",
   largest: "Largest (200%)",
   shortcuts: "Shortcuts",
   shortcutsTitle: "Keyboard Shortcuts",

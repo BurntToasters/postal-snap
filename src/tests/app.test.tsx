@@ -348,6 +348,7 @@ describe("App lifecycle", () => {
       ...defaultSettings,
       setupCompleted: false,
     });
+    vi.mocked(api.listAccounts).mockResolvedValue([]);
     const flow = render(<App />);
     expect(await screen.findByText("Setup flow")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Flow settings" }));

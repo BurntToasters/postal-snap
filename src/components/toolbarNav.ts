@@ -37,7 +37,45 @@ export function moveToolbarFocus(event: KeyboardEvent<HTMLElement>) {
   items[index].focus();
 }
 
+// Typeahead: a printable key jumps to the next item whose visible label
+// starts with it, wrapping around.
+function focusMenuItemByLetter(event: KeyboardEvent<HTMLElement>) {
+  if (
+    event.target instanceof HTMLElement &&
+    event.target.matches("input, textarea, select")
+  ) {
+    return;
+  }
+  const letter = event.key.toLocaleLowerCase();
+  const items = [
+    ...event.currentTarget.querySelectorAll<HTMLElement>(
+      '[role="menuitem"]:not([disabled])',
+    ),
+  ];
+  const start = items.findIndex((item) => item === document.activeElement);
+  for (let step = 1; step <= items.length; step += 1) {
+    const item = items[(start + step) % items.length];
+    const label = item.textContent?.trim().toLocaleLowerCase() ?? "";
+    if (label.startsWith(letter)) {
+      event.preventDefault();
+      event.stopPropagation();
+      item.focus();
+      return;
+    }
+  }
+}
+
 export function moveMenuFocus(event: KeyboardEvent<HTMLElement>) {
+  if (
+    event.key.length === 1 &&
+    event.key.trim() &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.altKey
+  ) {
+    focusMenuItemByLetter(event);
+    return;
+  }
   if (
     event.key !== "ArrowUp" &&
     event.key !== "ArrowDown" &&

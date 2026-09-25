@@ -139,7 +139,7 @@ export function RecipientField({
           id={listId}
           role="listbox"
           aria-label={strings.composer.suggestedRecipients}
-          className="recipient-suggestions"
+          className="recipient-suggestions app-menu"
         >
           {suggestions.map((suggestion, index) => (
             <li

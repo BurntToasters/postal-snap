@@ -7,6 +7,44 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import {
+  AlarmClockOff,
+  Archive,
+  ArrowUpRight,
+  CheckCheck,
+  Clipboard,
+  Clock,
+  Copy,
+  Download,
+  Eye,
+  FolderOpen,
+  FolderPlus,
+  Forward,
+  Link,
+  Mail,
+  MailOpen,
+  MailPlus,
+  Pencil,
+  Printer,
+  Redo2,
+  RefreshCw,
+  Reply,
+  ReplyAll,
+  RotateCcw,
+  Scissors,
+  Search,
+  Send,
+  Settings,
+  ShieldAlert,
+  ShieldCheck,
+  Star,
+  StarOff,
+  TextSelect,
+  Trash2,
+  Undo2,
+  X,
+  type LucideIcon,
+} from "lucide-react";
+import {
   CONTEXT_ACTION_EVENT,
   CONTEXT_DISMISS_EVENT,
   IFRAME_CONTEXT_EVENT,
@@ -14,15 +52,97 @@ import {
   itemsForTarget,
   resolveContextTarget,
   type ContextMenuActionDetail,
+  type ContextMenuIcon,
   type ContextMenuItem,
   type ContextMenuTarget,
   type IframeContextMenuDetail,
 } from "../contextMenu";
 import { inspectAndOpenExternalLink } from "./externalLink";
 import { strings } from "../i18n";
+import { folderIcons } from "./mail/folderIcons";
 import { parseMailto } from "../mailto";
 import { useAppStore } from "../store";
 import { moveMenuFocus } from "./toolbarNav";
+
+const menuIcons: Record<
+  Exclude<ContextMenuIcon, `folder:${string}`>,
+  LucideIcon
+> = {
+  reply: Reply,
+  "reply-all": ReplyAll,
+  forward: Forward,
+  "mark-read": MailOpen,
+  "mark-unread": Mail,
+  star: Star,
+  unstar: StarOff,
+  archive: Archive,
+  junk: ShieldAlert,
+  "not-junk": ShieldCheck,
+  trash: Trash2,
+  snooze: Clock,
+  unsnooze: AlarmClockOff,
+  open: FolderOpen,
+  refresh: RefreshCw,
+  "mark-all-read": CheckCheck,
+  "new-folder": FolderPlus,
+  rename: Pencil,
+  delete: Trash2,
+  retry: RotateCcw,
+  send: Send,
+  discard: Trash2,
+  undo: Undo2,
+  redo: Redo2,
+  cut: Scissors,
+  copy: Copy,
+  paste: Clipboard,
+  "select-all": TextSelect,
+  find: Search,
+  print: Printer,
+  "open-link": ArrowUpRight,
+  "copy-link": Link,
+  "copy-address": Copy,
+  compose: MailPlus,
+  preview: Eye,
+  download: Download,
+  remove: X,
+  settings: Settings,
+};
+
+function iconFor(icon: ContextMenuIcon | undefined): LucideIcon | undefined {
+  if (!icon) return undefined;
+  if (icon.startsWith("folder:")) {
+    const role = icon.slice("folder:".length) as keyof typeof folderIcons;
+    return folderIcons[role];
+  }
+  return menuIcons[icon as keyof typeof menuIcons];
+}
+
+type MenuActionItem = Extract<ContextMenuItem, { type: "item" }>;
+
+type MenuSection =
+  | { kind: "separator" }
+  | { kind: "item"; item: MenuActionItem }
+  | { kind: "group"; label: string; items: MenuActionItem[] };
+
+// A heading owns the items after it, up to the next separator.
+function groupMenuEntries(entries: ContextMenuItem[]): MenuSection[] {
+  const sections: MenuSection[] = [];
+  let group: Extract<MenuSection, { kind: "group" }> | null = null;
+  for (const entry of entries) {
+    if (entry.type === "heading") {
+      group = { kind: "group", label: entry.label, items: [] };
+      sections.push(group);
+    } else if (entry.type === "separator") {
+      group = null;
+      sections.push({ kind: "separator" });
+    } else if (group) {
+      group.items.push(entry);
+    } else {
+      sections.push({ kind: "item", item: entry });
+    }
+  }
+  return sections;
+}
 
 interface OpenMenu {
   x: number;
@@ -172,10 +292,9 @@ export function ContextMenuHost() {
   const close = useCallback(() => {
     savedEditRef.current = null;
     setMenu(null);
-    if (openerRef.current && document.contains(openerRef.current)) {
-      openerRef.current.focus();
-      openerRef.current = null;
-    }
+    const opener = openerRef.current;
+    openerRef.current = null;
+    if (opener && document.contains(opener)) opener.focus();
   }, []);
 
   const openAt = useCallback(
@@ -218,6 +337,10 @@ export function ContextMenuHost() {
     const onIframe = (event: Event) => {
       const detail = (event as CustomEvent<IframeContextMenuDetail>).detail;
       if (!detail) return;
+      // Return focus to the message body once the menu closes.
+      openerRef.current = document.querySelector<HTMLElement>(
+        ".message-body iframe",
+      );
       openAt(detail.x, detail.y, iframeTargetFromDetail(detail), null);
     };
     const onKeyOpen = (event: KeyboardEvent) => {
@@ -263,11 +386,14 @@ export function ContextMenuHost() {
       close();
     };
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" || event.key === "Tab") {
         event.preventDefault();
         close();
       }
     };
+    // A stale position after resize, or a menu left behind when the window
+    // loses focus, reads as a stuck popup.
+    const onDismiss = () => close();
     const onScroll = (event: Event) => {
       if (
         event.target instanceof Node &&
@@ -280,10 +406,14 @@ export function ContextMenuHost() {
     window.addEventListener("mousedown", onPointer, true);
     window.addEventListener("keydown", onKey, true);
     window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onDismiss);
+    window.addEventListener("blur", onDismiss);
     return () => {
       window.removeEventListener("mousedown", onPointer, true);
       window.removeEventListener("keydown", onKey, true);
       window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onDismiss);
+      window.removeEventListener("blur", onDismiss);
     };
   }, [close, menu]);
 
@@ -308,43 +438,67 @@ export function ContextMenuHost() {
   }, [menu]);
 
   if (!menu) return null;
+  const openMenu = menu;
+
+  function renderItem(entry: MenuActionItem) {
+    const Icon = iconFor(entry.icon);
+    return (
+      <button
+        key={entry.id}
+        type="button"
+        role="menuitem"
+        disabled={entry.disabled}
+        aria-label={entry.ariaLabel}
+        className={entry.danger ? "danger" : undefined}
+        onClick={() => {
+          const { id, target } = { id: entry.id, target: openMenu.target };
+          const savedEdit = savedEditRef.current;
+          close();
+          void runHostAction(id, target, savedEdit).then((handled) => {
+            if (!handled) dispatchContextAction(id, target);
+          });
+        }}
+      >
+        <span className="context-menu-icon" aria-hidden="true">
+          {Icon ? <Icon /> : null}
+        </span>
+        <span className="context-menu-label">{entry.label}</span>
+      </button>
+    );
+  }
 
   return createPortal(
     <div
       ref={menuRef}
-      className="context-menu"
+      className="context-menu app-menu"
       role="menu"
       aria-label={strings.contextMenu.menu}
       style={{ left: menu.x, top: menu.y }}
       onKeyDown={moveMenuFocus}
     >
-      {menu.items.map((entry, index) =>
-        entry.type === "separator" ? (
-          <div
-            key={`sep-${index}`}
-            className="context-menu-separator"
-            role="separator"
-          />
-        ) : (
-          <button
-            key={entry.id}
-            type="button"
-            role="menuitem"
-            disabled={entry.disabled}
-            className={entry.danger ? "danger" : undefined}
-            onClick={() => {
-              const { id, target } = { id: entry.id, target: menu.target };
-              const savedEdit = savedEditRef.current;
-              close();
-              void runHostAction(id, target, savedEdit).then((handled) => {
-                if (!handled) dispatchContextAction(id, target);
-              });
-            }}
-          >
-            {entry.label}
-          </button>
-        ),
-      )}
+      {groupMenuEntries(menu.items).map((section, index) => {
+        if (section.kind === "separator") {
+          return (
+            <div
+              key={`sep-${index}`}
+              className="context-menu-separator"
+              role="separator"
+            />
+          );
+        }
+        if (section.kind === "group") {
+          const headingId = `context-menu-heading-${index}`;
+          return (
+            <div key={headingId} role="group" aria-labelledby={headingId}>
+              <div id={headingId} className="context-menu-heading">
+                {section.label}
+              </div>
+              {section.items.map(renderItem)}
+            </div>
+          );
+        }
+        return renderItem(section.item);
+      })}
     </div>,
     document.body,
   );
