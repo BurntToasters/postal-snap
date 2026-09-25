@@ -11,15 +11,6 @@ import {
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useMailShortcuts } from "../hooks/useMailShortcuts";
 import { useScheduledOutbox } from "../hooks/useScheduledOutbox";
-import {
-  Archive,
-  FileText,
-  Inbox,
-  Menu,
-  Send,
-  ShieldAlert,
-  Trash2,
-} from "lucide-react";
 import { api } from "../api";
 import {
   CONTEXT_ACTION_EVENT,
@@ -28,7 +19,7 @@ import {
 import { strings } from "../i18n";
 import { folderLabel } from "../i18n/mail";
 import { useAppStore } from "../store";
-import type { AccountInboxCount, MailboxRole, MessageSummary } from "../types";
+import type { AccountInboxCount, MessageSummary } from "../types";
 import { applyPendingUpdate } from "../update";
 import { MessageReader } from "./MessageReader";
 import { AddAccountDialog, SentNoticeToast } from "./mail/mailDialogs";
@@ -39,6 +30,7 @@ import {
   matchesLocalQuery,
   mergeSearchResults,
 } from "./mail/mailSearch";
+import { folderIcons } from "./mail/folderIcons";
 import { MessageList } from "./mail/messageList";
 import { MailToolbar } from "./mail/mailToolbar";
 import { BulkBar, MessagePaneHeader } from "./mail/messagePaneChrome";
@@ -49,16 +41,6 @@ import { MEDIA_QUERIES } from "../breakpoints";
 interface Props {
   onOpenSettings: (tab?: "accounts") => void;
 }
-
-const folderIcons: Record<MailboxRole, typeof Inbox> = {
-  inbox: Inbox,
-  sent: Send,
-  drafts: FileText,
-  archive: Archive,
-  trash: Trash2,
-  junk: ShieldAlert,
-  other: Menu,
-};
 
 function relativeMessage(delta: number): MessageSummary | undefined {
   const state = useAppStore.getState();

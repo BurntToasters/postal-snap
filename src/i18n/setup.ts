@@ -14,15 +14,15 @@ export const setup = {
   supportedProviders:
     "Built-in help for Fastmail, Yahoo, AOL, Zoho, mailbox.org, and GMX.",
   privacy: "No tracking. No Postal Snap cloud.",
+  displayTitle: "Display",
+  displayHint: "Updates right away. Change it anytime in Settings.",
+  saveFailed: "Could not save that change, so it was undone. Try again.",
   openSettings: "Open Settings",
-  stepTwo: "Step 2 of 2",
   connectIcloud: "Connect iCloud Mail",
   connectOther: "Connect another account",
   connectProvider: (name: string) => `Connect ${name}`,
   icloudIntro:
     "Sign in with your iCloud Mail address and an app-specific password.",
-  manualIntro:
-    "Enter the incoming IMAP and outgoing SMTP settings from your email provider.",
   discoverIntro:
     "Enter your email address. Postal Snap checks built-in providers, your domain’s mail records, and your domain’s own secure settings file.",
   findSettings: "Find settings",
@@ -31,7 +31,6 @@ export const setup = {
     `Secure settings found for ${name}. Review them below.`,
   settingsNotFound:
     "Postal Snap could not find secure settings. Enter the server settings manually.",
-  changeAddress: "Use a different address",
   normalPasswordWarning:
     "Do not use your normal Apple Account password. iCloud Mail needs an app-specific password.",
   providerPasswordWarning: (name: string) =>
@@ -101,7 +100,6 @@ export const setup = {
   stepComfort: "Comfort",
   stepAccount: "Account",
   continue: "Continue",
-  skipForNow: "Skip for now",
   backToSetup: "Back to setup",
   appearanceTitle: "Choose how mail looks",
   appearanceIntro:

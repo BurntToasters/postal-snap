@@ -20,7 +20,12 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
             retryable: true,
           };
         }
-        if (location.search.includes("firstRun") && !state.added) return [];
+        if (
+          (location.search.includes("firstRun") || params.has("noAccounts")) &&
+          !state.added
+        ) {
+          return [];
+        }
         return (params.has("multiAccount") ? accounts : [account]).map(
           (item) => ({ ...item, aliases: [...(item.aliases ?? [])] }),
         );

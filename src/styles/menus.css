@@ -1,36 +1,64 @@
-/* Shared popover / menu pattern (moved, no visual change) */
+/* Shared menu surface. Every popup menu (context, mailbox More, reader More,
+   send options, account switcher, recipient suggestions) adds .app-menu. */
+.app-menu {
+  display: grid;
+  gap: 1px;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-soft);
+  font-size: 0.92rem;
+}
+
+/* Compact rows: menus are a pointer/keyboard surface, so rows sit below the
+   44px toolbar target while text scaling still grows them. */
+.app-menu [role="menuitem"] {
+  display: flex;
+  width: 100%;
+  min-height: 2.25rem;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 4px 10px 4px 8px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  color: var(--text);
+  background: transparent;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.app-menu [role="menuitem"]:hover:not(:disabled),
+.app-menu [role="menuitem"]:focus-visible {
+  background: var(--surface-hover);
+}
+
+.app-menu [role="menuitem"]:disabled {
+  opacity: 0.45;
+}
+
+.app-menu [role="menuitem"] > svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-inline: 1px;
+  color: var(--text-muted);
+}
+
+.app-menu [role="separator"] {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--border);
+}
+
 .mailbox-more-menu {
   position: absolute;
   z-index: 30;
   top: calc(100% + 6px);
   right: 0;
-  min-width: 190px;
-  padding: 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-  box-shadow: var(--shadow-soft);
-}
-
-.mailbox-more-menu button {
-  display: flex;
-  width: 100%;
-  min-height: 44px;
-  align-items: center;
-  gap: 8px;
-  justify-content: flex-start;
-  padding: 7px 10px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-}
-
-.mailbox-more-menu button:hover {
-  background: var(--surface-hover);
-}
-
-.mailbox-more-menu svg {
-  width: 17px;
+  min-width: 200px;
 }
 
 .reader-more-menu {
@@ -38,30 +66,30 @@
   z-index: 20;
   top: calc(100% + 6px);
   right: 0;
-  display: grid;
   min-width: 220px;
-  gap: 2px;
-  padding: 8px;
-  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-  box-shadow: var(--shadow-soft);
 }
 
-.reader-more-menu button,
 .reader-more-menu .move-control {
+  display: flex;
   width: 100%;
-  justify-content: flex-start;
-  padding: 8px 10px;
+  min-height: 2.25rem;
+  gap: 10px;
+  padding: 0 4px 0 9px;
+  border-radius: var(--radius-xs);
 }
 
-.reader-more-menu .move-control {
-  border: 1px solid transparent;
+.reader-more-menu .move-control svg {
+  width: 16px;
+  height: 16px;
+  color: var(--text-muted);
 }
 
 .reader-more-menu .move-control select {
   width: auto;
+  min-height: 2.25rem;
   flex: 1;
+  padding-inline: 0 6px;
+  color: var(--text);
 }
 
 .move-control {
@@ -87,6 +115,7 @@
   min-height: 44px;
   border: 0;
   background: transparent;
+  box-shadow: none;
 }
 
 .recipient-suggestions {
@@ -96,12 +125,7 @@
   left: 0;
   right: 0;
   margin: 0;
-  padding: 4px;
   list-style: none;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--surface) 92%, var(--surface-muted));
-  box-shadow: var(--shadow);
   max-height: 264px;
   overflow: auto;
 }
@@ -112,7 +136,7 @@
   min-height: 44px;
   align-content: center;
   padding: 6px 10px;
-  border-radius: 6px;
+  border-radius: var(--radius-xs);
   cursor: pointer;
 }
 
@@ -141,41 +165,13 @@
   z-index: 20;
   bottom: calc(100% + 6px);
   left: 0;
-  display: grid;
   min-width: 250px;
-  gap: 2px;
-  padding: 8px;
-  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-  box-shadow: var(--shadow-soft);
-}
-
-.send-menu > button {
-  display: flex;
-  min-height: 44px;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  text-align: left;
-  white-space: nowrap;
-}
-
-.send-menu > button:hover {
-  background: var(--surface-hover);
-}
-
-.send-menu > button svg {
-  width: 17px;
-  color: var(--text-muted);
 }
 
 .schedule-form {
   display: grid;
   gap: 8px;
+  margin-top: 4px;
   padding: 8px 10px;
   border-top: 1px solid var(--border);
 }
@@ -187,72 +183,46 @@
   font-weight: 600;
 }
 
-/* Shared popover helpers (additive only; existing selectors unchanged) */
-.popover-card {
-  min-width: 190px;
-  padding: 8px;
-  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-  box-shadow: var(--shadow-soft);
-}
-
-.popover-item {
-  display: flex;
-  min-height: 44px;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  text-align: left;
-}
-
-.popover-item:hover {
-  background: var(--surface-hover);
-}
-
 .context-menu {
   position: fixed;
   z-index: 1100;
-  min-width: 220px;
-  max-width: min(360px, calc(100vw - 16px));
+  display: block;
+  min-width: 200px;
+  max-width: min(320px, calc(100vw - 16px));
   max-height: min(80vh, calc(100dvh - 16px));
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-  box-shadow: var(--shadow-soft);
 }
 
-.context-menu [role="menuitem"] {
-  display: flex;
-  width: 100%;
-  min-height: 44px;
-  align-items: center;
-  justify-content: flex-start;
-  padding: 7px 10px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  text-align: left;
+.context-menu-icon {
+  display: grid;
+  flex: none;
+  width: 18px;
+  place-items: center;
+  color: var(--text-muted);
 }
 
-.context-menu [role="menuitem"]:hover,
-.context-menu [role="menuitem"]:focus-visible {
-  background: var(--surface-hover);
+.context-menu-icon svg {
+  width: 16px;
+  height: 16px;
 }
 
-.context-menu [role="menuitem"].danger {
+.context-menu-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-menu [role="menuitem"].danger,
+.context-menu [role="menuitem"].danger .context-menu-icon {
   color: var(--danger-ink);
 }
 
-.context-menu-separator {
-  height: 1px;
-  margin: 4px 6px;
-  background: var(--border);
+.context-menu-heading {
+  padding: 6px 10px 2px 36px;
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-weight: 650;
 }

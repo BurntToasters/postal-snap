@@ -13,14 +13,8 @@
   min-height: 0;
   padding: 14px 9px;
   overflow-y: auto;
-  border-right: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
-  background: linear-gradient(
-    155deg,
-    color-mix(in srgb, var(--surface-raised) 80%, var(--surface-muted)),
-    color-mix(in srgb, var(--surface-muted) 78%, var(--surface-sunken))
-  );
-  box-shadow: inset -1px 0 0
-    color-mix(in srgb, var(--surface-highlight) 50%, transparent);
+  border-right: 1px solid var(--border);
+  background: var(--surface-muted);
 }
 
 .settings-nav button {
@@ -31,7 +25,7 @@
   padding: 8px 12px;
   font-size: 0.92rem;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text);
   cursor: pointer;
@@ -42,17 +36,13 @@
   background: var(--surface-hover);
 }
 
+/* Matches the mailbox sidebar's selected folder. */
 .settings-nav button.active {
   color: var(--text);
-  border-color: color-mix(in srgb, var(--accent) 26%, transparent);
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--accent) 20%, transparent),
-    color-mix(in srgb, var(--accent) 12%, transparent)
-  );
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
   font-weight: 650;
   box-shadow:
-    inset 0 1px 0 color-mix(in srgb, white 9%, transparent),
+    inset 0 1px 0 var(--surface-highlight),
     var(--shadow-control);
 }
 
@@ -68,7 +58,7 @@
   min-height: 0;
   padding: 22px 26px 28px;
   overflow-y: auto;
-  background: color-mix(in srgb, var(--surface) 84%, var(--surface-sunken));
+  background: var(--surface);
 }
 
 .settings-panel {
@@ -113,7 +103,7 @@
 .settings-warning {
   padding: 14px 16px;
   border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--danger) 10%, var(--surface));
   color: var(--danger-ink);
   font-weight: 600;
@@ -122,7 +112,7 @@
 
 .settings-panel h2 {
   margin: 0 0 4px;
-  font-size: 1.35rem;
+  font-size: 1.15rem;
   letter-spacing: -0.02em;
 }
 
@@ -135,14 +125,7 @@
   padding: 16px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: linear-gradient(
-    145deg,
-    color-mix(in srgb, var(--surface-raised) 90%, var(--surface-highlight)),
-    color-mix(in srgb, var(--surface) 90%, var(--surface-muted))
-  );
-  box-shadow:
-    var(--shadow-card),
-    inset 0 1px 0 var(--surface-highlight);
+  background: var(--surface-muted);
 }
 
 .security-summary > span,
@@ -204,11 +187,6 @@
 
 .settings-confirm-card input {
   min-height: 44px;
-  padding: 8px 12px;
-  font-size: 1rem;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface-muted);
 }
 
 .settings-confirm-actions {
@@ -224,14 +202,7 @@
   padding: 16px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: linear-gradient(
-    145deg,
-    color-mix(in srgb, var(--surface-raised) 90%, var(--surface-highlight)),
-    color-mix(in srgb, var(--surface) 90%, var(--surface-muted))
-  );
-  box-shadow:
-    var(--shadow-card),
-    inset 0 1px 0 var(--surface-highlight);
+  background: var(--surface-muted);
 }
 
 .settings-data-card.danger-card {
@@ -304,16 +275,9 @@
   display: grid;
   gap: 12px;
   padding: 16px;
-  border: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
+  border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: linear-gradient(
-    145deg,
-    color-mix(in srgb, var(--surface-raised) 92%, var(--surface-highlight)),
-    color-mix(in srgb, var(--surface) 92%, var(--surface-muted))
-  );
-  box-shadow:
-    var(--shadow-card),
-    inset 0 1px 0 var(--surface-highlight);
+  background: var(--surface-muted);
 }
 
 .account-card-header {
@@ -340,7 +304,7 @@
   margin: 0;
   padding: 10px 12px;
   border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   color: var(--danger);
   background: color-mix(in srgb, var(--danger) 10%, var(--surface));
   font-size: 0.86rem;
@@ -366,11 +330,6 @@
   flex: 1 1 200px;
   min-width: 0;
   min-height: 88px;
-  padding: 8px 12px;
-  font-size: 0.88rem;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface-muted);
   resize: vertical;
 }
 
@@ -436,7 +395,7 @@
   min-height: 36px;
   padding: 4px 10px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--surface-muted);
   font-size: 0.86rem;
 }
@@ -486,11 +445,6 @@
 .add-alias-form input {
   flex: 1 1 200px;
   min-width: 0;
-  padding: 8px 12px;
-  font-size: 0.88rem;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface-muted);
 }
 
 .add-alias-form button {
@@ -506,7 +460,7 @@
   gap: 16px;
   padding: 16px 20px;
   border: 1px solid var(--accent);
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   background: var(--accent-soft);
   margin-bottom: 16px;
 }
@@ -541,7 +495,7 @@
   justify-content: space-between;
   padding: 10px 14px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--surface-muted);
 }
 
@@ -551,7 +505,7 @@
   align-items: center;
   padding: 2px 8px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-xs);
   font-family: inherit;
   font-size: 0.85rem;
   font-weight: 600;
