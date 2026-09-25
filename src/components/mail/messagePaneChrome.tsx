@@ -83,7 +83,7 @@ export function MessagePaneHeader({
               {mailboxMoreOpen ? (
                 <div
                   id="mailbox-more-menu"
-                  className="mailbox-more-menu"
+                  className="mailbox-more-menu app-menu"
                   role="menu"
                   aria-label={strings.mail.moreMailboxActions}
                 >

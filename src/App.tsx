@@ -23,6 +23,7 @@ import { SetupFlow } from "./components/SetupFlow";
 import { MailShell } from "./components/MailShell";
 import { SettingsDialog, type SettingsTab } from "./components/SettingsDialog";
 import { useAppStore } from "./store";
+import { useSettingsSave } from "./components/settings/useSettingsSave";
 import { applySettings } from "./settings";
 import {
   checkUpdateInteractive,
@@ -59,6 +60,8 @@ export default function App() {
   const [startupNotice, setStartupNotice] = useState<string | null>(null);
   const [ready, setReady] = useState(!inTauri());
   const loadRequest = useRef(0);
+  // Best-effort: routing already trusts the accounts, so ignore failures.
+  const { update: repairSettings } = useSettingsSave();
 
   const openSettings = useCallback((tab: SettingsTab = "general") => {
     setSettingsTab(tab);
@@ -88,6 +91,15 @@ export default function App() {
       setSettings(loadedSettings);
       setAccounts(loadedAccounts);
       applySettings(loadedSettings);
+      if (loadedAccounts.length > 0 && !loadedSettings.setupCompleted) {
+        // Accounts prove setup finished; repair a lost or reset flag. A
+        // queued patch merges onto the latest settings, never a stale copy.
+        void repairSettings(
+          { setupCompleted: true, setupStep: null },
+          undefined,
+          { quiet: true },
+        );
+      }
       setStartupNotice(startupNotice);
       if (startupNotice) setError(startupNotice);
       if (loadedAccounts.length > 0) {
@@ -102,7 +114,7 @@ export default function App() {
     } finally {
       setReady(true);
     }
-  }, [setAccounts, setError, setSettings]);
+  }, [repairSettings, setAccounts, setError, setSettings]);
 
   useEffect(() => {
     if (!inTauri()) return;
@@ -292,7 +304,7 @@ export default function App() {
         {strings.mail.settings}
       </button>
     </main>
-  ) : !settings.setupCompleted ? (
+  ) : !settings.setupCompleted && accounts.length === 0 ? (
     <main className="setup-host">
       <SetupFlow
         startupNotice={startupNotice}

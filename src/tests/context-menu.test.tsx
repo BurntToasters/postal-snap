@@ -721,7 +721,7 @@ describe("context menu items", () => {
           id: "toggle-star",
           label: strings.reader.addStar,
         }),
-        expect.objectContaining({ id: "move-mailbox:2" }),
+        expect.objectContaining({ id: "move-mailbox:5" }),
       ]),
     );
 

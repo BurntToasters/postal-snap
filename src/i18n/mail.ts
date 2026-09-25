@@ -1,6 +1,6 @@
 import type { MailboxRole, MailboxSummary } from "../types";
 
-const roleLabels: Record<MailboxRole, string> = {
+export const roleLabels: Record<MailboxRole, string> = {
   inbox: "Inbox",
   sent: "Sent",
   drafts: "Drafts",

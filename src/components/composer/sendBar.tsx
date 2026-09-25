@@ -110,7 +110,7 @@ export function SendBar({
         </button>
         {sendMenuOpen ? (
           <div
-            className="send-menu"
+            className="send-menu app-menu"
             ref={menuRef}
             role="menu"
             aria-label={strings.composer.sendOptions}

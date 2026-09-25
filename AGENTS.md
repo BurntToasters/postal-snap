@@ -3,6 +3,7 @@
 - NEVER write unit tests after you write code.
 - Highly prefer E2E tests as the sole testing mechanism. Use them to verify complex features work. At the end of E2E tests, produce a verifiable and repeatable artifact.
 - If you must test a system in isolation, FIRST write all the ways it could fail, THEN write the code.
+- Code comments may be included within edits, however they must remain concise. Long sentences or paragraphs are discouraged.
 
 # Postal Snap agent guide
 
@@ -12,7 +13,7 @@ Postal Snap is an open-source, MPL-2.0-licensed desktop email client with a calm
 
 Large readable defaults (comfortable density, adjustable text up to 200%) are an accessibility feature for low vision and eye strain, not an age-branded product tier. Never use "senior" in UI copy, docs, or fixtures.
 
-The v0.1 scope is deliberately focused:
+The v0.2 scope is deliberately focused:
 
 - Guided iCloud Mail setup using an app-specific password.
 - Secure manual IMAP/SMTP setup.
@@ -65,7 +66,7 @@ Important files:
 
 - Keep the UI minimalist but recognizably an email client.
 - Optimize for low cognitive load: large labels, clear hierarchy, plain errors, and obvious primary actions.
-- Interactive targets must be at least 44px where practical.
+- Interactive targets must be at least 44px where practical. Exception: popup menu rows (`.app-menu`) are 2.25rem so menus stay compact; they still scale with text size and support full keyboard use.
 - Preserve keyboard navigation, visible focus, screen-reader names, reduced motion, forced-colors support, and 200% text scaling.
 - Preserve right, bottom, and hidden reading-pane modes plus narrow-window mailbox drawer/back navigation.
 - System light/dark mode is the default. Postal blue is the restrained accent.
@@ -165,7 +166,7 @@ The `b` and `r` package scripts intentionally perform destructive branch cleanup
 
 ## Release status and manual gates
 
-Automated frontend, Playwright, Rust, lint, clippy, type, config, and production-build gates are established. They do not make a release ready. Final GitHub 0.1.x approval still requires external systems and real credentials:
+Automated frontend, Playwright, Rust, lint, clippy, type, config, and production-build gates are established. They do not make a release ready. Final GitHub 0.2.x approval still requires external systems and real credentials:
 
 - Online npm and RustSec audits.
 - Pinned GreenMail 2.1.11 TLS integration run (requires Docker and OpenSSL).

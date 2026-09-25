@@ -107,32 +107,19 @@ describe("first-run setup flow", () => {
     ).toBeVisible();
   });
 
-  it("marks setup complete on skip and on account connect", async () => {
+  it("marks setup complete on account connect", async () => {
     const onComplete = vi.fn(async () => undefined);
-    const { unmount } = render(
-      <SetupFlow onComplete={onComplete} startupNotice={null} />,
-    );
-    fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
-    fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
-    fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
-    fireEvent.click(screen.getByRole("button", { name: /Skip for now/i }));
-    await waitFor(() => expect(onComplete).toHaveBeenCalled());
-    expect(saveSettings).toHaveBeenCalledWith(
-      expect.objectContaining({ setupCompleted: true, setupStep: null }),
-    );
-    unmount();
-
-    resetSetupStore();
-    saveSettings.mockClear();
-    const onComplete2 = vi.fn(async () => undefined);
-    render(<SetupFlow onComplete={onComplete2} startupNotice={null} />);
+    render(<SetupFlow onComplete={onComplete} startupNotice={null} />);
     fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
     fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
     fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
     fireEvent.click(
       screen.getByRole("button", { name: /Mock connect account/i }),
     );
-    await waitFor(() => expect(onComplete2).toHaveBeenCalled());
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    expect(saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ setupCompleted: true, setupStep: null }),
+    );
   });
 
   it("shows restored-settings notice inside setup", () => {
@@ -252,7 +239,9 @@ describe("first-run setup flow", () => {
       target: { value: "dark" },
     });
     await waitFor(() =>
-      expect(screen.getByRole("alert")).toHaveTextContent("Saving…"),
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Could not save that change",
+      ),
     );
   });
 });

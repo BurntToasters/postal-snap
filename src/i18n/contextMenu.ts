@@ -9,4 +9,6 @@ export const contextMenu = {
   copy: "Copy",
   paste: "Paste",
   selectAll: "Select all",
+  moveTo: "Move to",
+  moveToFolder: (name: string) => `Move to ${name}`,
 } as const;

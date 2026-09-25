@@ -1,8 +1,11 @@
+import { useState } from "react";
 import { ShieldCheck } from "lucide-react";
 import { strings } from "../../i18n";
+import { roleLabels } from "../../i18n/mail";
 import { useAppStore } from "../../store";
 import type { AppSettings, SetupStep } from "../../types";
 import { SetupWizard } from "../SetupWizard";
+import { DisplayOptions } from "../setup/displayOptions";
 import { CloseToTraySwitch } from "../settings/closeToTray";
 
 export type SetupGo = (next: SetupStep) => void;
@@ -56,78 +59,7 @@ export function AppearanceStep({ saving, persist, go }: AppearanceStepProps) {
   return (
     <div className="setup-step">
       <p className="setup-intro">{strings.setup.appearanceIntro}</p>
-      <div className="setup-field-grid">
-        <label>
-          {strings.settings.appearance}
-          <select
-            aria-label={strings.settings.appearance}
-            value={settings.theme}
-            onChange={(event) =>
-              void persist({
-                theme: event.target.value as typeof settings.theme,
-              })
-            }
-          >
-            <option value="system">{strings.settings.autoDefault}</option>
-            <option value="light">{strings.settings.light}</option>
-            <option value="dark">{strings.settings.dark}</option>
-          </select>
-        </label>
-        <small className="setup-field-hint">
-          {strings.settings.appearanceHelp}
-        </small>
-        <label>
-          {strings.settings.spacing}
-          <select
-            aria-label={strings.settings.spacing}
-            value={settings.density}
-            onChange={(event) =>
-              void persist({
-                density: event.target.value as typeof settings.density,
-              })
-            }
-          >
-            <option value="comfortable">{strings.settings.comfortable}</option>
-            <option value="compact">{strings.settings.compact}</option>
-          </select>
-        </label>
-        <small className="setup-field-hint">
-          {strings.settings.spacingHelp}
-        </small>
-        <label>
-          {strings.settings.textSize}
-          <select
-            aria-label={strings.settings.textSize}
-            value={settings.textScale}
-            onChange={(event) =>
-              void persist({ textScale: Number(event.target.value) })
-            }
-          >
-            <option value={0.85}>{strings.settings.small}</option>
-            <option value={1}>{strings.settings.normal}</option>
-            <option value={1.15}>{strings.settings.large}</option>
-            <option value={1.3}>{strings.settings.extraLarge}</option>
-            <option value={1.5}>{strings.settings.veryLarge}</option>
-            <option value={2}>{strings.settings.largest}</option>
-          </select>
-        </label>
-        <label>
-          {strings.settings.readingPane}
-          <select
-            aria-label={strings.settings.readingPane}
-            value={settings.readingPane}
-            onChange={(event) =>
-              void persist({
-                readingPane: event.target.value as typeof settings.readingPane,
-              })
-            }
-          >
-            <option value="right">{strings.settings.paneRight}</option>
-            <option value="bottom">{strings.settings.paneBottom}</option>
-            <option value="hidden">{strings.settings.paneHidden}</option>
-          </select>
-        </label>
-      </div>
+      <DisplayOptions onChange={(patch) => void persist(patch)} />
 
       <div
         className="setup-preview"
@@ -138,9 +70,9 @@ export function AppearanceStep({ saving, persist, go }: AppearanceStepProps) {
         <div className="setup-preview-mail">
           <div className="setup-preview-folders" aria-hidden="true">
             <strong>{strings.setup.previewFolders}</strong>
-            <span className="active">Inbox</span>
-            <span>Sent</span>
-            <span>Drafts</span>
+            <span className="active">{roleLabels.inbox}</span>
+            <span>{roleLabels.sent}</span>
+            <span>{roleLabels.drafts}</span>
           </div>
           <div className="setup-preview-list" aria-hidden="true">
             <div className="setup-preview-row">
@@ -300,41 +232,44 @@ export function ComfortStep({ saving, persist, go }: ComfortStepProps) {
 }
 
 interface AccountStepProps {
-  saving: boolean;
   go: SetupGo;
-  finish: () => Promise<void>;
   handleAccountAdded: () => Promise<void>;
+  onOpenSettings?: () => void;
   error?: string;
 }
 
 export function AccountStep({
-  saving,
   go,
-  finish,
   handleAccountAdded,
+  onOpenSettings,
   error,
 }: AccountStepProps) {
+  // Once saved, going back would drop the first-sync screen and invite a
+  // duplicate account, so only "Open mailbox" remains.
+  const [accountSaved, setAccountSaved] = useState(false);
+
   return (
     <div className="setup-step setup-account-embed">
-      <p className="setup-intro">{strings.setup.accountIntro}</p>
-      <SetupWizard embedded onComplete={handleAccountAdded} />
-      <div className="setup-actions split setup-account-actions">
-        <button
-          type="button"
-          className="secondary-button"
-          onClick={() => go("comfort")}
-        >
-          {strings.setup.backToSetup}
-        </button>
-        <button
-          type="button"
-          className="secondary-button"
-          disabled={saving}
-          onClick={() => void finish()}
-        >
-          {strings.setup.skipForNow}
-        </button>
-      </div>
+      {accountSaved ? null : (
+        <p className="setup-intro">{strings.setup.accountIntro}</p>
+      )}
+      <SetupWizard
+        embedded
+        onComplete={handleAccountAdded}
+        onOpenSettings={onOpenSettings}
+        onAccountSaved={() => setAccountSaved(true)}
+      />
+      {accountSaved ? null : (
+        <div className="setup-actions setup-account-actions">
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => go("comfort")}
+          >
+            {strings.setup.backToSetup}
+          </button>
+        </div>
+      )}
       {error ? (
         <p className="setup-field-hint" role="alert">
           {error}
