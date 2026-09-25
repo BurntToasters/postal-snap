@@ -1,6 +1,6 @@
 use tauri::{AppHandle, State};
 
-use super::outbox::{deliver_outbox, deliver_outbox_locked};
+use super::outbox::deliver_outbox_locked;
 use super::{
     cleanup_unreferenced_attachments, command_result, emit_draft_change, emit_outbox_change,
     prepare_owned_compose, release_attachment_tokens, resolve_draft_files, wake, AppState,
@@ -179,7 +179,9 @@ pub async fn send_message(
         &prepared.bytes,
         None,
     )?;
-    command_result(deliver_outbox_locked(&outbox_id, &draft.account_id, &app, &state).await)
+    command_result(
+        deliver_outbox_locked(&outbox_id, &draft.account_id, "queued", &app, &state).await,
+    )
 }
 
 #[tauri::command]
@@ -189,11 +191,28 @@ pub async fn send_scheduled_outbox(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<SendOutcome> {
-    let (_, outbox_state) = state.db.outbox(&outbox_id, &account_id)?;
-    if outbox_state != "scheduled" {
-        return Err("Only a held message can be sent early.".into());
-    }
     let account = state.db.account(&account_id)?;
+    // The account worker delivers due messages on its own timer; the window's
+    // undo-send timer can ask at the same moment. Whichever arrives second
+    // sees the result here instead of sending again.
+    let _guard = state.lock_account(&account_id).await?;
+    let outbox_state = match state.db.outbox(&outbox_id, &account_id) {
+        Ok((_, outbox_state)) => outbox_state,
+        Err(_) => {
+            return Ok(SendOutcome {
+                id: outbox_id,
+                state: "removed".into(),
+                detail: None,
+            });
+        }
+    };
+    if outbox_state != "scheduled" {
+        return Ok(SendOutcome {
+            id: outbox_id,
+            state: outbox_state,
+            detail: None,
+        });
+    }
     if account.summary.sync_state == "offline" {
         return Ok(SendOutcome {
             id: outbox_id,
@@ -201,5 +220,5 @@ pub async fn send_scheduled_outbox(
             detail: Some("Waiting for a secure mail connection.".into()),
         });
     }
-    command_result(deliver_outbox(&outbox_id, &account_id, &app, &state).await)
+    command_result(deliver_outbox_locked(&outbox_id, &account_id, "scheduled", &app, &state).await)
 }

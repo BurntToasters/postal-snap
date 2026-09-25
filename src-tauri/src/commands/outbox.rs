@@ -104,7 +104,16 @@ pub async fn retry_outbox(
     if outbox_state != "needs_attention" {
         return Err("Only messages needing attention can be retried.".into());
     }
-    command_result(deliver_outbox_locked(&outbox_id, &draft.account_id, &app, &state).await)
+    command_result(
+        deliver_outbox_locked(
+            &outbox_id,
+            &draft.account_id,
+            "needs_attention",
+            &app,
+            &state,
+        )
+        .await,
+    )
 }
 
 #[tauri::command]
@@ -122,24 +131,13 @@ pub async fn retry_sent_copy(
     command_result(retry_sent_copy_locked(&outbox_id, &account_id, &app, &state).await)
 }
 
-pub(crate) async fn deliver_outbox(
-    outbox_id: &str,
-    account_id: &str,
-    app: &AppHandle,
-    state: &AppState,
-) -> Result<SendOutcome, String> {
-    let _guard = match state.lock_account(account_id).await {
-        Ok(guard) => guard,
-        Err(error) => {
-            return outbox_preparation_failed(outbox_id, account_id, app, state, error);
-        }
-    };
-    deliver_outbox_locked(outbox_id, account_id, app, state).await
-}
-
+/// Deliver one outbox row. The caller holds the account lock and checked,
+/// under that lock, that the row is in `from_state`; the claim fails if it
+/// is not.
 pub(crate) async fn deliver_outbox_locked(
     outbox_id: &str,
     account_id: &str,
+    from_state: &str,
     app: &AppHandle,
     state: &AppState,
 ) -> Result<SendOutcome, String> {
@@ -202,7 +200,10 @@ pub(crate) async fn deliver_outbox_locked(
             return outbox_preparation_failed(outbox_id, account_id, app, state, error);
         }
     };
-    if !state.db.claim_outbox_delivery(outbox_id, account_id)? {
+    if !state
+        .db
+        .claim_outbox_delivery(outbox_id, account_id, from_state)?
+    {
         return Err("This message is already sending.".into());
     }
     match mail::send_prepared(&account, &password, &draft, &mime_bytes).await {

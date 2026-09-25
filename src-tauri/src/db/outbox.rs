@@ -469,7 +469,19 @@ impl Database {
             .map_err(db_error)
     }
 
-    pub fn claim_outbox_delivery(&self, id: &str, account_id: &str) -> Result<bool, String> {
+    /// Move one row from `from_state` to `sending`. `from_state` must be the
+    /// state the caller checked under the account lock: accepting any
+    /// sendable state would let a stale caller resend a message another
+    /// delivery just left in `needs_attention`.
+    pub fn claim_outbox_delivery(
+        &self,
+        id: &str,
+        account_id: &str,
+        from_state: &str,
+    ) -> Result<bool, String> {
+        if !matches!(from_state, "queued" | "scheduled" | "needs_attention") {
+            return Ok(false);
+        }
         let conn = self.conn()?;
         // The database runs with synchronous=NORMAL for sync throughput. This
         // one commit must survive power loss: rolling back to `queued` would
@@ -478,8 +490,8 @@ impl Database {
             .map_err(db_error)?;
         let changed = conn.execute(
             "UPDATE outbox SET state='sending',attempt_started_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP
-                 WHERE id=?1 AND account_id=?2 AND state IN ('queued','scheduled','needs_attention')",
-            params![id, account_id],
+                 WHERE id=?1 AND account_id=?2 AND state=?3",
+            params![id, account_id, from_state],
         );
         let restored = conn.pragma_update(None, "synchronous", "NORMAL");
         let changed = changed.map_err(db_error)?;

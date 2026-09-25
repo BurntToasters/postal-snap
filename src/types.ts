@@ -229,7 +229,13 @@ export interface FilterRule {
 export interface SendOutcome {
   id: string;
   state:
-    "queued" | "sent" | "sent_copy_pending" | "needs_attention" | "scheduled";
+    | "queued"
+    | "sent"
+    | "sent_copy_pending"
+    | "needs_attention"
+    | "scheduled"
+    | "sending"
+    | "removed";
   detail?: string | null;
 }
 

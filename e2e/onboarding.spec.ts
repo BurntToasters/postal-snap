@@ -64,6 +64,41 @@ test("explains unsupported Gmail without showing a dead-end password form", asyn
   ).toHaveCount(0);
 });
 
+test("drops discovered servers when the address domain changes", async ({
+  page,
+}) => {
+  await reachAccountSetup(page);
+  await page.getByRole("button", { name: /Other email/i }).click();
+  const emailField = page.getByLabel("Email address");
+  const imapHost = page
+    .getByRole("group", { name: "Incoming IMAP" })
+    .getByLabel("Server");
+  await emailField.fill("reader@autodetect.example");
+  await page.getByRole("button", { name: "Find settings" }).click();
+  await expect(imapHost).toHaveValue("imap.autodetect.example");
+
+  await emailField.fill("other@autodetect.example");
+  await expect(imapHost).toHaveValue("imap.autodetect.example");
+
+  await emailField.fill("reader@fastmail.com");
+  await expect(imapHost).toHaveValue("");
+  await expect(
+    page.getByRole("heading", { name: "Connect autodetect.example" }),
+  ).toHaveCount(0);
+
+  await emailField.fill("reader@autodetect.example");
+  await page.getByRole("button", { name: "Find settings" }).click();
+  await expect(imapHost).toHaveValue("imap.autodetect.example");
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("button", { name: /Other email/i }).click();
+  await expect(imapHost).toHaveValue("");
+
+  await page.screenshot({
+    path: "test-results/onboarding-discovery-reset.png",
+    fullPage: true,
+  });
+});
+
 test("uses domain autoconfig and falls back to editable manual settings", async ({
   page,
 }) => {

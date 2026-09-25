@@ -191,14 +191,19 @@ async fn yield_point<H: SyncHooks>(
     lease: Lease,
     hooks: &mut H,
     account: &AccountRecord,
-    password: &str,
+    _password: &str,
 ) -> Result<Lease, String> {
     if !hooks.contended() {
         return Ok(lease);
     }
     lease.release();
     hooks.yield_account().await;
-    pool::checkout(account, password).await
+    // Removal and password changes run under the account lock while we
+    // yielded. Re-read the vault so this pass cannot reconnect with a
+    // password the user just deleted or replaced.
+    let current = crate::credentials::load(&account.summary.id)
+        .map_err(|_| "This account is no longer available.".to_string())?;
+    pool::checkout(account, &current).await
 }
 
 /// Per-pass download allowance shared by every folder.

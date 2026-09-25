@@ -2198,6 +2198,42 @@ mod tests {
     }
 
     #[test]
+    fn outbox_claim_requires_the_checked_state() {
+        // W12: a caller that checked "scheduled" must not send a row that
+        // another delivery already left needing attention.
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let id = db
+            .queue_outbox(
+                &draft(&account.summary.id),
+                "scheduled",
+                None,
+                "",
+                b"",
+                Some("2000-01-01T00:00:00Z"),
+            )
+            .unwrap();
+        db.set_outbox_state(&id, &account.summary.id, "needs_attention", None)
+            .unwrap();
+        assert!(!db
+            .claim_outbox_delivery(&id, &account.summary.id, "scheduled")
+            .unwrap());
+        assert!(!db
+            .claim_outbox_delivery(&id, &account.summary.id, "queued")
+            .unwrap());
+        assert!(!db
+            .claim_outbox_delivery(&id, "other-account", "needs_attention")
+            .unwrap());
+        assert!(db
+            .claim_outbox_delivery(&id, &account.summary.id, "needs_attention")
+            .unwrap());
+        assert!(!db
+            .claim_outbox_delivery(&id, &account.summary.id, "needs_attention")
+            .unwrap());
+    }
+
+    #[test]
     fn snoozed_messages_hide_until_due_then_return() {
         let db = Database::memory();
         let account = account();

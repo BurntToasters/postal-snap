@@ -44,6 +44,16 @@ interface Props {
   embedded?: boolean;
 }
 
+function emailDomain(address: string) {
+  const at = address.lastIndexOf("@");
+  return at < 0
+    ? ""
+    : address
+        .slice(at + 1)
+        .trim()
+        .toLowerCase();
+}
+
 const iCloudImapSummary = {
   host: "imap.mail.me.com",
   port: 993,
@@ -65,7 +75,12 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
   const [imap, setImap] = useState(emptyManualImap);
   const [smtp, setSmtp] = useState(emptyManualSmtp);
   const [discovery, setDiscovery] = useState<MailSettingsDiscovery>();
+  // Domain whose discovered servers fill the IMAP/SMTP fields. A password must
+  // never go to servers found for a different (for example mistyped) domain.
+  const [discoveredDomain, setDiscoveredDomain] = useState<string>();
   const [discovering, setDiscovering] = useState(false);
+  const emailRef = useRef(email);
+  emailRef.current = email;
   const [cacheMode, setCacheMode] = useState<"recent" | "full">("recent");
   const [savedAccount, setSavedAccount] = useState<AccountSummary>();
   const [syncProgress, setSyncProgress] = useState<SyncProgress>();
@@ -156,6 +171,14 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
     previousProviderRef.current = provider;
   }, [provider]);
 
+  function forgetDiscoveredServers(username: string) {
+    setDiscovery(undefined);
+    if (discoveredDomain === undefined) return;
+    setDiscoveredDomain(undefined);
+    setImap(emptyManualImap(username));
+    setSmtp(emptyManualSmtp(username));
+  }
+
   function chooseProvider(next: ProviderKind) {
     const username = email.trim();
     setProvider(next);
@@ -163,8 +186,8 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
     setShowPassword(false);
     setStatus(undefined);
     setHelpLinkNotice(undefined);
-    setDiscovery(undefined);
-    if (next === "manual") {
+    forgetDiscoveredServers(username);
+    if (next === "manual" && discoveredDomain === undefined) {
       setImap((current) =>
         current.host ? current : emptyManualImap(username),
       );
@@ -176,7 +199,7 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
 
   function returnToProviderPicker() {
     setProvider(undefined);
-    setDiscovery(undefined);
+    forgetDiscoveredServers(email.trim());
     setPassword("");
     setShowPassword(false);
     setStatus(undefined);
@@ -188,18 +211,22 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
     setDiscovering(true);
     setStatus(undefined);
     setDiscovery(undefined);
+    const query = email.trim();
     try {
-      const found = await api.discoverMailSettings(email.trim());
+      const found = await api.discoverMailSettings(query);
+      if (emailRef.current.trim() !== query) return;
       setDiscovery(found);
       if (found.status === "found") {
+        setDiscoveredDomain(emailDomain(query));
         setImap(found.imap);
         setSmtp(found.smtp);
-      } else if (found.status === "notFound") {
-        const username = email.trim();
-        setImap(emptyManualImap(username));
-        setSmtp(emptyManualSmtp(username));
+      } else {
+        setDiscoveredDomain(undefined);
+        setImap(emptyManualImap(query));
+        setSmtp(emptyManualSmtp(query));
       }
     } catch (cause) {
+      if (emailRef.current.trim() !== query) return;
       const described = describeSetupError(cause, "manual");
       setStatus({
         kind: "error",
@@ -216,6 +243,13 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
     setEmail(value);
     if (provider !== "manual") return;
     const next = value.trim();
+    if (
+      discoveredDomain !== undefined &&
+      emailDomain(next) !== discoveredDomain
+    ) {
+      forgetDiscoveredServers(next);
+      return;
+    }
     setImap((server) => ({
       ...server,
       username:
@@ -251,6 +285,13 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!provider || testing) return;
+    if (
+      discovery?.status === "found" &&
+      emailDomain(normalizedEmail) !== discoveredDomain
+    ) {
+      forgetDiscoveredServers(normalizedEmail);
+      return;
+    }
     setTesting(true);
     setStatus({
       kind: "working",
@@ -711,7 +752,8 @@ export function SetupWizard({ onComplete, onOpenSettings, embedded }: Props) {
                 )}
           </p>
         ) : null}
-        {provider === "icloud" ? (
+        {provider === "icloud" ||
+        foundProvider?.accountProvider === "icloud" ? (
           <div
             className="server-summary"
             aria-label={strings.setup.icloudServers}

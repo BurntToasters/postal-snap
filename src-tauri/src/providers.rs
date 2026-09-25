@@ -132,6 +132,19 @@ const PRESETS: &[ProviderPreset] = &[
         id: "zoho",
         name: "Zoho Mail Europe",
         domains: &["zoho.eu", "zohomail.eu"],
+        mx_suffixes: &[],
+        imap_host: "imap.zoho.eu",
+        imap_port: 993,
+        imap_tls: TlsMode::Tls,
+        smtp_host: "smtp.zoho.eu",
+        smtp_port: 465,
+        smtp_tls: TlsMode::Tls,
+        app_password_url: ZOHO_PASSWORD_URL,
+    },
+    ProviderPreset {
+        id: "zoho",
+        name: "Zoho Mail Europe",
+        domains: &[],
         mx_suffixes: &["zoho.eu"],
         imap_host: "imappro.zoho.eu",
         imap_port: 993,
@@ -145,6 +158,19 @@ const PRESETS: &[ProviderPreset] = &[
         id: "zoho",
         name: "Zoho Mail India",
         domains: &["zoho.in", "zohomail.in"],
+        mx_suffixes: &[],
+        imap_host: "imap.zoho.in",
+        imap_port: 993,
+        imap_tls: TlsMode::Tls,
+        smtp_host: "smtp.zoho.in",
+        smtp_port: 465,
+        smtp_tls: TlsMode::Tls,
+        app_password_url: ZOHO_PASSWORD_URL,
+    },
+    ProviderPreset {
+        id: "zoho",
+        name: "Zoho Mail India",
+        domains: &[],
         mx_suffixes: &["zoho.in"],
         imap_host: "imappro.zoho.in",
         imap_port: 993,
@@ -283,10 +309,10 @@ pub async fn discover_mail_settings(email: String) -> Result<MailSettingsDiscove
         return Ok(discovery_from_preset(preset, &email, "mx"));
     }
 
-    for url in [
-        format!("https://autoconfig.{domain}/mail/config-v1.1.xml"),
-        format!("https://{domain}/.well-known/autoconfig/mail/config-v1.1.xml"),
-    ] {
+    let Ok(urls) = autoconfig_urls(&domain) else {
+        return Ok(MailSettingsDiscovery::NotFound { domain });
+    };
+    for url in urls {
         let Ok(document) = fetch_autoconfig(&url).await else {
             continue;
         };
@@ -315,11 +341,60 @@ fn validate_discovery_email(raw: &str) -> Result<(String, String), String> {
     let (_, domain) = email
         .rsplit_once('@')
         .ok_or_else(|| "Enter a valid email address.".to_string())?;
-    if domain.len() > 253 || domain.is_empty() || domain.parse::<std::net::IpAddr>().is_ok() {
+    let domain = domain.trim_end_matches('.').to_string();
+    // The domain is interpolated into autoconfig URLs and shown as the
+    // provider name, so only plain public DNS names are allowed.
+    if !is_public_dns_name(&domain) {
         return Err("Enter a valid email address.".into());
     }
-    let domain = domain.trim_end_matches('.').to_string();
     Ok((email, domain))
+}
+
+fn autoconfig_urls(domain: &str) -> Result<[String; 2], String> {
+    Ok([
+        public_https_url(&format!("autoconfig.{domain}"), "/mail/config-v1.1.xml")?,
+        public_https_url(domain, "/.well-known/autoconfig/mail/config-v1.1.xml")?,
+    ])
+}
+
+fn public_https_url(host: &str, path: &str) -> Result<String, String> {
+    let mut url = url::Url::parse("https://invalid.example/")
+        .map_err(|_| "Could not build a settings address.".to_string())?;
+    url.set_host(Some(host))
+        .map_err(|_| "Enter a valid email address.".to_string())?;
+    url.set_path(path);
+    if url.scheme() != "https" || url.host_str() != Some(host) {
+        return Err("Enter a valid email address.".into());
+    }
+    Ok(url.into())
+}
+
+/// ASCII letters, digits, and inner hyphens; at least two labels; a
+/// non-numeric top-level label; no single-label or local-only names.
+fn is_public_dns_name(name: &str) -> bool {
+    if name.is_empty() || name.len() > 253 {
+        return false;
+    }
+    let labels: Vec<&str> = name.split('.').collect();
+    if labels.len() < 2 {
+        return false;
+    }
+    let valid_labels = labels.iter().all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+            && label
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    });
+    let top = labels[labels.len() - 1];
+    valid_labels
+        && !top.bytes().all(|byte| byte.is_ascii_digit())
+        && !matches!(
+            top.to_ascii_lowercase().as_str(),
+            "localhost" | "local" | "internal" | "lan" | "home" | "corp" | "arpa"
+        )
 }
 
 fn match_preset(domain: &str) -> Option<&'static ProviderPreset> {
@@ -366,10 +441,13 @@ async fn lookup_mx_preset(domain: &str) -> Result<Option<&'static ProviderPreset
         .map_err(|_| "Could not read system DNS settings.".to_string())?
         .build()
         .map_err(|_| "Could not start DNS lookup.".to_string())?;
-    let lookup = tokio::time::timeout(Duration::from_secs(5), resolver.mx_lookup(domain))
-        .await
-        .map_err(|_| "Mail provider lookup timed out.".to_string())?
-        .map_err(|_| "Mail provider lookup failed.".to_string())?;
+    let lookup = tokio::time::timeout(
+        Duration::from_secs(5),
+        resolver.mx_lookup(format!("{domain}.")),
+    )
+    .await
+    .map_err(|_| "Mail provider lookup timed out.".to_string())?
+    .map_err(|_| "Mail provider lookup failed.".to_string())?;
     let hosts = lookup
         .answers()
         .iter()
@@ -564,6 +642,9 @@ fn secure_server(server: ParsedServer, email: &str) -> Result<ServerConfig, Stri
         tls_mode,
         username,
     };
+    if !is_public_dns_name(&config.host) {
+        return Err("The mail settings point to an unsupported server name.".into());
+    }
     validate_server(&config)?;
     Ok(config)
 }
@@ -654,8 +735,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        match_preset, parse_autoconfig, preset_for_mx_hosts,
-        validate_autoconfig_target_with_resolver,
+        autoconfig_urls, match_preset, parse_autoconfig, preset_for_mx_hosts,
+        validate_autoconfig_target_with_resolver, validate_discovery_email,
     };
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
@@ -677,6 +758,14 @@ mod tests {
         assert_eq!(
             match_preset("fastmail.com.example").map(|preset| preset.id),
             None
+        );
+        assert_eq!(
+            match_preset("zoho.eu").map(|preset| preset.imap_host),
+            Some("imap.zoho.eu")
+        );
+        assert_eq!(
+            match_preset("zoho.in").map(|preset| preset.imap_host),
+            Some("imap.zoho.in")
         );
     }
 
@@ -708,6 +797,64 @@ mod tests {
     }
 
     #[test]
+    fn discovery_rejects_domains_that_alter_the_url() {
+        for email in [
+            "me@example.com/x?y",
+            "me@attacker.example/x.victim.com",
+            "me@example.com#frag",
+            "me@exa%2emple.com",
+            "me@localhost",
+            "me@[127.0.0.1]",
+            "me@example.123",
+            "me@-bad.example",
+        ] {
+            assert!(validate_discovery_email(email).is_err(), "{email}");
+        }
+        assert_eq!(
+            validate_discovery_email(" Reader@Mail.Example.COM ").unwrap(),
+            (
+                "reader@mail.example.com".to_string(),
+                "mail.example.com".to_string()
+            )
+        );
+        let [autoconfig, well_known] = autoconfig_urls("mail.example.com").unwrap();
+        assert_eq!(
+            autoconfig,
+            "https://autoconfig.mail.example.com/mail/config-v1.1.xml"
+        );
+        assert_eq!(
+            well_known,
+            "https://mail.example.com/.well-known/autoconfig/mail/config-v1.1.xml"
+        );
+    }
+
+    #[test]
+    fn autoconfig_rejects_internal_or_lookalike_hosts() {
+        for host in [
+            "127.0.0.1",
+            "192.168.1.1",
+            "[::1]",
+            "localhost",
+            "mail",
+            "imap.corp.internal",
+            "printer.local",
+            "imap.gm\u{0430}il.com",
+        ] {
+            let xml = format!(
+                r#"<?xml version="1.0"?>
+          <clientConfig><emailProvider id="example.test">
+            <incomingServer type="imap"><hostname>{host}</hostname><port>993</port><socketType>SSL</socketType><authentication>password-cleartext</authentication><username>%EMAILADDRESS%</username></incomingServer>
+            <outgoingServer type="smtp"><hostname>smtp.example.test</hostname><port>587</port><socketType>STARTTLS</socketType><authentication>password-cleartext</authentication><username>%EMAILADDRESS%</username></outgoingServer>
+          </emailProvider></clientConfig>"#
+            );
+            assert!(
+                parse_autoconfig(xml.as_bytes(), "reader@example.test").is_err(),
+                "{host}"
+            );
+        }
+    }
+
+    #[test]
     fn autoconfig_rejects_oversized_documents() {
         let oversized = vec![b' '; 64 * 1024 + 1];
         assert!(parse_autoconfig(&oversized, "reader@example.test").is_err());
@@ -724,6 +871,14 @@ mod tests {
             preset_for_mx_hosts(&["10 mail.unknown-provider.example.".into()])
                 .map(|preset| preset.id),
             None
+        );
+        assert_eq!(
+            preset_for_mx_hosts(&["10 mx.zoho.eu.".into()]).map(|preset| preset.imap_host),
+            Some("imappro.zoho.eu")
+        );
+        assert_eq!(
+            preset_for_mx_hosts(&["10 mx.zoho.in.".into()]).map(|preset| preset.imap_host),
+            Some("imappro.zoho.in")
         );
     }
 
