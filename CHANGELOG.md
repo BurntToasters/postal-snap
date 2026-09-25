@@ -28,6 +28,8 @@ Postal Snap is a calm, accessible desktop email client. Mail stays on your compu
 - **FIX - No duplicate account after connecting:** Once an account is saved during first-run setup, the Back button is hidden so the account cannot be added twice. The unused "Skip for now" button is removed, and Settings can be opened from the account step.
 - **UI - Display settings during setup:** The account setup screen now includes Appearance (Auto, Light, Dark), interface spacing (Comfortable, Compact), text size, and reading pane. Changes apply right away.
 - **UI - Compact menus with icons:** Right-click menus are more compact and show an icon beside every action. Move targets are grouped under "Move to", and Archive, Junk, and Trash no longer appear twice. The mailbox, reader, send, and account menus now share the same look.
+- **FIX - Folder names in move lists:** Move menus show the full folder path, so nested folders with the same name (like Work / Receipts and Personal / Receipts) stay distinct.
+- **FIX - Large text:** Menus widen and wrap with text size instead of cutting labels off, and their icons scale too. Text size gains an "Even larger (175%)" choice, matching the keyboard text-size steps.
 - **UI - Menu keyboard support:** In right-click menus, typing a letter jumps to the matching action, Tab closes the menu and returns focus, and menus close when the window is resized or loses focus.
 - **UI - Calmer settings and setup:** Settings, setup, and dialogs drop their gradients for flat surfaces. Buttons no longer shift on hover, folder names match the sidebar everywhere, and corner radii and heading sizes are consistent.
 

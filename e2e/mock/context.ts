@@ -54,6 +54,9 @@ export interface MockState {
   failWindowAction: boolean;
   savedSettings: unknown[];
   added: boolean;
+  accountRemoved: boolean;
+  releaseAddAccount?: () => void;
+  accountLoads: number;
   discarded: boolean;
   snoozed: boolean;
   sentDraft: unknown;

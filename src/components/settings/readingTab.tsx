@@ -1,4 +1,5 @@
 import { strings } from "../../i18n";
+import { READING_PANE_CHOICES, TEXT_SCALE_CHOICES } from "./displayChoices";
 import { useAppStore } from "../../store";
 import type { AppSettings } from "../../types";
 import { SettingRow, SettingsPanel } from "./primitives";
@@ -26,9 +27,11 @@ export function ReadingTab({ update }: ReadingTabProps) {
             })
           }
         >
-          <option value="right">{strings.settings.paneRight}</option>
-          <option value="bottom">{strings.settings.paneBottom}</option>
-          <option value="hidden">{strings.settings.paneHidden}</option>
+          {READING_PANE_CHOICES.map((choice) => (
+            <option key={choice.value} value={choice.value}>
+              {choice.label}
+            </option>
+          ))}
         </select>
       </SettingRow>
       <SettingRow
@@ -42,12 +45,11 @@ export function ReadingTab({ update }: ReadingTabProps) {
             void update({ textScale: Number(event.target.value) })
           }
         >
-          <option value={0.85}>{strings.settings.small}</option>
-          <option value={1}>{strings.settings.normal}</option>
-          <option value={1.15}>{strings.settings.large}</option>
-          <option value={1.3}>{strings.settings.extraLarge}</option>
-          <option value={1.5}>{strings.settings.veryLarge}</option>
-          <option value={2}>{strings.settings.largest}</option>
+          {TEXT_SCALE_CHOICES.map((choice) => (
+            <option key={choice.value} value={choice.value}>
+              {choice.label}
+            </option>
+          ))}
         </select>
       </SettingRow>
       <label className="switch-row">

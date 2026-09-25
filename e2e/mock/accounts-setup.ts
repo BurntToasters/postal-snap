@@ -12,6 +12,7 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
     const { account, accounts, params } = mock;
     Object.assign(mock.handlers, {
       list_accounts() {
+        state.accountLoads += 1;
         if (location.search.includes("startupFail")) {
           throw {
             code: "localStorageFailed",
@@ -20,6 +21,7 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
             retryable: true,
           };
         }
+        if (state.accountRemoved) return [];
         if (
           (location.search.includes("firstRun") || params.has("noAccounts")) &&
           !state.added
@@ -128,7 +130,7 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
         state.rules = state.rules.filter((rule) => rule.id !== args.ruleId);
         return undefined;
       },
-      add_account(args: Record<string, unknown>) {
+      async add_account(args: Record<string, unknown>) {
         if (location.search.includes("setupFail")) {
           throw {
             code: "authenticationFailed",
@@ -137,7 +139,13 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
           };
         }
         state.added = true;
+        state.accountRemoved = false;
         state.setupRequest = args.request;
+        if (params.has("delayAddAccount")) {
+          await new Promise<void>((resolve) => {
+            state.releaseAddAccount = resolve;
+          });
+        }
         return account;
       },
       get_sync_progress() {
@@ -168,6 +176,10 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
         return params.has("removalImpact")
           ? { unsentMessages: 2, unsyncedDrafts: 1, queuedChanges: 3 }
           : { unsentMessages: 0, unsyncedDrafts: 0, queuedChanges: 0 };
+      },
+      remove_account() {
+        state.accountRemoved = true;
+        return { cleanupPending: false };
       },
       discover_account_aliases() {
         (account as { aliases?: string[] }).aliases = [

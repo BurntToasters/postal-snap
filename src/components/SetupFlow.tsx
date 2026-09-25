@@ -69,8 +69,8 @@ export function SetupFlow({
   }
 
   async function handleAccountAdded() {
-    // Account already saved by SetupWizard. Mark first-run done, then reload.
-    await update({ setupCompleted: true, setupStep: null });
+    // App reloads accounts and repairs setupCompleted once an account exists.
+    // Setting the flag here first would briefly show the standalone wizard.
     await onComplete();
   }
 

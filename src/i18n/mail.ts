@@ -22,6 +22,22 @@ export function folderLabel(mailbox: MailboxSummary): string {
   return name;
 }
 
+// Flat lists (move menus) need the parent path so "Work/Receipts" and
+// "Personal/Receipts" stay distinguishable.
+export function folderPathLabel(mailbox: MailboxSummary): string {
+  const name = mailbox.displayName || mailbox.name;
+  const segments = mailbox.delimiter
+    ? name.split(mailbox.delimiter).filter(Boolean)
+    : [name];
+  const roleLabel = roleLabels[mailbox.role];
+  if (roleLabel) {
+    return segments.length > 1
+      ? [...segments.slice(0, -1), roleLabel].join(" / ")
+      : roleLabel;
+  }
+  return mailbox.delimiter ? segments.join(" / ") : name;
+}
+
 // English source catalog namespace: mail section.
 // Split from src/i18n.ts with zero text changes.
 export const mail = {

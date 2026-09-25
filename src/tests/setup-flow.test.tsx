@@ -107,7 +107,7 @@ describe("first-run setup flow", () => {
     ).toBeVisible();
   });
 
-  it("marks setup complete on account connect", async () => {
+  it("hands off to the app after account connect", async () => {
     const onComplete = vi.fn(async () => undefined);
     render(<SetupFlow onComplete={onComplete} startupNotice={null} />);
     fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
@@ -117,8 +117,10 @@ describe("first-run setup flow", () => {
       screen.getByRole("button", { name: /Mock connect account/i }),
     );
     await waitFor(() => expect(onComplete).toHaveBeenCalled());
-    expect(saveSettings).toHaveBeenCalledWith(
-      expect.objectContaining({ setupCompleted: true, setupStep: null }),
+    // App repairs setupCompleted after reloading accounts; marking it here
+    // first would flash the standalone wizard.
+    expect(saveSettings).not.toHaveBeenCalledWith(
+      expect.objectContaining({ setupCompleted: true }),
     );
   });
 
