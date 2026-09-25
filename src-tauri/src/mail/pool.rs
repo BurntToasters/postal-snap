@@ -35,7 +35,30 @@ struct Parked {
     parked_at: Instant,
 }
 
-static POOL: LazyLock<Mutex<HashMap<String, Parked>>> = LazyLock::new(Default::default);
+struct Pool {
+    parked: HashMap<String, Parked>,
+    generation: HashMap<String, u64>,
+}
+
+static POOL: LazyLock<Mutex<Pool>> = LazyLock::new(|| {
+    Mutex::new(Pool {
+        parked: HashMap::new(),
+        generation: HashMap::new(),
+    })
+});
+
+#[cfg(test)]
+fn generation_of(account_id: &str) -> u64 {
+    POOL.lock()
+        .ok()
+        .and_then(|pool| pool.generation.get(account_id).copied())
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+fn can_repark(account_id: &str, generation: u64) -> bool {
+    generation_of(account_id) == generation
+}
 
 /// Exclusive use of an account's IMAP session. Call [`Lease::release`] after
 /// a successful operation to park it for the next caller; dropping the lease
@@ -44,6 +67,7 @@ pub struct Lease {
     account_id: String,
     server: String,
     session: Option<ImapSession>,
+    generation: u64,
     pub capabilities: Capabilities,
 }
 
@@ -53,7 +77,11 @@ impl Lease {
             return;
         };
         if let Ok(mut pool) = POOL.lock() {
-            pool.insert(
+            let current = pool.generation.get(&self.account_id).copied().unwrap_or(0);
+            if current != self.generation {
+                return;
+            }
+            pool.parked.insert(
                 self.account_id.clone(),
                 Parked {
                     session,
@@ -113,10 +141,13 @@ fn server_key(account: &AccountRecord) -> String {
 pub async fn checkout(account: &AccountRecord, password: &str) -> Result<Lease, String> {
     let account_id = account.summary.id.clone();
     let server = server_key(account);
-    let parked = POOL
-        .lock()
-        .ok()
-        .and_then(|mut pool| pool.remove(&account_id));
+    let (parked, generation) = match POOL.lock() {
+        Ok(mut pool) => {
+            let generation = pool.generation.get(&account_id).copied().unwrap_or(0);
+            (pool.parked.remove(&account_id), generation)
+        }
+        Err(_) => (None, 0),
+    };
     if let Some(mut parked) = parked {
         let age = parked.parked_at.elapsed();
         if parked.server == server && age < MAX_PARKED {
@@ -130,6 +161,7 @@ pub async fn checkout(account: &AccountRecord, password: &str) -> Result<Lease, 
                     account_id,
                     server,
                     session: Some(parked.session),
+                    generation,
                     capabilities: parked.capabilities,
                 });
             }
@@ -148,6 +180,7 @@ pub async fn checkout(account: &AccountRecord, password: &str) -> Result<Lease, 
         account_id,
         server,
         session: Some(session),
+        generation,
         capabilities,
     })
 }
@@ -156,6 +189,25 @@ pub async fn checkout(account: &AccountRecord, password: &str) -> Result<Lease, 
 /// removed, or its server settings were edited.
 pub fn forget(account_id: &str) {
     if let Ok(mut pool) = POOL.lock() {
-        pool.remove(account_id);
+        pool.parked.remove(account_id);
+        let generation = pool.generation.entry(account_id.to_string()).or_insert(0);
+        *generation = generation.saturating_add(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::forget;
+
+    #[test]
+    fn forget_invalidates_outstanding_lease_generation() {
+        // W10: an in-flight lease must not re-park after forget, and a later
+        // checkout must be allowed to park under the new generation.
+        let id = "acc-forget-generation";
+        let gen = super::generation_of(id);
+        assert!(super::can_repark(id, gen));
+        forget(id);
+        assert!(!super::can_repark(id, gen));
+        assert!(super::can_repark(id, super::generation_of(id)));
     }
 }

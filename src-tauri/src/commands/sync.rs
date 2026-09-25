@@ -696,13 +696,13 @@ pub(crate) async fn replay_outbox_locked(account_id: &str, app: &AppHandle, stat
     }
     if let Ok(ids) = state.db.outbox_ids_in_state(account_id, &["queued"]) {
         for id in ids {
-            let _ = deliver_outbox_locked(&id, account_id, app, state).await;
+            let _ = deliver_outbox_locked(&id, account_id, "queued", app, state).await;
         }
     }
     let now = chrono::Utc::now().to_rfc3339();
     if let Ok(ids) = state.db.scheduled_due_outbox_ids(account_id, &now) {
         for id in ids {
-            let _ = deliver_outbox_locked(&id, account_id, app, state).await;
+            let _ = deliver_outbox_locked(&id, account_id, "scheduled", app, state).await;
         }
     }
 }
