@@ -2,12 +2,14 @@
 //! Linux ignores the preference and still quits when the window closes.
 
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(any(target_os = "macos", test))]
 use std::time::Duration;
 
 use tauri::{AppHandle, Manager, Runtime, WebviewWindow};
 
 /// A background-update restart is itself an app activation; ignore
 /// activations this soon after starting hidden.
+#[cfg(any(target_os = "macos", test))]
 const RELAUNCH_ACTIVATION_GRACE: Duration = Duration::from_secs(10);
 static LAUNCHED_HIDDEN: AtomicBool = AtomicBool::new(false);
 
@@ -21,6 +23,7 @@ pub fn is_hidden_to_tray() -> bool {
 
 /// macOS activates the app when its notification is clicked. While closed to
 /// the menu bar there is no window or Dock icon, so open the window.
+#[cfg(any(target_os = "macos", test))]
 pub fn should_show_on_activation(
     hidden_to_tray: bool,
     launched_hidden: bool,
