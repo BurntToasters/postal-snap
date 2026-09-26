@@ -14,25 +14,33 @@ export function seedRecipients(
   const message = seed.sourceMessage;
   if (!message) return "";
   if (seed.composeMode === "forward") return "";
-  const replyAddress = message.replyTo ?? message.senderAddress;
-  if (field === "to") return replyAddress ?? message.to.join(", ");
-  const ownAddresses = [accountEmail, ...aliases];
-  if (seed.composeMode !== "replyAll") return "";
-  const seen = new Set<string>();
-  return [...message.to, ...message.cc]
-    .filter(
-      (address) =>
-        ![...ownAddresses, message.senderAddress, replyAddress].some(
-          (excluded) => excluded?.toLowerCase() === address.toLowerCase(),
-        ),
-    )
-    .filter((address) => {
+  const ownAddresses = [accountEmail, ...aliases].map((a) => a.toLowerCase());
+  const isOwn = (address?: string | null) =>
+    Boolean(address && ownAddresses.includes(address.toLowerCase()));
+  const unique = (addresses: string[], excluded: Array<string | null>) => {
+    const seen = new Set(excluded.filter(Boolean).map((a) => a!.toLowerCase()));
+    return addresses.filter((address) => {
       const key = address.toLowerCase();
-      if (seen.has(key)) return false;
+      if (isOwn(address) || seen.has(key)) return false;
       seen.add(key);
       return true;
-    })
-    .join(", ");
+    });
+  };
+  // A message the user sent: answer its recipients, like other clients.
+  const othersInTo = unique(message.to, []);
+  // A note to yourself falls through and replies to you.
+  if (isOwn(message.senderAddress) && othersInTo.length > 0) {
+    if (field === "to") return othersInTo.join(", ");
+    if (seed.composeMode !== "replyAll") return "";
+    return unique(message.cc, message.to).join(", ");
+  }
+  const replyAddress = message.replyTo ?? message.senderAddress;
+  if (field === "to") return replyAddress ?? message.to.join(", ");
+  if (seed.composeMode !== "replyAll") return "";
+  return unique(
+    [...message.to, ...message.cc],
+    [message.senderAddress, replyAddress ?? null],
+  ).join(", ");
 }
 
 export function seedSubject(seed?: ComposerSeed): string {
@@ -61,16 +69,40 @@ export function seedBody(seed?: ComposerSeed): string {
       : `<p>${escapeHtml(draftText ?? "").replace(/\n/g, "<br>")}</p>`;
   }
   const message = seed.sourceMessage;
-  const intro =
-    seed.composeMode === "forward"
-      ? strings.composer.forwardedMessage
-      : strings.composer.wrote(
-          message.receivedAt,
-          message.senderName ||
-            message.senderAddress ||
-            strings.composer.sender,
-        );
-  return `<p></p><p><br></p><blockquote><p><strong>${escapeHtml(intro)}</strong></p>${message.htmlBody ? sanitizeComposeHtml(message.htmlBody) : `<p>${escapeHtml(message.textBody).replace(/\n/g, "<br>")}</p>`}</blockquote>`;
+  const who =
+    message.senderName || message.senderAddress || strings.composer.sender;
+  const when = quoteDate(message.receivedAt);
+  let intro: string;
+  if (seed.composeMode === "forward") {
+    const sender =
+      message.senderName && message.senderAddress
+        ? `${message.senderName} <${message.senderAddress}>`
+        : who;
+    const rows: Array<[string, string]> = [
+      [strings.composer.forwardFrom, sender],
+      [strings.composer.forwardDate, when],
+      [strings.composer.forwardSubject, message.subject],
+      [strings.composer.forwardTo, (message.to ?? []).join(", ")],
+      [strings.composer.forwardCc, (message.cc ?? []).join(", ")],
+    ];
+    intro = `<p><strong>${escapeHtml(strings.composer.forwardedMessage)}</strong><br>${rows
+      .filter(([, value]) => value)
+      .map(([label, value]) => `${escapeHtml(label)}: ${escapeHtml(value)}`)
+      .join("<br>")}</p>`;
+  } else {
+    intro = `<p><strong>${escapeHtml(strings.composer.wrote(when, who))}</strong></p>`;
+  }
+  return `<p></p><p><br></p><blockquote>${intro}${message.htmlBody ? sanitizeComposeHtml(message.htmlBody) : `<p>${escapeHtml(message.textBody).replace(/\n/g, "<br>")}</p>`}</blockquote>`;
+}
+
+/** Readable local date for reply and forward headers. */
+export function quoteDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
 }
 
 export function seedReferences(seed?: ComposerSeed): string[] | undefined {

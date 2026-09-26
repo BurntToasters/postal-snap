@@ -11,6 +11,8 @@ import { installMockIpc } from "./mock-ipc";
 // 7. Check for Updates downloads an update but offers only OK, no restart.
 // 5. Quit with a ready update relaunches the app (Windows installer /R).
 // 6. An update relaunch replays the startup mailto: argument.
+// 8. No periodic check after sleep or while hidden in the tray.
+// 9. A failed download counts as a finished check, skipping the retry.
 // Each test writes its recorded updater IPC to test-results/updater-*.json.
 
 test.beforeEach(async ({ page }) => installMockIpc(page));
@@ -160,6 +162,36 @@ test("Check for Updates offers Restart Now after a new download", async ({
     command: "prepare_update_relaunch",
     args: { mode: "window" },
   });
+  await saveArtifact(page, testInfo);
+});
+
+test("downloads an update when Rust reports a periodic check is due", async ({
+  page,
+}, testInfo) => {
+  // First (startup) check finds nothing; the update ships while asleep.
+  await page.goto("/?updateLater=1");
+  await expect(page.getByRole("button", { name: "Compose" })).toBeVisible();
+  await expect.poll(() => commands(page)).toContain("mark_update_checked");
+  expect(await commands(page)).not.toContain("download");
+
+  // Rust emits this from its wall-clock timer, even while hidden.
+  await emitNative(page, "update-check-due");
+
+  await waitForUpdateReady(page);
+  const checks = (await commands(page)).filter((c) => c === "check");
+  expect(checks).toHaveLength(2);
+  expect(await commands(page)).toContain("download");
+  await saveArtifact(page, testInfo);
+});
+
+test("a failed download does not count as a finished check", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/?update=1&downloadFails=1");
+  await expect(page.getByRole("button", { name: "Compose" })).toBeVisible();
+  await expect.poll(() => commands(page)).toContain("download");
+  await page.waitForTimeout(300);
+  expect(await commands(page)).not.toContain("mark_update_checked");
   await saveArtifact(page, testInfo);
 });
 

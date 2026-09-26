@@ -170,6 +170,18 @@ export async function registerMockFixtures(page: Page): Promise<void> {
     if (params.has("aliasCollision")) {
       summary.recipients = "notalias@example.test";
     }
+    // A message the user sent, as seen in Sent.
+    if (params.has("fromSelf")) {
+      summary.senderName = "Sam";
+      summary.senderAddress = "sam@icloud.com";
+      summary.recipients = "jane@example.com";
+    }
+    // A note the user sent to themselves.
+    if (params.has("noteToSelf")) {
+      summary.senderName = "Sam";
+      summary.senderAddress = "sam@icloud.com";
+      summary.recipients = "sam@icloud.com";
+    }
     const olderSummary = {
       ...summary,
       id: 9,

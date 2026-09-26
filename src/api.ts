@@ -156,6 +156,7 @@ export type NativeCommand =
   | "set_update_ready"
   | "background_update_allowed"
   | "schedule_background_update"
+  | "mark_update_checked"
   | "supports_workspace_window_fx"
   | "accessibility_reduce_transparency"
   | "set_workspace_window_fx";
@@ -517,6 +518,14 @@ export const api = {
   async onBackgroundUpdateDue(handler: () => void): Promise<UnlistenFn> {
     if (!inTauri()) return () => undefined;
     return listen("background-update-due", () => handler());
+  },
+  async onUpdateCheckDue(handler: () => void): Promise<UnlistenFn> {
+    if (!inTauri()) return () => undefined;
+    return listen("update-check-due", () => handler());
+  },
+  markUpdateChecked: () => {
+    if (!inTauri()) return Promise.resolve();
+    return call<void>("mark_update_checked");
   },
   scheduleBackgroundUpdate: () => {
     if (!inTauri()) return Promise.resolve();
