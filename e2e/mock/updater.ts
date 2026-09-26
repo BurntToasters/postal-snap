@@ -27,7 +27,10 @@ export async function registerMockUpdater(page: Page): Promise<void> {
           ? { rid: 71, currentVersion: "0.2.3", version: "9.9.9" }
           : null;
       }),
-      "plugin:updater|download": record("download", () => 72),
+      "plugin:updater|download": record("download", () => {
+        if (params.has("downloadFails")) throw "network lost";
+        return 72;
+      }),
       "plugin:updater|install": record("install"),
       "plugin:resources|close": record("resources-close"),
       relaunch_app: record("relaunch_app"),
@@ -36,6 +39,7 @@ export async function registerMockUpdater(page: Page): Promise<void> {
       clear_update_relaunch: record("clear_update_relaunch"),
       set_update_ready: record("set_update_ready"),
       schedule_background_update: record("schedule_background_update"),
+      mark_update_checked: record("mark_update_checked"),
       show_native_confirm: record("show_native_confirm", () => {
         const args = state.updateCalls[state.updateCalls.length - 1].args;
         return window.confirm(

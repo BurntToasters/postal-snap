@@ -26,6 +26,8 @@ vi.mock("../api", () => ({
     setUpdateReady: vi.fn().mockResolvedValue(undefined),
     backgroundUpdateAllowed: vi.fn().mockResolvedValue(false),
     onBackgroundUpdateDue: vi.fn().mockResolvedValue(() => undefined),
+    onUpdateCheckDue: vi.fn().mockResolvedValue(() => undefined),
+    markUpdateChecked: vi.fn().mockResolvedValue(undefined),
     scheduleBackgroundUpdate: vi.fn().mockResolvedValue(undefined),
     distribution: vi.fn().mockResolvedValue({ updatesManagedBy: "postalSnap" }),
   },
@@ -40,7 +42,6 @@ import {
   applyPendingUpdate,
   checkUpdateInteractive,
   checksUpdatesOnStartup,
-  periodicUpdateIntervalMs,
   promptToRestartForUpdate,
   removeUpdateFoundListener,
   resetUpdateStateForTesting,
@@ -80,6 +81,8 @@ describe("update checks", () => {
     onCloseRequested.mockResolvedValue(vi.fn());
     vi.mocked(api.relaunch).mockClear();
     vi.mocked(api.quitApp).mockClear();
+    vi.mocked(api.onUpdateCheckDue).mockClear();
+    vi.mocked(api.markUpdateChecked).mockClear();
     vi.mocked(api.trayIsActive).mockReset();
     vi.mocked(api.trayIsActive).mockResolvedValue(true);
     vi.mocked(api.distribution).mockResolvedValue({
@@ -258,32 +261,30 @@ describe("update checks", () => {
     );
   });
 
-  it("runs and stops periodic background checks", async () => {
-    vi.useFakeTimers();
+  it("runs periodic checks when Rust reports one is due", async () => {
     mockedCheck.mockResolvedValue(null);
+    let due: (() => void) | undefined;
+    const unlisten = vi.fn();
+    vi.mocked(api.onUpdateCheckDue).mockImplementationOnce(async (handler) => {
+      due = handler;
+      return unlisten;
+    });
     const stop = startPeriodicUpdateCheck("startupAnd6h");
-
-    await vi.advanceTimersByTimeAsync(
-      periodicUpdateIntervalMs("startupAnd6h")!,
-    );
-    expect(mockedCheck).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(due).toBeDefined());
+    due!();
+    await vi.waitFor(() => expect(mockedCheck).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(api.markUpdateChecked).toHaveBeenCalled());
     stop();
-    await vi.advanceTimersByTimeAsync(
-      periodicUpdateIntervalMs("startupAnd6h")!,
-    );
-    expect(mockedCheck).toHaveBeenCalledTimes(1);
-    vi.useRealTimers();
+    expect(unlisten).toHaveBeenCalled();
   });
 
   it("skips periodic and startup checks for manual updates", () => {
     expect(checksUpdatesOnStartup("manual")).toBe(false);
-    expect(periodicUpdateIntervalMs("manual")).toBeNull();
-    expect(periodicUpdateIntervalMs("startup")).toBeNull();
     expect(checksUpdatesOnStartup("startup")).toBe(true);
-    expect(periodicUpdateIntervalMs("startupAnd12h")).toBe(12 * 60 * 60 * 1000);
-    expect(periodicUpdateIntervalMs("startupAnd24h")).toBe(24 * 60 * 60 * 1000);
-    const stop = startPeriodicUpdateCheck("manual");
-    stop();
+    // Rust owns the periodic cadence; these never listen for it.
+    startPeriodicUpdateCheck("manual")();
+    startPeriodicUpdateCheck("startup")();
+    expect(api.onUpdateCheckDue).not.toHaveBeenCalled();
   });
 
   it("short-circuits checks when an update is already downloaded", async () => {
@@ -574,14 +575,17 @@ describe("update checks", () => {
   });
 
   it("skips periodic checks while an update is already ready", async () => {
-    vi.useFakeTimers();
     useAppStore.getState().setUpdateReady("0.3.0");
+    let due: (() => void) | undefined;
+    vi.mocked(api.onUpdateCheckDue).mockImplementationOnce(async (handler) => {
+      due = handler;
+      return () => undefined;
+    });
     const stop = startPeriodicUpdateCheck("startupAnd6h");
-    await vi.advanceTimersByTimeAsync(
-      periodicUpdateIntervalMs("startupAnd6h")!,
-    );
+    await vi.waitFor(() => expect(due).toBeDefined());
+    due!();
+    await Promise.resolve();
     expect(mockedCheck).not.toHaveBeenCalled();
     stop();
-    vi.useRealTimers();
   });
 });

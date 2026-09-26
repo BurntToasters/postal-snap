@@ -3,6 +3,7 @@ import {
   useRef,
   type Dispatch,
   type KeyboardEvent,
+  type ReactNode,
   type RefObject,
   type SetStateAction,
 } from "react";
@@ -37,6 +38,8 @@ export interface SendBarProps {
   addAttachments: () => void | Promise<void>;
   addInlineImage: () => void | Promise<void>;
   discardDraft: () => void | Promise<void>;
+  /** Resize grip for the floating composer. */
+  children?: ReactNode;
 }
 
 export function SendBar({
@@ -55,6 +58,7 @@ export function SendBar({
   addAttachments,
   addInlineImage,
   discardDraft,
+  children,
 }: SendBarProps) {
   const chevronRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -73,7 +77,7 @@ export function SendBar({
   }
 
   return (
-    <footer>
+    <footer className={children ? "has-resize-grip" : undefined}>
       <div className="send-split" ref={sendMenuRef}>
         <button
           className="primary-button send-button"
@@ -244,6 +248,7 @@ export function SendBar({
       >
         {strings.composer.discard}
       </button>
+      {children}
     </footer>
   );
 }

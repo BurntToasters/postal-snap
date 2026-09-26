@@ -11,7 +11,7 @@ use std::{
     collections::HashMap,
     ops::{Deref, DerefMut},
     sync::{LazyLock, Mutex},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use super::{send::connect_imap, ImapSession, IMAP_COMMAND_TIMEOUT};
@@ -26,6 +26,9 @@ const MAX_PARKED: Duration = Duration::from_secs(25 * 60);
 pub struct Capabilities {
     pub condstore: bool,
     pub idle: bool,
+    /// RFC 6851 MOVE.
+    pub mv: bool,
+    pub uidplus: bool,
 }
 
 struct Parked {
@@ -33,6 +36,9 @@ struct Parked {
     capabilities: Capabilities,
     server: String,
     parked_at: Instant,
+    /// Wall-clock park time; the monotonic clock pauses during sleep on
+    /// macOS and Linux.
+    parked_wall: SystemTime,
 }
 
 struct Pool {
@@ -88,6 +94,7 @@ impl Lease {
                     capabilities: self.capabilities,
                     server: self.server.clone(),
                     parked_at: Instant::now(),
+                    parked_wall: SystemTime::now(),
                 },
             );
         }
@@ -149,7 +156,10 @@ pub async fn checkout(account: &AccountRecord, password: &str) -> Result<Lease, 
         Err(_) => (None, 0),
     };
     if let Some(mut parked) = parked {
-        let age = parked.parked_at.elapsed();
+        let age = parked_age(
+            parked.parked_at.elapsed(),
+            SystemTime::now().duration_since(parked.parked_wall).ok(),
+        );
         if parked.server == server && age < MAX_PARKED {
             let healthy = age < REVALIDATE_AFTER
                 || matches!(
@@ -175,6 +185,8 @@ pub async fn checkout(account: &AccountRecord, password: &str) -> Result<Lease, 
     let capabilities = Capabilities {
         condstore: capabilities.has_str("CONDSTORE") || capabilities.has_str("QRESYNC"),
         idle: capabilities.has_str("IDLE"),
+        mv: capabilities.has_str("MOVE"),
+        uidplus: capabilities.has_str("UIDPLUS"),
     };
     Ok(Lease {
         account_id,
@@ -183,6 +195,12 @@ pub async fn checkout(account: &AccountRecord, password: &str) -> Result<Lease, 
         generation,
         capabilities,
     })
+}
+
+/// Time since parking, counting system sleep. `wall` is None when the clock
+/// moved backwards.
+fn parked_age(monotonic: Duration, wall: Option<Duration>) -> Duration {
+    monotonic.max(wall.unwrap_or(Duration::ZERO))
 }
 
 /// Drop any parked session for an account: its password changed, it was
@@ -197,7 +215,24 @@ pub fn forget(account_id: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::forget;
+    use super::{forget, parked_age, MAX_PARKED, REVALIDATE_AFTER};
+    use std::time::Duration;
+
+    #[test]
+    fn sleep_ages_a_parked_session() {
+        // macOS and Linux: monotonic time paused during 8 hours of sleep.
+        // The session must not look fresh, or a dead socket is reused.
+        let age = parked_age(Duration::from_secs(5), Some(Duration::from_secs(8 * 3600)));
+        assert!(age >= MAX_PARKED);
+        // Awake and recent: still skips the NOOP probe.
+        let age = parked_age(Duration::from_secs(5), Some(Duration::from_secs(5)));
+        assert!(age < REVALIDATE_AFTER);
+        // A clock moved backwards falls back to monotonic time.
+        assert_eq!(
+            parked_age(Duration::from_secs(90), None),
+            Duration::from_secs(90)
+        );
+    }
 
     #[test]
     fn forget_invalidates_outstanding_lease_generation() {

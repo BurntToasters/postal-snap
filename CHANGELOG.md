@@ -20,6 +20,15 @@
 
 Postal Snap is a calm, accessible desktop email client. Mail stays on your computer. There is no Postal Snap cloud, telemetry, or account of mine to log into.
 
+## Changes in `v0.2.7:`
+- **FIX - Update checks after sleep and in the tray:** Postal Snap now times "every 6/12/24 hours" update checks by the clock, so time asleep counts and a check runs soon after waking. Checks also run while the window is closed to the tray or menu bar, so a downloaded update can install there. A check that fails (for example, before Wi-Fi reconnects) tries again after 10 minutes.
+- **FIX - Faster Get Mail:** Get Mail now checks every folder for new mail and changes, shows new mail as each folder finishes, and returns. Downloading full messages and older mail continues in the background instead of making Get Mail wait.
+- **FIX - Mail after waking from sleep:** Postal Snap now notices when your computer wakes up. It reconnects right away, checks for new mail, sends any Send Later message that came due while asleep, and checks for updates. Before, new mail could take several minutes to appear, and the first action after waking could fail.
+- **UI - Roomier message window:** Replies and forwards open taller, so there is room to write. Clicking anywhere below the text now places the cursor in the message.
+- **UI - Move and resize the message window:** Drag the message window by its title to move it, and drag the corner grip (or focus it and use the arrow keys) to resize it. It always stays on screen. Before, dragging the title moved the whole app window.
+- **FIX - Replying to your own sent mail:** Reply and Reply All on a message you sent now address its recipients instead of you.
+- **FIX - Reply and forward headers:** Quoted replies show a readable date instead of a raw timestamp. Forwards now include the original sender, date, subject, and recipients.
+
 ## Changes in `v0.2.6:`
 - **Updater:** This update tests fixes from `v0.2.5`
 - **Tweetfeed:** Updated tweetfeed databases.

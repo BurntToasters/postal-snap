@@ -31,6 +31,9 @@ import { AddressFields } from "./composer/addressFields";
 import { ComposerHeader } from "./composer/composerHeader";
 import { FormatToolbar } from "./composer/formatToolbar";
 import { SendBar } from "./composer/sendBar";
+import { useComposerPlacement } from "./composer/useComposerPlacement";
+import { useMediaQuery } from "../hooks/useMediaQuery";
+import { MEDIA_QUERIES } from "../breakpoints";
 import {
   announceLocalMailChanged,
   composerTitle,
@@ -295,6 +298,12 @@ export function Composer({ accountId }: Props) {
       void requestClose();
     },
     { trapFocus: !keepSourceVisible },
+  );
+
+  const narrowViewport = useMediaQuery(MEDIA_QUERIES.narrowViewport);
+  const placement = useComposerPlacement(
+    dialogRef,
+    !maximized && !narrowViewport,
   );
 
   const editor = useEditor({
@@ -1004,10 +1013,12 @@ export function Composer({ accountId }: Props) {
         />
       )}
       <section
-        className={`composer-window${maximized ? " composer-maximized" : ""}`}
+        className={`composer-window${maximized ? " composer-maximized" : ""}${placement.placed ? " composer-placed" : ""}${!maximized && !narrowViewport ? " composer-movable" : ""}`}
         ref={dialogRef}
+        style={placement.style}
       >
         <ComposerHeader
+          dragHandlers={placement.headerHandlers}
           seed={seed}
           saveState={saveState}
           maximized={maximized}
@@ -1106,7 +1117,17 @@ export function Composer({ accountId }: Props) {
           addAttachments={addAttachments}
           addInlineImage={addInlineImage}
           discardDraft={discardDraft}
-        />
+        >
+          {!maximized && !narrowViewport ? (
+            <button
+              type="button"
+              className="composer-resize-grip"
+              aria-label={strings.composer.resizeWindow}
+              title={strings.composer.resizeHint}
+              {...placement.gripHandlers}
+            />
+          ) : null}
+        </SendBar>
         {linkDialogOpen ? (
           <div
             className="settings-confirm-overlay"

@@ -13,7 +13,57 @@
 
 .composer-layer-followup:not(.composer-layer-maximized) .composer-window {
   pointer-events: auto;
-  height: min(460px, 52vh);
+  height: min(620px, 78vh, 100%);
+}
+
+/* Floating composer: header drags it, the corner grip resizes it. */
+.composer-window.composer-movable > header {
+  cursor: move;
+  touch-action: none;
+}
+
+.composer-window > header button {
+  cursor: default;
+}
+
+.composer-window footer.has-resize-grip {
+  position: sticky;
+  padding-right: 52px;
+}
+
+/* 44px target; the drawn grip sits in its lower-right corner. */
+.composer-resize-grip {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(
+    135deg,
+    transparent 0 55%,
+    var(--text-muted) 55% 60%,
+    transparent 60% 70%,
+    var(--text-muted) 70% 75%,
+    transparent 75%
+  );
+  opacity: 0.7;
+  cursor: nwse-resize;
+  touch-action: none;
+}
+
+.composer-resize-grip:hover,
+.composer-resize-grip:focus-visible {
+  opacity: 1;
+}
+
+@media (forced-colors: active) {
+  .composer-resize-grip {
+    border: 1px solid ButtonText;
+    background: ButtonFace;
+  }
 }
 
 .composer-signature-preview {
@@ -276,6 +326,11 @@
   min-height: 160px;
   flex: 1 0 160px;
   overflow: hidden;
+}
+
+/* EditorContent's wrapper must fill too, or clicks below the text miss. */
+.composer-window > div:has(.composer-editor) > div {
+  height: 100%;
 }
 
 .composer-window .tiptap {

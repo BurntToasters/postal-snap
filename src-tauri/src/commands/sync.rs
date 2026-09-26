@@ -88,10 +88,12 @@ pub async fn sync_one(account_id: &str, app: &AppHandle, state: &AppState) -> Re
     let actor = state.actor(account_id)?;
     actor.request(wake::OPERATION);
     let guard = actor.acquire().await;
-    match run_sync_pass(account_id, app, state, &actor, guard).await {
-        Ok(_) => {
+    match run_sync_pass(account_id, app, state, &actor, guard, true).await {
+        Ok(outcome) => {
             // A successful manual pass proves the credentials work again.
-            actor.request(wake::RESUME);
+            // Skipped backfill and bodies continue in the background.
+            let more = if outcome.more_work { wake::SYNC } else { 0 };
+            actor.request(wake::RESUME | more);
             Ok(())
         }
         Err(PassError::AuthenticationFailed(error) | PassError::Other(error)) => Err(error),
@@ -114,6 +116,7 @@ struct WorkerHooks<'a> {
     account_id: String,
     policy: CachePolicy,
     last_progress: Option<Instant>,
+    quick: bool,
 }
 
 impl mail::SyncHooks for WorkerHooks<'_> {
@@ -145,6 +148,20 @@ impl mail::SyncHooks for WorkerHooks<'_> {
             Some(folder),
         );
     }
+
+    fn quick(&self) -> bool {
+        self.quick
+    }
+
+    fn folder_changed(&mut self) {
+        // Get Mail shows new mail per folder; background passes report once
+        // at the end so a first sync does not reload the list per folder.
+        if !self.quick {
+            return;
+        }
+        emit_folder_counts(self.app, &self.account_id);
+        emit_message_change(self.app, &self.account_id, None, "synced");
+    }
 }
 
 pub(crate) fn emit_progress(
@@ -174,6 +191,7 @@ pub(crate) async fn run_sync_pass(
     state: &AppState,
     actor: &Arc<AccountActor>,
     guard: OwnedMutexGuard<()>,
+    quick: bool,
 ) -> Result<mail::SyncOutcome, PassError> {
     let account = state.db.account(account_id).map_err(PassError::Other)?;
     let password = match credentials::load(account_id) {
@@ -205,6 +223,7 @@ pub(crate) async fn run_sync_pass(
         account_id: account_id.to_string(),
         policy: policy.clone(),
         last_progress: None,
+        quick,
     };
     let result = mail::sync_account(&state.db, &account, &password, &policy, &mut hooks).await;
     // Everything below needs the account; the hooks hold it again after any

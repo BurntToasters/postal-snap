@@ -51,6 +51,15 @@ pub trait SyncHooks: Send {
     fn yield_account(&mut self) -> impl Future<Output = ()> + Send;
     /// Called when the pass moves to a folder or finishes a batch.
     fn progress(&mut self, folder: &str);
+
+    /// Get Mail: fetch new envelopes and flags only. Backfill and body
+    /// downloads are left to the worker's next pass.
+    fn quick(&self) -> bool {
+        false
+    }
+
+    /// New envelopes were cached in one folder.
+    fn folder_changed(&mut self) {}
     /// Password to reconnect with after a yield. Removal and password changes
     /// run under the account lock while we yielded, so re-read the vault.
     fn current_password(&self, account_id: &str) -> Result<zeroize::Zeroizing<String>, String> {
@@ -261,8 +270,11 @@ pub async fn sync_account<H: SyncHooks>(
         lease = yield_point(lease, hooks, account, password).await?;
         hooks.progress(&folder.name);
         match sync_folder(&mut lease, db, account, policy, folder, &mut budget, hooks).await {
-            Ok(more) => {
+            Ok((more, changed)) => {
                 outcome.more_work |= more;
+                if changed {
+                    hooks.folder_changed();
+                }
                 let _ = db.set_mailbox_sync_error(account_id, &folder.name, None);
             }
             Err(_) => {
@@ -299,8 +311,9 @@ async fn sync_folder<H: SyncHooks>(
     folder: &ListedFolder,
     budget: &mut PassBudget,
     hooks: &mut H,
-) -> Result<bool, String> {
+) -> Result<(bool, bool), String> {
     let account_id = &account.summary.id;
+    let quick = hooks.quick();
     let condstore = lease.capabilities.condstore;
     let items = if condstore {
         "(MESSAGES UNSEEN UIDNEXT UIDVALIDITY HIGHESTMODSEQ)"
@@ -354,14 +367,19 @@ async fn sync_folder<H: SyncHooks>(
         && !db
             .prefetch_candidates(mailbox_id, policy, 1, u64::MAX, MAX_MESSAGE_BYTES as u64)?
             .is_empty();
-    if unchanged && !backfill_active && !flag_scan_due && !wants_prefetch {
-        return Ok(false);
+    // Work a quick pass leaves for the worker.
+    let deferred = quick && (backfill_active || wants_prefetch);
+    if unchanged && !flag_scan_due && (quick || (!backfill_active && !wants_prefetch)) {
+        return Ok((deferred, false));
     }
     if status.exists == 0 {
+        let changed = previous
+            .as_ref()
+            .is_some_and(|meta| meta.server_total.is_some_and(|total| total > 0));
         db.reconcile_expunged(mailbox_id, 0, u32::MAX, &HashSet::new())?;
         db.set_backfill(mailbox_id, None, "complete")?;
         db.set_highest_modseq(mailbox_id, status.highest_modseq)?;
-        return Ok(false);
+        return Ok((false, changed));
     }
     let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.examine(&folder.name))
         .await
@@ -445,6 +463,13 @@ async fn sync_folder<H: SyncHooks>(
         full_flag_scan(lease, db, mailbox_id).await?;
     }
 
+    let changed = new_fetched > 0 || !unchanged;
+    if quick {
+        return Ok((
+            deferred || (new_fetched > 0 && !folder.skip_prefetch),
+            changed,
+        ));
+    }
     let mut more_work = false;
     if backfill_active {
         let mut state = "active";
@@ -470,7 +495,7 @@ async fn sync_folder<H: SyncHooks>(
         more_work |=
             prefetch_bodies(lease, db, mailbox_id, uid_validity, policy, budget, hooks).await?;
     }
-    Ok(more_work)
+    Ok((more_work, changed))
 }
 
 enum EnvelopeRange {
