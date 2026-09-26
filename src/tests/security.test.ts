@@ -108,7 +108,7 @@ describe("received mail isolation", () => {
     expect(twice.html).toBe(once.html);
   });
 
-  it("keeps the reader iframe sandboxed to same-origin only", () => {
+  it("keeps the reader iframe scriptless with denied-popup links only", () => {
     const { container } = render(
       createElement(MessageBody, {
         message: messageDetail(makeMessage(), {
@@ -134,8 +134,9 @@ describe("received mail isolation", () => {
         onOpenMailto: () => undefined,
       }),
     );
+    // No allow-scripts, no allow-popups-to-escape-sandbox, no navigation.
     expect(container.querySelector("iframe")?.getAttribute("sandbox")).toBe(
-      "allow-same-origin",
+      "allow-same-origin allow-popups",
     );
   });
 

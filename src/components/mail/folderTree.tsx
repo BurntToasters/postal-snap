@@ -10,17 +10,16 @@ interface FolderNode {
   children: FolderNode[];
 }
 
-/** Build a tree from flat mailbox list using delimiter-based nesting. */
+/** Build a tree from flat mailbox list using delimiter-based nesting. Keeps
+ * the backend's role order (Inbox, Drafts, Sent, …) instead of raw names. */
 function buildTree(mailboxes: MailboxSummary[]): FolderNode[] {
   const roots: FolderNode[] = [];
   const nodeMap = new Map<string, FolderNode>();
+  for (const mailbox of mailboxes)
+    nodeMap.set(mailbox.name, { mailbox, children: [] });
 
-  const sorted = [...mailboxes].sort((a, b) => a.name.localeCompare(b.name));
-
-  for (const mailbox of sorted) {
-    const node: FolderNode = { mailbox, children: [] };
-    nodeMap.set(mailbox.name, node);
-
+  for (const mailbox of mailboxes) {
+    const node = nodeMap.get(mailbox.name) as FolderNode;
     const delimiter = mailbox.delimiter;
     if (delimiter && mailbox.name.includes(delimiter)) {
       const parentName = mailbox.name.slice(

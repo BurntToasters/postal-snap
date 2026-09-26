@@ -21,7 +21,18 @@
   align-items: start;
   justify-items: center;
   overflow: auto;
-  background: var(--canvas);
+  background:
+    radial-gradient(
+      circle at 18% 12%,
+      color-mix(in srgb, var(--accent) 13%, transparent),
+      transparent 34%
+    ),
+    radial-gradient(
+      circle at 86% 92%,
+      color-mix(in srgb, var(--accent) 7%, transparent),
+      transparent 30%
+    ),
+    var(--canvas);
 }
 
 .setup-page > .setup-card {
@@ -143,18 +154,27 @@
   gap: 14px;
   padding: 14px;
   text-align: left;
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
   border-radius: var(--radius-md);
-  background: var(--surface-muted);
+  background: linear-gradient(
+    145deg,
+    color-mix(in srgb, var(--surface-raised) 92%, var(--surface-highlight)),
+    color-mix(in srgb, var(--surface) 90%, var(--surface-muted))
+  );
+  box-shadow:
+    var(--shadow-card),
+    inset 0 1px 0 var(--surface-highlight);
   transition:
-    border-color 120ms ease,
-    background-color 120ms ease;
+    border-color 140ms ease,
+    background-color 140ms ease,
+    box-shadow 140ms ease;
 }
 
 .provider-button:hover,
 .provider-button.provider-primary:hover {
-  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
-  background: var(--surface-hover);
+  border-color: color-mix(in srgb, var(--accent) 54%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .provider-button.provider-primary {

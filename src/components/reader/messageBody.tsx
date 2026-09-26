@@ -102,9 +102,19 @@ export function PlainTextContent({
   );
 }
 
+function missingBodyNote(message: MessageDetail): string {
+  if (message.bodyStatus === "offline") return strings.mail.bodyOffline;
+  if (message.bodyStatus === "signInNeeded")
+    return strings.mail.bodySignInNeeded;
+  if (message.bodyStatus === "tooLarge" || message.size > 50 * 1024 * 1024)
+    return strings.mail.messageTooLarge;
+  return strings.mail.emptyBody;
+}
+
 export function MessageBody({
   message,
   sanitized,
+  showHtml = Boolean(message.htmlBody),
   currentLoadedHtml,
   frameHtml,
   filteredImages,
@@ -126,6 +136,7 @@ export function MessageBody({
 }: {
   message: MessageDetail;
   sanitized?: SanitizedMail;
+  showHtml?: boolean;
   currentLoadedHtml?: string;
   frameHtml: string;
   filteredImages: number;
@@ -197,13 +208,11 @@ export function MessageBody({
         </form>
       ) : null}
       <div className="message-body" ref={bodyRef} data-context="reader">
-        {!message.htmlBody && !message.textBody ? (
+        {!showHtml && !message.textBody ? (
           <p className="plain-text-body" role="note">
-            {message.size > 50 * 1024 * 1024
-              ? strings.mail.messageTooLarge
-              : strings.mail.emptyBody}
+            {missingBodyNote(message)}
           </p>
-        ) : message.htmlBody ? (
+        ) : showHtml ? (
           <iframe
             ref={frameRef}
             title={strings.reader.messageContent}
@@ -211,7 +220,10 @@ export function MessageBody({
             // allow-same-origin is required so the parent can reach
             // contentDocument for link wiring, scroll, and find; the document
             // itself stays scriptless and networkless (no allow-scripts).
-            sandbox="allow-same-origin"
+            // allow-popups lets WebKit hand link clicks to the native
+            // new-window hook, which always denies and routes them to the
+            // link confirmation flow.
+            sandbox="allow-same-origin allow-popups"
             srcDoc={frameHtml}
             onLoad={onFrameLoad}
           />

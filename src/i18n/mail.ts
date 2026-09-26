@@ -79,6 +79,10 @@ export const mail = {
   messageTooLarge:
     "This message is too large to download safely. You can still move, archive, or delete it from the list.",
   emptyBody: "This message has no readable text.",
+  bodyOffline:
+    "This message has not downloaded yet. Check your internet connection, then open it again.",
+  bodySignInNeeded:
+    "This message could not download because the mail server did not accept your sign-in. Update the password in Settings, then open it again.",
   loadOlder: "Load older mail",
   loadingOlder: "Loading older mail…",
   read: "Read",

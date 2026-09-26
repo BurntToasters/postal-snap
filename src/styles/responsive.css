@@ -422,4 +422,31 @@
     min-height: 500px !important;
     border: 0 !important;
   }
+
+  /* macOS native print: show only the print host's sandboxed frame. */
+  body:has(> .print-host) > :not(.print-host) {
+    display: none !important;
+  }
+
+  body > .print-host {
+    position: static !important;
+    width: auto !important;
+    visibility: visible !important;
+  }
+
+  .print-host iframe {
+    display: block;
+    width: 100%;
+    border: 0;
+  }
+}
+
+/* Laid out offscreen at page width so the frame height fits the paper. */
+.print-host {
+  position: fixed;
+  top: 0;
+  left: -10000px;
+  width: 720px;
+  visibility: hidden;
+  pointer-events: none;
 }
