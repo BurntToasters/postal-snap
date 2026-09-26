@@ -853,6 +853,13 @@ async fn release_attachment_tokens<'a>(
     }
 }
 
+/// Sync stores rows with rising ids, so only a row newer than the previous
+/// newest counts. An older row surfacing after the newest was removed
+/// elsewhere is not new mail.
+fn is_new_mail(previous_message_id: Option<i64>, message_id: i64, is_read: bool) -> bool {
+    !is_read && previous_message_id.is_none_or(|previous| message_id > previous)
+}
+
 fn notify_new_mail(
     app: &AppHandle,
     db: &Database,
@@ -862,7 +869,7 @@ fn notify_new_mail(
     let Ok(Some(message)) = db.latest_inbox_message(account_id) else {
         return;
     };
-    if previous_message_id == Some(message.id) || message.is_read {
+    if !is_new_mail(previous_message_id, message.id, message.is_read) {
         return;
     }
     let settings = app.state::<AppState>().settings.get().ok();
@@ -914,9 +921,86 @@ fn notify_new_mail(
 #[cfg(test)]
 mod tests {
     use super::{
-        attachments::preview_text, drafts_send::resolve_requested_send_at, sync::apply_filter_rules,
+        attachments::preview_text, drafts_send::resolve_requested_send_at, is_new_mail,
+        sync::apply_filter_rules,
     };
     use super::{cleanup_orphaned_account_dirs, take_normalized_account_password};
+
+    #[test]
+    fn outbox_keeps_the_unsigned_draft_for_undo() {
+        use super::drafts_send::sign_for_outbox;
+        let draft = crate::models::ComposeDraft {
+            id: None,
+            account_id: "account-1".into(),
+            from: None,
+            to: vec!["jane@example.com".into()],
+            cc: vec![],
+            bcc: vec![],
+            subject: "Hi".into(),
+            html_body: "<p>Hello</p>".into(),
+            text_body: "Hello".into(),
+            attachments: vec![],
+            in_reply_to: None,
+            references: None,
+            send_at: None,
+        };
+        let (stored, signed) = sign_for_outbox(draft, "Sam");
+        assert_eq!(stored.text_body, "Hello");
+        assert!(signed.text_body.ends_with("\n\n-- \nSam"));
+        // Undo returns `stored`; sending it again signs exactly once.
+        let (mut restored, _) = sign_for_outbox(stored, "Sam");
+        restored.text_body.push_str(" and more");
+        let (_, resent) = sign_for_outbox(restored, "Sam");
+        assert_eq!(resent.text_body.matches("-- \nSam").count(), 1);
+    }
+
+    #[test]
+    fn forwarded_inline_images_stay_inline_only_when_referenced() {
+        use super::attachments::forward_as_inline;
+        let image = crate::models::Attachment {
+            id: "a".into(),
+            filename: "logo.png".into(),
+            content_type: "image/png".into(),
+            size: 10,
+            content_id: Some("<logo@example.com>".into()),
+            inline: true,
+        };
+        assert!(forward_as_inline(
+            &image,
+            Some("<p>Hi</p><img src=\"cid:logo@example.com\">")
+        ));
+        // Stored received HTML keeps the reference as data-inline-cid.
+        assert!(forward_as_inline(
+            &image,
+            Some("<img data-inline-cid=\"logo@example.com\" alt=\"Logo\">")
+        ));
+        assert!(!forward_as_inline(&image, Some("<p>No picture</p>")));
+        assert!(!forward_as_inline(&image, None));
+        let file = crate::models::Attachment {
+            inline: false,
+            ..image.clone()
+        };
+        assert!(!forward_as_inline(
+            &file,
+            Some("<img src=\"cid:logo@example.com\">")
+        ));
+        let no_id = crate::models::Attachment {
+            content_id: None,
+            ..image
+        };
+        assert!(!forward_as_inline(&no_id, Some("<img src=\"cid:\">")));
+    }
+
+    #[test]
+    fn only_newer_unread_inbox_mail_is_new() {
+        // Rows get higher ids as sync stores them; an older row surfacing
+        // after the newest was removed elsewhere is not new mail.
+        assert!(is_new_mail(None, 7, false));
+        assert!(is_new_mail(Some(6), 7, false));
+        assert!(!is_new_mail(Some(7), 7, false));
+        assert!(!is_new_mail(Some(9), 7, false));
+        assert!(!is_new_mail(Some(6), 7, true));
+    }
     use crate::db::{CachedMessage, Database};
     use crate::models::{
         AccountRecord, AccountSummary, FilterRule, MailboxRole, ProviderKind, ServerConfig, TlsMode,

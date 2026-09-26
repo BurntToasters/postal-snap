@@ -3,9 +3,16 @@
 //! lived marker file rather than a command-line argument.
 
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use tauri::{AppHandle, Emitter, Manager, Runtime};
+
+/// Idle time in the tray or menu bar before a downloaded update installs.
+/// Timed here, not in the webview: hidden webviews throttle their timers.
+const BACKGROUND_UPDATE_DELAY: Duration = Duration::from_secs(60);
+static BACKGROUND_ARM: AtomicU64 = AtomicU64::new(0);
 
 const MARKER_FILE: &str = "update-relaunch";
 const MARKER_MAX_AGE: Duration = Duration::from_secs(10 * 60);
@@ -86,6 +93,35 @@ pub fn set_update_ready(ready: bool) {
 
 pub fn update_ready() -> bool {
     UPDATE_READY.load(Ordering::Relaxed)
+}
+
+/// True while the window is closed into an active tray or menu bar icon.
+pub fn waiting_in_tray<R: Runtime>(app: &AppHandle<R>) -> bool {
+    let close_to_tray = app
+        .try_state::<crate::commands::AppState>()
+        .and_then(|state| state.settings.get().ok())
+        .map(|settings| settings.close_to_tray)
+        .unwrap_or(true);
+    crate::tray::is_hidden_to_tray()
+        && crate::tray::should_hide_on_close(close_to_tray, crate::tray::tray_is_active())
+}
+
+/// After the delay, asks the frontend to install if the app is still waiting
+/// in the tray. The latest call wins.
+pub fn arm_background_update<R: Runtime>(app: &AppHandle<R>) {
+    if !update_ready() || !waiting_in_tray(app) {
+        return;
+    }
+    let arm = BACKGROUND_ARM.fetch_add(1, Ordering::Relaxed) + 1;
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let _nap = crate::app_nap::AppNapGuard::begin("Waiting to install an update");
+        tokio::time::sleep(BACKGROUND_UPDATE_DELAY).await;
+        if BACKGROUND_ARM.load(Ordering::Relaxed) == arm && update_ready() && waiting_in_tray(&app)
+        {
+            let _ = app.emit("background-update-due", ());
+        }
+    });
 }
 
 #[cfg(test)]

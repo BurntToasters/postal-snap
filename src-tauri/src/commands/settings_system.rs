@@ -149,8 +149,19 @@ pub async fn show_native_confirm(
     app: AppHandle,
     title: String,
     message: String,
+    ok_label: Option<String>,
+    cancel_label: Option<String>,
 ) -> CommandResult<bool> {
     check_native_dialog_text(&title, &message)?;
+    let buttons = match (ok_label, cancel_label) {
+        (Some(ok), Some(cancel)) => {
+            if ok.is_empty() || cancel.is_empty() || ok.len() > 40 || cancel.len() > 40 {
+                return Err("Dialog text is too long.".to_string().into());
+            }
+            tauri_plugin_dialog::MessageDialogButtons::OkCancelCustom(ok, cancel)
+        }
+        _ => tauri_plugin_dialog::MessageDialogButtons::OkCancel,
+    };
     let dialog_app = app.clone();
     let confirmed = tokio::task::spawn_blocking(move || {
         dialog_app
@@ -158,7 +169,7 @@ pub async fn show_native_confirm(
             .message(message)
             .title(title)
             .kind(tauri_plugin_dialog::MessageDialogKind::Info)
-            .buttons(tauri_plugin_dialog::MessageDialogButtons::OkCancel)
+            .buttons(buttons)
             .blocking_show()
     })
     .await
@@ -243,24 +254,22 @@ pub fn get_update_relaunch() -> Option<&'static str> {
 /// True while the window is hidden to the tray or menu bar, so an update can
 /// install and restart in the background without interrupting the user.
 #[tauri::command]
-pub fn background_update_allowed(app: AppHandle, state: State<'_, AppState>) -> bool {
-    let close_to_tray = state
-        .settings
-        .get()
-        .map(|settings| settings.close_to_tray)
-        .unwrap_or(true);
-    if !crate::tray::should_hide_on_close(close_to_tray, crate::tray::tray_is_active()) {
-        return false;
-    }
-    app.get_webview_window("main")
-        .and_then(|window| window.is_visible().ok())
-        .is_some_and(|visible| !visible)
+pub fn background_update_allowed(app: AppHandle) -> bool {
+    crate::update_relaunch::waiting_in_tray(&app)
 }
 
-/// Lets native Quit hand off to the frontend only while an update is ready.
+/// Lets native Quit hand off to the frontend only while an update is ready,
+/// and starts the tray wait if the window is already closed.
 #[tauri::command]
-pub fn set_update_ready(ready: bool) {
+pub fn set_update_ready(app: AppHandle, ready: bool) {
     crate::update_relaunch::set_update_ready(ready);
+    crate::update_relaunch::arm_background_update(&app);
+}
+
+/// Waits again, e.g. while a message is being written.
+#[tauri::command]
+pub fn schedule_background_update(app: AppHandle) {
+    crate::update_relaunch::arm_background_update(&app);
 }
 
 const MAX_LICENSE_NOTICE_BYTES: usize = 1_048_576;

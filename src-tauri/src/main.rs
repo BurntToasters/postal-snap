@@ -50,10 +50,7 @@ fn main() {
             let _ = app.emit("menu-action", action);
         })
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
+            tray::show_main(app);
         }))
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
@@ -185,9 +182,15 @@ fn main() {
                 .build()
                 .map_err(|error| error.to_string())?;
             tray::sync(app.handle(), close_to_tray);
+            #[cfg(target_os = "macos")]
+            tray::watch_activation(app.handle());
             // Never leave a hidden window with no icon to reopen it.
-            if start_hidden && !tray::should_hide_on_close(close_to_tray, tray::tray_is_active()) {
-                tray::show_main(app.handle());
+            if start_hidden {
+                if tray::should_hide_on_close(close_to_tray, tray::tray_is_active()) {
+                    tray::start_hidden_in_tray(app.handle());
+                } else {
+                    tray::show_main(app.handle());
+                }
             }
             install_menu(
                 app,
@@ -244,8 +247,9 @@ fn main() {
                         .unwrap_or(true);
                     if tray::should_hide_on_close(enabled, tray::tray_is_active()) {
                         api.prevent_close();
-                        let _ = window.hide();
-                        let _ = window.emit("main-window-hidden", ());
+                        if let Some(webview) = window.app_handle().get_webview_window("main") {
+                            tray::hide_main_to_tray(&webview);
+                        }
                     }
                 }
             }
@@ -348,6 +352,7 @@ fn main() {
             commands::settings_system::get_update_relaunch,
             commands::settings_system::set_update_ready,
             commands::settings_system::background_update_allowed,
+            commands::settings_system::schedule_background_update,
             window_fx::set_workspace_window_fx,
             window_fx::supports_workspace_window_fx,
             window_fx::accessibility_reduce_transparency,
@@ -363,10 +368,7 @@ fn main() {
             ..
         } = &event
         {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
+            tray::show_main(app);
         }
         #[cfg(not(target_os = "macos"))]
         let _ = (app, event);

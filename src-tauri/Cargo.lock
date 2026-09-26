@@ -3760,13 +3760,14 @@ dependencies = [
 
 [[package]]
 name = "postal-snap"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "adblock",
  "addr",
  "ammonia",
  "async-imap",
  "base64 0.22.1",
+ "block2",
  "chrono",
  "futures-util",
  "hickory-resolver",

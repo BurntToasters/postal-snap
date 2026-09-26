@@ -38,6 +38,7 @@ import { PaneSplitter } from "./mail/paneSplitter";
 import { useSettingsSave } from "./settings/useSettingsSave";
 
 import { MEDIA_QUERIES } from "../breakpoints";
+import { navigationOrder } from "../threads";
 
 interface Props {
   onOpenSettings: (tab?: "accounts") => void;
@@ -45,7 +46,7 @@ interface Props {
 
 function relativeMessage(delta: number): MessageSummary | undefined {
   const state = useAppStore.getState();
-  const items = state.messages;
+  const items = navigationOrder(state.messages, state.settings.groupThreads);
   if (items.length === 0) return undefined;
   const currentId = state.selectedMessage?.id;
   const index = items.findIndex((item) => item.id === currentId);
@@ -645,13 +646,17 @@ export function MailShell({ onOpenSettings }: Props) {
     }
     setBulkBusy(true);
     try {
+      const movedIds = selectedIds;
       const outcome = await api.moveMessagesToMailbox(
         activeAccountId,
-        selectedIds,
+        movedIds,
         destination.id,
       );
       if (outcome.failed > 0)
         setError(strings.mail.bulkPartial(outcome.failed));
+      // The bulk event names no message, so close a moved open message here.
+      const open = useAppStore.getState().selectedMessage;
+      if (open && movedIds.includes(open.id)) selectMessage(undefined);
       setSelectedIds([]);
       setSelecting(false);
       await refreshList();

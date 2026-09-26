@@ -1,8 +1,58 @@
-import type { FormEvent, RefObject } from "react";
+import { useLayoutEffect, type FormEvent, type RefObject } from "react";
 import { MailPlus, PanelLeft, RefreshCw, Search, Settings } from "lucide-react";
 import { strings } from "../../i18n";
 
 type LocalView = "drafts" | "outbox" | "snoozed";
+
+// Fit steps: the Update badge shortens (1, 2) and then shows only its dot
+// (3); Get Mail (4) and Compose (5) drop their labels only if the bar would
+// still clip. Clipping corrupts the toolbar; accessible names stay intact.
+const FIT_STEPS = 5;
+const BADGE_STEPS = 3;
+
+function fitToolbar(toolbar: HTMLElement) {
+  for (let step = 1; step <= FIT_STEPS; step += 1) {
+    toolbar.removeAttribute(`data-fit${step}`);
+  }
+  const trailing = toolbar.querySelector<HTMLElement>(".toolbar-trailing");
+  // The narrow layout stacks rows instead (display: contents).
+  if (!trailing || getComputedStyle(trailing).display === "contents") return;
+  const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+  const search = trailing.querySelector<HTMLElement>(".search-box > input");
+  const hasBadge = trailing.querySelector(".update-ready-badge") !== null;
+  // Flex-end overflow spills left, which scrollWidth does not report.
+  const clipped = () => {
+    const first = trailing.firstElementChild;
+    return (
+      first !== null &&
+      first.getBoundingClientRect().left <
+        trailing.getBoundingClientRect().left - 1
+    );
+  };
+  const searchCramped = () => search !== null && search.clientWidth < rem * 5;
+  for (let step = 1; step <= FIT_STEPS; step += 1) {
+    const badgeStep = step <= BADGE_STEPS;
+    if (badgeStep && !hasBadge) continue;
+    const needed = clipped() || (badgeStep && searchCramped());
+    if (!needed) break;
+    toolbar.setAttribute(`data-fit${step}`, "");
+  }
+}
+
+function useToolbarFit(
+  toolbarRef: RefObject<HTMLElement | null>,
+  updateReady: string | null,
+) {
+  useLayoutEffect(() => {
+    const toolbar = toolbarRef.current;
+    if (!toolbar) return;
+    fitToolbar(toolbar);
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => fitToolbar(toolbar));
+    observer.observe(toolbar);
+    return () => observer.disconnect();
+  }, [toolbarRef, updateReady]);
+}
 
 interface SearchBoxProps {
   inputRef: RefObject<HTMLInputElement | null>;
@@ -100,6 +150,7 @@ export function MailToolbar({
   ...searchProps
 }: MailToolbarProps) {
   const sidebarExpanded = sidebarDrawerViewport ? sidebarOpen : sidebarVisible;
+  useToolbarFit(toolbarRef, updateReady);
   return (
     <header
       ref={toolbarRef}
@@ -130,6 +181,7 @@ export function MailToolbar({
           onClick={onRefresh}
           disabled={busy}
           aria-label={strings.mail.getMail}
+          title={strings.mail.getMail}
         >
           <RefreshCw aria-hidden="true" className={busy ? "spinning" : ""} />
           <span>{strings.mail.getMail}</span>
@@ -143,6 +195,7 @@ export function MailToolbar({
           aria-keyshortcuts="Meta+N Control+N"
           onClick={onCompose}
           aria-label={strings.mail.compose}
+          title={strings.mail.compose}
         >
           <MailPlus aria-hidden="true" />
           <span>{strings.mail.compose}</span>
@@ -157,7 +210,15 @@ export function MailToolbar({
             aria-label={strings.mail.updateReadyBadge}
           >
             <span className="badge-dot" aria-hidden="true" />
-            <span>{strings.mail.updateReadyBadge}</span>
+            <span className="badge-label-long">
+              {strings.mail.updateReadyBadge}
+            </span>
+            <span className="badge-label-short" aria-hidden="true">
+              {strings.mail.updateReadyBadgeShort}
+            </span>
+            <span className="badge-label-tiny" aria-hidden="true">
+              {strings.mail.updateReadyBadgeTiny}
+            </span>
           </button>
         ) : null}
         <button

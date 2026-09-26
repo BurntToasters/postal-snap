@@ -48,12 +48,15 @@ pub fn list_filter_rules(
     command_result(state.db.list_filter_rules(&account_id))
 }
 
-#[tauri::command(async)]
-pub fn create_filter_rule(
+#[tauri::command]
+pub async fn create_filter_rule(
     rule: FilterRule,
     state: State<'_, AppState>,
 ) -> CommandResult<FilterRule> {
     state.db.account(&rule.account_id)?;
+    // Filing mail queues moves; hold the account so a sync pass cannot
+    // replay or reconcile the same messages at the same time.
+    let _guard = state.lock_account(&rule.account_id).await?;
     validate_filter_rule(&rule, &rule.account_id.clone())?;
     if rule.action == "move_mailbox" {
         if let Some(target) = rule.target_mailbox.as_deref() {
@@ -78,12 +81,15 @@ pub fn create_filter_rule(
     Ok(created)
 }
 
-#[tauri::command(async)]
-pub fn update_filter_rule(
+#[tauri::command]
+pub async fn update_filter_rule(
     rule: FilterRule,
     state: State<'_, AppState>,
 ) -> CommandResult<FilterRule> {
     state.db.account(&rule.account_id)?;
+    // Filing mail queues moves; hold the account so a sync pass cannot
+    // replay or reconcile the same messages at the same time.
+    let _guard = state.lock_account(&rule.account_id).await?;
     validate_filter_rule(&rule, &rule.account_id.clone())?;
     if rule.action == "move_mailbox" {
         if let Some(target) = rule.target_mailbox.as_deref() {

@@ -2,6 +2,7 @@ import { useEffect, useRef, type RefObject } from "react";
 import { TEXT_SCALES } from "../components/settings/displayChoices";
 import type { SettingsSaveUpdate } from "../components/settings/useSettingsSave";
 import { useAppStore } from "../store";
+import { navigationOrder } from "../threads";
 import type { AccountSummary, MessageSummary, ReadingPane } from "../types";
 
 export interface MailShortcutsOptions {
@@ -280,14 +281,22 @@ export function useMailShortcuts({
         }
       } else if (event.key === "Home") {
         if (inMessageList) return;
-        const first = useAppStore.getState().messages[0];
+        const state = useAppStore.getState();
+        const first = navigationOrder(
+          state.messages,
+          state.settings.groupThreads,
+        )[0];
         if (first) {
           event.preventDefault();
           void chooseMessage(first);
         }
       } else if (event.key === "End") {
         if (inMessageList) return;
-        const items = useAppStore.getState().messages;
+        const state = useAppStore.getState();
+        const items = navigationOrder(
+          state.messages,
+          state.settings.groupThreads,
+        );
         const last = items[items.length - 1];
         if (last) {
           event.preventDefault();

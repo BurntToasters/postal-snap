@@ -275,7 +275,7 @@ impl Database {
     pub fn latest_inbox_message(&self, account_id: &str) -> Result<Option<MessageSummary>, String> {
         let conn = self.conn()?;
         conn.query_row(
-            &format!("{} JOIN mailboxes box ON box.id=m.mailbox_id WHERE m.account_id=?1 AND box.role='inbox' ORDER BY m.received_at DESC,m.uid DESC LIMIT 1", MESSAGE_SUMMARY_SELECT),
+            &format!("{} JOIN mailboxes box ON box.id=m.mailbox_id WHERE m.account_id=?1 AND box.role='inbox' AND m.pending_move_to IS NULL ORDER BY m.received_at DESC,m.uid DESC LIMIT 1", MESSAGE_SUMMARY_SELECT),
             [account_id], map_message_summary,
         ).optional().map_err(db_error)
     }

@@ -183,10 +183,15 @@
 }
 
 .toolbar-trailing {
-  flex: 0 1 auto;
+  flex: 1 1 auto;
   flex-wrap: nowrap;
   justify-content: flex-end;
   overflow: hidden;
+}
+
+/* Only search shrinks; clipping Compose or the badge corrupts the bar. */
+.toolbar-trailing > :not(.search-box) {
+  flex-shrink: 0;
 }
 
 .app-toolbar .toolbar-button,
@@ -229,7 +234,8 @@
 
 .search-box {
   display: flex;
-  min-width: 180px;
+  overflow: hidden;
+  min-width: 150px;
   max-width: 18.125rem;
   min-height: 44px;
   flex: 1 1 16.875rem;
@@ -253,7 +259,8 @@
 }
 
 .search-box > input {
-  min-width: 72px;
+  min-width: 0;
+  flex: 1 1 auto;
   min-height: 44px;
   padding-inline: 8px;
   border: 0;
@@ -267,6 +274,7 @@
 
 .search-scope {
   display: inline-flex;
+  flex-shrink: 0;
   min-height: 44px;
   align-items: center;
   margin-right: 3px;
@@ -304,6 +312,38 @@
     background-color 0.15s ease,
     color 0.15s ease,
     transform 0.1s ease;
+}
+
+.update-ready-badge {
+  white-space: nowrap;
+}
+
+.update-ready-badge :is(.badge-label-short, .badge-label-tiny) {
+  display: none;
+}
+
+/* Fit steps set by MailToolbar; accessible names keep the full text. */
+.app-toolbar[data-fit1] .update-ready-badge .badge-label-long {
+  display: none;
+}
+
+.app-toolbar[data-fit1]:not([data-fit2])
+  .update-ready-badge
+  .badge-label-short {
+  display: inline;
+}
+
+.app-toolbar[data-fit2]:not([data-fit3]) .update-ready-badge .badge-label-tiny {
+  display: inline;
+}
+
+.app-toolbar[data-fit3] .update-ready-badge {
+  padding-inline: 14px;
+}
+
+.app-toolbar[data-fit4] .get-mail-button > span,
+.app-toolbar[data-fit5] .compose-button > span {
+  display: none;
 }
 
 .update-ready-badge:hover {

@@ -85,3 +85,20 @@ export function formatFullMessageDate(value: string, now = new Date()): string {
 
   return relative ? `${fullDate} (${relative})` : fullDate;
 }
+
+/** When a scheduled message sends: a time today, else a day and time. */
+export function formatScheduledTime(value: string, now = new Date()): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const time = new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+  if (date.toDateString() === now.toDateString()) return time;
+  const day = new Intl.DateTimeFormat(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  }).format(date);
+  return `${day}, ${time}`;
+}

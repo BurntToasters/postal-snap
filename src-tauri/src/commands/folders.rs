@@ -76,7 +76,8 @@ pub async fn rename_folder(
     }
     let _guard = state.lock_account(&account_id).await?;
     let (_, old_name) = state.db.mailbox(mailbox_id)?;
-    if old_name.eq_ignore_ascii_case(&name) {
+    // Exact match only: "work" to "Work" is a real rename.
+    if old_name == name {
         return Ok(());
     }
     let account = state.db.account(&account_id)?;

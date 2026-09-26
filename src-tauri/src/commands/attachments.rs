@@ -116,6 +116,30 @@ pub async fn preview_attachment(
     Err("Only images and plain-text files can be previewed.".into())
 }
 
+/// Forward an inline image as inline only when the forwarded text shows it by
+/// Content-ID; otherwise it would be invisible, so it travels as a file.
+pub(crate) fn forward_as_inline(
+    attachment: &crate::models::Attachment,
+    html_body: Option<&str>,
+) -> bool {
+    let Some(content_id) = attachment.content_id.as_deref() else {
+        return false;
+    };
+    let content_id = content_id
+        .trim()
+        .trim_start_matches('<')
+        .trim_end_matches('>');
+    let content_id = content_id.to_ascii_lowercase();
+    // Stored received HTML keeps the reference as data-inline-cid.
+    attachment.inline
+        && !content_id.is_empty()
+        && html_body.is_some_and(|html| {
+            let html = html.to_ascii_lowercase();
+            html.contains(&format!("cid:{content_id}"))
+                || html.contains(&format!("data-inline-cid=\"{content_id}\""))
+        })
+}
+
 #[tauri::command]
 pub async fn prepare_forward_attachments(
     account_id: String,
@@ -133,7 +157,8 @@ pub async fn prepare_forward_attachments(
     let mut created_tokens = Vec::new();
     let result = async {
         let mut total = 0usize;
-        for attachment in detail.attachments.into_iter() {
+        for attachment in detail.attachments.iter() {
+            let inline = forward_as_inline(attachment, detail.html_body.as_deref());
             let (_, bytes) = mail::extract_attachment(&raw, &attachment.id)?;
             total = total.saturating_add(bytes.len());
             if total > mail::MAX_MESSAGE_BYTES {
@@ -143,10 +168,20 @@ pub async fn prepare_forward_attachments(
             created_tokens.push(token.clone());
             prepared.push(ComposeAttachment {
                 token,
-                filename: attachment.filename,
-                content_type: Some(attachment.content_type),
-                inline: false,
-                content_id: None,
+                filename: attachment.filename.clone(),
+                content_type: Some(attachment.content_type.clone()),
+                inline,
+                // The quoted text refers to it as cid:<id>; keep that id.
+                content_id: inline.then(|| {
+                    attachment
+                        .content_id
+                        .as_deref()
+                        .unwrap_or_default()
+                        .trim()
+                        .trim_start_matches('<')
+                        .trim_end_matches('>')
+                        .to_string()
+                }),
                 size: Some(bytes.len()),
             });
         }
