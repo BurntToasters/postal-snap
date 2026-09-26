@@ -24,7 +24,7 @@ adblock = { version = "=0.13.3", default-features = false, features = ["embedded
 ammonia = "4.1.4"
 async-imap = { version = "0.11.3", default-features = false, features = ["runtime-tokio"] }
 imap-proto = "0.16.7"
-base64 = "0.22"
+base64 = "0.23"
 chrono = { version = "0.4", features = ["serde"] }
 futures-util = "0.3"
 keyring = "4.1.5"
