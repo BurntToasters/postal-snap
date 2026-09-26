@@ -88,7 +88,9 @@ export async function registerMockWindowEvents(
             case "plugin:process|restart":
               return undefined;
             case "plugin:deep-link|get_current":
-              return [];
+              return new URLSearchParams(location.search).has("startupMailto")
+                ? ["mailto:startup@example.test?subject=Startup"]
+                : [];
             case "plugin:notification|is_permission_granted":
               return true;
             default: {

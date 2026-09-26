@@ -222,7 +222,7 @@ export const settings = {
   installing: (version: string) => `Downloading ${version}…`,
   updateReadyCardTitle: "Update ready to install",
   updateReadyCardHelp: (version: string) =>
-    `Postal Snap version ${version} has been downloaded and is ready to install.`,
+    `Postal Snap version ${version} is downloaded. Restart now, or it installs quietly when you quit or while Postal Snap is hidden in the tray or menu bar.`,
   restartNow: "Restart Postal Snap",
   storeUpdateTitle: "Updates managed by app store",
   directUpdateTitle: "Signed Postal Snap updates",

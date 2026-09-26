@@ -21,6 +21,11 @@ vi.mock("../api", () => ({
     relaunch: vi.fn().mockResolvedValue(undefined),
     quitApp: vi.fn().mockResolvedValue(undefined),
     trayIsActive: vi.fn().mockResolvedValue(true),
+    prepareUpdateRelaunch: vi.fn().mockResolvedValue(undefined),
+    clearUpdateRelaunch: vi.fn().mockResolvedValue(undefined),
+    setUpdateReady: vi.fn().mockResolvedValue(undefined),
+    backgroundUpdateAllowed: vi.fn().mockResolvedValue(false),
+    onMainWindowHidden: vi.fn().mockResolvedValue(() => undefined),
     distribution: vi.fn().mockResolvedValue({ updatesManagedBy: "postalSnap" }),
   },
 }));
@@ -419,8 +424,9 @@ describe("update checks", () => {
     const preventDefault = vi.fn();
     await closeHandler?.({ preventDefault });
     expect(preventDefault).toHaveBeenCalled();
-    expect(update.install).toHaveBeenCalledTimes(1);
-    expect(api.relaunch).toHaveBeenCalledTimes(1);
+    expect(update.install).toHaveBeenCalledWith({ restartAfterInstall: false });
+    expect(api.relaunch).not.toHaveBeenCalled();
+    expect(api.quitApp).toHaveBeenCalledTimes(1);
     stop();
   });
 
@@ -476,8 +482,9 @@ describe("update checks", () => {
     const preventDefault = vi.fn();
     await closeHandler?.({ preventDefault });
     expect(preventDefault).toHaveBeenCalled();
-    expect(update.install).toHaveBeenCalledTimes(1);
-    expect(api.relaunch).toHaveBeenCalledTimes(1);
+    expect(update.install).toHaveBeenCalledWith({ restartAfterInstall: false });
+    expect(api.relaunch).not.toHaveBeenCalled();
+    expect(api.quitApp).toHaveBeenCalledTimes(1);
     stop();
   });
 
@@ -521,7 +528,8 @@ describe("update checks", () => {
     mockedCheck.mockResolvedValue(update as never);
     await runUpdateSingleFlight();
     await applyPendingUpdate();
-    expect(update.install).toHaveBeenCalledTimes(1);
+    expect(api.prepareUpdateRelaunch).toHaveBeenCalledWith("window");
+    expect(update.install).toHaveBeenCalledWith({ restartAfterInstall: true });
     expect(api.relaunch).toHaveBeenCalledTimes(1);
   });
 
@@ -531,14 +539,14 @@ describe("update checks", () => {
     expect(api.relaunch).not.toHaveBeenCalled();
   });
 
-  it("applies a pending update instead of quitting from the tray", async () => {
+  it("installs a pending update without relaunching when quitting from the tray", async () => {
     const update = fakeUpdate("0.2.6");
     mockedCheck.mockResolvedValue(update as never);
     await runUpdateSingleFlight();
     await quitOrApplyPendingUpdate();
-    expect(update.install).toHaveBeenCalledTimes(1);
-    expect(api.relaunch).toHaveBeenCalledTimes(1);
-    expect(api.quitApp).not.toHaveBeenCalled();
+    expect(update.install).toHaveBeenCalledWith({ restartAfterInstall: false });
+    expect(api.relaunch).not.toHaveBeenCalled();
+    expect(api.quitApp).toHaveBeenCalledTimes(1);
   });
 
   it("hides to tray only on macOS or an active Windows tray", async () => {

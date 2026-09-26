@@ -29,6 +29,7 @@ import {
   checkUpdateInteractive,
   checksUpdatesOnStartup,
   runUpdateSingleFlight,
+  startBackgroundUpdateWhileHidden,
   startDeferredUpdateOnQuit,
   startPeriodicUpdateCheck,
   quitOrApplyPendingUpdate,
@@ -157,6 +158,7 @@ export default function App() {
         }
       });
     const cancelQuitUpdate = startDeferredUpdateOnQuit();
+    const cancelBackgroundUpdate = startBackgroundUpdateWhileHidden();
     let active = true;
     const unsubscribers: Array<() => void> = [];
     void api
@@ -212,7 +214,11 @@ export default function App() {
       urls
         .filter((url) => /^mailto:/i.test(url))
         .forEach((url) => openComposer({ prefill: parseMailto(url) }));
-    void getCurrent()
+    // An update relaunch forwards the original mailto: argument; skip it.
+    void api
+      .updateRelaunch()
+      .catch(() => null)
+      .then((relaunch) => (relaunch ? null : getCurrent()))
       .then((urls) => {
         if (urls) handleUrls(urls);
       })
@@ -224,6 +230,7 @@ export default function App() {
     return () => {
       active = false;
       cancelQuitUpdate();
+      cancelBackgroundUpdate();
       unsubscribers.forEach((fn) => fn());
     };
   }, [
@@ -243,7 +250,12 @@ export default function App() {
 
   useEffect(() => {
     const keyboard = (event: KeyboardEvent) => {
-      if (event.metaKey || event.ctrlKey) {
+      // macOS Control keys edit text (Ctrl+P is previous line); use Command.
+      const mod =
+        document.documentElement.dataset.platform === "macos"
+          ? event.metaKey
+          : event.metaKey || event.ctrlKey;
+      if (mod) {
         if (event.key === ",") {
           event.preventDefault();
           openSettings();

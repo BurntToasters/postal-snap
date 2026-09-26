@@ -68,6 +68,7 @@ vi.mock("../api", () => ({
 
 vi.mock("../update", () => ({
   applyPendingUpdate: vi.fn().mockResolvedValue(undefined),
+  holdBackgroundUpdate: vi.fn(() => () => undefined),
 }));
 
 const account = makeAccount();

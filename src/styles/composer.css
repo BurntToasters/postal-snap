@@ -190,8 +190,8 @@
   display: grid;
   min-width: 44px;
   min-height: 44px;
-  width: 44px;
-  height: 44px;
+  width: max(44px, 2.25rem);
+  height: max(44px, 2.25rem);
   place-items: center;
   border: 1px solid transparent;
   border-radius: var(--radius-pill);
@@ -210,8 +210,8 @@
 }
 
 .toolbar-group button svg {
-  width: 19px;
-  height: 19px;
+  width: 1.1875rem;
+  height: 1.1875rem;
 }
 
 .toolbar-group select {
@@ -395,7 +395,8 @@
 }
 
 .send-split .send-chevron svg {
-  width: 17px;
+  width: 1.0625rem;
+  height: 1.0625rem;
 }
 
 .field-error {

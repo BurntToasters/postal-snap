@@ -87,7 +87,8 @@
 }
 
 .reader-actions svg {
-  width: 18px;
+  width: 1.125rem;
+  height: 1.125rem;
 }
 
 .reader-more {
@@ -205,7 +206,7 @@
 
 .details-grid {
   display: grid;
-  grid-template-columns: 90px 1fr;
+  grid-template-columns: minmax(90px, max-content) minmax(0, 1fr);
   gap: 8px 14px;
   margin: 0;
   font-size: 0.88rem;
@@ -317,7 +318,8 @@
 }
 
 .remote-content-banner svg {
-  width: 18px;
+  width: 1.125rem;
+  height: 1.125rem;
 }
 
 .remote-content-banner span {

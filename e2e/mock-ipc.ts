@@ -9,6 +9,7 @@ import { registerMockMessages } from "./mock/messages";
 import { registerMockRemoteSecurity } from "./mock/remote-security";
 import { registerMockSettingsSystem } from "./mock/settings-system";
 import { registerMockState } from "./mock/state";
+import { registerMockUpdater } from "./mock/updater";
 import { registerMockWindowEvents } from "./mock/window-events";
 
 // Installs the mocked Tauri IPC layer for e2e tests. Each module registers
@@ -31,4 +32,5 @@ export async function installMockIpc(
   await registerMockDraftsOutbox(page);
   await registerMockSettingsSystem(page);
   await registerMockRemoteSecurity(page);
+  await registerMockUpdater(page);
 }
