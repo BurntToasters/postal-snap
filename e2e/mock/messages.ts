@@ -124,11 +124,14 @@ export async function registerMockMessages(page: Page): Promise<void> {
               ? '<p><a href="https://library.example.test/hours">Open site</a></p>'
               : location.search.includes("credentialLink")
                 ? '<p><a href="https://trusted.example@phish.example.test/login">Open site</a></p>'
-                : location.search.includes("remote")
-                  ? '<p>Are we still meeting?</p><img src="https://images.example.test/pixel.png">'
-                  : location.search.includes("inline")
-                    ? '<p>Photo:</p><img src="cid:family-photo@example.test">'
-                    : "<p>Are we still meeting on Saturday?</p>",
+                : params.has("wideHtml")
+                  ? // Fixed-width newsletter layout, like Apple's welcome mail.
+                    `<table width="${params.get("wideHtml")}" style="width:${params.get("wideHtml")}px"><tr><td><h1 style="font-size:40px">Welcome to iCloud Mail.</h1><p>Your email address is someone@icloud.com. You can access your inbox on any iPhone, iPad, or Mac.</p></td></tr></table>`
+                  : location.search.includes("remote")
+                    ? '<p>Are we still meeting?</p><img src="https://images.example.test/pixel.png">'
+                    : location.search.includes("inline")
+                      ? '<p>Photo:</p><img src="cid:family-photo@example.test">'
+                      : "<p>Are we still meeting on Saturday?</p>",
           remoteImagesBlocked: false,
           references: [],
           attachments: location.search.includes("inline")
