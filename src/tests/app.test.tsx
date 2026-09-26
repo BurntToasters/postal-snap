@@ -26,6 +26,7 @@ vi.mock("../api", () => ({
     onAppWarning: vi.fn(),
     onMenuAction: vi.fn(),
     onTrayQuit: vi.fn(),
+    updateRelaunch: vi.fn(),
     setMailShortcutGuard: vi.fn(),
   },
 }));
@@ -36,6 +37,7 @@ vi.mock("../update", () => ({
   runUpdateSingleFlight: vi.fn(),
   startPeriodicUpdateCheck: vi.fn(),
   startDeferredUpdateOnQuit: vi.fn(),
+  startBackgroundUpdateWhileHidden: vi.fn(() => () => undefined),
   quitOrApplyPendingUpdate: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("../components/WindowChrome", () => ({
@@ -156,6 +158,7 @@ beforeEach(() => {
     return unlistenMenu;
   });
   vi.mocked(api.onTrayQuit).mockResolvedValue(() => undefined);
+  vi.mocked(api.updateRelaunch).mockResolvedValue(null);
   vi.mocked(api.setMailShortcutGuard).mockResolvedValue(undefined);
   vi.mocked(getCurrent).mockResolvedValue(null);
   vi.mocked(onOpenUrl).mockImplementation(async (handler) => {

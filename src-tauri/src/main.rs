@@ -17,6 +17,7 @@ mod settings;
 mod storage;
 mod threat_blocking;
 mod tray;
+mod update_relaunch;
 mod window_fx;
 mod window_snap;
 
@@ -32,6 +33,15 @@ fn main() {
             let action = event.id().as_ref();
             if action == "tray-quit" {
                 let _ = app.emit("tray-quit", ());
+                return;
+            }
+            if action == "app-quit" {
+                // A ready update installs from the frontend on quit.
+                if update_relaunch::update_ready() {
+                    let _ = app.emit("tray-quit", ());
+                } else {
+                    app.exit(0);
+                }
                 return;
             }
             if matches!(action, "settings" | "check-for-updates" | "tray-open") {
@@ -68,6 +78,7 @@ fn main() {
                 use std::os::unix::fs::PermissionsExt;
                 std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(0o700))?;
             }
+            let relaunch = update_relaunch::take(&data_dir);
             // Windows keeps the mail database in the local (non-roaming)
             // profile; migrate any legacy roaming database first.
             let mail_dir = storage::mail_data_dir(app.handle())?;
@@ -161,14 +172,23 @@ fn main() {
             // menubar onto this HWND — muda paints it through glass on activate.
             #[cfg(target_os = "windows")]
             let window_builder = window_builder.decorations(false);
-            window_builder.build().map_err(|error| error.to_string())?;
             let close_to_tray = app
                 .state::<AppState>()
                 .settings
                 .get()
                 .map(|settings| settings.close_to_tray)
                 .unwrap_or(true);
+            let start_hidden = relaunch == Some(update_relaunch::RelaunchMode::Background)
+                && close_to_tray;
+            window_builder
+                .visible(!start_hidden)
+                .build()
+                .map_err(|error| error.to_string())?;
             tray::sync(app.handle(), close_to_tray);
+            // Never leave a hidden window with no icon to reopen it.
+            if start_hidden && !tray::should_hide_on_close(close_to_tray, tray::tray_is_active()) {
+                tray::show_main(app.handle());
+            }
             install_menu(
                 app,
                 !has_startup_error && mail_actions_enabled(accounts.len()),
@@ -225,6 +245,7 @@ fn main() {
                     if tray::should_hide_on_close(enabled, tray::tray_is_active()) {
                         api.prevent_close();
                         let _ = window.hide();
+                        let _ = window.emit("main-window-hidden", ());
                     }
                 }
             }
@@ -322,6 +343,11 @@ fn main() {
             commands::settings_system::relaunch_app,
             commands::settings_system::quit_app,
             commands::settings_system::tray_is_active,
+            commands::settings_system::prepare_update_relaunch,
+            commands::settings_system::clear_update_relaunch,
+            commands::settings_system::get_update_relaunch,
+            commands::settings_system::set_update_ready,
+            commands::settings_system::background_update_allowed,
             window_fx::set_workspace_window_fx,
             window_fx::supports_workspace_window_fx,
             window_fx::accessibility_reduce_transparency,
@@ -464,7 +490,11 @@ fn build_application_menu<R: Runtime>(
         .hide_others();
     #[cfg(target_os = "macos")]
     let app_menu_builder = app_menu_builder.show_all();
-    let app_menu = app_menu_builder.separator().quit().build()?;
+    // Custom Quit so a downloaded update can install before exit.
+    let quit = MenuItemBuilder::with_id("app-quit", "Quit Postal Snap")
+        .accelerator("CmdOrCtrl+Q")
+        .build(handle)?;
+    let app_menu = app_menu_builder.separator().item(&quit).build()?;
     let file_menu = SubmenuBuilder::with_id(handle, "file", "File")
         .item(&compose)
         .item(&get_mail)

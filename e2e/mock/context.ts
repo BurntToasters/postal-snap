@@ -69,6 +69,8 @@ export interface MockState {
   exportedSettings: number;
   importedSettings: number;
   printCalls: number;
+  updateCalls: Array<{ command: string; args: Record<string, unknown> }>;
+  backgroundUpdateAllowed: boolean;
   rules: Array<Record<string, unknown>>;
   callbacks: Map<number, (...args: unknown[]) => void>;
   eventListeners: Map<string, Set<number>>;

@@ -3,7 +3,7 @@
   display: grid;
   min-height: 0;
   flex: 1;
-  grid-template-columns: 210px minmax(0, 1fr);
+  grid-template-columns: minmax(210px, auto) minmax(0, 1fr);
 }
 
 .settings-nav {
@@ -57,7 +57,8 @@
 }
 
 .settings-nav svg {
-  width: 19px;
+  width: 1.1875rem;
+  height: 1.1875rem;
 }
 
 .settings-nav button.active svg {
@@ -254,8 +255,8 @@
 
 .settings-actions svg,
 .settings-empty-state > svg {
-  width: 17px;
-  height: 17px;
+  width: 1.0625rem;
+  height: 1.0625rem;
 }
 
 .settings-data-status {
@@ -271,8 +272,8 @@
 }
 
 .settings-empty-state > svg {
-  width: 30px;
-  height: 30px;
+  width: 1.875rem;
+  height: 1.875rem;
 }
 
 .settings-empty-state p {
@@ -497,8 +498,8 @@
 }
 
 .update-ready-icon svg {
-  width: 32px;
-  height: 32px;
+  width: 2rem;
+  height: 2rem;
   color: var(--accent);
 }
 

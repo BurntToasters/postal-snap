@@ -6,7 +6,7 @@ export const update = {
     `Postal Snap ${version ? `version ${version}` : "update"} has been downloaded. Would you like to restart now to complete the update?`,
   downloadedQuietlyTitle: "Update Ready",
   downloadedQuietly: (version: string) =>
-    `Postal Snap ${version} is downloaded. Use Update Ready to restart now, or quit Postal Snap to install it. On Windows and macOS, quit from the tray or menu bar; closing the window hides the app when that option is on.`,
+    `Postal Snap ${version} is downloaded. Use Update Ready to restart now. Otherwise it installs quietly when you quit, or while Postal Snap is hidden in the tray or menu bar.`,
   upToDateTitle: "Postal Snap",
   upToDateMessage:
     "You're up to date! Postal Snap is currently running the latest version.",

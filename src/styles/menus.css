@@ -108,7 +108,8 @@
 }
 
 .move-control svg {
-  width: 18px;
+  width: 1.125rem;
+  height: 1.125rem;
 }
 
 .move-control select {

@@ -11,10 +11,20 @@ export interface UpdateCheckResult {
 
 export type UpdateFoundListener = (version?: string) => void;
 
+/**
+ * restart: reopen the window (Settings or banner).
+ * background: reopen in the tray or menu bar with no window.
+ * quit: install and stay closed.
+ */
+export type UpdateApplyMode = "restart" | "background" | "quit";
+
+/** Idle time after the window hides before a background install. */
+export const BACKGROUND_UPDATE_DELAY_MS = 3 * 60 * 1000;
+
 interface DownloadedUpdate {
   version: string;
   download: () => Promise<void>;
-  install: () => Promise<void>;
+  install: (options?: { restartAfterInstall?: boolean }) => Promise<void>;
 }
 
 let updateInFlight: Promise<UpdateCheckResult> | undefined;
@@ -25,7 +35,10 @@ let updateFound = false;
 let updateVersion: string | undefined;
 let updateReadyVersion: string | undefined;
 let pendingPackage: DownloadedUpdate | undefined;
-const quitUpdateListeners = new Set<() => void>();
+let backgroundApplyFailed = false;
+let quitApplyFailed = false;
+let backgroundHolds = 0;
+const updateReadyListeners = new Set<() => void>();
 
 export function addUpdateFoundListener(listener: UpdateFoundListener): void {
   updateFoundListeners.add(listener);
@@ -51,7 +64,10 @@ export function resetUpdateStateForTesting(): void {
   updateVersion = undefined;
   updateReadyVersion = undefined;
   pendingPackage = undefined;
-  quitUpdateListeners.clear();
+  backgroundApplyFailed = false;
+  quitApplyFailed = false;
+  backgroundHolds = 0;
+  updateReadyListeners.clear();
   useAppStore.getState().setUpdateReady(null);
 }
 
@@ -63,7 +79,8 @@ function markUpdateReady(update: DownloadedUpdate): void {
   pendingPackage = update;
   updateReadyVersion = update.version;
   useAppStore.getState().setUpdateReady(update.version);
-  for (const listener of quitUpdateListeners) listener();
+  void api.setUpdateReady(true).catch(() => undefined);
+  for (const listener of updateReadyListeners) listener();
 }
 
 function notifyUpdateFound(version: string): void {
@@ -113,16 +130,38 @@ export function runUpdateSingleFlight(
   return task;
 }
 
-export async function applyPendingUpdate(): Promise<void> {
+export async function applyPendingUpdate(
+  mode: UpdateApplyMode = "restart",
+): Promise<void> {
   if (applyInFlight) return applyInFlight;
   const task = (async (): Promise<void> => {
+    const relaunch = mode !== "quit";
     try {
+      if (mode === "background") {
+        // Without the marker the relaunch would open the window.
+        await api.prepareUpdateRelaunch("background");
+      } else if (mode === "restart") {
+        await api.prepareUpdateRelaunch("window").catch(() => undefined);
+      }
       if (pendingPackage) {
-        await pendingPackage.install();
+        // Windows exits here; its installer reopens the app only on relaunch.
+        await pendingPackage.install({ restartAfterInstall: relaunch });
         pendingPackage = undefined;
       }
-      await api.relaunch();
+      if (relaunch) await api.relaunch();
+      else await api.quitApp();
     } catch {
+      await api.clearUpdateRelaunch().catch(() => undefined);
+      if (mode === "background") {
+        // Stay quiet in the tray; Settings can still retry.
+        backgroundApplyFailed = true;
+        return;
+      }
+      if (mode === "quit") {
+        // The next Quit exits instead of retrying the failed install.
+        quitApplyFailed = true;
+        void api.setUpdateReady(false).catch(() => undefined);
+      }
       await api.showNativeMessage(
         strings.update.installErrorTitle,
         strings.update.installErrorMessage,
@@ -306,7 +345,7 @@ export function startDeferredUpdateOnQuit(): () => void {
             return;
           }
           try {
-            await applyPendingUpdate();
+            await quitOrApplyPendingUpdate();
           } catch {
             // Leave the window open so drafts and unsent mail are not lost.
           }
@@ -314,18 +353,84 @@ export function startDeferredUpdateOnQuit(): () => void {
       })
       .catch(() => undefined);
   };
-  quitUpdateListeners.add(attach);
+  updateReadyListeners.add(attach);
   attach();
   return () => {
     cancelled = true;
-    quitUpdateListeners.delete(attach);
+    updateReadyListeners.delete(attach);
+    unlisten?.();
+  };
+}
+
+/** Delays background installs while work such as an SMTP send runs. */
+export function holdBackgroundUpdate(): () => void {
+  backgroundHolds += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    backgroundHolds -= 1;
+  };
+}
+
+function backgroundUpdateBlocked(): boolean {
+  return backgroundHolds > 0 || useAppStore.getState().composerOpen;
+}
+
+/**
+ * Installs a downloaded update while the window is hidden to the tray or
+ * menu bar, then restarts there without showing the window.
+ */
+export function startBackgroundUpdateWhileHidden(): () => void {
+  let cancelled = false;
+  let timer: number | undefined;
+  let unlisten: (() => void) | undefined;
+  const schedule = () => {
+    if (cancelled || !pendingPackage || backgroundApplyFailed) return;
+    if (timer !== undefined) window.clearTimeout(timer);
+    timer = window.setTimeout(() => {
+      timer = undefined;
+      void attempt();
+    }, BACKGROUND_UPDATE_DELAY_MS);
+  };
+  const attempt = async () => {
+    if (
+      cancelled ||
+      !pendingPackage ||
+      backgroundApplyFailed ||
+      applyInFlight
+    ) {
+      return;
+    }
+    const allowed = await api.backgroundUpdateAllowed().catch(() => false);
+    // A visible window waits for the next hide.
+    if (!allowed || cancelled) return;
+    if (backgroundUpdateBlocked()) {
+      schedule();
+      return;
+    }
+    await applyPendingUpdate("background");
+  };
+  updateReadyListeners.add(schedule);
+  void api
+    .onMainWindowHidden(schedule)
+    .then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    })
+    .catch(() => undefined);
+  schedule();
+  return () => {
+    cancelled = true;
+    updateReadyListeners.delete(schedule);
+    if (timer !== undefined) window.clearTimeout(timer);
     unlisten?.();
   };
 }
 
 export async function quitOrApplyPendingUpdate(): Promise<void> {
-  if (getUpdateReadyVersion()) {
-    await applyPendingUpdate();
+  if (getUpdateReadyVersion() && !quitApplyFailed) {
+    await applyPendingUpdate("quit");
     return;
   }
   await api.quitApp();

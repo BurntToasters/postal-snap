@@ -69,8 +69,8 @@
 .toolbar-button svg,
 .icon-button svg,
 .add-account-button svg {
-  width: 19px;
-  height: 19px;
+  width: 1.1875rem;
+  height: 1.1875rem;
 }
 
 .danger-button {
