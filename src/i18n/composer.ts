@@ -80,6 +80,11 @@ export const composer = {
   invalidHeader: "Names and addresses cannot contain control characters.",
   invalidSubject: "Subject cannot contain control characters.",
   forwardedMessage: "Forwarded message",
+  forwardFrom: "From",
+  forwardDate: "Date",
+  forwardSubject: "Subject",
+  forwardTo: "To",
+  forwardCc: "Cc",
   wrote: (date: string, sender: string) => `On ${date}, ${sender} wrote:`,
   sender: "sender",
   attachmentSizeWarning:
@@ -87,6 +92,9 @@ export const composer = {
   minimize: "Minimize draft",
   maximize: "Maximize editor",
   restore: "Restore editor",
+  resizeWindow: "Resize message window",
+  resizeHint: "Drag, or use the arrow keys, to resize",
+  moveHint: "Drag to move",
   fromAlias: "From address",
   inlineImageFailed: (count: number) =>
     `${count} inline image${count === 1 ? "" : "s"} could not be restored. Save the draft and reopen it to retry.`,

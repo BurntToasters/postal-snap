@@ -272,6 +272,12 @@ pub fn schedule_background_update(app: AppHandle) {
     crate::update_relaunch::arm_background_update(&app);
 }
 
+/// Restarts the periodic update cadence after a successful check.
+#[tauri::command]
+pub fn mark_update_checked() {
+    crate::update_schedule::mark_checked();
+}
+
 const MAX_LICENSE_NOTICE_BYTES: usize = 1_048_576;
 const MAX_LICENSE_PACKAGE_BYTES: usize = 16_777_216;
 const LICENSE_NOTICE_FILES: &[(&str, &str, &str)] = &[
