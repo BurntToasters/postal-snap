@@ -32,6 +32,7 @@ Postal Snap is a calm, accessible desktop email client. Mail stays on your compu
 - **FIX - Narrow reader header:** In a narrow window, the date no longer takes the sender's place next to the picture. The sender comes first and the date sits below.
 - **UI - Icons grow with text size:** Toolbar, mailbox, reader, composer, settings, and setup icons now grow with larger text sizes instead of staying small beside large labels.
 - **UI - Large text fits better:** At larger text sizes, Settings choices stack so the full value shows, the Settings list no longer cuts off "Notifications", Get Mail stays on one line, the search box has room to type, setup step numbers stay inside their circles, and message details labels no longer run into their values.
+- **Misc:** General fixes.
 
 ## Changes in `v0.2.2:`
 
