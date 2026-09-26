@@ -171,7 +171,9 @@ pub(crate) async fn deliver_outbox_locked(
         return outbox_preparation_failed(outbox_id, account_id, app, state, error);
     }
     if message_id.is_empty() || mime_bytes.is_empty() {
-        let resolved = match resolve_draft_files(&state.db, &draft) {
+        // The queue keeps the unsigned draft for Undo; sign what goes out.
+        let signed = mail::apply_signature(draft.clone(), &account.summary.signature);
+        let resolved = match resolve_draft_files(&state.db, &signed) {
             Ok(draft) => draft,
             Err(error) => {
                 return outbox_preparation_failed(outbox_id, account_id, app, state, error);
@@ -223,7 +225,10 @@ pub(crate) async fn deliver_outbox_locked(
                 })
                 .collect();
             let _ = state.db.record_recipients(account_id, &history);
-            let sent_mailbox = state.db.mailbox_for_role(account_id, "sent")?;
+            // SMTP accepted the message: never return early here, or the row
+            // stays in `sending` until restart. A lookup error takes the
+            // Sent-copy retry path instead.
+            let sent_mailbox = state.db.mailbox_for_role(account_id, "sent").ok().flatten();
             let copy_result = match sent_mailbox {
                 Some((_, mailbox)) => {
                     mail::ensure_sent_copy(&account, &password, &mailbox, &message_id, &mime_bytes)
@@ -271,17 +276,31 @@ pub(crate) async fn deliver_outbox_locked(
                 detail: None,
             })
         }
-        Err(_) => {
-            const DETAIL: &str =
-                "Delivery could not be confirmed. Postal Snap will not resend automatically.";
+        Err(error) => {
+            // Only a definite "not accepted" may go back in the queue; an
+            // uncertain send waits for the user so it is never sent twice.
+            let (next_state, detail) = match error.kind {
+                mail::SendFailure::NotSentRetry => (
+                    "queued",
+                    "Not sent yet. The mail server could not take it right now. Postal Snap will try again automatically.",
+                ),
+                mail::SendFailure::NotSentRefused => (
+                    "needs_attention",
+                    "Not sent. The mail server refused this message. Check the recipients and the account, then try again.",
+                ),
+                mail::SendFailure::Uncertain => (
+                    "needs_attention",
+                    "Delivery could not be confirmed. Postal Snap will not resend automatically.",
+                ),
+            };
             state
                 .db
-                .set_outbox_state(outbox_id, account_id, "needs_attention", Some(DETAIL))?;
-            emit_outbox_change(app, account_id, Some(outbox_id), Some("needs_attention"));
+                .set_outbox_state(outbox_id, account_id, next_state, Some(detail))?;
+            emit_outbox_change(app, account_id, Some(outbox_id), Some(next_state));
             Ok(SendOutcome {
                 id: outbox_id.to_string(),
-                state: "needs_attention".into(),
-                detail: Some(DETAIL.into()),
+                state: next_state.into(),
+                detail: Some(detail.into()),
             })
         }
     }

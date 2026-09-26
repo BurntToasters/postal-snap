@@ -1445,6 +1445,93 @@ mod tests {
     }
 
     #[test]
+    fn draft_times_are_utc_rfc3339_even_for_legacy_rows() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let id = db.save_draft(&draft(&account.summary.id)).unwrap();
+        db.conn()
+            .unwrap()
+            .execute(
+                "UPDATE drafts SET updated_at='2026-09-26 04:27:52' WHERE id=?1",
+                [id.clone()],
+            )
+            .unwrap();
+        let listed = db.list_drafts(&account.summary.id).unwrap();
+        let parsed = chrono::DateTime::parse_from_rfc3339(&listed[0].updated_at).unwrap();
+        assert_eq!(
+            parsed.with_timezone(&chrono::Utc).to_rfc3339(),
+            "2026-09-26T04:27:52+00:00"
+        );
+        let fresh = db.save_draft(&draft(&account.summary.id)).unwrap();
+        let listed = db.list_drafts(&account.summary.id).unwrap();
+        let saved = listed.iter().find(|item| item.id == fresh).unwrap();
+        assert!(chrono::DateTime::parse_from_rfc3339(&saved.updated_at).is_ok());
+    }
+
+    #[test]
+    fn drafts_sort_by_time_across_stored_formats() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let local = db.save_draft(&draft(&account.summary.id)).unwrap();
+        let imported = db.save_draft(&draft(&account.summary.id)).unwrap();
+        let conn = db.conn().unwrap();
+        conn.execute(
+            "UPDATE drafts SET updated_at='2026-09-26 05:00:00' WHERE id=?1",
+            [local.clone()],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE drafts SET updated_at='2026-09-26T04:00:00+00:00' WHERE id=?1",
+            [imported.clone()],
+        )
+        .unwrap();
+        drop(conn);
+        let listed = db.list_drafts(&account.summary.id).unwrap();
+        let order: Vec<_> = listed.iter().map(|item| item.id.clone()).collect();
+        assert_eq!(order, vec![local, imported]);
+    }
+
+    #[test]
+    fn latest_inbox_message_skips_mail_leaving_the_inbox() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, &account.summary.id, "INBOX", &MailboxRole::Inbox);
+        let archive = mailbox(&db, &account.summary.id, "Archive", &MailboxRole::Archive);
+        db.upsert_message(
+            &account.summary.id,
+            inbox,
+            &message(1, "2026-08-18T12:00:00Z"),
+        )
+        .unwrap();
+        db.upsert_message(
+            &account.summary.id,
+            inbox,
+            &message(2, "2026-08-19T12:00:00Z"),
+        )
+        .unwrap();
+        let id_for = |uid: u32| -> i64 {
+            db.conn()
+                .unwrap()
+                .query_row(
+                    "SELECT id FROM messages WHERE mailbox_id=?1 AND uid=?2",
+                    rusqlite::params![inbox, uid],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        let (older, newer) = (id_for(1), id_for(2));
+        db.mark_pending_move(newer, archive).unwrap();
+        let latest = db
+            .latest_inbox_message(&account.summary.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(latest.id, older);
+    }
+
+    #[test]
     fn cursor_pagination_clamps_zero_limit_without_panicking() {
         let db = Database::memory();
         let account = account();

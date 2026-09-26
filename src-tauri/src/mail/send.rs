@@ -49,19 +49,68 @@ pub async fn prepare_draft_message(
     Ok(bytes)
 }
 
+/// What a failed SMTP send means for the message.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SendFailure {
+    /// Never accepted and safe to try again: a 4xx reply, or no connection.
+    NotSentRetry,
+    /// Never accepted and a retry will not help: a 5xx reply or failed TLS.
+    NotSentRefused,
+    /// The connection may have dropped after the message body. Never resend
+    /// without the user.
+    Uncertain,
+}
+
+/// Why a send failed. The server's words are never kept: they can name
+/// addresses, and the outbox shows a fixed plain explanation instead.
+#[derive(Debug)]
+pub struct SendError {
+    pub kind: SendFailure,
+}
+
+/// SMTP replies are final: a 4xx or 5xx means the server did not take the
+/// message, at any stage. Only a lost connection mid-session is uncertain.
+pub(crate) fn classify_send_failure(
+    permanent: bool,
+    transient: bool,
+    tls: bool,
+    connect_failed: bool,
+) -> SendFailure {
+    if permanent || tls {
+        SendFailure::NotSentRefused
+    } else if transient || connect_failed {
+        SendFailure::NotSentRetry
+    } else {
+        SendFailure::Uncertain
+    }
+}
+
 pub async fn send_prepared(
     account: &AccountRecord,
     password: &str,
     draft: &ComposeDraft,
     bytes: &[u8],
-) -> Result<(), String> {
-    let envelope = message_envelope(account, draft)?;
+) -> Result<(), SendError> {
+    // Nothing reached a server before the transport exists.
+    let refused = |_| SendError {
+        kind: SendFailure::NotSentRefused,
+    };
+    let envelope = message_envelope(account, draft).map_err(refused)?;
     let password = Zeroizing::new(password.to_string());
-    let transport = smtp_transport(&account.smtp, &password)?;
+    let transport = smtp_transport(&account.smtp, &password).map_err(refused)?;
     transport
         .send_raw(&envelope, bytes)
         .await
-        .map_err(|error| redact_error(&error, "Send"))?;
+        .map_err(|error| SendError {
+            // lettre keeps its connect-failure kind private; its Debug output
+            // names it. `refused_smtp_connection_is_not_sent` pins this.
+            kind: classify_send_failure(
+                error.is_permanent(),
+                error.is_transient(),
+                error.is_tls(),
+                format!("{error:?}").contains("kind: Connection"),
+            ),
+        })?;
     Ok(())
 }
 

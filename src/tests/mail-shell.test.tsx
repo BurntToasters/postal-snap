@@ -1110,6 +1110,10 @@ describe("mail shell", () => {
     const scrollListener = vi.fn();
     window.addEventListener("postal:menu-action", menuListener);
     window.addEventListener("postal:scroll-reader", scrollListener);
+    // Flat list order; grouped conversation order is covered in e2e.
+    useAppStore.setState({
+      settings: { ...useAppStore.getState().settings, groupThreads: false },
+    });
     renderShell();
     await screen.findByRole("option", { name: /First message/i });
 

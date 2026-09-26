@@ -96,6 +96,7 @@ pub use remote_drafts::{
 };
 pub use send::{
     apply_signature, ensure_sent_copy, prepare_draft_message, prepare_message, send_prepared,
+    SendFailure,
 };
 #[cfg(test)]
 pub use sync::Uncontended;
@@ -229,6 +230,78 @@ mod tests {
             references: None,
             send_at: None,
         }
+    }
+
+    fn loopback_smtp_account() -> AccountRecord {
+        AccountRecord {
+            summary: AccountSummary {
+                id: "account-1".into(),
+                provider: ProviderKind::Manual,
+                email: "sam@example.com".into(),
+                display_name: "Sam".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+                color: None,
+            },
+            imap: ServerConfig {
+                host: "127.0.0.1".into(),
+                port: 1,
+                tls_mode: TlsMode::Tls,
+                username: "sam@example.com".into(),
+            },
+            smtp: ServerConfig {
+                host: "127.0.0.1".into(),
+                port: 1,
+                tls_mode: TlsMode::Tls,
+                username: "sam@example.com".into(),
+            },
+        }
+    }
+
+    #[test]
+    fn smtp_failures_split_into_not_sent_and_uncertain() {
+        use super::send::{classify_send_failure, SendFailure};
+        // A 4xx reply or a connection that never opened: nothing was accepted.
+        assert_eq!(
+            classify_send_failure(false, true, false, false),
+            SendFailure::NotSentRetry
+        );
+        assert_eq!(
+            classify_send_failure(false, false, false, true),
+            SendFailure::NotSentRetry
+        );
+        // A 5xx reply or failed TLS: not sent, and a retry will not help.
+        assert_eq!(
+            classify_send_failure(true, false, false, false),
+            SendFailure::NotSentRefused
+        );
+        assert_eq!(
+            classify_send_failure(false, false, true, false),
+            SendFailure::NotSentRefused
+        );
+        // Anything else may have dropped after the body: never resend.
+        assert_eq!(
+            classify_send_failure(false, false, false, false),
+            SendFailure::Uncertain
+        );
+    }
+
+    #[tokio::test]
+    async fn refused_smtp_connection_is_not_sent() {
+        use super::send::SendFailure;
+        // Port 1 on loopback refuses before any SMTP session exists.
+        let failure = send_prepared(
+            &loopback_smtp_account(),
+            "unused",
+            &blank_draft(),
+            b"Subject: Hello\r\n\r\nHello",
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(failure.kind, SendFailure::NotSentRetry);
     }
 
     #[test]

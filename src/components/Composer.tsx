@@ -221,7 +221,14 @@ export function Composer({ accountId }: Props) {
   const [minimized, setMinimized] = useState(false);
   const [maximized, setMaximized] = useState(false);
   const [moreFormattingOpen, setMoreFormattingOpen] = useState(false);
-  const close = useAppStore((state) => state.closeComposer);
+  const closeComposer = useAppStore((state) => state.closeComposer);
+  // Set when this composer closes itself (send, save, discard). Any other
+  // unmount means a new composer replaced it and unsaved work must be kept.
+  const closedByComposer = useRef(false);
+  const close = useCallback(() => {
+    closedByComposer.current = true;
+    closeComposer();
+  }, [closeComposer]);
   const setError = useAppStore((state) => state.setError);
   const [to, setTo] = useState(
     seedRecipients(seed, "to", accountEmail, account?.aliases),
@@ -569,6 +576,37 @@ export function Composer({ accountId }: Props) {
     saveDraftRef.current = saveDraft;
   }, [saveDraft]);
 
+  const editorRef = useRef(editor);
+  useEffect(() => {
+    editorRef.current = editor;
+  }, [editor]);
+
+  // Replaced by another composer (mailto:, Reply, an opened draft): save the
+  // user's edits as a draft instead of dropping them. Tiptap destroys the
+  // editor after unmount, so it is still readable here.
+  useEffect(
+    () => () => {
+      if (
+        closedByComposer.current ||
+        isDiscarding.current ||
+        isSending.current ||
+        draftRevision.current === 0 ||
+        saveStateRef.current !== "unsaved"
+      )
+        return;
+      const draft = buildDraftRef.current();
+      if (!hasDraftContent(draft, editorRef.current?.getText() ?? "")) return;
+      void (savePromiseRef.current ?? Promise.resolve())
+        .catch(() => undefined)
+        .then(() =>
+          api.saveDraft({ ...draft, id: draftIdRef.current ?? draft.id }),
+        )
+        .then(() => announceLocalMailChanged(draft.accountId))
+        .catch(() => undefined);
+    },
+    [],
+  );
+
   useEffect(() => {
     let active = true;
     let unlisten: (() => void) | undefined;
@@ -706,7 +744,17 @@ export function Composer({ accountId }: Props) {
           sendAt ? { ...draft, sendAt } : draft,
         );
         announceLocalMailChanged(accountId);
-        if (outcome.state === "needs_attention" && outcome.detail) {
+        // Uncertain, or queued after a real attempt: never let it look sent.
+        // An offline account queues on purpose and needs no warning.
+        const current = useAppStore.getState();
+        const offline =
+          current.accounts.find((item) => item.id === accountId)?.syncState ===
+            "offline" || current.sync[accountId]?.phase === "offline";
+        if (
+          (outcome.state === "needs_attention" ||
+            (outcome.state === "queued" && !offline)) &&
+          outcome.detail
+        ) {
           setError(outcome.detail);
         }
         if (outcome.state === "scheduled") {

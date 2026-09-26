@@ -18,9 +18,6 @@ export type UpdateFoundListener = (version?: string) => void;
  */
 export type UpdateApplyMode = "restart" | "background" | "quit";
 
-/** Idle time after the window hides before a background install. */
-export const BACKGROUND_UPDATE_DELAY_MS = 3 * 60 * 1000;
-
 interface DownloadedUpdate {
   version: string;
   download: () => Promise<void>;
@@ -183,6 +180,7 @@ export async function promptToRestartForUpdate(
   const confirmed = await api.showNativeConfirm(
     strings.update.readyTitle,
     strings.update.readyPrompt(ver ?? ""),
+    { ok: strings.update.restartNow, cancel: strings.update.later },
   );
   if (confirmed) {
     await applyPendingUpdate();
@@ -200,10 +198,7 @@ export async function checkUpdateInteractive(): Promise<void> {
     try {
       const result = await updateInFlight;
       if (result.available && result.version) {
-        await api.showNativeMessage(
-          strings.update.downloadedQuietlyTitle,
-          strings.update.downloadedQuietly(result.version),
-        );
+        await promptToRestartForUpdate(result.version);
       } else {
         await api.showNativeMessage(
           strings.update.upToDateTitle,
@@ -252,10 +247,7 @@ export async function checkUpdateInteractive(): Promise<void> {
         return;
       }
 
-      await api.showNativeMessage(
-        strings.update.downloadedQuietlyTitle,
-        strings.update.downloadedQuietly(update.version),
-      );
+      await promptToRestartForUpdate(update.version);
     } catch {
       await api.showNativeMessage(
         strings.update.checkErrorTitle,
@@ -383,16 +375,8 @@ function backgroundUpdateBlocked(): boolean {
  */
 export function startBackgroundUpdateWhileHidden(): () => void {
   let cancelled = false;
-  let timer: number | undefined;
   let unlisten: (() => void) | undefined;
-  const schedule = () => {
-    if (cancelled || !pendingPackage || backgroundApplyFailed) return;
-    if (timer !== undefined) window.clearTimeout(timer);
-    timer = window.setTimeout(() => {
-      timer = undefined;
-      void attempt();
-    }, BACKGROUND_UPDATE_DELAY_MS);
-  };
+  // Rust times the tray wait; hidden webviews throttle their own timers.
   const attempt = async () => {
     if (
       cancelled ||
@@ -403,27 +387,23 @@ export function startBackgroundUpdateWhileHidden(): () => void {
       return;
     }
     const allowed = await api.backgroundUpdateAllowed().catch(() => false);
-    // A visible window waits for the next hide.
+    // A reopened window waits for the next close.
     if (!allowed || cancelled) return;
     if (backgroundUpdateBlocked()) {
-      schedule();
+      void api.scheduleBackgroundUpdate().catch(() => undefined);
       return;
     }
     await applyPendingUpdate("background");
   };
-  updateReadyListeners.add(schedule);
   void api
-    .onMainWindowHidden(schedule)
+    .onBackgroundUpdateDue(() => void attempt())
     .then((fn) => {
       if (cancelled) fn();
       else unlisten = fn;
     })
     .catch(() => undefined);
-  schedule();
   return () => {
     cancelled = true;
-    updateReadyListeners.delete(schedule);
-    if (timer !== undefined) window.clearTimeout(timer);
     unlisten?.();
   };
 }
