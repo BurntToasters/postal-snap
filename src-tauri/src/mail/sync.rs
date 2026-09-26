@@ -51,6 +51,12 @@ pub trait SyncHooks: Send {
     fn yield_account(&mut self) -> impl Future<Output = ()> + Send;
     /// Called when the pass moves to a folder or finishes a batch.
     fn progress(&mut self, folder: &str);
+    /// Password to reconnect with after a yield. Removal and password changes
+    /// run under the account lock while we yielded, so re-read the vault.
+    fn current_password(&self, account_id: &str) -> Result<zeroize::Zeroizing<String>, String> {
+        crate::credentials::load(account_id)
+            .map_err(|_| "This account is no longer available.".to_string())
+    }
 }
 
 /// Hooks for passes run without a worker (integration tests).
@@ -198,11 +204,8 @@ async fn yield_point<H: SyncHooks>(
     }
     lease.release();
     hooks.yield_account().await;
-    // Removal and password changes run under the account lock while we
-    // yielded. Re-read the vault so this pass cannot reconnect with a
-    // password the user just deleted or replaced.
-    let current = crate::credentials::load(&account.summary.id)
-        .map_err(|_| "This account is no longer available.".to_string())?;
+    // Never reconnect with a password the user just deleted or replaced.
+    let current = hooks.current_password(&account.summary.id)?;
     pool::checkout(account, &current).await
 }
 

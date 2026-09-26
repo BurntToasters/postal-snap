@@ -771,6 +771,14 @@ mod tests {
         fn progress(&mut self, folder: &str) {
             self.visited.push(folder.to_string());
         }
+
+        // The test account has no vault entry; CI runners have no keyring.
+        fn current_password(
+            &self,
+            _account_id: &str,
+        ) -> Result<zeroize::Zeroizing<String>, String> {
+            Ok(zeroize::Zeroizing::new(self.password.to_string()))
+        }
     }
 
     fn imap_date(days_ago: i64, offset_minutes: i64) -> String {
