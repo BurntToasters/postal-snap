@@ -1,4 +1,4 @@
-import type { Dispatch, SetStateAction } from "react";
+import type { Dispatch, HTMLAttributes, SetStateAction } from "react";
 import { Maximize2, Minimize2, Minus, TriangleAlert, X } from "lucide-react";
 import { strings } from "../../i18n";
 import type { ComposerSeed } from "../../store";
@@ -6,6 +6,7 @@ import type { DraftSummary } from "../../types";
 import { composerTitle } from "./composerSeed";
 
 export interface ComposerHeaderProps {
+  dragHandlers?: HTMLAttributes<HTMLElement>;
   seed: ComposerSeed | undefined;
   saveState: "unsaved" | "saving" | "saved";
   maximized: boolean;
@@ -18,6 +19,7 @@ export interface ComposerHeaderProps {
 }
 
 export function ComposerHeader({
+  dragHandlers = {},
   seed,
   saveState,
   maximized,
@@ -30,7 +32,14 @@ export function ComposerHeader({
 }: ComposerHeaderProps) {
   return (
     <>
-      <header data-tauri-drag-region="deep">
+      {/* Floating: drag moves the composer. Maximized: the app window. */}
+      <header
+        data-tauri-drag-region={maximized ? "deep" : undefined}
+        title={
+          dragHandlers.onPointerDown ? strings.composer.moveHint : undefined
+        }
+        {...dragHandlers}
+      >
         <span>
           <h1 id="composer-title">{composerTitle(seed)}</h1>
           <small aria-live="polite">

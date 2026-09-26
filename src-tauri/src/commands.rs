@@ -112,6 +112,9 @@ pub(crate) mod wake {
     /// A manual sync succeeded; leave the sign-in-failed pause without
     /// another pass.
     pub const RESUME: u8 = 64;
+    /// The computer woke from sleep: sync like SYNC, but a worker paused for
+    /// a rejected password stays paused.
+    pub const SLEEP: u8 = 128;
 }
 
 pub(crate) struct AccountActor {
@@ -221,6 +224,13 @@ impl AppState {
         Ok(())
     }
 
+    /// After system sleep: end a dead IDLE, send what came due, then sync.
+    pub(crate) fn wake_after_sleep(&self, account_id: &str) {
+        if let Ok(actor) = self.actor(account_id) {
+            actor.request(wake::SLEEP | wake::OUTBOX);
+        }
+    }
+
     /// Take the account for a user action, interrupting IDLE and preempting
     /// background sync at its next yield point.
     async fn lock_account(&self, account_id: &str) -> Result<OwnedMutexGuard<()>, String> {
@@ -308,6 +318,12 @@ const IDLE_REFRESH: Duration = Duration::from_secs(5 * 60);
 /// Quiet period before locally saved drafts are pushed to the server.
 const DRAFT_PUSH_DELAY: Duration = Duration::from_secs(60);
 
+/// Only the user (new password, Get Mail) ends a rejected-password pause;
+/// waking from sleep must not retry the sign-in.
+fn leaves_auth_pause(reasons: u8) -> bool {
+    reasons & (wake::CREDENTIALS | wake::SYNC | wake::RESUME) != 0
+}
+
 /// Long-lived loop for one account: sync passes, targeted jobs, IDLE, and
 /// the outbox timer. Exits when the account is removed.
 async fn run_account_worker(account_id: &str, app: &AppHandle) {
@@ -324,16 +340,21 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
         };
         let reasons = actor.take_reasons();
         if parked {
-            if reasons & (wake::CREDENTIALS | wake::SYNC | wake::RESUME) == 0 {
+            if !leaves_auth_pause(reasons) {
                 actor.wake.notified().await;
                 continue;
             }
             parked = false;
         }
-        if reasons & (wake::SYNC | wake::POLICY | wake::CREDENTIALS) != 0 {
+        if reasons & (wake::SYNC | wake::POLICY | wake::CREDENTIALS | wake::SLEEP) != 0 {
             pending_full = true;
         }
         let guard = actor.acquire().await;
+        if reasons & wake::OUTBOX != 0 && (pending_full || more_work) {
+            // Send Later items that came due (for example during sleep) go
+            // out before a long pass.
+            sync::run_targeted_jobs(account_id, app, &state, wake::OUTBOX).await;
+        }
         if pending_full || more_work {
             let previous_message_id = state
                 .db
@@ -341,7 +362,7 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
                 .ok()
                 .flatten()
                 .map(|message| message.id);
-            match sync::run_sync_pass(account_id, app, &state, &actor, guard).await {
+            match sync::run_sync_pass(account_id, app, &state, &actor, guard, false).await {
                 Ok(outcome) => {
                     backoff = 2;
                     attempt = 0;
@@ -361,7 +382,7 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
                     more_work = false;
                     tokio::select! {
                         _ = tokio::time::sleep(reconnect_delay(account_id, backoff, attempt)) => {},
-                        _ = wait_for(&actor, wake::SYNC | wake::CREDENTIALS) => {},
+                        _ = wait_for(&actor, wake::SYNC | wake::CREDENTIALS | wake::SLEEP) => {},
                     }
                     backoff = (backoff * 2).min(120);
                     attempt = attempt.wrapping_add(1);
@@ -394,7 +415,7 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
             emit_sync(app, account_id, "offline", Some(detail), None);
             tokio::select! {
                 _ = tokio::time::sleep(reconnect_delay(account_id, backoff, attempt)) => {},
-                _ = wait_for(&actor, wake::SYNC | wake::CREDENTIALS) => {},
+                _ = wait_for(&actor, wake::SYNC | wake::CREDENTIALS | wake::SLEEP) => {},
             }
             backoff = (backoff * 2).min(120);
             attempt = attempt.wrapping_add(1);
@@ -455,7 +476,7 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
                 );
                 tokio::select! {
                     _ = tokio::time::sleep(reconnect_delay(account_id, backoff, attempt)) => {},
-                    _ = wait_for(&actor, wake::SYNC | wake::CREDENTIALS) => {},
+                    _ = wait_for(&actor, wake::SYNC | wake::CREDENTIALS | wake::SLEEP) => {},
                 }
                 backoff = (backoff * 2).min(120);
                 attempt = attempt.wrapping_add(1);
@@ -920,6 +941,15 @@ fn notify_new_mail(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn waking_from_sleep_keeps_a_rejected_password_paused() {
+        use super::{leaves_auth_pause, wake};
+        assert!(!leaves_auth_pause(wake::SLEEP | wake::OUTBOX));
+        assert!(leaves_auth_pause(wake::SYNC));
+        assert!(leaves_auth_pause(wake::CREDENTIALS));
+        assert!(leaves_auth_pause(wake::RESUME));
+    }
+
     use super::{
         attachments::preview_text, drafts_send::resolve_requested_send_at, is_new_mail,
         sync::apply_filter_rules,

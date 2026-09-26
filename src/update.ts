@@ -108,10 +108,15 @@ export function runUpdateSingleFlight(
     }
     const { check } = await import("@tauri-apps/plugin-updater");
     const update = await check();
-    if (!update) return { available: false };
+    // A check only counts once nothing is left to download.
+    if (!update) {
+      void api.markUpdateChecked().catch(() => undefined);
+      return { available: false };
+    }
     notifyUpdateFound(update.version);
     await update.download();
     markUpdateReady(update);
+    void api.markUpdateChecked().catch(() => undefined);
     return { available: true, version: update.version };
   })();
   updateInFlight = task;
@@ -228,6 +233,7 @@ export async function checkUpdateInteractive(): Promise<void> {
       const { check } = await import("@tauri-apps/plugin-updater");
       const update = await check();
       if (!update) {
+        void api.markUpdateChecked().catch(() => undefined);
         await api.showNativeMessage(
           strings.update.upToDateTitle,
           strings.update.upToDateMessage,
@@ -239,6 +245,7 @@ export async function checkUpdateInteractive(): Promise<void> {
       try {
         await update.download();
         markUpdateReady(update);
+        void api.markUpdateChecked().catch(() => undefined);
       } catch {
         await api.showNativeMessage(
           strings.update.downloadErrorTitle,
@@ -276,32 +283,32 @@ export function checksUpdatesOnStartup(interval: UpdateCheckInterval): boolean {
   return interval !== "manual";
 }
 
-export function periodicUpdateIntervalMs(
-  interval: UpdateCheckInterval,
-): number | null {
-  switch (interval) {
-    case "startupAnd6h":
-      return 6 * 60 * 60 * 1000;
-    case "startupAnd12h":
-      return 12 * 60 * 60 * 1000;
-    case "startupAnd24h":
-      return 24 * 60 * 60 * 1000;
-    default:
-      return null;
-  }
-}
-
+/**
+ * Rust times the cadence on the wall clock, so sleep and hidden-window
+ * throttling cannot delay a due check.
+ */
 export function startPeriodicUpdateCheck(
   interval: UpdateCheckInterval,
 ): () => void {
-  const intervalMs = periodicUpdateIntervalMs(interval);
-  if (intervalMs == null) return () => undefined;
-  const timer = window.setInterval(() => {
-    if (!getUpdateReadyVersion() && !interactiveInFlight && !updateInFlight) {
-      void runUpdateSingleFlight().catch(() => undefined);
-    }
-  }, intervalMs);
-  return () => window.clearInterval(timer);
+  // Rust owns the cadence; only skip listening when it never checks.
+  if (interval === "manual" || interval === "startup") return () => undefined;
+  let cancelled = false;
+  let unlisten: (() => void) | undefined;
+  void api
+    .onUpdateCheckDue(() => {
+      if (!getUpdateReadyVersion() && !interactiveInFlight && !updateInFlight) {
+        void runUpdateSingleFlight().catch(() => undefined);
+      }
+    })
+    .then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    })
+    .catch(() => undefined);
+  return () => {
+    cancelled = true;
+    unlisten?.();
+  };
 }
 
 export async function windowWouldHideInsteadOfQuit(

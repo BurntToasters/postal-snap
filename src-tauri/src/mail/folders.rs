@@ -248,10 +248,9 @@ async fn move_remote_inner(
             "This mailbox changed; refresh mail and try again.".to_string(),
         ));
     }
-    let capabilities = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.capabilities())
-        .await
-        .map_err(|_| MailboxOperationError::transient("Move timed out.".to_string()))?
-        .map_err(|error| remote_failure(error, "Move capability check"))?;
+    // Checked once per connection by the pool; saves a round trip per move.
+    let can_move = session.capabilities.mv;
+    let has_uidplus = session.capabilities.uidplus;
     let set = uids
         .iter()
         .map(ToString::to_string)
@@ -281,7 +280,7 @@ async fn move_remote_inner(
                 .map_err(|_| MailboxOperationError::transient("Move timed out.".to_string()))?
                 .map_err(|error| remote_failure(error, "Move"))?;
             if !existing.is_empty() {
-                if !capabilities.has_str("UIDPLUS") {
+                if !has_uidplus {
                     return Err(MailboxOperationError::terminal(
                         "This mail server cannot safely move messages.".to_string(),
                     ));
@@ -321,12 +320,12 @@ async fn move_remote_inner(
                 .map_err(|error| remote_failure(error, "Move"))?;
         }
     }
-    if capabilities.has_str("MOVE") {
+    if can_move {
         tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.uid_mv(set, destination))
             .await
             .map_err(|_| MailboxOperationError::transient("Move timed out.".to_string()))?
             .map_err(|error| remote_failure(error, "Move"))?;
-    } else if capabilities.has_str("UIDPLUS") {
+    } else if has_uidplus {
         tokio::time::timeout(
             IMAP_COMMAND_TIMEOUT,
             session.uid_copy(set.clone(), destination),

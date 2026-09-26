@@ -110,11 +110,13 @@ export async function registerMockMessages(page: Page): Promise<void> {
             attachments: [],
           };
         }
+        const fromSelf = params.has("fromSelf");
         return {
           ...selected,
           to: [selected.recipients],
-          cc: [],
-          replyTo: null,
+          cc: fromSelf ? ["lee@example.com", "sam@icloud.com"] : [],
+          // IMAP ENVELOPE fills Reply-To from From when it is absent.
+          replyTo: fromSelf ? "sam@icloud.com" : null,
           textBody: "Are we still meeting on Saturday?",
           htmlBody: location.search.includes("threatLink")
             ? '<p><a href="https://phish.example.test/login">Open site</a></p>'

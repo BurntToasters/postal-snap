@@ -673,6 +673,37 @@ mod tests {
         }
         let summary = inbox_message.expect("SMTP delivery reached Inbox");
         assert_eq!(inbox_counts, Some((1, 1)));
+
+        // Get Mail quick pass. Failure modes: (1) it downloads bodies or
+        // backfill before returning, so Get Mail takes minutes; (2) it skips
+        // new envelopes; (3) it reports no remaining work, so the worker
+        // never downloads the skipped bodies.
+        let quick_db = Database::memory();
+        quick_db.insert_account(&account).unwrap();
+        let quick = sync_account(
+            &quick_db,
+            &account,
+            password,
+            &CachePolicy::default(),
+            &mut QuickPass,
+        )
+        .await
+        .unwrap();
+        let quick_inbox = quick_db
+            .mailbox_id_for_name(&account.summary.id, "INBOX")
+            .unwrap()
+            .unwrap();
+        assert_eq!(quick_db.cached_message_count(quick_inbox).unwrap(), 1);
+        let progress = quick_db
+            .account_sync_progress(&account.summary.id, &CachePolicy::default())
+            .unwrap();
+        assert_eq!(progress.bodies_done, 0);
+        assert!(quick.more_work);
+        run_until_settled(&quick_db, &account, password, &CachePolicy::default()).await;
+        let progress = quick_db
+            .account_sync_progress(&account.summary.id, &CachePolicy::default())
+            .unwrap();
+        assert_eq!(progress.bodies_done, 1);
         let downloaded = download_message(
             &account,
             password,
@@ -851,6 +882,23 @@ mod tests {
             _account_id: &str,
         ) -> Result<zeroize::Zeroizing<String>, String> {
             Ok(zeroize::Zeroizing::new(self.password.to_string()))
+        }
+    }
+
+    /// Hooks for a user-started Get Mail pass.
+    struct QuickPass;
+
+    impl SyncHooks for QuickPass {
+        fn contended(&self) -> bool {
+            false
+        }
+
+        async fn yield_account(&mut self) {}
+
+        fn progress(&mut self, _folder: &str) {}
+
+        fn quick(&self) -> bool {
+            true
         }
     }
 

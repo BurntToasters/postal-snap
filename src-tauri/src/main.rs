@@ -12,12 +12,24 @@ mod models;
 #[allow(dead_code)]
 mod oauth;
 mod providers;
+mod resume_watch;
 mod security;
 mod settings;
 mod storage;
 mod threat_blocking;
 mod tray;
 mod update_relaunch;
+// Store editions keep only the IPC stub; their stores handle updates.
+#[cfg_attr(
+    any(
+        not(feature = "direct-updater"),
+        feature = "flatpak",
+        feature = "mas",
+        feature = "msstore"
+    ),
+    allow(dead_code)
+)]
+mod update_schedule;
 mod window_fx;
 mod window_snap;
 
@@ -197,6 +209,12 @@ fn main() {
                 !has_startup_error && mail_actions_enabled(accounts.len()),
             )?;
             #[cfg(all(
+                feature = "direct-updater",
+                not(any(feature = "flatpak", feature = "mas", feature = "msstore"))
+            ))]
+            update_schedule::start(app.handle());
+            resume_watch::start(app.handle());
+            #[cfg(all(
                 target_os = "linux",
                 not(any(feature = "flatpak", feature = "mas", feature = "msstore"))
             ))]
@@ -353,6 +371,7 @@ fn main() {
             commands::settings_system::set_update_ready,
             commands::settings_system::background_update_allowed,
             commands::settings_system::schedule_background_update,
+            commands::settings_system::mark_update_checked,
             window_fx::set_workspace_window_fx,
             window_fx::supports_workspace_window_fx,
             window_fx::accessibility_reduce_transparency,
