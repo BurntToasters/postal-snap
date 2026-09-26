@@ -41,6 +41,7 @@ Required for GitHub 0.2.x. The live iCloud smoke is a signing-host gate; do not 
 
 - [ ] Hostile-message fixtures cannot run scripts, submit forms, frame content, or load remote resources.
 - [ ] Remote images never load before consent; private, loopback, link-local, and redirect targets stay blocked.
+- [ ] In the signed app on the newest macOS and on Linux, HTML and plain-text message bodies render in the reading pane, loaded images appear, and Print includes the whole body across pages. Clicking an HTML mail link shows the hostname-first confirmation and never blanks the message. Mocked Chromium tests cannot catch native navigation-policy or scriptless-frame behavior.
 - [ ] Known advertising and tracking images stay blocked after Load images; fetch failures remain retryable.
 - [ ] Reported-threat images stay blocked after Load images and are not labeled Safe or confirmed.
 - [ ] `npm run filters:check` matches the committed official EasyList/EasyPrivacy and TweetFeed snapshots. Refresh TweetFeed alone with `npm run tweetfeed:update` when shipping a threat-list bump.

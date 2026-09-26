@@ -1,5 +1,6 @@
 import type { RefObject } from "react";
 import {
+  ArrowUpFromLine,
   Clock,
   FileText,
   FolderPlus,
@@ -162,7 +163,7 @@ export function Sidebar({
           onClick={() => onSelectLocalView("drafts")}
         />
         <FolderButton
-          icon={TriangleAlert}
+          icon={outboxCount ? TriangleAlert : ArrowUpFromLine}
           label={strings.mail.outbox}
           count={outboxCount}
           active={activeLocalView === "outbox"}

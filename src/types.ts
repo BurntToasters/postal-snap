@@ -151,6 +151,8 @@ export interface MessageDetail extends MessageSummary {
   remoteImagesBlocked: boolean;
   attachments: Attachment[];
   references?: string[];
+  /** Why the body is missing when it could not be downloaded. */
+  bodyStatus?: "available" | "offline" | "signInNeeded" | "tooLarge";
 }
 
 export interface ComposeAttachment {

@@ -110,7 +110,9 @@ test("message context menu is compact, iconed, and groups move targets", async (
   await expect(menu).toHaveCount(0);
 });
 
-test("settings dialog uses flat surfaces", async ({ page }) => {
+// Failure mode: a flattening pass strips the raised, Mail-style depth from
+// the settings chrome and cards, leaving plain fills.
+test("settings dialog keeps raised surfaces", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).first().click();
   const dialog = page.locator(".settings-window");
@@ -118,18 +120,16 @@ test("settings dialog uses flat surfaces", async ({ page }) => {
 
   const gradients = await page.evaluate(() =>
     [
-      ".settings-window",
       ".settings-window > header",
       ".settings-nav",
       ".settings-nav button.active",
-      ".settings-content",
       ".settings-row, .switch-row",
     ].map((selector) => {
       const node = document.querySelector(selector);
       return node ? getComputedStyle(node).backgroundImage : "missing";
     }),
   );
-  expect(gradients).toEqual(Array(6).fill("none"));
+  for (const image of gradients) expect(image).toContain("linear-gradient");
 
   await page.screenshot({ path: "test-results/ui-polish-settings.png" });
 });
@@ -447,4 +447,30 @@ test("back-to-back keyboard settings changes both persist", async ({
   await page.screenshot({
     path: "test-results/ui-polish-settings-race-fixed.png",
   });
+});
+
+// Failure mode: the folder tree re-sorted by raw IMAP name, so "Archive" and
+// "Deleted Messages" appeared above the Inbox.
+test("mailbox sidebar keeps Inbox first in role order", async ({ page }) => {
+  await page.goto("/");
+  const nav = page.getByRole("navigation", { name: "Mailboxes" });
+  const labels = await nav
+    .locator("[data-mailbox-id] > button.folder > span")
+    .allTextContents();
+  expect(labels.slice(0, 3)).toEqual(["Inbox", "Archive", "Trash"]);
+  await nav.screenshot({ path: "test-results/ui-polish-folder-order.png" });
+});
+
+// Failure mode: the selected row painted its dot for read mail too, so an
+// opened message still looked unread.
+test("selected read message shows no unread dot", async ({ page }) => {
+  await page.goto("/");
+  const row = page.getByRole("option", { name: /Weekend plans/i });
+  await row.click();
+  await expect(row).toHaveClass(/\bread\b/);
+  await expect(row.locator(".unread-dot")).toHaveCSS(
+    "background-color",
+    "rgba(0, 0, 0, 0)",
+  );
+  await row.screenshot({ path: "test-results/ui-polish-read-selected.png" });
 });
