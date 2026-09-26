@@ -73,6 +73,10 @@ export async function registerMockRemoteSecurity(page: Page): Promise<void> {
           `${String(args.title)}\n\n${String(args.message)}`,
         );
       },
+      print_webview() {
+        state.printCalls += 1;
+        return undefined;
+      },
       show_native_message(args: Record<string, unknown>) {
         window.alert(`${String(args.title)}\n\n${String(args.message)}`);
         return undefined;

@@ -24,16 +24,26 @@
 .toolbar-button,
 .secondary-button,
 .icon-button {
-  background: var(--surface-raised);
-  box-shadow: var(--shadow-control);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--surface-raised) 88%, var(--surface-highlight)),
+    color-mix(in srgb, var(--surface) 82%, var(--surface-muted))
+  );
+  box-shadow:
+    var(--shadow-control),
+    inset 0 1px 0 var(--surface-highlight);
 }
 
 .primary-button {
   border-color: var(--accent);
   color: var(--accent-contrast);
-  background: var(--accent);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent) 88%, white),
+    var(--accent)
+  );
   font-weight: 700;
-  box-shadow: var(--shadow-control);
+  box-shadow: 0 2px 5px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 .primary-button:hover {
@@ -67,7 +77,9 @@
   border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
   color: var(--danger-ink);
   background: color-mix(in srgb, var(--danger-soft) 70%, transparent);
-  box-shadow: var(--shadow-control);
+  box-shadow:
+    var(--shadow-control),
+    inset 0 1px 0 var(--surface-highlight);
 }
 
 .danger-button:hover {

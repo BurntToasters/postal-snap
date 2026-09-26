@@ -61,6 +61,15 @@ export async function hydrateInlineImages(
   );
 }
 
+/** True when sanitized HTML still shows text or an image. */
+export function hasVisibleHtml(html: string): boolean {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  return (
+    (doc.body.textContent ?? "").trim().length > 0 ||
+    doc.body.querySelector("img, hr") !== null
+  );
+}
+
 export function escapePrint(value: string): string {
   return value
     .replace(/&/g, "&amp;")
@@ -77,6 +86,7 @@ export function buildPrintDocument(
   message: MessageDetail,
   loadedHtml: { messageId: number; html: string } | undefined,
   textScale: number,
+  sanitizedHtml?: string,
 ): string {
   const from = message.senderName
     ? `${message.senderName} <${message.senderAddress}>`
@@ -93,7 +103,9 @@ export function buildPrintDocument(
   const body =
     loadedHtml?.messageId === message.id && loadedHtml.html
       ? loadedHtml.html
-      : `<pre style="white-space:pre-wrap;font:inherit">${escapePrint(message.textBody)}</pre>`;
+      : sanitizedHtml
+        ? sanitizedHtml
+        : `<pre style="white-space:pre-wrap;font:inherit">${escapePrint(message.textBody)}</pre>`;
   return messageFrameDocument(
     `<section style="margin:0 0 16px;padding:0 0 12px;border-bottom:1px solid #c8d2dc">${header}</section>${body}`,
     textScale,

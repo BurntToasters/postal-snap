@@ -58,6 +58,7 @@ vi.mock("../api", () => ({
     saveSettings: vi.fn(),
     onFolderCountsChanged: vi.fn(),
     onMessageChanged: vi.fn(),
+    onFrameLink: vi.fn().mockResolvedValue(() => undefined),
     onDraftSyncChanged: vi.fn().mockResolvedValue(() => undefined),
     onOutboxChanged: vi.fn().mockResolvedValue(() => undefined),
     onOfflineOperationsDropped: vi.fn().mockResolvedValue(() => undefined),

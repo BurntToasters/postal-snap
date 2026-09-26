@@ -62,6 +62,33 @@ export async function registerMockMessages(page: Page): Promise<void> {
         }
         const selected =
           args.accountId === secondSummary.accountId ? secondSummary : summary;
+        if (params.has("bodyOffline")) {
+          return {
+            ...selected,
+            to: [selected.recipients],
+            cc: [],
+            replyTo: null,
+            textBody: "",
+            htmlBody: null,
+            remoteImagesBlocked: false,
+            references: [],
+            attachments: [],
+            bodyStatus: "offline",
+          };
+        }
+        if (params.has("blankHtml")) {
+          return {
+            ...selected,
+            to: [selected.recipients],
+            cc: [],
+            replyTo: null,
+            textBody: "Plain part is still readable.",
+            htmlBody: "\n  <div> </div>\n",
+            remoteImagesBlocked: false,
+            references: [],
+            attachments: [],
+          };
+        }
         return {
           ...selected,
           to: [selected.recipients],

@@ -946,7 +946,7 @@
   color: var(--accent-contrast);
 }
 
-.message-row.selected .unread-dot {
+.message-row.selected.unread .unread-dot {
   background: var(--accent-contrast);
 }
 
