@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { accountCannotSend } from "../accountStatus";
+import { holdBackgroundUpdate } from "../update";
 import { useAppStore } from "../store";
 import type { OutboxSummary, SyncState } from "../types";
 
@@ -21,7 +22,10 @@ export function useScheduledOutbox(
     if (scheduledOutboxInFlight.current.has(key)) return undefined;
     scheduledOutboxInFlight.current.add(key);
     setScheduledSendInFlight((previous) => new Set(previous).add(key));
+    // An update restart mid-send would leave the SMTP outcome uncertain.
+    const releaseUpdateHold = holdBackgroundUpdate();
     return api.sendScheduledOutbox(id, accountId).finally(() => {
+      releaseUpdateHold();
       scheduledOutboxInFlight.current.delete(key);
       setScheduledSendInFlight((previous) => {
         if (!previous.has(key)) return previous;

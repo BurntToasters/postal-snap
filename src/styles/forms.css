@@ -73,7 +73,8 @@ textarea:focus-visible {
 }
 
 .password-field svg {
-  width: 19px;
+  width: 1.1875rem;
+  height: 1.1875rem;
 }
 
 fieldset {

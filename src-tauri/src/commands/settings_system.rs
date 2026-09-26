@@ -213,6 +213,56 @@ pub fn tray_is_active() -> bool {
     crate::tray::tray_is_active()
 }
 
+/// Records how the next launch should open; call before installing an update.
+#[tauri::command]
+pub fn prepare_update_relaunch(app: AppHandle, mode: String) -> CommandResult<()> {
+    let mode = crate::update_relaunch::RelaunchMode::parse(&mode)
+        .ok_or_else(|| "Postal Snap could not prepare the update.".to_string())?;
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "Postal Snap could not prepare the update.".to_string())?;
+    crate::update_relaunch::write(&data_dir, mode)
+        .map_err(|_| "Postal Snap could not prepare the update.".to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn clear_update_relaunch(app: AppHandle) {
+    if let Ok(data_dir) = app.path().app_data_dir() {
+        crate::update_relaunch::clear(&data_dir);
+    }
+}
+
+/// "window" or "background" when this launch followed an installed update.
+#[tauri::command]
+pub fn get_update_relaunch() -> Option<&'static str> {
+    crate::update_relaunch::launched_after_update().map(|mode| mode.as_str())
+}
+
+/// True while the window is hidden to the tray or menu bar, so an update can
+/// install and restart in the background without interrupting the user.
+#[tauri::command]
+pub fn background_update_allowed(app: AppHandle, state: State<'_, AppState>) -> bool {
+    let close_to_tray = state
+        .settings
+        .get()
+        .map(|settings| settings.close_to_tray)
+        .unwrap_or(true);
+    if !crate::tray::should_hide_on_close(close_to_tray, crate::tray::tray_is_active()) {
+        return false;
+    }
+    app.get_webview_window("main")
+        .and_then(|window| window.is_visible().ok())
+        .is_some_and(|visible| !visible)
+}
+
+/// Lets native Quit hand off to the frontend only while an update is ready.
+#[tauri::command]
+pub fn set_update_ready(ready: bool) {
+    crate::update_relaunch::set_update_ready(ready);
+}
+
 const MAX_LICENSE_NOTICE_BYTES: usize = 1_048_576;
 const MAX_LICENSE_PACKAGE_BYTES: usize = 16_777_216;
 const LICENSE_NOTICE_FILES: &[(&str, &str, &str)] = &[

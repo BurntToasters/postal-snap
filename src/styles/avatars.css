@@ -10,7 +10,8 @@
 }
 
 .provider-symbol svg {
-  width: 26px;
+  width: 1.625rem;
+  height: 1.625rem;
 }
 
 .account-avatar {

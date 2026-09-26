@@ -98,7 +98,12 @@ export function useMailShortcuts({
           "button, a, [role='menuitem'], .reader-actions, .format-toolbar, .settings-nav, .bulk-bar",
         ) && !target?.closest(".message-list"),
       );
-      const mod = event.metaKey || event.ctrlKey;
+      // macOS: Control keys are text editing (Ctrl+E ends the line), so only
+      // Command is the shortcut modifier there.
+      const mod =
+        document.documentElement.dataset.platform === "macos"
+          ? event.metaKey
+          : event.metaKey || event.ctrlKey;
       const key = event.key.toLowerCase();
 
       if (
@@ -232,7 +237,7 @@ export function useMailShortcuts({
         return;
       }
       if (
-        (event.key === "/" && !mod) ||
+        (event.key === "/" && !mod && !isEditing) ||
         (mod && !event.shiftKey && !event.altKey && key === "f")
       ) {
         event.preventDefault();
