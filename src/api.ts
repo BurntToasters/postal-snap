@@ -150,6 +150,11 @@ export type NativeCommand =
   | "relaunch_app"
   | "quit_app"
   | "tray_is_active"
+  | "prepare_update_relaunch"
+  | "clear_update_relaunch"
+  | "get_update_relaunch"
+  | "set_update_ready"
+  | "background_update_allowed"
   | "supports_workspace_window_fx"
   | "accessibility_reduce_transparency"
   | "set_workspace_window_fx";
@@ -498,6 +503,30 @@ export const api = {
   async onTrayQuit(handler: () => void): Promise<UnlistenFn> {
     if (!inTauri()) return () => undefined;
     return listen("tray-quit", () => handler());
+  },
+  async onMainWindowHidden(handler: () => void): Promise<UnlistenFn> {
+    if (!inTauri()) return () => undefined;
+    return listen("main-window-hidden", () => handler());
+  },
+  prepareUpdateRelaunch: (mode: "window" | "background") => {
+    if (!inTauri()) return Promise.resolve();
+    return call<void>("prepare_update_relaunch", { mode });
+  },
+  clearUpdateRelaunch: () => {
+    if (!inTauri()) return Promise.resolve();
+    return call<void>("clear_update_relaunch");
+  },
+  updateRelaunch: () => {
+    if (!inTauri()) return Promise.resolve(null);
+    return call<"window" | "background" | null>("get_update_relaunch");
+  },
+  setUpdateReady: (ready: boolean) => {
+    if (!inTauri()) return Promise.resolve();
+    return call<void>("set_update_ready", { ready });
+  },
+  backgroundUpdateAllowed: () => {
+    if (!inTauri()) return Promise.resolve(false);
+    return call<boolean>("background_update_allowed");
   },
 };
 

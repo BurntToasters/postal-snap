@@ -73,7 +73,7 @@
 
 .setup-progress {
   display: grid;
-  grid-template-columns: 30px 1fr 30px;
+  grid-template-columns: 1.875rem 1fr 1.875rem;
   align-items: center;
   margin: 28px 0 24px;
   color: var(--text-muted);
@@ -81,8 +81,8 @@
 
 .setup-progress > span {
   display: grid;
-  width: 30px;
-  height: 30px;
+  width: 1.875rem;
+  height: 1.875rem;
   place-items: center;
   border: 1px solid var(--border);
   border-radius: 50%;
@@ -99,7 +99,8 @@
 }
 
 .setup-progress > span svg {
-  width: 15px;
+  width: 0.9375rem;
+  height: 0.9375rem;
 }
 
 .setup-progress > i {
@@ -225,7 +226,8 @@
 }
 
 .provider-arrow svg {
-  width: 19px;
+  width: 1.1875rem;
+  height: 1.1875rem;
 }
 
 .privacy-note {
@@ -241,7 +243,8 @@
 }
 
 .privacy-note svg {
-  width: 20px;
+  width: 1.25rem;
+  height: 1.25rem;
   color: var(--success);
 }
 
@@ -343,7 +346,8 @@
 }
 
 .connection-status svg {
-  width: 19px;
+  width: 1.1875rem;
+  height: 1.1875rem;
 }
 
 .connection-status span {
@@ -476,9 +480,9 @@
 .setup-flow-progress > div:not(:last-child)::after {
   position: absolute;
   z-index: 0;
-  top: 15px;
-  left: calc(50% + 20px);
-  width: calc(100% - 40px);
+  top: 0.9375rem;
+  left: calc(50% + 1.25rem);
+  width: calc(100% - 2.5rem);
   height: 2px;
   content: "";
   background: var(--border);
@@ -492,8 +496,8 @@
   position: relative;
   z-index: 1;
   display: grid;
-  width: 30px;
-  height: 30px;
+  width: 1.875rem;
+  height: 1.875rem;
   place-items: center;
   border: 1px solid var(--border);
   border-radius: 50%;
@@ -503,7 +507,8 @@
 }
 
 .setup-flow-progress > div > span svg {
-  width: 15px;
+  width: 0.9375rem;
+  height: 0.9375rem;
 }
 
 .setup-flow-progress > div:is(.active, .done) > span {

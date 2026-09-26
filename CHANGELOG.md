@@ -20,6 +20,19 @@
 
 Postal Snap is a calm, accessible desktop email client. Mail stays on your computer. There is no Postal Snap cloud, telemetry, or account of mine to log into.
 
+## Changes in `v0.2.3:`
+
+- **UI - Updates install while Postal Snap waits in the tray or menu bar:** When the window is closed to the notification area or menu bar, a downloaded update now installs on its own after a few minutes and Postal Snap starts again in the tray or menu bar, with no window. It waits while you are writing a message or a scheduled message is sending.
+- **FIX - Quiet Windows updates:** The Windows installer no longer shows a progress window when an update installs in the background or on quit.
+- **FIX - Quitting no longer reopens the app:** Quitting with a downloaded update installs it and stays closed. Before, Postal Snap opened again right after the update. Restart Postal Snap in Settings and the Update Ready badge still reopen the window.
+- **FIX - Quit on macOS installs updates:** Postal Snap → Quit (⌘Q) now installs a downloaded update, the same as Quit from the menu bar icon. If an install on quit fails, the next Quit closes the app instead of trying again.
+- **FIX - No repeated email link after an update:** When Postal Snap was opened from an email link, restarting to update no longer opens a new message for that link a second time.
+- **FIX - Typing a slash in search:** The search box now accepts "/" (for example "1/2"). Pressing "/" outside a text field still jumps to search.
+- **FIX - Control keys on macOS edit text:** In a text field, Control+E, Control+N, and Control+P move the cursor again instead of archiving the open message, starting a new message, or printing. Command shortcuts are unchanged.
+- **FIX - Narrow reader header:** In a narrow window, the date no longer takes the sender's place next to the picture. The sender comes first and the date sits below.
+- **UI - Icons grow with text size:** Toolbar, mailbox, reader, composer, settings, and setup icons now grow with larger text sizes instead of staying small beside large labels.
+- **UI - Large text fits better:** At larger text sizes, Settings choices stack so the full value shows, the Settings list no longer cuts off "Notifications", Get Mail stays on one line, the search box has room to type, setup step numbers stay inside their circles, and message details labels no longer run into their values.
+
 ## Changes in `v0.2.2:`
 
 - **FIX - Messages open blank:** Message bodies showed as an empty white area on macOS 27 (and on Linux). The newer system web engine asks Postal Snap for permission before loading the message frame, and Postal Snap refused it. Postal Snap now allows only its own built-in message and print frames, so mail shows again. This also fixes blank printouts. Pictures you load with "Load images" now appear too.

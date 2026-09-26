@@ -173,6 +173,15 @@
   flex: 1 1 auto;
 }
 
+.get-mail-button {
+  white-space: nowrap;
+}
+
+/* Let search shrink first so Get Mail is never clipped at large text. */
+.toolbar-leading {
+  flex-shrink: 0;
+}
+
 .toolbar-trailing {
   flex: 0 1 auto;
   flex-wrap: nowrap;
@@ -221,9 +230,9 @@
 .search-box {
   display: flex;
   min-width: 180px;
-  max-width: 290px;
+  max-width: 18.125rem;
   min-height: 44px;
-  flex: 1 1 270px;
+  flex: 1 1 16.875rem;
   align-items: center;
   border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
   border-radius: var(--radius-pill);
@@ -237,7 +246,8 @@
 }
 
 .search-box > svg {
-  width: 17px;
+  width: 1.0625rem;
+  height: 1.0625rem;
   margin-left: 11px;
   color: var(--text-muted);
 }
@@ -416,7 +426,8 @@
 }
 
 .account-switcher-trigger > svg {
-  width: 17px;
+  width: 1.0625rem;
+  height: 1.0625rem;
   flex: 0 0 auto;
   color: var(--text-muted);
   transition: transform 120ms ease;
@@ -539,12 +550,14 @@
   position: absolute;
   top: 13px;
   right: 9px;
-  width: 17px;
+  width: 1.0625rem;
+  height: 1.0625rem;
   pointer-events: none;
 }
 
 .add-account-button {
   justify-content: flex-start;
+  text-align: left;
   margin: 0 5px 8px;
   border-color: transparent;
   background: transparent;
@@ -571,7 +584,7 @@
   display: grid;
   width: 100%;
   min-height: 44px;
-  grid-template-columns: 23px 1fr auto;
+  grid-template-columns: 1.4375rem 1fr auto;
   align-items: center;
   gap: 8px;
   padding: 7px 10px;
@@ -622,8 +635,8 @@
 }
 
 .folder-expand svg {
-  width: 14px;
-  height: 14px;
+  width: 0.875rem;
+  height: 0.875rem;
   transition: transform 120ms ease;
 }
 
@@ -651,7 +664,8 @@
 }
 
 .folder svg {
-  width: 19px;
+  width: 1.1875rem;
+  height: 1.1875rem;
   color: var(--accent);
 }
 
@@ -781,7 +795,7 @@
 
 .pane-heading-actions .toolbar-button,
 .pane-heading-actions .icon-button {
-  min-height: 44px;
+  min-height: var(--control-height);
   border-radius: var(--radius-pill);
 }
 
@@ -821,8 +835,8 @@
 }
 
 .bulk-bar button svg {
-  width: 17px;
-  height: 17px;
+  width: 1.0625rem;
+  height: 1.0625rem;
 }
 
 .message-row-wrap {
@@ -907,7 +921,7 @@
   display: grid;
   width: calc(100% - 12px);
   min-height: 88px;
-  grid-template-columns: 10px minmax(0, 1fr) auto;
+  grid-template-columns: 0.625rem minmax(0, 1fr) auto;
   grid-template-areas:
     "dot sender date"
     "dot subject subject"
@@ -957,10 +971,10 @@
 
 .unread-dot {
   grid-area: dot;
-  width: 8px;
-  height: 8px;
+  width: 0.5rem;
+  height: 0.5rem;
   align-self: start;
-  margin-top: 7px;
+  margin-top: 0.4375rem;
   border-radius: 50%;
   background: transparent;
 }
@@ -1008,7 +1022,8 @@
 }
 
 .message-subject svg {
-  width: 14px;
+  width: 0.875rem;
+  height: 0.875rem;
   color: var(--warning);
 }
 
