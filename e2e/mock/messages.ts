@@ -10,10 +10,27 @@ export async function registerMockMessages(page: Page): Promise<void> {
     const state = window.__POSTAL_SNAP_TEST__ as MockState;
     const { mailboxes, summary, olderSummary, secondSummary, params } = mock;
     let paginatedCursorConsumed = false;
+    const threadGapItems = () => [
+      { ...summary, threadRoot: "<weekend@example.com>" },
+      {
+        ...summary,
+        id: 30,
+        uid: 50,
+        messageId: "<solo@example.com>",
+        subject: "Library hours",
+        receivedAt: "2026-08-17T18:00:00Z",
+        threadRoot: null,
+      },
+      { ...olderSummary, threadRoot: "<weekend@example.com>" },
+    ];
     Object.assign(mock.handlers, {
       list_messages(args: Record<string, unknown>) {
         if (state.moved || params.has("empty"))
           return { items: [], nextCursor: null, hasMore: false };
+        // `?threadGap=1`: a solo message between two replies of one thread.
+        if (params.has("threadGap")) {
+          return { items: threadGapItems(), nextCursor: null, hasMore: false };
+        }
         if (location.search.includes("pagination")) {
           if (!args.cursor) {
             return {
@@ -60,8 +77,12 @@ export async function registerMockMessages(page: Page): Promise<void> {
             retryable: false,
           };
         }
-        const selected =
-          args.accountId === secondSummary.accountId ? secondSummary : summary;
+        const selected = params.has("threadGap")
+          ? (threadGapItems().find((item) => item.id === args.messageId) ??
+            summary)
+          : args.accountId === secondSummary.accountId
+            ? secondSummary
+            : summary;
         if (params.has("bodyOffline")) {
           return {
             ...selected,

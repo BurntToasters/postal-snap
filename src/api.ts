@@ -155,6 +155,7 @@ export type NativeCommand =
   | "get_update_relaunch"
   | "set_update_ready"
   | "background_update_allowed"
+  | "schedule_background_update"
   | "supports_workspace_window_fx"
   | "accessibility_reduce_transparency"
   | "set_workspace_window_fx";
@@ -469,10 +470,19 @@ export const api = {
     call<AccountSummary>("discover_account_aliases", { accountId }),
   updateAccountAliases: (accountId: string, aliases: string[]) =>
     call<AccountSummary>("update_account_aliases", { accountId, aliases }),
-  showNativeConfirm: (title: string, message: string) => {
+  showNativeConfirm: (
+    title: string,
+    message: string,
+    labels?: { ok: string; cancel: string },
+  ) => {
     if (!inTauri())
       return Promise.resolve(window.confirm(`${title}\n\n${message}`));
-    return call<boolean>("show_native_confirm", { title, message });
+    return call<boolean>("show_native_confirm", {
+      title,
+      message,
+      okLabel: labels?.ok,
+      cancelLabel: labels?.cancel,
+    });
   },
   showNativeMessage: (title: string, message: string) => {
     if (!inTauri()) {
@@ -504,9 +514,13 @@ export const api = {
     if (!inTauri()) return () => undefined;
     return listen("tray-quit", () => handler());
   },
-  async onMainWindowHidden(handler: () => void): Promise<UnlistenFn> {
+  async onBackgroundUpdateDue(handler: () => void): Promise<UnlistenFn> {
     if (!inTauri()) return () => undefined;
-    return listen("main-window-hidden", () => handler());
+    return listen("background-update-due", () => handler());
+  },
+  scheduleBackgroundUpdate: () => {
+    if (!inTauri()) return Promise.resolve();
+    return call<void>("schedule_background_update");
   },
   prepareUpdateRelaunch: (mode: "window" | "background") => {
     if (!inTauri()) return Promise.resolve();

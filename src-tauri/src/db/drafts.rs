@@ -35,8 +35,8 @@ impl Database {
         let transaction = conn.transaction().map_err(db_error)?;
         transaction.execute(
             "INSERT INTO drafts(id,account_id,draft_json,updated_at,sync_state,remote_message_id,revision,deleted_at)
-             VALUES(?1,?2,?3,CURRENT_TIMESTAMP,'localPending',?4,?5,NULL)
-             ON CONFLICT(id) DO UPDATE SET draft_json=excluded.draft_json,updated_at=CURRENT_TIMESTAMP,
+             VALUES(?1,?2,?3,strftime('%Y-%m-%dT%H:%M:%SZ','now'),'localPending',?4,?5,NULL)
+             ON CONFLICT(id) DO UPDATE SET draft_json=excluded.draft_json,updated_at=excluded.updated_at,
              sync_state='localPending',sync_detail=NULL,remote_message_id=excluded.remote_message_id,
              revision=excluded.revision,deleted_at=NULL",
             params![id, draft.account_id, json, remote_message_id, revision],
@@ -56,8 +56,13 @@ impl Database {
         let conn = self.conn()?;
         let mut statement = conn
             .prepare(
-                "SELECT id,draft_json,updated_at,sync_state,sync_detail FROM drafts
-                 WHERE account_id=?1 AND (deleted_at IS NULL OR sync_state='deletePending') ORDER BY updated_at DESC",
+                // Older rows hold SQLite's "YYYY-MM-DD HH:MM:SS" (UTC, no zone)
+                // and imports hold RFC 3339; normalize both so the list sorts
+                // by time and JavaScript does not read them as local time.
+                "SELECT id,draft_json,COALESCE(strftime('%Y-%m-%dT%H:%M:%SZ',updated_at),updated_at),
+                 sync_state,sync_detail FROM drafts
+                 WHERE account_id=?1 AND (deleted_at IS NULL OR sync_state='deletePending')
+                 ORDER BY datetime(updated_at) DESC",
             )
             .map_err(db_error)?;
         let rows = statement
@@ -154,7 +159,7 @@ impl Database {
                 "SELECT id,draft_json,remote_mailbox,remote_uid,remote_uid_validity,
                  COALESCE(remote_message_id,''),revision,deleted_at IS NOT NULL
                  FROM drafts WHERE account_id=?1 AND sync_state IN ('localPending','deletePending','localOnly')
-                 ORDER BY updated_at",
+                 ORDER BY datetime(updated_at)",
             )
             .map_err(db_error)?;
         let rows = statement

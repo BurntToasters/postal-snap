@@ -406,9 +406,10 @@ for (const [platform, userAgent] of Object.entries(platforms)) {
                 }),
               )
               .toBe(true);
+            // Labels may drop to icons (named buttons) instead of clipping.
             for (const selector of [
-              ".get-mail-button span",
-              ".compose-button span",
+              ".get-mail-button",
+              ".compose-button",
               ".search-box input",
               ".settings-button",
             ]) {

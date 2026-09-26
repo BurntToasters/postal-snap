@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Clock, FileText, Send, TriangleAlert, X } from "lucide-react";
-import { formatMessageDate } from "../../format";
+import { formatMessageDate, formatScheduledTime } from "../../format";
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
 import type { MessageSummary } from "../../types";
@@ -125,6 +125,18 @@ export function DraftList({
   );
 }
 
+// Seconds only near the end; a far send time reads as a clock time.
+function scheduledLabel(sendAt: string, now: number): string {
+  const seconds = Math.max(
+    0,
+    Math.round((new Date(sendAt).getTime() - now) / 1000),
+  );
+  if (seconds < 120) return strings.mail.sendIn(seconds);
+  if (seconds < 60 * 60)
+    return strings.mail.sendInMinutes(Math.round(seconds / 60));
+  return strings.mail.sendsAt(formatScheduledTime(sendAt, new Date(now)));
+}
+
 export function OutboxList({
   items,
   sendingIds,
@@ -180,14 +192,7 @@ export function OutboxList({
               <small>{item.detail}</small>
               {item.state === "scheduled" && item.sendAt ? (
                 <small className="status-label">
-                  {strings.mail.sendIn(
-                    Math.max(
-                      0,
-                      Math.round(
-                        (new Date(item.sendAt).getTime() - now) / 1000,
-                      ),
-                    ),
-                  )}
+                  {scheduledLabel(item.sendAt, now)}
                 </small>
               ) : null}
               <small className="status-label">

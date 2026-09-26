@@ -72,6 +72,15 @@ pub async fn delete_draft(
     Ok(())
 }
 
+/// The draft to keep in the outbox, and the signed copy to send.
+pub(crate) fn sign_for_outbox(
+    draft: ComposeDraft,
+    signature: &str,
+) -> (ComposeDraft, ComposeDraft) {
+    let signed = mail::apply_signature(draft.clone(), signature);
+    (draft, signed)
+}
+
 /// Validate an explicit Send Later time. Returns the normalized RFC 3339
 /// timestamp, or `None` when the composer did not request scheduling.
 pub(crate) fn resolve_requested_send_at(send_at: Option<&str>) -> Result<Option<String>, String> {
@@ -99,9 +108,11 @@ pub async fn send_message(
     state: State<'_, AppState>,
 ) -> CommandResult<SendOutcome> {
     let account = state.db.account(&draft.account_id)?;
-    let draft = mail::apply_signature(draft, &account.summary.signature);
     let draft = prepare_owned_compose(draft, &account)?;
-    let resolved_draft = resolve_draft_files(&state.db, &draft)?;
+    // The queue stores the unsigned draft so Undo Send and editing never
+    // repeat the signature; the prepared MIME carries it.
+    let (draft, signed) = sign_for_outbox(draft, &account.summary.signature);
+    let resolved_draft = resolve_draft_files(&state.db, &signed)?;
     let prepared = mail::prepare_message(&account, &resolved_draft).await?;
     let settings = state.settings.get()?;
     let delay = settings.undo_send_seconds.min(30);

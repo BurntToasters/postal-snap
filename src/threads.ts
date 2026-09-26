@@ -37,3 +37,13 @@ export function groupThreads(messages: MessageSummary[]): ThreadGroup[] {
   groups.sort((left, right) => byDate(left.newest, right.newest));
   return groups;
 }
+
+/** Keyboard order for j/k and arrows: the list's visual order. */
+export function navigationOrder(
+  messages: MessageSummary[],
+  grouped: boolean,
+): MessageSummary[] {
+  return grouped
+    ? groupThreads(messages).flatMap((group) => group.items)
+    : messages;
+}

@@ -25,7 +25,8 @@ vi.mock("../api", () => ({
     clearUpdateRelaunch: vi.fn().mockResolvedValue(undefined),
     setUpdateReady: vi.fn().mockResolvedValue(undefined),
     backgroundUpdateAllowed: vi.fn().mockResolvedValue(false),
-    onMainWindowHidden: vi.fn().mockResolvedValue(() => undefined),
+    onBackgroundUpdateDue: vi.fn().mockResolvedValue(() => undefined),
+    scheduleBackgroundUpdate: vi.fn().mockResolvedValue(undefined),
     distribution: vi.fn().mockResolvedValue({ updatesManagedBy: "postalSnap" }),
   },
 }));
@@ -183,21 +184,22 @@ describe("update checks", () => {
     expect(mockedConfirm).not.toHaveBeenCalled();
   });
 
-  it("downloads a found update without restarting", async () => {
+  it("offers Restart Now or Later after downloading a found update", async () => {
     const update = fakeUpdate("0.1.4");
     mockedCheck.mockResolvedValue(update as never);
+    mockedConfirm.mockResolvedValueOnce(false);
 
     await checkUpdateInteractive();
 
-    expect(mockedConfirm).not.toHaveBeenCalled();
+    expect(mockedConfirm).toHaveBeenCalledWith(
+      "Update Ready",
+      expect.stringContaining("0.1.4"),
+      { ok: "Restart Now", cancel: "Later" },
+    );
     expect(update.download).toHaveBeenCalledTimes(1);
     expect(update.install).not.toHaveBeenCalled();
     expect(update.downloadAndInstall).not.toHaveBeenCalled();
     expect(api.relaunch).not.toHaveBeenCalled();
-    expect(mockedMessage).toHaveBeenCalledWith(
-      "Update Ready",
-      expect.stringContaining("0.1.4"),
-    );
   });
 
   it("installs a downloaded update only after an explicit restart", async () => {
@@ -296,6 +298,7 @@ describe("update checks", () => {
     expect(mockedConfirm).toHaveBeenCalledWith(
       "Update Ready",
       expect.stringContaining("0.2.0"),
+      { ok: "Restart Now", cancel: "Later" },
     );
     expect(api.relaunch).toHaveBeenCalledTimes(1);
   });
@@ -336,12 +339,13 @@ describe("update checks", () => {
     finishDownload();
     await background;
     await interactive;
-    expect(mockedConfirm).not.toHaveBeenCalled();
-    expect(update.install).not.toHaveBeenCalled();
-    expect(mockedMessage).toHaveBeenCalledWith(
+    // Declined (Later): the joined download is offered but not installed.
+    expect(mockedConfirm).toHaveBeenCalledWith(
       "Update Ready",
       expect.stringContaining("0.2.1"),
+      { ok: "Restart Now", cancel: "Later" },
     );
+    expect(update.install).not.toHaveBeenCalled();
 
     resetUpdateStateForTesting();
     let failCheck!: (cause: Error) => void;
