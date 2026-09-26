@@ -32,21 +32,21 @@
       "kind": "tweetfeed-domains",
       "file": "tweetfeed-domains.txt",
       "url": "https://api.tweetfeed.live/v1/blocklist/domains.txt",
-      "updated": "2026-09-14T18:45:17Z",
-      "entries": 1497,
-      "publishedSha256": "8358af89c006d353f0db43b5709c2819f39168a6c591aebd9a01e35a46240bd4",
-      "bytes": 33684,
-      "sha256": "8358af89c006d353f0db43b5709c2819f39168a6c591aebd9a01e35a46240bd4"
+      "updated": "2026-09-26T07:15:18Z",
+      "entries": 1017,
+      "publishedSha256": "bd22986d16ef16716b9c33678c207064f09c5e4c253fa150724806e89ec554ce",
+      "bytes": 22198,
+      "sha256": "bd22986d16ef16716b9c33678c207064f09c5e4c253fa150724806e89ec554ce"
     },
     {
       "kind": "tweetfeed-urls",
       "file": "tweetfeed-urls.txt",
       "url": "https://api.tweetfeed.live/v1/blocklist/urls.txt",
-      "updated": "2026-09-14T18:45:17Z",
-      "entries": 1700,
-      "publishedSha256": "b6df5c18a91f99f5d2b2b4ad715e92de08e1af658173c207e19a162b6521ce30",
-      "bytes": 56389,
-      "sha256": "b6df5c18a91f99f5d2b2b4ad715e92de08e1af658173c207e19a162b6521ce30"
+      "updated": "2026-09-26T07:15:18Z",
+      "entries": 1143,
+      "publishedSha256": "060e73f5059ec84956dd09f41482f81c0a26fdb6d695522b4669afddf40a877b",
+      "bytes": 37493,
+      "sha256": "060e73f5059ec84956dd09f41482f81c0a26fdb6d695522b4669afddf40a877b"
     },
     {
       "kind": "license-cc0",
@@ -56,6 +56,6 @@
       "sha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
     }
   ],
-  "tweetfeedDownloadedAt": "2026-09-14T20:13:20.217Z",
-  "tweetfeedManifestGeneratedAt": "2026-09-14T20:00:29Z"
+  "tweetfeedDownloadedAt": "2026-09-26T07:38:38.340Z",
+  "tweetfeedManifestGeneratedAt": "2026-09-26T07:30:27Z"
 }
