@@ -95,7 +95,12 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
             createdAt: "2026-08-18T11:00:00Z",
             sendAt:
               outcome === "scheduled"
-                ? new Date(Date.now() + 60_000).toISOString()
+                ? new Date(
+                    Date.now() +
+                      (location.search.includes("scheduledLater")
+                        ? 5 * 60 * 60_000
+                        : 60_000),
+                  ).toISOString()
                 : null,
           },
         ];
@@ -206,7 +211,10 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
                 ? "queued"
                 : "sent");
         if (lastSendOutcome === "queued") {
-          lastSendDetail = offlineDetail;
+          // Online, "queued" means the server could not take it yet.
+          lastSendDetail = offline
+            ? offlineDetail
+            : "Not sent yet. The mail server could not take it right now. Postal Snap will try again automatically.";
         } else if (lastSendOutcome === "scheduled") {
           lastSendDetail = draft?.sendAt
             ? offline

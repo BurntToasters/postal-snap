@@ -120,6 +120,9 @@ export const mail = {
   scheduledWaiting: "Held before sending",
   sendIn: (seconds: number) =>
     seconds <= 0 ? "Sending…" : `Sending in ${seconds}s`,
+  sendInMinutes: (minutes: number) =>
+    minutes === 1 ? "Sending in 1 minute" : `Sending in ${minutes} minutes`,
+  sendsAt: (when: string) => `Sends ${when}`,
   sendNow: "Send now",
   sendingNow: (subject: string) => `Sending "${subject}" now`,
   messageScheduled: "Send scheduled",
@@ -143,6 +146,8 @@ export const mail = {
   hoursAgo: (count: number) => `${count}h ago`,
   daysAgo: (count: number) => `${count}d ago`,
   updateReadyBadge: "Update Ready · Click to Restart",
+  updateReadyBadgeShort: "Restart to Update",
+  updateReadyBadgeTiny: "Update",
   updateReadyTooltip: (version: string) =>
     `Version ${version} is downloaded and ready to install. Click to restart.`,
   itemCount: (count: number) => (count === 1 ? "1 item" : `${count} items`),

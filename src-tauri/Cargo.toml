@@ -1,6 +1,6 @@
 [package]
 name = "postal-snap"
-version = "0.2.4"
+version = "0.2.5"
 description = "A calm, accessible desktop email client."
 authors = ["BurntToasters <code@rosie.run>"]
 edition = "2021"
@@ -67,8 +67,11 @@ tauri = { version = "2", features = ["image-png"] }
 # Reads NSWorkspace.accessibilityDisplayShouldReduceTransparency; WKWebView does
 # not implement the prefers-reduced-transparency media query.
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSAccessibility", "NSWorkspace"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSObject", "NSProcessInfo", "NSString"] }
+# Observes NSApplicationDidBecomeActiveNotification so a notification click
+# reopens the window while Postal Snap waits in the menu bar.
+block2 = "0.6"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSAccessibility", "NSApplication", "NSWorkspace"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSObject", "NSProcessInfo", "NSString", "NSNotification", "NSOperation", "block2"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.61.3", features = [

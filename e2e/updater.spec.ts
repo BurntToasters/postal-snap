@@ -8,11 +8,10 @@ import { installMockIpc } from "./mock-ipc";
 // 2. A ready update never installs while the app sits hidden in the tray.
 // 3. A background install starts while the window is visible.
 // 4. A background install starts while a message is being composed.
+// 7. Check for Updates downloads an update but offers only OK, no restart.
 // 5. Quit with a ready update relaunches the app (Windows installer /R).
 // 6. An update relaunch replays the startup mailto: argument.
 // Each test writes its recorded updater IPC to test-results/updater-*.json.
-
-const BACKGROUND_DELAY = "03:05";
 
 test.beforeEach(async ({ page }) => installMockIpc(page));
 
@@ -78,7 +77,6 @@ test("restarts into the window from the update banner", async ({
 test("installs quietly and restarts to the tray while hidden", async ({
   page,
 }, testInfo) => {
-  await page.clock.install();
   await page.goto("/?update=1");
   await waitForUpdateReady(page);
 
@@ -86,9 +84,8 @@ test("installs quietly and restarts to the tray while hidden", async ({
     const state = window.__POSTAL_SNAP_TEST__;
     if (state) state.backgroundUpdateAllowed = true;
   });
-  await emitNative(page, "main-window-hidden");
-  expect(await commands(page)).not.toContain("install");
-  await page.clock.fastForward(BACKGROUND_DELAY);
+  // Rust emits this after the window has waited in the tray.
+  await emitNative(page, "background-update-due");
 
   await expect.poll(() => commands(page)).toContain("relaunch_app");
   const calls = await updateCalls(page);
@@ -104,12 +101,10 @@ test("installs quietly and restarts to the tray while hidden", async ({
 });
 
 test("waits while the window is visible", async ({ page }, testInfo) => {
-  await page.clock.install();
   await page.goto("/?update=1");
   await waitForUpdateReady(page);
 
-  await emitNative(page, "main-window-hidden");
-  await page.clock.fastForward(BACKGROUND_DELAY);
+  await emitNative(page, "background-update-due");
 
   await expect
     .poll(() => commands(page))
@@ -120,7 +115,6 @@ test("waits while the window is visible", async ({ page }, testInfo) => {
 });
 
 test("waits while a message is being composed", async ({ page }, testInfo) => {
-  await page.clock.install();
   await page.goto("/?update=1");
   await waitForUpdateReady(page);
   await page.getByRole("button", { name: "Compose" }).click();
@@ -130,15 +124,42 @@ test("waits while a message is being composed", async ({ page }, testInfo) => {
     const state = window.__POSTAL_SNAP_TEST__;
     if (state) state.backgroundUpdateAllowed = true;
   });
-  await emitNative(page, "main-window-hidden");
-  await page.clock.fastForward(BACKGROUND_DELAY);
+  await emitNative(page, "background-update-due");
+  // Blocked: ask Rust to wait again instead of installing.
   await expect
     .poll(() => commands(page))
-    .toContain("background_update_allowed");
-  await page.clock.fastForward(BACKGROUND_DELAY);
+    .toContain("schedule_background_update");
 
   expect(await commands(page)).not.toContain("install");
   expect(await commands(page)).not.toContain("relaunch_app");
+  await saveArtifact(page, testInfo);
+});
+
+test("Check for Updates offers Restart Now after a new download", async ({
+  page,
+}, testInfo) => {
+  page.on("dialog", (dialog) => void dialog.accept());
+  await page.goto("/?updateLater=1");
+  await expect(page.getByRole("button", { name: "Compose" })).toBeVisible();
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("tab", { name: "Updates" }).click();
+  await page.getByRole("button", { name: "Check for updates" }).click();
+
+  await expect.poll(() => commands(page)).toContain("relaunch_app");
+  const calls = await updateCalls(page);
+  expect(calls).toContainEqual(
+    expect.objectContaining({
+      command: "show_native_confirm",
+      args: expect.objectContaining({
+        okLabel: "Restart Now",
+        cancelLabel: "Later",
+      }),
+    }),
+  );
+  expect(calls).toContainEqual({
+    command: "prepare_update_relaunch",
+    args: { mode: "window" },
+  });
   await saveArtifact(page, testInfo);
 });
 
