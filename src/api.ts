@@ -146,6 +146,7 @@ export type NativeCommand =
   | "update_account_aliases"
   | "show_native_confirm"
   | "show_native_message"
+  | "print_webview"
   | "relaunch_app"
   | "quit_app"
   | "tray_is_active"
@@ -394,6 +395,10 @@ export const api = {
   getLicenseCredits: () => call<LicenseCredits>("get_license_credits"),
   getSyncProgress: (accountId: string) =>
     call<SyncProgress>("get_sync_progress", { accountId }),
+  async onFrameLink(handler: (url: string) => void): Promise<UnlistenFn> {
+    if (!inTauri()) return () => undefined;
+    return listen<string>("frame-link", ({ payload }) => handler(payload));
+  },
   async onSyncState(handler: (state: SyncState) => void): Promise<UnlistenFn> {
     if (!inTauri()) return () => undefined;
     return listen<SyncState>("sync-state", ({ payload }) => handler(payload));
@@ -471,6 +476,7 @@ export const api = {
     }
     return call<void>("show_native_message", { title, message });
   },
+  printWebview: () => call<void>("print_webview"),
   relaunch: () => {
     if (!inTauri()) {
       window.location.reload();

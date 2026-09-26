@@ -27,6 +27,7 @@ export async function registerMockState(page: Page): Promise<void> {
       moved: false,
       exportedSettings: 0,
       importedSettings: 0,
+      printCalls: 0,
       rules: [] as Array<Record<string, unknown>>,
       callbacks: new Map<number, (...args: unknown[]) => void>(),
       eventListeners: new Map<string, Set<number>>(),

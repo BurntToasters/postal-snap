@@ -8,7 +8,11 @@ import {
 } from "../contextMenu";
 import { strings } from "../i18n";
 import { parseMailto } from "../mailto";
-import { messageFrameDocument, sanitizeReceivedHtml } from "../security";
+import {
+  messageFrameDocument,
+  sanitizeReceivedHtml,
+  withFrameLinks,
+} from "../security";
 import { useAppStore } from "../store";
 import type { Attachment, AttachmentPreview, MessageSummary } from "../types";
 import { useDialogFocus } from "./useDialogFocus";
@@ -20,6 +24,7 @@ import { ReaderToolbar } from "./reader/readerToolbar";
 import { SnoozePanel } from "./reader/snoozePanel";
 import {
   buildPrintDocument,
+  hasVisibleHtml,
   hydrateInlineImages,
   moveCounts,
 } from "./reader/readerUtils";
@@ -125,7 +130,33 @@ export function MessageReader({
 
   function printMessage() {
     if (!message) return;
-    const html = buildPrintDocument(message, loadedHtml, settings.textScale);
+    const html = buildPrintDocument(
+      message,
+      loadedHtml,
+      settings.textScale,
+      showHtml ? sanitized?.html : undefined,
+    );
+    document.querySelector(".print-host")?.remove();
+    if (document.documentElement.dataset.platform === "macos") {
+      // WebKit on macOS ignores print() from a frame, so print the window
+      // natively and let @media print show only this sandboxed host. It
+      // stays until the next print because the sheet renders pages later.
+      const host = document.createElement("div");
+      host.className = "print-host";
+      host.setAttribute("aria-hidden", "true");
+      const printer = document.createElement("iframe");
+      printer.setAttribute("sandbox", "allow-same-origin");
+      printer.tabIndex = -1;
+      printer.srcdoc = html;
+      printer.addEventListener("load", () => {
+        const height = printer.contentDocument?.documentElement.scrollHeight;
+        printer.style.height = `${height ?? 0}px`;
+        void api.printWebview().catch((cause) => setError(String(cause)));
+      });
+      host.appendChild(printer);
+      document.body.appendChild(host);
+      return;
+    }
     const printer = document.createElement("iframe");
     // Intentionally unsandboxed: the parent calls contentWindow.print(), but a
     // sandboxed srcdoc frame is cross-origin (print() is not exposed on the
@@ -339,6 +370,29 @@ export function MessageReader({
     }
   }
 
+  const handleExternalLinkRef = useRef(handleExternalLink);
+  handleExternalLinkRef.current = handleExternalLink;
+
+  // Native side routes denied frame popups (WebKit link clicks) here.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let active = true;
+    void api
+      .onFrameLink((url) => {
+        if (/^https?:\/\//i.test(url)) void handleExternalLinkRef.current(url);
+        else if (/^mailto:/i.test(url))
+          useAppStore.getState().openComposer({ prefill: parseMailto(url) });
+      })
+      .then((stop) => {
+        if (active) unlisten = stop;
+        else stop();
+      });
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, []);
+
   const menuHandlersRef = useRef({
     openComposer,
     forwardMessage,
@@ -466,6 +520,11 @@ export function MessageReader({
     () => (htmlBody ? sanitizeReceivedHtml(htmlBody) : undefined),
     [htmlBody],
   );
+  // Fall back to the text part when the HTML part sanitizes to nothing visible.
+  const showHtml = useMemo(
+    () => (sanitized ? hasVisibleHtml(sanitized.html) : false),
+    [sanitized],
+  );
   const currentLoadedHtml =
     loadedHtml && loadedHtml.messageId === message?.id
       ? loadedHtml.html
@@ -498,9 +557,10 @@ export function MessageReader({
   const messageId = message?.id;
   const messageAccountId = message?.accountId;
   const loadingImages = loadingImagesFor === messageId;
-  const frameHtml = messageFrameDocument(
-    currentLoadedHtml ?? sanitized?.html ?? "",
-    settings.textScale,
+  const frameSource = currentLoadedHtml ?? sanitized?.html ?? "";
+  const frameHtml = useMemo(
+    () => messageFrameDocument(withFrameLinks(frameSource), settings.textScale),
+    [frameSource, settings.textScale],
   );
 
   useEffect(() => {
@@ -1086,6 +1146,7 @@ export function MessageReader({
       <MessageBody
         message={message}
         sanitized={sanitized}
+        showHtml={showHtml}
         currentLoadedHtml={currentLoadedHtml}
         frameHtml={frameHtml}
         filteredImages={filteredImages}

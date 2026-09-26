@@ -187,6 +187,16 @@ pub async fn show_native_message(
     Ok(())
 }
 
+/// macOS WebKit ignores print() from frames, so print the calling window
+/// natively. The frontend shows only its print host under @media print.
+#[tauri::command]
+pub fn print_webview(window: tauri::WebviewWindow) -> CommandResult<()> {
+    window
+        .print()
+        .map_err(|_| "Postal Snap could not open printing.".to_string())?;
+    Ok(())
+}
+
 #[tauri::command]
 pub fn relaunch_app(app: AppHandle) -> CommandResult<()> {
     app.restart();

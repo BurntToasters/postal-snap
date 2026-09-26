@@ -128,7 +128,31 @@ fn main() {
                 .ok_or("Postal Snap window configuration is missing.")?;
             let window_builder = tauri::WebviewWindowBuilder::from_config(app.handle(), &window_config)
                 .map_err(|error| error.to_string())?
-                .on_navigation(allowed_webview_navigation);
+                .on_navigation({
+                    let app = app.handle().clone();
+                    move |url| {
+                        if allowed_webview_navigation(url) {
+                            return true;
+                        }
+                        // macOS WebKit asks this policy for a mail link's
+                        // popup first. Deny it; the reader confirms the link.
+                        if let Some(target) = frame_link_target(url) {
+                            let _ = app.emit("frame-link", target);
+                        }
+                        false
+                    }
+                })
+                .on_new_window({
+                    let app = app.handle().clone();
+                    move |url, _features| {
+                        // WebKitGTK routes mail link popups here instead.
+                        // Never open a window.
+                        if let Some(target) = frame_link_target(&url) {
+                            let _ = app.emit("frame-link", target);
+                        }
+                        tauri::webview::NewWindowResponse::Deny
+                    }
+                });
             #[cfg(target_os = "macos")]
             let window_builder = window_builder
                 .title_bar_style(tauri::TitleBarStyle::Overlay)
@@ -294,6 +318,7 @@ fn main() {
             commands::sync::sync_all_accounts,
             commands::settings_system::show_native_confirm,
             commands::settings_system::show_native_message,
+            commands::settings_system::print_webview,
             commands::settings_system::relaunch_app,
             commands::settings_system::quit_app,
             commands::settings_system::tray_is_active,
@@ -582,9 +607,20 @@ pub fn update_mail_menu_or_warn<R: Runtime>(app: &tauri::AppHandle<R>, enabled: 
     }
 }
 
+/// Link targets a denied frame popup may hand to the reader. The reader still
+/// inspects and confirms before anything opens.
+fn frame_link_target(url: &url::Url) -> Option<String> {
+    let text = url.as_str();
+    (matches!(url.scheme(), "http" | "https" | "mailto") && text.len() <= 16 * 1024)
+        .then(|| text.to_string())
+}
+
 fn allowed_webview_navigation(url: &url::Url) -> bool {
     match url.scheme() {
         "tauri" | "ipc" => true,
+        // Reader and print frames load sanitized mail via srcdoc. WebKit on
+        // macOS 27 and WebKitGTK ask this policy for subframe loads too.
+        "about" => matches!(url.path(), "srcdoc" | "blank"),
         "http" | "https" => matches!(
             url.host_str(),
             Some("localhost" | "127.0.0.1" | "tauri.localhost" | "ipc.localhost")
@@ -596,8 +632,8 @@ fn allowed_webview_navigation(url: &url::Url) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        allowed_webview_navigation, attaches_native_window_menu, mail_actions_enabled,
-        updater_menu_policy,
+        allowed_webview_navigation, attaches_native_window_menu, frame_link_target,
+        mail_actions_enabled, updater_menu_policy,
     };
     #[cfg(not(target_os = "macos"))]
     use super::{build_application_menu, set_mail_menu_items_enabled};
@@ -623,6 +659,37 @@ mod tests {
         assert!(!allowed_webview_navigation(
             &url::Url::parse("https://evil.example/").unwrap(),
         ));
+        // Regression: cancelling about:srcdoc blanked every message body.
+        assert!(allowed_webview_navigation(
+            &url::Url::parse("about:srcdoc").unwrap(),
+        ));
+        assert!(allowed_webview_navigation(
+            &url::Url::parse("about:blank").unwrap(),
+        ));
+        assert!(!allowed_webview_navigation(
+            &url::Url::parse("about:config").unwrap(),
+        ));
+        assert!(!allowed_webview_navigation(
+            &url::Url::parse("data:text/html,<p>x</p>").unwrap(),
+        ));
+        assert!(!allowed_webview_navigation(
+            &url::Url::parse("file:///etc/passwd").unwrap(),
+        ));
+    }
+
+    #[test]
+    fn frame_links_route_only_web_and_mailto_targets() {
+        let parse = |text: &str| url::Url::parse(text).unwrap();
+        assert_eq!(
+            frame_link_target(&parse("https://library.example.test/hours")).as_deref(),
+            Some("https://library.example.test/hours"),
+        );
+        assert!(frame_link_target(&parse("mailto:jane@example.test")).is_some());
+        assert!(frame_link_target(&parse("javascript:alert(1)")).is_none());
+        assert!(frame_link_target(&parse("file:///etc/passwd")).is_none());
+        assert!(frame_link_target(&parse("tauri://localhost/")).is_none());
+        let long = format!("https://example.test/{}", "a".repeat(16 * 1024));
+        assert!(frame_link_target(&parse(&long)).is_none());
     }
 
     #[test]
