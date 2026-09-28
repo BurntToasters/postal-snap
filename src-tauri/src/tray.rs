@@ -134,6 +134,30 @@ pub fn tray_click_hides(
     visible && !minimized && (focused || !click_keeps_focus)
 }
 
+#[cfg(any(target_os = "windows", target_os = "macos", test))]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum TrayClickAction {
+    Toggle,
+    ShowMenu,
+    Ignore,
+}
+
+/// Left up toggles. On macOS the menu is detached, so right up pops it;
+/// Windows shows its attached menu natively.
+#[cfg(any(target_os = "windows", target_os = "macos", test))]
+pub fn tray_click_action(
+    button: tauri::tray::MouseButton,
+    state: tauri::tray::MouseButtonState,
+    is_macos: bool,
+) -> TrayClickAction {
+    use tauri::tray::{MouseButton, MouseButtonState};
+    match (button, state) {
+        (MouseButton::Left, MouseButtonState::Up) => TrayClickAction::Toggle,
+        (MouseButton::Right, MouseButtonState::Up) if is_macos => TrayClickAction::ShowMenu,
+        _ => TrayClickAction::Ignore,
+    }
+}
+
 pub fn show_main<R: Runtime>(app: &AppHandle<R>) {
     HIDDEN_TO_TRAY.store(false, Ordering::Relaxed);
     #[cfg(target_os = "macos")]
@@ -150,10 +174,10 @@ pub fn show_main<R: Runtime>(app: &AppHandle<R>) {
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 mod native {
-    use super::{show_main, AppHandle, Runtime};
+    use super::{show_main, tray_click_action, AppHandle, Runtime, TrayClickAction};
     use std::sync::atomic::{AtomicBool, Ordering};
     use tauri::menu::{MenuBuilder, MenuItemBuilder};
-    use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+    use tauri::tray::{TrayIconBuilder, TrayIconEvent};
     use tauri::{Emitter, Manager};
 
     const TRAY_ID: &str = "postal-snap";
@@ -205,6 +229,16 @@ mod native {
         }
     }
 
+    // performClick tracks the menu until it closes, so detach right after.
+    #[cfg(target_os = "macos")]
+    fn show_menu_once<R: Runtime>(tray: &tauri::tray::TrayIcon<R>, menu: &tauri::menu::Menu<R>) {
+        if tray.set_menu(Some(menu.clone())).is_err() {
+            return;
+        }
+        let _ = tray.with_inner_tray_icon(|t| t.show_menu());
+        let _ = tray.set_menu(None::<tauri::menu::Menu<R>>);
+    }
+
     fn install<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
         #[cfg(target_os = "macos")]
         let icon =
@@ -227,8 +261,12 @@ mod native {
             .map_err(|_| "background icon unavailable".to_string())?;
         let builder = TrayIconBuilder::with_id(TRAY_ID)
             .icon(icon)
-            .tooltip("Postal Snap")
-            .menu(&menu)
+            .tooltip("Postal Snap");
+        // macOS: an attached menu opens on left click, so attach it only
+        // around a right click. Windows keeps the menu attached.
+        #[cfg(target_os = "windows")]
+        let builder = builder.menu(&menu);
+        let builder = builder
             // Left click shows or hides the window; right click opens the menu.
             .show_menu_on_left_click(false)
             .on_menu_event(|app, event| match event.id.as_ref() {
@@ -238,14 +276,22 @@ mod native {
                 }
                 _ => {}
             })
-            .on_tray_icon_event(|tray, event| {
-                if let TrayIconEvent::Click {
-                    button: MouseButton::Left,
-                    button_state: MouseButtonState::Up,
+            .on_tray_icon_event(move |tray, event| {
+                let TrayIconEvent::Click {
+                    button,
+                    button_state,
                     ..
                 } = event
-                {
-                    toggle_main(tray.app_handle());
+                else {
+                    return;
+                };
+                match tray_click_action(button, button_state, cfg!(target_os = "macos")) {
+                    TrayClickAction::Toggle => toggle_main(tray.app_handle()),
+                    TrayClickAction::ShowMenu => {
+                        #[cfg(target_os = "macos")]
+                        show_menu_once(tray, &menu);
+                    }
+                    TrayClickAction::Ignore => {}
                 }
             });
         #[cfg(target_os = "macos")]
@@ -259,8 +305,61 @@ mod native {
 
 #[cfg(test)]
 mod tests {
-    use super::{should_hide_on_close, should_show_on_activation, tray_click_hides};
+    use super::{
+        should_hide_on_close, should_show_on_activation, tray_click_action, tray_click_hides,
+        TrayClickAction,
+    };
     use std::time::Duration;
+    use tauri::tray::{MouseButton, MouseButtonState};
+
+    // Failure modes for tray clicks:
+    // - left click opens the menu instead of toggling (macOS attached menu)
+    // - right click toggles the window instead of opening the menu
+    // - Down and Up both fire, so the window toggles twice
+    // - menu stays attached after the popup, so left click opens it again
+    // - hidden window is not restored by a click
+    // - Dock/Accessory policy is not reset when the window returns
+    // - notification-click activation stops reopening the window
+    #[test]
+    fn left_up_toggles_on_both_platforms() {
+        for mac in [true, false] {
+            let up = MouseButtonState::Up;
+            assert_eq!(
+                tray_click_action(MouseButton::Left, up, mac),
+                TrayClickAction::Toggle
+            );
+        }
+    }
+
+    #[test]
+    fn right_up_opens_menu_only_on_macos() {
+        let up = MouseButtonState::Up;
+        assert_eq!(
+            tray_click_action(MouseButton::Right, up, true),
+            TrayClickAction::ShowMenu
+        );
+        // Windows opens its attached menu natively.
+        assert_eq!(
+            tray_click_action(MouseButton::Right, up, false),
+            TrayClickAction::Ignore
+        );
+    }
+
+    #[test]
+    fn down_and_other_buttons_are_ignored() {
+        for mac in [true, false] {
+            for button in [MouseButton::Left, MouseButton::Right, MouseButton::Middle] {
+                assert_eq!(
+                    tray_click_action(button, MouseButtonState::Down, mac),
+                    TrayClickAction::Ignore
+                );
+            }
+            assert_eq!(
+                tray_click_action(MouseButton::Middle, MouseButtonState::Up, mac),
+                TrayClickAction::Ignore
+            );
+        }
+    }
 
     #[test]
     fn left_click_toggles_the_window() {
