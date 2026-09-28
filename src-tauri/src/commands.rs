@@ -960,6 +960,9 @@ mod tests {
     fn outbox_keeps_the_unsigned_draft_for_undo() {
         use super::drafts_send::sign_for_outbox;
         let draft = crate::models::ComposeDraft {
+            body_format: crate::models::BodyFormat::Html,
+            source_message_id: None,
+            source_kind: None,
             id: None,
             account_id: "account-1".into(),
             from: None,
@@ -1039,6 +1042,7 @@ mod tests {
     fn rule_account() -> AccountRecord {
         AccountRecord {
             summary: AccountSummary {
+                default_body_format: crate::models::BodyFormat::Html,
                 id: "account-1".into(),
                 provider: ProviderKind::Manual,
                 email: "sam@example.com".into(),

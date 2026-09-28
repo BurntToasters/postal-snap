@@ -43,6 +43,9 @@ export type MailSettingsDiscovery =
     }
   | { status: "notFound"; domain: string };
 
+export type BodyFormat = "html" | "plain";
+export type DraftSourceKind = "reply" | "reply_all" | "forward";
+
 export interface AccountSummary {
   id: string;
   provider: ProviderKind;
@@ -54,6 +57,7 @@ export interface AccountSummary {
   authMethod?: string;
   signature?: string;
   color?: string | null;
+  defaultBodyFormat?: BodyFormat;
 }
 
 export interface AccountRemovalOutcome {
@@ -100,6 +104,7 @@ export interface MessageSummary {
   hasAttachments: boolean;
   size: number;
   threadRoot?: string | null;
+  hasCalendar?: boolean;
 }
 
 export interface MessageCursor {
@@ -153,6 +158,9 @@ export interface MessageDetail extends MessageSummary {
   references?: string[];
   /** Why the body is missing when it could not be downloaded. */
   bodyStatus?: "available" | "offline" | "signInNeeded" | "tooLarge";
+  /** Raw bounded header values; parsed later. */
+  listUnsubscribe?: string | null;
+  listUnsubscribePost?: string | null;
 }
 
 export interface ComposeAttachment {
@@ -178,6 +186,9 @@ export interface ComposeDraft {
   inReplyTo?: string;
   references?: string[];
   sendAt?: string | null;
+  bodyFormat?: BodyFormat;
+  sourceMessageId?: number | null;
+  sourceKind?: DraftSourceKind | null;
 }
 
 export interface DraftSummary {

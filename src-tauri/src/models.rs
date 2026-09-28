@@ -111,6 +111,8 @@ pub struct AccountSummary {
     /// Avatar color token chosen by the user; `None` uses the automatic color.
     #[serde(default)]
     pub color: Option<String>,
+    #[serde(default)]
+    pub default_body_format: BodyFormat,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -209,6 +211,8 @@ pub struct MessageSummary {
     pub size: u64,
     #[serde(default)]
     pub thread_root: Option<String>,
+    #[serde(default)]
+    pub has_calendar: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -255,6 +259,11 @@ pub struct MessageDetail {
     /// `tooLarge`.
     #[serde(default = "default_body_status")]
     pub body_status: String,
+    /// Raw bounded List-Unsubscribe / List-Unsubscribe-Post header values.
+    #[serde(default)]
+    pub list_unsubscribe: Option<String>,
+    #[serde(default)]
+    pub list_unsubscribe_post: Option<String>,
 }
 
 fn default_body_status() -> String {
@@ -290,6 +299,58 @@ pub struct ComposeDraft {
     pub references: Option<Vec<String>>,
     #[serde(default)]
     pub send_at: Option<String>,
+    #[serde(default)]
+    pub body_format: BodyFormat,
+    #[serde(default)]
+    pub source_message_id: Option<i64>,
+    #[serde(default)]
+    pub source_kind: Option<DraftSourceKind>,
+}
+
+/// Compose body format; unknown values fail IPC deserialization.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BodyFormat {
+    #[default]
+    Html,
+    Plain,
+}
+
+impl BodyFormat {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Html => "html",
+            Self::Plain => "plain",
+        }
+    }
+
+    /// Unknown stored values fall back to HTML.
+    pub fn from_db(value: &str) -> Self {
+        if value == "plain" {
+            Self::Plain
+        } else {
+            Self::Html
+        }
+    }
+}
+
+/// What a draft answers; unknown values fail IPC deserialization.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DraftSourceKind {
+    Reply,
+    ReplyAll,
+    Forward,
+}
+
+impl DraftSourceKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Reply => "reply",
+            Self::ReplyAll => "reply_all",
+            Self::Forward => "forward",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1160,6 +1221,9 @@ mod tests {
     #[test]
     fn compose_limits_reject_header_injection_and_excessive_recipients() {
         let mut draft = ComposeDraft {
+            body_format: crate::models::BodyFormat::Html,
+            source_message_id: None,
+            source_kind: None,
             id: None,
             account_id: "account-1".into(),
             from: None,

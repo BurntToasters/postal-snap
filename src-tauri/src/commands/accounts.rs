@@ -132,6 +132,7 @@ pub async fn add_account(
     }
     let id = uuid::Uuid::new_v4().to_string();
     let summary = AccountSummary {
+        default_body_format: crate::models::BodyFormat::Html,
         id: id.clone(),
         provider: request.provider.clone(),
         email: request.email.trim().to_lowercase(),

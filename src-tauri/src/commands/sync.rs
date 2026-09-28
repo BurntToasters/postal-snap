@@ -635,6 +635,9 @@ async fn import_remote_drafts_locked(
             continue;
         }
         let draft = ComposeDraft {
+            body_format: crate::models::BodyFormat::Html,
+            source_message_id: None,
+            source_kind: None,
             id: Some(id.clone()),
             account_id: account_id.clone(),
             from: remote.from.as_deref().and_then(|address| {
