@@ -3790,6 +3790,91 @@ mod tests {
         assert_eq!(db.apply_vanished(inbox, &[]).unwrap(), 0);
     }
 
+    // Failure modes: `from:` matches a body mention; operator-only queries
+    // return nothing; `after:` drops its own day or `before:` includes it;
+    // subject hits rank below body hits; hostile FTS text errors or widens
+    // the match; operators leak rows across mailboxes.
+    #[test]
+    fn search_operators_filter_and_rank() {
+        let db = Database::memory();
+        let account = account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        let other = mailbox(&db, account_id, "Other", &MailboxRole::Other);
+        let mut first = message(1, "2026-08-10T09:00:00+00:00");
+        first.subject = "Budget review".into();
+        first.text_body = "numbers inside".into();
+        let mut second = message(2, "2026-08-20T09:00:00+00:00");
+        second.subject = "Lunch".into();
+        second.sender_name = "Bob".into();
+        second.sender_address = "bob@example.com".into();
+        second.text_body = "the budget came from jane".into();
+        second.is_read = true;
+        second.is_starred = true;
+        second.attachments = vec![Attachment {
+            id: "a1".into(),
+            filename: "plan.pdf".into(),
+            content_type: "application/pdf".into(),
+            size: 10,
+            content_id: None,
+            inline: false,
+        }];
+        let mut third = message(3, "2026-09-01T09:00:00+00:00");
+        third.subject = "Trip".into();
+        third.recipients = "sam@example.com, lee@example.com".into();
+        third.text_body = "photos".into();
+        third.is_read = true;
+        for item in [&first, &second, &third] {
+            db.upsert_message(account_id, inbox, item).unwrap();
+        }
+        let mut stray = message(1, "2026-08-11T09:00:00+00:00");
+        stray.subject = "Budget elsewhere".into();
+        db.upsert_message(account_id, other, &stray).unwrap();
+
+        let run = |text: &str| -> Vec<u32> {
+            db.search(&SearchQuery {
+                account_id: account_id.clone(),
+                mailbox_id: Some(inbox),
+                text: text.into(),
+                all_folders: false,
+                limit: 10,
+            })
+            .unwrap()
+            .into_iter()
+            .map(|item| item.uid)
+            .collect()
+        };
+        // Subject weight beats a body mention.
+        assert_eq!(run("budget"), vec![1, 2]);
+        let mut from = run("from:jane");
+        from.sort_unstable();
+        assert_eq!(from, vec![1, 3]);
+        assert_eq!(run("from:jane is:unread"), vec![1]);
+        assert_eq!(run("is:flagged"), vec![2]);
+        assert_eq!(run("has:attachment"), vec![2]);
+        assert_eq!(run("to:lee"), vec![3]);
+        assert_eq!(run("subject:budget"), vec![1]);
+        assert_eq!(run("is:read after:2026-08-20 before:2026-09-01"), vec![2]);
+        assert_eq!(run("after:2026-08-11"), vec![3, 2]);
+        assert_eq!(run("before:2026-08-11"), vec![1]);
+        // Unknown operators fall back to plain text; no match here.
+        assert!(run("nosuch:thing").is_empty());
+        // FTS syntax stays literal.
+        for hostile in [
+            "budget OR \"",
+            "NEAR(a b) OR *",
+            "from:\"x\" OR subject:*",
+            "\"unterminated",
+            "-budget",
+            "sender:jane",
+        ] {
+            let _ = run(hostile);
+        }
+        assert!(run("sender:jane").is_empty());
+        assert!(run("").is_empty());
+    }
+
     #[test]
     fn prefetch_failures_back_off() {
         let db = Database::memory();

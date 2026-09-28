@@ -13,6 +13,7 @@ mod models;
 mod oauth;
 mod providers;
 mod resume_watch;
+mod search_query;
 mod security;
 mod settings;
 mod storage;
