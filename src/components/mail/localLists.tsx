@@ -177,6 +177,7 @@ export function OutboxList({
           <article
             key={item.id}
             className="attention-row"
+            data-state={item.state}
             data-context="outbox"
             data-outbox-id={item.id}
             data-busy={sending ? "true" : undefined}

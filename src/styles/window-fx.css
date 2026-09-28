@@ -94,6 +94,15 @@ html[data-window-fx="vibrant"] .message-body pre {
   -webkit-backdrop-filter: none !important;
 }
 
+html[data-window-fx="vibrant"] .message-body[data-follows-theme="true"],
+html[data-window-fx="vibrant"] .message-body[data-follows-theme="true"] iframe,
+html[data-window-fx="vibrant"]
+  .message-body[data-follows-theme="true"]
+  :is(.plain-text-body, pre) {
+  background: var(--surface) !important;
+  color-scheme: dark !important;
+}
+
 html[data-window-fx="vibrant"] .message-body {
   border-radius: var(--radius-md);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 70%, transparent);

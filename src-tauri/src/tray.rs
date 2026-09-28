@@ -120,6 +120,20 @@ pub fn start_hidden_in_tray<R: Runtime>(app: &AppHandle<R>) {
     let _ = app;
 }
 
+/// Left click on the tray or menu bar icon hides the window when it is the
+/// one in use, and otherwise brings it back and forward. A macOS menu bar
+/// click keeps focus, so focus decides there; a Windows tray click moves
+/// focus to the taskbar first, so visibility decides.
+#[cfg(any(target_os = "windows", target_os = "macos", test))]
+pub fn tray_click_hides(
+    visible: bool,
+    minimized: bool,
+    focused: bool,
+    click_keeps_focus: bool,
+) -> bool {
+    visible && !minimized && (focused || !click_keeps_focus)
+}
+
 pub fn show_main<R: Runtime>(app: &AppHandle<R>) {
     HIDDEN_TO_TRAY.store(false, Ordering::Relaxed);
     #[cfg(target_os = "macos")]
@@ -140,7 +154,7 @@ mod native {
     use std::sync::atomic::{AtomicBool, Ordering};
     use tauri::menu::{MenuBuilder, MenuItemBuilder};
     use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-    use tauri::Emitter;
+    use tauri::{Emitter, Manager};
 
     const TRAY_ID: &str = "postal-snap";
     static TRAY_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -175,6 +189,22 @@ mod native {
         TRAY_ACTIVE.store(false, Ordering::Relaxed);
     }
 
+    fn toggle_main<R: Runtime>(app: &AppHandle<R>) {
+        let Some(window) = app.get_webview_window("main") else {
+            return;
+        };
+        let visible = window.is_visible().unwrap_or(false);
+        let minimized = window.is_minimized().unwrap_or(false);
+        let focused = window.is_focused().unwrap_or(false);
+        if super::tray_click_hides(visible, minimized, focused, cfg!(target_os = "macos")) {
+            // Same path as closing, so macOS leaves the Dock and a ready
+            // update can install in the background.
+            super::hide_main_to_tray(&window);
+        } else {
+            show_main(app);
+        }
+    }
+
     fn install<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
         #[cfg(target_os = "macos")]
         let icon =
@@ -199,7 +229,8 @@ mod native {
             .icon(icon)
             .tooltip("Postal Snap")
             .menu(&menu)
-            .show_menu_on_left_click(cfg!(target_os = "macos"))
+            // Left click shows or hides the window; right click opens the menu.
+            .show_menu_on_left_click(false)
             .on_menu_event(|app, event| match event.id.as_ref() {
                 "tray-open" => show_main(app),
                 "tray-quit" => {
@@ -214,9 +245,7 @@ mod native {
                     ..
                 } = event
                 {
-                    if cfg!(target_os = "windows") {
-                        show_main(tray.app_handle());
-                    }
+                    toggle_main(tray.app_handle());
                 }
             });
         #[cfg(target_os = "macos")]
@@ -230,8 +259,22 @@ mod native {
 
 #[cfg(test)]
 mod tests {
-    use super::{should_hide_on_close, should_show_on_activation};
+    use super::{should_hide_on_close, should_show_on_activation, tray_click_hides};
     use std::time::Duration;
+
+    #[test]
+    fn left_click_toggles_the_window() {
+        // macOS: the click keeps focus, so only the front window hides. A
+        // window behind other apps comes forward instead.
+        assert!(tray_click_hides(true, false, true, true));
+        assert!(!tray_click_hides(true, false, false, true));
+        // Windows: the taskbar takes focus first, so visibility decides.
+        assert!(tray_click_hides(true, false, false, false));
+        // Hidden or minimized: always bring it back.
+        assert!(!tray_click_hides(false, false, true, true));
+        assert!(!tray_click_hides(true, true, true, true));
+        assert!(!tray_click_hides(true, true, false, false));
+    }
 
     #[test]
     fn activation_opens_the_window_only_when_closed_to_the_tray() {

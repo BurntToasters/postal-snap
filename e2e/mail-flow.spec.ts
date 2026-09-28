@@ -1284,7 +1284,9 @@ test("triages several messages at once", async ({ page }) => {
   await page.getByRole("button", { name: "Select" }).click();
   await page.getByRole("checkbox", { name: /Weekend plans/i }).check();
   await expect(page.getByRole("toolbar", { name: "1 selected" })).toBeVisible();
-  await page.getByRole("button", { name: "Mark read", exact: true }).click();
+  // Read state lives in the mailbox More menu while selecting.
+  await page.getByRole("button", { name: "More mailbox actions" }).click();
+  await page.getByRole("menuitem", { name: "Mark read", exact: true }).click();
   await expect(page.getByRole("toolbar", { name: "1 selected" })).toBeHidden();
 
   await page.getByRole("button", { name: "More mailbox actions" }).click();

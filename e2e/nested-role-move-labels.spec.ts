@@ -32,12 +32,12 @@ test("reader move list distinguishes nested role folders", async ({ page }) => {
   await page.getByRole("option", { name: /Weekend plans/i }).click();
   await page.getByRole("button", { name: "More actions" }).click();
 
-  const move = page.getByRole("combobox", { name: "Move to folder" });
+  const move = page
+    .getByRole("menu", { name: "More actions" })
+    .getByRole("group", { name: "Move to" });
   const labels = await move
-    .locator("option")
-    .evaluateAll((options) =>
-      options.map((option) => option.textContent?.trim()),
-    );
+    .getByRole("menuitem")
+    .evaluateAll((items) => items.map((item) => item.textContent?.trim()));
   expect(labels).toContain("Sent");
   expect(labels).toContain("Work / Sent");
   expect(labels).toContain("Personal / Sent");

@@ -544,3 +544,38 @@
   background: var(--surface);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
+
+/* Mail-rule form: label above each field, with room between fields. */
+.rule-form {
+  display: grid;
+  gap: 6px;
+}
+
+.rule-form > label {
+  margin-top: 10px;
+  font-weight: 650;
+}
+
+.rule-form > label:first-child {
+  margin-top: 0;
+}
+
+/* One titled section per job in the account card: password, signature,
+   mail rules, and addresses, split by hairlines. */
+.account-settings-card
+  > :is(
+    .account-password-section,
+    .account-rules-section,
+    .account-aliases-section
+  ) {
+  display: grid;
+  gap: 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.account-password-section > label,
+.account-settings-card .aliases-header strong {
+  font-size: 0.95rem;
+  font-weight: 700;
+}
