@@ -575,6 +575,24 @@ impl Database {
         Ok(removed)
     }
 
+    /// Delete cached rows for UIDs a QRESYNC VANISHED response named.
+    /// Scoped to one mailbox; rows under a pending local move stay.
+    pub fn apply_vanished(&self, mailbox_id: i64, uids: &[u32]) -> Result<u32, String> {
+        let mut conn = self.conn()?;
+        let transaction = conn.transaction().map_err(db_error)?;
+        let mut removed = 0u32;
+        for uid in uids {
+            removed += transaction
+                .execute(
+                    "DELETE FROM messages WHERE mailbox_id=?1 AND uid=?2 AND pending_move_to IS NULL",
+                    params![mailbox_id, uid],
+                )
+                .map_err(db_error)? as u32;
+        }
+        transaction.commit().map_err(db_error)?;
+        Ok(removed)
+    }
+
     pub fn cached_message_count(&self, mailbox_id: i64) -> Result<u32, String> {
         self.conn()?
             .query_row(

@@ -12,9 +12,7 @@ Quick tracker for things wired into the app but not 100% yet. Full scope rules l
 
 Kept on purpose; each has a planned consumer. Remove if still unused after that work lands.
 
-- `get_account_inbox_counts`: planned per-account sidebar badges.
 - `update_account_display_name`: planned inline account renaming; the command and `Database::update_account_display_name` exist but no UI calls them yet.
-- `sync_all_accounts`: planned single refresh across every account; no UI caller yet.
 - `list_all_mailboxes`: planned unified-inbox search (scope decision pending).
 - `search_all_cached_messages`: command registration removed from Rust because no mailbox UI used it. The backing `Database::search_all_accounts` API stays parked for the pending unified-inbox decision, and the frontend API entry is removed separately.
 
@@ -27,7 +25,7 @@ Kept on purpose; each has a planned consumer. Remove if still unused after that 
 - **Send size**: 25 MiB shows a warning but sending stays enabled; providers differ, backend caps at 100 MiB. Deliberate.
 - **Setup inputs during testing**: editable while the connection test runs; the backend tests a request snapshot, so edits cannot corrupt the in-flight check.
 - **IDLE**: watches INBOX only; other folders refresh on the ~120s full-sync loop.
-- **Flag sync**: always FETCHes flags for the cached UID set; no CONDSTORE/MODSEQ yet.
+- **Flag sync**: CONDSTORE `CHANGEDSINCE` when advertised; QRESYNC `VANISHED` replaces the expunge `UID SEARCH` when the server accepts `ENABLE QRESYNC`. Other servers scan every cached UID. GreenMail does not advertise QRESYNC, so it is covered by Rust tests and the iCloud smoke test only.
 - **Mail rules**: applied only after successful syncs; server-side filter upload, rule reordering, and test-match preview are not implemented.
 - **Attachment IDs**: deterministic hash (name + CID + size + index) with legacy fallback. No per-message salt; distinct contents with identical metadata collide.
 - **Search ranking**: unweighted bm25 AND-of-prefix; body can drown subject/sender; CJK recall limited. Server body matches append by date.

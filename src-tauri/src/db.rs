@@ -1800,7 +1800,10 @@ mod tests {
         let detail = db.message_detail(id, &account.summary.id).unwrap();
         let listed = db.list_messages(mailbox, None, 10).unwrap().items;
         assert_eq!(detail.summary.thread_root, listed[0].thread_root);
-        assert_eq!(detail.summary.thread_root.as_deref(), Some("<1@example.com>"));
+        assert_eq!(
+            detail.summary.thread_root.as_deref(),
+            Some("<1@example.com>")
+        );
         assert!(!detail.to.is_empty(), "{:?}", detail.to);
     }
 
@@ -3749,6 +3752,42 @@ mod tests {
         assert_eq!(removed, 1);
         assert_eq!(db.cached_message_count(inbox).unwrap(), 2);
         assert_eq!(db.pending_move_uids(inbox).unwrap(), vec![2]);
+    }
+
+    // Failure modes: VANISHED must not touch the same UID in another mailbox,
+    // rows under a pending move, or UIDs never cached; repeats are harmless.
+    #[test]
+    fn apply_vanished_is_mailbox_scoped_and_keeps_pending_moves() {
+        let db = Database::memory();
+        let account = account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        let archive = mailbox(&db, account_id, "Archive", &MailboxRole::Archive);
+        for uid in 1..=4 {
+            db.upsert_envelope(
+                account_id,
+                inbox,
+                &envelope_only(uid, "2026-08-18T12:00:00+00:00"),
+            )
+            .unwrap();
+        }
+        db.upsert_envelope(
+            account_id,
+            archive,
+            &envelope_only(1, "2026-08-18T12:00:00+00:00"),
+        )
+        .unwrap();
+        let moving = db.message_summary_by_uid(inbox, 2).unwrap().unwrap().id;
+        db.mark_pending_move(moving, archive).unwrap();
+
+        let removed = db.apply_vanished(inbox, &[1, 2, 99]).unwrap();
+        assert_eq!(removed, 1);
+        assert_eq!(db.cached_message_count(inbox).unwrap(), 3);
+        assert_eq!(db.cached_message_count(archive).unwrap(), 1);
+        assert_eq!(db.pending_move_uids(inbox).unwrap(), vec![2]);
+        assert_eq!(db.apply_vanished(inbox, &[1]).unwrap(), 0);
+        assert_eq!(db.apply_vanished(inbox, &[]).unwrap(), 0);
     }
 
     #[test]
