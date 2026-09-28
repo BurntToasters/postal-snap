@@ -68,56 +68,9 @@
   top: calc(100% + 6px);
   right: 0;
   min-width: 220px;
-}
-
-.reader-more-menu .move-control {
-  display: flex;
-  width: 100%;
-  min-height: 2.25rem;
-  gap: 10px;
-  padding: 0 4px 0 9px;
-  border-radius: var(--radius-xs);
-}
-
-.reader-more-menu .move-control svg {
-  width: 1.1em;
-  height: 1.1em;
-  color: var(--text-muted);
-}
-
-.reader-more-menu .move-control select {
-  width: auto;
-  min-height: 2.25rem;
-  flex: 1;
-  padding-inline: 0 6px;
-  color: var(--text);
-}
-
-.move-control {
-  display: inline-flex;
-  min-height: 44px;
-  align-items: center;
-  gap: 6px;
-  padding-left: 8px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-}
-
-.move-control:hover {
-  border-color: var(--border);
-}
-
-.move-control svg {
-  width: 1.125rem;
-  height: 1.125rem;
-}
-
-.move-control select {
-  width: 84px;
-  min-height: 44px;
-  border: 0;
-  background: transparent;
-  box-shadow: none;
+  /* Long folder lists scroll inside the menu instead of off screen. */
+  max-height: min(70vh, 34rem);
+  overflow-y: auto;
 }
 
 .recipient-suggestions {

@@ -194,14 +194,20 @@ test("every menu shares one surface and compact rows", async ({ page }) => {
 test("reader move list uses the same folder names as the sidebar", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("/?nestedFolders=1");
   await page.getByRole("option", { name: /Weekend plans/i }).click();
   await page.getByRole("button", { name: "More actions" }).click();
-  const move = page.getByRole("combobox", { name: "Move to folder" });
-  await expect(move.locator("option", { hasText: "Trash" })).toHaveCount(1);
+  const menu = page.getByRole("menu", { name: "More actions" });
+  // Trash has its own toolbar button; raw server names never appear.
   await expect(
-    move.locator("option", { hasText: "Deleted Messages" }),
+    page.getByRole("button", { name: "Move to trash" }),
+  ).toBeVisible();
+  await expect(
+    menu.getByRole("menuitem", { name: /Deleted Messages/ }),
   ).toHaveCount(0);
+  await expect(
+    menu.getByRole("menuitem", { name: "Move to Projects / 2026 / Launch" }),
+  ).toHaveCount(1);
 });
 
 test("heading scale and section labels stay consistent", async ({ page }) => {
@@ -374,8 +380,8 @@ test("move targets show full folder paths and stay whole at 200% text", async ({
   await page.getByRole("button", { name: "More actions" }).click();
   await expect(
     page
-      .getByRole("combobox", { name: "Move to folder" })
-      .locator("option", { hasText: "Projects / 2026 / Launch" }),
+      .getByRole("menu", { name: "More actions" })
+      .getByRole("menuitem", { name: "Move to Projects / 2026 / Launch" }),
   ).toHaveCount(1);
 });
 

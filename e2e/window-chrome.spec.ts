@@ -187,7 +187,7 @@ for (const [platform, userAgent] of Object.entries(platforms)) {
       ).toBeFocused();
       await page.keyboard.press("End");
       await expect(
-        page.getByRole("combobox", { name: "Move to folder" }),
+        page.getByRole("menuitem", { name: "Snooze" }),
       ).toBeFocused();
       await page.keyboard.press("Home");
       await expect(page.getByRole("menuitem", { name: "Print" })).toBeFocused();

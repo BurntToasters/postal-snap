@@ -27,6 +27,15 @@ interface MessagePaneHeaderProps {
   onOpenMore: (open: boolean) => void;
   onMarkAllRead: () => void;
   onClearSearch: () => void;
+  /** Select mode: actions on the selection, shown in the More menu. */
+  selection?: {
+    count: number;
+    mailboxRole?: MailboxRole;
+    onMarkRead: () => void;
+    onMarkUnread: () => void;
+    onJunk: () => void;
+    onNotJunk: () => void;
+  };
 }
 
 export function MessagePaneHeader({
@@ -43,7 +52,9 @@ export function MessagePaneHeader({
   onOpenMore,
   onMarkAllRead,
   onClearSearch,
+  selection,
 }: MessagePaneHeaderProps) {
+  const selectionDisabled = !selection || selection.count === 0 || bulkBusy;
   return (
     <div className="pane-heading">
       <span>
@@ -87,6 +98,53 @@ export function MessagePaneHeader({
                   role="menu"
                   aria-label={strings.mail.moreMailboxActions}
                 >
+                  {selecting && selection ? (
+                    <>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        disabled={selectionDisabled}
+                        onClick={selection.onMarkRead}
+                      >
+                        <MailOpen aria-hidden="true" />
+                        {strings.reader.markRead}
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        disabled={selectionDisabled}
+                        onClick={selection.onMarkUnread}
+                      >
+                        <Mail aria-hidden="true" />
+                        {strings.reader.markUnread}
+                      </button>
+                      {selection.mailboxRole === "junk" ? (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          disabled={selectionDisabled}
+                          onClick={selection.onNotJunk}
+                        >
+                          <Inbox aria-hidden="true" />
+                          {strings.reader.notJunk}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          disabled={selectionDisabled}
+                          onClick={selection.onJunk}
+                        >
+                          <ShieldAlert aria-hidden="true" />
+                          {strings.reader.junk}
+                        </button>
+                      )}
+                      <div
+                        className="context-menu-separator"
+                        role="separator"
+                      />
+                    </>
+                  ) : null}
                   <button
                     type="button"
                     role="menuitem"
@@ -111,27 +169,19 @@ export function MessagePaneHeader({
   );
 }
 
+// Archive and Trash stay labeled here so the bar fits one row; read state
+// and junk sit in the mailbox More menu while selecting.
 interface BulkBarProps {
   selectedCount: number;
   busy: boolean;
-  mailboxRole?: MailboxRole;
-  onMarkRead: () => void;
-  onMarkUnread: () => void;
   onArchive: () => void;
-  onJunk: () => void;
-  onNotJunk: () => void;
   onTrash: () => void;
 }
 
 export function BulkBar({
   selectedCount,
   busy,
-  mailboxRole,
-  onMarkRead,
-  onMarkUnread,
   onArchive,
-  onJunk,
-  onNotJunk,
   onTrash,
 }: BulkBarProps) {
   const disabled = selectedCount === 0 || busy;
@@ -142,24 +192,9 @@ export function BulkBar({
       aria-label={strings.mail.selectedCount(selectedCount)}
     >
       <strong>{strings.mail.selectedCount(selectedCount)}</strong>
-      <button type="button" disabled={disabled} onClick={onMarkRead}>
-        <MailOpen aria-hidden="true" /> {strings.reader.markRead}
-      </button>
-      <button type="button" disabled={disabled} onClick={onMarkUnread}>
-        <Mail aria-hidden="true" /> {strings.reader.markUnread}
-      </button>
       <button type="button" disabled={disabled} onClick={onArchive}>
         <Archive aria-hidden="true" /> {strings.reader.archive}
       </button>
-      {mailboxRole === "junk" ? (
-        <button type="button" disabled={disabled} onClick={onNotJunk}>
-          <Inbox aria-hidden="true" /> {strings.reader.notJunk}
-        </button>
-      ) : (
-        <button type="button" disabled={disabled} onClick={onJunk}>
-          <ShieldAlert aria-hidden="true" /> {strings.reader.junk}
-        </button>
-      )}
       <button type="button" disabled={disabled} onClick={onTrash}>
         <Trash2 aria-hidden="true" /> {strings.reader.trash}
       </button>

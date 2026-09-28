@@ -9,14 +9,15 @@ import {
 import { strings } from "../i18n";
 import { parseMailto } from "../mailto";
 import {
+  hasAuthorColors,
   messageFrameDocument,
   sanitizeReceivedHtml,
   withFrameLinks,
 } from "../security";
+import { useIsDark } from "../hooks/useColorScheme";
 import { useAppStore } from "../store";
 import type { Attachment, AttachmentPreview, MessageSummary } from "../types";
 import { useDialogFocus } from "./useDialogFocus";
-import { AppMark } from "./AppMark";
 import { AttachmentList } from "./reader/attachmentList";
 import { MessageBody } from "./reader/messageBody";
 import { MessageHeader } from "./reader/messageHeader";
@@ -66,6 +67,7 @@ export function MessageReader({
   const setMessages = useAppStore((state) => state.setMessages);
   const openComposer = useAppStore((state) => state.openComposer);
   const settings = useAppStore((state) => state.settings);
+  const isDark = useIsDark();
   const setError = useAppStore((state) => state.setError);
   const accounts = useAppStore((state) => state.accounts);
   const frame = useRef<HTMLIFrameElement>(null);
@@ -559,8 +561,14 @@ export function MessageReader({
   const loadingImages = loadingImagesFor === messageId;
   const frameSource = currentLoadedHtml ?? sanitized?.html ?? "";
   const frameHtml = useMemo(
-    () => messageFrameDocument(withFrameLinks(frameSource), settings.textScale),
-    [frameSource, settings.textScale],
+    () =>
+      messageFrameDocument(
+        withFrameLinks(frameSource),
+        settings.textScale,
+        // Colorless mail follows dark mode; designed mail keeps its page.
+        isDark && !hasAuthorColors(frameSource),
+      ),
+    [frameSource, isDark, settings.textScale],
   );
 
   useEffect(() => {
@@ -1071,8 +1079,8 @@ export function MessageReader({
     );
   if (!message)
     return (
+      // Quiet text, like Mail's "No Message Selected".
       <section className="reader-pane empty-reader" id="reader-pane">
-        <AppMark size={60} className="brand-watermark" />
         <p>{strings.mail.noMessage}</p>
       </section>
     );
@@ -1147,6 +1155,7 @@ export function MessageReader({
         message={message}
         sanitized={sanitized}
         showHtml={showHtml}
+        followsTheme={isDark && (!showHtml || !hasAuthorColors(frameSource))}
         currentLoadedHtml={currentLoadedHtml}
         frameHtml={frameHtml}
         filteredImages={filteredImages}
