@@ -96,6 +96,11 @@ svg {
 }
 
 @media (forced-colors: active) {
+  .search-box:focus-within {
+    outline: 3px solid Highlight;
+    outline-offset: 2px;
+  }
+
   .global-window-caption-controls button {
     border: 1px solid ButtonText;
   }

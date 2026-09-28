@@ -128,6 +128,13 @@ export function MailShell({ onOpenSettings }: Props) {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [mailboxMoreOpen, setMailboxMoreOpen] = useState(false);
   const mailboxMoreRef = useRef<HTMLDivElement>(null);
+  // Close the mailbox menu and give focus back to its button.
+  function closeMailboxMore() {
+    setMailboxMoreOpen(false);
+    mailboxMoreRef.current
+      ?.querySelector<HTMLButtonElement>("button[aria-haspopup='menu']")
+      ?.focus();
+  }
   const toolbarRef = useRef<HTMLElement>(null);
   const newFolderButtonRef = useRef<HTMLButtonElement>(null);
   const lastFolderInvoker = useRef<HTMLElement | null>(null);
@@ -1429,11 +1436,28 @@ export function MailShell({ onOpenSettings }: Props) {
           }}
           onOpenMore={setMailboxMoreOpen}
           onMarkAllRead={() => {
-            setMailboxMoreOpen(false);
-            mailboxMoreRef.current
-              ?.querySelector<HTMLButtonElement>("button[aria-haspopup='menu']")
-              ?.focus();
+            closeMailboxMore();
             void markAllRead();
+          }}
+          selection={{
+            count: selectedIds.length,
+            mailboxRole: activeMailbox?.role,
+            onMarkRead: () => {
+              closeMailboxMore();
+              void bulkFlags(true, undefined);
+            },
+            onMarkUnread: () => {
+              closeMailboxMore();
+              void bulkFlags(false, undefined);
+            },
+            onJunk: () => {
+              closeMailboxMore();
+              void bulkMove("junk");
+            },
+            onNotJunk: () => {
+              closeMailboxMore();
+              void bulkMove("inbox");
+            },
           }}
           onClearSearch={() => {
             messageRequest.current += 1;
@@ -1446,12 +1470,7 @@ export function MailShell({ onOpenSettings }: Props) {
           <BulkBar
             selectedCount={selectedIds.length}
             busy={bulkBusy}
-            mailboxRole={activeMailbox?.role}
-            onMarkRead={() => void bulkFlags(true, undefined)}
-            onMarkUnread={() => void bulkFlags(false, undefined)}
             onArchive={() => void bulkMove("archive")}
-            onNotJunk={() => void bulkMove("inbox")}
-            onJunk={() => void bulkMove("junk")}
             onTrash={() => void bulkMove("trash")}
           />
         ) : null}

@@ -75,6 +75,9 @@ export async function syncWorkspaceWindowFx(
       false);
   const increasedContrast =
     window.matchMedia?.("(prefers-contrast: more)")?.matches ?? false;
+  // WKWebView lacks the media query; CSS reads the native answer here.
+  document.documentElement.dataset.reduceTransparency =
+    String(reducedTransparency);
   const active =
     supports && enabled && !reducedTransparency && !increasedContrast;
   document.documentElement.dataset.windowFx = active ? "vibrant" : "opaque";

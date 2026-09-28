@@ -186,7 +186,30 @@ export function withFrameLinks(html: string): string {
   return doc.body.innerHTML;
 }
 
-export function messageFrameDocument(html: string, textScale = 1): string {
+/**
+ * Mail that sets any color of its own was designed for a light page and
+ * stays on white. Mail without colors can follow dark mode, as Apple Mail
+ * does. Received HTML carries no <style> blocks, so inline colors are all.
+ */
+export function hasAuthorColors(html: string): boolean {
+  return /\bbgcolor\s*=|\bbackground(?:-color)?\s*[:=]|(?:^|[\s;"'])color\s*:|<font\b[^>]*\bcolor\s*=/i.test(
+    html,
+  );
+}
+
+// A neutral picture glyph for blocked remote images instead of the browser's
+// broken-image icon. The frame CSP allows data: images.
+const BLOCKED_IMAGE_GLYPH =
+  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%238e8e93' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='18' height='18' rx='2'/%3E%3Ccircle cx='9' cy='9' r='2'/%3E%3Cpath d='m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21'/%3E%3C/svg%3E";
+
+const DARK_FRAME_STYLE =
+  "html,body{background:#1c1c1e !important;color-scheme:dark}body{color:#e8e8ea}a{color:#6cb6ff}.remote-image-blocked{background:#2c2c2e;border-color:#48484a}";
+
+export function messageFrameDocument(
+  html: string,
+  textScale = 1,
+  dark = false,
+): string {
   const fontSize = Math.round(16 * Math.max(1, Math.min(2, textScale)));
   const policy = [
     "default-src 'none'",
@@ -198,7 +221,7 @@ export function messageFrameDocument(html: string, textScale = 1): string {
     "object-src 'none'",
     "base-uri 'none'",
   ].join("; ");
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${policy}"><meta http-equiv="x-dns-prefetch-control" content="off"><meta name="referrer" content="no-referrer"><style>html,body{background:#ffffff !important;color-scheme:light}body{font:${fontSize}px/1.55 system-ui,sans-serif;color:#20252b;margin:16px;overflow-wrap:anywhere}img{max-width:100%;height:auto}.remote-image-blocked{display:inline-block;min-width:120px;min-height:40px;background:#eef2f6;border:1px solid #c8d2dc}a{color:#1264a3}</style></head><body>${html}</body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${policy}"><meta http-equiv="x-dns-prefetch-control" content="off"><meta name="referrer" content="no-referrer"><style>html,body{background:#ffffff !important;color-scheme:light}body{font:${fontSize}px/1.55 system-ui,sans-serif;color:#20252b;margin:16px;overflow-wrap:anywhere}img{max-width:100%;height:auto}.remote-image-blocked{display:inline-block;min-width:120px;min-height:40px;background:#eef2f6;border:1px solid #c8d2dc;border-radius:6px;object-fit:none;content:url("${BLOCKED_IMAGE_GLYPH}")}a{color:#1264a3}${dark ? DARK_FRAME_STYLE : ""}</style></head><body>${html}</body></html>`;
 }
 
 export function htmlToPlainText(html: string): string {

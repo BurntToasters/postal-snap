@@ -231,9 +231,9 @@
   align-items: center;
   gap: 2px;
   padding: 2px 4px;
-  border: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
+  border: 0;
   border-radius: var(--radius-pill);
-  background: color-mix(in srgb, var(--surface) 86%, transparent);
+  background: var(--fill);
 }
 
 .toolbar-group > button {

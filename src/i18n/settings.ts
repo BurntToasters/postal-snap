@@ -52,10 +52,10 @@ export const settings = {
     "Softly blurs the desktop behind Postal Snap. Email itself always stays solid and readable.",
   closeToTrayWindows: "Keep running in the notification area",
   closeToTrayWindowsHelp:
-    "Closing the window hides Postal Snap instead of quitting. Open it from the tray icon, or quit from that menu.",
+    "Closing the window hides Postal Snap instead of quitting. Click the tray icon to show or hide it; right-click the icon to quit.",
   closeToTrayMac: "Keep running in the menu bar",
   closeToTrayMacHelp:
-    "Closing the window hides Postal Snap instead of quitting. Open it from the menu bar icon, or quit from that menu.",
+    "Closing the window hides Postal Snap instead of quitting. Click the menu bar icon to show or hide it; right-click the icon to quit.",
   vaultTitle: "Passwords use your system vault.",
   vaultHelp: "Postal Snap never stores passwords in settings or logs.",
   protectionOn: "Mail protection is on",
