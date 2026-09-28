@@ -123,7 +123,7 @@ impl Database {
 }
 
 pub(crate) const MESSAGE_SUMMARY_SELECT: &str = "SELECT m.id,m.account_id,m.mailbox_id,m.uid,m.message_id,m.subject,m.sender_name,m.sender_address,m.recipients,m.received_at,m.preview,m.is_read,m.is_starred,m.has_attachments,m.size,m.thread_root,m.has_calendar FROM messages m";
-pub(crate) const MESSAGE_DETAIL_SELECT: &str = "SELECT m.id,m.account_id,m.mailbox_id,m.uid,m.message_id,m.subject,m.sender_name,m.sender_address,m.recipients,m.received_at,m.preview,m.is_read,m.is_starred,m.has_attachments,m.size,m.to_json,m.cc_json,m.reply_to,m.text_body,m.html_body,m.attachments_json,m.list_unsubscribe,m.list_unsubscribe_post,m.has_calendar FROM messages m";
+pub(crate) const MESSAGE_DETAIL_SELECT: &str = "SELECT m.id,m.account_id,m.mailbox_id,m.uid,m.message_id,m.subject,m.sender_name,m.sender_address,m.recipients,m.received_at,m.preview,m.is_read,m.is_starred,m.has_attachments,m.size,m.to_json,m.cc_json,m.reply_to,m.text_body,m.html_body,m.attachments_json,m.list_unsubscribe,m.list_unsubscribe_post,m.has_calendar,m.thread_root FROM messages m";
 
 pub(crate) fn map_message_summary(row: &Row<'_>) -> rusqlite::Result<MessageSummary> {
     Ok(MessageSummary {
@@ -142,7 +142,7 @@ pub(crate) fn map_message_summary(row: &Row<'_>) -> rusqlite::Result<MessageSumm
         is_starred: row.get::<_, i32>(12)? != 0,
         has_attachments: row.get::<_, i32>(13)? != 0,
         size: row.get::<_, i64>(14)?.max(0) as u64,
-        thread_root: row.get(15)?,
+        thread_root: row.get("thread_root")?,
         // By name: detail rows lay out columns differently.
         has_calendar: row.get::<_, i64>("has_calendar")? != 0,
     })
@@ -1777,6 +1777,33 @@ mod tests {
             "{items:?}"
         );
     }
+    // Failure modes: detail select shifts columns so summary.thread_root
+    // reads to_json; root is null for unthreaded mail; detail body fields
+    // (to/cc) must still map after any select reorder.
+    #[test]
+    fn message_detail_reports_thread_root_not_recipients() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let mailbox = mailbox(&db, &account.summary.id, "INBOX", &MailboxRole::Inbox);
+        let mut child = message(2, "2026-08-18T13:00:00Z");
+        child.thread_parent = Some("<1@example.com>".into());
+        db.upsert_message(&account.summary.id, mailbox, &child)
+            .unwrap();
+        let id = db
+            .list_messages(mailbox, None, 10)
+            .unwrap()
+            .items
+            .first()
+            .unwrap()
+            .id;
+        let detail = db.message_detail(id, &account.summary.id).unwrap();
+        let listed = db.list_messages(mailbox, None, 10).unwrap().items;
+        assert_eq!(detail.summary.thread_root, listed[0].thread_root);
+        assert_eq!(detail.summary.thread_root.as_deref(), Some("<1@example.com>"));
+        assert!(!detail.to.is_empty(), "{:?}", detail.to);
+    }
+
     #[test]
     fn clearing_downloads_preserves_envelopes_and_subject_search() {
         let db = Database::memory();
