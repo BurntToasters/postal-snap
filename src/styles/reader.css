@@ -37,34 +37,43 @@
   gap: 6px;
   padding: 6px 12px;
   overflow: visible;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--surface-raised) 70%, var(--surface)),
-    var(--surface)
-  );
-  box-shadow: inset 0 1px 0 var(--surface-highlight);
+  border-bottom: 1px solid var(--border);
+  /* Soft scroll edge (macOS 27): the message blurs as it passes beneath. */
+  background: color-mix(in srgb, var(--surface) 84%, transparent);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+}
+
+html[data-reduce-transparency="true"] .reader-actions {
+  background: var(--surface);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+@media (prefers-contrast: more), (prefers-reduced-transparency: reduce) {
+  .reader-actions {
+    background: var(--surface);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
 }
 
 .reader-unified-actions {
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 3px;
-  padding: 2px;
-  border: 1px solid color-mix(in srgb, var(--border) 58%, transparent);
-  border-radius: var(--radius-pill);
-  background: color-mix(in srgb, var(--surface-muted) 72%, transparent);
-  box-shadow:
-    var(--shadow-control),
-    inset 0 1px 0 var(--surface-highlight);
+  gap: 8px;
 }
 
-.toolbar-divider {
-  width: 1px;
-  align-self: stretch;
-  margin-block: 8px;
-  background: color-mix(in srgb, var(--border) 70%, transparent);
+/* One borderless capsule per group, on a system fill (HIG toolbars). */
+.reader-action-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-pill);
+  background: var(--fill);
 }
 
 .reader-actions button {
@@ -83,7 +92,7 @@
 }
 
 .reader-actions button:hover {
-  background: var(--surface-hover);
+  background: var(--fill-hover);
 }
 
 .reader-actions svg {
@@ -307,19 +316,32 @@
   background: var(--surface-hover);
 }
 
+/* Blocked pictures are information, not a warning: a quiet Mail-style bar.
+   Only a reported threat keeps the warning color. */
 .remote-content-banner {
   display: flex;
   align-items: center;
   gap: 9px;
   padding: 10px 18px;
+  color: var(--text);
+  background: var(--fill);
+  border-bottom: 1px solid var(--border);
+}
+
+.remote-content-banner.warning {
   color: var(--warning-ink);
   background: var(--warning-soft);
-  border-bottom: 1px solid color-mix(in srgb, var(--warning) 28%, var(--border));
+  border-bottom-color: color-mix(in srgb, var(--warning) 28%, var(--border));
 }
 
 .remote-content-banner svg {
   width: 1.125rem;
   height: 1.125rem;
+  color: var(--accent);
+}
+
+.remote-content-banner.warning svg {
+  color: inherit;
 }
 
 .remote-content-banner span {
@@ -328,10 +350,11 @@
 
 .remote-content-banner button {
   min-height: 44px;
-  border: 1px solid currentColor;
-  border-radius: var(--radius-xs);
+  padding-inline: 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
   color: inherit;
-  background: transparent;
+  background: var(--surface);
 }
 
 .message-find {
@@ -380,6 +403,18 @@
   color: var(--mail-ink);
 }
 
+/* Dark mode with no sender colors: the body follows the app theme, as Apple
+   Mail does. Mail with its own colors keeps the white page above. */
+.message-body[data-follows-theme="true"],
+.message-body[data-follows-theme="true"] iframe {
+  background: var(--surface);
+  color-scheme: dark;
+}
+
+.message-body[data-follows-theme="true"] :is(pre, .plain-text-body) {
+  color: var(--text);
+}
+
 .plain-text-body a {
   color: var(--accent);
   text-decoration: underline;
@@ -395,6 +430,7 @@
   place-content: center;
   justify-items: center;
   color: var(--text-muted);
+  font-size: 1.05rem;
 }
 
 .attachment-list {

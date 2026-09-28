@@ -144,15 +144,9 @@
   flex-wrap: nowrap;
   gap: 8px;
   padding: 7px 12px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--surface-raised) 86%, var(--surface-highlight)),
-    color-mix(in srgb, var(--surface) 88%, var(--surface-muted))
-  );
-  box-shadow:
-    inset 0 1px 0 var(--surface-highlight),
-    var(--shadow-control);
+  /* A real bar (macOS 27): one solid material and a hairline, no glow. */
+  border-bottom: 1px solid var(--border);
+  background: var(--bar);
   user-select: none;
 }
 
@@ -241,9 +235,9 @@
   flex: 1 1 16.875rem;
   align-items: center;
   border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-color: transparent;
   border-radius: var(--radius-pill);
-  background: color-mix(in srgb, var(--surface) 92%, transparent);
-  box-shadow: inset 0 1px 0 var(--surface-highlight);
+  background: var(--fill);
 }
 
 .search-box:focus-within {
@@ -268,7 +262,10 @@
   box-shadow: none;
 }
 
+/* The capsule shows focus (:focus-within); an outline here would be
+   clipped into brackets by the capsule's rounded overflow. */
 .search-box > input:focus-visible {
+  outline: none;
   box-shadow: none;
 }
 
@@ -400,14 +397,9 @@
   flex-direction: column;
   padding: 14px 10px 12px;
   overflow: hidden;
-  border-right: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
-  background: linear-gradient(
-    160deg,
-    color-mix(in srgb, var(--surface-raised) 66%, var(--surface-muted)),
-    color-mix(in srgb, var(--surface-muted) 80%, var(--surface-sunken))
-  );
-  box-shadow: inset -1px 0 0
-    color-mix(in srgb, var(--surface-highlight) 46%, transparent);
+  /* Edge-to-edge sidebar a step darker than content (macOS 27). */
+  border-right: 1px solid var(--border);
+  background: var(--sidebar-bg);
 }
 
 .account-heading {
@@ -595,10 +587,13 @@
   pointer-events: none;
 }
 
+/* Same inset and icon column as mailbox rows, so labels line up. */
 .add-account-button {
   justify-content: flex-start;
   text-align: left;
-  margin: 0 5px 8px;
+  margin: 0 0 8px;
+  padding-inline: 10px;
+  gap: calc(8px + 0.25rem);
   border-color: transparent;
   background: transparent;
 }
@@ -615,8 +610,8 @@
 .sidebar-section-title {
   margin: 14px 10px 5px;
   color: var(--text-muted);
-  font-size: 0.76rem;
-  font-weight: 680;
+  font-size: 0.75rem;
+  font-weight: 650;
   letter-spacing: 0.01em;
 }
 
@@ -624,7 +619,8 @@
   display: grid;
   width: 100%;
   min-height: 44px;
-  grid-template-columns: 1.4375rem 1fr auto;
+  /* minmax(0, …) lets long names truncate instead of widening the pane. */
+  grid-template-columns: 1.4375rem minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   padding: 7px 10px;
@@ -640,9 +636,17 @@
 }
 
 .folder-row {
+  position: relative;
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 4px;
+}
+
+.folder > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .folder-row .folder {
@@ -650,8 +654,37 @@
   min-width: 0;
 }
 
-.folder-action {
-  flex: 0 0 auto;
+/* Rename/Delete float over the row's end on hover or keyboard focus, as in
+   Mail (the folder context menu offers them too). Still in the Tab order. */
+.folder-row .folder-action {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  opacity: 0;
+  color: var(--text-muted);
+  background: var(--sidebar-bg);
+  box-shadow: none;
+  transform: translateY(-50%);
+  transition: opacity 120ms ease;
+}
+
+.folder-row .folder-action:nth-last-of-type(2) {
+  right: 44px;
+}
+
+.folder-row:hover .folder-action,
+.folder-row:focus-within .folder-action {
+  opacity: 1;
+}
+
+.folder-row .folder-action:hover {
+  color: var(--text);
+  background: var(--sidebar-selection);
 }
 
 .folder-tree-row {
@@ -666,12 +699,20 @@
 
 .folder-expand {
   flex: 0 0 auto;
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  min-height: 44px;
   padding: 0;
   display: flex;
   align-items: center;
   justify-content: center;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+}
+
+.folder-expand:hover {
+  background: var(--sidebar-selection);
 }
 
 .folder-expand svg {
@@ -685,7 +726,7 @@
 }
 
 .folder-expand-spacer {
-  flex: 0 0 20px;
+  flex: 0 0 24px;
 }
 
 .folder-dialog {
@@ -694,9 +735,11 @@
   padding: 8px 5px;
 }
 
+/* Neutral selection with accent icons, as in macOS 27 Mail. The raised edge
+   matches the Settings sidebar so every sidebar selection reads the same. */
 .folder.active {
   color: var(--text);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  background: var(--sidebar-selection);
   font-weight: 650;
   box-shadow:
     inset 0 1px 0 var(--surface-highlight),
@@ -713,43 +756,22 @@
   color: var(--warning);
 }
 
-/* Role-tinted sidebar icons (macOS 27 design language). Active rows stay
-   accent monochrome so the selected state reads as one unit. */
-.folder.sent:not(.active) svg {
-  color: var(--folder-sent);
-}
+/* Sidebar icons use the accent color (HIG: people expect their chosen
+   accent). A fixed color marks meaning only: the Outbox warning above. */
 
-.folder.drafts:not(.active) svg {
-  color: var(--folder-drafts);
-}
-
-.folder.archive:not(.active) svg {
-  color: var(--folder-archive);
-}
-
-.folder.trash:not(.active) svg {
-  color: var(--folder-trash);
-}
-
-.folder.junk:not(.active) svg {
-  color: var(--folder-junk);
-}
-
+/* Counts are plain secondary numbers, not pills (macOS 27 Mail). */
 .folder strong {
-  min-width: 26px;
-  padding: 2px 8px;
-  text-align: center;
-  color: var(--text);
-  background: color-mix(in srgb, var(--text-muted) 14%, transparent);
-  border-radius: var(--radius-pill);
-  font-size: 0.78rem;
-  font-weight: 680;
+  min-width: 1.5rem;
+  padding: 0 2px;
+  text-align: right;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-weight: 550;
   font-variant-numeric: tabular-nums;
 }
 
 .folder.active strong {
-  color: var(--accent-ink);
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--text);
 }
 
 .sync-indicator {
@@ -801,13 +823,8 @@
   justify-content: space-between;
   gap: 10px;
   padding: 9px 14px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--surface-raised) 64%, var(--surface)),
-    var(--surface)
-  );
-  box-shadow: inset 0 1px 0 var(--surface-highlight);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
 }
 
 .pane-heading > span {
@@ -833,10 +850,20 @@
   gap: 4px;
 }
 
+/* Borderless glass-style controls: a system fill, no bezel or shadow. */
 .pane-heading-actions .toolbar-button,
 .pane-heading-actions .icon-button {
   min-height: var(--control-height);
+  border-color: transparent;
   border-radius: var(--radius-pill);
+  background: var(--fill);
+  box-shadow: none;
+}
+
+.pane-heading-actions .toolbar-button:hover,
+.pane-heading-actions .icon-button:hover {
+  border-color: transparent;
+  background: var(--fill-hover);
 }
 
 .mailbox-more {
@@ -850,7 +877,7 @@
   gap: 8px;
   padding: 10px 16px;
   border-bottom: 1px solid var(--border);
-  background: var(--surface-muted);
+  background: var(--surface);
 }
 
 .bulk-bar strong {
@@ -864,14 +891,14 @@
   align-items: center;
   gap: 6px;
   padding: 7px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--fill);
   white-space: nowrap;
 }
 
 .bulk-bar button:hover {
-  background: var(--surface-hover);
+  background: var(--fill-hover);
 }
 
 .bulk-bar button svg {
@@ -890,12 +917,19 @@
   border-bottom: 0;
 }
 
-.message-select {
-  width: 28px;
-  height: 28px;
+.message-select-hit {
+  display: grid;
   min-width: 44px;
   min-height: 44px;
-  margin: auto 0 auto 8px;
+  margin: auto 0 auto 4px;
+  place-items: center;
+  cursor: pointer;
+}
+
+.message-select {
+  width: 1.25rem;
+  height: 1.25rem;
+  margin: 0;
   accent-color: var(--accent);
   cursor: pointer;
 }
@@ -921,15 +955,21 @@
   padding-left: 18px;
 }
 
+/* Conversation size reads as a quiet secondary count, not a second badge. */
 .thread-header .thread-count {
   min-width: 25px;
   padding: 2px 6px;
   text-align: center;
-  border-radius: var(--radius-md);
-  color: var(--accent-contrast);
-  background: var(--accent);
+  border-radius: var(--radius-pill);
+  color: var(--text);
+  background: var(--fill);
   font-size: 0.78rem;
-  font-weight: 700;
+  font-weight: 650;
+}
+
+.message-row.selected .thread-count {
+  color: var(--accent-contrast);
+  background: color-mix(in srgb, var(--accent-contrast) 22%, transparent);
 }
 
 .thread-header .unread-dot[data-unread="false"] {
@@ -950,10 +990,12 @@
   background: var(--surface-muted);
 }
 
+/* Centered, like Mail's "No Messages"; clamp keeps short panes usable. */
 .list-state {
-  padding: 52px 24px;
+  padding: clamp(52px, 28vh, 260px) 24px 24px;
   text-align: center;
   color: var(--text-muted);
+  font-size: 1.05rem;
 }
 
 .message-row {
@@ -1042,9 +1084,9 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* The blue dot and bold sender mark unread; the date stays secondary. */
 .message-row.unread .message-date {
-  color: var(--accent-ink);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .message-subject {
@@ -1127,9 +1169,20 @@
   white-space: nowrap;
 }
 
+/* Subjects are the sender's words: normal text. Only a message that needs
+   attention gets the warning icon and status color. */
 .attention-row {
   grid-template-columns: 24px minmax(0, 1fr);
-  color: var(--warning);
+  color: var(--text);
+}
+
+.attention-row > svg {
+  color: var(--text-muted);
+}
+
+.attention-row[data-state="needs_attention"] > svg,
+.attention-row[data-state="needs_attention"] .status-label {
+  color: var(--warning-ink);
 }
 
 .attention-row small {
@@ -1146,10 +1199,14 @@
 
 .attention-row button {
   min-height: 44px;
-  padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
+  padding: 6px 14px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--fill);
+}
+
+.attention-row button:hover {
+  background: var(--fill-hover);
 }
 
 .draft-sync-state {

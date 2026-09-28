@@ -61,9 +61,10 @@
   height: 42px;
   place-items: center;
   border-radius: 50%;
-  color: var(--accent-contrast);
-  background: var(--accent);
-  font-weight: 750;
+  /* Contacts-style monogram, as Mail shows for senders without a photo. */
+  color: #ffffff;
+  background: var(--monogram);
+  font-weight: 650;
 }
 
 .app-mark,
