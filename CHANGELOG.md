@@ -21,6 +21,7 @@
 Postal Snap is a calm, accessible desktop email client. Mail stays on your computer. There is no Postal Snap cloud, telemetry, or account of mine to log into.
 
 ## Changes in `v0.2.8:`
+- **FIX - Wide emails fit the reading pane:** Newsletters and other fixed-width emails now shrink to fit the reading pane instead of scrolling sideways. Very wide emails stop shrinking at a readable size. The blocked-pictures notice is also shorter, so the message gets more room.
 - **UI - Closer to macOS-style:** The mailbox window now follows the macOS 27 design. The sidebar runs edge to edge in a quieter tone, with mailbox icons in your accent color, plain unread counts, and a soft gray highlight for the open mailbox. The top bar is one solid bar. Reply, Reply All, and Forward sit in one group and Archive, Trash, and More in another. Unread mail is marked by the blue dot and bold text, dates stay gray, conversation counts are quieter, and senders show a gray monogram like Contacts.
 - **UI - Dark mode messages:** In dark mode, messages that do not set their own colors (including all plain-text mail) now show on a dark page instead of a bright white one. Messages designed with their own colors keep their white page so they stay readable. Printing is unchanged.
 - **UI - Tidier details:** The search field's focus ring no longer shows as brackets inside the field. In Select mode, checkboxes are normal size with the same easy click area. "Add account" and "New folder" line up with the mailboxes. An empty mailbox shows its message in the middle of the list. Mail rule fields in Settings have room between them. The formatting bar, selection actions, and Outbox buttons use the same quiet buttons as the rest of the window.
@@ -37,7 +38,6 @@ Postal Snap is a calm, accessible desktop email client. Mail stays on your compu
 - **FIX - Mail after waking from sleep:** Postal Snap now notices when your computer wakes up. It reconnects right away, checks for new mail, sends any Send Later message that came due while asleep, and checks for updates. Before, new mail could take several minutes to appear, and the first action after waking could fail.
 - **UI - Roomier message window:** Replies and forwards open taller, so there is room to write. Clicking anywhere below the text now places the cursor in the message.
 - **UI - Move and resize the message window:** Drag the message window by its title to move it, and drag the corner grip (or focus it and use the arrow keys) to resize it. It always stays on screen. Before, dragging the title moved the whole app window.
-- **FIX - Wide emails fit the reading pane:** Newsletters and other fixed-width emails now shrink to fit the reading pane instead of scrolling sideways. Very wide emails stop shrinking at a readable size. The blocked-pictures notice is also shorter, so the message gets more room.
 - **FIX - Replying to your own sent mail:** Reply and Reply All on a message you sent now address its recipients instead of you.
 - **FIX - Reply and forward headers:** Quoted replies show a readable date instead of a raw timestamp. Forwards now include the original sender, date, subject, and recipients.
 
