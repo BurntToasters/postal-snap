@@ -9,14 +9,15 @@ import {
 import { strings } from "../i18n";
 import { parseMailto } from "../mailto";
 import {
+  hasAuthorColors,
   messageFrameDocument,
   sanitizeReceivedHtml,
   withFrameLinks,
 } from "../security";
+import { useIsDark } from "../hooks/useColorScheme";
 import { useAppStore } from "../store";
 import type { Attachment, AttachmentPreview, MessageSummary } from "../types";
 import { useDialogFocus } from "./useDialogFocus";
-import { AppMark } from "./AppMark";
 import { AttachmentList } from "./reader/attachmentList";
 import { MessageBody } from "./reader/messageBody";
 import { MessageHeader } from "./reader/messageHeader";
@@ -54,6 +55,9 @@ function restoreMovedMessage(
   return restored;
 }
 
+/** Smallest shrink-to-fit scale before wide mail scrolls sideways. */
+const MIN_FIT_ZOOM = 0.6;
+
 export function MessageReader({
   onSnoozed,
 }: {
@@ -66,6 +70,7 @@ export function MessageReader({
   const setMessages = useAppStore((state) => state.setMessages);
   const openComposer = useAppStore((state) => state.openComposer);
   const settings = useAppStore((state) => state.settings);
+  const isDark = useIsDark();
   const setError = useAppStore((state) => state.setError);
   const accounts = useAppStore((state) => state.accounts);
   const frame = useRef<HTMLIFrameElement>(null);
@@ -559,8 +564,14 @@ export function MessageReader({
   const loadingImages = loadingImagesFor === messageId;
   const frameSource = currentLoadedHtml ?? sanitized?.html ?? "";
   const frameHtml = useMemo(
-    () => messageFrameDocument(withFrameLinks(frameSource), settings.textScale),
-    [frameSource, settings.textScale],
+    () =>
+      messageFrameDocument(
+        withFrameLinks(frameSource),
+        settings.textScale,
+        // Colorless mail follows dark mode; designed mail keeps its page.
+        isDark && !hasAuthorColors(frameSource),
+      ),
+    [frameSource, isDark, settings.textScale],
   );
 
   useEffect(() => {
@@ -592,6 +603,29 @@ export function MessageReader({
   }, [inlineAttachments, messageAccountId, messageId, sanitized]);
 
   const frameLinkCleanup = useRef<(() => void) | undefined>(undefined);
+
+  // Shrink fixed-width mail to the pane, like other mail apps, but never
+  // below a readable size; past that it scrolls sideways.
+  const fitFrameContent = useCallback(() => {
+    const doc = frame.current?.contentDocument;
+    if (!doc?.body) return;
+    doc.body.style.zoom = "";
+    const root = doc.documentElement;
+    const available = root.clientWidth;
+    const needed = root.scrollWidth;
+    if (available > 0 && needed > available + 1) {
+      const zoom = Math.max(MIN_FIT_ZOOM, available / needed);
+      doc.body.style.zoom = String(Math.floor(zoom * 100) / 100);
+    }
+  }, []);
+
+  useEffect(() => {
+    const node = frame.current;
+    if (!node || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => fitFrameContent());
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [fitFrameContent, frameHtml]);
 
   function wireFrameLinks() {
     frameLinkCleanup.current?.();
@@ -1071,8 +1105,8 @@ export function MessageReader({
     );
   if (!message)
     return (
+      // Quiet text, like Mail's "No Message Selected".
       <section className="reader-pane empty-reader" id="reader-pane">
-        <AppMark size={60} className="brand-watermark" />
         <p>{strings.mail.noMessage}</p>
       </section>
     );
@@ -1147,6 +1181,7 @@ export function MessageReader({
         message={message}
         sanitized={sanitized}
         showHtml={showHtml}
+        followsTheme={isDark && (!showHtml || !hasAuthorColors(frameSource))}
         currentLoadedHtml={currentLoadedHtml}
         frameHtml={frameHtml}
         filteredImages={filteredImages}
@@ -1165,7 +1200,10 @@ export function MessageReader({
         }}
         onSubmitFind={findInMessage}
         onLoadImages={() => void loadImages()}
-        onFrameLoad={wireFrameLinks}
+        onFrameLoad={() => {
+          wireFrameLinks();
+          fitFrameContent();
+        }}
         onOpenLink={(url) => void handleExternalLink(url)}
         onOpenMailto={(url) => openComposer({ prefill: parseMailto(url) })}
       />

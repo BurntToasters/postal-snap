@@ -299,7 +299,10 @@ describe("mail shell", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: /First message/i }));
     fireEvent.click(screen.getByRole("checkbox", { name: /Second message/i }));
     expect(screen.getByRole("toolbar", { name: "2 selected" })).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Mark read" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Mark read" }));
 
     await waitFor(() =>
       expect(mockedSetMessagesFlags).toHaveBeenCalledWith(
@@ -1028,7 +1031,10 @@ describe("mail shell", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
     fireEvent.click(screen.getByRole("checkbox", { name: /First message/i }));
-    fireEvent.click(screen.getByRole("button", { name: "Mark unread" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Mark unread" }));
     await waitFor(() =>
       expect(useAppStore.getState().error).toMatch(/1 message could not/i),
     );
@@ -1471,7 +1477,10 @@ describe("mail shell", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
     fireEvent.click(screen.getByRole("checkbox", { name: /First message/i }));
-    fireEvent.click(screen.getByRole("button", { name: "Mark read" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Mark read" }));
     await waitFor(() =>
       expect(useAppStore.getState().error).toMatch(/flag batch failed/i),
     );
@@ -1795,7 +1804,10 @@ describe("mail shell", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Select" }));
     fireEvent.click(screen.getByRole("checkbox", { name: /First message/i }));
     fireEvent.click(
-      screen.getByRole("button", { name: strings.reader.notJunk }),
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: strings.reader.notJunk }),
     );
     await waitFor(() =>
       expect(mockedMoveMessagesToMailbox).toHaveBeenCalledWith(

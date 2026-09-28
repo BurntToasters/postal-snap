@@ -115,6 +115,7 @@ export function MessageBody({
   message,
   sanitized,
   showHtml = Boolean(message.htmlBody),
+  followsTheme = false,
   currentLoadedHtml,
   frameHtml,
   filteredImages,
@@ -137,6 +138,8 @@ export function MessageBody({
   message: MessageDetail;
   sanitized?: SanitizedMail;
   showHtml?: boolean;
+  /** Dark mode and no sender colors: draw the body in the app theme. */
+  followsTheme?: boolean;
   currentLoadedHtml?: string;
   frameHtml: string;
   filteredImages: number;
@@ -165,7 +168,11 @@ export function MessageBody({
         </div>
       ) : null}
       {threatImages > 0 ? (
-        <div className="remote-content-banner" role="status" aria-live="polite">
+        <div
+          className="remote-content-banner warning"
+          role="status"
+          aria-live="polite"
+        >
           <ShieldAlert aria-hidden="true" />
           <span>{strings.reader.threatImages(threatImages)}</span>
         </div>
@@ -207,7 +214,12 @@ export function MessageBody({
           </button>
         </form>
       ) : null}
-      <div className="message-body" ref={bodyRef} data-context="reader">
+      <div
+        className="message-body"
+        ref={bodyRef}
+        data-context="reader"
+        data-follows-theme={followsTheme ? "true" : undefined}
+      >
         {!showHtml && !message.textBody ? (
           <p className="plain-text-body" role="note">
             {missingBodyNote(message)}

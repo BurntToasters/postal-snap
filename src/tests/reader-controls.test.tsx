@@ -154,7 +154,12 @@ describe("reader toolbar", () => {
         message={messageDetail(makeMessage())}
         mailboxes={[
           makeMailbox(),
-          makeMailbox({ id: 2, role: "archive", displayName: "Archive" }),
+          makeMailbox({
+            id: 2,
+            role: "other",
+            name: "Projects",
+            displayName: "Projects",
+          }),
           makeMailbox({ id: 3, accountId: "other", displayName: "Other" }),
         ]}
         readingPane="hidden"
@@ -207,9 +212,10 @@ describe("reader toolbar", () => {
     ]) {
       fireEvent.click(screen.getByRole("menuitem", { name: label }));
     }
-    fireEvent.change(
-      screen.getByRole("combobox", { name: strings.reader.moveFolder }),
-      { target: { value: "2" } },
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: strings.contextMenu.moveToFolder("Projects"),
+      }),
     );
 
     expect(callbacks.onBack).toHaveBeenCalledTimes(2);
