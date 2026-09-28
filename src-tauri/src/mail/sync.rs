@@ -9,6 +9,9 @@ use super::parse::{
     internal_date, parse_envelope, parse_message, received_at_fallback, system_flags,
 };
 use super::pool::{self, Lease};
+use super::qresync::{
+    decide_expunge_path, drain_vanished, plan_vanished, ExpungePath, VanishedPlan,
+};
 use super::send::{connect_imap, test_smtp};
 use super::{
     BodyBudget, BACKFILL_MESSAGE_BATCH, IMAP_COMMAND_TIMEOUT, INITIAL_MESSAGE_BATCH,
@@ -447,12 +450,13 @@ async fn sync_folder<H: SyncHooks>(
     let modseq_before_fetch = status.highest_modseq;
     if condstore && !purged && meta.highest_modseq.is_some() {
         let known = meta.highest_modseq.unwrap_or_default();
+        let mut vanished = None;
         if modseq_before_fetch != Some(known) {
             if let Some(low) = db.min_uid(mailbox_id)? {
-                sync_changed_flags(lease, db, mailbox_id, low, known).await?;
+                vanished = sync_changed_flags(lease, db, mailbox_id, low, known).await?;
             }
         }
-        if expunge_suspected {
+        if decide_expunge_path(vanished.as_ref(), expunge_suspected) == ExpungePath::Reconcile {
             reconcile_expunges(lease, db, mailbox_id).await?;
         }
         db.set_highest_modseq(mailbox_id, modseq_before_fetch)?;
@@ -705,19 +709,29 @@ async fn backfill_batch(
     })
 }
 
+/// Fetch flag changes since `since`. With QRESYNC, the same command reports
+/// expunged UIDs (VANISHED) and they are applied here; the returned plan tells
+/// the caller whether `reconcile_expunges` can be skipped.
 async fn sync_changed_flags(
     lease: &mut Lease,
     db: &Database,
     mailbox_id: i64,
     low: u32,
     since: u64,
-) -> Result<(), String> {
+) -> Result<Option<VanishedPlan>, String> {
+    let qresync = lease.capabilities.qresync;
+    let modifier = if qresync {
+        format!("(CHANGEDSINCE {since} VANISHED)")
+    } else {
+        format!("(CHANGEDSINCE {since})")
+    };
+    if qresync {
+        // Stale lines from earlier commands must not read as this fetch's.
+        drain_vanished(lease);
+    }
     let rows = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
         lease
-            .uid_fetch(
-                format!("{low}:*"),
-                format!("(UID FLAGS) (CHANGEDSINCE {since})"),
-            )
+            .uid_fetch(format!("{low}:*"), format!("(UID FLAGS) {modifier}"))
             .await?
             .try_collect::<Vec<_>>()
             .await
@@ -725,6 +739,10 @@ async fn sync_changed_flags(
     .await
     .map_err(|_| "Flag sync timed out.".to_string())?
     .map_err(|error| redact_error(&error, "Flag sync"))?;
+    let plan = qresync.then(|| {
+        let (ranges, drained) = drain_vanished(lease);
+        plan_vanished(&ranges, drained)
+    });
     let changed = rows
         .iter()
         .filter_map(|item| {
@@ -732,7 +750,11 @@ async fn sync_changed_flags(
             item.uid.map(|uid| (uid, seen, flagged))
         })
         .collect::<Vec<_>>();
-    db.reconcile_flags(mailbox_id, &changed, &[])
+    db.reconcile_flags(mailbox_id, &changed, &[])?;
+    if let Some(VanishedPlan::Apply(uids)) = &plan {
+        db.apply_vanished(mailbox_id, uids)?;
+    }
+    Ok(plan)
 }
 
 /// Refresh flags for every cached UID and drop rows the server no longer has.

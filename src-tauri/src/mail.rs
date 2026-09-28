@@ -2,6 +2,7 @@ pub mod folders;
 pub mod icloud;
 pub mod parse;
 pub mod pool;
+pub mod qresync;
 pub mod remote_drafts;
 pub mod send;
 pub mod sync;

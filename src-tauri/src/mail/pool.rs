@@ -29,6 +29,8 @@ pub struct Capabilities {
     /// RFC 6851 MOVE.
     pub mv: bool,
     pub uidplus: bool,
+    /// RFC 7162 QRESYNC advertised and `ENABLE QRESYNC` accepted.
+    pub qresync: bool,
 }
 
 struct Parked {
@@ -182,12 +184,28 @@ pub async fn checkout(account: &AccountRecord, password: &str) -> Result<Lease, 
         .await
         .map_err(|_| "IMAP capability check timed out.".to_string())?
         .map_err(|error| redact_error(&error, "IMAP capability check"))?;
-    let capabilities = Capabilities {
-        condstore: capabilities.has_str("CONDSTORE") || capabilities.has_str("QRESYNC"),
+    let advertises_qresync = capabilities.has_str("QRESYNC");
+    let mut capabilities = Capabilities {
+        condstore: capabilities.has_str("CONDSTORE") || advertises_qresync,
         idle: capabilities.has_str("IDLE"),
         mv: capabilities.has_str("MOVE"),
         uidplus: capabilities.has_str("UIDPLUS"),
+        qresync: false,
     };
+    if advertises_qresync {
+        // Before any SELECT/EXAMINE. A refusal keeps the legacy sync path.
+        match tokio::time::timeout(
+            IMAP_COMMAND_TIMEOUT,
+            session.run_command_and_check_ok("ENABLE QRESYNC"),
+        )
+        .await
+        {
+            Ok(Ok(())) => capabilities.qresync = true,
+            Ok(Err(async_imap::error::Error::No(_) | async_imap::error::Error::Bad(_))) => {}
+            Ok(Err(error)) => return Err(redact_error(&error, "IMAP capability check")),
+            Err(_) => return Err("IMAP capability check timed out.".into()),
+        }
+    }
     Ok(Lease {
         account_id,
         server,
