@@ -55,6 +55,9 @@ function restoreMovedMessage(
   return restored;
 }
 
+/** Smallest shrink-to-fit scale before wide mail scrolls sideways. */
+const MIN_FIT_ZOOM = 0.6;
+
 export function MessageReader({
   onSnoozed,
 }: {
@@ -600,6 +603,29 @@ export function MessageReader({
   }, [inlineAttachments, messageAccountId, messageId, sanitized]);
 
   const frameLinkCleanup = useRef<(() => void) | undefined>(undefined);
+
+  // Shrink fixed-width mail to the pane, like other mail apps, but never
+  // below a readable size; past that it scrolls sideways.
+  const fitFrameContent = useCallback(() => {
+    const doc = frame.current?.contentDocument;
+    if (!doc?.body) return;
+    doc.body.style.zoom = "";
+    const root = doc.documentElement;
+    const available = root.clientWidth;
+    const needed = root.scrollWidth;
+    if (available > 0 && needed > available + 1) {
+      const zoom = Math.max(MIN_FIT_ZOOM, available / needed);
+      doc.body.style.zoom = String(Math.floor(zoom * 100) / 100);
+    }
+  }, []);
+
+  useEffect(() => {
+    const node = frame.current;
+    if (!node || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => fitFrameContent());
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [fitFrameContent, frameHtml]);
 
   function wireFrameLinks() {
     frameLinkCleanup.current?.();
@@ -1174,7 +1200,10 @@ export function MessageReader({
         }}
         onSubmitFind={findInMessage}
         onLoadImages={() => void loadImages()}
-        onFrameLoad={wireFrameLinks}
+        onFrameLoad={() => {
+          wireFrameLinks();
+          fitFrameContent();
+        }}
         onOpenLink={(url) => void handleExternalLink(url)}
         onOpenMailto={(url) => openComposer({ prefill: parseMailto(url) })}
       />

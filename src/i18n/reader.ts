@@ -68,5 +68,5 @@ export const reader = {
   blockedImages: (count: number) =>
     `${count} remote image${count === 1 ? "" : "s"} blocked for privacy.`,
   blockedImagesDetail:
-    "Pictures from the internet are blocked to protect your privacy. Known advertising and tracking images stay blocked when you load pictures. Other pictures may still reveal that you opened this message.",
+    "Known trackers stay blocked if you load them, but other pictures may tell the sender you opened this message.",
 } as const;
