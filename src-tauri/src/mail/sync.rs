@@ -1165,19 +1165,22 @@ pub async fn server_search(
     } else {
         Vec::new()
     };
-    let search_text = query
-        .text
-        .chars()
-        .take(200)
-        .filter(|character| !character.is_control())
-        .collect::<String>()
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"");
-    if search_text.trim().is_empty() {
+    let parsed = crate::search_query::parse(&query.text);
+    let Some(criteria) = parsed.imap_criteria() else {
         return Ok(Vec::new());
-    }
+    };
     let mut lease = pool::checkout(account, password).await?;
-    match search_mailboxes(&mut lease, db, account, query, &search_text, mailboxes).await {
+    match search_mailboxes(
+        &mut lease,
+        db,
+        account,
+        query,
+        &criteria,
+        parsed.has_attachment,
+        mailboxes,
+    )
+    .await
+    {
         Ok(results) => {
             lease.release();
             Ok(results)
@@ -1194,7 +1197,8 @@ async fn search_mailboxes(
     db: &Database,
     account: &AccountRecord,
     query: &SearchQuery,
-    search_text: &str,
+    criteria: &str,
+    require_attachment: bool,
     mailboxes: Vec<(i64, String)>,
 ) -> Result<Vec<MessageSummary>, String> {
     let mut results = Vec::new();
@@ -1218,12 +1222,7 @@ async fn search_mailboxes(
                 continue;
             }
         }
-        let search_cmd = if search_text.is_ascii() {
-            format!("TEXT \"{search_text}\"")
-        } else {
-            format!("CHARSET UTF-8 TEXT \"{search_text}\"")
-        };
-        let mut uids = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.uid_search(&search_cmd))
+        let mut uids = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.uid_search(criteria))
             .await
             .map_err(|_| "Server search timed out.".to_string())?
             .map_err(|error| redact_error(&error, "Server search"))?
@@ -1263,7 +1262,10 @@ async fn search_mailboxes(
         db.upsert_envelopes(&account.summary.id, mailbox_id, &parsed)?;
         for message in &parsed {
             if let Some(summary) = db.message_summary_by_uid(mailbox_id, message.uid)? {
-                results.push(summary);
+                // IMAP has no attachment key; the envelope hint filters.
+                if !require_attachment || summary.has_attachments {
+                    results.push(summary);
+                }
             }
         }
         let threaded: Vec<String> = parsed

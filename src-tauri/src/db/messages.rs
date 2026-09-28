@@ -782,31 +782,58 @@ impl Database {
     }
 
     pub fn search(&self, query: &SearchQuery) -> Result<Vec<MessageSummary>, String> {
+        use rusqlite::types::Value;
         let conn = self.conn()?;
-        let terms = fts_query(&query.text);
-        if terms.is_empty() {
+        let parsed = crate::search_query::parse(&query.text);
+        if parsed.is_empty() {
             return Ok(Vec::new());
         }
-        let mailbox_filter = if query.all_folders {
-            ""
+        let expression = parsed.fts_match();
+        let mut values = vec![Value::from(query.account_id.clone())];
+        let mut sql = MESSAGE_SUMMARY_SELECT.to_string();
+        if expression.is_some() {
+            sql.push_str(" JOIN message_fts fts ON fts.rowid=m.id");
+        }
+        sql.push_str(" WHERE m.account_id=?1 AND m.pending_move_to IS NULL");
+        if let Some(expression) = expression.clone() {
+            values.push(Value::from(expression));
+            sql.push_str(&format!(" AND message_fts MATCH ?{}", values.len()));
+        }
+        if let (false, Some(mailbox_id)) = (query.all_folders, query.mailbox_id) {
+            values.push(Value::from(mailbox_id));
+            sql.push_str(&format!(" AND m.mailbox_id = ?{}", values.len()));
+        }
+        if parsed.has_attachment {
+            sql.push_str(" AND m.has_attachments=1");
+        }
+        match parsed.read {
+            Some(true) => sql.push_str(" AND m.is_read=1"),
+            Some(false) => sql.push_str(" AND m.is_read=0"),
+            None => {}
+        }
+        if parsed.flagged {
+            sql.push_str(" AND m.is_starred=1");
+        }
+        // Dates are UTC days; received_at is RFC 3339, so text compares.
+        if let Some(date) = parsed.after {
+            values.push(Value::from(date.format("%Y-%m-%d").to_string()));
+            sql.push_str(&format!(" AND m.received_at >= ?{}", values.len()));
+        }
+        if let Some(date) = parsed.before {
+            values.push(Value::from(date.format("%Y-%m-%d").to_string()));
+            sql.push_str(&format!(" AND m.received_at < ?{}", values.len()));
+        }
+        // Weights: subject, sender, recipients, body.
+        sql.push_str(if expression.is_some() {
+            " ORDER BY bm25(message_fts, 10.0, 6.0, 3.0, 1.0), m.received_at DESC"
         } else {
-            " AND (?3 IS NULL OR m.mailbox_id = ?3)"
-        };
-        let sql = format!(
-            "{} JOIN message_fts fts ON fts.rowid=m.id WHERE m.account_id=?1 AND m.pending_move_to IS NULL AND message_fts MATCH ?2 {} ORDER BY bm25(message_fts), m.received_at DESC LIMIT ?4",
-            MESSAGE_SUMMARY_SELECT, mailbox_filter,
-        );
+            " ORDER BY m.received_at DESC, m.uid DESC"
+        });
+        values.push(Value::from(i64::from(query.limit.min(500))));
+        sql.push_str(&format!(" LIMIT ?{}", values.len()));
         let mut statement = conn.prepare(&sql).map_err(db_error)?;
         let rows = statement
-            .query_map(
-                params![
-                    query.account_id,
-                    terms,
-                    query.mailbox_id,
-                    query.limit.min(500)
-                ],
-                map_message_summary,
-            )
+            .query_map(rusqlite::params_from_iter(values), map_message_summary)
             .map_err(db_error)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
     }
@@ -825,7 +852,7 @@ impl Database {
             return Ok(Vec::new());
         }
         let sql = format!(
-            "{} JOIN message_fts fts ON fts.rowid=m.id WHERE m.pending_move_to IS NULL AND message_fts MATCH ?1 ORDER BY bm25(message_fts), m.received_at DESC LIMIT ?2",
+            "{} JOIN message_fts fts ON fts.rowid=m.id WHERE m.pending_move_to IS NULL AND message_fts MATCH ?1 ORDER BY bm25(message_fts, 10.0, 6.0, 3.0, 1.0), m.received_at DESC LIMIT ?2",
             MESSAGE_SUMMARY_SELECT,
         );
         let mut statement = conn.prepare(&sql).map_err(db_error)?;
