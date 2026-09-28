@@ -1,13 +1,13 @@
 use super::{db_error, parse_provider, parse_tls, Database};
 use rusqlite::{params, OptionalExtension};
 
-use crate::models::{AccountRecord, AccountSummary, ServerConfig};
+use crate::models::{AccountRecord, AccountSummary, BodyFormat, ServerConfig};
 
 impl Database {
     pub fn list_accounts(&self) -> Result<Vec<AccountSummary>, String> {
         let conn = self.conn()?;
         let mut statement = conn.prepare(
-            "SELECT id, provider, email, display_name, sync_state, error, aliases_json, auth_method, signature, color FROM accounts ORDER BY sort_order, created_at",
+            "SELECT id, provider, email, display_name, sync_state, error, aliases_json, auth_method, signature, color, default_body_format FROM accounts ORDER BY sort_order, created_at",
         ).map_err(db_error)?;
         let rows = statement
             .query_map([], |row| {
@@ -26,6 +26,7 @@ impl Database {
                         .unwrap_or_else(|| "password".into()),
                     signature: row.get::<_, Option<String>>(8)?.unwrap_or_default(),
                     color: row.get(9)?,
+                    default_body_format: BodyFormat::from_db(&row.get::<_, String>(10)?),
                 })
             })
             .map_err(db_error)?;
@@ -38,7 +39,7 @@ impl Database {
             "SELECT id, provider, email, display_name, sync_state, error,
                     imap_host, imap_port, imap_tls, imap_username,
                     smtp_host, smtp_port, smtp_tls, smtp_username,
-                    aliases_json, auth_method, signature, color
+                    aliases_json, auth_method, signature, color, default_body_format
              FROM accounts WHERE id = ?1",
             [id],
             |row| {
@@ -58,6 +59,7 @@ impl Database {
                             .unwrap_or_else(|| "password".into()),
                         signature: row.get::<_, Option<String>>(16)?.unwrap_or_default(),
                         color: row.get(17)?,
+                        default_body_format: BodyFormat::from_db(&row.get::<_, String>(18)?),
                     },
                     imap: ServerConfig {
                         host: row.get(6)?,
@@ -88,8 +90,8 @@ impl Database {
                 id, provider, email, display_name, sync_state,
                 imap_host, imap_port, imap_tls, imap_username,
                 smtp_host, smtp_port, smtp_tls, smtp_username,
-                aliases_json, auth_method, color, sort_order
-             ) VALUES (?1, ?2, ?3, ?4, 'idle', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
+                aliases_json, auth_method, color, default_body_format, sort_order
+             ) VALUES (?1, ?2, ?3, ?4, 'idle', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
                 (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM accounts))",
             params![
                 account.summary.id,
@@ -107,6 +109,7 @@ impl Database {
                 aliases_json,
                 account.summary.auth_method,
                 account.summary.color,
+                account.summary.default_body_format.as_str(),
             ],
         )
         .map_err(|error| {

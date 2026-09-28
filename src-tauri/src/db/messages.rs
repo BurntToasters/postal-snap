@@ -311,6 +311,8 @@ impl Database {
                     attachments: json_or_default(row.get::<_, String>(20)?),
                     references: Vec::new(),
                     body_status: "available".into(),
+                    list_unsubscribe: row.get(21)?,
+                    list_unsubscribe_post: row.get(22)?,
                 })
             },
         )

@@ -154,6 +154,7 @@ mod tests {
     async fn parsed_drafts_keep_the_prepared_message_id() {
         let account = AccountRecord {
             summary: AccountSummary {
+                default_body_format: crate::models::BodyFormat::Html,
                 id: "account-1".into(),
                 provider: ProviderKind::Manual,
                 email: "sam@example.com".into(),
@@ -179,6 +180,9 @@ mod tests {
             },
         };
         let draft = ComposeDraft {
+            body_format: crate::models::BodyFormat::Html,
+            source_message_id: None,
+            source_kind: None,
             id: None,
             account_id: account.summary.id.clone(),
             from: None,
@@ -216,6 +220,9 @@ mod tests {
 
     fn blank_draft() -> ComposeDraft {
         ComposeDraft {
+            body_format: crate::models::BodyFormat::Html,
+            source_message_id: None,
+            source_kind: None,
             id: None,
             account_id: "account-1".into(),
             from: None,
@@ -235,6 +242,7 @@ mod tests {
     fn loopback_smtp_account() -> AccountRecord {
         AccountRecord {
             summary: AccountSummary {
+                default_body_format: crate::models::BodyFormat::Html,
                 id: "account-1".into(),
                 provider: ProviderKind::Manual,
                 email: "sam@example.com".into(),
@@ -394,6 +402,7 @@ mod tests {
     async fn uid_operations_fail_closed_without_mailbox_identity() {
         let account = AccountRecord {
             summary: AccountSummary {
+                default_body_format: crate::models::BodyFormat::Html,
                 id: "account-1".into(),
                 provider: ProviderKind::Manual,
                 email: "sam@example.com".into(),
@@ -459,6 +468,7 @@ mod tests {
     async fn builds_multipart_plain_and_html_mail() {
         let account = AccountRecord {
             summary: AccountSummary {
+                default_body_format: crate::models::BodyFormat::Html,
                 id: "account-1".into(),
                 provider: ProviderKind::Manual,
                 email: "sam@example.com".into(),
@@ -484,6 +494,9 @@ mod tests {
             },
         };
         let draft = ComposeDraft {
+            body_format: crate::models::BodyFormat::Html,
+            source_message_id: None,
+            source_kind: None,
             id: None,
             account_id: account.summary.id.clone(),
             from: None,
@@ -510,6 +523,7 @@ mod tests {
     async fn outgoing_mime_hides_bcc_but_envelope_keeps_recipient() {
         let account = AccountRecord {
             summary: AccountSummary {
+                default_body_format: crate::models::BodyFormat::Html,
                 id: "account-1".into(),
                 provider: ProviderKind::Manual,
                 email: "sam@example.com".into(),
@@ -535,6 +549,9 @@ mod tests {
             },
         };
         let draft = ComposeDraft {
+            body_format: crate::models::BodyFormat::Html,
+            source_message_id: None,
+            source_kind: None,
             id: None,
             account_id: account.summary.id.clone(),
             from: None,
@@ -570,6 +587,7 @@ mod tests {
         let password = "mail-test-password";
         let account = AccountRecord {
             summary: AccountSummary {
+                default_body_format: crate::models::BodyFormat::Html,
                 id: "11111111-1111-4111-8111-111111111111".into(),
                 provider: ProviderKind::Manual,
                 email: "user@example.test".into(),
@@ -618,6 +636,9 @@ mod tests {
         let attachment_path = attachment_dir.path().join("family-note.txt");
         std::fs::write(&attachment_path, b"attachment body").unwrap();
         let draft = ComposeDraft {
+            body_format: crate::models::BodyFormat::Html,
+            source_message_id: None,
+            source_kind: None,
             id: None,
             account_id: account.summary.id.clone(),
             from: None,
@@ -939,6 +960,7 @@ mod tests {
         let password = "mail-test-password";
         let account = AccountRecord {
             summary: AccountSummary {
+                default_body_format: crate::models::BodyFormat::Html,
                 id: "44444444-4444-4444-8444-444444444444".into(),
                 provider: ProviderKind::Manual,
                 email: "history@example.test".into(),
