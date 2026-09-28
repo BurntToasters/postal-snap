@@ -276,15 +276,18 @@ export function MessageList({
     return (
       <div key={message.id} className="message-row-wrap">
         {selecting ? (
-          <input
-            type="checkbox"
-            className="message-select"
-            checked={checked}
-            onChange={() => onToggleSelect?.(message.id)}
-            aria-label={strings.mail.selectMessage(
-              message.subject || strings.common.noSubject,
-            )}
-          />
+          // A compact checkbox inside a full 44px click target.
+          <label className="message-select-hit">
+            <input
+              type="checkbox"
+              className="message-select"
+              checked={checked}
+              onChange={() => onToggleSelect?.(message.id)}
+              aria-label={strings.mail.selectMessage(
+                message.subject || strings.common.noSubject,
+              )}
+            />
+          </label>
         ) : null}
         <button
           type="button"

@@ -459,6 +459,6 @@ html[data-text-scale="large"] .settings-row select {
 }
 
 /* Large text wraps reader actions; a pill shape reads as broken. */
-html[data-text-scale="large"] .reader-unified-actions {
+html[data-text-scale="large"] .reader-action-group {
   border-radius: var(--radius-lg);
 }

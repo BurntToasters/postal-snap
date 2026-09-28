@@ -117,7 +117,8 @@ describe("MessageReader", () => {
     useAppStore.setState({ selectedMessage: undefined });
     const { rerender } = render(<MessageReader />);
     expect(screen.getByText(strings.mail.noMessage)).toBeVisible();
-    expect(document.querySelector(".empty-reader img.app-mark")).toBeVisible();
+    // Quiet text only, like Mail: no app mark or icon.
+    expect(document.querySelector(".empty-reader img")).toBeNull();
     expect(document.querySelector(".empty-reader svg")).toBeNull();
     useAppStore.setState({
       settings: { ...defaultSettings, readingPane: "hidden" },
@@ -380,9 +381,10 @@ describe("MessageReader", () => {
       fireEvent.click(
         screen.getByRole("button", { name: strings.reader.moreActions }),
       );
-      fireEvent.change(
-        screen.getByRole("combobox", { name: strings.reader.moveFolder }),
-        { target: { value: "5" } },
+      fireEvent.click(
+        screen.getByRole("menuitem", {
+          name: strings.contextMenu.moveToFolder("Receipts"),
+        }),
       );
     }, ["account-1", 1, 5]);
 
@@ -453,9 +455,10 @@ describe("MessageReader", () => {
     fireEvent.click(
       screen.getByRole("button", { name: strings.reader.moreActions }),
     );
-    fireEvent.change(
-      screen.getByRole("combobox", { name: strings.reader.moveFolder }),
-      { target: { value: String(custom.id) } },
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: strings.contextMenu.moveToFolder("Receipts"),
+      }),
     );
     await waitFor(() =>
       expect(useAppStore.getState().error).toBe("Error: folder move failed"),

@@ -131,7 +131,11 @@ export async function registerMockMessages(page: Page): Promise<void> {
                     ? '<p>Are we still meeting?</p><img src="https://images.example.test/pixel.png">'
                     : location.search.includes("inline")
                       ? '<p>Photo:</p><img src="cid:family-photo@example.test">'
-                      : "<p>Are we still meeting on Saturday?</p>",
+                      : location.search.includes("plainOnly")
+                        ? null
+                        : location.search.includes("styledMail")
+                          ? '<table bgcolor="#ffffff"><tr><td style="color: #333333">Designed newsletter</td></tr></table>'
+                          : "<p>Are we still meeting on Saturday?</p>",
           remoteImagesBlocked: false,
           references: [],
           attachments: location.search.includes("inline")
