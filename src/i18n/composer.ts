@@ -98,4 +98,30 @@ export const composer = {
   fromAlias: "From address",
   inlineImageFailed: (count: number) =>
     `${count} inline image${count === 1 ? "" : "s"} could not be restored. Save the draft and reopen it to retry.`,
+  // Words that suggest the sender meant to attach a file.
+  attachmentKeywords: [
+    "attached",
+    "attachment",
+    "attaching",
+    "enclosed",
+    "see the file",
+    "find attached",
+  ],
+  noAttachmentTitle: "Send without an attachment?",
+  noAttachmentDetail:
+    "Your message mentions an attachment, but nothing is attached.",
+  addAttachment: "Add attachment",
+  sendAnyway: "Send anyway",
+  messageOptions: "Message options",
+  plainText: "Plain text",
+  richText: "Rich text",
+  plainBodyLabel: "Message body (plain text)",
+  plainSwitchTitle: "Switch to plain text?",
+  plainSwitchDetail:
+    "Fonts, colors, links, tables, and pictures will be removed. Pictures stay attached as files.",
+  plainSwitchConfirm: "Switch to plain text",
+  keepRichText: "Keep rich text",
+  dropOverlay: "Drop files here to attach them",
+  dropAttached: (count: number) =>
+    `${count} file${count === 1 ? "" : "s"} attached.`,
 } as const;

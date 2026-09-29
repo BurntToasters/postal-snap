@@ -461,3 +461,89 @@
   font-weight: 600;
   line-height: 1.3;
 }
+
+/* Header menu: message format. */
+.composer-options-menu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  right: 12px;
+  min-width: 200px;
+}
+
+/* Plain-text editor: same box, focus ring, and text scale as the rich one. */
+.composer-window > div:has(.composer-plain-editor) {
+  min-height: 160px;
+  flex: 1 0 160px;
+  overflow: hidden;
+}
+
+.composer-plain-editor {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 160px;
+  box-sizing: border-box;
+  padding: 18px 21px;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  resize: none;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  line-height: 1.5;
+}
+
+.composer-plain-editor:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--focus);
+}
+
+/* Drop-in attachments: covers the composer while files hover over it. */
+.composer-drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 10px;
+  border: 3px dashed var(--accent, var(--focus));
+  border-radius: inherit;
+  color: var(--text);
+  background: color-mix(
+    in srgb,
+    var(--surface) 88%,
+    var(--accent, var(--focus))
+  );
+  font-size: 1.15rem;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.composer-drop-overlay[data-active="true"] {
+  opacity: 1;
+}
+
+.composer-drop-overlay svg {
+  width: 2.2em;
+  height: 2.2em;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .composer-drop-overlay {
+    transition: opacity 120ms ease;
+  }
+}
+
+@media (forced-colors: active) {
+  .composer-drop-overlay {
+    border-color: Highlight;
+    background: Canvas;
+  }
+
+  .composer-plain-editor:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+}

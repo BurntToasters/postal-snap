@@ -12,6 +12,7 @@ pub mod accounts;
 pub mod attachments;
 pub mod cache_policy;
 pub mod drafts_send;
+pub mod drag_drop;
 pub mod folders;
 pub mod messages;
 pub mod outbox;

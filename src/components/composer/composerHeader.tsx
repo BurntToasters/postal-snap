@@ -1,8 +1,26 @@
-import type { Dispatch, HTMLAttributes, SetStateAction } from "react";
-import { Maximize2, Minimize2, Minus, TriangleAlert, X } from "lucide-react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type Dispatch,
+  type HTMLAttributes,
+  type KeyboardEvent,
+  type SetStateAction,
+} from "react";
+import {
+  FileText,
+  Maximize2,
+  Minimize2,
+  Minus,
+  MoreHorizontal,
+  TriangleAlert,
+  Type,
+  X,
+} from "lucide-react";
 import { strings } from "../../i18n";
 import type { ComposerSeed } from "../../store";
-import type { DraftSummary } from "../../types";
+import type { BodyFormat, DraftSummary } from "../../types";
+import { moveMenuFocus } from "../toolbarNav";
 import { composerTitle } from "./composerSeed";
 
 export interface ComposerHeaderProps {
@@ -13,6 +31,8 @@ export interface ComposerHeaderProps {
   sending: boolean;
   draftSyncState: DraftSummary["syncState"] | undefined;
   draftSyncDetail?: string | null;
+  bodyFormat: BodyFormat;
+  onToggleBodyFormat: () => void;
   setMinimized: Dispatch<SetStateAction<boolean>>;
   setMaximized: Dispatch<SetStateAction<boolean>>;
   requestClose: () => void | Promise<void>;
@@ -26,10 +46,39 @@ export function ComposerHeader({
   sending,
   draftSyncState,
   draftSyncDetail,
+  bodyFormat,
+  onToggleBodyFormat,
   setMinimized,
   setMaximized,
   requestClose,
 }: ComposerHeaderProps) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    menuRef.current
+      ?.querySelector<HTMLElement>('[role="menuitem"]:not([disabled])')
+      ?.focus();
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (
+        !menuRef.current?.contains(target) &&
+        !menuButtonRef.current?.contains(target)
+      )
+        setMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [menuOpen]);
+
+  function closeMenu() {
+    setMenuOpen(false);
+    menuButtonRef.current?.focus();
+  }
+
+  const plain = bodyFormat === "plain";
   return (
     <>
       {/* Floating: drag moves the composer. Maximized: the app window. */}
@@ -51,6 +100,19 @@ export function ComposerHeader({
           </small>
         </span>
         <div className="composer-window-controls">
+          <button
+            className="icon-button"
+            type="button"
+            ref={menuButtonRef}
+            onClick={() => setMenuOpen((open) => !open)}
+            disabled={sending}
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            aria-label={strings.composer.messageOptions}
+            title={strings.composer.messageOptions}
+          >
+            <MoreHorizontal />
+          </button>
           <button
             className="icon-button"
             type="button"
@@ -86,6 +148,39 @@ export function ComposerHeader({
             <X />
           </button>
         </div>
+        {menuOpen ? (
+          <div
+            className="composer-options-menu app-menu"
+            ref={menuRef}
+            role="menu"
+            aria-label={strings.composer.messageOptions}
+            onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
+              if (event.key === "Escape" || event.key === "Tab") {
+                event.preventDefault();
+                event.stopPropagation();
+                closeMenu();
+                return;
+              }
+              moveMenuFocus(event);
+            }}
+          >
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setMenuOpen(false);
+                onToggleBodyFormat();
+              }}
+            >
+              {plain ? (
+                <Type aria-hidden="true" />
+              ) : (
+                <FileText aria-hidden="true" />
+              )}
+              {plain ? strings.composer.richText : strings.composer.plainText}
+            </button>
+          </div>
+        ) : null}
       </header>
       {draftSyncState === "localOnly" || draftSyncState === "conflict" ? (
         <div

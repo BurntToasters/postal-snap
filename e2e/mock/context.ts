@@ -14,6 +14,7 @@ export interface MockAccount {
   error: string | null;
   signature?: string;
   aliases?: string[];
+  defaultBodyFormat?: string;
 }
 
 export interface MockMailbox {
