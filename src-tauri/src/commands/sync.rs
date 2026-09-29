@@ -129,6 +129,9 @@ impl mail::SyncHooks for WorkerHooks<'_> {
         // account back.
         self.guard.take();
         tokio::task::yield_now().await;
+        // If the worker took the account meanwhile and went into IDLE, wake it
+        // so this pass is not stuck until the IDLE refresh.
+        self.actor.request(wake::OPERATION);
         self.guard = Some(self.actor.acquire().await);
     }
 

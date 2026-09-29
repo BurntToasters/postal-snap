@@ -88,7 +88,7 @@
 .recipient-suggestions li {
   display: grid;
   gap: 1px;
-  min-height: 44px;
+  min-height: var(--target-size);
   align-content: center;
   padding: 6px 10px;
   border-radius: var(--radius-xs);

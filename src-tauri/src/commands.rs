@@ -155,6 +155,12 @@ impl AccountActor {
         let _waiting = Waiting(&self.waiting);
         self.operation.clone().lock_owned().await
     }
+
+    /// The worker's lock: not counted as waiting, so a running pass never
+    /// yields to the worker just so it can go back to IDLE.
+    async fn acquire_for_worker(self: &Arc<Self>) -> OwnedMutexGuard<()> {
+        self.operation.clone().lock_owned().await
+    }
 }
 
 impl AppState {
@@ -351,7 +357,7 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
         if reasons & (wake::SYNC | wake::POLICY | wake::CREDENTIALS | wake::SLEEP) != 0 {
             pending_full = true;
         }
-        let guard = actor.acquire().await;
+        let guard = actor.acquire_for_worker().await;
         if reasons & wake::OUTBOX != 0 && (pending_full || more_work) {
             // Send Later items that came due (for example during sleep) go
             // out before a long pass.
@@ -448,6 +454,12 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
             due.max(Duration::from_millis(200)).min(IDLE_REFRESH)
         });
         let job_due_first = next_job.is_some_and(|due| due < IDLE_REFRESH);
+        if actor.contended() {
+            // A user action or a yielded pass is queued: IDLE would hold the
+            // account from it until the next wake-up.
+            drop(guard);
+            continue;
+        }
         match mail::idle_inbox(&account, &password, &actor.wake, limit).await {
             Ok(mail::IdleOutcome::Changed) => pending_full = true,
             Ok(mail::IdleOutcome::Timeout) if job_due_first => {
@@ -980,6 +992,43 @@ fn notify_new_mail(
 
 #[cfg(test)]
 mod tests {
+    // Get Mail stall failure modes:
+    // - a Get Mail pass yields to the worker only because the worker waits
+    //   for the lock, and the worker then IDLEs holding it (up to 300s);
+    // - a user action queued behind the worker is not seen as contention.
+    #[tokio::test]
+    async fn worker_lock_wait_is_not_contention_but_user_waits_are() {
+        use super::{AccountActor, AsyncMutex, AtomicU8, AtomicUsize, Notify};
+        use std::sync::Arc;
+        let actor = Arc::new(AccountActor {
+            operation: Arc::new(AsyncMutex::new(())),
+            wake: Notify::new(),
+            reasons: AtomicU8::new(0),
+            waiting: AtomicUsize::new(0),
+        });
+        let pass = actor.acquire().await;
+        let worker = tokio::spawn({
+            let actor = actor.clone();
+            async move {
+                let _guard = actor.acquire_for_worker().await;
+            }
+        });
+        tokio::task::yield_now().await;
+        assert!(!actor.contended(), "a pass must not yield to the worker");
+        let user = tokio::spawn({
+            let actor = actor.clone();
+            async move {
+                let _guard = actor.acquire().await;
+            }
+        });
+        tokio::task::yield_now().await;
+        assert!(actor.contended(), "a queued user action must be seen");
+        drop(pass);
+        worker.await.unwrap();
+        user.await.unwrap();
+        assert!(!actor.contended());
+    }
+
     #[test]
     fn waking_from_sleep_keeps_a_rejected_password_paused() {
         use super::{leaves_auth_pause, wake};
