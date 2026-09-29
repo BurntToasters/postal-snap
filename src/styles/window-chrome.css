@@ -54,8 +54,8 @@ html[data-platform="windows"] .global-window-caption-controls {
 .global-window-caption-controls button {
   display: grid;
   width: 46px;
-  height: 44px;
-  min-height: 44px;
+  height: var(--caption-button-height);
+  min-height: var(--caption-button-height);
   place-items: center;
   padding: 0;
   border: 0;

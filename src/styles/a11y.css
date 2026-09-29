@@ -20,8 +20,8 @@ svg {
 
 @media (forced-colors: active) {
   .switch-row input {
-    width: 44px;
-    min-width: 44px;
+    width: var(--target-size);
+    min-width: var(--target-size);
     appearance: auto;
     border: 1px solid ButtonText;
     accent-color: Highlight;

@@ -1247,6 +1247,132 @@ mod tests {
         assert!(pool::checkout(&account, "wrong-password").await.is_err());
     }
 
+    /// Get Mail timing against a real iCloud account. Prints step timings and
+    /// capability names only; no addresses, subjects, or server text.
+    #[tokio::test]
+    #[ignore = "requires POSTAL_SNAP_TEST_ICLOUD_EMAIL and POSTAL_SNAP_TEST_ICLOUD_PASSWORD"]
+    async fn icloud_live_sync_timing() {
+        use std::time::Instant;
+        let email = std::env::var("POSTAL_SNAP_TEST_ICLOUD_EMAIL").unwrap();
+        let password = std::env::var("POSTAL_SNAP_TEST_ICLOUD_PASSWORD").unwrap();
+        let request = AccountSetupRequest {
+            provider: ProviderKind::Icloud,
+            email: email.clone(),
+            display_name: "Timing".into(),
+            password: password.clone(),
+            imap: None,
+            smtp: None,
+            cache_policy: None,
+        };
+        let (imap, smtp) = crate::models::validated_setup(&request).unwrap();
+        let (imap, smtp) = test_account(&request, &imap, &smtp, &password)
+            .await
+            .unwrap();
+
+        let started = Instant::now();
+        let mut session = connect_imap(&imap, &password).await.unwrap();
+        eprintln!("login: {:?}", started.elapsed());
+        let step = Instant::now();
+        let caps = session.capabilities().await.unwrap();
+        let mut names: Vec<String> = caps.iter().map(|cap| format!("{cap:?}")).collect();
+        names.sort();
+        eprintln!("capability: {:?} -> {}", step.elapsed(), names.join(" "));
+        if caps.has_str("QRESYNC") {
+            let step = Instant::now();
+            let enabled = session.run_command_and_check_ok("ENABLE QRESYNC").await;
+            eprintln!(
+                "enable qresync: {:?} ok={}",
+                step.elapsed(),
+                enabled.is_ok()
+            );
+            let step = Instant::now();
+            let selected = session.examine("INBOX").await.unwrap();
+            eprintln!("examine: {:?}", step.elapsed());
+            let step = Instant::now();
+            let since = selected
+                .highest_modseq
+                .unwrap_or(1)
+                .saturating_sub(1)
+                .max(1);
+            let rows = tokio::time::timeout(
+                IMAP_COMMAND_TIMEOUT,
+                session
+                    .uid_fetch(
+                        "1:*",
+                        format!("(UID FLAGS) (CHANGEDSINCE {since} VANISHED)"),
+                    )
+                    .await
+                    .unwrap()
+                    .try_collect::<Vec<_>>(),
+            )
+            .await;
+            eprintln!(
+                "changedsince+vanished: {:?} result={}",
+                step.elapsed(),
+                match &rows {
+                    Ok(Ok(rows)) => format!("{} rows", rows.len()),
+                    Ok(Err(_)) => "error".into(),
+                    Err(_) => "TIMEOUT".into(),
+                }
+            );
+        }
+        let _ = session.logout().await;
+
+        let account = AccountRecord {
+            summary: AccountSummary {
+                default_body_format: crate::models::BodyFormat::Html,
+                id: "66666666-6666-4666-8666-666666666666".into(),
+                provider: ProviderKind::Icloud,
+                email,
+                display_name: "Timing".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+                color: None,
+            },
+            imap,
+            smtp,
+        };
+        let db = Database::memory();
+        db.insert_account(&account).unwrap();
+        for pass in 1..=3 {
+            let step = Instant::now();
+            let result = sync_account(
+                &db,
+                &account,
+                &password,
+                &CachePolicy::default(),
+                &mut Uncontended,
+            )
+            .await;
+            eprintln!(
+                "sync pass {pass}: {:?} ok={}",
+                step.elapsed(),
+                result.is_ok()
+            );
+        }
+        // An instant `Changed` with no new mail means IDLE wakes itself and
+        // the worker loops full passes (the "Checking mail…" spinner).
+        let wake = tokio::sync::Notify::new();
+        for round in 1..=3 {
+            let step = Instant::now();
+            let outcome = idle_inbox(&account, &password, &wake, Duration::from_secs(15)).await;
+            eprintln!("idle {round}: {:?} -> {outcome:?}", step.elapsed());
+        }
+        // Get Mail interrupts IDLE; this is how long it waits for the lock.
+        let step = Instant::now();
+        let (outcome, ()) = tokio::join!(
+            idle_inbox(&account, &password, &wake, Duration::from_secs(60)),
+            async {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                wake.notify_one();
+            }
+        );
+        eprintln!("idle interrupt: {:?} -> {outcome:?}", step.elapsed());
+    }
+
     #[tokio::test]
     #[ignore = "requires POSTAL_SNAP_TEST_ICLOUD_EMAIL and POSTAL_SNAP_TEST_ICLOUD_PASSWORD"]
     async fn icloud_live_connection_smoke() {
