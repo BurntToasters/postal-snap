@@ -51,7 +51,7 @@ url = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 # Native window blur / vibrancy; macOS transparency uses the direct-build
 # private API feature, store builds keep it off.
-window-vibrancy = "0.6"
+window-vibrancy = "0.8"
 zeroize = { version = "1", features = ["derive"] }
 quick-xml = { version = "0.42", default-features = false }
 hickory-resolver = { version = "0.26.3", default-features = false, features = ["system-config", "tokio"] }
