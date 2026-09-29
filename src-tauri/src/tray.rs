@@ -134,7 +134,8 @@ pub fn tray_click_hides(
     visible && !minimized && (focused || !click_keeps_focus)
 }
 
-#[cfg(any(target_os = "windows", target_os = "macos", test))]
+// `tauri::tray` exists only where the `tray-icon` feature is on (Cargo.toml).
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum TrayClickAction {
     Toggle,
@@ -144,7 +145,7 @@ pub enum TrayClickAction {
 
 /// Left up toggles. On macOS the menu is detached, so right up pops it;
 /// Windows shows its attached menu natively.
-#[cfg(any(target_os = "windows", target_os = "macos", test))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 pub fn tray_click_action(
     button: tauri::tray::MouseButton,
     state: tauri::tray::MouseButtonState,
@@ -305,12 +306,8 @@ mod native {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        should_hide_on_close, should_show_on_activation, tray_click_action, tray_click_hides,
-        TrayClickAction,
-    };
+    use super::{should_hide_on_close, should_show_on_activation, tray_click_hides};
     use std::time::Duration;
-    use tauri::tray::{MouseButton, MouseButtonState};
 
     // Failure modes for tray clicks:
     // - left click opens the menu instead of toggling (macOS attached menu)
@@ -320,44 +317,51 @@ mod tests {
     // - hidden window is not restored by a click
     // - Dock/Accessory policy is not reset when the window returns
     // - notification-click activation stops reopening the window
-    #[test]
-    fn left_up_toggles_on_both_platforms() {
-        for mac in [true, false] {
+    // - Linux builds reference `tauri::tray`, which needs `tray-icon`
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    mod click_action {
+        use super::super::{tray_click_action, TrayClickAction};
+        use tauri::tray::{MouseButton, MouseButtonState};
+
+        #[test]
+        fn left_up_toggles_on_both_platforms() {
+            for mac in [true, false] {
+                let up = MouseButtonState::Up;
+                assert_eq!(
+                    tray_click_action(MouseButton::Left, up, mac),
+                    TrayClickAction::Toggle
+                );
+            }
+        }
+
+        #[test]
+        fn right_up_opens_menu_only_on_macos() {
             let up = MouseButtonState::Up;
             assert_eq!(
-                tray_click_action(MouseButton::Left, up, mac),
-                TrayClickAction::Toggle
+                tray_click_action(MouseButton::Right, up, true),
+                TrayClickAction::ShowMenu
+            );
+            // Windows opens its attached menu natively.
+            assert_eq!(
+                tray_click_action(MouseButton::Right, up, false),
+                TrayClickAction::Ignore
             );
         }
-    }
 
-    #[test]
-    fn right_up_opens_menu_only_on_macos() {
-        let up = MouseButtonState::Up;
-        assert_eq!(
-            tray_click_action(MouseButton::Right, up, true),
-            TrayClickAction::ShowMenu
-        );
-        // Windows opens its attached menu natively.
-        assert_eq!(
-            tray_click_action(MouseButton::Right, up, false),
-            TrayClickAction::Ignore
-        );
-    }
-
-    #[test]
-    fn down_and_other_buttons_are_ignored() {
-        for mac in [true, false] {
-            for button in [MouseButton::Left, MouseButton::Right, MouseButton::Middle] {
+        #[test]
+        fn down_and_other_buttons_are_ignored() {
+            for mac in [true, false] {
+                for button in [MouseButton::Left, MouseButton::Right, MouseButton::Middle] {
+                    assert_eq!(
+                        tray_click_action(button, MouseButtonState::Down, mac),
+                        TrayClickAction::Ignore
+                    );
+                }
                 assert_eq!(
-                    tray_click_action(button, MouseButtonState::Down, mac),
+                    tray_click_action(MouseButton::Middle, MouseButtonState::Up, mac),
                     TrayClickAction::Ignore
                 );
             }
-            assert_eq!(
-                tray_click_action(MouseButton::Middle, MouseButtonState::Up, mac),
-                TrayClickAction::Ignore
-            );
         }
     }
 
