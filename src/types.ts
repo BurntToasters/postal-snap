@@ -105,6 +105,8 @@ export interface MessageSummary {
   size: number;
   threadRoot?: string | null;
   hasCalendar?: boolean;
+  isAnswered?: boolean;
+  isForwarded?: boolean;
 }
 
 export interface MessageCursor {
@@ -161,6 +163,47 @@ export interface MessageDetail extends MessageSummary {
   /** Raw bounded header values; parsed later. */
   listUnsubscribe?: string | null;
   listUnsubscribePost?: string | null;
+  /** Derived in Rust from the stored headers. */
+  unsubscribe?: UnsubscribeOptions | null;
+  invite?: CalendarInvite | null;
+}
+
+export interface UnsubscribeOptions {
+  oneClick: boolean;
+  httpsUrl?: string | null;
+  httpsHost?: string | null;
+  mailto?: string | null;
+}
+
+export interface IcsTime {
+  /** `YYYY-MM-DD`, `YYYY-MM-DDTHH:MM:SS`, or the same with a trailing `Z`. */
+  iso: string;
+  allDay: boolean;
+  utc: boolean;
+  tzid?: string | null;
+}
+
+export interface CalendarInvite {
+  method?: string | null;
+  status?: string | null;
+  summary?: string | null;
+  start?: IcsTime | null;
+  end?: IcsTime | null;
+  location?: string | null;
+  organizerName?: string | null;
+  organizerEmail?: string | null;
+}
+
+export interface SourceHeader {
+  name: string;
+  value: string;
+}
+
+export interface MessageSource {
+  headers: SourceHeader[];
+  source: string;
+  truncated: boolean;
+  size: number;
 }
 
 export interface ComposeAttachment {

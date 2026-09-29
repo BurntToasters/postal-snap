@@ -45,6 +45,9 @@ export interface MockMessageSummary {
   hasAttachments: boolean;
   size: number;
   threadRoot: string | null;
+  hasCalendar?: boolean;
+  isAnswered?: boolean;
+  isForwarded?: boolean;
 }
 
 export interface MockState {
@@ -74,6 +77,7 @@ export interface MockState {
   ipcCalls: Array<{ command: string; args: Record<string, unknown> }>;
   backgroundUpdateAllowed: boolean;
   rules: Array<Record<string, unknown>>;
+  ipcCalls: Array<{ command: string; args: Record<string, unknown> }>;
   callbacks: Map<number, (...args: unknown[]) => void>;
   eventListeners: Map<string, Set<number>>;
   nextCallback: number;

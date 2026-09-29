@@ -208,8 +208,19 @@ pub(crate) async fn deliver_outbox_locked(
     {
         return Err("This message is already sending.".into());
     }
-    match mail::send_prepared(&account, &password, &draft, &mime_bytes).await {
+    let sent = mail::send_prepared(&account, &password, &draft, &mime_bytes).await;
+    let confirmation = sent.as_ref().map(|_| ()).map_err(|error| error.kind);
+    match sent {
         Ok(()) => {
+            super::replied::mark_source_after_send(
+                app,
+                state,
+                &account,
+                &password,
+                &draft,
+                &confirmation,
+            )
+            .await;
             let history: Vec<(String, String)> = draft
                 .to
                 .iter()

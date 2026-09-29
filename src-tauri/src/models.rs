@@ -213,6 +213,10 @@ pub struct MessageSummary {
     pub thread_root: Option<String>,
     #[serde(default)]
     pub has_calendar: bool,
+    #[serde(default)]
+    pub is_answered: bool,
+    #[serde(default)]
+    pub is_forwarded: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -264,6 +268,11 @@ pub struct MessageDetail {
     pub list_unsubscribe: Option<String>,
     #[serde(default)]
     pub list_unsubscribe_post: Option<String>,
+    /// Derived from the stored headers by Rust; the frontend never parses them.
+    #[serde(default)]
+    pub unsubscribe: Option<crate::mail::list_unsubscribe::UnsubscribeOptions>,
+    #[serde(default)]
+    pub invite: Option<crate::mail::ics::CalendarInvite>,
 }
 
 fn default_body_status() -> String {

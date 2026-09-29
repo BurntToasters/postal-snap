@@ -1109,6 +1109,11 @@
   color: var(--warning);
 }
 
+/* Replied, forwarded, and invitation marks are quiet, not warnings. */
+.message-subject svg.message-mark {
+  color: var(--text-muted);
+}
+
 .message-preview {
   grid-area: preview;
   display: -webkit-box;

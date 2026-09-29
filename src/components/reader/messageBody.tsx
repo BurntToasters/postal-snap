@@ -3,6 +3,7 @@ import { Image, ShieldAlert, ShieldCheck } from "lucide-react";
 import { strings } from "../../i18n";
 import type { SanitizedMail } from "../../security";
 import type { MessageDetail } from "../../types";
+import { InviteCard } from "./inviteCard";
 
 export function PlainTextContent({
   text,
@@ -161,6 +162,7 @@ export function MessageBody({
 }) {
   return (
     <>
+      {message.invite ? <InviteCard invite={message.invite} /> : null}
       {filteredImages > 0 ? (
         <div className="remote-content-banner" role="status" aria-live="polite">
           <ShieldCheck aria-hidden="true" />

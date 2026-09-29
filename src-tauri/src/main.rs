@@ -19,6 +19,7 @@ mod settings;
 mod storage;
 mod threat_blocking;
 mod tray;
+mod unsubscribe;
 mod update_relaunch;
 // Store editions keep only the IPC stub; their stores handle updates.
 #[cfg_attr(
@@ -292,6 +293,9 @@ fn main() {
             commands::sync::sync_account,
             commands::messages::list_messages,
             commands::messages::get_message,
+            commands::messages::get_message_source,
+            commands::messages::save_message_eml,
+            commands::messages::unsubscribe_one_click,
             commands::messages::set_message_flags,
             commands::messages::set_messages_flags,
             commands::messages::move_message,

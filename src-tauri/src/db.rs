@@ -20,7 +20,7 @@ use crate::models::{
 };
 use crate::models::{Attachment, ComposeDraft, MailboxRole, MessageSummary, ProviderKind, TlsMode};
 
-const CURRENT_SCHEMA_VERSION: u32 = 19;
+const CURRENT_SCHEMA_VERSION: u32 = 20;
 
 pub type MailboxSyncState = (Option<u32>, Option<u32>, u32, Option<u32>);
 
@@ -53,6 +53,12 @@ pub struct CachedMessage {
     pub attachments: Vec<Attachment>,
     pub raw_message: Vec<u8>,
     pub has_attachments: bool,
+    pub is_answered: bool,
+    pub is_forwarded: bool,
+    pub has_calendar: bool,
+    pub calendar_json: Option<String>,
+    pub list_unsubscribe: Option<String>,
+    pub list_unsubscribe_post: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -122,8 +128,8 @@ impl Database {
     }
 }
 
-pub(crate) const MESSAGE_SUMMARY_SELECT: &str = "SELECT m.id,m.account_id,m.mailbox_id,m.uid,m.message_id,m.subject,m.sender_name,m.sender_address,m.recipients,m.received_at,m.preview,m.is_read,m.is_starred,m.has_attachments,m.size,m.thread_root,m.has_calendar FROM messages m";
-pub(crate) const MESSAGE_DETAIL_SELECT: &str = "SELECT m.id,m.account_id,m.mailbox_id,m.uid,m.message_id,m.subject,m.sender_name,m.sender_address,m.recipients,m.received_at,m.preview,m.is_read,m.is_starred,m.has_attachments,m.size,m.to_json,m.cc_json,m.reply_to,m.text_body,m.html_body,m.attachments_json,m.list_unsubscribe,m.list_unsubscribe_post,m.has_calendar,m.thread_root FROM messages m";
+pub(crate) const MESSAGE_SUMMARY_SELECT: &str = "SELECT m.id,m.account_id,m.mailbox_id,m.uid,m.message_id,m.subject,m.sender_name,m.sender_address,m.recipients,m.received_at,m.preview,m.is_read,m.is_starred,m.has_attachments,m.size,m.thread_root,m.has_calendar,m.is_answered,m.is_forwarded FROM messages m";
+pub(crate) const MESSAGE_DETAIL_SELECT: &str = "SELECT m.id,m.account_id,m.mailbox_id,m.uid,m.message_id,m.subject,m.sender_name,m.sender_address,m.recipients,m.received_at,m.preview,m.is_read,m.is_starred,m.has_attachments,m.size,m.to_json,m.cc_json,m.reply_to,m.text_body,m.html_body,m.attachments_json,m.list_unsubscribe,m.list_unsubscribe_post,m.has_calendar,m.is_answered,m.is_forwarded,m.calendar_json,m.thread_root FROM messages m";
 
 pub(crate) fn map_message_summary(row: &Row<'_>) -> rusqlite::Result<MessageSummary> {
     Ok(MessageSummary {
@@ -145,6 +151,8 @@ pub(crate) fn map_message_summary(row: &Row<'_>) -> rusqlite::Result<MessageSumm
         thread_root: row.get("thread_root")?,
         // By name: detail rows lay out columns differently.
         has_calendar: row.get::<_, i64>("has_calendar")? != 0,
+        is_answered: row.get::<_, i64>("is_answered")? != 0,
+        is_forwarded: row.get::<_, i64>("is_forwarded")? != 0,
     })
 }
 
@@ -781,6 +789,13 @@ fn migrate_schema(connection: &mut Connection) -> Result<(), String> {
         transaction
             .pragma_update(None, "user_version", 19)
             .map_err(db_error)?;
+        version = 19;
+    }
+    if version < 20 {
+        migrate_v20(&transaction)?;
+        transaction
+            .pragma_update(None, "user_version", 20)
+            .map_err(db_error)?;
     }
     transaction
         .pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)
@@ -927,6 +942,27 @@ fn migrate_v19(transaction: &rusqlite::Transaction) -> Result<(), String> {
         ),
     ] {
         ensure_column(transaction, table, column, sql)?;
+    }
+    Ok(())
+}
+
+/// Schema v20: replied/forwarded flags and the parsed calendar invite.
+fn migrate_v20(transaction: &rusqlite::Transaction) -> Result<(), String> {
+    for (column, sql) in [
+        (
+            "is_answered",
+            "ALTER TABLE messages ADD COLUMN is_answered INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "is_forwarded",
+            "ALTER TABLE messages ADD COLUMN is_forwarded INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "calendar_json",
+            "ALTER TABLE messages ADD COLUMN calendar_json TEXT",
+        ),
+    ] {
+        ensure_column(transaction, "messages", column, sql)?;
     }
     Ok(())
 }
@@ -1236,6 +1272,12 @@ mod tests {
             attachments: vec![],
             raw_message: b"Subject: Family picnic\r\n\r\nBring sandwiches".to_vec(),
             has_attachments: false,
+            is_answered: false,
+            is_forwarded: false,
+            has_calendar: false,
+            calendar_json: None,
+            list_unsubscribe: None,
+            list_unsubscribe_post: None,
         }
     }
 
@@ -3614,6 +3656,50 @@ mod tests {
             .unwrap();
         columns.sort();
         columns
+    }
+
+    // v20 failure modes: cached message lost; reply flags default to set;
+    // migrated shape differs from fresh; re-run from v19 fails.
+    #[test]
+    fn migrates_v19_to_v20_preserving_messages_and_defaults() {
+        let db = Database::memory();
+        let account = account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        db.upsert_message(account_id, inbox, &message(1, "2026-08-18T12:00:00+00:00"))
+            .unwrap();
+        let fresh_shape = table_columns(&db.conn().unwrap(), "messages");
+        {
+            let mut connection = db.conn().unwrap();
+            connection
+                .execute_batch(
+                    "ALTER TABLE messages DROP COLUMN is_answered;
+                     ALTER TABLE messages DROP COLUMN is_forwarded;
+                     ALTER TABLE messages DROP COLUMN calendar_json;
+                     PRAGMA user_version=19;",
+                )
+                .unwrap();
+            migrate_schema(&mut connection).unwrap();
+            connection.execute_batch("PRAGMA user_version=19;").unwrap();
+            migrate_schema(&mut connection).unwrap();
+            let version: u32 = connection
+                .pragma_query_value(None, "user_version", |row| row.get(0))
+                .unwrap();
+            assert_eq!(version, CURRENT_SCHEMA_VERSION);
+            assert_eq!(table_columns(&connection, "messages"), fresh_shape);
+        }
+        assert!(cached(&db, inbox, 1, account_id));
+        let (answered, forwarded, calendar): (i64, i64, Option<String>) = db
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT is_answered,is_forwarded,calendar_json FROM messages",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!((answered, forwarded, calendar), (0, 0, None));
     }
 
     #[test]
