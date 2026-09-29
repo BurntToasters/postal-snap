@@ -91,6 +91,12 @@ pub(crate) fn parse_envelope(
             || header_suggests_attachments(fetch),
             bodystructure_has_attachments,
         ),
+        is_answered: false,
+        is_forwarded: false,
+        has_calendar: false,
+        calendar_json: None,
+        list_unsubscribe: None,
+        list_unsubscribe_post: None,
     })
 }
 
@@ -262,6 +268,18 @@ pub(crate) fn system_flags(item: &async_imap::types::Fetch) -> (bool, bool) {
         })
 }
 
+/// `\Answered` and `$Forwarded` (keywords are case-insensitive atoms).
+pub(crate) fn reply_flags(item: &async_imap::types::Fetch) -> (bool, bool) {
+    item.flags()
+        .fold((false, false), |(answered, forwarded), flag| match flag {
+            async_imap::types::Flag::Answered => (true, forwarded),
+            async_imap::types::Flag::Custom(name) if name.eq_ignore_ascii_case("$Forwarded") => {
+                (answered, true)
+            }
+            _ => (answered, forwarded),
+        })
+}
+
 pub(crate) fn received_at_fallback(
     item: &async_imap::types::Fetch,
     cached_received_at: Option<&str>,
@@ -348,6 +366,8 @@ pub(crate) fn parse_message(
         .cloned()
         .collect::<Vec<_>>()
         .join(", ");
+    let (list_unsubscribe, list_unsubscribe_post) = unsubscribe_headers(&message);
+    let invite = calendar_invite(&message);
     Ok(CachedMessage {
         internal_at: None,
         uid,
@@ -381,7 +401,49 @@ pub(crate) fn parse_message(
         has_attachments: !attachments.is_empty(),
         attachments,
         raw_message: raw.to_vec(),
+        is_answered: false,
+        is_forwarded: false,
+        has_calendar: invite.is_some() || has_calendar_part(&message),
+        calendar_json: invite.and_then(|invite| serde_json::to_string(&invite).ok()),
+        list_unsubscribe,
+        list_unsubscribe_post,
     })
+}
+
+fn is_calendar_part(part: &mail_parser::MessagePart<'_>) -> bool {
+    part.content_type().is_some_and(|value| {
+        value.ctype().eq_ignore_ascii_case("text")
+            && value
+                .subtype()
+                .is_some_and(|subtype| subtype.eq_ignore_ascii_case("calendar"))
+    })
+}
+
+/// Inline or attached `text/calendar`, even when it fails to parse.
+fn has_calendar_part(message: &mail_parser::Message<'_>) -> bool {
+    message.parts.iter().any(is_calendar_part)
+}
+
+fn calendar_invite(message: &mail_parser::Message<'_>) -> Option<super::ics::CalendarInvite> {
+    message
+        .parts
+        .iter()
+        .filter(|part| is_calendar_part(part))
+        .find_map(|part| super::ics::parse_invite(part.contents()))
+}
+
+/// Bounded List-Unsubscribe headers; see `list_unsubscribe`.
+fn unsubscribe_headers(message: &mail_parser::Message<'_>) -> (Option<String>, Option<String>) {
+    let mut list = None;
+    let mut post = None;
+    for (name, value) in message.headers_raw() {
+        if list.is_none() && name.eq_ignore_ascii_case("list-unsubscribe") {
+            list = super::list_unsubscribe::normalize_list_unsubscribe(value);
+        } else if post.is_none() && name.eq_ignore_ascii_case("list-unsubscribe-post") {
+            post = super::list_unsubscribe::normalize_post(value);
+        }
+    }
+    (list, post)
 }
 
 pub(crate) fn validate_mime_resource_shape(raw: &[u8]) -> Result<(), String> {

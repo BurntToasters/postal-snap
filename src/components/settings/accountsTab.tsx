@@ -3,6 +3,7 @@ import { Mail } from "lucide-react";
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
 import type { FilterRule, MailboxSummary } from "../../types";
+import { BodyFormatControl } from "./bodyFormatControl";
 import { SettingsPanel, SettingsSection } from "./primitives";
 
 function ruleActionLabel(
@@ -274,6 +275,8 @@ export function AccountsTab({
                 </div>
               ) : null}
             </div>
+
+            <BodyFormatControl account={account} />
 
             <div className="account-rules-section">
               <div className="aliases-header">

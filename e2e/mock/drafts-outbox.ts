@@ -42,8 +42,13 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
           cc: [],
           bcc: [],
           subject: "Family update",
-          htmlBody: "<p>Draft message</p>",
-          textBody: "Draft message",
+          bodyFormat: location.search.includes("plainDraft") ? "plain" : "html",
+          htmlBody: location.search.includes("plainDraft")
+            ? ""
+            : "<p>Draft message</p>",
+          textBody: location.search.includes("plainDraft")
+            ? "Plain draft line\n> quoted line"
+            : "Draft message",
           attachments: location.search.includes("draftInline")
             ? [
                 {
@@ -166,7 +171,10 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
         return undefined;
       },
       search_cached_messages(args: Record<string, unknown>) {
-        const search = args.query as { allFolders?: boolean } | undefined;
+        const search = args.query as
+          { allFolders?: boolean; text?: string } | undefined;
+        // "bodyonly" text: only the server has the match.
+        if (search?.text?.includes("bodyonly")) return [];
         return [
           {
             ...summary,
@@ -175,7 +183,12 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
         ];
       },
       search_server_messages(args: Record<string, unknown>) {
-        const search = args.query as { allFolders?: boolean } | undefined;
+        const search = args.query as
+          { allFolders?: boolean; text?: string } | undefined;
+        if (search?.text?.includes("bodyonly"))
+          return [
+            { ...summary, id: 77, uid: 77, subject: "Server body match" },
+          ];
         return [
           {
             ...summary,
@@ -239,7 +252,41 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
         };
       },
       choose_attachments() {
-        return [];
+        return location.search.includes("pickFile")
+          ? [
+              {
+                token: "picked-token-1",
+                filename: "budget.pdf",
+                contentType: "application/pdf",
+                inline: false,
+                contentId: null,
+                size: 4096,
+              },
+            ]
+          : [];
+      },
+      attach_dropped_files() {
+        // Rust holds the paths; the UI only ever sees opaque tokens.
+        return location.search.includes("dropEmpty")
+          ? []
+          : [
+              {
+                token: "dropped-token-1",
+                filename: "family-photo.jpg",
+                contentType: "image/jpeg",
+                inline: false,
+                contentId: null,
+                size: 2048,
+              },
+              {
+                token: "dropped-token-2",
+                filename: "notes.txt",
+                contentType: "text/plain",
+                inline: false,
+                contentId: null,
+                size: 64,
+              },
+            ];
       },
       preview_attachment() {
         return {

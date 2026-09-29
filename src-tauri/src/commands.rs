@@ -12,9 +12,11 @@ pub mod accounts;
 pub mod attachments;
 pub mod cache_policy;
 pub mod drafts_send;
+pub mod drag_drop;
 pub mod folders;
 pub mod messages;
 pub mod outbox;
+pub mod replied;
 pub mod security_net;
 pub mod settings_system;
 pub mod snooze_filters;
@@ -608,6 +610,7 @@ enum ValidatedReplay {
     Drop,
     ClearPending(i64),
     Flags(FlagOperation),
+    Keyword(replied::KeywordOperation),
     Move(MoveOperation),
 }
 
@@ -640,6 +643,24 @@ fn validate_queued_operation(
                 return Ok(ValidatedReplay::Drop);
             }
             Ok(ValidatedReplay::Flags(operation))
+        }
+        "keyword" => {
+            let Ok(operation) = serde_json::from_str::<replied::KeywordOperation>(payload) else {
+                return Ok(ValidatedReplay::Drop);
+            };
+            let Ok((owner, mailbox, uid)) = db.message_location(operation.message_id) else {
+                return Ok(ValidatedReplay::Drop);
+            };
+            if owner != account_id || mailbox != operation.mailbox || uid != operation.uid {
+                return Ok(ValidatedReplay::Drop);
+            }
+            let Some(expected) = operation.uid_validity else {
+                return Ok(ValidatedReplay::Drop);
+            };
+            if db.mailbox_uid_validity(account_id, &operation.mailbox)? != Some(expected) {
+                return Ok(ValidatedReplay::Drop);
+            }
+            Ok(ValidatedReplay::Keyword(operation))
         }
         "move" => {
             let Ok(operation) = serde_json::from_str::<MoveOperation>(payload) else {
@@ -709,6 +730,24 @@ async fn replay_offline_operations(
                     operation.is_read,
                     operation.is_starred,
                 )?;
+                if let Err(error) = &result {
+                    if error.terminal {
+                        db.remove_operation(account_id, id)?;
+                        dropped = dropped.saturating_add(1);
+                    }
+                    continue;
+                }
+            }
+            ValidatedReplay::Keyword(operation) => {
+                let result = mail::set_remote_keyword(
+                    account,
+                    password,
+                    &operation.mailbox,
+                    operation.uid,
+                    operation.uid_validity,
+                    operation.keyword,
+                )
+                .await;
                 if let Err(error) = &result {
                     if error.terminal {
                         db.remove_operation(account_id, id)?;
@@ -960,6 +999,9 @@ mod tests {
     fn outbox_keeps_the_unsigned_draft_for_undo() {
         use super::drafts_send::sign_for_outbox;
         let draft = crate::models::ComposeDraft {
+            body_format: crate::models::BodyFormat::Html,
+            source_message_id: None,
+            source_kind: None,
             id: None,
             account_id: "account-1".into(),
             from: None,
@@ -1039,6 +1081,7 @@ mod tests {
     fn rule_account() -> AccountRecord {
         AccountRecord {
             summary: AccountSummary {
+                default_body_format: crate::models::BodyFormat::Html,
                 id: "account-1".into(),
                 provider: ProviderKind::Manual,
                 email: "sam@example.com".into(),
@@ -1093,6 +1136,12 @@ mod tests {
             attachments: vec![],
             raw_message: b"Subject: Power bill\r\n\r\nPay by Friday".to_vec(),
             has_attachments: false,
+            is_answered: false,
+            is_forwarded: false,
+            has_calendar: false,
+            calendar_json: None,
+            list_unsubscribe: None,
+            list_unsubscribe_post: None,
         };
         message.sender_address = "bills@power.example.com".into();
         db.upsert_message(account_id, inbox, &message).unwrap();
@@ -1391,5 +1440,120 @@ mod tests {
             .request(&account.summary.id, super::wake::SYNC)
             .is_err());
         let _ = std::fs::remove_dir_all(directory);
+    }
+
+    // Replied/forwarded failure modes, written before the code:
+    // - a keyword is set after a refused, retry, or uncertain send
+    // - a forged source_message_id from another account gets a flag
+    // - $Forwarded is attempted where PERMANENTFLAGS forbids it
+    // - the flag op replays onto a recycled UID or changed UIDVALIDITY
+    // - the local mark clears an already-set flag
+    // - a draft with no source, or a plain new message, gets a keyword
+    #[test]
+    fn keyword_only_after_confirmed_send() {
+        use super::replied::{keyword_after_send, SourceKeyword};
+        use crate::mail::SendFailure;
+        use crate::models::DraftSourceKind::{Forward, Reply, ReplyAll};
+        assert_eq!(
+            keyword_after_send(Some(Reply), &Ok(())),
+            Some(SourceKeyword::Answered)
+        );
+        assert_eq!(
+            keyword_after_send(Some(ReplyAll), &Ok(())),
+            Some(SourceKeyword::Answered)
+        );
+        assert_eq!(
+            keyword_after_send(Some(Forward), &Ok(())),
+            Some(SourceKeyword::Forwarded)
+        );
+        assert_eq!(keyword_after_send(None, &Ok(())), None);
+        for failure in [
+            SendFailure::NotSentRetry,
+            SendFailure::NotSentRefused,
+            SendFailure::Uncertain,
+        ] {
+            for kind in [Reply, ReplyAll, Forward] {
+                assert_eq!(keyword_after_send(Some(kind), &Err(failure)), None);
+            }
+        }
+    }
+
+    #[test]
+    fn forwarded_needs_permanent_flag_support() {
+        use crate::mail::folders::forwarded_permitted;
+        use async_imap::types::Flag;
+        assert!(!forwarded_permitted(&[]));
+        assert!(!forwarded_permitted(&[Flag::Seen, Flag::Answered]));
+        assert!(forwarded_permitted(&[Flag::MayCreate]));
+        assert!(forwarded_permitted(&[Flag::Custom("$forwarded".into())]));
+        assert!(!forwarded_permitted(&[Flag::Custom("$Junk".into())]));
+    }
+
+    #[test]
+    fn source_message_must_belong_to_the_sending_account() {
+        use super::replied::resolve_source;
+        let db = Database::memory();
+        let account = rule_account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let mut other = rule_account();
+        other.summary.id = "account-2".into();
+        other.summary.email = "kim@example.com".into();
+        other.imap.username = "kim@example.com".into();
+        other.smtp.username = "kim@example.com".into();
+        db.insert_account(&other).unwrap();
+        let inbox = rule_mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        let id = bill(&db, account_id, inbox, 1);
+        let target = resolve_source(&db, account_id, id).unwrap().unwrap();
+        assert_eq!((target.mailbox.as_str(), target.uid), ("INBOX", 1));
+        assert_eq!(target.uid_validity, Some(1));
+        assert!(resolve_source(&db, "account-2", id).unwrap().is_none());
+        assert!(resolve_source(&db, account_id, id + 999).unwrap().is_none());
+    }
+
+    #[test]
+    fn keyword_replay_drops_stale_operations_and_mark_only_sets() {
+        use super::replied::KeywordOperation;
+        use super::{validate_queued_operation, ValidatedReplay};
+        let db = Database::memory();
+        let account = rule_account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = rule_mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        let id = bill(&db, account_id, inbox, 1);
+        let payload = |uid: u32, validity: Option<u32>, mailbox: &str| {
+            serde_json::to_string(&KeywordOperation {
+                message_id: id,
+                uid,
+                mailbox: mailbox.into(),
+                uid_validity: validity,
+                keyword: super::replied::SourceKeyword::Answered,
+            })
+            .unwrap()
+        };
+        assert!(matches!(
+            validate_queued_operation(&db, account_id, "keyword", &payload(1, Some(1), "INBOX")),
+            Ok(ValidatedReplay::Keyword(_))
+        ));
+        for stale in [
+            payload(1, Some(9), "INBOX"),
+            payload(1, None, "INBOX"),
+            payload(7, Some(1), "INBOX"),
+            payload(1, Some(1), "Archive"),
+        ] {
+            assert!(matches!(
+                validate_queued_operation(&db, account_id, "keyword", &stale),
+                Ok(ValidatedReplay::Drop)
+            ));
+        }
+        assert!(matches!(
+            validate_queued_operation(&db, "account-2", "keyword", &payload(1, Some(1), "INBOX")),
+            Ok(ValidatedReplay::Drop)
+        ));
+        db.mark_replied(id, account_id, true, false).unwrap();
+        db.mark_replied(id, account_id, false, true).unwrap();
+        db.mark_replied(id, account_id, false, false).unwrap();
+        let summary = db.list_messages(inbox, None, 10).unwrap().items.remove(0);
+        assert!(summary.is_answered && summary.is_forwarded);
     }
 }

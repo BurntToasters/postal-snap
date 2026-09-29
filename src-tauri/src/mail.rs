@@ -1,9 +1,14 @@
+pub mod flowed;
 pub mod folders;
 pub mod icloud;
+pub mod ics;
+pub mod list_unsubscribe;
 pub mod parse;
 pub mod pool;
+pub mod qresync;
 pub mod remote_drafts;
 pub mod send;
+pub mod source;
 pub mod sync;
 
 use std::time::Duration;
@@ -88,7 +93,8 @@ pub struct RemoteDraftSnapshot {
 
 pub use folders::{
     create_folder, delete_folder, empty_folder, mark_folder_read, move_remote, move_remote_uids,
-    rename_folder, set_remote_flags, set_remote_uid_flags, MoveOptions,
+    rename_folder, set_remote_flags, set_remote_keyword, set_remote_uid_flags, MoveOptions,
+    SourceKeyword,
 };
 pub use icloud::discover_icloud_aliases;
 pub use remote_drafts::{
@@ -137,6 +143,58 @@ mod tests {
         assert_eq!(parsed.message_id.as_deref(), Some("<one@example.com>"));
     }
 
+    // parse_message glue failure modes, written before the glue:
+    // - List-Unsubscribe is missed when the header name is not lower-case
+    // - List-Unsubscribe-Post is read from the wrong header
+    // - unsafe URIs (http:, javascript:) reach the stored value
+    // - a text/calendar part (alternative or attachment) is not detected
+    // - a calendar that fails to parse hides the fact that one exists
+    // - the .ics stops being listed as a saveable attachment
+    // - a message with neither header nor calendar reports either
+    #[test]
+    fn stores_bounded_list_unsubscribe_headers() {
+        let raw = b"From: a@example.com\r\nSubject: News\r\nLIST-UNSUBSCRIBE: <https://a.example/u>,\r\n <http://a.example/plain>, <javascript:x>\r\nList-Unsubscribe-Post: List-Unsubscribe=One-Click\r\n\r\nbody";
+        let parsed = parse_message(1, raw, false, false, None).unwrap();
+        assert_eq!(
+            parsed.list_unsubscribe.as_deref(),
+            Some("<https://a.example/u>")
+        );
+        assert_eq!(
+            parsed.list_unsubscribe_post.as_deref(),
+            Some("List-Unsubscribe=One-Click")
+        );
+        let plain = b"From: a@example.com\r\nSubject: Hi\r\n\r\nbody";
+        let parsed = parse_message(2, plain, false, false, None).unwrap();
+        assert!(parsed.list_unsubscribe.is_none() && parsed.list_unsubscribe_post.is_none());
+        assert!(!parsed.has_calendar && parsed.calendar_json.is_none());
+    }
+
+    #[test]
+    fn detects_calendar_parts_inline_and_attached() {
+        let ics = "BEGIN:VCALENDAR\r\nMETHOD:REQUEST\r\nBEGIN:VEVENT\r\nSUMMARY:Lunch\r\nDTSTART:20261001T120000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+        let inline = format!(
+            "From: a@example.com\r\nSubject: Invite\r\nContent-Type: multipart/alternative; boundary=b\r\n\r\n--b\r\nContent-Type: text/plain\r\n\r\nLunch\r\n--b\r\nContent-Type: text/calendar; method=REQUEST\r\n\r\n{ics}--b--\r\n"
+        );
+        let parsed = parse_message(3, inline.as_bytes(), false, false, None).unwrap();
+        assert!(parsed.has_calendar);
+        let invite: crate::mail::ics::CalendarInvite =
+            serde_json::from_str(parsed.calendar_json.as_deref().unwrap()).unwrap();
+        assert_eq!(invite.summary.as_deref(), Some("Lunch"));
+        assert_eq!(invite.method.as_deref(), Some("REQUEST"));
+        let attached = format!(
+            "From: a@example.com\r\nSubject: Invite\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n--b\r\nContent-Type: text/plain\r\n\r\nLunch\r\n--b\r\nContent-Type: text/calendar; name=invite.ics\r\nContent-Disposition: attachment; filename=invite.ics\r\n\r\n{ics}--b--\r\n"
+        );
+        let parsed = parse_message(4, attached.as_bytes(), false, false, None).unwrap();
+        assert!(parsed.has_calendar && parsed.calendar_json.is_some());
+        assert!(parsed
+            .attachments
+            .iter()
+            .any(|item| item.filename == "invite.ics"));
+        let broken = "From: a@example.com\r\nSubject: Invite\r\nContent-Type: text/calendar\r\n\r\nnot a calendar";
+        let parsed = parse_message(5, broken.as_bytes(), false, false, None).unwrap();
+        assert!(parsed.has_calendar && parsed.calendar_json.is_none());
+    }
+
     #[test]
     fn normalizes_message_ids_with_or_without_brackets() {
         assert_eq!(
@@ -154,6 +212,7 @@ mod tests {
     async fn parsed_drafts_keep_the_prepared_message_id() {
         let account = AccountRecord {
             summary: AccountSummary {
+                default_body_format: crate::models::BodyFormat::Html,
                 id: "account-1".into(),
                 provider: ProviderKind::Manual,
                 email: "sam@example.com".into(),
@@ -179,6 +238,9 @@ mod tests {
             },
         };
         let draft = ComposeDraft {
+            body_format: crate::models::BodyFormat::Html,
+            source_message_id: None,
+            source_kind: None,
             id: None,
             account_id: account.summary.id.clone(),
             from: None,
@@ -216,6 +278,9 @@ mod tests {
 
     fn blank_draft() -> ComposeDraft {
         ComposeDraft {
+            body_format: crate::models::BodyFormat::Html,
+            source_message_id: None,
+            source_kind: None,
             id: None,
             account_id: "account-1".into(),
             from: None,
@@ -235,6 +300,7 @@ mod tests {
     fn loopback_smtp_account() -> AccountRecord {
         AccountRecord {
             summary: AccountSummary {
+                default_body_format: crate::models::BodyFormat::Html,
                 id: "account-1".into(),
                 provider: ProviderKind::Manual,
                 email: "sam@example.com".into(),
@@ -394,6 +460,7 @@ mod tests {
     async fn uid_operations_fail_closed_without_mailbox_identity() {
         let account = AccountRecord {
             summary: AccountSummary {
+                default_body_format: crate::models::BodyFormat::Html,
                 id: "account-1".into(),
                 provider: ProviderKind::Manual,
                 email: "sam@example.com".into(),
@@ -459,6 +526,7 @@ mod tests {
     async fn builds_multipart_plain_and_html_mail() {
         let account = AccountRecord {
             summary: AccountSummary {
+                default_body_format: crate::models::BodyFormat::Html,
                 id: "account-1".into(),
                 provider: ProviderKind::Manual,
                 email: "sam@example.com".into(),
@@ -484,6 +552,9 @@ mod tests {
             },
         };
         let draft = ComposeDraft {
+            body_format: crate::models::BodyFormat::Html,
+            source_message_id: None,
+            source_kind: None,
             id: None,
             account_id: account.summary.id.clone(),
             from: None,
@@ -510,6 +581,7 @@ mod tests {
     async fn outgoing_mime_hides_bcc_but_envelope_keeps_recipient() {
         let account = AccountRecord {
             summary: AccountSummary {
+                default_body_format: crate::models::BodyFormat::Html,
                 id: "account-1".into(),
                 provider: ProviderKind::Manual,
                 email: "sam@example.com".into(),
@@ -535,6 +607,9 @@ mod tests {
             },
         };
         let draft = ComposeDraft {
+            body_format: crate::models::BodyFormat::Html,
+            source_message_id: None,
+            source_kind: None,
             id: None,
             account_id: account.summary.id.clone(),
             from: None,
@@ -570,6 +645,7 @@ mod tests {
         let password = "mail-test-password";
         let account = AccountRecord {
             summary: AccountSummary {
+                default_body_format: crate::models::BodyFormat::Html,
                 id: "11111111-1111-4111-8111-111111111111".into(),
                 provider: ProviderKind::Manual,
                 email: "user@example.test".into(),
@@ -618,6 +694,9 @@ mod tests {
         let attachment_path = attachment_dir.path().join("family-note.txt");
         std::fs::write(&attachment_path, b"attachment body").unwrap();
         let draft = ComposeDraft {
+            body_format: crate::models::BodyFormat::Html,
+            source_message_id: None,
+            source_kind: None,
             id: None,
             account_id: account.summary.id.clone(),
             from: None,
@@ -939,6 +1018,7 @@ mod tests {
         let password = "mail-test-password";
         let account = AccountRecord {
             summary: AccountSummary {
+                default_body_format: crate::models::BodyFormat::Html,
                 id: "44444444-4444-4444-8444-444444444444".into(),
                 provider: ProviderKind::Manual,
                 email: "history@example.test".into(),

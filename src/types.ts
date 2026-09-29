@@ -43,6 +43,9 @@ export type MailSettingsDiscovery =
     }
   | { status: "notFound"; domain: string };
 
+export type BodyFormat = "html" | "plain";
+export type DraftSourceKind = "reply" | "reply_all" | "forward";
+
 export interface AccountSummary {
   id: string;
   provider: ProviderKind;
@@ -54,6 +57,7 @@ export interface AccountSummary {
   authMethod?: string;
   signature?: string;
   color?: string | null;
+  defaultBodyFormat?: BodyFormat;
 }
 
 export interface AccountRemovalOutcome {
@@ -100,6 +104,9 @@ export interface MessageSummary {
   hasAttachments: boolean;
   size: number;
   threadRoot?: string | null;
+  hasCalendar?: boolean;
+  isAnswered?: boolean;
+  isForwarded?: boolean;
 }
 
 export interface MessageCursor {
@@ -153,6 +160,50 @@ export interface MessageDetail extends MessageSummary {
   references?: string[];
   /** Why the body is missing when it could not be downloaded. */
   bodyStatus?: "available" | "offline" | "signInNeeded" | "tooLarge";
+  /** Raw bounded header values; parsed later. */
+  listUnsubscribe?: string | null;
+  listUnsubscribePost?: string | null;
+  /** Derived in Rust from the stored headers. */
+  unsubscribe?: UnsubscribeOptions | null;
+  invite?: CalendarInvite | null;
+}
+
+export interface UnsubscribeOptions {
+  oneClick: boolean;
+  httpsUrl?: string | null;
+  httpsHost?: string | null;
+  mailto?: string | null;
+}
+
+export interface IcsTime {
+  /** `YYYY-MM-DD`, `YYYY-MM-DDTHH:MM:SS`, or the same with a trailing `Z`. */
+  iso: string;
+  allDay: boolean;
+  utc: boolean;
+  tzid?: string | null;
+}
+
+export interface CalendarInvite {
+  method?: string | null;
+  status?: string | null;
+  summary?: string | null;
+  start?: IcsTime | null;
+  end?: IcsTime | null;
+  location?: string | null;
+  organizerName?: string | null;
+  organizerEmail?: string | null;
+}
+
+export interface SourceHeader {
+  name: string;
+  value: string;
+}
+
+export interface MessageSource {
+  headers: SourceHeader[];
+  source: string;
+  truncated: boolean;
+  size: number;
 }
 
 export interface ComposeAttachment {
@@ -178,6 +229,9 @@ export interface ComposeDraft {
   inReplyTo?: string;
   references?: string[];
   sendAt?: string | null;
+  bodyFormat?: BodyFormat;
+  sourceMessageId?: number | null;
+  sourceKind?: DraftSourceKind | null;
 }
 
 export interface DraftSummary {
@@ -263,6 +317,14 @@ export interface AccountChangeEvent {
 export interface MessageChangeEvent extends AccountChangeEvent {
   messageId?: number | null;
   kind: "flags" | "moved" | "synced";
+}
+
+/** Window drag-drop from Rust. Positions are CSS pixels; no paths. */
+export interface ComposeDragEvent {
+  phase: "over" | "drop" | "leave";
+  x: number;
+  y: number;
+  count: number;
 }
 
 export interface DraftSyncEvent extends AccountChangeEvent {

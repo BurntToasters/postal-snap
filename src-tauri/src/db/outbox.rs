@@ -448,7 +448,7 @@ impl Database {
             .query_map([account_id], |row| {
                 Ok(SnoozedSummary {
                     message: map_message_summary(row)?,
-                    snoozed_until: row.get(16)?,
+                    snoozed_until: row.get("snoozed_until")?,
                 })
             })
             .map_err(db_error)?

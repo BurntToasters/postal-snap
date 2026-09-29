@@ -1,6 +1,7 @@
 import { strings } from "../../i18n";
 import { sanitizeComposeHtml } from "../../security";
 import type { ComposerSeed } from "../../store";
+import type { DraftSourceKind } from "../../types";
 
 export function seedRecipients(
   seed: ComposerSeed | undefined,
@@ -114,6 +115,28 @@ export function seedReferences(seed?: ComposerSeed): string[] | undefined {
   if (!parentId) return seed?.draft?.references;
   const prior = seed?.sourceMessage?.references?.filter(Boolean) ?? [];
   return [...prior, parentId];
+}
+
+/** Message this draft answers; Rust marks it only after a confirmed send. */
+export function seedSource(seed?: ComposerSeed): {
+  sourceMessageId?: number | null;
+  sourceKind?: DraftSourceKind | null;
+} {
+  if (seed?.draft?.sourceMessageId != null && seed.draft.sourceKind)
+    return {
+      sourceMessageId: seed.draft.sourceMessageId,
+      sourceKind: seed.draft.sourceKind,
+    };
+  if (!seed?.sourceMessage || !seed.composeMode) return {};
+  return {
+    sourceMessageId: seed.sourceMessage.id,
+    sourceKind:
+      seed.composeMode === "replyAll"
+        ? "reply_all"
+        : seed.composeMode === "forward"
+          ? "forward"
+          : "reply",
+  };
 }
 
 export function composerTitle(seed?: ComposerSeed): string {

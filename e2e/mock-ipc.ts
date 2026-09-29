@@ -6,6 +6,7 @@ import { registerMockDraftsOutbox } from "./mock/drafts-outbox";
 import { registerMockFixtures } from "./mock/fixtures";
 import { registerMockFolders } from "./mock/folders";
 import { registerMockMessages } from "./mock/messages";
+import { registerMockReading } from "./mock/reading";
 import { registerMockRemoteSecurity } from "./mock/remote-security";
 import { registerMockSettingsSystem } from "./mock/settings-system";
 import { registerMockState } from "./mock/state";
@@ -32,5 +33,6 @@ export async function installMockIpc(
   await registerMockDraftsOutbox(page);
   await registerMockSettingsSystem(page);
   await registerMockRemoteSecurity(page);
+  await registerMockReading(page);
   await registerMockUpdater(page);
 }

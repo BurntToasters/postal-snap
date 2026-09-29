@@ -15,6 +15,11 @@ export function getShortcutsRegistry(): ShortcutItem[] {
   return [
     { id: "new-message", label: strings.composer.newMessage, keys: `${mod} N` },
     { id: "get-mail", label: strings.mail.getMail, keys: `${shiftMod} N` },
+    {
+      id: "get-mail-all",
+      label: strings.mail.getMailAllAccounts,
+      keys: "⇧ F5",
+    },
     { id: "reply", label: strings.reader.reply, keys: `${mod} R` },
     { id: "reply-all", label: strings.reader.replyAll, keys: `${shiftMod} R` },
     { id: "forward", label: strings.reader.forward, keys: `${shiftMod} F` },

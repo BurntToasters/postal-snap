@@ -34,12 +34,23 @@ impl Database {
         let remote_message_id = format!("<draft-{id}-{revision}@run.rosie.snap>");
         let transaction = conn.transaction().map_err(db_error)?;
         transaction.execute(
-            "INSERT INTO drafts(id,account_id,draft_json,updated_at,sync_state,remote_message_id,revision,deleted_at)
-             VALUES(?1,?2,?3,strftime('%Y-%m-%dT%H:%M:%SZ','now'),'localPending',?4,?5,NULL)
+            "INSERT INTO drafts(id,account_id,draft_json,updated_at,sync_state,remote_message_id,revision,deleted_at,
+             body_format,source_message_id,source_kind)
+             VALUES(?1,?2,?3,strftime('%Y-%m-%dT%H:%M:%SZ','now'),'localPending',?4,?5,NULL,?6,?7,?8)
              ON CONFLICT(id) DO UPDATE SET draft_json=excluded.draft_json,updated_at=excluded.updated_at,
              sync_state='localPending',sync_detail=NULL,remote_message_id=excluded.remote_message_id,
-             revision=excluded.revision,deleted_at=NULL",
-            params![id, draft.account_id, json, remote_message_id, revision],
+             revision=excluded.revision,deleted_at=NULL,body_format=excluded.body_format,
+             source_message_id=excluded.source_message_id,source_kind=excluded.source_kind",
+            params![
+                id,
+                draft.account_id,
+                json,
+                remote_message_id,
+                revision,
+                stored.body_format.as_str(),
+                stored.source_message_id,
+                stored.source_kind.map(|kind| kind.as_str()),
+            ],
         ).map_err(db_error)?;
         replace_attachment_refs(
             &transaction,

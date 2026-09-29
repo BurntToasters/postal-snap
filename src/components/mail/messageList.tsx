@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { Paperclip, Star } from "lucide-react";
+import { CalendarDays, Forward, Paperclip, Reply, Star } from "lucide-react";
 import { formatMessageDate } from "../../format";
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
@@ -270,6 +270,9 @@ export function MessageList({
       message.subject || strings.common.noSubject,
       formatMessageDate(message.receivedAt),
       message.hasAttachments ? strings.mail.hasAttachments : null,
+      message.hasCalendar ? strings.mail.hasInvitation : null,
+      message.isAnswered ? strings.mail.replied : null,
+      message.isForwarded ? strings.mail.forwarded : null,
     ]
       .filter(Boolean)
       .join(", ");
@@ -319,6 +322,15 @@ export function MessageList({
             ) : null}
             <span>{message.subject || strings.common.noSubject}</span>
             {message.hasAttachments ? <Paperclip aria-hidden="true" /> : null}
+            {message.hasCalendar ? (
+              <CalendarDays className="message-mark" aria-hidden="true" />
+            ) : null}
+            {message.isAnswered ? (
+              <Reply className="message-mark" aria-hidden="true" />
+            ) : null}
+            {message.isForwarded ? (
+              <Forward className="message-mark" aria-hidden="true" />
+            ) : null}
           </span>
           <span className="message-preview">
             {loadingMessageId === message.id

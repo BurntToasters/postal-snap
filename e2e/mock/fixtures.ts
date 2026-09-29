@@ -18,6 +18,7 @@ export async function registerMockFixtures(page: Page): Promise<void> {
         ? "Sign-in failed. Update the account password in Settings > Accounts."
         : null,
       color: "blue",
+      defaultBodyFormat: params.has("defaultPlain") ? "plain" : "html",
       aliases: params.has("aliasCollision") ? ["alias@example.test"] : [],
     };
     const secondAccount = {

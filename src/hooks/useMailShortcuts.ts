@@ -11,6 +11,7 @@ export interface MailShortcutsOptions {
   setAccountSwitcherOpen: (open: boolean) => void;
   openComposer: () => void;
   refresh: () => Promise<void>;
+  refreshAll: () => Promise<void>;
   onOpenSettings: (tab?: "accounts") => void;
   updateSettings: SettingsSaveUpdate;
   searchInput: RefObject<HTMLInputElement | null>;
@@ -24,6 +25,7 @@ export function useMailShortcuts({
   setAccountSwitcherOpen,
   openComposer,
   refresh,
+  refreshAll,
   onOpenSettings,
   updateSettings,
   searchInput,
@@ -37,6 +39,7 @@ export function useMailShortcuts({
       const action = (event as CustomEvent<string>).detail;
       if (action === "compose") openComposer();
       if (action === "get-mail") void refresh();
+      if (action === "get-mail-all") void refreshAll();
       if (action === "settings") onOpenSettings();
       if (
         action === "text-larger" ||
@@ -126,6 +129,11 @@ export function useMailShortcuts({
       if (mod && !event.shiftKey && key === "n") {
         event.preventDefault();
         openComposer();
+        return;
+      }
+      if (event.key === "F5" && event.shiftKey && !mod && !event.altKey) {
+        event.preventDefault();
+        void refreshAll();
         return;
       }
       if (
@@ -325,6 +333,7 @@ export function useMailShortcuts({
     onOpenSettings,
     openComposer,
     refresh,
+    refreshAll,
     relativeMessage,
     searchInput,
     selectAccount,

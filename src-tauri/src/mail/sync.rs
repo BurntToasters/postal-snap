@@ -6,9 +6,12 @@ use futures_util::TryStreamExt;
 use tokio::sync::Notify;
 
 use super::parse::{
-    internal_date, parse_envelope, parse_message, received_at_fallback, system_flags,
+    internal_date, parse_envelope, parse_message, received_at_fallback, reply_flags, system_flags,
 };
 use super::pool::{self, Lease};
+use super::qresync::{
+    decide_expunge_path, drain_vanished, plan_vanished, ExpungePath, VanishedPlan,
+};
 use super::send::{connect_imap, test_smtp};
 use super::{
     BodyBudget, BACKFILL_MESSAGE_BATCH, IMAP_COMMAND_TIMEOUT, INITIAL_MESSAGE_BATCH,
@@ -447,12 +450,13 @@ async fn sync_folder<H: SyncHooks>(
     let modseq_before_fetch = status.highest_modseq;
     if condstore && !purged && meta.highest_modseq.is_some() {
         let known = meta.highest_modseq.unwrap_or_default();
+        let mut vanished = None;
         if modseq_before_fetch != Some(known) {
             if let Some(low) = db.min_uid(mailbox_id)? {
-                sync_changed_flags(lease, db, mailbox_id, low, known).await?;
+                vanished = sync_changed_flags(lease, db, mailbox_id, low, known).await?;
             }
         }
-        if expunge_suspected {
+        if decide_expunge_path(vanished.as_ref(), expunge_suspected) == ExpungePath::Reconcile {
             reconcile_expunges(lease, db, mailbox_id).await?;
         }
         db.set_highest_modseq(mailbox_id, modseq_before_fetch)?;
@@ -558,9 +562,10 @@ async fn cache_envelopes(
             break;
         };
         let (seen, flagged) = system_flags(&item);
-        let Ok(parsed) = parse_envelope(&item, seen, flagged) else {
+        let Ok(mut parsed) = parse_envelope(&item, seen, flagged) else {
             continue;
         };
+        (parsed.is_answered, parsed.is_forwarded) = reply_flags(&item);
         let is_old = cutoff.is_some_and(|cutoff| {
             item.internal_date()
                 .map(|date| date.with_timezone(&Utc) < *cutoff)
@@ -705,19 +710,29 @@ async fn backfill_batch(
     })
 }
 
+/// Fetch flag changes since `since`. With QRESYNC, the same command reports
+/// expunged UIDs (VANISHED) and they are applied here; the returned plan tells
+/// the caller whether `reconcile_expunges` can be skipped.
 async fn sync_changed_flags(
     lease: &mut Lease,
     db: &Database,
     mailbox_id: i64,
     low: u32,
     since: u64,
-) -> Result<(), String> {
+) -> Result<Option<VanishedPlan>, String> {
+    let qresync = lease.capabilities.qresync;
+    let modifier = if qresync {
+        format!("(CHANGEDSINCE {since} VANISHED)")
+    } else {
+        format!("(CHANGEDSINCE {since})")
+    };
+    if qresync {
+        // Stale lines from earlier commands must not read as this fetch's.
+        drain_vanished(lease);
+    }
     let rows = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
         lease
-            .uid_fetch(
-                format!("{low}:*"),
-                format!("(UID FLAGS) (CHANGEDSINCE {since})"),
-            )
+            .uid_fetch(format!("{low}:*"), format!("(UID FLAGS) {modifier}"))
             .await?
             .try_collect::<Vec<_>>()
             .await
@@ -725,6 +740,10 @@ async fn sync_changed_flags(
     .await
     .map_err(|_| "Flag sync timed out.".to_string())?
     .map_err(|error| redact_error(&error, "Flag sync"))?;
+    let plan = qresync.then(|| {
+        let (ranges, drained) = drain_vanished(lease);
+        plan_vanished(&ranges, drained)
+    });
     let changed = rows
         .iter()
         .filter_map(|item| {
@@ -732,7 +751,19 @@ async fn sync_changed_flags(
             item.uid.map(|uid| (uid, seen, flagged))
         })
         .collect::<Vec<_>>();
-    db.reconcile_flags(mailbox_id, &changed, &[])
+    let replies = rows
+        .iter()
+        .filter_map(|item| {
+            let (answered, forwarded) = reply_flags(item);
+            item.uid.map(|uid| (uid, answered, forwarded))
+        })
+        .collect::<Vec<_>>();
+    db.reconcile_reply_flags(mailbox_id, &replies)?;
+    db.reconcile_flags(mailbox_id, &changed, &[])?;
+    if let Some(VanishedPlan::Apply(uids)) = &plan {
+        db.apply_vanished(mailbox_id, uids)?;
+    }
+    Ok(plan)
 }
 
 /// Refresh flags for every cached UID and drop rows the server no longer has.
@@ -758,6 +789,14 @@ async fn full_flag_scan(lease: &mut Lease, db: &Database, mailbox_id: i64) -> Re
                 item.uid.map(|uid| (uid, seen, flagged))
             })
             .collect::<Vec<_>>();
+        let replies = rows
+            .iter()
+            .filter_map(|item| {
+                let (answered, forwarded) = reply_flags(item);
+                item.uid.map(|uid| (uid, answered, forwarded))
+            })
+            .collect::<Vec<_>>();
+        db.reconcile_reply_flags(mailbox_id, &replies)?;
         db.reconcile_flags(mailbox_id, &seen, chunk)?;
     }
     db.mark_flag_scan(mailbox_id)
@@ -1143,19 +1182,22 @@ pub async fn server_search(
     } else {
         Vec::new()
     };
-    let search_text = query
-        .text
-        .chars()
-        .take(200)
-        .filter(|character| !character.is_control())
-        .collect::<String>()
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"");
-    if search_text.trim().is_empty() {
+    let parsed = crate::search_query::parse(&query.text);
+    let Some(criteria) = parsed.imap_criteria() else {
         return Ok(Vec::new());
-    }
+    };
     let mut lease = pool::checkout(account, password).await?;
-    match search_mailboxes(&mut lease, db, account, query, &search_text, mailboxes).await {
+    match search_mailboxes(
+        &mut lease,
+        db,
+        account,
+        query,
+        &criteria,
+        parsed.has_attachment,
+        mailboxes,
+    )
+    .await
+    {
         Ok(results) => {
             lease.release();
             Ok(results)
@@ -1172,7 +1214,8 @@ async fn search_mailboxes(
     db: &Database,
     account: &AccountRecord,
     query: &SearchQuery,
-    search_text: &str,
+    criteria: &str,
+    require_attachment: bool,
     mailboxes: Vec<(i64, String)>,
 ) -> Result<Vec<MessageSummary>, String> {
     let mut results = Vec::new();
@@ -1196,12 +1239,7 @@ async fn search_mailboxes(
                 continue;
             }
         }
-        let search_cmd = if search_text.is_ascii() {
-            format!("TEXT \"{search_text}\"")
-        } else {
-            format!("CHARSET UTF-8 TEXT \"{search_text}\"")
-        };
-        let mut uids = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.uid_search(&search_cmd))
+        let mut uids = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.uid_search(criteria))
             .await
             .map_err(|_| "Server search timed out.".to_string())?
             .map_err(|error| redact_error(&error, "Server search"))?
@@ -1235,13 +1273,19 @@ async fn search_mailboxes(
             .iter()
             .filter_map(|item| {
                 let (seen, flagged) = system_flags(item);
-                parse_envelope(item, seen, flagged).ok()
+                parse_envelope(item, seen, flagged).ok().map(|mut parsed| {
+                    (parsed.is_answered, parsed.is_forwarded) = reply_flags(item);
+                    parsed
+                })
             })
             .collect::<Vec<_>>();
         db.upsert_envelopes(&account.summary.id, mailbox_id, &parsed)?;
         for message in &parsed {
             if let Some(summary) = db.message_summary_by_uid(mailbox_id, message.uid)? {
-                results.push(summary);
+                // IMAP has no attachment key; the envelope hint filters.
+                if !require_attachment || summary.has_attachments {
+                    results.push(summary);
+                }
             }
         }
         let threaded: Vec<String> = parsed

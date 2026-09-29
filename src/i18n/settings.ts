@@ -133,6 +133,10 @@ export const settings = {
     "Added automatically when sending. Plain text, up to 2000 characters.",
   signaturePlaceholder: "Best regards,\nSam",
   signatureSaved: "Signature saved.",
+  newMessageFormat: "New messages start as",
+  newMessageFormatHelp:
+    "Plain text sends no fonts or formatting. You can switch any message while writing.",
+  newMessageFormatSaved: "New message format saved.",
   rulesTitle: "Mail rules",
   rulesHelp:
     "New mail matching a rule is filed automatically on the next sync.",

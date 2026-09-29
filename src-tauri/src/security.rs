@@ -337,7 +337,7 @@ where
     Ok(PublicImageTarget::Fetch(url, host, addresses))
 }
 
-fn is_public_ip(ip: IpAddr) -> bool {
+pub(crate) fn is_public_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => is_public_v4(ip),
         IpAddr::V6(ip) => is_public_v6(ip),
