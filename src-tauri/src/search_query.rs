@@ -194,7 +194,8 @@ fn imap_quote(value: &str) -> Option<String> {
 
 fn imap_date(date: NaiveDate) -> String {
     format!(
-        "{}-{}-{}",
+        // IMAP date-year is 4DIGIT; `0001` must not become `1`.
+        "{}-{}-{:04}",
         date.day(),
         MONTHS[date.month0() as usize],
         date.year()
@@ -414,6 +415,11 @@ mod tests {
         );
         assert_eq!(parse("is:read").imap_criteria().unwrap(), "SEEN");
         assert_eq!(parse("to:sam").imap_criteria().unwrap(), "TO \"sam\"");
+        // Short years would be a BAD response and fail server search.
+        assert_eq!(
+            parse("before:0001-05-05").imap_criteria().unwrap(),
+            "BEFORE 5-May-0001"
+        );
     }
 
     #[test]

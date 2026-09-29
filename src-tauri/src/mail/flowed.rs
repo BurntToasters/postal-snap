@@ -47,10 +47,12 @@ fn wrap_line(line: &str, lines: &mut Vec<String>) {
         }
         // Prefer the last space that fits; a long word may run past the
         // limit but is never cut.
+        // A piece of exactly "-- " would read as a signature marker.
+        let allowed = |i: usize| breakable(rest, i) && rest[..=i] != ['-', '-', ' '];
         let cut = (0..budget)
             .rev()
-            .find(|&i| breakable(rest, i))
-            .or_else(|| (budget..rest.len()).find(|&i| breakable(rest, i)));
+            .find(|&i| allowed(i))
+            .or_else(|| (budget..rest.len()).find(|&i| allowed(i)));
         let Some(cut) = cut else {
             push_stuffed(rest, lines);
             return;
@@ -91,6 +93,14 @@ mod tests {
             }
         }
         out
+    }
+
+    #[test]
+    fn never_emits_a_bare_signature_marker_from_wrapping() {
+        let text = format!("-- {}", "u".repeat(90));
+        let encoded = encode_flowed(&text);
+        assert!(encoded.split('\n').all(|line| line != "-- "));
+        assert_eq!(decode(&encoded), text);
     }
 
     #[test]
