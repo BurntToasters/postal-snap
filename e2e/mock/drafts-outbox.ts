@@ -166,7 +166,10 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
         return undefined;
       },
       search_cached_messages(args: Record<string, unknown>) {
-        const search = args.query as { allFolders?: boolean } | undefined;
+        const search = args.query as
+          { allFolders?: boolean; text?: string } | undefined;
+        // "bodyonly" text: only the server has the match.
+        if (search?.text?.includes("bodyonly")) return [];
         return [
           {
             ...summary,
@@ -175,7 +178,12 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
         ];
       },
       search_server_messages(args: Record<string, unknown>) {
-        const search = args.query as { allFolders?: boolean } | undefined;
+        const search = args.query as
+          { allFolders?: boolean; text?: string } | undefined;
+        if (search?.text?.includes("bodyonly"))
+          return [
+            { ...summary, id: 77, uid: 77, subject: "Server body match" },
+          ];
         return [
           {
             ...summary,

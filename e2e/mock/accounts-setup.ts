@@ -160,14 +160,16 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
         };
       },
       get_account_inbox_counts() {
-        return accounts.map((item) => {
+        // ?badgeCounts=0,1200 overrides unread per account, in order.
+        const forced = params.get("badgeCounts")?.split(",").map(Number);
+        return accounts.map((item, index) => {
           const inbox = mock.mailboxes.find(
             (mailbox) =>
               mailbox.accountId === item.id && mailbox.role === "inbox",
           );
           return {
             accountId: item.id,
-            unreadCount: inbox?.unreadCount ?? 0,
+            unreadCount: forced?.[index] ?? inbox?.unreadCount ?? 0,
             totalCount: inbox?.totalCount ?? 0,
           };
         });

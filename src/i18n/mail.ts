@@ -45,6 +45,21 @@ export const mail = {
   getMail: "Get Mail",
   search: "Search mail",
   searchMailboxOnly: "Search this list",
+  searchTips: "Search tips",
+  searchTipsTitle: "Search tips",
+  searchTipsIntro:
+    "Type words, or add filters. Put quotes around values with spaces.",
+  searchTipsClose: "Close search tips",
+  searchTipsItems: [
+    { syntax: "from:jane", meaning: "Sender name or address" },
+    { syntax: "to:sam@example.com", meaning: "Recipient name or address" },
+    { syntax: 'subject:"trip plans"', meaning: "Words in the subject" },
+    { syntax: "has:attachment", meaning: "Has an attachment" },
+    { syntax: "is:unread", meaning: "Not read yet (or is:read)" },
+    { syntax: "is:flagged", meaning: "Starred messages" },
+    { syntax: "after:2026-08-01", meaning: "On or after this date" },
+    { syntax: "before:2026-09-01", meaning: "Before this date" },
+  ],
   thisMailbox: "This mailbox",
   thisAccount: "This account",
   settings: "Settings",
@@ -57,6 +72,13 @@ export const mail = {
   emailAccounts: "Email accounts",
   accountSettings: "Account settings",
   getMailAllAccounts: "Get mail for all accounts",
+  moreGetMailOptions: "More ways to get mail",
+  unreadCount: (count: number) => `${count} unread`,
+  unreadInOtherAccounts: (count: number) => `${count} unread in other accounts`,
+  refreshAllPartial: (failed: number) =>
+    failed === 1
+      ? "1 account could not be refreshed. Check its status in the account list."
+      : `${failed} accounts could not be refreshed. Check their status in the account list.`,
   accountReady: "Ready",
   accountSyncing: "Syncing",
   accountOffline: "Offline",

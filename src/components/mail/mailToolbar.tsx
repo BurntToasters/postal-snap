@@ -1,6 +1,8 @@
 import { useLayoutEffect, type FormEvent, type RefObject } from "react";
 import { MailPlus, PanelLeft, RefreshCw, Search, Settings } from "lucide-react";
 import { strings } from "../../i18n";
+import { GetMailMenu } from "./getMailMenu";
+import { SearchTips } from "./searchTips";
 
 type LocalView = "drafts" | "outbox" | "snoozed";
 
@@ -11,6 +13,7 @@ const FIT_STEPS = 5;
 const BADGE_STEPS = 3;
 
 function fitToolbar(toolbar: HTMLElement) {
+  toolbar.removeAttribute("data-fit-tips");
   for (let step = 1; step <= FIT_STEPS; step += 1) {
     toolbar.removeAttribute(`data-fit${step}`);
   }
@@ -30,6 +33,8 @@ function fitToolbar(toolbar: HTMLElement) {
     );
   };
   const searchCramped = () => search !== null && search.clientWidth < rem * 5;
+  // The tips button gives its width back before anything else shrinks.
+  if (searchCramped()) toolbar.setAttribute("data-fit-tips", "");
   for (let step = 1; step <= FIT_STEPS; step += 1) {
     const badgeStep = step <= BADGE_STEPS;
     if (badgeStep && !hasBadge) continue;
@@ -102,6 +107,7 @@ export function SearchBox({
           activeLocalView !== "outbox",
         )}
       />
+      <SearchTips />
       {!activeLocalView ? (
         <button
           className="search-scope"
@@ -126,6 +132,9 @@ interface MailToolbarProps extends SearchBoxProps {
   sidebarOpen: boolean;
   sidebarVisible: boolean;
   busy: boolean;
+  accountCount: number;
+  syncingAll: boolean;
+  onRefreshAll: () => void;
   updateReady: string | null;
   onToggleSidebar: () => void;
   onRefresh: () => void;
@@ -141,6 +150,9 @@ export function MailToolbar({
   sidebarOpen,
   sidebarVisible,
   busy,
+  accountCount,
+  syncingAll,
+  onRefreshAll,
   updateReady,
   onToggleSidebar,
   onRefresh,
@@ -183,9 +195,19 @@ export function MailToolbar({
           aria-label={strings.mail.getMail}
           title={strings.mail.getMail}
         >
-          <RefreshCw aria-hidden="true" className={busy ? "spinning" : ""} />
+          <RefreshCw
+            aria-hidden="true"
+            className={busy || syncingAll ? "spinning" : ""}
+          />
           <span>{strings.mail.getMail}</span>
         </button>
+        {accountCount > 1 ? (
+          <GetMailMenu
+            busy={busy}
+            syncingAll={syncingAll}
+            onRefreshAll={onRefreshAll}
+          />
+        ) : null}
       </div>
       <span className="toolbar-flex-spacer" aria-hidden="true" />
       <div className="toolbar-trailing">
