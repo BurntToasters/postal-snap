@@ -16,7 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from "@tiptap/extension-table";
-import { Maximize2, TriangleAlert, X } from "lucide-react";
+import { Maximize2, Paperclip, TriangleAlert, X } from "lucide-react";
 import { api } from "../api";
 import {
   CONTEXT_ACTION_EVENT,
@@ -25,12 +25,14 @@ import {
 import { strings } from "../i18n";
 import { htmlToPlainText, sanitizeComposeHtml } from "../security";
 import { useAppStore } from "../store";
-import type { ComposeAttachment, ComposeDraft } from "../types";
+import type { BodyFormat, ComposeAttachment, ComposeDraft } from "../types";
 import { useDialogFocus } from "./useDialogFocus";
 import { AddressFields } from "./composer/addressFields";
+import { ConfirmDialog } from "./composer/confirmDialog";
 import { ComposerHeader } from "./composer/composerHeader";
 import { FormatToolbar } from "./composer/formatToolbar";
 import { SendBar } from "./composer/sendBar";
+import { htmlToQuotedPlainText, plainTextToHtml } from "./composer/plainText";
 import { useComposerPlacement } from "./composer/useComposerPlacement";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { MEDIA_QUERIES } from "../breakpoints";
@@ -44,6 +46,7 @@ import {
 } from "./composer/composerSeed";
 import {
   hasDraftContent,
+  mentionsAttachment,
   splitAddresses,
   validateRecipientFields,
   validateSubject,
@@ -247,6 +250,26 @@ export function Composer({ accountId }: Props) {
     seed?.draft?.attachments ?? seed?.prefill?.attachments ?? [],
   );
   const [draftId, setDraftId] = useState<string | undefined>(seed?.draft?.id);
+  // A saved draft keeps its own format; new messages use the account default.
+  const [bodyFormat, setBodyFormat] = useState<BodyFormat>(
+    seed?.draft
+      ? (seed.draft.bodyFormat ?? "html")
+      : (account?.defaultBodyFormat ?? "html"),
+  );
+  const [plainBody, setPlainBody] = useState(() =>
+    bodyFormat === "plain"
+      ? seed?.draft
+        ? seed.draft.textBody
+        : htmlToQuotedPlainText(seedBody(seed))
+      : "",
+  );
+  const [confirmPlain, setConfirmPlain] = useState(false);
+  const [attachmentWarning, setAttachmentWarning] = useState<{
+    sendAt?: string;
+  } | null>(null);
+  const [dropActive, setDropActive] = useState(false);
+  const [dropNote, setDropNote] = useState("");
+  const plainRef = useRef<HTMLTextAreaElement>(null);
   const [inlineImages, setInlineImages] = useState(
     new Map<string, { dataUrl: string; contentId: string }>(),
   );
@@ -354,6 +377,23 @@ export function Composer({ accountId }: Props) {
     onUpdate: markUnsaved,
   });
 
+  const editorRef = useRef(editor);
+  const bodyFormatRef = useRef(bodyFormat);
+  const plainBodyRef = useRef(plainBody);
+  useEffect(() => {
+    editorRef.current = editor;
+    bodyFormatRef.current = bodyFormat;
+    plainBodyRef.current = plainBody;
+  }, [bodyFormat, editor, plainBody]);
+  /** Text of whichever editor is showing, for empty-draft checks. */
+  const currentBodyText = useCallback(
+    () =>
+      bodyFormatRef.current === "plain"
+        ? plainBodyRef.current
+        : (editorRef.current?.getText() ?? ""),
+    [],
+  );
+
   const canSend = useMemo(
     () =>
       Boolean(
@@ -420,9 +460,12 @@ export function Composer({ accountId }: Props) {
   }, [accountId, attachments, editor, setError]);
 
   const buildDraft = useCallback((): ComposeDraft => {
-    let htmlBody = editor?.getHTML() ?? "";
-    for (const { dataUrl, contentId } of inlineImages.values())
-      htmlBody = htmlBody.split(dataUrl).join(`cid:${contentId}`);
+    const plain = bodyFormat === "plain";
+    // A plain draft carries text only; the editor keeps the last rich copy.
+    let htmlBody = plain ? "" : (editor?.getHTML() ?? "");
+    if (!plain)
+      for (const { dataUrl, contentId } of inlineImages.values())
+        htmlBody = htmlBody.split(dataUrl).join(`cid:${contentId}`);
     return {
       id: draftId,
       accountId,
@@ -432,7 +475,8 @@ export function Composer({ accountId }: Props) {
       bcc: splitAddresses(bcc),
       subject: subject.trim(),
       htmlBody,
-      textBody: htmlToPlainText(htmlBody),
+      textBody: plain ? plainBody : htmlToPlainText(htmlBody),
+      bodyFormat,
       attachments,
       inReplyTo:
         seed?.draft?.inReplyTo ??
@@ -445,11 +489,13 @@ export function Composer({ accountId }: Props) {
     accountId,
     attachments,
     bcc,
+    bodyFormat,
     cc,
     draftId,
     editor,
     fromAddress,
     inlineImages,
+    plainBody,
     seed,
     subject,
     to,
@@ -472,7 +518,7 @@ export function Composer({ accountId }: Props) {
         !isDiscarding.current &&
         saveStateRef.current === "unsaved" &&
         !saveInFlight.current &&
-        hasDraftContent(draft, editor.getText())
+        hasDraftContent(draft, currentBodyText())
       ) {
         const revision = draftRevision.current;
         saveInFlight.current = true;
@@ -530,13 +576,13 @@ export function Composer({ accountId }: Props) {
       window.removeEventListener("beforeunload", flushDraft);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [accountId, editor, sending, setError]);
+  }, [accountId, currentBodyText, editor, sending, setError]);
 
   const saveDraft = useCallback(
     async (showStatus = true) => {
       if (sending || isDiscarding.current || saveInFlight.current) return;
       const draft = buildDraft();
-      if (!hasDraftContent(draft, editor?.getText() ?? "")) {
+      if (!hasDraftContent(draft, currentBodyText())) {
         if (showStatus) close();
         return;
       }
@@ -578,17 +624,12 @@ export function Composer({ accountId }: Props) {
         }
       }
     },
-    [accountId, buildDraft, close, editor, sending, setError],
+    [accountId, buildDraft, close, currentBodyText, sending, setError],
   );
 
   useEffect(() => {
     saveDraftRef.current = saveDraft;
   }, [saveDraft]);
-
-  const editorRef = useRef(editor);
-  useEffect(() => {
-    editorRef.current = editor;
-  }, [editor]);
 
   // Replaced by another composer (mailto:, Reply, an opened draft): save the
   // user's edits as a draft instead of dropping them. Tiptap destroys the
@@ -604,7 +645,7 @@ export function Composer({ accountId }: Props) {
       )
         return;
       const draft = buildDraftRef.current();
-      if (!hasDraftContent(draft, editorRef.current?.getText() ?? "")) return;
+      if (!hasDraftContent(draft, currentBodyText())) return;
       void (savePromiseRef.current ?? Promise.resolve())
         .catch(() => undefined)
         .then(() =>
@@ -613,7 +654,7 @@ export function Composer({ accountId }: Props) {
         .then(() => announceLocalMailChanged(draft.accountId))
         .catch(() => undefined);
     },
-    [],
+    [currentBodyText],
   );
 
   useEffect(() => {
@@ -667,7 +708,7 @@ export function Composer({ accountId }: Props) {
       return;
     }
     const draft = buildDraft();
-    if (!hasDraftContent(draft, editor?.getText() ?? "")) {
+    if (!hasDraftContent(draft, currentBodyText())) {
       close();
       return;
     }
@@ -687,7 +728,7 @@ export function Composer({ accountId }: Props) {
 
   async function discardDraft() {
     if (sending || isDiscarding.current) return;
-    if (hasDraftContent(buildDraft(), editor?.getText() ?? "")) {
+    if (hasDraftContent(buildDraft(), currentBodyText())) {
       const confirmed = await api.showNativeConfirm(
         strings.composer.discard,
         strings.composer.discardQuestion,
@@ -723,7 +764,7 @@ export function Composer({ accountId }: Props) {
   const isAttachmentSizeWarning = totalAttachmentBytes > 25 * 1024 * 1024;
 
   const sendMessage = useCallback(
-    async (sendAt?: string) => {
+    async (sendAt?: string, attachmentChecked = false) => {
       const validation = validateRecipientFields(to, cc, bcc);
       const subjectValidation = validateSubject(subject);
       setRecipientError(validation);
@@ -743,6 +784,18 @@ export function Composer({ accountId }: Props) {
           setError(strings.composer.invalidSchedule);
           return;
         }
+      }
+      if (
+        !attachmentChecked &&
+        attachments.length === 0 &&
+        mentionsAttachment(
+          bodyFormat === "plain" ? plainBody : (editor?.getHTML() ?? ""),
+          bodyFormat,
+          account?.signature,
+        )
+      ) {
+        setAttachmentWarning({ sendAt });
+        return;
       }
       pendingClose.current = false;
       isSending.current = true;
@@ -788,7 +841,22 @@ export function Composer({ accountId }: Props) {
         setSending(false);
       }
     },
-    [accountId, bcc, buildDraft, canSend, cc, close, setError, subject, to],
+    [
+      account?.signature,
+      accountId,
+      attachments.length,
+      bcc,
+      bodyFormat,
+      buildDraft,
+      canSend,
+      cc,
+      close,
+      editor,
+      plainBody,
+      setError,
+      subject,
+      to,
+    ],
   );
 
   useEffect(() => {
@@ -796,6 +864,7 @@ export function Composer({ accountId }: Props) {
       if (event.isComposing || event.keyCode === 229) return;
       if (minimized) return;
       if (document.querySelector(".settings-window")) return;
+      if (attachmentWarning || confirmPlain) return;
       if (!(event.metaKey || event.ctrlKey)) return;
       if (event.key === "Enter") {
         event.preventDefault();
@@ -807,7 +876,7 @@ export function Composer({ accountId }: Props) {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [minimized, saveDraft, sendMessage]);
+  }, [attachmentWarning, confirmPlain, minimized, saveDraft, sendMessage]);
 
   useEffect(() => {
     if (!sendMenuOpen) return;
@@ -830,6 +899,94 @@ export function Composer({ accountId }: Props) {
       document.removeEventListener("keydown", onKey);
     };
   }, [sendMenuOpen]);
+
+  function switchToPlain() {
+    setPlainBody(htmlToQuotedPlainText(editor?.getHTML() ?? ""));
+    // No HTML remains to show a picture, so pictures travel as files.
+    setInlineImages(new Map());
+    setAttachments((items) =>
+      items.map((item) =>
+        item.inline ? { ...item, inline: false, contentId: undefined } : item,
+      ),
+    );
+    setBodyFormat("plain");
+    setConfirmPlain(false);
+    markUnsaved();
+  }
+
+  function switchToRich() {
+    editor?.commands.setContent(plainTextToHtml(plainBody), {
+      emitUpdate: false,
+    });
+    setBodyFormat("html");
+    markUnsaved();
+  }
+
+  function toggleBodyFormat() {
+    if (bodyFormat === "plain") {
+      switchToRich();
+      return;
+    }
+    const hasContent = Boolean(editor?.getText().trim()) || inlineImages.size;
+    if (hasContent) setConfirmPlain(true);
+    else switchToPlain();
+  }
+
+  const shownFormat = useRef(bodyFormat);
+  useEffect(() => {
+    if (shownFormat.current === bodyFormat) return;
+    shownFormat.current = bodyFormat;
+    if (bodyFormat === "plain") plainRef.current?.focus();
+    else editorRef.current?.commands.focus();
+  }, [bodyFormat]);
+
+  // Native drop: Rust holds the paths and reports only a position. Attach
+  // only when the drop lands on this open composer.
+  useEffect(() => {
+    if (minimized) return;
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    const overComposer = (x: number, y: number) => {
+      const box = dialogRef.current?.getBoundingClientRect();
+      return Boolean(
+        box &&
+        !isSending.current &&
+        !dialogRef.current?.querySelector('[role="alertdialog"]') &&
+        x >= box.left &&
+        x <= box.right &&
+        y >= box.top &&
+        y <= box.bottom,
+      );
+    };
+    void api
+      .onComposeDrag((event) => {
+        if (event.phase === "leave") {
+          setDropActive(false);
+          return;
+        }
+        const over = overComposer(event.x, event.y);
+        setDropActive(event.phase === "over" && over);
+        if (event.phase !== "drop" || !over) return;
+        void api
+          .attachDroppedFiles(accountId)
+          .then((dropped) => {
+            if (dropped.length === 0) return;
+            setAttachments((items) => [...items, ...dropped]);
+            setDropNote(strings.composer.dropAttached(dropped.length));
+            markUnsaved();
+          })
+          .catch((cause) => setError(String(cause)));
+      })
+      .then((stop) => {
+        if (active) unlisten = stop;
+        else stop();
+      });
+    return () => {
+      active = false;
+      unlisten?.();
+      setDropActive(false);
+    };
+  }, [accountId, dialogRef, markUnsaved, minimized, setError]);
 
   async function addAttachments() {
     try {
@@ -929,6 +1086,13 @@ export function Composer({ accountId }: Props) {
     const onAction = (event: Event) => {
       const detail = (event as CustomEvent<ContextMenuActionDetail>).detail;
       if (!detail) return;
+      if (detail.target.kind === "composer" && bodyFormat === "plain") {
+        plainRef.current?.focus();
+        if (detail.id === "undo") document.execCommand("undo");
+        if (detail.id === "redo") document.execCommand("redo");
+        if (detail.id === "select-all") plainRef.current?.select();
+        return;
+      }
       if (detail.target.kind === "composer") {
         if (detail.id === "undo") editor?.chain().focus().undo().run();
         if (detail.id === "redo") editor?.chain().focus().redo().run();
@@ -1025,6 +1189,8 @@ export function Composer({ accountId }: Props) {
           sending={sending}
           draftSyncState={draftSyncState}
           draftSyncDetail={draftSyncDetail}
+          bodyFormat={bodyFormat}
+          onToggleBodyFormat={toggleBodyFormat}
           setMinimized={setMinimized}
           setMaximized={setMaximized}
           requestClose={requestClose}
@@ -1053,18 +1219,35 @@ export function Composer({ accountId }: Props) {
           setSubjectError={setSubjectError}
           markUnsaved={markUnsaved}
         />
-        <FormatToolbar
-          editor={editor}
-          formattingOpen={formattingOpen}
-          setFormattingOpen={setFormattingOpen}
-          moreFormattingOpen={moreFormattingOpen}
-          setMoreFormattingOpen={setMoreFormattingOpen}
-          adjustIndent={adjustIndent}
-          addLink={addLink}
-        />
-        <div data-context="composer">
-          <EditorContent editor={editor} />
-        </div>
+        {bodyFormat === "html" ? (
+          <FormatToolbar
+            editor={editor}
+            formattingOpen={formattingOpen}
+            setFormattingOpen={setFormattingOpen}
+            moreFormattingOpen={moreFormattingOpen}
+            setMoreFormattingOpen={setMoreFormattingOpen}
+            adjustIndent={adjustIndent}
+            addLink={addLink}
+          />
+        ) : null}
+        {bodyFormat === "html" ? (
+          <div data-context="composer">
+            <EditorContent editor={editor} />
+          </div>
+        ) : (
+          <div data-context="composer">
+            <textarea
+              ref={plainRef}
+              className="composer-plain-editor"
+              aria-label={strings.composer.plainBodyLabel}
+              value={plainBody}
+              onChange={(event) => {
+                setPlainBody(event.target.value);
+                markUnsaved();
+              }}
+            />
+          </div>
+        )}
         {account?.signature && !seed?.draft ? (
           <aside className="composer-signature-preview">
             <strong>{strings.composer.signaturePreview}</strong>
@@ -1128,6 +1311,46 @@ export function Composer({ accountId }: Props) {
             />
           ) : null}
         </SendBar>
+        <div
+          className="composer-drop-overlay"
+          data-active={dropActive}
+          aria-hidden="true"
+        >
+          <Paperclip aria-hidden="true" />
+          <strong>{strings.composer.dropOverlay}</strong>
+        </div>
+        <div className="visually-hidden" aria-live="polite">
+          {dropActive ? strings.composer.dropOverlay : dropNote}
+        </div>
+        {attachmentWarning ? (
+          <ConfirmDialog
+            title={strings.composer.noAttachmentTitle}
+            detail={strings.composer.noAttachmentDetail}
+            primaryLabel={strings.composer.addAttachment}
+            secondaryLabel={strings.composer.sendAnyway}
+            onPrimary={() => {
+              setAttachmentWarning(null);
+              void addAttachments();
+            }}
+            onSecondary={() => {
+              const { sendAt } = attachmentWarning;
+              setAttachmentWarning(null);
+              void sendMessage(sendAt, true);
+            }}
+            onCancel={() => setAttachmentWarning(null)}
+          />
+        ) : null}
+        {confirmPlain ? (
+          <ConfirmDialog
+            title={strings.composer.plainSwitchTitle}
+            detail={strings.composer.plainSwitchDetail}
+            primaryLabel={strings.composer.keepRichText}
+            secondaryLabel={strings.composer.plainSwitchConfirm}
+            onPrimary={() => setConfirmPlain(false)}
+            onSecondary={switchToPlain}
+            onCancel={() => setConfirmPlain(false)}
+          />
+        ) : null}
         {linkDialogOpen ? (
           <div
             className="settings-confirm-overlay"

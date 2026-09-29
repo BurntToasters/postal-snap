@@ -276,6 +276,14 @@ export interface MessageChangeEvent extends AccountChangeEvent {
   kind: "flags" | "moved" | "synced";
 }
 
+/** Window drag-drop from Rust. Positions are CSS pixels; no paths. */
+export interface ComposeDragEvent {
+  phase: "over" | "drop" | "leave";
+  x: number;
+  y: number;
+  count: number;
+}
+
 export interface DraftSyncEvent extends AccountChangeEvent {
   draftId?: string | null;
   syncState?: DraftSummary["syncState"] | "deletePending" | null;

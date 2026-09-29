@@ -2260,6 +2260,52 @@ mod tests {
         assert!(db.update_account_signature("missing", "Hi").is_err());
     }
 
+    // Failure modes for the default body format setter:
+    // 1. An unknown account silently succeeds.
+    // 2. The value is not stored, or is stored for the wrong account.
+    // 3. An unknown format string passes IPC and reaches the database.
+    // 4. Setting Plain changes the signature or other account fields.
+    #[test]
+    fn account_default_body_format_round_trips_per_account() {
+        use crate::models::BodyFormat;
+        let db = Database::memory();
+        let first = account();
+        db.insert_account(&first).unwrap();
+        let mut second = account();
+        second.summary.id = "account-2".into();
+        second.summary.email = "other@example.com".into();
+        db.insert_account(&second).unwrap();
+        assert!(db
+            .set_account_default_body_format("missing", BodyFormat::Plain)
+            .is_err());
+        let summary = db
+            .set_account_default_body_format(&first.summary.id, BodyFormat::Plain)
+            .unwrap();
+        assert_eq!(summary.default_body_format, BodyFormat::Plain);
+        assert_eq!(summary.signature, first.summary.signature);
+        let listed = db.list_accounts().unwrap();
+        let format_of = |id: &str| {
+            listed
+                .iter()
+                .find(|item| item.id == id)
+                .unwrap()
+                .default_body_format
+        };
+        assert_eq!(format_of(&first.summary.id), BodyFormat::Plain);
+        assert_eq!(format_of(&second.summary.id), BodyFormat::Html);
+        db.set_account_default_body_format(&first.summary.id, BodyFormat::Html)
+            .unwrap();
+        assert_eq!(
+            db.account(&first.summary.id)
+                .unwrap()
+                .summary
+                .default_body_format,
+            BodyFormat::Html
+        );
+        assert!(serde_json::from_str::<BodyFormat>("\"rich\"").is_err());
+        assert!(serde_json::from_str::<BodyFormat>("\"plain\"").is_ok());
+    }
+
     #[test]
     fn interrupted_sends_need_attention_after_restart() {
         let directory = tempfile::tempdir().unwrap();

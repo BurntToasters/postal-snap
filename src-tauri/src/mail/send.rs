@@ -11,6 +11,7 @@ use lettre::{
 use tokio::net::TcpStream;
 use zeroize::Zeroizing;
 
+use super::flowed::encode_flowed;
 use super::parse::parse_mailbox;
 use super::remote_drafts::search_message_id;
 use super::{
@@ -18,7 +19,9 @@ use super::{
     MAX_MESSAGE_BYTES, MAX_OUTGOING_BYTES,
 };
 use crate::{
-    models::{validate_compose_sender, AccountRecord, ComposeDraft, ServerConfig, TlsMode},
+    models::{
+        validate_compose_sender, AccountRecord, BodyFormat, ComposeDraft, ServerConfig, TlsMode,
+    },
     security::{redact_error, safe_filename},
 };
 
@@ -252,6 +255,16 @@ pub(crate) async fn test_smtp(
     Ok(())
 }
 
+/// Plain body: one text/plain part, format=flowed, no HTML alternative.
+fn flowed_plain_part(draft: &ComposeDraft) -> SinglePart {
+    SinglePart::builder()
+        .header(
+            ContentType::parse("text/plain; charset=utf-8; format=flowed")
+                .expect("static MIME type is valid"),
+        )
+        .body(encode_flowed(&draft.text_body))
+}
+
 fn alternative_multipart(draft: &ComposeDraft) -> MultiPart {
     MultiPart::alternative()
         .singlepart(SinglePart::plain(draft.text_body.clone()))
@@ -314,8 +327,14 @@ async fn build_message_with_id(
     message_id: &str,
     keep_bcc: bool,
 ) -> Result<Message, String> {
+    let plain = draft.body_format == BodyFormat::Plain;
     let mut outgoing = draft.clone();
-    outgoing.html_body = crate::html_sanitize::sanitize_compose_html_for_send(&draft.html_body);
+    // A plain message never carries HTML.
+    outgoing.html_body = if plain {
+        String::new()
+    } else {
+        crate::html_sanitize::sanitize_compose_html_for_send(&draft.html_body)
+    };
     let draft = &outgoing;
     if !keep_bcc && draft.to.is_empty() && draft.cc.is_empty() && draft.bcc.is_empty() {
         return Err("Add at least one recipient.".into());
@@ -405,7 +424,8 @@ async fn build_message_with_id(
             ContentType::parse("application/octet-stream").expect("static MIME type is valid")
         });
         let filename = safe_filename(&item.filename);
-        if item.inline {
+        // Plain text has no HTML to reference an inline image: send a file.
+        if item.inline && !plain {
             inline_parts.push(
                 LettreAttachment::new_inline(
                     item.content_id
@@ -417,6 +437,19 @@ async fn build_message_with_id(
         } else {
             file_parts.push(LettreAttachment::new(filename).body(bytes, content_type));
         }
+    }
+    if plain {
+        let text = flowed_plain_part(draft);
+        return if file_parts.is_empty() {
+            builder.singlepart(text)
+        } else {
+            let mut mixed = MultiPart::mixed().singlepart(text);
+            for part in file_parts {
+                mixed = mixed.singlepart(part);
+            }
+            builder.multipart(mixed)
+        }
+        .map_err(|error| redact_error(&error, "Message construction"));
     }
     let related = if inline_parts.is_empty() {
         None
@@ -503,11 +536,15 @@ fn escape_signature_html(value: &str) -> String {
 /// Retries reuse the queued draft, so the contains-check keeps it singular.
 pub fn apply_signature(mut draft: ComposeDraft, signature: &str) -> ComposeDraft {
     let signature = signature.trim();
+    let plain = draft.body_format == BodyFormat::Plain;
     let already_applied = draft.text_body.ends_with(&format!("\n\n-- \n{signature}"));
     if signature.is_empty() || already_applied {
         return draft;
     }
     draft.text_body = format!("{}\n\n-- \n{signature}", draft.text_body.trim_end());
+    if plain {
+        return draft;
+    }
     let html_lines = escape_signature_html(signature).replace('\n', "<br>");
     if draft.html_body.trim().is_empty() {
         draft.html_body = format!("<p>-- </p><p>{html_lines}</p>");
@@ -515,4 +552,182 @@ pub fn apply_signature(mut draft: ComposeDraft, signature: &str) -> ComposeDraft
         draft.html_body = format!("{}<br><br>-- <br>{html_lines}", draft.html_body);
     }
     draft
+}
+
+#[cfg(test)]
+mod plain_tests {
+    use super::*;
+    use crate::models::{
+        AccountSummary, BodyFormat, ComposeAttachment, ProviderKind, ServerConfig, TlsMode,
+    };
+
+    // Failure modes for plain-text sends:
+    // 1. A plain draft still ships text/html or multipart/alternative.
+    // 2. The plain part lacks charset=utf-8 or format=flowed.
+    // 3. Draft html_body text leaks into the plain message.
+    // 4. Attachments do not give multipart/mixed, or one goes missing.
+    // 5. An inline image becomes multipart/related with no HTML to show it.
+    // 6. The transfer encoding eats trailing soft-break spaces or "-- ".
+    // 7. The signature touches html_body, or loses its "-- " marker.
+    // 8. The signature is added twice on a retry.
+    // 9. HTML drafts change shape (still alternative with both parts).
+    // 10. The size limit is skipped for plain bodies.
+    // 11. Remote-draft copies (keep_bcc) build HTML while sends build plain.
+
+    fn account() -> AccountRecord {
+        AccountRecord {
+            summary: AccountSummary {
+                default_body_format: BodyFormat::Plain,
+                id: "account-1".into(),
+                provider: ProviderKind::Manual,
+                email: "sam@example.com".into(),
+                display_name: "Sam".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+                color: None,
+            },
+            imap: ServerConfig {
+                host: "imap.example.com".into(),
+                port: 993,
+                tls_mode: TlsMode::Tls,
+                username: "sam".into(),
+            },
+            smtp: ServerConfig {
+                host: "smtp.example.com".into(),
+                port: 587,
+                tls_mode: TlsMode::StartTls,
+                username: "sam".into(),
+            },
+        }
+    }
+
+    fn draft(format: BodyFormat, text: &str) -> ComposeDraft {
+        ComposeDraft {
+            body_format: format,
+            source_message_id: None,
+            source_kind: None,
+            id: None,
+            account_id: "account-1".into(),
+            from: None,
+            to: vec!["jane@example.com".into()],
+            cc: vec![],
+            bcc: vec![],
+            subject: "Plain".into(),
+            html_body: "<p>HTMLSECRET</p>".into(),
+            text_body: text.into(),
+            attachments: vec![],
+            in_reply_to: None,
+            references: None,
+            send_at: None,
+        }
+    }
+
+    async fn rendered(draft: &ComposeDraft) -> String {
+        let bytes = build_message(&account(), draft).await.unwrap().formatted();
+        String::from_utf8(bytes).unwrap()
+    }
+
+    fn attachment(dir: &tempfile::TempDir, name: &str, inline: bool) -> ComposeAttachment {
+        let path = dir.path().join(name);
+        std::fs::write(&path, b"file body").unwrap();
+        ComposeAttachment {
+            token: path.to_string_lossy().into(),
+            filename: name.into(),
+            content_type: Some("image/png".into()),
+            inline,
+            content_id: inline.then(|| "cid-1@inline".to_string()),
+            size: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn plain_draft_is_one_flowed_text_part() {
+        let out = rendered(&draft(BodyFormat::Plain, "Hello Jane")).await;
+        assert!(out.contains("format=flowed"));
+        assert!(out.to_ascii_lowercase().contains("charset=utf-8"));
+        assert!(!out.contains("text/html"));
+        assert!(!out.contains("multipart"));
+        assert!(!out.contains("HTMLSECRET"));
+        assert!(out.contains("Hello Jane"));
+    }
+
+    #[tokio::test]
+    async fn plain_body_survives_transfer_encoding() {
+        let long = "word ".repeat(40).trim_end().to_string();
+        let text = format!("{long}\n\n-- \nSam\n> quoted");
+        let out = rendered(&draft(BodyFormat::Plain, &text)).await;
+        let parsed = mail_parser::MessageParser::default()
+            .parse(out.as_bytes())
+            .unwrap();
+        let body = parsed.body_text(0).unwrap().replace("\r\n", "\n");
+        let body = body.trim_end_matches('\n');
+        assert_eq!(body, super::super::flowed::encode_flowed(&text));
+        assert!(body.contains("\n-- \nSam\n"));
+        assert!(body.lines().next().unwrap().ends_with(' '));
+    }
+
+    #[tokio::test]
+    async fn plain_with_attachment_is_mixed_with_no_alternative() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut plain = draft(BodyFormat::Plain, "See file");
+        plain.attachments = vec![attachment(&dir, "a.png", false)];
+        let out = rendered(&plain).await;
+        assert!(out.contains("multipart/mixed"));
+        assert!(!out.contains("multipart/alternative"));
+        assert!(!out.contains("text/html"));
+        assert!(out.contains("format=flowed"));
+        assert!(out.contains("a.png"));
+    }
+
+    #[tokio::test]
+    async fn plain_inline_image_travels_as_a_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut plain = draft(BodyFormat::Plain, "Look");
+        plain.attachments = vec![attachment(&dir, "pic.png", true)];
+        let out = rendered(&plain).await;
+        assert!(!out.contains("multipart/related"));
+        assert!(!out.to_ascii_lowercase().contains("content-id"));
+        assert!(out.contains("multipart/mixed"));
+        assert!(out.contains("pic.png"));
+    }
+
+    #[tokio::test]
+    async fn html_draft_keeps_both_alternatives() {
+        let out = rendered(&draft(BodyFormat::Html, "Hello")).await;
+        assert!(out.contains("multipart/alternative"));
+        assert!(out.contains("text/html"));
+        assert!(!out.contains("format=flowed"));
+    }
+
+    #[tokio::test]
+    async fn plain_bodies_obey_the_size_limit() {
+        let huge = "x".repeat(MAX_MESSAGE_BYTES + 1);
+        let error = build_message(&account(), &draft(BodyFormat::Plain, &huge))
+            .await
+            .unwrap_err();
+        assert!(error.contains("too large"));
+    }
+
+    #[test]
+    fn plain_signature_is_text_only_and_applied_once() {
+        let plain = draft(BodyFormat::Plain, "Hello");
+        let signed = apply_signature(plain.clone(), "Sam\nsam@example.com");
+        assert_eq!(signed.text_body, "Hello\n\n-- \nSam\nsam@example.com");
+        assert_eq!(signed.html_body, plain.html_body);
+        let twice = apply_signature(signed.clone(), "Sam\nsam@example.com");
+        assert_eq!(twice.text_body, signed.text_body);
+    }
+
+    #[tokio::test]
+    async fn remote_draft_copy_of_a_plain_draft_is_plain() {
+        let bytes = prepare_draft_message(&account(), &draft(BodyFormat::Plain, "Hi"), "<d@x>")
+            .await
+            .unwrap();
+        let out = String::from_utf8(bytes).unwrap();
+        assert!(out.contains("format=flowed"));
+        assert!(!out.contains("text/html"));
+    }
 }

@@ -106,6 +106,12 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
         (account as { signature?: string }).signature = String(args.signature);
         return { ...account };
       },
+      update_account_default_body_format(args: Record<string, unknown>) {
+        (account as { defaultBodyFormat?: string }).defaultBodyFormat = String(
+          args.format,
+        );
+        return { ...account };
+      },
       list_filter_rules() {
         state.rules = state.rules ?? [];
         return state.rules;

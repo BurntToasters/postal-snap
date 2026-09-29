@@ -336,6 +336,20 @@ pub fn update_account_signature(
     command_result(state.db.update_account_signature(&account_id, &signature))
 }
 
+/// Unknown formats fail IPC deserialization before reaching the database.
+#[tauri::command]
+pub fn update_account_default_body_format(
+    account_id: String,
+    format: crate::models::BodyFormat,
+    state: State<'_, AppState>,
+) -> CommandResult<AccountSummary> {
+    command_result(
+        state
+            .db
+            .set_account_default_body_format(&account_id, format),
+    )
+}
+
 #[tauri::command]
 pub fn get_account_inbox_counts(
     state: State<'_, AppState>,

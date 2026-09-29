@@ -227,6 +227,26 @@ impl Database {
         Ok(record.summary)
     }
 
+    pub fn set_account_default_body_format(
+        &self,
+        id: &str,
+        format: BodyFormat,
+    ) -> Result<AccountSummary, String> {
+        {
+            let conn = self.conn()?;
+            let updated = conn
+                .execute(
+                    "UPDATE accounts SET default_body_format = ?1 WHERE id = ?2",
+                    params![format.as_str(), id],
+                )
+                .map_err(db_error)?;
+            if updated != 1 {
+                return Err("Account not found.".into());
+            }
+        }
+        Ok(self.account(id)?.summary)
+    }
+
     pub fn remove_account(&self, id: &str) -> Result<(), String> {
         let mut conn = self.conn()?;
         let tx = conn.transaction().map_err(db_error)?;

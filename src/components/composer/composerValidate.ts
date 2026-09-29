@@ -1,5 +1,47 @@
 import { strings } from "../../i18n";
-import type { ComposeDraft } from "../../types";
+import { htmlToPlainText } from "../../security";
+import type { BodyFormat, ComposeDraft } from "../../types";
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const attachmentWords = new RegExp(
+  `\\b(?:${strings.composer.attachmentKeywords.map(escapeRegExp).join("|")})s?\\b`,
+  "i",
+);
+
+/** Text the sender wrote: no quoted reply or forward, no signature. */
+export function authoredText(
+  body: string,
+  format: BodyFormat,
+  signature = "",
+): string {
+  let text: string;
+  if (format === "plain") {
+    text = body
+      .split(/\r?\n/)
+      .filter((line) => !/^\s*>/.test(line))
+      .join("\n");
+  } else {
+    const doc = new DOMParser().parseFromString(body, "text/html");
+    for (const quote of doc.querySelectorAll("blockquote")) quote.remove();
+    text = htmlToPlainText(doc.body.innerHTML);
+  }
+  const marker = text.search(/^-- ?$/m);
+  if (marker >= 0) text = text.slice(0, marker);
+  const own = signature.trim();
+  return own ? text.split(own).join("") : text;
+}
+
+/** True when the message talks about an attachment the sender wrote. */
+export function mentionsAttachment(
+  body: string,
+  format: BodyFormat,
+  signature = "",
+): boolean {
+  return attachmentWords.test(authoredText(body, format, signature));
+}
 
 export function splitAddresses(value: string): string[] {
   const result: string[] = [];

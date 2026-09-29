@@ -35,6 +35,8 @@ vi.mock("../api", () => ({
     inspectExternalUrl: vi.fn(),
     openExternalUrl: vi.fn(),
     onDraftSyncChanged: vi.fn().mockResolvedValue(() => undefined),
+    onComposeDrag: vi.fn().mockResolvedValue(() => undefined),
+    attachDroppedFiles: vi.fn().mockResolvedValue([]),
     listDrafts: vi.fn().mockResolvedValue([]),
   },
 }));

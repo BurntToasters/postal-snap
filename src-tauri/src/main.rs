@@ -272,6 +272,9 @@ fn main() {
                     }
                 }
             }
+            if let WindowEvent::DragDrop(drag) = event {
+                commands::drag_drop::on_drag_drop(window, drag);
+            }
             if matches!(event, WindowEvent::Destroyed) {
                 window_snap::on_window_destroyed(window);
             }
@@ -326,6 +329,7 @@ fn main() {
             commands::attachments::preview_attachment,
             commands::attachments::prepare_forward_attachments,
             commands::attachments::choose_attachments,
+            commands::drag_drop::attach_dropped_files,
             commands::security_net::fetch_remote_image,
             commands::security_net::inspect_external_url,
             commands::security_net::open_external_url,
@@ -348,6 +352,7 @@ fn main() {
             commands::accounts::update_account_aliases,
             commands::accounts::update_account_display_name,
             commands::accounts::update_account_signature,
+            commands::accounts::update_account_default_body_format,
             commands::accounts::get_account_inbox_counts,
             commands::accounts::update_account_color,
             commands::accounts::reorder_accounts,

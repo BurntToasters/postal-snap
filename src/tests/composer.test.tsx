@@ -20,6 +20,8 @@ vi.mock("../api", () => ({
     suggestRecipients: vi.fn().mockResolvedValue([]),
     showNativeConfirm: vi.fn().mockResolvedValue(true),
     onDraftSyncChanged: vi.fn().mockResolvedValue(() => undefined),
+    onComposeDrag: vi.fn().mockResolvedValue(() => undefined),
+    attachDroppedFiles: vi.fn().mockResolvedValue([]),
     listDrafts: vi.fn().mockResolvedValue([]),
   },
 }));
