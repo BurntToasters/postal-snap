@@ -1,5 +1,13 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
-import { Check, ChevronDown, ChevronUp, Copy, ShieldCheck } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  ChevronUp,
+  Copy,
+  Forward,
+  Reply,
+  ShieldCheck,
+} from "lucide-react";
 import { formatBytes, formatFullMessageDate } from "../../format";
 import { strings } from "../../i18n";
 import type {
@@ -64,6 +72,8 @@ export function MessageHeader({
   onToggleDetails,
   titleRef,
   treatAsOverlay,
+  answered = false,
+  forwarded = false,
 }: {
   message: MessageDetail;
   account?: AccountSummary;
@@ -72,6 +82,8 @@ export function MessageHeader({
   onToggleDetails: () => void;
   titleRef: RefObject<HTMLHeadingElement | null>;
   treatAsOverlay: boolean;
+  answered?: boolean;
+  forwarded?: boolean;
 }) {
   return (
     <header className="message-header">
@@ -103,6 +115,22 @@ export function MessageHeader({
             </span>
           ) : null}
         </div>
+        {answered || forwarded ? (
+          <div className="reply-state" data-testid="reply-state">
+            {answered ? (
+              <span>
+                <Reply aria-hidden="true" size={14} />
+                {strings.mail.replied}
+              </span>
+            ) : null}
+            {forwarded ? (
+              <span>
+                <Forward aria-hidden="true" size={14} />
+                {strings.mail.forwarded}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
         <div className="recipient-summary">
           <span className="recipient-label">{strings.reader.to}</span>
           <span className="recipient-preview">

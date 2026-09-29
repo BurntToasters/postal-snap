@@ -132,6 +132,7 @@ pub async fn add_account(
     }
     let id = uuid::Uuid::new_v4().to_string();
     let summary = AccountSummary {
+        default_body_format: crate::models::BodyFormat::Html,
         id: id.clone(),
         provider: request.provider.clone(),
         email: request.email.trim().to_lowercase(),
@@ -333,6 +334,20 @@ pub fn update_account_signature(
     state: State<'_, AppState>,
 ) -> CommandResult<AccountSummary> {
     command_result(state.db.update_account_signature(&account_id, &signature))
+}
+
+/// Unknown formats fail IPC deserialization before reaching the database.
+#[tauri::command]
+pub fn update_account_default_body_format(
+    account_id: String,
+    format: crate::models::BodyFormat,
+    state: State<'_, AppState>,
+) -> CommandResult<AccountSummary> {
+    command_result(
+        state
+            .db
+            .set_account_default_body_format(&account_id, format),
+    )
 }
 
 #[tauri::command]

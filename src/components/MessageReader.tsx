@@ -14,6 +14,7 @@ import {
   sanitizeReceivedHtml,
   withFrameLinks,
 } from "../security";
+import { ShieldCheck } from "lucide-react";
 import { useIsDark } from "../hooks/useColorScheme";
 import { useAppStore } from "../store";
 import type { Attachment, AttachmentPreview, MessageSummary } from "../types";
@@ -21,6 +22,7 @@ import { useDialogFocus } from "./useDialogFocus";
 import { AttachmentList } from "./reader/attachmentList";
 import { MessageBody } from "./reader/messageBody";
 import { MessageHeader } from "./reader/messageHeader";
+import { OriginalDialog } from "./reader/originalDialog";
 import { ReaderToolbar } from "./reader/readerToolbar";
 import { SnoozePanel } from "./reader/snoozePanel";
 import {
@@ -126,6 +128,8 @@ export function MessageReader({
   const [showDetailsFor, setShowDetailsFor] = useState<number>();
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [originalOpen, setOriginalOpen] = useState(false);
+  const [unsubscribeSentFor, setUnsubscribeSentFor] = useState<number>();
   const moreMenuRef = useRef<HTMLDivElement>(null);
   const moreTriggerRef = useRef<HTMLButtonElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -264,6 +268,10 @@ export function MessageReader({
     restoreMoreFocus();
   }, [restoreMoreFocus]);
   const dialogRef = useDialogFocus(() => {
+    if (originalOpen) {
+      setOriginalOpen(false);
+      return;
+    }
     if (preview) {
       setPreview(null);
       return;
@@ -333,8 +341,12 @@ export function MessageReader({
     setMenuMessageId(message?.id);
     if (moreOpen) setMoreOpen(false);
     if (snoozeOpen) setSnoozeOpen(false);
+    if (originalOpen) setOriginalOpen(false);
   }
 
+  const listed = useAppStore((state) =>
+    message ? state.messages.find((item) => item.id === message.id) : undefined,
+  );
   const account = accounts.find((a) => a.id === message?.accountId);
   const currentMailbox = mailboxes.find((m) => m.id === message?.mailboxId);
   const isArchiveMailbox = currentMailbox?.role === "archive";
@@ -373,6 +385,36 @@ export function MessageReader({
     } catch {
       // Opening failures stay in the generic native error; do not surface URLs.
     }
+  }
+
+  async function unsubscribe() {
+    const target = useAppStore.getState().selectedMessage;
+    const options = target?.unsubscribe;
+    if (!target || !options) return;
+    if (options.oneClick && options.httpsHost) {
+      const confirmed = await api.showNativeConfirm(
+        strings.reader.unsubscribeTitle,
+        strings.reader.unsubscribeConfirm(options.httpsHost),
+      );
+      if (!confirmed) return;
+      try {
+        await api.unsubscribeOneClick(target.accountId, target.id);
+        setUnsubscribeSentFor(target.id);
+      } catch {
+        // Reasons stay generic: server text and addresses are never shown.
+        setError(strings.reader.unsubscribeFailed);
+      }
+      return;
+    }
+    if (options.mailto) {
+      // The user reviews and sends this like any other message.
+      const draft = parseMailto(options.mailto);
+      openComposer({
+        prefill: { ...draft, subject: draft.subject.replace(/[\r\n]+/g, " ") },
+      });
+      return;
+    }
+    if (options.httpsUrl) await handleExternalLink(options.httpsUrl);
   }
 
   const handleExternalLinkRef = useRef(handleExternalLink);
@@ -1153,6 +1195,8 @@ export function MessageReader({
         }}
         onMoveToMailbox={(mailboxId) => void moveToMailbox(mailboxId)}
         onOpenSnooze={() => setSnoozeOpen(true)}
+        onUnsubscribe={() => void unsubscribe()}
+        onShowOriginal={() => setOriginalOpen(true)}
         onToggleMore={() => setMoreOpen((value) => !value)}
         onOpenMore={() => setMoreOpen(true)}
         onCloseMore={closeMoreMenu}
@@ -1176,7 +1220,29 @@ export function MessageReader({
         }
         titleRef={titleRef}
         treatAsOverlay={treatAsOverlay}
+        answered={listed?.isAnswered ?? message.isAnswered}
+        forwarded={listed?.isForwarded ?? message.isForwarded}
       />
+      {unsubscribeSentFor === message.id ? (
+        <div className="remote-content-banner" role="status" aria-live="polite">
+          <ShieldCheck aria-hidden="true" />
+          <span>
+            <strong>{strings.reader.unsubscribeSent}</strong>{" "}
+            {strings.reader.unsubscribeSentDetail}
+          </span>
+        </div>
+      ) : null}
+      {originalOpen ? (
+        <OriginalDialog
+          accountId={message.accountId}
+          messageId={message.id}
+          onClose={() => {
+            setOriginalOpen(false);
+            restoreMoreFocus();
+          }}
+          onError={(text) => setError(text)}
+        />
+      ) : null}
       <MessageBody
         message={message}
         sanitized={sanitized}

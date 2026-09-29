@@ -8,6 +8,8 @@ import type {
   AccountRemovalImpact,
   AccountSetupRequest,
   AccountSummary,
+  BodyFormat,
+  ComposeDragEvent,
   MailSettingsDiscovery,
   AppSettings,
   CacheUsage,
@@ -19,6 +21,7 @@ import type {
   DraftSyncEvent,
   MailboxSummary,
   MessageDetail,
+  MessageSource,
   MessageCursor,
   AttachmentPreview,
   BulkOutcome,
@@ -70,6 +73,9 @@ function inTauri(): boolean {
 
 export type NativeCommand =
   | "list_accounts"
+  | "get_message_source"
+  | "save_message_eml"
+  | "unsubscribe_one_click"
   | "test_account"
   | "discover_mail_settings"
   | "test_saved_account"
@@ -79,6 +85,8 @@ export type NativeCommand =
   | "get_account_removal_impact"
   | "erase_all_data"
   | "update_account_signature"
+  | "update_account_default_body_format"
+  | "attach_dropped_files"
   | "get_account_inbox_counts"
   | "list_mailboxes"
   | "list_all_mailboxes"
@@ -201,6 +209,11 @@ export const api = {
   },
   updateAccountSignature: (accountId: string, signature: string) =>
     call<AccountSummary>("update_account_signature", { accountId, signature }),
+  updateAccountDefaultBodyFormat: (accountId: string, format: BodyFormat) =>
+    call<AccountSummary>("update_account_default_body_format", {
+      accountId,
+      format,
+    }),
   getAccountInboxCounts: () =>
     call<AccountInboxCount[]>("get_account_inbox_counts"),
   listMailboxes: (accountId: string) =>
@@ -217,6 +230,12 @@ export const api = {
     call<MessagePage>("list_messages", { accountId, mailboxId, cursor, limit }),
   getMessage: (accountId: string, messageId: number) =>
     call<MessageDetail>("get_message", { accountId, messageId }),
+  getMessageSource: (accountId: string, messageId: number) =>
+    call<MessageSource>("get_message_source", { accountId, messageId }),
+  saveMessageEml: (accountId: string, messageId: number) =>
+    call<void>("save_message_eml", { accountId, messageId }),
+  unsubscribeOneClick: (accountId: string, messageId: number) =>
+    call<void>("unsubscribe_one_click", { accountId, messageId }),
   setMessageFlags: (
     accountId: string,
     messageId: number,
@@ -350,6 +369,8 @@ export const api = {
     }),
   chooseAttachments: (accountId: string, inline: boolean) =>
     call<ComposeAttachment[]>("choose_attachments", { accountId, inline }),
+  attachDroppedFiles: (accountId: string) =>
+    call<ComposeAttachment[]>("attach_dropped_files", { accountId }),
   fetchRemoteImage: (url: string) =>
     call<RemoteImageResult>("fetch_remote_image", { url }),
   inspectExternalUrl: (url: string) =>
@@ -439,6 +460,15 @@ export const api = {
   ): Promise<UnlistenFn> {
     if (!inTauri()) return () => undefined;
     return listen<DraftSyncEvent>("draft-sync-changed", ({ payload }) =>
+      handler(payload),
+    );
+  },
+  /** Native drag-drop position and count. Never file paths. */
+  async onComposeDrag(
+    handler: (event: ComposeDragEvent) => void,
+  ): Promise<UnlistenFn> {
+    if (!inTauri()) return () => undefined;
+    return listen<ComposeDragEvent>("compose-drag", ({ payload }) =>
       handler(payload),
     );
   },

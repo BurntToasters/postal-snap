@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
+use tauri_plugin_dialog::DialogExt;
 
 use super::sync::account_policy;
 use super::{command_result, emit_folder_counts, emit_message_change, AppState, CommandResult};
@@ -107,6 +108,76 @@ pub async fn get_message(
     detail.references = state.db.message_references(message_id, &account_id)?;
     detail.body_status = body_status.into();
     Ok(detail)
+}
+
+/// Raw source for "Show original". Uses the same on-demand download as the
+/// reader (size limit, account lock, ownership) and never renders it.
+#[tauri::command]
+pub async fn get_message_source(
+    account_id: String,
+    message_id: i64,
+    state: State<'_, AppState>,
+) -> CommandResult<mail::source::MessageSource> {
+    ensure_message_content(&account_id, message_id, &state).await?;
+    let raw = state.db.raw_message(message_id, &account_id)?;
+    Ok(mail::source::build_source(&raw))
+}
+
+/// Save the original message to a destination the user picks.
+#[tauri::command]
+pub async fn save_message_eml(
+    account_id: String,
+    message_id: i64,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<()> {
+    ensure_message_content(&account_id, message_id, &state).await?;
+    let raw = state.db.raw_message(message_id, &account_id)?;
+    let picker = app.clone();
+    let destination = tokio::task::spawn_blocking(move || {
+        picker
+            .dialog()
+            .file()
+            .set_file_name("message.eml")
+            .blocking_save_file()
+    })
+    .await
+    .map_err(|_| "Could not open the save dialog.".to_string())?;
+    let Some(destination) = destination else {
+        return Ok(());
+    };
+    let destination = destination
+        .into_path()
+        .map_err(|_| "Choose a valid save location.".to_string())?;
+    tokio::fs::write(destination, raw).await.map_err(|_| {
+        "Could not save the message at that location."
+            .to_string()
+            .into()
+    })
+}
+
+/// RFC 8058 one-click unsubscribe. The URL comes from the stored header, never
+/// from the frontend.
+#[tauri::command]
+pub async fn unsubscribe_one_click(
+    account_id: String,
+    message_id: i64,
+    state: State<'_, AppState>,
+) -> CommandResult<()> {
+    let db = state.db.clone();
+    let detail =
+        tauri::async_runtime::spawn_blocking(move || db.message_detail(message_id, &account_id))
+            .await
+            .map_err(|_| "Postal Snap could not read this message.".to_string())??;
+    let url = detail
+        .list_unsubscribe
+        .as_deref()
+        .and_then(|list| {
+            mail::list_unsubscribe::one_click_url(list, detail.list_unsubscribe_post.as_deref())
+        })
+        .ok_or_else(|| "This message does not support one-click unsubscribe.".to_string())?;
+    let block_threats = state.settings.get()?.block_reported_threats;
+    command_result(crate::unsubscribe::send_one_click(&url, block_threats).await)
 }
 
 #[derive(Serialize)]

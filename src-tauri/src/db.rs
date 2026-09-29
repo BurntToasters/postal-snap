@@ -20,7 +20,7 @@ use crate::models::{
 };
 use crate::models::{Attachment, ComposeDraft, MailboxRole, MessageSummary, ProviderKind, TlsMode};
 
-const CURRENT_SCHEMA_VERSION: u32 = 18;
+const CURRENT_SCHEMA_VERSION: u32 = 20;
 
 pub type MailboxSyncState = (Option<u32>, Option<u32>, u32, Option<u32>);
 
@@ -53,6 +53,12 @@ pub struct CachedMessage {
     pub attachments: Vec<Attachment>,
     pub raw_message: Vec<u8>,
     pub has_attachments: bool,
+    pub is_answered: bool,
+    pub is_forwarded: bool,
+    pub has_calendar: bool,
+    pub calendar_json: Option<String>,
+    pub list_unsubscribe: Option<String>,
+    pub list_unsubscribe_post: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -122,8 +128,8 @@ impl Database {
     }
 }
 
-pub(crate) const MESSAGE_SUMMARY_SELECT: &str = "SELECT m.id,m.account_id,m.mailbox_id,m.uid,m.message_id,m.subject,m.sender_name,m.sender_address,m.recipients,m.received_at,m.preview,m.is_read,m.is_starred,m.has_attachments,m.size,m.thread_root FROM messages m";
-pub(crate) const MESSAGE_DETAIL_SELECT: &str = "SELECT m.id,m.account_id,m.mailbox_id,m.uid,m.message_id,m.subject,m.sender_name,m.sender_address,m.recipients,m.received_at,m.preview,m.is_read,m.is_starred,m.has_attachments,m.size,m.to_json,m.cc_json,m.reply_to,m.text_body,m.html_body,m.attachments_json FROM messages m";
+pub(crate) const MESSAGE_SUMMARY_SELECT: &str = "SELECT m.id,m.account_id,m.mailbox_id,m.uid,m.message_id,m.subject,m.sender_name,m.sender_address,m.recipients,m.received_at,m.preview,m.is_read,m.is_starred,m.has_attachments,m.size,m.thread_root,m.has_calendar,m.is_answered,m.is_forwarded FROM messages m";
+pub(crate) const MESSAGE_DETAIL_SELECT: &str = "SELECT m.id,m.account_id,m.mailbox_id,m.uid,m.message_id,m.subject,m.sender_name,m.sender_address,m.recipients,m.received_at,m.preview,m.is_read,m.is_starred,m.has_attachments,m.size,m.to_json,m.cc_json,m.reply_to,m.text_body,m.html_body,m.attachments_json,m.list_unsubscribe,m.list_unsubscribe_post,m.has_calendar,m.is_answered,m.is_forwarded,m.calendar_json,m.thread_root FROM messages m";
 
 pub(crate) fn map_message_summary(row: &Row<'_>) -> rusqlite::Result<MessageSummary> {
     Ok(MessageSummary {
@@ -142,7 +148,11 @@ pub(crate) fn map_message_summary(row: &Row<'_>) -> rusqlite::Result<MessageSumm
         is_starred: row.get::<_, i32>(12)? != 0,
         has_attachments: row.get::<_, i32>(13)? != 0,
         size: row.get::<_, i64>(14)?.max(0) as u64,
-        thread_root: row.get(15)?,
+        thread_root: row.get("thread_root")?,
+        // By name: detail rows lay out columns differently.
+        has_calendar: row.get::<_, i64>("has_calendar")? != 0,
+        is_answered: row.get::<_, i64>("is_answered")? != 0,
+        is_forwarded: row.get::<_, i64>("is_forwarded")? != 0,
     })
 }
 
@@ -772,6 +782,20 @@ fn migrate_schema(connection: &mut Connection) -> Result<(), String> {
         transaction
             .pragma_update(None, "user_version", 18)
             .map_err(db_error)?;
+        version = 18;
+    }
+    if version < 19 {
+        migrate_v19(&transaction)?;
+        transaction
+            .pragma_update(None, "user_version", 19)
+            .map_err(db_error)?;
+        version = 19;
+    }
+    if version < 20 {
+        migrate_v20(&transaction)?;
+        transaction
+            .pragma_update(None, "user_version", 20)
+            .map_err(db_error)?;
     }
     transaction
         .pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)
@@ -873,6 +897,74 @@ fn migrate_v18(transaction: &rusqlite::Transaction) -> Result<(), String> {
              CREATE INDEX IF NOT EXISTS messages_account_bodies ON messages(account_id,body_bytes) WHERE body_bytes>0;",
         )
         .map_err(db_error)
+}
+
+/// Schema v19: draft reply/forward source and body format, per-account
+/// default body format, and List-Unsubscribe / calendar message metadata.
+/// Draft source ids are plain integers (no FK) so evicting the source message
+/// never touches the draft. Outbox rows carry these fields in `draft_json`.
+fn migrate_v19(transaction: &rusqlite::Transaction) -> Result<(), String> {
+    for (table, column, sql) in [
+        (
+            "drafts",
+            "source_message_id",
+            "ALTER TABLE drafts ADD COLUMN source_message_id INTEGER",
+        ),
+        (
+            "drafts",
+            "source_kind",
+            "ALTER TABLE drafts ADD COLUMN source_kind TEXT",
+        ),
+        (
+            "drafts",
+            "body_format",
+            "ALTER TABLE drafts ADD COLUMN body_format TEXT NOT NULL DEFAULT 'html'",
+        ),
+        (
+            "accounts",
+            "default_body_format",
+            "ALTER TABLE accounts ADD COLUMN default_body_format TEXT NOT NULL DEFAULT 'html'",
+        ),
+        (
+            "messages",
+            "list_unsubscribe",
+            "ALTER TABLE messages ADD COLUMN list_unsubscribe TEXT",
+        ),
+        (
+            "messages",
+            "list_unsubscribe_post",
+            "ALTER TABLE messages ADD COLUMN list_unsubscribe_post TEXT",
+        ),
+        (
+            "messages",
+            "has_calendar",
+            "ALTER TABLE messages ADD COLUMN has_calendar INTEGER NOT NULL DEFAULT 0",
+        ),
+    ] {
+        ensure_column(transaction, table, column, sql)?;
+    }
+    Ok(())
+}
+
+/// Schema v20: replied/forwarded flags and the parsed calendar invite.
+fn migrate_v20(transaction: &rusqlite::Transaction) -> Result<(), String> {
+    for (column, sql) in [
+        (
+            "is_answered",
+            "ALTER TABLE messages ADD COLUMN is_answered INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "is_forwarded",
+            "ALTER TABLE messages ADD COLUMN is_forwarded INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "calendar_json",
+            "ALTER TABLE messages ADD COLUMN calendar_json TEXT",
+        ),
+    ] {
+        ensure_column(transaction, "messages", column, sql)?;
+    }
+    Ok(())
 }
 
 /// Restore the database-level unique email guarantee. This is a no-op when the
@@ -1120,6 +1212,7 @@ mod tests {
     fn account() -> AccountRecord {
         AccountRecord {
             summary: AccountSummary {
+                default_body_format: crate::models::BodyFormat::Html,
                 id: "account-1".into(),
                 provider: ProviderKind::Manual,
                 email: "sam@example.com".into(),
@@ -1179,11 +1272,20 @@ mod tests {
             attachments: vec![],
             raw_message: b"Subject: Family picnic\r\n\r\nBring sandwiches".to_vec(),
             has_attachments: false,
+            is_answered: false,
+            is_forwarded: false,
+            has_calendar: false,
+            calendar_json: None,
+            list_unsubscribe: None,
+            list_unsubscribe_post: None,
         }
     }
 
     fn draft(account_id: &str) -> ComposeDraft {
         ComposeDraft {
+            body_format: crate::models::BodyFormat::Html,
+            source_message_id: None,
+            source_kind: None,
             id: None,
             account_id: account_id.into(),
             from: None,
@@ -1717,6 +1819,36 @@ mod tests {
             "{items:?}"
         );
     }
+    // Failure modes: detail select shifts columns so summary.thread_root
+    // reads to_json; root is null for unthreaded mail; detail body fields
+    // (to/cc) must still map after any select reorder.
+    #[test]
+    fn message_detail_reports_thread_root_not_recipients() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let mailbox = mailbox(&db, &account.summary.id, "INBOX", &MailboxRole::Inbox);
+        let mut child = message(2, "2026-08-18T13:00:00Z");
+        child.thread_parent = Some("<1@example.com>".into());
+        db.upsert_message(&account.summary.id, mailbox, &child)
+            .unwrap();
+        let id = db
+            .list_messages(mailbox, None, 10)
+            .unwrap()
+            .items
+            .first()
+            .unwrap()
+            .id;
+        let detail = db.message_detail(id, &account.summary.id).unwrap();
+        let listed = db.list_messages(mailbox, None, 10).unwrap().items;
+        assert_eq!(detail.summary.thread_root, listed[0].thread_root);
+        assert_eq!(
+            detail.summary.thread_root.as_deref(),
+            Some("<1@example.com>")
+        );
+        assert!(!detail.to.is_empty(), "{:?}", detail.to);
+    }
+
     #[test]
     fn clearing_downloads_preserves_envelopes_and_subject_search() {
         let db = Database::memory();
@@ -2168,6 +2300,52 @@ mod tests {
             .update_account_signature(&account.summary.id, "bad\x00sig")
             .is_err());
         assert!(db.update_account_signature("missing", "Hi").is_err());
+    }
+
+    // Failure modes for the default body format setter:
+    // 1. An unknown account silently succeeds.
+    // 2. The value is not stored, or is stored for the wrong account.
+    // 3. An unknown format string passes IPC and reaches the database.
+    // 4. Setting Plain changes the signature or other account fields.
+    #[test]
+    fn account_default_body_format_round_trips_per_account() {
+        use crate::models::BodyFormat;
+        let db = Database::memory();
+        let first = account();
+        db.insert_account(&first).unwrap();
+        let mut second = account();
+        second.summary.id = "account-2".into();
+        second.summary.email = "other@example.com".into();
+        db.insert_account(&second).unwrap();
+        assert!(db
+            .set_account_default_body_format("missing", BodyFormat::Plain)
+            .is_err());
+        let summary = db
+            .set_account_default_body_format(&first.summary.id, BodyFormat::Plain)
+            .unwrap();
+        assert_eq!(summary.default_body_format, BodyFormat::Plain);
+        assert_eq!(summary.signature, first.summary.signature);
+        let listed = db.list_accounts().unwrap();
+        let format_of = |id: &str| {
+            listed
+                .iter()
+                .find(|item| item.id == id)
+                .unwrap()
+                .default_body_format
+        };
+        assert_eq!(format_of(&first.summary.id), BodyFormat::Plain);
+        assert_eq!(format_of(&second.summary.id), BodyFormat::Html);
+        db.set_account_default_body_format(&first.summary.id, BodyFormat::Html)
+            .unwrap();
+        assert_eq!(
+            db.account(&first.summary.id)
+                .unwrap()
+                .summary
+                .default_body_format,
+            BodyFormat::Html
+        );
+        assert!(serde_json::from_str::<BodyFormat>("\"rich\"").is_err());
+        assert!(serde_json::from_str::<BodyFormat>("\"plain\"").is_ok());
     }
 
     #[test]
@@ -3447,6 +3625,240 @@ mod tests {
         );
     }
 
+    // v19 failure modes, written before the migration:
+    // - a v18 DB with drafts/outbox/messages/managed attachments loses rows
+    // - migration is partial or not inside the migrate_schema transaction
+    // - migrated schema differs from a fresh schema
+    // - defaults are wrong (formats must be 'html', calendar 0, others NULL)
+    // - an unknown body_format / source_kind is accepted at the IPC boundary
+    // - re-running the migration fails or resets stored values
+    const V19_DROPS: &str = "ALTER TABLE drafts DROP COLUMN source_message_id;
+         ALTER TABLE drafts DROP COLUMN source_kind;
+         ALTER TABLE drafts DROP COLUMN body_format;
+         ALTER TABLE accounts DROP COLUMN default_body_format;
+         ALTER TABLE messages DROP COLUMN list_unsubscribe;
+         ALTER TABLE messages DROP COLUMN list_unsubscribe_post;
+         ALTER TABLE messages DROP COLUMN has_calendar;";
+
+    fn table_columns(
+        connection: &Connection,
+        table: &str,
+    ) -> Vec<(String, String, i64, Option<String>)> {
+        let mut statement = connection
+            .prepare(&format!("PRAGMA table_info({table})"))
+            .unwrap();
+        let mut columns = statement
+            .query_map([], |row| {
+                Ok((row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        columns.sort();
+        columns
+    }
+
+    // v20 failure modes: cached message lost; reply flags default to set;
+    // migrated shape differs from fresh; re-run from v19 fails.
+    #[test]
+    fn migrates_v19_to_v20_preserving_messages_and_defaults() {
+        let db = Database::memory();
+        let account = account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        db.upsert_message(account_id, inbox, &message(1, "2026-08-18T12:00:00+00:00"))
+            .unwrap();
+        let fresh_shape = table_columns(&db.conn().unwrap(), "messages");
+        {
+            let mut connection = db.conn().unwrap();
+            connection
+                .execute_batch(
+                    "ALTER TABLE messages DROP COLUMN is_answered;
+                     ALTER TABLE messages DROP COLUMN is_forwarded;
+                     ALTER TABLE messages DROP COLUMN calendar_json;
+                     PRAGMA user_version=19;",
+                )
+                .unwrap();
+            migrate_schema(&mut connection).unwrap();
+            connection.execute_batch("PRAGMA user_version=19;").unwrap();
+            migrate_schema(&mut connection).unwrap();
+            let version: u32 = connection
+                .pragma_query_value(None, "user_version", |row| row.get(0))
+                .unwrap();
+            assert_eq!(version, CURRENT_SCHEMA_VERSION);
+            assert_eq!(table_columns(&connection, "messages"), fresh_shape);
+        }
+        assert!(cached(&db, inbox, 1, account_id));
+        let (answered, forwarded, calendar): (i64, i64, Option<String>) = db
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT is_answered,is_forwarded,calendar_json FROM messages",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!((answered, forwarded, calendar), (0, 0, None));
+    }
+
+    #[test]
+    fn migrates_v18_to_v19_preserving_rows_and_defaults() {
+        let db = Database::memory();
+        let account = account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        db.upsert_message(account_id, inbox, &message(1, "2026-08-18T12:00:00+00:00"))
+            .unwrap();
+        let draft_id = db.save_draft(&draft(account_id)).unwrap();
+        {
+            let connection = db.conn().unwrap();
+            connection
+                .execute(
+                    "INSERT INTO file_grants(token,path,account_id,size) VALUES('tok','/tmp/x',?1,0)",
+                    [account_id],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO attachment_refs(token,owner_kind,owner_id) VALUES('tok','draft',?1)",
+                    [&draft_id],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO outbox(id,account_id,draft_json,state) VALUES('o1',?1,'{}','queued')",
+                    [account_id],
+                )
+                .unwrap();
+        }
+        let fresh_shape = {
+            let connection = db.conn().unwrap();
+            ["drafts", "accounts", "messages", "outbox"]
+                .map(|table| table_columns(&connection, table))
+        };
+        {
+            let mut connection = db.conn().unwrap();
+            connection
+                .execute_batch(&format!("{V19_DROPS} PRAGMA user_version=18;"))
+                .unwrap();
+            migrate_schema(&mut connection).unwrap();
+            // Re-running from the same version must be a no-op.
+            connection.execute_batch("PRAGMA user_version=18;").unwrap();
+            migrate_schema(&mut connection).unwrap();
+            let version: u32 = connection
+                .pragma_query_value(None, "user_version", |row| row.get(0))
+                .unwrap();
+            assert_eq!(version, CURRENT_SCHEMA_VERSION);
+            let migrated_shape = ["drafts", "accounts", "messages", "outbox"]
+                .map(|table| table_columns(&connection, table));
+            assert_eq!(migrated_shape, fresh_shape);
+        }
+        assert!(cached(&db, inbox, 1, account_id));
+        assert_eq!(
+            db.draft(&draft_id, account_id).unwrap().subject,
+            "Family update"
+        );
+        let connection = db.conn().unwrap();
+        let refs: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM attachment_refs WHERE token='tok'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(refs, 1);
+        let outbox: i64 = connection
+            .query_row("SELECT COUNT(*) FROM outbox", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(outbox, 1);
+        let (format, source_id, source_kind): (String, Option<i64>, Option<String>) = connection
+            .query_row(
+                "SELECT body_format,source_message_id,source_kind FROM drafts",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (format.as_str(), source_id, source_kind),
+            ("html", None, None)
+        );
+        let account_format: String = connection
+            .query_row("SELECT default_body_format FROM accounts", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(account_format, "html");
+        let (unsub, post, calendar): (Option<String>, Option<String>, i64) = connection
+            .query_row(
+                "SELECT list_unsubscribe,list_unsubscribe_post,has_calendar FROM messages",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!((unsub, post, calendar), (None, None, 0));
+    }
+
+    #[test]
+    fn failed_v19_step_rolls_back_whole_migration() {
+        let db = Database::memory();
+        let mut connection = db.conn().unwrap();
+        connection
+            .execute_batch(&format!("{V19_DROPS} PRAGMA user_version=18;"))
+            .unwrap();
+        let tx = connection.transaction().unwrap();
+        migrate_v19(&tx).unwrap();
+        drop(tx); // dropped without commit: nothing persists
+        assert!(!column_exists(&connection, "drafts", "body_format").unwrap());
+        assert!(!column_exists(&connection, "messages", "has_calendar").unwrap());
+        let version: u32 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 18);
+    }
+
+    #[test]
+    fn draft_round_trip_keeps_source_and_format() {
+        use crate::models::{BodyFormat, DraftSourceKind};
+        let db = Database::memory();
+        let account = account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let mut value = draft(account_id);
+        value.body_format = BodyFormat::Plain;
+        value.source_message_id = Some(42);
+        value.source_kind = Some(DraftSourceKind::ReplyAll);
+        let id = db.save_draft(&value).unwrap();
+        let loaded = db.draft(&id, account_id).unwrap();
+        assert_eq!(loaded.body_format, BodyFormat::Plain);
+        assert_eq!(loaded.source_kind, Some(DraftSourceKind::ReplyAll));
+        let row: (String, Option<i64>, Option<String>) = db
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT body_format,source_message_id,source_kind FROM drafts WHERE id=?1",
+                [&id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row, ("plain".into(), Some(42), Some("reply_all".into())));
+    }
+
+    #[test]
+    fn unknown_enum_strings_are_rejected_at_ipc() {
+        use crate::models::{BodyFormat, DraftSourceKind};
+        assert!(serde_json::from_str::<BodyFormat>("\"rtf\"").is_err());
+        assert!(serde_json::from_str::<DraftSourceKind>("\"bounce\"").is_err());
+        assert_eq!(
+            serde_json::from_str::<DraftSourceKind>("\"reply_all\"").unwrap(),
+            DraftSourceKind::ReplyAll
+        );
+        // Legacy draft JSON without the new keys still loads with defaults.
+        let legacy = r#"{"id":null,"accountId":"a","from":null,"to":[],"cc":[],"bcc":[],"subject":"","htmlBody":"","textBody":"","attachments":[],"inReplyTo":null,"references":null}"#;
+        let parsed: ComposeDraft = serde_json::from_str(legacy).unwrap();
+        assert_eq!(parsed.body_format, BodyFormat::Html);
+        assert_eq!(parsed.source_kind, None);
+    }
+
     #[test]
     fn expunge_reconcile_keeps_pending_moves() {
         let db = Database::memory();
@@ -3472,6 +3884,127 @@ mod tests {
         assert_eq!(removed, 1);
         assert_eq!(db.cached_message_count(inbox).unwrap(), 2);
         assert_eq!(db.pending_move_uids(inbox).unwrap(), vec![2]);
+    }
+
+    // Failure modes: VANISHED must not touch the same UID in another mailbox,
+    // rows under a pending move, or UIDs never cached; repeats are harmless.
+    #[test]
+    fn apply_vanished_is_mailbox_scoped_and_keeps_pending_moves() {
+        let db = Database::memory();
+        let account = account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        let archive = mailbox(&db, account_id, "Archive", &MailboxRole::Archive);
+        for uid in 1..=4 {
+            db.upsert_envelope(
+                account_id,
+                inbox,
+                &envelope_only(uid, "2026-08-18T12:00:00+00:00"),
+            )
+            .unwrap();
+        }
+        db.upsert_envelope(
+            account_id,
+            archive,
+            &envelope_only(1, "2026-08-18T12:00:00+00:00"),
+        )
+        .unwrap();
+        let moving = db.message_summary_by_uid(inbox, 2).unwrap().unwrap().id;
+        db.mark_pending_move(moving, archive).unwrap();
+
+        let removed = db.apply_vanished(inbox, &[1, 2, 99]).unwrap();
+        assert_eq!(removed, 1);
+        assert_eq!(db.cached_message_count(inbox).unwrap(), 3);
+        assert_eq!(db.cached_message_count(archive).unwrap(), 1);
+        assert_eq!(db.pending_move_uids(inbox).unwrap(), vec![2]);
+        assert_eq!(db.apply_vanished(inbox, &[1]).unwrap(), 0);
+        assert_eq!(db.apply_vanished(inbox, &[]).unwrap(), 0);
+    }
+
+    // Failure modes: `from:` matches a body mention; operator-only queries
+    // return nothing; `after:` drops its own day or `before:` includes it;
+    // subject hits rank below body hits; hostile FTS text errors or widens
+    // the match; operators leak rows across mailboxes.
+    #[test]
+    fn search_operators_filter_and_rank() {
+        let db = Database::memory();
+        let account = account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        let other = mailbox(&db, account_id, "Other", &MailboxRole::Other);
+        let mut first = message(1, "2026-08-10T09:00:00+00:00");
+        first.subject = "Budget review".into();
+        first.text_body = "numbers inside".into();
+        let mut second = message(2, "2026-08-20T09:00:00+00:00");
+        second.subject = "Lunch".into();
+        second.sender_name = "Bob".into();
+        second.sender_address = "bob@example.com".into();
+        second.text_body = "the budget came from jane".into();
+        second.is_read = true;
+        second.is_starred = true;
+        second.attachments = vec![Attachment {
+            id: "a1".into(),
+            filename: "plan.pdf".into(),
+            content_type: "application/pdf".into(),
+            size: 10,
+            content_id: None,
+            inline: false,
+        }];
+        let mut third = message(3, "2026-09-01T09:00:00+00:00");
+        third.subject = "Trip".into();
+        third.recipients = "sam@example.com, lee@example.com".into();
+        third.text_body = "photos".into();
+        third.is_read = true;
+        for item in [&first, &second, &third] {
+            db.upsert_message(account_id, inbox, item).unwrap();
+        }
+        let mut stray = message(1, "2026-08-11T09:00:00+00:00");
+        stray.subject = "Budget elsewhere".into();
+        db.upsert_message(account_id, other, &stray).unwrap();
+
+        let run = |text: &str| -> Vec<u32> {
+            db.search(&SearchQuery {
+                account_id: account_id.clone(),
+                mailbox_id: Some(inbox),
+                text: text.into(),
+                all_folders: false,
+                limit: 10,
+            })
+            .unwrap()
+            .into_iter()
+            .map(|item| item.uid)
+            .collect()
+        };
+        // Subject weight beats a body mention.
+        assert_eq!(run("budget"), vec![1, 2]);
+        let mut from = run("from:jane");
+        from.sort_unstable();
+        assert_eq!(from, vec![1, 3]);
+        assert_eq!(run("from:jane is:unread"), vec![1]);
+        assert_eq!(run("is:flagged"), vec![2]);
+        assert_eq!(run("has:attachment"), vec![2]);
+        assert_eq!(run("to:lee"), vec![3]);
+        assert_eq!(run("subject:budget"), vec![1]);
+        assert_eq!(run("is:read after:2026-08-20 before:2026-09-01"), vec![2]);
+        assert_eq!(run("after:2026-08-11"), vec![3, 2]);
+        assert_eq!(run("before:2026-08-11"), vec![1]);
+        // Unknown operators fall back to plain text; no match here.
+        assert!(run("nosuch:thing").is_empty());
+        // FTS syntax stays literal.
+        for hostile in [
+            "budget OR \"",
+            "NEAR(a b) OR *",
+            "from:\"x\" OR subject:*",
+            "\"unterminated",
+            "-budget",
+            "sender:jane",
+        ] {
+            let _ = run(hostile);
+        }
+        assert!(run("sender:jane").is_empty());
+        assert!(run("").is_empty());
     }
 
     #[test]

@@ -1,3 +1,5 @@
+use std::path::{Path, PathBuf};
+
 use base64::{engine::general_purpose::STANDARD, Engine};
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
@@ -222,7 +224,41 @@ pub async fn choose_attachments(
     })
     .await
     .map_err(|_| "Could not open the file dialog.".to_string())?;
-    let account_dir = managed_account_dir(&state.attachment_dir, &account_id)?;
+    let paths = selected
+        .into_iter()
+        .map(|item| {
+            item.into_path()
+                .map_err(|_| "That selected file is unavailable.".to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    stage_attachment_paths(&state, &account_id, paths, inline).await
+}
+
+/// Read one user-chosen file. Regular files only: no directories, no
+/// symlinks, and nothing over `max_bytes`. Errors never name the path.
+pub(crate) async fn read_attachment_source(path: &Path, max_bytes: u64) -> Result<Vec<u8>, String> {
+    let unavailable = || "That selected file is unavailable.".to_string();
+    let metadata = tokio::fs::symlink_metadata(path)
+        .await
+        .map_err(|_| unavailable())?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(unavailable());
+    }
+    if metadata.len() > max_bytes {
+        return Err("That attachment is too large.".into());
+    }
+    tokio::fs::read(path).await.map_err(|_| unavailable())
+}
+
+/// Copy chosen or dropped files into private storage and return opaque
+/// tokens. Shared by the picker and drag-drop; all or nothing.
+pub(crate) async fn stage_attachment_paths(
+    state: &AppState,
+    account_id: &str,
+    selected: Vec<PathBuf>,
+    inline: bool,
+) -> CommandResult<Vec<ComposeAttachment>> {
+    let account_dir = managed_account_dir(&state.attachment_dir, account_id)?;
     tokio::fs::create_dir_all(&account_dir)
         .await
         .map_err(|_| "Could not create private draft storage.".to_string())?;
@@ -240,27 +276,13 @@ pub async fn choose_attachments(
             return Err("Choose no more than 100 attachments.".into());
         }
         let mut total = 0usize;
-        for selected in selected {
-            let path = selected
-                .into_path()
-                .map_err(|_| "That selected file is unavailable.".to_string())?;
-            let metadata = tokio::fs::symlink_metadata(&path)
-                .await
-                .map_err(|_| "That selected file is unavailable.".to_string())?;
-            if metadata.file_type().is_symlink() || !metadata.is_file() {
-                return Err("That selected file is unavailable.".into());
-            }
-            if metadata.len() > mail::MAX_MESSAGE_BYTES as u64 {
-                return Err("That attachment is too large.".into());
-            }
-            let bytes = tokio::fs::read(&path)
-                .await
-                .map_err(|_| "That selected file is unavailable.".to_string())?;
+        for path in selected {
+            let bytes = read_attachment_source(&path, mail::MAX_MESSAGE_BYTES as u64).await?;
             total = total.saturating_add(bytes.len());
             if total > mail::MAX_OUTGOING_BYTES {
                 return Err("The selected attachments are too large.".into());
             }
-            let token = write_managed_file(&state, &account_id, &account_dir, &bytes).await?;
+            let token = write_managed_file(state, account_id, &account_dir, &bytes).await?;
             created_tokens.push(token.clone());
             attachments.push(ComposeAttachment {
                 token,
@@ -283,12 +305,8 @@ pub async fn choose_attachments(
     }
     .await;
     if result.is_err() {
-        release_attachment_tokens(
-            &state,
-            &account_id,
-            created_tokens.iter().map(String::as_str),
-        )
-        .await;
+        release_attachment_tokens(state, account_id, created_tokens.iter().map(String::as_str))
+            .await;
     }
     result
 }
@@ -365,4 +383,60 @@ pub async fn release_compose_attachments(
     state.db.account(&account_id)?;
     release_attachment_tokens(&state, &account_id, tokens.iter().map(String::as_str)).await;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Failure modes for attachment sources (picker and drop):
+    // 1. A directory is accepted.
+    // 2. A symlink is followed, so a link can smuggle another file in.
+    // 3. A file over the per-file limit is read into memory first.
+    // 4. A missing file panics or the error names the path.
+    // 5. A regular file is refused or its bytes change.
+
+    #[tokio::test]
+    async fn regular_files_are_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("note.txt");
+        std::fs::write(&path, b"hello").unwrap();
+        assert_eq!(read_attachment_source(&path, 1024).await.unwrap(), b"hello");
+    }
+
+    #[tokio::test]
+    async fn directories_are_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let error = read_attachment_source(dir.path(), 1024).await.unwrap_err();
+        assert!(!error.contains(dir.path().to_str().unwrap()));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn symlinks_are_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target.txt");
+        std::fs::write(&target, b"secret").unwrap();
+        let link = dir.path().join("link.txt");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(read_attachment_source(&link, 1024).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn oversized_files_are_refused_before_reading() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.bin");
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(2048).unwrap();
+        let error = read_attachment_source(&path, 1024).await.unwrap_err();
+        assert!(error.contains("too large"));
+    }
+
+    #[tokio::test]
+    async fn missing_files_give_a_plain_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gone.txt");
+        let error = read_attachment_source(&path, 1024).await.unwrap_err();
+        assert!(!error.contains("gone.txt"));
+    }
 }

@@ -106,6 +106,7 @@ export function MailShell({ onOpenSettings }: Props) {
     () => new Set(),
   );
   const syncingAccountIdsRef = useRef(new Set<string>());
+  const syncingAllRef = useRef(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const onDrawerChange = useCallback((matches: boolean) => {
     if (!matches) setSidebarOpen(false);
@@ -284,19 +285,6 @@ export function MailShell({ onOpenSettings }: Props) {
     const timer = window.setTimeout(() => void loadAccountCounts(), 0);
     return () => window.clearTimeout(timer);
   }, [accounts, loadAccountCounts]);
-
-  async function refreshAllAccounts() {
-    if (syncingAllAccounts) return;
-    setSyncingAllAccounts(true);
-    try {
-      await api.syncAllAccounts();
-      await Promise.all([loadAccountCounts(), loadAccountData()]);
-    } catch (cause) {
-      setError(String(cause));
-    } finally {
-      setSyncingAllAccounts(false);
-    }
-  }
 
   const loadAccountData = useCallback(async () => {
     if (!activeAccountId) return;
@@ -536,6 +524,36 @@ export function MailShell({ onOpenSettings }: Props) {
   const refresh = useCallback(async () => {
     if (activeAccountId) await refreshAccount(activeAccountId);
   }, [activeAccountId, refreshAccount]);
+
+  // Same progress and error handling as one account; counts come from STATUS.
+  const refreshAllAccounts = useCallback(async () => {
+    if (syncingAllRef.current) return;
+    syncingAllRef.current = true;
+    setSyncingAllAccounts(true);
+    const ids = useAppStore.getState().accounts.map((account) => account.id);
+    // Only claim accounts no single refresh already owns.
+    const claimed = ids.filter((id) => !syncingAccountIdsRef.current.has(id));
+    for (const id of claimed) syncingAccountIdsRef.current.add(id);
+    setSyncingAccountIds(new Set(syncingAccountIdsRef.current));
+    try {
+      const synced = await api.syncAllAccounts();
+      const failed = ids.filter((id) => !synced.includes(id)).length;
+      if (failed > 0) setError(strings.mail.refreshAllPartial(failed));
+      await loadAccountCounts();
+      if (useAppStore.getState().activeAccountId) {
+        await loadAccountData();
+        if (submittedQueryRef.current) await runSearch();
+        else await loadMessages();
+      }
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      for (const id of claimed) syncingAccountIdsRef.current.delete(id);
+      setSyncingAccountIds(new Set(syncingAccountIdsRef.current));
+      syncingAllRef.current = false;
+      setSyncingAllAccounts(false);
+    }
+  }, [loadAccountCounts, loadAccountData, loadMessages, runSearch, setError]);
 
   async function refreshList() {
     if (submittedQueryRef.current) await runSearch();
@@ -857,6 +875,7 @@ export function MailShell({ onOpenSettings }: Props) {
     setAccountSwitcherOpen,
     openComposer,
     refresh,
+    refreshAll: refreshAllAccounts,
     onOpenSettings,
     updateSettings,
     searchInput,
@@ -1303,6 +1322,9 @@ export function MailShell({ onOpenSettings }: Props) {
         sidebarOpen={sidebarOpen}
         sidebarVisible={sidebarVisible}
         busy={busy}
+        accountCount={accounts.length}
+        syncingAll={syncingAllAccounts}
+        onRefreshAll={() => void refreshAllAccounts()}
         updateReady={updateReady}
         inputRef={searchInput}
         query={query}

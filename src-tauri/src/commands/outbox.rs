@@ -208,7 +208,9 @@ pub(crate) async fn deliver_outbox_locked(
     {
         return Err("This message is already sending.".into());
     }
-    match mail::send_prepared(&account, &password, &draft, &mime_bytes).await {
+    let sent = mail::send_prepared(&account, &password, &draft, &mime_bytes).await;
+    let confirmation = sent.as_ref().map(|_| ()).map_err(|error| error.kind);
+    match sent {
         Ok(()) => {
             let history: Vec<(String, String)> = draft
                 .to
@@ -252,6 +254,17 @@ pub(crate) async fn deliver_outbox_locked(
                         "Message sent. This draft removes itself once the Sent copy is saved.",
                     );
                 }
+                // Row is final first, so a stalled IMAP flag call cannot leave a
+                // delivered message in `sending` (restart would ask to resend).
+                super::replied::mark_source_after_send(
+                    app,
+                    state,
+                    &account,
+                    &password,
+                    &draft,
+                    &confirmation,
+                )
+                .await;
                 emit_outbox_change(app, account_id, Some(outbox_id), Some("sent_copy_pending"));
                 return Ok(SendOutcome {
                     id: outbox_id.to_string(),
@@ -267,6 +280,15 @@ pub(crate) async fn deliver_outbox_locked(
                 state,
                 account_id,
                 draft.attachments.iter().map(|item| item.token.as_str()),
+            )
+            .await;
+            super::replied::mark_source_after_send(
+                app,
+                state,
+                &account,
+                &password,
+                &draft,
+                &confirmation,
             )
             .await;
             emit_outbox_change(app, account_id, Some(outbox_id), Some("sent"));

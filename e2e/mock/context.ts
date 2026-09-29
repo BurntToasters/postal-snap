@@ -14,6 +14,7 @@ export interface MockAccount {
   error: string | null;
   signature?: string;
   aliases?: string[];
+  defaultBodyFormat?: string;
 }
 
 export interface MockMailbox {
@@ -44,6 +45,9 @@ export interface MockMessageSummary {
   hasAttachments: boolean;
   size: number;
   threadRoot: string | null;
+  hasCalendar?: boolean;
+  isAnswered?: boolean;
+  isForwarded?: boolean;
 }
 
 export interface MockState {
@@ -70,6 +74,7 @@ export interface MockState {
   importedSettings: number;
   printCalls: number;
   updateCalls: Array<{ command: string; args: Record<string, unknown> }>;
+  ipcCalls: Array<{ command: string; args: Record<string, unknown> }>;
   backgroundUpdateAllowed: boolean;
   rules: Array<Record<string, unknown>>;
   callbacks: Map<number, (...args: unknown[]) => void>;

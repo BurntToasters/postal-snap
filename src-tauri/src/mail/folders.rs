@@ -71,6 +71,80 @@ fn remote_failure(error: async_imap::error::Error, action: &str) -> MailboxOpera
     }
 }
 
+/// Replied/forwarded keyword set on the source message after a sent reply.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceKeyword {
+    Answered,
+    Forwarded,
+}
+
+impl SourceKeyword {
+    fn atom(self) -> &'static str {
+        match self {
+            Self::Answered => "\\Answered",
+            Self::Forwarded => "$Forwarded",
+        }
+    }
+}
+
+/// `$Forwarded` is a custom keyword: only set it when the mailbox lets
+/// clients create keywords (`\*`) or already lists it.
+pub fn forwarded_permitted(permanent: &[async_imap::types::Flag<'_>]) -> bool {
+    permanent.iter().any(|flag| match flag {
+        async_imap::types::Flag::MayCreate => true,
+        async_imap::types::Flag::Custom(name) => name.eq_ignore_ascii_case("$Forwarded"),
+        _ => false,
+    })
+}
+
+/// Set one keyword on one message. `$Forwarded` on a server that forbids it
+/// is skipped without error.
+pub async fn set_remote_keyword(
+    account: &AccountRecord,
+    password: &str,
+    mailbox: &str,
+    uid: u32,
+    expected_uid_validity: Option<u32>,
+    keyword: SourceKeyword,
+) -> Result<(), MailboxOperationError> {
+    let expected_uid_validity = expected_uid_validity.ok_or_else(|| {
+        MailboxOperationError::transient(
+            "Mailbox identity is unavailable; refresh mail and try again.".to_string(),
+        )
+    })?;
+    let mut session = super::pool::checkout(account, password)
+        .await
+        .map_err(MailboxOperationError::transient)?;
+    let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(mailbox))
+        .await
+        .map_err(|_| MailboxOperationError::transient("Message update timed out.".to_string()))?
+        .map_err(|error| remote_failure(error, "Message update"))?;
+    if selected.uid_validity != Some(expected_uid_validity) {
+        return Err(MailboxOperationError::terminal(
+            "This mailbox changed; refresh mail and try again.".to_string(),
+        ));
+    }
+    if keyword == SourceKeyword::Forwarded && !forwarded_permitted(&selected.permanent_flags) {
+        session.release();
+        return Ok(());
+    }
+    let command = format!("+FLAGS.SILENT ({})", keyword.atom());
+    tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
+        session
+            .uid_store(uid.to_string(), command)
+            .await
+            .map_err(|error| remote_failure(error, "Message update"))?
+            .try_collect::<Vec<_>>()
+            .await
+            .map_err(|error| remote_failure(error, "Message update"))
+    })
+    .await
+    .map_err(|_| MailboxOperationError::transient("Message update timed out.".to_string()))??;
+    session.release();
+    Ok(())
+}
+
 pub async fn set_remote_flags(
     account: &AccountRecord,
     password: &str,

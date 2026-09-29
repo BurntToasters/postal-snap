@@ -3,6 +3,7 @@ import { ChevronDown, MailPlus, RefreshCw, Settings } from "lucide-react";
 import { accountSyncPhase } from "../../accountStatus";
 import { strings } from "../../i18n";
 import type { AccountInboxCount, AccountSummary, SyncState } from "../../types";
+import { UnreadBadge } from "./unreadBadge";
 
 interface Props {
   accounts: AccountSummary[];
@@ -59,6 +60,10 @@ export function AccountSwitcher({
   onSettings,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
+  const otherUnread = counts
+    .filter((item) => item.accountId !== activeAccount?.id)
+    .filter((item) => accounts.some((account) => account.id === item.accountId))
+    .reduce((sum, item) => sum + item.unreadCount, 0);
   const triggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -108,6 +113,10 @@ export function AccountSwitcher({
           <strong>{activeAccount?.displayName || strings.mail.account}</strong>
           <small>{activeAccount?.email}</small>
         </span>
+        <UnreadBadge
+          count={otherUnread}
+          label={strings.mail.unreadInOtherAccounts(otherUnread)}
+        />
         <ChevronDown aria-hidden="true" />
       </button>
       {open ? (
@@ -150,14 +159,10 @@ export function AccountSwitcher({
                     {status.label}
                   </small>
                 </span>
-                {count?.unreadCount ? (
-                  <span
-                    className="account-unread"
-                    aria-label={`${count.unreadCount} unread`}
-                  >
-                    {count.unreadCount}
-                  </span>
-                ) : null}
+                <UnreadBadge
+                  count={count?.unreadCount ?? 0}
+                  label={strings.mail.unreadCount(count?.unreadCount ?? 0)}
+                />
               </button>
             );
           })}
@@ -167,6 +172,7 @@ export function AccountSwitcher({
             role="menuitem"
             onClick={onGetAll}
             disabled={syncingAll}
+            aria-keyshortcuts="Shift+F5"
           >
             <RefreshCw
               className={syncingAll ? "spinning" : ""}

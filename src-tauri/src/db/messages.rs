@@ -41,6 +41,43 @@ impl Database {
         transaction.commit().map_err(db_error)
     }
 
+    /// Server truth for `\\Answered` / `$Forwarded`, keyed by UID.
+    pub fn reconcile_reply_flags(
+        &self,
+        mailbox_id: i64,
+        seen: &[(u32, bool, bool)],
+    ) -> Result<(), String> {
+        let mut conn = self.conn()?;
+        let transaction = conn.transaction().map_err(db_error)?;
+        for (uid, answered, forwarded) in seen {
+            transaction
+                .execute(
+                    "UPDATE messages SET is_answered=?3,is_forwarded=?4 WHERE mailbox_id=?1 AND uid=?2",
+                    params![mailbox_id, uid, *answered as i32, *forwarded as i32],
+                )
+                .map_err(db_error)?;
+        }
+        transaction.commit().map_err(db_error)
+    }
+
+    /// Optimistic local mark after a confirmed send; only ever turns flags on.
+    pub fn mark_replied(
+        &self,
+        id: i64,
+        account_id: &str,
+        answered: bool,
+        forwarded: bool,
+    ) -> Result<(), String> {
+        self.conn()?
+            .execute(
+                "UPDATE messages SET is_answered=is_answered OR ?3, is_forwarded=is_forwarded OR ?4
+                 WHERE id=?1 AND account_id=?2",
+                params![id, account_id, answered as i32, forwarded as i32],
+            )
+            .map_err(db_error)?;
+        Ok(())
+    }
+
     #[cfg(test)]
     pub fn upsert_message(
         &self,
@@ -298,6 +335,9 @@ impl Database {
                 let sanitized = html_body
                     .as_deref()
                     .map(crate::html_sanitize::sanitize_received_html);
+                let list_unsubscribe: Option<String> = row.get("list_unsubscribe")?;
+                let list_unsubscribe_post: Option<String> = row.get("list_unsubscribe_post")?;
+                let calendar_json: Option<String> = row.get("calendar_json")?;
                 Ok(MessageDetail {
                     summary: map_message_summary(row)?,
                     to: json_or_default(row.get::<_, String>(15)?),
@@ -311,6 +351,15 @@ impl Database {
                     attachments: json_or_default(row.get::<_, String>(20)?),
                     references: Vec::new(),
                     body_status: "available".into(),
+                    unsubscribe: crate::mail::list_unsubscribe::options(
+                        list_unsubscribe.as_deref(),
+                        list_unsubscribe_post.as_deref(),
+                    ),
+                    list_unsubscribe,
+                    list_unsubscribe_post,
+                    invite: calendar_json
+                        .as_deref()
+                        .and_then(|json| serde_json::from_str(json).ok()),
                 })
             },
         )
@@ -780,31 +829,58 @@ impl Database {
     }
 
     pub fn search(&self, query: &SearchQuery) -> Result<Vec<MessageSummary>, String> {
+        use rusqlite::types::Value;
         let conn = self.conn()?;
-        let terms = fts_query(&query.text);
-        if terms.is_empty() {
+        let parsed = crate::search_query::parse(&query.text);
+        if parsed.is_empty() {
             return Ok(Vec::new());
         }
-        let mailbox_filter = if query.all_folders {
-            ""
+        let expression = parsed.fts_match();
+        let mut values = vec![Value::from(query.account_id.clone())];
+        let mut sql = MESSAGE_SUMMARY_SELECT.to_string();
+        if expression.is_some() {
+            sql.push_str(" JOIN message_fts fts ON fts.rowid=m.id");
+        }
+        sql.push_str(" WHERE m.account_id=?1 AND m.pending_move_to IS NULL");
+        if let Some(expression) = expression.clone() {
+            values.push(Value::from(expression));
+            sql.push_str(&format!(" AND message_fts MATCH ?{}", values.len()));
+        }
+        if let (false, Some(mailbox_id)) = (query.all_folders, query.mailbox_id) {
+            values.push(Value::from(mailbox_id));
+            sql.push_str(&format!(" AND m.mailbox_id = ?{}", values.len()));
+        }
+        if parsed.has_attachment {
+            sql.push_str(" AND m.has_attachments=1");
+        }
+        match parsed.read {
+            Some(true) => sql.push_str(" AND m.is_read=1"),
+            Some(false) => sql.push_str(" AND m.is_read=0"),
+            None => {}
+        }
+        if parsed.flagged {
+            sql.push_str(" AND m.is_starred=1");
+        }
+        // Dates are UTC days; received_at is RFC 3339, so text compares.
+        if let Some(date) = parsed.after {
+            values.push(Value::from(date.format("%Y-%m-%d").to_string()));
+            sql.push_str(&format!(" AND m.received_at >= ?{}", values.len()));
+        }
+        if let Some(date) = parsed.before {
+            values.push(Value::from(date.format("%Y-%m-%d").to_string()));
+            sql.push_str(&format!(" AND m.received_at < ?{}", values.len()));
+        }
+        // Weights: subject, sender, recipients, body.
+        sql.push_str(if expression.is_some() {
+            " ORDER BY bm25(message_fts, 10.0, 6.0, 3.0, 1.0), m.received_at DESC"
         } else {
-            " AND (?3 IS NULL OR m.mailbox_id = ?3)"
-        };
-        let sql = format!(
-            "{} JOIN message_fts fts ON fts.rowid=m.id WHERE m.account_id=?1 AND m.pending_move_to IS NULL AND message_fts MATCH ?2 {} ORDER BY bm25(message_fts), m.received_at DESC LIMIT ?4",
-            MESSAGE_SUMMARY_SELECT, mailbox_filter,
-        );
+            " ORDER BY m.received_at DESC, m.uid DESC"
+        });
+        values.push(Value::from(i64::from(query.limit.min(500))));
+        sql.push_str(&format!(" LIMIT ?{}", values.len()));
         let mut statement = conn.prepare(&sql).map_err(db_error)?;
         let rows = statement
-            .query_map(
-                params![
-                    query.account_id,
-                    terms,
-                    query.mailbox_id,
-                    query.limit.min(500)
-                ],
-                map_message_summary,
-            )
+            .query_map(rusqlite::params_from_iter(values), map_message_summary)
             .map_err(db_error)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
     }
@@ -823,7 +899,7 @@ impl Database {
             return Ok(Vec::new());
         }
         let sql = format!(
-            "{} JOIN message_fts fts ON fts.rowid=m.id WHERE m.pending_move_to IS NULL AND message_fts MATCH ?1 ORDER BY bm25(message_fts), m.received_at DESC LIMIT ?2",
+            "{} JOIN message_fts fts ON fts.rowid=m.id WHERE m.pending_move_to IS NULL AND message_fts MATCH ?1 ORDER BY bm25(message_fts, 10.0, 6.0, 3.0, 1.0), m.received_at DESC LIMIT ?2",
             MESSAGE_SUMMARY_SELECT,
         );
         let mut statement = conn.prepare(&sql).map_err(db_error)?;
@@ -862,9 +938,10 @@ fn write_full_message(
             account_id, mailbox_id, uid, message_id, subject, sender_name, sender_address, recipients,
             received_at, preview, is_read, is_starred, has_attachments, size, to_json, cc_json,
             reply_to, thread_parent, thread_root, text_body, html_body, attachments_json, raw_message, accessed_at,
-            internal_at, body_bytes, prefetch_failures, prefetch_retry_at
+            internal_at, body_bytes, prefetch_failures, prefetch_retry_at,
+            has_calendar, calendar_json, list_unsubscribe, list_unsubscribe_post
          ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,'1970-01-01 00:00:00',
-            COALESCE(?24,?9),?25,0,NULL)
+            COALESCE(?24,?9),?25,0,NULL,?26,?27,?28,?29)
          ON CONFLICT(mailbox_id, uid) DO UPDATE SET
             message_id=excluded.message_id, subject=excluded.subject, sender_name=excluded.sender_name,
             sender_address=excluded.sender_address, recipients=excluded.recipients, received_at=excluded.received_at,
@@ -874,7 +951,9 @@ fn write_full_message(
             thread_root=excluded.thread_root, text_body=excluded.text_body,
             html_body=excluded.html_body, attachments_json=excluded.attachments_json, raw_message=excluded.raw_message,
             internal_at=COALESCE(?24, messages.internal_at, excluded.received_at),
-            body_bytes=excluded.body_bytes, prefetch_failures=0, prefetch_retry_at=NULL",
+            body_bytes=excluded.body_bytes, prefetch_failures=0, prefetch_retry_at=NULL,
+            has_calendar=excluded.has_calendar, calendar_json=excluded.calendar_json,
+            list_unsubscribe=excluded.list_unsubscribe, list_unsubscribe_post=excluded.list_unsubscribe_post",
         params![
             account_id, mailbox_id, message.uid, message.message_id, message.subject, message.sender_name,
             message.sender_address, message.recipients, message.received_at, message.preview,
@@ -883,6 +962,8 @@ fn write_full_message(
             message.text_body, message.html_body,
             attachments, message.raw_message, message.internal_at,
             body_bytes.min(i64::MAX as usize) as i64,
+            message.has_calendar as i32, message.calendar_json, message.list_unsubscribe,
+            message.list_unsubscribe_post,
         ],
     ).map_err(db_error)?;
     let id: i64 = transaction
@@ -919,13 +1000,14 @@ fn write_envelope(
             account_id, mailbox_id, uid, message_id, subject, sender_name, sender_address, recipients,
             received_at, preview, is_read, is_starred, has_attachments, size, to_json, cc_json,
             reply_to, thread_parent, thread_root, text_body, html_body, attachments_json, raw_message, accessed_at,
-            internal_at
+            internal_at, is_answered, is_forwarded
          ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,'',?10,?11,?12,?13,?14,?15,?16,?17,?18,'',NULL,'[]',X'','1970-01-01 00:00:00',
-            COALESCE(?19,?9))
+            COALESCE(?19,?9),?20,?21)
          ON CONFLICT(mailbox_id, uid) DO UPDATE SET
             message_id=excluded.message_id, subject=excluded.subject, sender_name=excluded.sender_name,
             sender_address=excluded.sender_address, recipients=excluded.recipients, received_at=excluded.received_at,
             is_read=excluded.is_read, is_starred=excluded.is_starred, size=excluded.size,
+            is_answered=excluded.is_answered, is_forwarded=excluded.is_forwarded,
             to_json=excluded.to_json, cc_json=excluded.cc_json, reply_to=excluded.reply_to,
             thread_parent=excluded.thread_parent, thread_root=excluded.thread_root,
             internal_at=COALESCE(?19, messages.internal_at, excluded.received_at),
@@ -950,6 +1032,8 @@ fn write_envelope(
             thread_parent,
             thread_root,
             message.internal_at,
+            message.is_answered as i32,
+            message.is_forwarded as i32,
         ],
     ).map_err(db_error)?;
     let id: i64 = transaction

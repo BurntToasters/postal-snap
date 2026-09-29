@@ -96,6 +96,7 @@ export async function registerMockWindowEvents(
             default: {
               const mock = window.__POSTAL_SNAP_MOCK__ as MockShared;
               const handler = mock.handlers[command];
+              state.ipcCalls.push({ command, args: { ...args } });
               if (handler) return handler(args);
               throw new Error(`No mock handler for native command: ${command}`);
             }

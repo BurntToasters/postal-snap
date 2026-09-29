@@ -207,7 +207,15 @@ export async function registerMockMessages(page: Page): Promise<void> {
         return undefined;
       },
       sync_all_accounts() {
-        return mock.accounts.map((account) => account.id);
+        // ?syncAddsMail: new unread arrives on the second account.
+        if (params.has("syncAddsMail")) {
+          const inbox = mock.mailboxes.find((item) => item.id === 21);
+          if (inbox) inbox.unreadCount += 2;
+        }
+        // ?syncAllPartial: only the first account refreshes.
+        return mock.accounts
+          .filter((_, index) => !params.has("syncAllPartial") || index === 0)
+          .map((account) => account.id);
       },
       release_compose_attachments() {
         return undefined;

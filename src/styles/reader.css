@@ -548,3 +548,152 @@ html[data-reduce-transparency="true"] .reader-actions {
   min-height: 44px;
   width: auto;
 }
+
+/* Replied / forwarded state in the header */
+.reply-state {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.reply-state span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Calendar invitation card above the body */
+.invite-card {
+  display: grid;
+  gap: 6px;
+  margin: 12px 18px 0;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+}
+
+.invite-card[data-cancelled="true"] {
+  border-left-color: var(--danger);
+}
+
+.invite-card[data-cancelled="true"] .invite-title {
+  text-decoration: line-through;
+}
+
+.invite-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-weight: 650;
+}
+
+.invite-card-head svg {
+  width: 1.125rem;
+  height: 1.125rem;
+  color: var(--accent);
+}
+
+.invite-title {
+  margin: 0;
+  font-size: 1.15rem;
+  overflow-wrap: anywhere;
+}
+
+.invite-details {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 14px;
+  margin: 0;
+}
+
+.invite-details dt {
+  color: var(--text-muted);
+}
+
+.invite-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.invite-location {
+  white-space: pre-line;
+}
+
+.invite-note {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+/* Show original dialog */
+/* Positioned so it paints above the backdrop button. */
+.original-dialog {
+  position: relative;
+  z-index: 1;
+  width: min(900px, 96vw);
+}
+
+.original-body {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  padding: 14px 18px;
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  background: var(--surface-muted);
+}
+
+.original-body h3 {
+  margin: 6px 0 0;
+  font-size: 0.95rem;
+}
+
+.original-headers-scroll {
+  max-height: 34vh;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.original-headers {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.original-headers th,
+.original-headers td {
+  padding: 6px 10px;
+  vertical-align: top;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+
+.original-headers th {
+  width: 1%;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-weight: 650;
+}
+
+.original-source {
+  margin: 0;
+  padding: 12px;
+  max-height: 40vh;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

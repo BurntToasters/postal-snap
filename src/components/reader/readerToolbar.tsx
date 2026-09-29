@@ -4,8 +4,10 @@ import {
   ArrowLeft,
   Clock,
   FolderInput,
+  FileText,
   Forward,
   Mail,
+  MailMinus,
   MailOpen,
   MoreHorizontal,
   Printer,
@@ -47,6 +49,8 @@ export function ReaderToolbar({
   onMoveToInbox,
   onMoveToMailbox,
   onOpenSnooze,
+  onUnsubscribe,
+  onShowOriginal,
   onToggleMore,
   onOpenMore,
   onCloseMore,
@@ -75,6 +79,8 @@ export function ReaderToolbar({
   onMoveToInbox: () => void;
   onMoveToMailbox: (mailboxId: number) => void;
   onOpenSnooze: () => void;
+  onUnsubscribe: () => void;
+  onShowOriginal: () => void;
   onToggleMore: () => void;
   onOpenMore: () => void;
   onCloseMore: () => void;
@@ -259,6 +265,30 @@ export function ReaderToolbar({
                 >
                   <Clock aria-hidden="true" />
                   {strings.reader.snooze}
+                </button>
+                {message.unsubscribe ? (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      onUnsubscribe();
+                      onDismissMore();
+                    }}
+                  >
+                    <MailMinus aria-hidden="true" />
+                    {strings.reader.unsubscribe}
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    onShowOriginal();
+                    onDismissMore();
+                  }}
+                >
+                  <FileText aria-hidden="true" />
+                  {strings.reader.showOriginal}
                 </button>
                 {moveDestinations.length > 0 ? (
                   // Folders as menu items, like the right-click menu. Archive,

@@ -136,6 +136,8 @@ describe("reader toolbar", () => {
     onMoveToInbox: vi.fn(),
     onMoveToMailbox: vi.fn(),
     onOpenSnooze: vi.fn(),
+    onUnsubscribe: vi.fn(),
+    onShowOriginal: vi.fn(),
     onToggleMore: vi.fn(),
     onOpenMore: vi.fn(),
     onCloseMore: vi.fn(),

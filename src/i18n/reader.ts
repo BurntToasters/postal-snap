@@ -65,6 +65,42 @@ export const reader = {
     `This address was reported as potentially dangerous.\n\n${hostname}\n\n${url}\n\nIt is better not to open it. Choose Cancel unless you are sure you want to continue.`,
   reportedThreatOpenAnyway:
     "Open this reported address anyway? This can put your information at risk.",
+  unsubscribe: "Unsubscribe…",
+  unsubscribeTitle: "Unsubscribe from this sender?",
+  unsubscribeConfirm: (hostname: string) =>
+    `${hostname}\n\nPostal Snap will send a one-time request to this sender's server asking to remove you from its list. Nothing else is shared.\n\nSend the request?`,
+  unsubscribeSent: "Unsubscribe request sent",
+  unsubscribeSentDetail:
+    "The sender decides whether and when to act on it. You may still get a few more messages.",
+  unsubscribeFailed:
+    "The unsubscribe request was not sent. Try again later, or use the sender's own unsubscribe page.",
+  showOriginal: "Show original",
+  originalTitle: "Original message",
+  originalHeaders: "Headers",
+  originalSource: "Source",
+  originalLoading: "Loading the original message…",
+  originalTruncated:
+    "Showing the first part only. Save as .eml to keep the whole message.",
+  copySource: "Copy source",
+  saveEml: "Save as .eml",
+  repliedTo: "You replied to this message",
+  forwardedMessage: "You forwarded this message",
+  invitation: "Calendar invitation",
+  inviteMethod: (method: string | null | undefined, status?: string | null) => {
+    if (method === "CANCEL" || status === "CANCELLED") return "Cancelled";
+    if (method === "REQUEST") return "Invitation";
+    if (method === "REPLY") return "Reply to an invitation";
+    if (method === "COUNTER") return "Proposed new time";
+    if (method === "PUBLISH") return "Event";
+    return status === "TENTATIVE" ? "Tentative event" : "Event";
+  },
+  inviteUntitled: "Untitled event",
+  inviteWhen: "When",
+  inviteWhere: "Where",
+  inviteOrganizer: "Organizer",
+  inviteAllDay: "All day",
+  inviteNoRsvp:
+    "Postal Snap shows invitations but does not send replies. Answer from your calendar or by email.",
   blockedImages: (count: number) =>
     `${count} remote image${count === 1 ? "" : "s"} blocked for privacy.`,
   blockedImagesDetail:

@@ -1061,7 +1061,9 @@ test("lists desktop-style shortcuts instead of using R for Get Mail", async ({
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("tab", { name: "Shortcuts" }).click();
-  const getMail = page.locator(".shortcut-row").filter({ hasText: "Get Mail" });
+  const getMail = page
+    .locator(".shortcut-row")
+    .filter({ has: page.getByText("Get Mail", { exact: true }) });
   await expect(getMail.locator("kbd")).toContainText("N");
   await expect(getMail.locator("kbd")).not.toContainText("R");
   await expect(
