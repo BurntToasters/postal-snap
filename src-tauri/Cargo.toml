@@ -1,6 +1,6 @@
 [package]
 name = "postal-snap"
-version = "0.3.0"
+version = "0.3.1"
 description = "A calm, accessible desktop email client."
 authors = ["BurntToasters <code@rosie.run>"]
 edition = "2021"
@@ -37,7 +37,7 @@ rusqlite = { version = "0.40", features = ["bundled", "chrono"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-tauri = { version = "2" }
+tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-deep-link = "2"
 tauri-plugin-notification = "2"

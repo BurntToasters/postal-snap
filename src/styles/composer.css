@@ -36,8 +36,8 @@
   position: absolute;
   right: 0;
   bottom: 0;
-  width: 44px;
-  height: 44px;
+  width: var(--target-size);
+  height: var(--target-size);
   padding: 0;
   border: 0;
   border-radius: var(--radius-sm);
@@ -110,7 +110,7 @@
   display: flex;
   align-items: center;
   max-width: 380px;
-  min-height: 48px;
+  min-height: var(--bar-height-sm);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--surface);
@@ -181,8 +181,8 @@
 .cc-toggle {
   position: static;
   transform: none;
-  min-height: 44px;
-  min-width: 44px;
+  min-height: var(--target-size);
+  min-width: var(--target-size);
   padding: 8px 12px;
   font-size: 0.82rem;
   white-space: nowrap;
@@ -238,10 +238,10 @@
 
 .toolbar-group > button {
   display: grid;
-  min-width: 44px;
-  min-height: 44px;
-  width: max(44px, 2.25rem);
-  height: max(44px, 2.25rem);
+  min-width: var(--target-size);
+  min-height: var(--target-size);
+  width: max(var(--target-size), 2.25rem);
+  height: max(var(--target-size), 2.25rem);
   place-items: center;
   border: 1px solid transparent;
   border-radius: var(--radius-pill);
@@ -266,7 +266,7 @@
 
 .toolbar-group select {
   width: auto;
-  min-height: 44px;
+  min-height: var(--target-size);
   padding: 4px 8px;
   border: 1px solid transparent;
   border-radius: var(--radius-pill);
@@ -279,10 +279,10 @@
 }
 
 .toolbar-group .color-control {
-  min-width: 44px;
-  min-height: 44px;
-  width: 44px;
-  height: 44px;
+  min-width: var(--target-size);
+  min-height: var(--target-size);
+  width: var(--target-size);
+  height: var(--target-size);
 }
 
 .send-kbd-hint {
@@ -299,15 +299,15 @@
 .color-control {
   position: relative;
   display: grid;
-  width: 44px;
-  height: 44px;
+  width: var(--target-size);
+  height: var(--target-size);
   place-items: center;
 }
 
 .color-control input {
   position: absolute;
   inset: 0;
-  min-height: 44px;
+  min-height: var(--target-size);
   opacity: 0;
 }
 
@@ -378,8 +378,8 @@
 }
 
 .compose-attachments button {
-  min-width: 44px;
-  min-height: 44px;
+  min-width: var(--target-size);
+  min-height: var(--target-size);
   border: 0;
   border-radius: 50%;
   background: transparent;
@@ -442,7 +442,7 @@
 }
 
 .send-split .send-chevron {
-  min-width: 44px;
+  min-width: var(--target-size);
   padding-inline: 8px;
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   border-left: 1px solid

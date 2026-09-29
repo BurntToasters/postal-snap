@@ -65,7 +65,7 @@
 
   .sidebar-mobile-header {
     display: flex;
-    min-height: 48px;
+    min-height: var(--bar-height-sm);
     align-items: center;
     justify-content: space-between;
     padding: 0 4px 8px 9px;
@@ -74,7 +74,7 @@
 
 @media (max-height: 640px) {
   .pane-heading {
-    min-height: 56px;
+    min-height: var(--bar-height-md);
     padding-block: 10px;
   }
 
@@ -118,7 +118,9 @@
 
   .app-toolbar {
     display: grid;
-    grid-template-columns: 44px minmax(0, 1fr) auto 44px;
+    grid-template-columns: var(--target-size) minmax(0, 1fr) auto var(
+        --target-size
+      );
     gap: 6px;
     padding-inline: 10px;
   }
@@ -129,7 +131,7 @@
   }
 
   .app-toolbar .icon-button {
-    width: 44px;
+    width: var(--target-size);
   }
 
   .get-mail-button {

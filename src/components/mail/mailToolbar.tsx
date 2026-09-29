@@ -33,12 +33,17 @@ function fitToolbar(toolbar: HTMLElement) {
     );
   };
   const searchCramped = () => search !== null && search.clientWidth < rem * 5;
+  // Below this search is too narrow to type in (wider fonts, e.g. Linux),
+  // so Get Mail and Compose drop labels even without clipping.
+  const searchUnusable = () =>
+    search !== null && search.clientWidth < rem * 3.75;
   // The tips button gives its width back before anything else shrinks.
   if (searchCramped()) toolbar.setAttribute("data-fit-tips", "");
   for (let step = 1; step <= FIT_STEPS; step += 1) {
     const badgeStep = step <= BADGE_STEPS;
     if (badgeStep && !hasBadge) continue;
-    const needed = clipped() || (badgeStep && searchCramped());
+    const needed =
+      clipped() || (badgeStep ? searchCramped() : searchUnusable());
     if (!needed) break;
     toolbar.setAttribute(`data-fit${step}`, "");
   }
