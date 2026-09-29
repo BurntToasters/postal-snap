@@ -42,6 +42,7 @@ import {
   seedBody,
   seedRecipients,
   seedReferences,
+  seedSource,
   seedSubject,
 } from "./composer/composerSeed";
 import {
@@ -484,6 +485,7 @@ export function Composer({ accountId }: Props) {
           ? undefined
           : (seed?.sourceMessage?.messageId ?? undefined)),
       references: seedReferences(seed),
+      ...seedSource(seed),
     };
   }, [
     accountId,

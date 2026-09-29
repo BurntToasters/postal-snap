@@ -32,6 +32,7 @@ export async function registerMockState(page: Page): Promise<void> {
       ipcCalls: [],
       backgroundUpdateAllowed: false,
       rules: [] as Array<Record<string, unknown>>,
+      ipcCalls: [] as Array<{ command: string; args: Record<string, unknown> }>,
       callbacks: new Map<number, (...args: unknown[]) => void>(),
       eventListeners: new Map<string, Set<number>>(),
       nextCallback: 1,

@@ -6,7 +6,7 @@ use futures_util::TryStreamExt;
 use tokio::sync::Notify;
 
 use super::parse::{
-    internal_date, parse_envelope, parse_message, received_at_fallback, system_flags,
+    internal_date, parse_envelope, parse_message, received_at_fallback, reply_flags, system_flags,
 };
 use super::pool::{self, Lease};
 use super::qresync::{
@@ -562,9 +562,10 @@ async fn cache_envelopes(
             break;
         };
         let (seen, flagged) = system_flags(&item);
-        let Ok(parsed) = parse_envelope(&item, seen, flagged) else {
+        let Ok(mut parsed) = parse_envelope(&item, seen, flagged) else {
             continue;
         };
+        (parsed.is_answered, parsed.is_forwarded) = reply_flags(&item);
         let is_old = cutoff.is_some_and(|cutoff| {
             item.internal_date()
                 .map(|date| date.with_timezone(&Utc) < *cutoff)
@@ -750,6 +751,14 @@ async fn sync_changed_flags(
             item.uid.map(|uid| (uid, seen, flagged))
         })
         .collect::<Vec<_>>();
+    let replies = rows
+        .iter()
+        .filter_map(|item| {
+            let (answered, forwarded) = reply_flags(item);
+            item.uid.map(|uid| (uid, answered, forwarded))
+        })
+        .collect::<Vec<_>>();
+    db.reconcile_reply_flags(mailbox_id, &replies)?;
     db.reconcile_flags(mailbox_id, &changed, &[])?;
     if let Some(VanishedPlan::Apply(uids)) = &plan {
         db.apply_vanished(mailbox_id, uids)?;
@@ -780,6 +789,14 @@ async fn full_flag_scan(lease: &mut Lease, db: &Database, mailbox_id: i64) -> Re
                 item.uid.map(|uid| (uid, seen, flagged))
             })
             .collect::<Vec<_>>();
+        let replies = rows
+            .iter()
+            .filter_map(|item| {
+                let (answered, forwarded) = reply_flags(item);
+                item.uid.map(|uid| (uid, answered, forwarded))
+            })
+            .collect::<Vec<_>>();
+        db.reconcile_reply_flags(mailbox_id, &replies)?;
         db.reconcile_flags(mailbox_id, &seen, chunk)?;
     }
     db.mark_flag_scan(mailbox_id)
@@ -1256,7 +1273,10 @@ async fn search_mailboxes(
             .iter()
             .filter_map(|item| {
                 let (seen, flagged) = system_flags(item);
-                parse_envelope(item, seen, flagged).ok()
+                parse_envelope(item, seen, flagged).ok().map(|mut parsed| {
+                    (parsed.is_answered, parsed.is_forwarded) = reply_flags(item);
+                    parsed
+                })
             })
             .collect::<Vec<_>>();
         db.upsert_envelopes(&account.summary.id, mailbox_id, &parsed)?;

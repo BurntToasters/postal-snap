@@ -21,6 +21,7 @@ import type {
   DraftSyncEvent,
   MailboxSummary,
   MessageDetail,
+  MessageSource,
   MessageCursor,
   AttachmentPreview,
   BulkOutcome,
@@ -72,6 +73,9 @@ function inTauri(): boolean {
 
 export type NativeCommand =
   | "list_accounts"
+  | "get_message_source"
+  | "save_message_eml"
+  | "unsubscribe_one_click"
   | "test_account"
   | "discover_mail_settings"
   | "test_saved_account"
@@ -226,6 +230,12 @@ export const api = {
     call<MessagePage>("list_messages", { accountId, mailboxId, cursor, limit }),
   getMessage: (accountId: string, messageId: number) =>
     call<MessageDetail>("get_message", { accountId, messageId }),
+  getMessageSource: (accountId: string, messageId: number) =>
+    call<MessageSource>("get_message_source", { accountId, messageId }),
+  saveMessageEml: (accountId: string, messageId: number) =>
+    call<void>("save_message_eml", { accountId, messageId }),
+  unsubscribeOneClick: (accountId: string, messageId: number) =>
+    call<void>("unsubscribe_one_click", { accountId, messageId }),
   setMessageFlags: (
     accountId: string,
     messageId: number,
