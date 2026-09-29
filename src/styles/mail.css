@@ -1225,3 +1225,97 @@
 .draft-sync-state.pending {
   color: var(--accent);
 }
+
+.get-mail-menu-wrap {
+  position: relative;
+  display: flex;
+}
+
+.get-mail-menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 14rem;
+}
+
+.search-tips-button {
+  display: inline-flex;
+  width: 44px;
+  min-height: 44px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  color: var(--text-muted);
+  background: transparent;
+}
+
+.app-toolbar[data-fit-tips] .search-tips-button:not([aria-expanded="true"]) {
+  display: none;
+}
+
+.search-tips-button svg {
+  width: 1.1rem;
+  height: 1.1rem;
+}
+
+.search-tips-button:hover,
+.search-tips-button[aria-expanded="true"] {
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+}
+
+.search-tips-panel {
+  position: fixed;
+  z-index: 60;
+  display: grid;
+  gap: 8px;
+  width: min(24rem, calc(100vw - 16px));
+  max-height: calc(100vh - 6rem);
+  overflow: auto;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-soft);
+  font-size: 0.92rem;
+}
+
+.search-tips-panel p {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.search-tips-panel dl {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.search-tips-panel dl > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+}
+
+.search-tips-panel dt,
+.search-tips-panel dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.search-tips-panel code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.86em;
+}
+
+.search-tips-close {
+  justify-self: end;
+  min-height: 44px;
+  padding: 4px 14px;
+}

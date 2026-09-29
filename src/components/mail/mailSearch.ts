@@ -10,9 +10,9 @@ export function mergeSearchResults(
   localItems: MessageSummary[],
   serverItems: MessageSummary[],
 ): MessageSummary[] {
-  // Cached FTS uses AND of up to 12 terms ranked by bm25; server uses IMAP
-  // TEXT phrase matching. Keep cached rank order, then append server-only
-  // body matches newest-first so server hits are not filtered through FTS.
+  // Cached FTS ranks operator and text terms by weighted bm25; the server
+  // maps the same operators to IMAP keys. Keep cached rank order, then append
+  // server-only body matches newest-first so they skip the FTS filter.
   const seen = new Set<number>();
   const merged: MessageSummary[] = [];
   for (const item of localItems) {
