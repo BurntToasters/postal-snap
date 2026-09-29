@@ -1,7 +1,6 @@
-/* Shared compact density pattern (moved, no visual change) */
+/* Compact density. Sizes come from the tokens in variables.css; this file
+   holds only layout changes tokens cannot express. */
 :root[data-density="compact"] .message-row {
-  min-height: 64px;
-  padding-block: 7px;
   grid-template-areas: "dot sender date" "dot subject subject";
 }
 
@@ -15,52 +14,60 @@
   display: none;
 }
 
-:root[data-density="compact"] .pane-heading {
-  min-height: 48px;
-  padding-block: 6px;
+/* Title and count share one line, like Mail's compact list header. */
+:root[data-density="compact"] .pane-heading > span {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
 }
 
 :root[data-density="compact"] .pane-heading h1 {
   font-size: 1.08rem;
 }
 
-:root[data-density="compact"] .reader-actions {
-  min-height: 48px;
-  padding-block: 4px;
-}
-
 :root[data-density="compact"] .message-header {
   padding-block: 10px 8px;
 }
 
-:root[data-density="compact"] .local-mail-row,
-:root[data-density="compact"] .attention-row {
-  min-height: 56px;
-  padding-block: 8px;
+:root[data-density="compact"] .folder-pane {
+  padding-block: 10px 8px;
 }
 
-:root[data-density="compact"] .folder-pane .folder-row {
-  min-height: 44px;
-  padding-block: 6px;
-}
-
-:root[data-density="compact"] .folder-pane .folder-row svg {
+:root[data-density="compact"] .folder-pane .folder svg {
   width: 1rem;
   height: 1rem;
+}
+
+:root[data-density="compact"] .sidebar-section-title {
+  margin-block: 10px 3px;
+}
+
+:root[data-density="compact"] .add-account-button {
+  margin-bottom: 4px;
+}
+
+:root[data-density="compact"] .account-heading {
+  padding-block: 2px;
 }
 
 :root[data-density="compact"] .app-toolbar {
   gap: 6px;
 }
 
-:root[data-density="compact"] .bulk-bar,
-:root[data-density="compact"] .snooze-bar {
-  min-height: 44px;
-  padding-block: 6px;
+:root[data-density="compact"] .search-box > input {
+  padding-block: var(--control-pad-block);
+}
+
+:root[data-density="compact"] .search-scope {
+  padding-block: 2px;
+}
+
+:root[data-density="compact"] .reader-actions button {
+  padding-block: 3px;
 }
 
 :root[data-density="compact"] .setup-preview-row {
-  min-height: 44px;
   padding-block: 6px;
 }
 

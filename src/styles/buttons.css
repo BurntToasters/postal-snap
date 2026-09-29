@@ -9,7 +9,7 @@
   align-items: center;
   justify-content: center;
   gap: 7px;
-  padding: 8px 14px;
+  padding: var(--control-pad-block) 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface);
@@ -61,7 +61,7 @@
 
 .icon-button {
   width: var(--control-height);
-  padding: 8px;
+  padding: var(--control-pad-block);
 }
 
 .primary-button svg,

@@ -63,6 +63,26 @@
   --space-6: 1.5rem;
   --control-height: 2.75rem;
   --toolbar-height: 3.75rem;
+  /* Density tokens: size UI with these, never literals, so compact
+     (below) can restyle everything by overriding them. */
+  --target-size: 44px;
+  --target-size-inset: var(--target-size);
+  --bar-height-sm: 48px;
+  --bar-height-md: 56px;
+  --control-pad-block: 8px;
+  --row-pad-block: 7px;
+  --toolbar-pad-block: 7px;
+  --bar-pad-block: 6px;
+  --bar-pad-block-lg: 10px;
+  --sidebar-gap: 3px;
+  --pane-heading-height: 62px;
+  --pane-heading-pad-block: 9px;
+  --message-row-height: 88px;
+  --message-row-pad-block: 10px;
+  --list-row-height: 72px;
+  --list-row-pad-block: 11px;
+  /* OS title bar size; not density-driven (Snap overlay reads its bounds). */
+  --caption-button-height: 44px;
   --scrim: rgb(15 25 33 / 52%);
   --scrim-soft: rgb(15 25 33 / 38%);
   --mail-canvas: #ffffff;
@@ -198,10 +218,26 @@
 }
 
 :root[data-density="compact"] {
-  /* Keep --control-height at 44px for target-size comfort. Compact shrinks
-     visuals and spacing only; hit areas stay full size via min-height. */
-  --control-height: 2.75rem;
-  --toolbar-height: 3.375rem;
+  /* Compact: traditional mail density (macOS Mail). AGENTS.md sizing rules
+     cover the default density only. rem values scale with text size. */
+  --control-height: 2rem;
+  --toolbar-height: 3rem;
+  --target-size: 2rem;
+  --target-size-inset: 1.75rem;
+  --bar-height-sm: 2.5rem;
+  --bar-height-md: 2.75rem;
+  --control-pad-block: 4px;
+  --row-pad-block: 4px;
+  --toolbar-pad-block: 5px;
+  --bar-pad-block: 4px;
+  --bar-pad-block-lg: 4px;
+  --sidebar-gap: 1px;
+  --pane-heading-height: 2.75rem;
+  --pane-heading-pad-block: 4px;
+  --message-row-height: 3.25rem;
+  --message-row-pad-block: 6px;
+  --list-row-height: 3.5rem;
+  --list-row-pad-block: 8px;
   --space-3: 0.625rem;
   --space-4: 0.75rem;
   --space-5: 1rem;

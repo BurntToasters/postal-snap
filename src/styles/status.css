@@ -53,8 +53,8 @@
 }
 
 .toast button {
-  min-width: 44px;
-  min-height: 44px;
+  min-width: var(--target-size);
+  min-height: var(--target-size);
   border: 0;
   background: transparent;
   font-size: 1.35rem;

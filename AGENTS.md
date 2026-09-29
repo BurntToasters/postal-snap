@@ -67,6 +67,9 @@ Important files:
 - Keep the UI minimalist but recognizably an email client.
 - Optimize for low cognitive load: large labels, clear hierarchy, plain errors, and obvious primary actions.
 - Interactive targets must be at least 44px where practical. Exception: popup menu rows (`.app-menu`) are 2.25rem so menus stay compact; they still scale with text size and support full keyboard use.
+- These sizing rules apply to the default (comfortable) density. Compact density is exempt: it is a traditional mail density (macOS Mail-like 2rem rows) for people who prefer it, and it must stay as polished as the default.
+- Size UI with the density tokens in `src/styles/variables.css` (`--target-size`, `--control-height`, `--bar-height-*`, `--*-pad-block`, row heights). Never hard-code sizes. Compact overrides the tokens; `src/styles/density.css` holds only layout changes tokens cannot express.
+- Verify every UI change in both comfortable and compact density, including 200% text.
 - Preserve keyboard navigation, visible focus, screen-reader names, reduced motion, forced-colors support, and 200% text scaling.
 - Preserve right, bottom, and hidden reading-pane modes plus narrow-window mailbox drawer/back navigation.
 - System light/dark mode is the default. Postal blue is the restrained accent.
