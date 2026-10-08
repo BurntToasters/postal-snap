@@ -225,12 +225,14 @@ mod tests {
                 color: None,
             },
             imap: ServerConfig {
+                trusted_certificate: None,
                 host: "imap.example.com".into(),
                 port: 993,
                 tls_mode: TlsMode::Tls,
                 username: "sam@example.com".into(),
             },
             smtp: ServerConfig {
+                trusted_certificate: None,
                 host: "smtp.example.com".into(),
                 port: 587,
                 tls_mode: TlsMode::StartTls,
@@ -313,12 +315,14 @@ mod tests {
                 color: None,
             },
             imap: ServerConfig {
+                trusted_certificate: None,
                 host: "127.0.0.1".into(),
                 port: 1,
                 tls_mode: TlsMode::Tls,
                 username: "sam@example.com".into(),
             },
             smtp: ServerConfig {
+                trusted_certificate: None,
                 host: "127.0.0.1".into(),
                 port: 1,
                 tls_mode: TlsMode::Tls,
@@ -473,12 +477,14 @@ mod tests {
                 color: None,
             },
             imap: ServerConfig {
+                trusted_certificate: None,
                 host: "127.0.0.1".into(),
                 port: 1,
                 tls_mode: TlsMode::Tls,
                 username: "sam".into(),
             },
             smtp: ServerConfig {
+                trusted_certificate: None,
                 host: "127.0.0.1".into(),
                 port: 1,
                 tls_mode: TlsMode::Tls,
@@ -539,12 +545,14 @@ mod tests {
                 color: None,
             },
             imap: ServerConfig {
+                trusted_certificate: None,
                 host: "imap.example.com".into(),
                 port: 993,
                 tls_mode: TlsMode::Tls,
                 username: "sam".into(),
             },
             smtp: ServerConfig {
+                trusted_certificate: None,
                 host: "smtp.example.com".into(),
                 port: 587,
                 tls_mode: TlsMode::StartTls,
@@ -594,12 +602,14 @@ mod tests {
                 color: None,
             },
             imap: ServerConfig {
+                trusted_certificate: None,
                 host: "imap.example.com".into(),
                 port: 993,
                 tls_mode: TlsMode::Tls,
                 username: "sam@example.com".into(),
             },
             smtp: ServerConfig {
+                trusted_certificate: None,
                 host: "smtp.example.com".into(),
                 port: 587,
                 tls_mode: TlsMode::StartTls,
@@ -635,6 +645,178 @@ mod tests {
             .any(|address| address.to_string() == "hidden@example.com"));
     }
 
+    // Live protocol scenarios: matching pins, TLS modes, rejected auth,
+    // replacement/hostname mismatch before credentials, required STARTTLS,
+    // missing extensions, hierarchy, delivery, and reconnect after restart.
+    #[tokio::test]
+    #[ignore = "requires canonical compatibility fixtures"]
+    async fn bridge_tls_protocol_integration() {
+        use super::send::{test_smtp, SendFailure};
+        let pem = std::fs::read_to_string(
+            std::env::var("POSTAL_SNAP_MAIL_TEST_CA_CERT").expect("fixture certificate required"),
+        )
+        .unwrap();
+        let endpoint = |name: &str, mode: TlsMode| ServerConfig {
+            host: "127.0.0.1".into(),
+            port: std::env::var(name)
+                .unwrap_or_else(|_| panic!("missing fixture port {name}"))
+                .parse()
+                .unwrap(),
+            tls_mode: mode,
+            username: "fixture@example.test".into(),
+            trusted_certificate: Some(pem.clone()),
+        };
+        let mut account = AccountRecord {
+            summary: AccountSummary {
+                id: "bridge-protocol-fixture".into(),
+                provider: ProviderKind::ProtonBridge,
+                email: "fixture@example.test".into(),
+                display_name: "Fixture".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+                color: None,
+                default_body_format: crate::models::BodyFormat::Plain,
+            },
+            imap: endpoint("POSTAL_SNAP_BRIDGE_IMAP_TLS", TlsMode::Tls),
+            smtp: endpoint("POSTAL_SNAP_BRIDGE_SMTP_TLS", TlsMode::Tls),
+        };
+        let draft = ComposeDraft {
+            id: None,
+            account_id: account.summary.id.clone(),
+            from: None,
+            to: vec!["recipient@example.test".into()],
+            cc: vec![],
+            bcc: vec![],
+            subject: "Synthetic compatibility fixture".into(),
+            html_body: String::new(),
+            text_body: "Synthetic protocol body".into(),
+            attachments: vec![],
+            in_reply_to: None,
+            references: None,
+            send_at: None,
+            body_format: crate::models::BodyFormat::Plain,
+            source_message_id: None,
+            source_kind: None,
+        };
+        let password = "fixture-password";
+        for (imap_name, smtp_name, mode) in [
+            (
+                "POSTAL_SNAP_BRIDGE_IMAP_TLS",
+                "POSTAL_SNAP_BRIDGE_SMTP_TLS",
+                TlsMode::Tls,
+            ),
+            (
+                "POSTAL_SNAP_BRIDGE_IMAP_STARTTLS",
+                "POSTAL_SNAP_BRIDGE_SMTP_STARTTLS",
+                TlsMode::StartTls,
+            ),
+        ] {
+            account.imap = endpoint(imap_name, mode.clone());
+            account.smtp = endpoint(smtp_name, mode);
+            let mut session = connect_imap(&account.imap, password)
+                .await
+                .expect("matching IMAP pin");
+            let capabilities = session.capabilities().await.unwrap();
+            assert!(!capabilities.has_str("IDLE"));
+            let names = session
+                .list(None, Some("*"))
+                .await
+                .unwrap()
+                .try_collect::<Vec<_>>()
+                .await
+                .unwrap();
+            assert!(names.iter().any(|name| name.name() == "Labels/Project"));
+            assert!(session
+                .run_command_and_check_ok("ENABLE QRESYNC")
+                .await
+                .is_err());
+            session.logout().await.unwrap();
+            assert!(connect_imap(&account.imap, "wrong-password").await.is_err());
+            test_smtp(&account.smtp, &account.summary.email, password)
+                .await
+                .expect("matching SMTP pin");
+            assert!(
+                test_smtp(&account.smtp, &account.summary.email, "wrong-password")
+                    .await
+                    .is_err()
+            );
+            let prepared = prepare_message(&account, &draft).await.unwrap();
+            send_prepared(&account, password, &draft, &prepared.bytes)
+                .await
+                .expect("same-connection pinned send");
+        }
+        for (imap_name, smtp_name, mode) in [
+            (
+                "POSTAL_SNAP_BRIDGE_IMAP_MISMATCH",
+                "POSTAL_SNAP_BRIDGE_SMTP_MISMATCH",
+                TlsMode::Tls,
+            ),
+            (
+                "POSTAL_SNAP_BRIDGE_IMAP_WRONG_HOST",
+                "POSTAL_SNAP_BRIDGE_SMTP_WRONG_HOST",
+                TlsMode::Tls,
+            ),
+            (
+                "POSTAL_SNAP_BRIDGE_IMAP_NO_STARTTLS",
+                "POSTAL_SNAP_BRIDGE_SMTP_NO_STARTTLS",
+                TlsMode::StartTls,
+            ),
+        ] {
+            account.imap = endpoint(imap_name, mode.clone());
+            account.smtp = endpoint(smtp_name, mode);
+            assert!(
+                connect_imap(&account.imap, password).await.is_err(),
+                "{imap_name} must fail before LOGIN"
+            );
+            assert!(
+                test_smtp(&account.smtp, &account.summary.email, password)
+                    .await
+                    .is_err(),
+                "{smtp_name} must fail before AUTH"
+            );
+            let prepared = prepare_message(&account, &draft).await.unwrap();
+            let error = send_prepared(&account, password, &draft, &prepared.bytes)
+                .await
+                .expect_err("negative fixture must refuse send");
+            assert_ne!(error.kind, SendFailure::Uncertain);
+        }
+        account.imap = endpoint("POSTAL_SNAP_BRIDGE_IMAP_STARTTLS", TlsMode::StartTls);
+        let mut session = connect_imap(&account.imap, password).await.unwrap();
+        session
+            .run_command_and_check_ok("XFIXTURERESTART")
+            .await
+            .unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if session.noop().await.is_err() {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .is_ok(),
+            "restart must close the old session"
+        );
+        let mut reconnected = false;
+        for _ in 0..40 {
+            if let Ok(mut fresh) = connect_imap(&account.imap, password).await {
+                fresh.logout().await.unwrap();
+                reconnected = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(
+            reconnected,
+            "Bridge must reconnect after controlled restart"
+        );
+    }
+
     #[tokio::test]
     #[ignore = "requires npm run test:mail-integration"]
     async fn greenmail_protocol_integration() {
@@ -658,12 +840,14 @@ mod tests {
                 color: None,
             },
             imap: ServerConfig {
+                trusted_certificate: None,
                 host: "localhost".into(),
                 port: 3993,
                 tls_mode: TlsMode::Tls,
                 username: "user@example.test".into(),
             },
             smtp: ServerConfig {
+                trusted_certificate: None,
                 host: "localhost".into(),
                 port: 3465,
                 tls_mode: TlsMode::Tls,
@@ -671,6 +855,7 @@ mod tests {
             },
         };
         let setup = AccountSetupRequest {
+            certificate_reference: None,
             provider: ProviderKind::Manual,
             email: account.summary.email.clone(),
             display_name: account.summary.display_name.clone(),
@@ -1031,12 +1216,14 @@ mod tests {
                 color: None,
             },
             imap: ServerConfig {
+                trusted_certificate: None,
                 host: "localhost".into(),
                 port: 3993,
                 tls_mode: TlsMode::Tls,
                 username: "history@example.test".into(),
             },
             smtp: ServerConfig {
+                trusted_certificate: None,
                 host: "localhost".into(),
                 port: 3465,
                 tls_mode: TlsMode::Tls,
@@ -1256,6 +1443,7 @@ mod tests {
         let email = std::env::var("POSTAL_SNAP_TEST_ICLOUD_EMAIL").unwrap();
         let password = std::env::var("POSTAL_SNAP_TEST_ICLOUD_PASSWORD").unwrap();
         let request = AccountSetupRequest {
+            certificate_reference: None,
             provider: ProviderKind::Icloud,
             email: email.clone(),
             display_name: "Timing".into(),
@@ -1381,6 +1569,7 @@ mod tests {
         let password = std::env::var("POSTAL_SNAP_TEST_ICLOUD_PASSWORD")
             .expect("set POSTAL_SNAP_TEST_ICLOUD_PASSWORD outside the repository");
         let request = AccountSetupRequest {
+            certificate_reference: None,
             provider: ProviderKind::Icloud,
             email,
             display_name: "Postal Snap Test".into(),

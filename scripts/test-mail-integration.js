@@ -1,36 +1,70 @@
-import { chmod, mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { connect } from "node:net";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { process, root } from "./lib/paths.js";
 import { run } from "./lib/spawn.js";
+import { execFileSync } from "node:child_process";
+import { probeCompatibilityFixture } from "../tests/mail/compatibility-fixture.mjs";
 
-try {
-  await run("docker", ["compose", "version"]);
-} catch {
-  throw new Error(
-    "Docker with Compose is required for npm run test:mail-integration.",
-  );
-}
-try {
-  await run("openssl", ["version"]);
-} catch {
-  throw new Error("OpenSSL is required for npm run test:mail-integration.");
-}
-
-const temporary = await mkdtemp(join(tmpdir(), "postal-snap-mail-test-"));
-const key = join(temporary, "server.key");
-const certificate = join(temporary, "server.pem");
-const store = join(temporary, "server.p12");
+// Failure inventory: prerequisite, generation, fixture and Cargo failures must
+// leave a redacted report; cleanup failure must not erase the primary result.
+const reportDirectory = join(root, "artifacts/mail-integration");
+const report = {
+  schemaVersion: 1,
+  commit: execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: root,
+    encoding: "utf8",
+  }).trim(),
+  startedAt: new Date().toISOString(),
+  fixtureVersions: { greenmail: "2.1.11", compatibility: "1" },
+  commands: [],
+  results: [],
+  status: "running",
+};
+let temporary;
+let environment;
+let stage = "prerequisites";
+let greenmailStarted = false;
 const compose = join(root, "tests/mail/docker-compose.yml");
 const project = "postal-snap-mail-test";
-const environment = {
-  ...process.env,
-  POSTAL_SNAP_GREENMAIL_P12: store,
-};
+async function recordedRun(command, args, options) {
+  report.commands.push({
+    command,
+    args: args.map((arg) =>
+      temporary
+        ? arg.replaceAll(temporary, "<temporary>").replaceAll(root, "<repo>")
+        : arg.replaceAll(root, "<repo>"),
+    ),
+  });
+  return run(command, args, options);
+}
 
 try {
-  await run("openssl", [
+  try {
+    await recordedRun("docker", ["compose", "version"]);
+  } catch {
+    throw new Error(
+      "Docker with Compose is required for npm run test:mail-integration.",
+    );
+  }
+  try {
+    await recordedRun("openssl", ["version"]);
+  } catch {
+    throw new Error("OpenSSL is required for npm run test:mail-integration.");
+  }
+
+  temporary = await mkdtemp(join(tmpdir(), "postal-snap-mail-test-"));
+  const key = join(temporary, "server.key");
+  const certificate = join(temporary, "server.pem");
+  const store = join(temporary, "server.p12");
+  environment = {
+    ...process.env,
+    POSTAL_SNAP_GREENMAIL_P12: store,
+  };
+
+  stage = "certificate-generation";
+  await recordedRun("openssl", [
     "req",
     "-x509",
     "-newkey",
@@ -49,7 +83,7 @@ try {
     "-addext",
     "basicConstraints=critical,CA:TRUE",
   ]);
-  await run("openssl", [
+  await recordedRun("openssl", [
     "pkcs12",
     "-export",
     "-in",
@@ -64,11 +98,37 @@ try {
     "pass:changeit",
   ]);
   await chmod(store, 0o644);
-  await run("docker", ["compose", "-p", project, "-f", compose, "up", "-d"], {
-    env: environment,
-  });
+  if (process.env.POSTAL_SNAP_COMPAT_FIXTURE_PROBE === "1") {
+    stage = "compatibility-fixture-probe";
+    report.commands.push({
+      command: "probeCompatibilityFixture",
+      args: ["<temporary>/server.pem", "<temporary>/server.key"],
+    });
+    report.results.push(
+      ...(await probeCompatibilityFixture({
+        certificatePath: certificate,
+        keyPath: key,
+      })),
+    );
+  } else {
+    report.results.push({
+      name: "compatibility-fixture-probe",
+      status: "skipped",
+      reason: "Enable POSTAL_SNAP_COMPAT_FIXTURE_PROBE=1.",
+    });
+  }
+  stage = "greenmail-start";
+  greenmailStarted = true;
+  await recordedRun(
+    "docker",
+    ["compose", "-p", project, "-f", compose, "up", "-d"],
+    {
+      env: environment,
+    },
+  );
   await Promise.all([waitForPort(3465), waitForPort(3993)]);
-  await run(
+  stage = "greenmail-protocol-integration";
+  await recordedRun(
     "cargo",
     [
       "test",
@@ -88,13 +148,37 @@ try {
       },
     },
   );
+  report.results.push({
+    name: "greenmail-protocol-integration",
+    status: "passed",
+  });
+  report.status = "passed";
+} catch (error) {
+  report.status = "failed";
+  report.results.push({
+    name: stage,
+    status: "failed",
+    reason:
+      "See redacted command output; raw errors are excluded from this report.",
+  });
+  throw error;
 } finally {
-  await run(
-    "docker",
-    ["compose", "-p", project, "-f", compose, "down", "--volumes"],
-    { env: environment },
-  ).catch(() => undefined);
-  await rm(temporary, { recursive: true, force: true });
+  if (greenmailStarted)
+    await recordedRun(
+      "docker",
+      ["compose", "-p", project, "-f", compose, "down", "--volumes"],
+      { env: environment },
+    ).catch(() => undefined);
+  if (temporary)
+    await rm(temporary, { recursive: true, force: true }).catch(
+      () => undefined,
+    );
+  report.finishedAt = new Date().toISOString();
+  await mkdir(reportDirectory, { recursive: true });
+  await writeFile(
+    join(reportDirectory, "results.json"),
+    `${JSON.stringify(report, null, 2)}\n`,
+  );
 }
 
 async function waitForPort(port) {

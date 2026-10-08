@@ -137,11 +137,19 @@ impl DerefMut for Lease {
 
 fn server_key(account: &AccountRecord) -> String {
     format!(
-        "{}:{}:{}:{}",
+        "{}:{}:{}:{}:{}",
         account.imap.host,
         account.imap.port,
         account.imap.tls_mode.as_str(),
-        account.imap.username
+        account.imap.username,
+        account
+            .imap
+            .trusted_certificate
+            .as_ref()
+            .map(|pem| crate::bridge::certificate_metadata(pem)
+                .map(|metadata| metadata.fingerprint)
+                .unwrap_or_default())
+            .unwrap_or_default()
     )
 }
 

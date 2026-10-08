@@ -2,6 +2,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { normalizeIpcError } from "./errors";
 import type {
+  AccountConnection,
+  BridgeCertificate,
+  FolderAssignment,
+  ServerConfig,
   AccountChangeEvent,
   AccountInboxCount,
   AccountRemovalOutcome,
@@ -72,6 +76,13 @@ function inTauri(): boolean {
 }
 
 export type NativeCommand =
+  | "get_account_connection"
+  | "update_account_connection"
+  | "import_bridge_certificate"
+  | "approve_bridge_certificate"
+  | "remove_bridge_certificate"
+  | "get_folder_assignments"
+  | "set_folder_assignment"
   | "list_accounts"
   | "get_message_source"
   | "save_message_eml"
@@ -185,6 +196,41 @@ async function call<T>(
 }
 
 export const api = {
+  getAccountConnection: (accountId: string) =>
+    call<AccountConnection>("get_account_connection", { accountId }),
+  updateAccountConnection: (
+    accountId: string,
+    imap: ServerConfig,
+    smtp: ServerConfig,
+    confirmIdentityChange = false,
+  ) =>
+    call<AccountConnection>("update_account_connection", {
+      accountId,
+      imap,
+      smtp,
+      confirmIdentityChange,
+    }),
+  importBridgeCertificate: () =>
+    call<BridgeCertificate | null>("import_bridge_certificate"),
+  approveBridgeCertificate: (reference: string, accountId?: string) =>
+    call<string>("approve_bridge_certificate", {
+      reference,
+      accountId: accountId ?? null,
+    }),
+  removeBridgeCertificate: (accountId: string) =>
+    call<void>("remove_bridge_certificate", { accountId }),
+  getFolderAssignments: (accountId: string) =>
+    call<FolderAssignment[]>("get_folder_assignments", { accountId }),
+  setFolderAssignment: (
+    accountId: string,
+    role: FolderAssignment["role"],
+    mailboxId: number | null,
+  ) =>
+    call<FolderAssignment[]>("set_folder_assignment", {
+      accountId,
+      role,
+      mailboxId,
+    }),
   listAccounts: () => call<AccountSummary[]>("list_accounts"),
   testAccount: (request: AccountSetupRequest) =>
     call<void>("test_account", { request }),

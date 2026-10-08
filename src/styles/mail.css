@@ -996,6 +996,13 @@
   text-align: center;
   color: var(--text-muted);
   font-size: 1.05rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.list-state p {
+  max-inline-size: 32ch;
+  margin: 0 auto var(--space-4);
 }
 
 .message-row {
@@ -1015,8 +1022,14 @@
   border: 0;
   border-radius: var(--radius-sm);
   background: var(--surface);
+  color: var(--text);
+  line-height: 1.45;
   box-shadow: inset 0 -1px color-mix(in srgb, var(--border) 72%, transparent);
   transition: background-color 120ms ease;
+}
+
+.message-row.unread {
+  background: color-mix(in srgb, var(--accent) 3%, var(--surface));
 }
 
 .message-row:hover {
@@ -1037,7 +1050,7 @@
     color-mix(in srgb, var(--accent-contrast) 18%, transparent);
 }
 
-.message-row.selected :is(.message-date, .message-preview),
+.message-row.selected :is(.message-date, .message-preview, .message-mark),
 .message-row.selected.unread .message-date {
   color: var(--accent-contrast);
 }
@@ -1067,6 +1080,7 @@
 
 .message-sender {
   grid-area: sender;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1079,9 +1093,11 @@
 
 .message-date {
   grid-area: date;
+  align-self: baseline;
   color: var(--text-muted);
   font-size: 0.82rem;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 /* The blue dot and bold sender mark unread; the date stays secondary. */
@@ -1098,12 +1114,14 @@
 }
 
 .message-subject > span {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .message-subject svg {
+  flex: 0 0 auto;
   width: 0.875rem;
   height: 0.875rem;
   color: var(--warning);

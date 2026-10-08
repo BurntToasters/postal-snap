@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app_nap;
+mod bridge;
 mod commands;
 mod content_blocking;
 mod credentials;
@@ -281,6 +282,13 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            commands::compatibility::get_account_connection,
+            commands::compatibility::update_account_connection,
+            commands::compatibility::import_bridge_certificate,
+            commands::compatibility::approve_bridge_certificate,
+            commands::compatibility::remove_bridge_certificate,
+            commands::compatibility::get_folder_assignments,
+            commands::compatibility::set_folder_assignment,
             commands::accounts::list_accounts,
             commands::accounts::test_account,
             providers::discover_mail_settings,

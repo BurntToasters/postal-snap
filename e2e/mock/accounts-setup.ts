@@ -10,7 +10,154 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
     const mock = window.__POSTAL_SNAP_MOCK__ as MockShared;
     const state = window.__POSTAL_SNAP_TEST__ as MockState;
     const { account, accounts, params } = mock;
+    type Certificate = {
+      reference: string;
+      fingerprint: string;
+      expiresAt: string;
+    };
+    type Server = {
+      host: string;
+      port: number;
+      tlsMode: string;
+      username: string;
+    };
+    const connections: Record<
+      string,
+      { imap: Server; smtp: Server; certificate?: Certificate }
+    > = {};
+    const certificates = new Map<string, Certificate>();
+    const assignments: Record<
+      string,
+      Array<{ role: string; mailboxId: number | null; missing: boolean }>
+    > = {};
+    const certificate: Certificate = {
+      reference: "bridge-certificate-fixture",
+      fingerprint: "SHA-256: 12:34:56:78:90:AB:CD:EF",
+      expiresAt: "2099-01-01T00:00:00Z",
+    };
+    function ownedAccount(id: unknown) {
+      const item = accounts.find((candidate) => candidate.id === id);
+      if (!item)
+        throw {
+          code: "invalidInput",
+          message: "Account not found.",
+          retryable: false,
+        };
+      return item;
+    }
+    function connection(id: unknown) {
+      const item = ownedAccount(id);
+      connections[item.id] ??= {
+        imap: {
+          host: "imap.mail.me.com",
+          port: 993,
+          tlsMode: "tls",
+          username: item.email,
+        },
+        smtp: {
+          host: "smtp.mail.me.com",
+          port: 587,
+          tlsMode: "startTls",
+          username: item.email,
+        },
+      };
+      return connections[item.id];
+    }
+    function folderAssignments(id: unknown) {
+      const item = ownedAccount(id);
+      assignments[item.id] ??= [
+        "sent",
+        "drafts",
+        "archive",
+        "junk",
+        "trash",
+      ].map((role) => ({
+        role,
+        mailboxId:
+          params.has("missingFolder") &&
+          item.id === account.id &&
+          role === "sent"
+            ? 999
+            : null,
+        missing:
+          params.has("missingFolder") &&
+          item.id === account.id &&
+          role === "sent",
+      }));
+      return assignments[item.id];
+    }
     Object.assign(mock.handlers, {
+      get_account_connection(args: Record<string, unknown>) {
+        return structuredClone(connection(args.accountId));
+      },
+      update_account_connection(args: Record<string, unknown>) {
+        const item = ownedAccount(args.accountId);
+        if (params.has("failConnection"))
+          throw {
+            code: "connectionFailed",
+            message:
+              "Connection test failed. Your saved connection has not changed.",
+            retryable: true,
+          };
+        connections[item.id] = {
+          ...connection(item.id),
+          imap: structuredClone(args.imap as Server),
+          smtp: structuredClone(args.smtp as Server),
+        };
+        return { ...item };
+      },
+      import_bridge_certificate() {
+        if (params.has("certificateCancel")) return null;
+        certificates.set(certificate.reference, certificate);
+        return { ...certificate };
+      },
+      approve_bridge_certificate(args: Record<string, unknown>) {
+        const approved = certificates.get(
+          String(args.reference ?? args.certificateReference),
+        );
+        if (!approved)
+          throw {
+            code: "invalidInput",
+            message: "Import a public certificate first.",
+            retryable: false,
+          };
+        if (args.accountId)
+          connection(args.accountId).certificate = { ...approved };
+        return approved.reference;
+      },
+      remove_bridge_certificate(args: Record<string, unknown>) {
+        delete connection(args.accountId).certificate;
+        return undefined;
+      },
+      get_folder_assignments(args: Record<string, unknown>) {
+        return structuredClone(folderAssignments(args.accountId));
+      },
+      set_folder_assignment(args: Record<string, unknown>) {
+        const rows = folderAssignments(args.accountId);
+        const row = rows.find((item) => item.role === args.role);
+        if (!row)
+          throw {
+            code: "invalidInput",
+            message: "Unknown folder role.",
+            retryable: false,
+          };
+        const mailboxId =
+          args.mailboxId == null ? null : Number(args.mailboxId);
+        if (
+          mailboxId !== null &&
+          !mock.mailboxes.some(
+            (box) => box.id === mailboxId && box.accountId === args.accountId,
+          )
+        )
+          throw {
+            code: "invalidInput",
+            message: "Choose a folder belonging to this account.",
+            retryable: false,
+          };
+        row.mailboxId = mailboxId;
+        row.missing = false;
+        return structuredClone(rows);
+      },
       list_accounts() {
         state.accountLoads += 1;
         if (location.search.includes("startupFail")) {
@@ -137,6 +284,18 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
         return undefined;
       },
       async add_account(args: Record<string, unknown>) {
+        const request = args.request as Record<string, unknown>;
+        if (
+          params.has("bridgeCertificateFail") &&
+          request.provider === "protonBridge" &&
+          !request.certificateReference
+        )
+          throw {
+            code: "certificateFailed",
+            message:
+              "Bridge certificate verification failed. Import Bridge's exported public certificate.",
+            retryable: true,
+          };
         if (location.search.includes("setupFail")) {
           throw {
             code: "authenticationFailed",

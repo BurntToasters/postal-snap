@@ -421,12 +421,14 @@ fn discovery_from_preset(
         },
         source: source.into(),
         imap: ServerConfig {
+            trusted_certificate: None,
             host: preset.imap_host.into(),
             port: preset.imap_port,
             tls_mode: preset.imap_tls.clone(),
             username: imap_username.into(),
         },
         smtp: ServerConfig {
+            trusted_certificate: None,
             host: preset.smtp_host.into(),
             port: preset.smtp_port,
             tls_mode: preset.smtp_tls.clone(),
@@ -629,6 +631,7 @@ fn secure_server(server: ParsedServer, email: &str) -> Result<ServerConfig, Stri
         return Err("The mail settings use an unsupported username format.".into());
     }
     let config = ServerConfig {
+        trusted_certificate: None,
         host: server
             .host
             .trim()

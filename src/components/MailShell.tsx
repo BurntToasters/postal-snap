@@ -41,7 +41,7 @@ import { MEDIA_QUERIES } from "../breakpoints";
 import { navigationOrder } from "../threads";
 
 interface Props {
-  onOpenSettings: (tab?: "accounts") => void;
+  onOpenSettings: (tab?: "accounts", accountId?: string) => void;
 }
 
 function relativeMessage(delta: number): MessageSummary | undefined {
@@ -1104,7 +1104,7 @@ export function MailShell({ onOpenSettings }: Props) {
         if (id === "get-mail") void refreshAccount(target.accountId);
         if (id === "account-settings") {
           selectAccount(target.accountId);
-          onOpenSettings("accounts");
+          onOpenSettings("accounts", activeAccountId);
         }
         return;
       }

@@ -1,4 +1,5 @@
 pub mod accounts;
+pub mod compatibility;
 pub mod drafts;
 pub mod files_cache;
 pub mod mailboxes;
@@ -20,7 +21,7 @@ use crate::models::{
 };
 use crate::models::{Attachment, ComposeDraft, MailboxRole, MessageSummary, ProviderKind, TlsMode};
 
-const CURRENT_SCHEMA_VERSION: u32 = 20;
+const CURRENT_SCHEMA_VERSION: u32 = 21;
 
 pub type MailboxSyncState = (Option<u32>, Option<u32>, u32, Option<u32>);
 
@@ -157,10 +158,10 @@ pub(crate) fn map_message_summary(row: &Row<'_>) -> rusqlite::Result<MessageSumm
 }
 
 pub(crate) fn parse_provider(value: &str) -> ProviderKind {
-    if value == "icloud" {
-        ProviderKind::Icloud
-    } else {
-        ProviderKind::Manual
+    match value {
+        "icloud" => ProviderKind::Icloud,
+        "protonBridge" => ProviderKind::ProtonBridge,
+        _ => ProviderKind::Manual,
     }
 }
 pub(crate) fn parse_tls(value: &str) -> TlsMode {
@@ -797,6 +798,11 @@ fn migrate_schema(connection: &mut Connection) -> Result<(), String> {
             .pragma_update(None, "user_version", 20)
             .map_err(db_error)?;
     }
+    if version < 21 {
+        transaction.execute_batch("ALTER TABLE accounts ADD COLUMN bridge_certificate TEXT;
+            CREATE TABLE folder_assignments (account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                role TEXT NOT NULL, mailbox_id INTEGER NOT NULL, PRIMARY KEY(account_id,role), UNIQUE(account_id,mailbox_id));").map_err(db_error)?;
+    }
     transaction
         .pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)
         .map_err(db_error)?;
@@ -1225,12 +1231,14 @@ mod tests {
                 color: None,
             },
             imap: ServerConfig {
+                trusted_certificate: None,
                 host: "imap.example.com".into(),
                 port: 993,
                 tls_mode: TlsMode::Tls,
                 username: "sam@example.com".into(),
             },
             smtp: ServerConfig {
+                trusted_certificate: None,
                 host: "smtp.example.com".into(),
                 port: 587,
                 tls_mode: TlsMode::StartTls,
@@ -4123,4 +4131,47 @@ mod tests {
         assert_eq!(message_rows, 40);
         assert_eq!(fts_rows, message_rows);
     }
+    #[test]
+    fn folder_assignments_are_owned_and_missing_targets_fail_closed() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let id = db.upsert_mailbox(&account.summary.id, "CustomSent", &MailboxRole::Other, Some(1), Some(1), Some(0), 0).unwrap();
+        assert!(db.set_folder_assignment("foreign", "sent", Some(id)).is_err());
+        db.set_folder_assignment(&account.summary.id, "sent", Some(id)).unwrap();
+        assert_eq!(db.mailbox_for_role(&account.summary.id, "sent").unwrap().unwrap().0, id);
+        db.rename_mailbox_local(&account.summary.id, "CustomSent", "RenamedSent").unwrap();
+        assert_eq!(db.mailbox_for_role(&account.summary.id, "sent").unwrap().unwrap().1, "RenamedSent");
+        db.conn().unwrap().execute("DELETE FROM mailboxes WHERE id=?1", [id]).unwrap();
+        assert!(db.mailbox_for_role(&account.summary.id, "sent").is_err());
+        db.set_folder_assignment(&account.summary.id, "sent", None).unwrap();
+        assert!(db.mailbox_for_role(&account.summary.id, "sent").unwrap().is_none());
+    }
+
+    #[test]
+    fn bridge_provider_round_trips_and_defaults_have_no_trust() {
+        let db = Database::memory();
+        let mut account = account();
+        account.summary.provider = ProviderKind::ProtonBridge;
+        db.insert_account(&account).unwrap();
+        let loaded = db.account(&account.summary.id).unwrap();
+        assert_eq!(loaded.summary.provider, ProviderKind::ProtonBridge);
+        assert!(loaded.imap.trusted_certificate.is_none());
+        assert!(db.folder_assignments(&account.summary.id).unwrap().iter().all(|assignment| assignment.mailbox_id.is_none()));
+    }
+
+    #[test]
+    fn identity_reset_preserves_drafts_and_clears_remote_tracking() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let local = draft(&account.summary.id);
+        let id = db.save_draft(&local).unwrap();
+        db.conn().unwrap().execute("UPDATE drafts SET remote_mailbox='Old',remote_uid=7,remote_uid_validity=1 WHERE id=?1", [&id]).unwrap();
+        db.reset_remote_identity(&account.summary.id).unwrap();
+        let tracked = db.pending_draft_sync(&account.summary.id).unwrap().into_iter().find(|record| record.id == id).unwrap();
+        assert!(tracked.remote_uid.is_none());
+        assert!(tracked.remote_mailbox.is_none());
+    }
+
 }
