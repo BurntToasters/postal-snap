@@ -16,6 +16,8 @@ export const errors = {
   settingsWriteFailed:
     "Postal Snap could not save settings. Check the destination and available disk space, then try again.",
   authenticationFailed: "Sign-in failed. Check the email address and password.",
+  certificateFailed:
+    "Certificate verification failed. Check the trusted server certificate.",
   connectionFailed: "Could not reach the mail server. Check your connection.",
   localStorageFailed:
     "Postal Snap could not access local mail data on your computer.",

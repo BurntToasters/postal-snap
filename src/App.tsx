@@ -57,6 +57,7 @@ export default function App() {
   const composeNonce = useAppStore((state) => state.composeNonce);
   const openComposer = useAppStore((state) => state.openComposer);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsAccountId, setSettingsAccountId] = useState<string>();
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
   const [settingsRouteRequest, setSettingsRouteRequest] = useState(0);
   const [startupError, setStartupError] = useState<string>();
@@ -80,11 +81,15 @@ export default function App() {
   // Best-effort: routing already trusts the accounts, so ignore failures.
   const { update: repairSettings } = useSettingsSave();
 
-  const openSettings = useCallback((tab: SettingsTab = "general") => {
-    setSettingsTab(tab);
-    setSettingsRouteRequest((value) => value + 1);
-    setSettingsOpen(true);
-  }, []);
+  const openSettings = useCallback(
+    (tab: SettingsTab = "general", accountId?: string) => {
+      setSettingsTab(tab);
+      setSettingsAccountId(accountId);
+      setSettingsRouteRequest((value) => value + 1);
+      setSettingsOpen(true);
+    },
+    [],
+  );
 
   const loadAccounts = useCallback(async () => {
     const request = ++loadRequest.current;
@@ -364,8 +369,8 @@ export default function App() {
     </main>
   ) : (
     <MailShell
-      onOpenSettings={(tab) =>
-        openSettings(tab === "accounts" ? "accounts" : "general")
+      onOpenSettings={(tab, accountId) =>
+        openSettings(tab === "accounts" ? "accounts" : "general", accountId)
       }
     />
   );
@@ -394,6 +399,7 @@ export default function App() {
         <SettingsDialog
           key={`${settingsTab}:${settingsRouteRequest}`}
           initialTab={settingsTab}
+          initialAccountId={settingsAccountId}
           onClose={() => setSettingsOpen(false)}
           onLastAccountRemoved={claimAccountlessSetup}
         />

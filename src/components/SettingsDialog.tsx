@@ -38,6 +38,8 @@ import { useDialogFocus } from "./useDialogFocus";
 import { preparePassword } from "./setup/request";
 import type { SettingsTab } from "./settings/primitives";
 import { useSettingsSave } from "./settings/useSettingsSave";
+import { settingsSearchEntries } from "./settings/settingsSearch";
+import { AppearanceTab } from "./settings/appearanceTab";
 import { GeneralTab } from "./settings/generalTab";
 import { ReadingTab } from "./settings/readingTab";
 import { NotificationsTab } from "./settings/notificationsTab";
@@ -53,6 +55,7 @@ export type { SettingsTab } from "./settings/primitives";
 interface Props {
   onClose: () => void;
   initialTab?: SettingsTab;
+  initialAccountId?: string;
   onLastAccountRemoved?: () => void;
 }
 
@@ -62,6 +65,7 @@ const tabs: Array<{
   icon: typeof Monitor;
 }> = [
   { id: "general", label: strings.settings.general, icon: Monitor },
+  { id: "appearance", label: strings.settings.appearanceTitle, icon: Monitor },
   { id: "reading", label: strings.settings.reading, icon: Eye },
   { id: "notifications", label: strings.settings.notifications, icon: Bell },
   { id: "storage", label: strings.settings.storage, icon: Database },
@@ -75,6 +79,7 @@ const tabs: Array<{
 export function SettingsDialog({
   onClose,
   initialTab = "general",
+  initialAccountId,
   onLastAccountRemoved,
 }: Props) {
   const accounts = useAppStore((state) => state.accounts);
@@ -82,13 +87,25 @@ export function SettingsDialog({
   const setSettings = useAppStore((state) => state.setSettings);
   const setError = useAppStore((state) => state.setError);
   const [tab, setTab] = useState<SettingsTab>(initialTab);
+  const [query, setQuery] = useState("");
+  const [selectedAccountId, setSelectedAccountId] = useState(initialAccountId);
+  const [requestedAccountPage, setRequestedAccountPage] = useState<
+    "connection" | "folders" | "identity" | "rules"
+  >("connection");
+  const [connectionDirty, setConnectionDirty] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const [searchTarget, setSearchTarget] = useState<string>();
+  const discardBusy = useRef(false);
+  const dirtyRef = useRef(false);
   const [usage, setUsage] = useState<CacheUsage>();
   const [distribution, setDistribution] = useState<DistributionChannel>();
   const [windowFxSupported, setWindowFxSupported] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<string>(
     strings.settings.checkUpdates,
   );
-  const { saving, update } = useSettingsSave();
+  const { saving, update } = useSettingsSave((cause) =>
+    setSaveError(String(cause)),
+  );
   const [dataBusy, setDataBusy] = useState(false);
   const [dataStatus, setDataStatus] = useState<string>();
   const [eraseBusy, setEraseBusy] = useState(false);
@@ -144,15 +161,109 @@ export function SettingsDialog({
     >
   >({});
   const [ruleStatus, setRuleStatus] = useState<Record<string, string>>({});
+  dirtyRef.current =
+    connectionDirty ||
+    Object.entries(signatureInputs).some(
+      ([id, value]) =>
+        value !==
+        (accounts.find((account) => account.id === id)?.signature ?? ""),
+    ) ||
+    Object.values(newRuleInputs).some(
+      (draft) =>
+        draft.name !== "" ||
+        draft.contains !== "" ||
+        draft.field !== "from" ||
+        draft.action !== "mark_read" ||
+        draft.target !== "",
+    );
+  const confirmDiscard = useCallback(async () => {
+    if (!dirtyRef.current) return true;
+    if (discardBusy.current) return false;
+    discardBusy.current = true;
+    try {
+      if (
+        !(await api.showNativeConfirm(
+          strings.settings.discardTitle,
+          strings.settings.discardHelp,
+        ))
+      )
+        return false;
+      setSignatureInputs({});
+      setNewRuleInputs({});
+      setConnectionDirty(false);
+      setPasswordInputs({});
+      dirtyRef.current = false;
+      return true;
+    } finally {
+      discardBusy.current = false;
+    }
+  }, []);
   const requestClose = useCallback(() => {
     if (confirmThreatOff) {
       setConfirmThreatOff(false);
       setConfirmToken("");
       return;
     }
-    onClose();
-  }, [confirmThreatOff, onClose]);
+    void confirmDiscard()
+      .then((leave) => {
+        if (leave) onClose();
+      })
+      .catch((cause) => setSaveError(String(cause)));
+  }, [confirmThreatOff, confirmDiscard, onClose]);
   const dialogRef = useDialogFocus(requestClose);
+  async function changeTab(next: SettingsTab) {
+    if (await confirmDiscard()) {
+      setTab(next);
+      setSaveError("");
+    }
+  }
+  const results = settingsSearchEntries.filter((entry) =>
+    query
+      .trim()
+      .toLocaleLowerCase()
+      .split(/\s+/)
+      .every((term) =>
+        `${entry.title} ${entry.help} ${entry.keywords}`
+          .toLocaleLowerCase()
+          .includes(term),
+      ),
+  );
+  async function openSearchResult(
+    entry: (typeof settingsSearchEntries)[number],
+  ) {
+    if (!(await confirmDiscard())) return;
+    setQuery("");
+    setTab(entry.section);
+    if (entry.accountPage) {
+      setSelectedAccountId(
+        useAppStore.getState().activeAccountId ?? accounts[0]?.id,
+      );
+      setRequestedAccountPage(entry.accountPage);
+    }
+    setSearchTarget(entry.title);
+  }
+  useEffect(() => {
+    if (!searchTarget || query) return;
+    const frame = window.requestAnimationFrame(() => {
+      const controls =
+        settingsContentRef.current?.querySelectorAll<HTMLElement>(
+          "label,button,input,select,textarea",
+        );
+      const target = Array.from(controls ?? []).find(
+        (element) =>
+          element.getAttribute("aria-label") === searchTarget ||
+          element.textContent?.trim() === searchTarget ||
+          element.querySelector("strong")?.textContent?.trim() === searchTarget,
+      );
+      const focus = target?.matches("input,select,textarea,button")
+        ? target
+        : target?.querySelector<HTMLElement>("input,select,textarea,button");
+      (focus ?? target)?.scrollIntoView?.({ block: "nearest" });
+      (focus ?? target)?.focus();
+      setSearchTarget(undefined);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [tab, query, searchTarget]);
 
   const handleUpdateFound = useCallback<UpdateFoundListener>((version) => {
     setUpdateStatus(strings.settings.installing(version ?? ""));
@@ -694,7 +805,45 @@ export function SettingsDialog({
             <X aria-hidden="true" />
           </button>
         </header>
+        <div className="settings-search" inert={confirmThreatOff || undefined}>
+          <input
+            type="search"
+            aria-label={strings.settings.search}
+            placeholder={strings.settings.search}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+          {query ? (
+            <button
+              type="button"
+              className="text-button"
+              onClick={() => setQuery("")}
+            >
+              {strings.settings.clearSearch}
+            </button>
+          ) : null}
+        </div>
+        {saveError ? (
+          <p className="settings-save-error" role="alert">
+            {saveError}
+          </p>
+        ) : null}
         <div className="settings-layout" inert={confirmThreatOff || undefined}>
+          <label className="settings-section-select">
+            <span>{strings.settings.sectionSelector}</span>
+            <select
+              value={tab}
+              onChange={(event) =>
+                void changeTab(event.target.value as SettingsTab)
+              }
+            >
+              {tabs.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          </label>
           <nav
             className="settings-nav"
             aria-label={strings.settings.sections}
@@ -713,7 +862,7 @@ export function SettingsDialog({
                 tabIndex={tab === id ? 0 : -1}
                 className={tab === id ? "active" : ""}
                 onClick={(event) => {
-                  setTab(id);
+                  void changeTab(id);
                   event.currentTarget.scrollIntoView?.({
                     block: "nearest",
                     inline: "nearest",
@@ -727,82 +876,122 @@ export function SettingsDialog({
             ))}
           </nav>
           <div className="settings-content" ref={settingsContentRef}>
-            {tab === "general" ? (
-              <GeneralTab
-                update={update}
-                windowFxSupported={windowFxSupported}
-                dataBusy={dataBusy}
-                dataStatus={dataStatus}
-                setTab={setTab}
-                exportSettings={exportSettings}
-                importSettings={importSettings}
-              />
-            ) : null}
-            {tab === "reading" ? <ReadingTab update={update} /> : null}
-            {tab === "notifications" ? (
-              <NotificationsTab update={update} />
-            ) : null}
-            {tab === "storage" ? (
-              <StorageTab
-                usage={usage}
-                update={update}
-                clearCache={clearCache}
-              />
-            ) : null}
-            {tab === "accounts" ? (
-              <AccountsTab
-                onClose={onClose}
-                mailboxes={accountMailboxes}
-                testingAccountId={testingAccountId}
-                testedHealthy={testedHealthy}
-                testAccount={testAccount}
-                removeAccount={removeAccount}
-                passwordInputs={passwordInputs}
-                setPasswordInputs={setPasswordInputs}
-                passwordStatus={passwordStatus}
-                updatingPasswordId={updatingPasswordId}
-                handleUpdatePassword={handleUpdatePassword}
-                signatureInputs={signatureInputs}
-                setSignatureInputs={setSignatureInputs}
-                signatureStatus={signatureStatus}
-                savingSignatureId={savingSignatureId}
-                handleSaveSignature={handleSaveSignature}
-                filterRules={filterRules}
-                ruleInput={ruleInput}
-                setRuleField={setRuleField}
-                handleAddRule={handleAddRule}
-                handleToggleRule={handleToggleRule}
-                handleDeleteRule={handleDeleteRule}
-                ruleStatus={ruleStatus}
-                detectingAliasesAccountId={detectingAliasesAccountId}
-                handleDetectAliases={handleDetectAliases}
-                aliasStatus={aliasStatus}
-                newAliasInputs={newAliasInputs}
-                setNewAliasInputs={setNewAliasInputs}
-                handleAddAlias={handleAddAlias}
-                handleRemoveAlias={handleRemoveAlias}
-                eraseBusy={eraseBusy}
-                eraseStatus={eraseStatus}
-                eraseAllData={eraseAllData}
-              />
-            ) : null}
-            {tab === "shortcuts" ? <ShortcutsTab /> : null}
-            {tab === "updates" ? (
-              <UpdatesTab
-                distribution={distribution}
-                updateStatus={updateStatus}
-                checkingUpdate={checkingUpdate}
-                checkForUpdates={checkForUpdates}
-                update={update}
-              />
-            ) : null}
-            {tab === "advanced" ? (
-              <AdvancedTab
-                setAdvertisingBlocking={setAdvertisingBlocking}
-                setThreatBlocking={setThreatBlocking}
-              />
-            ) : null}
-            {tab === "about" ? <AboutTab /> : null}
+            {query.trim() ? (
+              <div className="settings-search-results">
+                {results.length ? (
+                  results.map((entry) => (
+                    <button
+                      className="settings-search-result"
+                      type="button"
+                      key={`${entry.section}-${entry.title}`}
+                      onClick={() => void openSearchResult(entry)}
+                    >
+                      <strong>{entry.title}</strong>
+                      <span>
+                        {tabs.find((item) => item.id === entry.section)?.label}
+                      </span>
+                      <small>{entry.help}</small>
+                    </button>
+                  ))
+                ) : (
+                  <p role="status">{strings.settings.noResults}</p>
+                )}
+              </div>
+            ) : (
+              <>
+                {tab === "appearance" ? (
+                  <AppearanceTab
+                    update={update}
+                    windowFxSupported={windowFxSupported}
+                  />
+                ) : null}
+                {tab === "general" ? (
+                  <GeneralTab
+                    update={update}
+                    windowFxSupported={windowFxSupported}
+                    dataBusy={dataBusy}
+                    dataStatus={dataStatus}
+                    setTab={setTab}
+                    exportSettings={exportSettings}
+                    importSettings={importSettings}
+                  />
+                ) : null}
+                {tab === "reading" ? <ReadingTab update={update} /> : null}
+                {tab === "notifications" ? (
+                  <NotificationsTab update={update} />
+                ) : null}
+                {tab === "storage" ? (
+                  <StorageTab
+                    usage={usage}
+                    update={update}
+                    clearCache={clearCache}
+                  />
+                ) : null}
+                {tab === "accounts" ? (
+                  <AccountsTab
+                    key={`${selectedAccountId ?? "list"}-${requestedAccountPage}`}
+                    selectedAccountId={selectedAccountId}
+                    initialPage={requestedAccountPage}
+                    onSelectAccount={(id) => {
+                      setSelectedAccountId(id);
+                      setRequestedAccountPage("connection");
+                    }}
+                    beforeNavigate={confirmDiscard}
+                    onConnectionDirty={setConnectionDirty}
+                    onClose={onClose}
+                    mailboxes={accountMailboxes}
+                    testingAccountId={testingAccountId}
+                    testedHealthy={testedHealthy}
+                    testAccount={testAccount}
+                    removeAccount={removeAccount}
+                    passwordInputs={passwordInputs}
+                    setPasswordInputs={setPasswordInputs}
+                    passwordStatus={passwordStatus}
+                    updatingPasswordId={updatingPasswordId}
+                    handleUpdatePassword={handleUpdatePassword}
+                    signatureInputs={signatureInputs}
+                    setSignatureInputs={setSignatureInputs}
+                    signatureStatus={signatureStatus}
+                    savingSignatureId={savingSignatureId}
+                    handleSaveSignature={handleSaveSignature}
+                    filterRules={filterRules}
+                    ruleInput={ruleInput}
+                    setRuleField={setRuleField}
+                    handleAddRule={handleAddRule}
+                    handleToggleRule={handleToggleRule}
+                    handleDeleteRule={handleDeleteRule}
+                    ruleStatus={ruleStatus}
+                    detectingAliasesAccountId={detectingAliasesAccountId}
+                    handleDetectAliases={handleDetectAliases}
+                    aliasStatus={aliasStatus}
+                    newAliasInputs={newAliasInputs}
+                    setNewAliasInputs={setNewAliasInputs}
+                    handleAddAlias={handleAddAlias}
+                    handleRemoveAlias={handleRemoveAlias}
+                    eraseBusy={eraseBusy}
+                    eraseStatus={eraseStatus}
+                    eraseAllData={eraseAllData}
+                  />
+                ) : null}
+                {tab === "shortcuts" ? <ShortcutsTab /> : null}
+                {tab === "updates" ? (
+                  <UpdatesTab
+                    distribution={distribution}
+                    updateStatus={updateStatus}
+                    checkingUpdate={checkingUpdate}
+                    checkForUpdates={checkForUpdates}
+                    update={update}
+                  />
+                ) : null}
+                {tab === "advanced" ? (
+                  <AdvancedTab
+                    setAdvertisingBlocking={setAdvertisingBlocking}
+                    setThreatBlocking={setThreatBlocking}
+                  />
+                ) : null}
+                {tab === "about" ? <AboutTab /> : null}
+              </>
+            )}
           </div>
         </div>
         {confirmThreatOff ? (

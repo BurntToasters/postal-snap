@@ -251,21 +251,10 @@
   }
 
   .settings-nav {
-    display: flex;
-    max-height: none;
-    padding: 7px;
-    overflow-x: auto;
-    overflow-y: hidden;
-    overscroll-behavior-inline: contain;
-    scroll-padding-inline: 7px;
-    scroll-snap-type: inline proximity;
-    border-right: 0;
-    border-bottom: 1px solid var(--border);
+    display: none;
   }
-
-  .settings-nav button {
-    flex: 0 0 auto;
-    scroll-snap-align: nearest;
+  .settings-section-select {
+    display: grid;
   }
 
   .settings-content {

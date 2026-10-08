@@ -1,6 +1,18 @@
 // English source catalog namespace: setup section.
 // Split from src/i18n.ts with zero text changes.
 export const setup = {
+  bridge: "Proton Bridge",
+  bridgeDetail:
+    "Experimental · Connect through Proton Mail Bridge on this computer",
+  bridgeIntro:
+    "Install and sign in to Proton Mail Bridge, then copy its email client settings below. Bridge must remain running. Use the Bridge password, not your Proton account password.",
+  bridgePassword: "Bridge password",
+  bridgePasswordHint:
+    "Copy the username and Bridge password shown in Proton Mail Bridge. Your Proton account password will not work here.",
+  bridgeCertificateHint:
+    "Export the public TLS certificate from Bridge settings, then import and approve it here. Do not select its private key.",
+  bridgeUnavailableHint:
+    "Open Proton Mail Bridge and check its displayed ports and connection modes. Bridge must remain running.",
   title: "Add your email",
   intro: "Choose an account. Password stays in your computer’s secure vault.",
   progress: "Setup progress",

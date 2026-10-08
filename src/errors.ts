@@ -13,6 +13,7 @@ const codes = new Set<IpcErrorCode>([
   "settingsWriteFailed",
   "authenticationFailed",
   "connectionFailed",
+  "certificateFailed",
   "localStorageFailed",
   "invalidInput",
   "operationFailed",
@@ -55,8 +56,19 @@ export function describeSetupError(
       hint:
         provider === "icloud"
           ? strings.setup.authHintIcloud
-          : strings.setup.authHintManual,
+          : provider === "protonBridge"
+            ? strings.setup.bridgePasswordHint
+            : strings.setup.authHintManual,
       showAppPasswordLink: provider === "icloud",
+    };
+  }
+  if (provider === "protonBridge") {
+    return {
+      text: error.message,
+      hint:
+        error.code === "certificateFailed"
+          ? strings.setup.bridgeCertificateHint
+          : strings.setup.bridgeUnavailableHint,
     };
   }
   if (error.code === "connectionFailed") {
