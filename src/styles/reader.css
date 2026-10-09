@@ -126,6 +126,7 @@ html[data-reduce-transparency="true"] .reader-actions {
   font-size: clamp(1.25rem, 2.1vw, 1.75rem);
   line-height: 1.2;
   letter-spacing: -0.02em;
+  overflow-wrap: anywhere;
 }
 
 .sender-details {
@@ -140,15 +141,19 @@ html[data-reduce-transparency="true"] .reader-actions {
   align-items: baseline;
   gap: 8px;
   flex-wrap: wrap;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .sender-name {
+  min-width: 0;
   font-size: 1.05rem;
   font-weight: 700;
   color: var(--text);
 }
 
 .sender-address-muted {
+  min-width: 0;
   font-size: 0.85rem;
   color: var(--text-muted);
 }
@@ -163,6 +168,7 @@ html[data-reduce-transparency="true"] .reader-actions {
 }
 
 .recipient-preview {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -175,13 +181,16 @@ html[data-reduce-transparency="true"] .reader-actions {
   color: var(--text-muted);
   font-size: 0.82rem;
   text-align: right;
-  white-space: nowrap;
+  max-inline-size: 20ch;
+  white-space: normal;
+  line-height: 1.5;
   overflow-wrap: anywhere;
 }
 
 .details-toggle {
   display: inline-flex;
   width: fit-content;
+  max-width: 100%;
   min-height: var(--target-size);
   align-items: center;
   gap: 6px;
@@ -431,6 +440,10 @@ html[data-reduce-transparency="true"] .reader-actions {
   justify-items: center;
   color: var(--text-muted);
   font-size: 1.05rem;
+  padding: var(--space-5);
+  text-align: center;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
 }
 
 .attachment-list {
@@ -449,10 +462,11 @@ html[data-reduce-transparency="true"] .reader-actions {
 
 .attachment-list button {
   display: flex;
-  min-height: 46px;
+  min-height: var(--target-size);
+  max-width: 100%;
   align-items: center;
   gap: 8px;
-  padding: 6px 10px;
+  padding: var(--control-pad-block) var(--space-3);
   text-align: left;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -461,6 +475,12 @@ html[data-reduce-transparency="true"] .reader-actions {
 
 .attachment-list button span {
   display: grid;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.attachment-list button svg {
+  flex: 0 0 auto;
 }
 
 .attachment-list small {
@@ -469,6 +489,8 @@ html[data-reduce-transparency="true"] .reader-actions {
 
 .attachment-row {
   display: flex;
+  min-width: 0;
+  max-width: 100%;
   align-items: stretch;
   gap: 6px;
 }

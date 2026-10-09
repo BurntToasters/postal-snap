@@ -22,7 +22,8 @@ pub fn list_accounts(state: State<'_, AppState>) -> CommandResult<Vec<AccountSum
 
 #[tauri::command]
 pub async fn test_account(mut request: AccountSetupRequest) -> CommandResult<()> {
-    let (imap, smtp, password) = take_validated_setup(&mut request)?;
+    let (mut imap, mut smtp, password) = take_validated_setup(&mut request)?;
+    crate::bridge::apply_setup_trust(&request, &mut imap, &mut smtp)?;
     mail::test_account(&request, &imap, &smtp, &password).await?;
     Ok(())
 }
@@ -39,6 +40,7 @@ pub async fn test_saved_account(
     }
     let password = credentials::load(&account_id)?;
     let request = AccountSetupRequest {
+        certificate_reference: None,
         provider: account.summary.provider.clone(),
         email: account.summary.email.clone(),
         display_name: account.summary.display_name.clone(),
@@ -67,6 +69,7 @@ pub async fn update_account_password(
     let normalized = take_normalized_account_password(&account.summary.provider, password)?;
     let (imap, smtp) = mail::test_account(
         &AccountSetupRequest {
+            certificate_reference: None,
             provider: account.summary.provider.clone(),
             email: account.summary.email.clone(),
             display_name: account.summary.display_name.clone(),
@@ -115,7 +118,8 @@ pub async fn add_account(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<AccountSummary> {
-    let (imap, smtp, password) = take_validated_setup(&mut request)?;
+    let (mut imap, mut smtp, password) = take_validated_setup(&mut request)?;
+    crate::bridge::apply_setup_trust(&request, &mut imap, &mut smtp)?;
     if request
         .cache_policy
         .as_ref()
@@ -158,6 +162,9 @@ pub async fn add_account(
     if let Err(error) = state.db.insert_account(&account) {
         let _ = credentials::remove(&id);
         return Err(error.into());
+    }
+    if let Some(reference) = &request.certificate_reference {
+        crate::bridge::consume(reference);
     }
     let default_policy = state.settings.get()?.cache_policy;
     let policy = request

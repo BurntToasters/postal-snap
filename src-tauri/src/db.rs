@@ -1,4 +1,5 @@
 pub mod accounts;
+pub mod compatibility;
 pub mod drafts;
 pub mod files_cache;
 pub mod mailboxes;
@@ -20,7 +21,7 @@ use crate::models::{
 };
 use crate::models::{Attachment, ComposeDraft, MailboxRole, MessageSummary, ProviderKind, TlsMode};
 
-const CURRENT_SCHEMA_VERSION: u32 = 20;
+const CURRENT_SCHEMA_VERSION: u32 = 23;
 
 pub type MailboxSyncState = (Option<u32>, Option<u32>, u32, Option<u32>);
 
@@ -157,10 +158,10 @@ pub(crate) fn map_message_summary(row: &Row<'_>) -> rusqlite::Result<MessageSumm
 }
 
 pub(crate) fn parse_provider(value: &str) -> ProviderKind {
-    if value == "icloud" {
-        ProviderKind::Icloud
-    } else {
-        ProviderKind::Manual
+    match value {
+        "icloud" => ProviderKind::Icloud,
+        "protonBridge" => ProviderKind::ProtonBridge,
+        _ => ProviderKind::Manual,
     }
 }
 pub(crate) fn parse_tls(value: &str) -> TlsMode {
@@ -797,10 +798,234 @@ fn migrate_schema(connection: &mut Connection) -> Result<(), String> {
             .pragma_update(None, "user_version", 20)
             .map_err(db_error)?;
     }
+    if version < 21 {
+        ensure_column(
+            &transaction,
+            "accounts",
+            "bridge_certificate",
+            "ALTER TABLE accounts ADD COLUMN bridge_certificate TEXT",
+        )?;
+        transaction.execute_batch("CREATE TABLE IF NOT EXISTS folder_assignments (account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                role TEXT NOT NULL, mailbox_id INTEGER NOT NULL, PRIMARY KEY(account_id,role), UNIQUE(account_id,mailbox_id));").map_err(db_error)?;
+    }
+    if version < 22 {
+        ensure_column(
+            &transaction,
+            "mailboxes",
+            "server_available",
+            "ALTER TABLE mailboxes ADD COLUMN server_available INTEGER NOT NULL DEFAULT 1",
+        )?;
+        transaction
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS message_id_sequence (
+            singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+            last_id INTEGER NOT NULL CHECK(typeof(last_id)='integer' AND last_id>=0));
+            INSERT OR IGNORE INTO message_id_sequence(singleton,last_id)
+                VALUES(1,(SELECT COALESCE(MAX(id),0) FROM messages));",
+            )
+            .map_err(db_error)?;
+        version = 22;
+    }
+    if version < 23 {
+        migrate_v23_mailbox_names(&transaction)?;
+        transaction
+            .pragma_update(None, "user_version", 23)
+            .map_err(db_error)?;
+    }
+    // Also initialize this sequence for earlier development snapshots of v22.
+    transaction.execute_batch("CREATE TABLE IF NOT EXISTS mailbox_id_sequence (
+        singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+        last_id INTEGER NOT NULL CHECK(typeof(last_id)='integer' AND last_id>=0));
+        INSERT OR IGNORE INTO mailbox_id_sequence(singleton,last_id)
+            VALUES(1,(SELECT COALESCE(MAX(id),0) FROM (SELECT id FROM mailboxes UNION ALL SELECT mailbox_id AS id FROM folder_assignments)));").map_err(db_error)?;
     transaction
         .pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)
         .map_err(db_error)?;
     transaction.commit().map_err(db_error)
+}
+
+/// Schema v23: convert cached IMAP4rev1 mailbox names from modified UTF-7.
+fn migrate_v23_mailbox_names(transaction: &rusqlite::Transaction) -> Result<(), String> {
+    let rows = {
+        let mut statement = transaction
+            .prepare("SELECT id,account_id,name,display_name FROM mailboxes ORDER BY account_id,id")
+            .map_err(db_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })
+            .map_err(db_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_error)?;
+        rows
+    };
+
+    let mut normalized = Vec::with_capacity(rows.len());
+    let mut final_names = std::collections::HashSet::with_capacity(rows.len());
+    for (id, account_id, name, display_name) in rows {
+        let decoded_name = crate::mail::utf7::decode(&name);
+        let decoded_display_name = crate::mail::utf7::decode(&display_name);
+        if !final_names.insert((account_id.clone(), decoded_name.clone())) {
+            return Err(
+                "Saved folder names conflict. Cached mail and queued changes were preserved."
+                    .into(),
+            );
+        }
+        normalized.push((
+            id,
+            account_id,
+            name,
+            display_name,
+            decoded_name,
+            decoded_display_name,
+        ));
+    }
+
+    // Move changed names aside first so swaps and nested names remain unique.
+    let mut reserved_names = final_names;
+    for (_, account_id, name, _, decoded_name, _) in &normalized {
+        reserved_names.insert((account_id.clone(), name.clone()));
+        reserved_names.insert((account_id.clone(), decoded_name.clone()));
+    }
+    for (id, account_id, name, _, decoded_name, _) in &normalized {
+        if name == decoded_name {
+            continue;
+        }
+        let mut temporary = format!("__postal_snap_v23_mailbox_{id}__");
+        let mut suffix = 0_u32;
+        while reserved_names.contains(&(account_id.clone(), temporary.clone())) {
+            suffix = suffix.saturating_add(1);
+            temporary = format!("__postal_snap_v23_mailbox_{id}_{suffix}__");
+        }
+        reserved_names.insert((account_id.clone(), temporary.clone()));
+        transaction
+            .execute(
+                "UPDATE mailboxes SET name=?2 WHERE id=?1 AND account_id=?3",
+                params![id, temporary, account_id],
+            )
+            .map_err(db_error)?;
+    }
+    for (id, account_id, name, display_name, decoded_name, decoded_display_name) in &normalized {
+        if name != decoded_name || display_name != decoded_display_name {
+            transaction
+                .execute(
+                    "UPDATE mailboxes SET name=?2,display_name=?3 WHERE id=?1 AND account_id=?4",
+                    params![id, decoded_name, decoded_display_name, account_id],
+                )
+                .map_err(db_error)?;
+        }
+    }
+
+    let drafts = {
+        let mut statement = transaction
+            .prepare("SELECT id,remote_mailbox FROM drafts WHERE remote_mailbox IS NOT NULL")
+            .map_err(db_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(db_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_error)?;
+        rows
+    };
+    for (id, name) in drafts {
+        let decoded = crate::mail::utf7::decode(&name);
+        if name != decoded {
+            transaction
+                .execute(
+                    "UPDATE drafts SET remote_mailbox=?2 WHERE id=?1",
+                    params![id, decoded],
+                )
+                .map_err(db_error)?;
+        }
+    }
+
+    let filter_targets = {
+        let mut statement = transaction
+            .prepare("SELECT id,target_mailbox FROM filter_rules WHERE target_mailbox IS NOT NULL")
+            .map_err(db_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(db_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_error)?;
+        rows
+    };
+    for (id, name) in filter_targets {
+        let decoded = crate::mail::utf7::decode(&name);
+        if name != decoded {
+            transaction
+                .execute(
+                    "UPDATE filter_rules SET target_mailbox=?2 WHERE id=?1",
+                    params![id, decoded],
+                )
+                .map_err(db_error)?;
+        }
+    }
+
+    let operations = {
+        let mut statement = transaction
+            .prepare(
+                "SELECT id,kind,payload FROM offline_ops WHERE kind IN ('flags','keyword','move')",
+            )
+            .map_err(db_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(db_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_error)?;
+        rows
+    };
+    for (id, kind, payload) in operations {
+        let mut value: serde_json::Value = serde_json::from_str(&payload).map_err(|_| {
+            "Saved queued changes could not be migrated. Cached mail and queued changes were preserved."
+                .to_string()
+        })?;
+        let keys: &[&str] = match kind.as_str() {
+            "flags" | "keyword" => &["mailbox"],
+            "move" => &["source", "destination"],
+            _ => &[],
+        };
+        let mut changed = false;
+        for key in keys {
+            let Some(name) = value.get(*key).and_then(serde_json::Value::as_str) else {
+                continue;
+            };
+            let decoded = crate::mail::utf7::decode(name);
+            if name != decoded {
+                value[*key] = serde_json::Value::String(decoded);
+                changed = true;
+            }
+        }
+        if changed {
+            let rewritten = serde_json::to_string(&value).map_err(|_| {
+                "Saved queued changes could not be migrated. Cached mail and queued changes were preserved."
+                    .to_string()
+            })?;
+            transaction
+                .execute(
+                    "UPDATE offline_ops SET payload=?2 WHERE id=?1",
+                    params![id, rewritten],
+                )
+                .map_err(db_error)?;
+        }
+    }
+
+    Ok(())
 }
 
 /// Schema v18: per-account download policy, account presentation, resumable
@@ -1225,12 +1450,14 @@ mod tests {
                 color: None,
             },
             imap: ServerConfig {
+                trusted_certificate: None,
                 host: "imap.example.com".into(),
                 port: 993,
                 tls_mode: TlsMode::Tls,
                 username: "sam@example.com".into(),
             },
             smtp: ServerConfig {
+                trusted_certificate: None,
                 host: "smtp.example.com".into(),
                 port: 587,
                 tls_mode: TlsMode::StartTls,
@@ -4122,5 +4349,301 @@ mod tests {
             .unwrap();
         assert_eq!(message_rows, 40);
         assert_eq!(fts_rows, message_rows);
+    }
+    #[test]
+    fn folder_assignments_are_owned_and_missing_targets_fail_closed() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let id = db
+            .upsert_mailbox(
+                &account.summary.id,
+                "CustomSent",
+                &MailboxRole::Other,
+                Some(1),
+                Some(1),
+                Some(0),
+                0,
+            )
+            .unwrap();
+        assert!(db
+            .set_folder_assignment("foreign", "sent", Some(id))
+            .is_err());
+        db.set_folder_assignment(&account.summary.id, "sent", Some(id))
+            .unwrap();
+        assert_eq!(
+            db.mailbox_for_role(&account.summary.id, "sent")
+                .unwrap()
+                .unwrap()
+                .0,
+            id
+        );
+        db.rename_mailbox_local(&account.summary.id, "CustomSent", "RenamedSent")
+            .unwrap();
+        assert_eq!(
+            db.mailbox_for_role(&account.summary.id, "sent")
+                .unwrap()
+                .unwrap()
+                .1,
+            "RenamedSent"
+        );
+        db.conn()
+            .unwrap()
+            .execute("DELETE FROM mailboxes WHERE id=?1", [id])
+            .unwrap();
+        assert!(db.mailbox_for_role(&account.summary.id, "sent").is_err());
+        db.set_folder_assignment(&account.summary.id, "sent", None)
+            .unwrap();
+        assert!(db
+            .mailbox_for_role(&account.summary.id, "sent")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn bridge_provider_round_trips_and_defaults_have_no_trust() {
+        let db = Database::memory();
+        let mut account = account();
+        account.summary.provider = ProviderKind::ProtonBridge;
+        db.insert_account(&account).unwrap();
+        let loaded = db.account(&account.summary.id).unwrap();
+        assert_eq!(loaded.summary.provider, ProviderKind::ProtonBridge);
+        assert!(loaded.imap.trusted_certificate.is_none());
+        assert!(db
+            .folder_assignments(&account.summary.id)
+            .unwrap()
+            .iter()
+            .all(|assignment| assignment.mailbox_id.is_none()));
+    }
+
+    #[test]
+    fn identity_reset_preserves_drafts_and_clears_remote_tracking() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let local = draft(&account.summary.id);
+        let id = db.save_draft(&local).unwrap();
+        db.conn().unwrap().execute("UPDATE drafts SET remote_mailbox='Old',remote_uid=7,remote_uid_validity=1 WHERE id=?1", [&id]).unwrap();
+        db.reset_remote_identity(&account.summary.id).unwrap();
+        let tracked = db
+            .pending_draft_sync(&account.summary.id)
+            .unwrap()
+            .into_iter()
+            .find(|record| record.id == id)
+            .unwrap();
+        assert!(tracked.remote_uid.is_none());
+        assert!(tracked.remote_mailbox.is_none());
+    }
+    // Failure inventory: reset/eviction must not recycle IDs retained by an
+    // open composer; both insert paths preserve existing IDs and legacy maxima.
+    #[test]
+    fn stale_composer_source_ids_never_resolve_after_identity_reset() {
+        for envelope_only in [false, true] {
+            let db = Database::memory();
+            let account = account();
+            db.insert_account(&account).unwrap();
+            let inbox = mailbox(&db, &account.summary.id, "INBOX", &MailboxRole::Inbox);
+            let old = message(1, "2026-08-18T12:00:00Z");
+            if envelope_only {
+                db.upsert_envelope(&account.summary.id, inbox, &old)
+                    .unwrap();
+            } else {
+                db.upsert_message(&account.summary.id, inbox, &old).unwrap();
+            }
+            let old_id = db
+                .conn()
+                .unwrap()
+                .query_row(
+                    "SELECT id FROM messages WHERE mailbox_id=?1",
+                    [inbox],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap();
+            db.reset_remote_identity(&account.summary.id).unwrap();
+            let replacement = mailbox(&db, &account.summary.id, "INBOX", &MailboxRole::Inbox);
+            let new = message(1, "2026-08-19T12:00:00Z");
+            if envelope_only {
+                db.upsert_envelope(&account.summary.id, replacement, &new)
+                    .unwrap();
+            } else {
+                db.upsert_message(&account.summary.id, replacement, &new)
+                    .unwrap();
+            }
+            let new_id = db
+                .conn()
+                .unwrap()
+                .query_row(
+                    "SELECT id FROM messages WHERE mailbox_id=?1",
+                    [replacement],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap();
+            assert!(new_id > old_id, "stale composer ID must remain unavailable");
+            db.mark_replied(old_id, &account.summary.id, true, true)
+                .unwrap();
+            let detail = db.message_detail(new_id, &account.summary.id).unwrap();
+            assert!(!detail.summary.is_answered && !detail.summary.is_forwarded);
+            assert!(db.message_detail(old_id, &account.summary.id).is_err());
+        }
+    }
+
+    #[test]
+    fn message_id_sequence_migration_preserves_legacy_high_water() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, &account.summary.id, "INBOX", &MailboxRole::Inbox);
+        db.upsert_message(
+            &account.summary.id,
+            inbox,
+            &message(1, "2026-08-18T12:00:00Z"),
+        )
+        .unwrap();
+        {
+            let mut conn = db.conn().unwrap();
+            conn.execute("UPDATE messages SET id=500", []).unwrap();
+            conn.execute_batch("DROP TABLE IF EXISTS message_id_sequence; PRAGMA user_version=21;")
+                .unwrap();
+            migrate_schema(&mut conn).unwrap();
+            conn.execute("DELETE FROM messages", []).unwrap();
+        }
+        db.upsert_envelope(
+            &account.summary.id,
+            inbox,
+            &message(2, "2026-08-19T12:00:00Z"),
+        )
+        .unwrap();
+        let id = db
+            .conn()
+            .unwrap()
+            .query_row("SELECT id FROM messages", [], |row| row.get::<_, i64>(0))
+            .unwrap();
+        assert!(id > 500);
+        db.upsert_message(
+            &account.summary.id,
+            inbox,
+            &message(2, "2026-08-19T12:00:00Z"),
+        )
+        .unwrap();
+        assert_eq!(
+            db.conn()
+                .unwrap()
+                .query_row("SELECT id FROM messages", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            id
+        );
+    }
+
+    #[test]
+    fn vanished_assigned_folder_is_missing_even_when_operations_keep_cache() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let target = mailbox(&db, &account.summary.id, "CustomSent", &MailboxRole::Other);
+        db.set_folder_assignment(&account.summary.id, "sent", Some(target))
+            .unwrap();
+        db.queue_operation(
+            &account.summary.id,
+            "flags",
+            &serde_json::json!({"mailbox":"CustomSent","uid":1}),
+            Some("guarded-folder"),
+        )
+        .unwrap();
+        db.reconcile_mailboxes(&account.summary.id, &std::collections::HashSet::new())
+            .unwrap();
+        assert!(
+            db.mailbox(target).is_ok(),
+            "pending operations keep cached folder"
+        );
+        assert!(
+            db.folder_assignments(&account.summary.id)
+                .unwrap()
+                .into_iter()
+                .find(|item| item.role == "sent")
+                .unwrap()
+                .missing
+        );
+        assert!(db.mailbox_for_role(&account.summary.id, "sent").is_err());
+        db.upsert_mailbox(
+            &account.summary.id,
+            "CustomSent",
+            &MailboxRole::Other,
+            Some(1),
+            Some(1),
+            Some(0),
+            0,
+        )
+        .unwrap();
+        assert!(db
+            .mailbox_for_role(&account.summary.id, "sent")
+            .unwrap()
+            .is_some());
+    }
+    // Failure inventory: selected folder IDs survive in UI and queued IPC
+    // after identity reset/account removal; new folders must never reuse them.
+    #[test]
+    fn stale_mailbox_ids_never_resolve_after_identity_reset() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let old = mailbox(&db, &account.summary.id, "OldPersonal", &MailboxRole::Other);
+        db.reset_remote_identity(&account.summary.id).unwrap();
+        let replacement = mailbox(
+            &db,
+            &account.summary.id,
+            "DifferentPersonal",
+            &MailboxRole::Other,
+        );
+        assert!(replacement > old);
+        assert!(db.mailbox(old).is_err());
+        assert_eq!(
+            mailbox(
+                &db,
+                &account.summary.id,
+                "DifferentPersonal",
+                &MailboxRole::Other
+            ),
+            replacement
+        );
+        db.rename_mailbox_local(&account.summary.id, "DifferentPersonal", "RenamedPersonal")
+            .unwrap();
+        assert_eq!(db.mailbox(replacement).unwrap().1, "RenamedPersonal");
+    }
+
+    #[test]
+    fn mailbox_ids_never_reuse_removed_account_folders() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let old = mailbox(&db, &account.summary.id, "OldPersonal", &MailboxRole::Other);
+        db.remove_account(&account.summary.id).unwrap();
+        db.insert_account(&account).unwrap();
+        let replacement = mailbox(&db, &account.summary.id, "NewPersonal", &MailboxRole::Other);
+        assert!(replacement > old);
+        assert!(db.mailbox(old).is_err());
+    }
+
+    #[test]
+    fn mailbox_id_sequence_migration_preserves_assigned_tombstone_high_water() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        mailbox(&db, &account.summary.id, "INBOX", &MailboxRole::Inbox);
+        {
+            let mut conn = db.conn().unwrap();
+            conn.execute("UPDATE mailboxes SET id=500", []).unwrap();
+            conn.execute(
+                "INSERT INTO folder_assignments(account_id,role,mailbox_id) VALUES(?1,'sent',900)",
+                [&account.summary.id],
+            )
+            .unwrap();
+            conn.execute_batch("DROP TABLE IF EXISTS mailbox_id_sequence; PRAGMA user_version=21;")
+                .unwrap();
+            migrate_schema(&mut conn).unwrap();
+        }
+        db.remove_account(&account.summary.id).unwrap();
+        db.insert_account(&account).unwrap();
+        let new = mailbox(&db, &account.summary.id, "NewPersonal", &MailboxRole::Other);
+        assert!(new > 900);
     }
 }

@@ -116,7 +116,8 @@ pub async fn set_remote_keyword(
     let mut session = super::pool::checkout(account, password)
         .await
         .map_err(MailboxOperationError::transient)?;
-    let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(mailbox))
+    let wire_mailbox = session.mailbox_name(mailbox);
+    let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(&wire_mailbox))
         .await
         .map_err(|_| MailboxOperationError::transient("Message update timed out.".to_string()))?
         .map_err(|error| remote_failure(error, "Message update"))?;
@@ -186,7 +187,8 @@ pub async fn set_remote_uid_flags(
     let mut session = super::pool::checkout(account, password)
         .await
         .map_err(MailboxOperationError::transient)?;
-    let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(mailbox))
+    let wire_mailbox = session.mailbox_name(mailbox);
+    let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(&wire_mailbox))
         .await
         .map_err(|_| MailboxOperationError::transient("Message update timed out.".to_string()))?
         .map_err(|error| remote_failure(error, "Message update"))?;
@@ -313,7 +315,9 @@ async fn move_remote_inner(
     let mut session = super::pool::checkout(account, password)
         .await
         .map_err(MailboxOperationError::transient)?;
-    let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(source))
+    let wire_source = session.mailbox_name(source);
+    let wire_destination = session.mailbox_name(destination);
+    let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(&wire_source))
         .await
         .map_err(|_| MailboxOperationError::transient("Move timed out.".to_string()))?
         .map_err(|error| remote_failure(error, "Move"))?;
@@ -344,7 +348,7 @@ async fn move_remote_inner(
                 quote_imap_search(raw_message_id)
             );
             let destination_selected =
-                tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(destination))
+                tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(&wire_destination))
                     .await
                     .map_err(|_| MailboxOperationError::transient("Move timed out.".to_string()))?
                     .map_err(|error| remote_failure(error, "Move"))?;
@@ -359,7 +363,7 @@ async fn move_remote_inner(
                         "This mail server cannot safely move messages.".to_string(),
                     ));
                 }
-                tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(source))
+                tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(&wire_source))
                     .await
                     .map_err(|_| MailboxOperationError::transient("Move timed out.".to_string()))?
                     .map_err(|error| remote_failure(error, "Move"))?;
@@ -388,21 +392,21 @@ async fn move_remote_inner(
                 session.release();
                 return Ok(());
             }
-            tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(source))
+            tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(&wire_source))
                 .await
                 .map_err(|_| MailboxOperationError::transient("Move timed out.".to_string()))?
                 .map_err(|error| remote_failure(error, "Move"))?;
         }
     }
     if can_move {
-        tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.uid_mv(set, destination))
+        tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.uid_mv(set, &wire_destination))
             .await
             .map_err(|_| MailboxOperationError::transient("Move timed out.".to_string()))?
             .map_err(|error| remote_failure(error, "Move"))?;
     } else if has_uidplus {
         tokio::time::timeout(
             IMAP_COMMAND_TIMEOUT,
-            session.uid_copy(set.clone(), destination),
+            session.uid_copy(set.clone(), &wire_destination),
         )
         .await
         .map_err(|_| MailboxOperationError::transient("Move timed out.".to_string()))?
@@ -444,7 +448,8 @@ pub async fn create_folder(
     name: &str,
 ) -> Result<(), String> {
     let mut session = super::pool::checkout(account, password).await?;
-    let result = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.create(name))
+    let wire_name = session.mailbox_name(name);
+    let result = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.create(&wire_name))
         .await
         .map_err(|_| "Creating the folder timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Folder creation"));
@@ -459,10 +464,15 @@ pub async fn rename_folder(
     new_name: &str,
 ) -> Result<(), String> {
     let mut session = super::pool::checkout(account, password).await?;
-    let result = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.rename(old_name, new_name))
-        .await
-        .map_err(|_| "Renaming the folder timed out.".to_string())?
-        .map_err(|error| redact_error(&error, "Folder rename"));
+    let wire_old_name = session.mailbox_name(old_name);
+    let wire_new_name = session.mailbox_name(new_name);
+    let result = tokio::time::timeout(
+        IMAP_COMMAND_TIMEOUT,
+        session.rename(&wire_old_name, &wire_new_name),
+    )
+    .await
+    .map_err(|_| "Renaming the folder timed out.".to_string())?
+    .map_err(|error| redact_error(&error, "Folder rename"));
     session.release();
     result
 }
@@ -473,7 +483,8 @@ pub async fn delete_folder(
     name: &str,
 ) -> Result<(), String> {
     let mut session = super::pool::checkout(account, password).await?;
-    let result = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.delete(name))
+    let wire_name = session.mailbox_name(name);
+    let result = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.delete(&wire_name))
         .await
         .map_err(|_| "Deleting the folder timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Folder deletion"));
@@ -492,7 +503,8 @@ pub async fn empty_folder(
         "Mailbox identity is unavailable; refresh mail and try again.".to_string()
     })?;
     let mut session = super::pool::checkout(account, password).await?;
-    let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(name))
+    let wire_name = session.mailbox_name(name);
+    let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(&wire_name))
         .await
         .map_err(|_| "Emptying the folder timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Folder empty"))?;
@@ -587,7 +599,8 @@ pub async fn mark_folder_read(
     expected_uid_validity: u32,
 ) -> Result<(), String> {
     let mut session = super::pool::checkout(account, password).await?;
-    let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(mailbox))
+    let wire_mailbox = session.mailbox_name(mailbox);
+    let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(&wire_mailbox))
         .await
         .map_err(|_| "Marking the folder read timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Mark folder read"))?;

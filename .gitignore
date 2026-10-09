@@ -18,3 +18,5 @@ THIRD_PARTY_NOTICES*.txt
 public/licenses.json
 public/licenses-cargo.json
 .claude/
+
+artifacts/

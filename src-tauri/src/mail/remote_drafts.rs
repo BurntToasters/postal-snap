@@ -32,7 +32,8 @@ pub async fn upsert_remote_draft(
     previous_uid_validity: Option<u32>,
 ) -> Result<RemoteDraftLocation, String> {
     let mut session = super::pool::checkout(account, password).await?;
-    let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(mailbox))
+    let wire_mailbox = session.mailbox_name(mailbox);
+    let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(&wire_mailbox))
         .await
         .map_err(|_| "Draft synchronization timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Draft synchronization"))?;
@@ -51,12 +52,12 @@ pub async fn upsert_remote_draft(
     if matching.is_empty() {
         tokio::time::timeout(
             IMAP_COMMAND_TIMEOUT,
-            session.append(mailbox, Some("(\\Draft)"), None, bytes),
+            session.append(&wire_mailbox, Some("(\\Draft)"), None, bytes),
         )
         .await
         .map_err(|_| "Draft upload timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Draft upload"))?;
-        let refreshed = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(mailbox))
+        let refreshed = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(&wire_mailbox))
             .await
             .map_err(|_| "Draft synchronization timed out.".to_string())?
             .map_err(|error| redact_error(&error, "Draft synchronization"))?;
@@ -116,7 +117,8 @@ pub async fn delete_remote_draft(
             .to_string()
     })?;
     let mut session = super::pool::checkout(account, password).await?;
-    let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(mailbox))
+    let wire_mailbox = session.mailbox_name(mailbox);
+    let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(&wire_mailbox))
         .await
         .map_err(|_| "Draft deletion timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Draft deletion"))?;
@@ -163,7 +165,8 @@ pub async fn fetch_remote_drafts(
     known_uids: &std::collections::HashSet<u32>,
 ) -> Result<RemoteDraftSnapshot, String> {
     let mut session = super::pool::checkout(account, password).await?;
-    let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.examine(mailbox))
+    let wire_mailbox = session.mailbox_name(mailbox);
+    let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.examine(&wire_mailbox))
         .await
         .map_err(|_| "Draft download timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Draft download"))?;

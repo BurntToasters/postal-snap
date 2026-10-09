@@ -280,26 +280,27 @@ test("keeps settings tab names accessible in a narrow window", async ({
   await page.getByRole("button", { name: "Settings" }).click();
   const tabNames = [
     "General",
-    "Reading",
+    "Appearance",
+    "Reading & Sending",
     "Notifications",
     "Storage",
     "Accounts",
     "Shortcuts",
     "Updates",
-    "Advanced",
+    "Privacy & Security",
     "About",
   ];
-  await expect
-    .poll(() =>
-      page
-        .getByRole("tab")
-        .evaluateAll((tabs) =>
-          tabs.map((tab) => tab.getAttribute("aria-label")),
-        ),
-    )
-    .toEqual(tabNames);
+  const sections = page.getByRole("combobox", {
+    name: "Settings section",
+    exact: true,
+  });
+  await expect(sections).toBeVisible();
+  expect(await sections.locator("option").allTextContents()).toEqual(tabNames);
   for (const name of tabNames) {
-    await expect(page.getByRole("tab", { name }).locator("span")).toBeVisible();
+    await sections.selectOption({ label: name });
+    await expect(
+      page.getByRole("tabpanel", { name, exact: true }),
+    ).toBeVisible();
   }
 });
 
@@ -385,7 +386,7 @@ test("requires typing CONFIRM before reported-threat warnings can be disabled", 
 }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
-  await page.getByRole("tab", { name: "Advanced" }).click();
+  await page.getByRole("tab", { name: "Privacy & Security" }).click();
   const toggle = page.getByRole("checkbox", {
     name: /Warn about reported dangerous addresses/,
   });
@@ -622,13 +623,13 @@ test("switches reading layouts and opens hidden messages accessibly", async ({
 }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
-  await page.getByRole("tab", { name: "Reading" }).click();
+  await page.getByRole("tab", { name: "Appearance" }).click();
   await page.getByLabel("Reading pane", { exact: true }).selectOption("bottom");
   await page.getByRole("button", { name: "Close settings" }).click();
   await expect(page.locator("main.mail-shell")).toHaveClass(/pane-bottom/);
 
   await page.getByRole("button", { name: "Settings" }).click();
-  await page.getByRole("tab", { name: "Reading" }).click();
+  await page.getByRole("tab", { name: "Appearance" }).click();
   await page.getByLabel("Reading pane", { exact: true }).selectOption("hidden");
   await page.getByRole("button", { name: "Close settings" }).click();
   await page.getByRole("option", { name: /Weekend plans/i }).click();
@@ -1046,7 +1047,7 @@ test("hides message previews in compact density", async ({ page }) => {
     page.getByText("Are we still meeting on Saturday?"),
   ).toBeVisible();
   await page.getByRole("button", { name: "Settings" }).click();
-  await page.getByRole("tab", { name: "General" }).click();
+  await page.getByRole("tab", { name: "Appearance", exact: true }).click();
   await page.getByLabel("Interface spacing").selectOption("compact");
   await page.getByRole("button", { name: "Close settings" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-density", "compact");
@@ -1180,6 +1181,8 @@ test("detects and manages account aliases and presents From selector in composer
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("tab", { name: "Accounts" }).click();
+  await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
+  await page.getByRole("button", { name: "Identity", exact: true }).click();
 
   await page.getByRole("button", { name: "Detect from iCloud" }).click();
   await expect(page.locator(".aliases-list")).toContainText(
@@ -1198,6 +1201,8 @@ test("renders alias header help without overlap blockers", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("tab", { name: "Accounts" }).click();
+  await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
+  await page.getByRole("button", { name: "Identity", exact: true }).click();
   await expect(page.getByText("Email Aliases & Custom Domains")).toBeVisible();
   await expect(
     page.getByText(/Send and receive using iCloud aliases/),
@@ -1273,6 +1278,7 @@ test("recovers expired passwords without removing the account", async ({
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("tab", { name: "Accounts" }).click();
   await expect(page.getByRole("alert")).toContainText("Sign-in failed");
+  await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
   await page.getByLabel("Update password").fill("new-app-password");
   await page.getByRole("button", { name: "Update password" }).click();
   await expect(page.getByText(/Password updated/)).toBeVisible();
@@ -1383,6 +1389,8 @@ test("saves a per-account signature", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("tab", { name: "Accounts" }).click();
+  await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
+  await page.getByRole("button", { name: "Identity", exact: true }).click();
   await page.getByLabel("Email signature").fill("Best,\nSam");
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText(/Signature saved/)).toBeVisible();
@@ -1392,6 +1400,8 @@ test("creates, disables, and deletes a mail rule", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("tab", { name: "Accounts" }).click();
+  await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
+  await page.getByRole("button", { name: "Rules", exact: true }).click();
   await page.getByLabel("Rule name").fill("Bills");
   await page.getByLabel("Text to match").fill("power.example.com");
   await page.getByRole("button", { name: "Add rule" }).click();
@@ -1439,7 +1449,7 @@ test("keeps message body opaque when translucent window effects are enabled", as
 }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
-  await page.getByRole("tab", { name: "General" }).click();
+  await page.getByRole("tab", { name: "Appearance", exact: true }).click();
   await page.getByLabel("Translucent window background").check();
   await expect(page.locator("html")).toHaveAttribute(
     "data-window-fx",
@@ -1463,7 +1473,7 @@ test("keeps chrome opaque when the platform cannot provide native glass", async 
     "opaque",
   );
   await page.getByRole("button", { name: "Settings" }).click();
-  await page.getByRole("tab", { name: "General" }).click();
+  await page.getByRole("tab", { name: "Appearance", exact: true }).click();
   await expect(
     page.getByRole("checkbox", { name: /Translucent window background/ }),
   ).toHaveCount(0);

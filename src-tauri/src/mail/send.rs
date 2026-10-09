@@ -1,4 +1,10 @@
-use std::path::Path;
+use std::{
+    io,
+    net::SocketAddr,
+    path::Path,
+    pin::Pin,
+    task::{Context, Poll},
+};
 
 use lettre::{
     address::Envelope,
@@ -8,7 +14,10 @@ use lettre::{
     transport::smtp::authentication::Credentials,
     AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
 };
-use tokio::net::TcpStream;
+use tokio::{
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf},
+    net::TcpStream,
+};
 use zeroize::Zeroizing;
 
 use super::flowed::encode_flowed;
@@ -100,6 +109,34 @@ pub async fn send_prepared(
     };
     let envelope = message_envelope(account, draft).map_err(refused)?;
     let password = Zeroizing::new(password.to_string());
+    if account.smtp.trusted_certificate.is_some() {
+        let mut connection = connect_pinned_smtp(&account.smtp, &password)
+            .await
+            .map_err(|message| SendError {
+                kind: if message.to_ascii_lowercase().contains("certificate")
+                    || message.to_ascii_lowercase().contains("tls")
+                    || message.contains("sign-in")
+                {
+                    SendFailure::NotSentRefused
+                } else {
+                    SendFailure::NotSentRetry
+                },
+            })?;
+        tokio::time::timeout(CONNECT_TIMEOUT, connection.send(&envelope, bytes))
+            .await
+            .map_err(|_| SendError {
+                kind: SendFailure::Uncertain,
+            })?
+            .map_err(|error| SendError {
+                kind: classify_send_failure(
+                    error.is_permanent(),
+                    error.is_transient(),
+                    error.is_tls(),
+                    false,
+                ),
+            })?;
+        return Ok(());
+    }
     let transport = smtp_transport(&account.smtp, &password).map_err(refused)?;
     transport
         .send_raw(&envelope, bytes)
@@ -125,7 +162,8 @@ pub async fn ensure_sent_copy(
     bytes: &[u8],
 ) -> Result<(), String> {
     let mut session = super::pool::checkout(account, password).await?;
-    tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(mailbox))
+    let wire_mailbox = session.mailbox_name(mailbox);
+    tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(&wire_mailbox))
         .await
         .map_err(|_| "Sent folder timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Sent folder"))?;
@@ -133,12 +171,12 @@ pub async fn ensure_sent_copy(
     if existing.is_empty() {
         tokio::time::timeout(
             IMAP_COMMAND_TIMEOUT,
-            session.append(mailbox, Some("(\\Seen)"), None, bytes),
+            session.append(&wire_mailbox, Some("(\\Seen)"), None, bytes),
         )
         .await
         .map_err(|_| "Saving the Sent copy timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Save Sent copy"))?;
-        tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(mailbox))
+        tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(&wire_mailbox))
             .await
             .map_err(|_| "Sent folder timed out.".to_string())?
             .map_err(|error| redact_error(&error, "Sent folder"))?;
@@ -162,7 +200,14 @@ pub(crate) async fn connect_imap(
         .await
         .map_err(|_| "Incoming server timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Incoming connection"))?;
-    let native_connector = tokio_native_tls::native_tls::TlsConnector::builder();
+    let mut native_connector = tokio_native_tls::native_tls::TlsConnector::builder();
+    if let Some(pem) = &server.trusted_certificate {
+        crate::bridge::validate_loopback(&server.host)?;
+        crate::bridge::certificate_metadata(pem)?;
+        let certificate = tokio_native_tls::native_tls::Certificate::from_pem(pem.as_bytes())
+            .map_err(|_| "The saved Bridge certificate is invalid.".to_string())?;
+        native_connector.add_root_certificate(certificate);
+    }
     #[cfg(test)]
     let native_connector = add_test_imap_root(native_connector)?;
     let native_connector = native_connector
@@ -174,7 +219,8 @@ pub(crate) async fn connect_imap(
             let tls = tokio::time::timeout(CONNECT_TIMEOUT, connector.connect(&server.host, tcp))
                 .await
                 .map_err(|_| "Incoming TLS negotiation timed out.".to_string())?
-                .map_err(|error| redact_error(&error, "Incoming TLS negotiation"))?;
+                .map_err(|error| crate::bridge::tls_error(&error, "Incoming TLS negotiation"))?;
+            verify_pinned_stream(server, &tls)?;
             let mut client = async_imap::Client::new(tls);
             tokio::time::timeout(CONNECT_TIMEOUT, client.read_response())
                 .await
@@ -203,7 +249,8 @@ pub(crate) async fn connect_imap(
             )
             .await
             .map_err(|_| "Incoming STARTTLS timed out.".to_string())?
-            .map_err(|error| redact_error(&error, "Incoming STARTTLS"))?;
+            .map_err(|error| crate::bridge::tls_error(&error, "Incoming STARTTLS"))?;
+            verify_pinned_stream(server, &tls)?;
             async_imap::Client::new(tls)
         }
     };
@@ -219,6 +266,180 @@ pub(crate) async fn connect_imap(
             }
             _ => redact_error(&error, "Incoming connection"),
         })
+}
+
+fn verify_pinned_stream(
+    server: &ServerConfig,
+    stream: &tokio_native_tls::TlsStream<TcpStream>,
+) -> Result<(), String> {
+    let Some(pem) = &server.trusted_certificate else {
+        return Ok(());
+    };
+    let peer = stream
+        .get_ref()
+        .peer_certificate()
+        .map_err(|_| {
+            "Certificate verification failed. Could not inspect the Bridge certificate.".to_string()
+        })?
+        .ok_or("Certificate verification failed. Bridge did not present a certificate.")?;
+    let der = peer.to_der().map_err(|_| {
+        "Certificate verification failed. The Bridge certificate is invalid.".to_string()
+    })?;
+    crate::bridge::verify_peer_certificate(pem, &der)
+}
+
+// STARTTLS has already consumed the greeting when lettre takes this stream.
+#[derive(Debug)]
+struct PinnedSmtpStream {
+    stream: tokio_native_tls::TlsStream<TcpStream>,
+    peer: SocketAddr,
+    greeting: &'static [u8],
+}
+
+impl AsyncRead for PinnedSmtpStream {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        if !self.greeting.is_empty() && buf.remaining() > 0 {
+            let count = self.greeting.len().min(buf.remaining());
+            buf.put_slice(&self.greeting[..count]);
+            self.greeting = &self.greeting[count..];
+            return Poll::Ready(Ok(()));
+        }
+        Pin::new(&mut self.stream).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for PinnedSmtpStream {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.stream).poll_write(cx, buf)
+    }
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.stream).poll_flush(cx)
+    }
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.stream).poll_shutdown(cx)
+    }
+}
+
+impl lettre::transport::smtp::client::AsyncTokioStream for PinnedSmtpStream {
+    fn peer_addr(&self) -> io::Result<SocketAddr> {
+        Ok(self.peer)
+    }
+}
+
+async fn smtp_reply(tcp: &mut TcpStream, expected: &[u8; 3]) -> Result<bool, String> {
+    let mut supports_starttls = false;
+    let mut total = 0usize;
+    for _ in 0..128 {
+        let mut line = Vec::new();
+        loop {
+            let byte = tcp
+                .read_u8()
+                .await
+                .map_err(|_| "Outgoing connection closed during secure setup.".to_string())?;
+            line.push(byte);
+            total += 1;
+            if line.len() > 4096 || total > 65536 {
+                return Err("Outgoing server response exceeded the safe limit.".into());
+            }
+            if byte == b'\n' {
+                break;
+            }
+        }
+        if line.len() < 6
+            || &line[..3] != expected
+            || !line.ends_with(b"\r\n")
+            || !matches!(line[3], b' ' | b'-')
+        {
+            return Err("Outgoing server refused secure connection setup.".into());
+        }
+        let extension = &line[4..line.len() - 2];
+        if extension.eq_ignore_ascii_case(b"STARTTLS") {
+            supports_starttls = true;
+        }
+        if line[3] == b' ' {
+            return Ok(supports_starttls);
+        }
+    }
+    Err("Outgoing server response exceeded the safe limit.".into())
+}
+
+async fn connect_pinned_smtp(
+    server: &ServerConfig,
+    password: &str,
+) -> Result<lettre::transport::smtp::client::AsyncSmtpConnection, String> {
+    tokio::time::timeout(CONNECT_TIMEOUT, async {
+        use lettre::transport::smtp::{
+            authentication::Mechanism, client::AsyncSmtpConnection, extension::ClientId,
+        };
+        crate::bridge::validate_loopback(&server.host)?;
+        let pem = server
+            .trusted_certificate
+            .as_deref()
+            .ok_or("The Bridge certificate is unavailable.")?;
+        crate::bridge::certificate_metadata(pem)?;
+        let certificate = tokio_native_tls::native_tls::Certificate::from_pem(pem.as_bytes())
+            .map_err(|_| "The saved Bridge certificate is invalid.".to_string())?;
+        let connector = tokio_native_tls::native_tls::TlsConnector::builder()
+            .add_root_certificate(certificate)
+            .build()
+            .map_err(|error| crate::bridge::tls_error(&error, "Outgoing TLS setup"))?;
+        let mut tcp = TcpStream::connect((server.host.as_str(), server.port))
+            .await
+            .map_err(|error| redact_error(&error, "Outgoing connection"))?;
+        let peer = tcp
+            .peer_addr()
+            .map_err(|_| "Outgoing connection is unavailable.".to_string())?;
+        let greeting = match server.tls_mode {
+            TlsMode::Tls => &b""[..],
+            TlsMode::StartTls => {
+                smtp_reply(&mut tcp, b"220").await?;
+                tcp.write_all(b"EHLO localhost\r\n")
+                    .await
+                    .map_err(|_| "Outgoing connection failed.".to_string())?;
+                if !smtp_reply(&mut tcp, b"250").await? {
+                    return Err("Required outgoing STARTTLS is unavailable.".into());
+                }
+                tcp.write_all(b"STARTTLS\r\n")
+                    .await
+                    .map_err(|_| "Required outgoing STARTTLS failed.".to_string())?;
+                smtp_reply(&mut tcp, b"220").await?;
+                &b"220 localhost ESMTP\r\n"[..]
+            }
+        };
+        let connector = tokio_native_tls::TlsConnector::from(connector);
+        let stream = connector
+            .connect(&server.host, tcp)
+            .await
+            .map_err(|error| crate::bridge::tls_error(&error, "Outgoing TLS negotiation"))?;
+        verify_pinned_stream(server, &stream)?;
+        let stream = PinnedSmtpStream {
+            stream,
+            peer,
+            greeting,
+        };
+        let mut connection =
+            AsyncSmtpConnection::connect_with_transport(Box::new(stream), &ClientId::default())
+                .await
+                .map_err(|error| redact_error(&error, "Outgoing greeting"))?;
+        connection
+            .auth(
+                &[Mechanism::Plain, Mechanism::Login],
+                &Credentials::new(server.username.clone(), password.to_owned()),
+            )
+            .await
+            .map_err(|error| redact_error(&error, "Outgoing sign-in"))?;
+        Ok(connection)
+    })
+    .await
+    .map_err(|_| "Outgoing server timed out before sending.".to_string())?
 }
 
 #[cfg(test)]
@@ -241,11 +462,24 @@ pub(crate) async fn test_smtp(
     password: &str,
 ) -> Result<(), String> {
     let password = Zeroizing::new(password.to_string());
+    if server.trusted_certificate.is_some() {
+        let mut connection = connect_pinned_smtp(server, &password).await?;
+        let connected = tokio::time::timeout(CONNECT_TIMEOUT, connection.test_connected())
+            .await
+            .map_err(|_| "Outgoing server timed out.".to_string())?;
+        if !connected {
+            return Err("The outgoing server declined the secure connection.".into());
+        }
+        let _: Mailbox = email
+            .parse()
+            .map_err(|_| "Enter a valid sender address.".to_string())?;
+        return Ok(());
+    }
     let transport = smtp_transport(server, &password)?;
     let connected = tokio::time::timeout(CONNECT_TIMEOUT, transport.test_connection())
         .await
         .map_err(|_| "Outgoing server timed out.".to_string())?
-        .map_err(|error| redact_error(&error, "Outgoing connection"))?;
+        .map_err(|error| crate::bridge::tls_error(&error, "Outgoing connection"))?;
     if !connected {
         return Err("The outgoing server declined the secure connection.".into());
     }
@@ -276,6 +510,9 @@ fn smtp_transport(
     password: &Zeroizing<String>,
 ) -> Result<AsyncSmtpTransport<Tokio1Executor>, String> {
     let credentials = Credentials::new(server.username.clone(), password.as_str().to_owned());
+    if server.trusted_certificate.is_some() {
+        return Err("Bridge certificate connections require the verified pinned transport.".into());
+    }
     #[cfg(test)]
     if let Ok(path) = std::env::var("POSTAL_SNAP_MAIL_TEST_CA_CERT") {
         use lettre::transport::smtp::client::{Certificate, Tls, TlsParameters};
@@ -590,12 +827,14 @@ mod plain_tests {
                 color: None,
             },
             imap: ServerConfig {
+                trusted_certificate: None,
                 host: "imap.example.com".into(),
                 port: 993,
                 tls_mode: TlsMode::Tls,
                 username: "sam".into(),
             },
             smtp: ServerConfig {
+                trusted_certificate: None,
                 host: "smtp.example.com".into(),
                 port: 587,
                 tls_mode: TlsMode::StartTls,

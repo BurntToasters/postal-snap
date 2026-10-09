@@ -1,4 +1,4 @@
-export type ProviderKind = "icloud" | "manual";
+export type ProviderKind = "icloud" | "manual" | "protonBridge";
 export type TlsMode = "tls" | "startTls";
 export type MailboxRole =
   "inbox" | "sent" | "drafts" | "archive" | "trash" | "junk" | "other";
@@ -22,6 +22,7 @@ export interface AccountSetupRequest {
   imap?: ServerConfig;
   smtp?: ServerConfig;
   cachePolicy?: CachePolicy;
+  certificateReference?: string;
 }
 
 export type MailSettingsDiscovery =
@@ -428,6 +429,11 @@ export type IpcErrorCode =
   | "settingsReadFailed"
   | "settingsWriteFailed"
   | "authenticationFailed"
+  | "certificateInvalid"
+  | "pendingOperations"
+  | "folderAttention"
+  | "identityConfirmation"
+  | "certificateFailed"
   | "connectionFailed"
   | "localStorageFailed"
   | "invalidInput"
@@ -437,6 +443,7 @@ export interface IpcErrorPayload {
   code: IpcErrorCode;
   message: string;
   retryable: boolean;
+  stage?: "imap" | "smtp";
 }
 
 export interface CacheUsage {
@@ -453,4 +460,21 @@ export interface ExternalLinkCheck {
   url: string;
   hostname: string;
   reportedThreat: boolean;
+}
+
+export interface BridgeCertificate {
+  reference: string;
+  fingerprint: string;
+  expiresAt: string;
+}
+export interface AccountConnection {
+  imap: ServerConfig;
+  smtp: ServerConfig;
+  certificate?: BridgeCertificate | null;
+  blockers?: { queuedChanges: number; unsentMessages: number };
+}
+export interface FolderAssignment {
+  role: "sent" | "drafts" | "archive" | "junk" | "trash";
+  mailboxId: number | null;
+  missing: boolean;
 }

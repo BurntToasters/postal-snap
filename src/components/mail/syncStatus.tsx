@@ -6,7 +6,7 @@ interface SyncStatusProps {
   account: AccountSummary | undefined;
   sync: SyncState | undefined;
   progress?: SyncProgress | undefined;
-  onOpenSettings?: (tab?: "accounts") => void;
+  onOpenSettings?: (tab?: "accounts", accountId?: string) => void;
 }
 
 export function SyncStatus({
@@ -53,13 +53,16 @@ export function SyncStatus({
             max={progress.envelopesTotal}
           />
         ) : null}
-        {phase === "authFailed" && onOpenSettings ? (
+        {(phase === "authFailed" || phase === "offline" || phase === "error") &&
+        onOpenSettings ? (
           <button
             type="button"
             className="text-button sync-action-button"
-            onClick={() => onOpenSettings("accounts")}
+            onClick={() => onOpenSettings("accounts", account?.id)}
           >
-            {strings.settings.updatePassword}
+            {phase === "authFailed"
+              ? strings.settings.updatePassword
+              : strings.settings.connection}
           </button>
         ) : null}
       </div>

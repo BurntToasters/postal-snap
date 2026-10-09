@@ -910,6 +910,26 @@ impl Database {
     }
 }
 
+// IDs may outlive cache rows in an open reader or composer.
+fn stable_message_id(
+    transaction: &rusqlite::Transaction<'_>,
+    mailbox_id: i64,
+    uid: u32,
+) -> Result<i64, String> {
+    let existing = transaction
+        .query_row(
+            "SELECT id FROM messages WHERE mailbox_id=?1 AND uid=?2",
+            params![mailbox_id, uid],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(db_error)?;
+    if let Some(id) = existing {
+        return Ok(id);
+    }
+    transaction.query_row("UPDATE message_id_sequence SET last_id=MAX(last_id,(SELECT COALESCE(MAX(id),0) FROM messages))+1 WHERE singleton=1 RETURNING last_id", [], |row| row.get(0)).map_err(db_error)
+}
+
 fn write_full_message(
     transaction: &rusqlite::Transaction,
     account_id: &str,
@@ -933,14 +953,15 @@ fn write_full_message(
     };
     let (thread_parent, thread_root) =
         provisional_thread_root(transaction, account_id, mailbox_id, message)?;
+    let stable_id = stable_message_id(transaction, mailbox_id, message.uid)?;
     transaction.execute(
         "INSERT INTO messages (
-            account_id, mailbox_id, uid, message_id, subject, sender_name, sender_address, recipients,
+            id, account_id, mailbox_id, uid, message_id, subject, sender_name, sender_address, recipients,
             received_at, preview, is_read, is_starred, has_attachments, size, to_json, cc_json,
             reply_to, thread_parent, thread_root, text_body, html_body, attachments_json, raw_message, accessed_at,
             internal_at, body_bytes, prefetch_failures, prefetch_retry_at,
             has_calendar, calendar_json, list_unsubscribe, list_unsubscribe_post
-         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,'1970-01-01 00:00:00',
+         ) VALUES (?30,?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,'1970-01-01 00:00:00',
             COALESCE(?24,?9),?25,0,NULL,?26,?27,?28,?29)
          ON CONFLICT(mailbox_id, uid) DO UPDATE SET
             message_id=excluded.message_id, subject=excluded.subject, sender_name=excluded.sender_name,
@@ -963,7 +984,7 @@ fn write_full_message(
             attachments, message.raw_message, message.internal_at,
             body_bytes.min(i64::MAX as usize) as i64,
             message.has_calendar as i32, message.calendar_json, message.list_unsubscribe,
-            message.list_unsubscribe_post,
+            message.list_unsubscribe_post, stable_id,
         ],
     ).map_err(db_error)?;
     let id: i64 = transaction
@@ -995,13 +1016,14 @@ fn write_envelope(
         .map_err(|_| "Could not index recipients.".to_string())?;
     let (thread_parent, thread_root) =
         provisional_thread_root(transaction, account_id, mailbox_id, message)?;
+    let stable_id = stable_message_id(transaction, mailbox_id, message.uid)?;
     transaction.execute(
         "INSERT INTO messages (
-            account_id, mailbox_id, uid, message_id, subject, sender_name, sender_address, recipients,
+            id, account_id, mailbox_id, uid, message_id, subject, sender_name, sender_address, recipients,
             received_at, preview, is_read, is_starred, has_attachments, size, to_json, cc_json,
             reply_to, thread_parent, thread_root, text_body, html_body, attachments_json, raw_message, accessed_at,
             internal_at, is_answered, is_forwarded
-         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,'',?10,?11,?12,?13,?14,?15,?16,?17,?18,'',NULL,'[]',X'','1970-01-01 00:00:00',
+         ) VALUES (?22,?1,?2,?3,?4,?5,?6,?7,?8,?9,'',?10,?11,?12,?13,?14,?15,?16,?17,?18,'',NULL,'[]',X'','1970-01-01 00:00:00',
             COALESCE(?19,?9),?20,?21)
          ON CONFLICT(mailbox_id, uid) DO UPDATE SET
             message_id=excluded.message_id, subject=excluded.subject, sender_name=excluded.sender_name,
@@ -1033,7 +1055,7 @@ fn write_envelope(
             thread_root,
             message.internal_at,
             message.is_answered as i32,
-            message.is_forwarded as i32,
+            message.is_forwarded as i32, stable_id,
         ],
     ).map_err(db_error)?;
     let id: i64 = transaction

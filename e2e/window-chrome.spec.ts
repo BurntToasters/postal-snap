@@ -212,13 +212,17 @@ for (const [platform, userAgent] of Object.entries(platforms)) {
 
       await page.goto("/");
       await page.getByRole("button", { name: "Settings", exact: true }).click();
-      await expect(page.getByRole("tablist")).toHaveAttribute(
-        "aria-orientation",
-        "horizontal",
-      );
-      await page.getByRole("tab", { name: "General" }).focus();
-      await page.keyboard.press("ArrowRight");
-      await expect(page.getByRole("tab", { name: "Reading" })).toBeFocused();
+      const sections = page.getByRole("combobox", {
+        name: "Settings section",
+        exact: true,
+      });
+      await expect(sections).toBeVisible();
+      await sections.focus();
+      await sections.selectOption("appearance");
+      await expect(sections).toBeFocused();
+      await expect(
+        page.getByRole("tabpanel", { name: "Appearance", exact: true }),
+      ).toBeVisible();
       await expect(page.locator(".settings-window")).toBeVisible();
       expect(
         (await page.locator(".settings-window").boundingBox())!.y,
@@ -552,19 +556,23 @@ test.describe("whole-app responsive UI", () => {
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     const names = [
       "General",
-      "Reading",
+      "Appearance",
+      "Reading & Sending",
       "Notifications",
       "Storage",
       "Accounts",
       "Shortcuts",
       "Updates",
-      "Advanced",
+      "Privacy & Security",
       "About",
     ];
     for (const name of names) {
-      const tab = page.getByRole("tab", { name });
-      await tab.click();
-      await expect(tab).toHaveAttribute("aria-selected", "true");
+      const sections = page.getByRole("combobox", {
+        name: "Settings section",
+        exact: true,
+      });
+      await sections.selectOption({ label: name });
+      await expect(sections.locator("option:checked")).toHaveText(name);
       await expect(page.getByRole("tabpanel", { name })).toBeVisible();
       expect(
         await page
