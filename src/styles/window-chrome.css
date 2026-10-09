@@ -83,7 +83,7 @@ html[data-platform="windows"] .global-window-caption-controls {
 }
 
 html[data-platform="macos"] .app-toolbar {
-  padding-left: 12px;
+  padding-left: var(--toolbar-pad-inline);
 }
 
 /* Traffic lights float over the sidebar, which starts the window's first row. */
@@ -138,5 +138,57 @@ html[data-platform="windows"] .app-toolbar {
 
 /* In fullscreen macOS moves traffic lights into its own transient titlebar. */
 html[data-platform="macos"][data-window-fullscreen="true"] .app-toolbar {
-  padding-left: 12px;
+  padding-left: var(--toolbar-pad-inline);
+}
+
+@media (min-width: 761px) {
+  /* Reader covers the title strip and is the drag surface. */
+  html:has(.reader-pane[aria-modal="true"]) .window-drag-strip {
+    background: transparent;
+    pointer-events: none;
+  }
+
+  html[data-platform="macos"]:not([data-window-fullscreen="true"])
+    .pane-hidden
+    .reader-pane:not(.reader-hidden):not(.empty-reader)
+    :is(
+      .reader-actions,
+      .message-header,
+      .remote-content-banner,
+      .message-find,
+      .plain-text-body,
+      .attachment-list,
+      .snooze-panel
+    ) {
+    padding-left: 84px;
+  }
+
+  html[data-platform="macos"]:not([data-window-fullscreen="true"])
+    .pane-hidden
+    .reader-pane:not(.reader-hidden):not(.empty-reader)
+    .invite-card {
+    margin-left: 84px;
+  }
+
+  html[data-platform="windows"]
+    .pane-hidden
+    .reader-pane:not(.reader-hidden):not(.empty-reader)
+    :is(
+      .reader-actions,
+      .message-header,
+      .remote-content-banner,
+      .message-find,
+      .plain-text-body,
+      .attachment-list,
+      .snooze-panel
+    ) {
+    padding-right: 150px;
+  }
+
+  html[data-platform="windows"]
+    .pane-hidden
+    .reader-pane:not(.reader-hidden):not(.empty-reader)
+    .invite-card {
+    margin-right: 150px;
+  }
 }

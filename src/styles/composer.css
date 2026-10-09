@@ -67,7 +67,7 @@
 }
 
 .composer-signature-preview {
-  margin: 0 16px 12px;
+  margin: 0 var(--toolbar-pad-inline) 12px;
   padding: 8px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -190,7 +190,7 @@
 
 .format-toggle-row {
   display: flex;
-  padding: 6px 12px 0;
+  padding: 6px var(--toolbar-pad-inline) 0;
 }
 
 .format-toggle .format-aa {
@@ -207,7 +207,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  padding: 6px 12px;
+  padding: 6px var(--toolbar-pad-inline);
   overflow-x: auto;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
   background: color-mix(in srgb, var(--surface) 90%, var(--surface-muted));
@@ -335,7 +335,7 @@
 
 .composer-window .tiptap {
   height: 100%;
-  padding: 18px 21px;
+  padding: 18px var(--toolbar-pad-inline);
   overflow: auto;
   outline: none;
   line-height: 1.5;
@@ -422,7 +422,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 7px;
-  padding: 9px 15px;
+  padding: 9px var(--toolbar-pad-inline);
   border-top: 1px solid var(--border);
   background: var(--surface);
 }
@@ -489,7 +489,7 @@
   height: 100%;
   min-height: 160px;
   box-sizing: border-box;
-  padding: 18px 21px;
+  padding: 18px var(--toolbar-pad-inline);
   border: 0;
   border-radius: 0;
   outline: none;

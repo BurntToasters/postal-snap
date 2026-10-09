@@ -104,7 +104,7 @@ legend {
 .address-fields {
   position: relative;
   display: grid;
-  padding: 5px 16px;
+  padding: 5px var(--toolbar-pad-inline);
 }
 
 .address-fields label {

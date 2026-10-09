@@ -55,6 +55,7 @@ export function ReaderToolbar({
   onOpenMore,
   onCloseMore,
   onDismissMore,
+  windowDrag,
 }: {
   message: MessageDetail;
   mailboxes: MailboxSummary[];
@@ -85,6 +86,7 @@ export function ReaderToolbar({
   onOpenMore: () => void;
   onCloseMore: () => void;
   onDismissMore: () => void;
+  windowDrag?: boolean;
 }) {
   const moveDestinations = mailboxes.filter(
     (mailbox) =>
@@ -100,6 +102,7 @@ export function ReaderToolbar({
       role="toolbar"
       aria-label={strings.reader.actions}
       data-context="chrome"
+      data-tauri-drag-region={windowDrag ? "deep" : undefined}
       onKeyDown={moveToolbarFocus}
     >
       <button
