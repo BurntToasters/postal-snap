@@ -174,6 +174,7 @@ test("warns about local work before removing an account", async ({ page }) => {
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("tab", { name: "Accounts" }).click();
 
+  await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
   const dialogMessage = new Promise<string>((resolve) => {
     page.once("dialog", async (dialog) => {
       resolve(dialog.message());

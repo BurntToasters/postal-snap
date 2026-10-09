@@ -110,27 +110,25 @@ test("message context menu is compact, iconed, and groups move targets", async (
   await expect(menu).toHaveCount(0);
 });
 
-// Failure mode: a flattening pass strips the raised, Mail-style depth from
-// the settings chrome and cards, leaving plain fills.
-test("settings dialog keeps raised surfaces", async ({ page }) => {
+// Settings retain subtle depth while grouped rows use quiet surfaces.
+test("settings dialog keeps restrained surfaces", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).first().click();
   const dialog = page.locator(".settings-window");
   await expect(dialog).toBeVisible();
-
-  const gradients = await page.evaluate(() =>
-    [
-      ".settings-window > header",
-      ".settings-nav",
-      ".settings-nav button.active",
-      ".settings-row, .switch-row",
-    ].map((selector) => {
-      const node = document.querySelector(selector);
-      return node ? getComputedStyle(node).backgroundImage : "missing";
-    }),
+  await expect(
+    page.getByRole("searchbox", { name: "Search settings" }),
+  ).toBeVisible();
+  expect(
+    await dialog.evaluate((node) => getComputedStyle(node).boxShadow),
+  ).not.toBe("none");
+  const surfaces = await page.evaluate(() =>
+    [".settings-nav", ".settings-nav button.active"].map(
+      (selector) =>
+        getComputedStyle(document.querySelector(selector)!).backgroundImage,
+    ),
   );
-  for (const image of gradients) expect(image).toContain("linear-gradient");
-
+  for (const surface of surfaces) expect(surface).toBe("none");
   await page.screenshot({ path: "test-results/ui-polish-settings.png" });
 });
 
@@ -390,7 +388,7 @@ test("move targets show full folder paths and stay whole at 200% text", async ({
 test("every reachable text size has a named choice", async ({ page }) => {
   await page.goto("/?scale=1.75");
   await page.getByRole("button", { name: "Settings" }).first().click();
-  await page.getByRole("tab", { name: "Reading" }).click();
+  await page.getByRole("tab", { name: "Appearance" }).click();
   const size = page.getByRole("combobox", { name: "Text size" });
   await expect(size).toHaveValue("1.75");
   const label = await size.evaluate(

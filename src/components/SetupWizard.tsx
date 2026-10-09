@@ -36,6 +36,7 @@ import {
   preparePassword,
   trimServer,
 } from "./setup/request";
+import { BridgeCertificateControl } from "./settings/bridgeCertificate";
 import { ServerFields } from "./setup/serverFields";
 import { SetupDisplaySection } from "./setup/displayOptions";
 
@@ -78,6 +79,7 @@ export function SetupWizard({
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [certificateReference, setCertificateReference] = useState<string>();
   const [showPassword, setShowPassword] = useState(false);
   const [imap, setImap] = useState(emptyManualImap);
   const [smtp, setSmtp] = useState(emptyManualSmtp);
@@ -117,11 +119,13 @@ export function SetupWizard({
         : (provider ?? "icloud");
     return {
       provider: accountProvider,
+      certificateReference:
+        accountProvider === "protonBridge" ? certificateReference : undefined,
       displayName: displayName.trim(),
       email: normalizedEmail,
       password: preparePassword(provider ?? "icloud", password),
-      imap: accountProvider === "manual" ? trimServer(imap) : undefined,
-      smtp: accountProvider === "manual" ? trimServer(smtp) : undefined,
+      imap: accountProvider !== "icloud" ? trimServer(imap) : undefined,
+      smtp: accountProvider !== "icloud" ? trimServer(smtp) : undefined,
       cachePolicy: {
         mode: cacheMode,
         days: 90,
@@ -130,6 +134,7 @@ export function SetupWizard({
     };
   }, [
     cacheMode,
+    certificateReference,
     discovery,
     displayName,
     imap,
@@ -192,11 +197,16 @@ export function SetupWizard({
   function chooseProvider(next: ProviderKind) {
     const username = email.trim();
     setProvider(next);
+    setCertificateReference(undefined);
     setPassword("");
     setShowPassword(false);
     setStatus(undefined);
     setHelpLinkNotice(undefined);
     forgetDiscoveredServers(username);
+    if (next === "protonBridge") {
+      setImap({ host: "127.0.0.1", port: 1143, tlsMode: "startTls", username });
+      setSmtp({ host: "127.0.0.1", port: 1025, tlsMode: "startTls", username });
+    }
     if (next === "manual" && discoveredDomain === undefined) {
       setImap((current) =>
         current.host ? current : emptyManualImap(username),
@@ -209,6 +219,7 @@ export function SetupWizard({
 
   function returnToProviderPicker() {
     setProvider(undefined);
+    setCertificateReference(undefined);
     forgetDiscoveredServers(email.trim());
     setPassword("");
     setShowPassword(false);
@@ -223,6 +234,10 @@ export function SetupWizard({
     setDiscovery(undefined);
     const query = email.trim();
     try {
+      if (/@(proton\.me|protonmail\.com|protonmail\.ch|pm\.me)$/i.test(query)) {
+        chooseProvider("protonBridge");
+        return;
+      }
       const found = await api.discoverMailSettings(query);
       if (emailRef.current.trim() !== query) return;
       setDiscovery(found);
@@ -251,7 +266,7 @@ export function SetupWizard({
   function updateEmail(value: string) {
     const previous = email.trim();
     setEmail(value);
-    if (provider !== "manual") return;
+    if (provider !== "manual" && provider !== "protonBridge") return;
     const next = value.trim();
     if (
       discoveredDomain !== undefined &&
@@ -282,6 +297,7 @@ export function SetupWizard({
       if (
         patch.tlsMode &&
         patch.tlsMode !== server.tlsMode &&
+        provider !== "protonBridge" &&
         isStandardPort(kind, server.port)
       ) {
         next.port = defaultPort(kind, patch.tlsMode);
@@ -438,6 +454,22 @@ export function SetupWizard({
             </h2>
           )}
           <div className="provider-list">
+            <button
+              type="button"
+              className="provider-button"
+              onClick={() => chooseProvider("protonBridge")}
+            >
+              <span className="provider-symbol" aria-hidden="true">
+                <ShieldCheck />
+              </span>
+              <span className="provider-copy">
+                <strong>{strings.setup.bridge}</strong>
+                <small>{strings.setup.bridgeDetail}</small>
+              </span>
+              <span className="provider-arrow" aria-hidden="true">
+                <ChevronRight />
+              </span>
+            </button>
             <button
               type="button"
               className="provider-button provider-primary"
@@ -624,18 +656,22 @@ export function SetupWizard({
           <FormTitle id="setup-form-title" tabIndex={-1}>
             {provider === "icloud"
               ? strings.setup.connectIcloud
-              : foundProvider
-                ? strings.setup.connectProvider(foundProvider.providerName)
-                : strings.setup.connectOther}
+              : provider === "protonBridge"
+                ? strings.setup.bridge
+                : foundProvider
+                  ? strings.setup.connectProvider(foundProvider.providerName)
+                  : strings.setup.connectOther}
           </FormTitle>
           <p className="setup-intro">
             {provider === "icloud"
               ? strings.setup.icloudIntro
-              : foundProvider
-                ? strings.setup.settingsFound(foundProvider.providerName)
-                : discovery?.status === "notFound"
-                  ? strings.setup.settingsNotFound
-                  : strings.setup.discoverIntro}
+              : provider === "protonBridge"
+                ? strings.setup.bridgeIntro
+                : foundProvider
+                  ? strings.setup.settingsFound(foundProvider.providerName)
+                  : discovery?.status === "notFound"
+                    ? strings.setup.settingsNotFound
+                    : strings.setup.discoverIntro}
           </p>
         </div>
         {requiresAppPassword ? (
@@ -716,9 +752,11 @@ export function SetupWizard({
         ) : null}
         <div className="field-label">
           <label htmlFor="setup-password">
-            {requiresAppPassword
-              ? strings.setup.appPassword
-              : strings.setup.emailPassword}
+            {provider === "protonBridge"
+              ? strings.setup.bridgePassword
+              : requiresAppPassword
+                ? strings.setup.appPassword
+                : strings.setup.emailPassword}
           </label>
           <span className="password-field">
             <input
@@ -800,6 +838,9 @@ export function SetupWizard({
             />
           </div>
         )}
+        {provider === "protonBridge" ? (
+          <BridgeCertificateControl onApproved={setCertificateReference} />
+        ) : null}
         <fieldset className="download-choice">
           <legend>{strings.setup.downloadMail}</legend>
           <label>

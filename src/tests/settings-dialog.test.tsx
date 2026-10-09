@@ -28,6 +28,10 @@ vi.mock("../api", () => ({
   api: {
     saveSettings: vi.fn(),
     listAccounts: vi.fn(),
+    getAccountConnection: vi.fn(),
+    updateAccountConnection: vi.fn(),
+    getFolderAssignments: vi.fn(),
+    setFolderAssignment: vi.fn(),
     listAllMailboxes: vi.fn(),
     getAccountRemovalImpact: vi.fn(),
     testAccount: vi.fn(),
@@ -75,6 +79,22 @@ const account = makeAccount("account-1", "icloud", {
 beforeEach(() => {
   vi.clearAllMocks();
   mockSaveSettingsPassthrough();
+  vi.mocked(api.showNativeConfirm).mockResolvedValue(true);
+  vi.mocked(api.getAccountConnection).mockResolvedValue({
+    imap: {
+      host: "imap.mail.me.com",
+      port: 993,
+      tlsMode: "tls",
+      username: account.email,
+    },
+    smtp: {
+      host: "smtp.mail.me.com",
+      port: 587,
+      tlsMode: "startTls",
+      username: account.email,
+    },
+  });
+  vi.mocked(api.getFolderAssignments).mockResolvedValue([]);
   vi.mocked(api.listAccounts).mockResolvedValue([account]);
   vi.mocked(api.listAllMailboxes).mockImplementation(async () =>
     useAppStore.getState().mailboxes.map((mailbox) => ({ ...mailbox })),
@@ -97,10 +117,28 @@ beforeEach(() => {
   });
 });
 
+async function manageAccount(
+  page: "Connection" | "Identity" | "Rules" = "Connection",
+) {
+  await act(async () => {
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Manage Test User" }),
+    );
+  });
+  if (page !== "Connection") await accountPage(page);
+}
+
+async function accountPage(page: "Connection" | "Identity" | "Rules") {
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: page }));
+  });
+}
+
 describe("SettingsDialog component", () => {
   it("renders accounts tab with existing aliases and allows adding new alias", async () => {
     const onClose = vi.fn();
     render(<SettingsDialog initialTab="accounts" onClose={onClose} />);
+    await manageAccount("Identity");
 
     await act(async () => {
       await Promise.resolve();
@@ -168,6 +206,7 @@ describe("SettingsDialog component", () => {
   it("detects iCloud aliases via CalDAV", async () => {
     const onClose = vi.fn();
     render(<SettingsDialog initialTab="accounts" onClose={onClose} />);
+    await manageAccount("Identity");
 
     await act(async () => {
       await Promise.resolve();
@@ -188,6 +227,7 @@ describe("SettingsDialog component", () => {
     const { container } = render(
       <SettingsDialog initialTab="accounts" onClose={onClose} />,
     );
+    await manageAccount("Identity");
 
     await act(async () => {
       await Promise.resolve();
@@ -231,7 +271,7 @@ describe("SettingsDialog component", () => {
 
   it("offers the translucent window toggle when supported", async () => {
     const onClose = vi.fn();
-    render(<SettingsDialog initialTab="general" onClose={onClose} />);
+    render(<SettingsDialog initialTab="appearance" onClose={onClose} />);
 
     const toggle = await screen.findByRole("checkbox", {
       name: /Translucent window background/,
@@ -278,7 +318,7 @@ describe("SettingsDialog component", () => {
     document.documentElement.dataset.platform = "linux";
     render(<SettingsDialog initialTab="general" onClose={vi.fn()} />);
     expect(
-      await screen.findByRole("combobox", { name: /Appearance/i }),
+      await screen.findByRole("button", { name: "Export settings" }),
     ).toBeVisible();
     expect(
       screen.queryByRole("checkbox", {
@@ -303,7 +343,7 @@ describe("SettingsDialog component", () => {
       return next;
     });
     const onClose = vi.fn();
-    render(<SettingsDialog initialTab="general" onClose={onClose} />);
+    render(<SettingsDialog initialTab="appearance" onClose={onClose} />);
     const windowFx = await screen.findByRole("checkbox", {
       name: /Translucent window background/,
     });
@@ -414,6 +454,7 @@ describe("SettingsDialog component", () => {
     });
     const onClose = vi.fn();
     render(<SettingsDialog initialTab="accounts" onClose={onClose} />);
+    await manageAccount("Connection");
 
     await act(async () => {
       await Promise.resolve();
@@ -440,6 +481,7 @@ describe("SettingsDialog component", () => {
     });
     const onClose = vi.fn();
     render(<SettingsDialog initialTab="accounts" onClose={onClose} />);
+    await manageAccount("Identity");
 
     await act(async () => {
       await Promise.resolve();
@@ -460,7 +502,7 @@ describe("SettingsDialog component", () => {
 
   it("changes the undo send window", async () => {
     const onClose = vi.fn();
-    render(<SettingsDialog initialTab="general" onClose={onClose} />);
+    render(<SettingsDialog initialTab="reading" onClose={onClose} />);
 
     const select = await screen.findByLabelText("Undo send window");
     await act(async () => {
@@ -498,6 +540,7 @@ describe("SettingsDialog component", () => {
     });
     const onClose = vi.fn();
     render(<SettingsDialog initialTab="accounts" onClose={onClose} />);
+    await manageAccount("Rules");
 
     await screen.findByText("Bills");
     const toggle = screen.getByRole("button", { name: /Bills/ });
@@ -565,6 +608,7 @@ describe("SettingsDialog component", () => {
     ];
     vi.mocked(api.listFilterRules).mockResolvedValue(rules);
     render(<SettingsDialog initialTab="accounts" onClose={vi.fn()} />);
+    await manageAccount("Rules");
 
     await screen.findByText("Read note");
     expect(screen.getByText(/Mark as read\./)).toBeVisible();
@@ -583,6 +627,7 @@ describe("SettingsDialog component", () => {
         }),
     );
     render(<SettingsDialog initialTab="accounts" onClose={vi.fn()} />);
+    await manageAccount("Identity");
     await screen.findByLabelText("Email signature");
 
     fireEvent.change(screen.getByLabelText("Email signature"), {
@@ -615,6 +660,7 @@ describe("SettingsDialog component", () => {
         }),
     );
     render(<SettingsDialog initialTab="accounts" onClose={vi.fn()} />);
+    await manageAccount("Identity");
     await screen.findByText("alias@icloud.com");
 
     fireEvent.click(
@@ -640,21 +686,19 @@ describe("SettingsDialog component", () => {
     ]);
   });
 
-  it("opens Advanced from the General protection card", async () => {
+  it("opens Privacy & Security from General settings", async () => {
     render(<SettingsDialog initialTab="general" onClose={vi.fn()} />);
 
-    expect(screen.getByRole("heading", { name: "Appearance" })).toBeVisible();
-    expect(screen.getByRole("heading", { name: "Sending" })).toBeVisible();
-    expect(screen.getByRole("heading", { name: "Privacy" })).toBeVisible();
-    expect(screen.getByText("Mail protection is on")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "General" })).toBeVisible();
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Review Advanced" }));
+      const privacy = screen.getByRole("tab", { name: "Privacy & Security" });
+      privacy.focus();
+      fireEvent.click(privacy);
     });
 
-    expect(screen.getByRole("tab", { name: "Advanced" })).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
+    expect(
+      screen.getByRole("tab", { name: "Privacy & Security" }),
+    ).toHaveAttribute("aria-selected", "true");
     expect(
       screen.getByRole("checkbox", {
         name: /Block advertising and tracking images/,
@@ -670,7 +714,9 @@ describe("SettingsDialog component", () => {
         requestAnimationFrame(() => resolve());
       });
     });
-    expect(screen.getByRole("tab", { name: "Advanced" })).toHaveFocus();
+    expect(
+      screen.getByRole("tab", { name: "Privacy & Security" }),
+    ).toHaveFocus();
   });
 
   it("asks before turning off advertising and tracking image checks", async () => {
@@ -809,7 +855,9 @@ describe("SettingsDialog component", () => {
     expect(useAppStore.getState().settings.theme).toBe("dark");
     expect(await screen.findByText(/Settings imported/)).toBeVisible();
 
-    fireEvent.click(screen.getByRole("tab", { name: "Accounts" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: "Accounts" }));
+    });
     expect(
       screen.getAllByRole("button", { name: "Reset & Restart" }),
     ).toHaveLength(1);
@@ -843,6 +891,7 @@ describe("SettingsDialog component", () => {
     vi.mocked(api.removeAccount).mockResolvedValue({ cleanupPending: false });
     vi.mocked(api.listAccounts).mockResolvedValueOnce([]);
     render(<SettingsDialog initialTab="accounts" onClose={onClose} />);
+    await manageAccount("Connection");
 
     fireEvent.click(
       await screen.findByRole("button", { name: "Test connection" }),
@@ -860,6 +909,7 @@ describe("SettingsDialog component", () => {
 
   it("validates aliases and removes one only after confirmation", async () => {
     render(<SettingsDialog initialTab="accounts" onClose={vi.fn()} />);
+    await manageAccount("Identity");
     const input = await screen.findByLabelText("alias@yourdomain.com");
 
     fireEvent.change(input, { target: { value: "not-an-address" } });
@@ -887,6 +937,7 @@ describe("SettingsDialog component", () => {
 
   it("validates required rule name and match text", async () => {
     render(<SettingsDialog initialTab="accounts" onClose={vi.fn()} />);
+    await manageAccount("Rules");
     await screen.findByRole("button", { name: "Add rule" });
 
     fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
@@ -906,13 +957,13 @@ describe("SettingsDialog component", () => {
 
     fireEvent.keyDown(general, { key: "ArrowDown" });
     await waitFor(() =>
-      expect(screen.getByRole("tab", { name: "Reading" })).toHaveFocus(),
+      expect(screen.getByRole("tab", { name: "Appearance" })).toHaveFocus(),
     );
-    expect(screen.getByRole("tab", { name: "Reading" })).toHaveAttribute(
+    expect(screen.getByRole("tab", { name: "Appearance" })).toHaveAttribute(
       "aria-selected",
       "true",
     );
-    fireEvent.keyDown(screen.getByRole("tab", { name: "Reading" }), {
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Appearance" }), {
       key: "End",
     });
     await waitFor(() =>
@@ -920,7 +971,7 @@ describe("SettingsDialog component", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
-    expect(onClose).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });
 
   it("returns each settings tab to the top", async () => {
@@ -1007,17 +1058,19 @@ describe("SettingsDialog component", () => {
       new Error("erase failed"),
     );
     render(<SettingsDialog initialTab="accounts" onClose={vi.fn()} />);
-    await screen.findByText("Bills");
+    await manageAccount("Connection");
 
     fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
     await waitFor(() =>
       expect(useAppStore.getState().error).toMatch(/test failed/i),
     );
+    await accountPage("Identity");
     fireEvent.click(screen.getByRole("button", { name: "Detect from iCloud" }));
     await waitFor(() =>
       expect(useAppStore.getState().error).toMatch(/detect failed/i),
     );
 
+    await accountPage("Connection");
     fireEvent.change(screen.getByLabelText("Update password"), {
       target: { value: "new-app-password" },
     });
@@ -1025,6 +1078,7 @@ describe("SettingsDialog component", () => {
     await waitFor(() =>
       expect(useAppStore.getState().error).toMatch(/password failed/i),
     );
+    await accountPage("Identity");
     fireEvent.change(screen.getByLabelText("Email signature"), {
       target: { value: "Regards" },
     });
@@ -1046,6 +1100,8 @@ describe("SettingsDialog component", () => {
       expect(useAppStore.getState().error).toMatch(/alias remove failed/i),
     );
 
+    await accountPage("Rules");
+    await screen.findByText("Bills");
     fireEvent.change(screen.getByLabelText("Rule name"), {
       target: { value: "New rule" },
     });
@@ -1084,12 +1140,15 @@ describe("SettingsDialog component", () => {
     vi.mocked(api.saveSettings).mockRejectedValueOnce(
       new Error("theme save failed"),
     );
-    render(<SettingsDialog initialTab="general" onClose={vi.fn()} />);
-    fireEvent.change(await screen.findByLabelText("Appearance"), {
-      target: { value: "dark" },
-    });
+    render(<SettingsDialog initialTab="appearance" onClose={vi.fn()} />);
+    fireEvent.change(
+      await screen.findByRole("combobox", { name: "Appearance" }),
+      {
+        target: { value: "dark" },
+      },
+    );
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/theme save failed/i),
+      expect(screen.getByRole("alert")).toHaveTextContent(/theme save failed/i),
     );
     expect(useAppStore.getState().settings.theme).toBe("system");
 
@@ -1114,8 +1173,8 @@ describe("SettingsDialog component", () => {
       target: { value: "recent" },
     });
 
-    fireEvent.click(screen.getByRole("tab", { name: "Advanced" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: /reported/i }));
+    fireEvent.click(screen.getByRole("tab", { name: "Privacy & Security" }));
+    fireEvent.click(await screen.findByRole("checkbox", { name: /reported/i }));
     fireEvent.click(
       document.querySelector(".settings-confirm-overlay") as HTMLElement,
     );

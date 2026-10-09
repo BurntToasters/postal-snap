@@ -8,6 +8,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import { AboutTab } from "../components/settings/aboutTab";
+import { AppearanceTab } from "../components/settings/appearanceTab";
 import { AdvancedTab } from "../components/settings/advancedTab";
 import { editionName } from "../components/settings/helpers";
 import { NotificationsTab } from "../components/settings/notificationsTab";
@@ -269,7 +270,12 @@ describe("small settings tabs", () => {
 
   it("updates reading pane, text size, and thread grouping", () => {
     const update = vi.fn().mockResolvedValue(defaultSettings);
-    render(<ReadingTab update={update} />);
+    render(
+      <>
+        <AppearanceTab update={update} windowFxSupported={true} />
+        <ReadingTab update={update} />
+      </>,
+    );
     fireEvent.change(
       screen.getByRole("combobox", { name: strings.settings.readingPane }),
       { target: { value: "bottom" } },
@@ -278,7 +284,11 @@ describe("small settings tabs", () => {
       screen.getByRole("combobox", { name: strings.settings.textSize }),
       { target: { value: "1.5" } },
     );
-    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: new RegExp(strings.settings.groupThreads),
+      }),
+    );
     expect(update.mock.calls).toEqual([
       [{ readingPane: "bottom" }],
       [{ textScale: 1.5 }],

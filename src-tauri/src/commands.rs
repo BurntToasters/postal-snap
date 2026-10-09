@@ -11,6 +11,7 @@ use std::{
 pub mod accounts;
 pub mod attachments;
 pub mod cache_policy;
+pub mod compatibility;
 pub mod drafts_send;
 pub mod drag_drop;
 pub mod folders;
@@ -1143,12 +1144,14 @@ mod tests {
                 color: None,
             },
             imap: ServerConfig {
+                trusted_certificate: None,
                 host: "imap.example.com".into(),
                 port: 993,
                 tls_mode: TlsMode::Tls,
                 username: "sam@example.com".into(),
             },
             smtp: ServerConfig {
+                trusted_certificate: None,
                 host: "smtp.example.com".into(),
                 port: 587,
                 tls_mode: TlsMode::StartTls,

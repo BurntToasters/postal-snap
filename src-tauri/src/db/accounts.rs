@@ -39,7 +39,7 @@ impl Database {
             "SELECT id, provider, email, display_name, sync_state, error,
                     imap_host, imap_port, imap_tls, imap_username,
                     smtp_host, smtp_port, smtp_tls, smtp_username,
-                    aliases_json, auth_method, signature, color, default_body_format
+                    aliases_json, auth_method, signature, color, default_body_format, bridge_certificate
              FROM accounts WHERE id = ?1",
             [id],
             |row| {
@@ -62,12 +62,14 @@ impl Database {
                         default_body_format: BodyFormat::from_db(&row.get::<_, String>(18)?),
                     },
                     imap: ServerConfig {
+                        trusted_certificate: row.get(19)?,
                         host: row.get(6)?,
                         port: row.get::<_, u16>(7)?,
                         tls_mode: parse_tls(&row.get::<_, String>(8)?),
                         username: row.get(9)?,
                     },
                     smtp: ServerConfig {
+                        trusted_certificate: row.get(19)?,
                         host: row.get(10)?,
                         port: row.get::<_, u16>(11)?,
                         tls_mode: parse_tls(&row.get::<_, String>(12)?),
@@ -90,8 +92,8 @@ impl Database {
                 id, provider, email, display_name, sync_state,
                 imap_host, imap_port, imap_tls, imap_username,
                 smtp_host, smtp_port, smtp_tls, smtp_username,
-                aliases_json, auth_method, color, default_body_format, sort_order
-             ) VALUES (?1, ?2, ?3, ?4, 'idle', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
+                aliases_json, auth_method, color, default_body_format, bridge_certificate, sort_order
+             ) VALUES (?1, ?2, ?3, ?4, 'idle', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
                 (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM accounts))",
             params![
                 account.summary.id,
@@ -110,6 +112,7 @@ impl Database {
                 account.summary.auth_method,
                 account.summary.color,
                 account.summary.default_body_format.as_str(),
+                account.imap.trusted_certificate,
             ],
         )
         .map_err(|error| {

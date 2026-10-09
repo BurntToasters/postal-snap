@@ -120,6 +120,14 @@ struct WorkerHooks<'a> {
 }
 
 impl mail::SyncHooks for WorkerHooks<'_> {
+    fn validate_connection(&self, previous: &crate::models::AccountRecord) -> Result<(), String> {
+        let current = self.db.account(&self.account_id)?;
+        if current.imap != previous.imap || current.smtp != previous.smtp {
+            return Err("Account connection changed. Restart mail sync.".into());
+        }
+        Ok(())
+    }
+
     fn contended(&self) -> bool {
         self.actor.contended()
     }

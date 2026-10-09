@@ -60,13 +60,26 @@ impl Database {
             )
             .optional()
             .map_err(db_error)?;
+        // Folder IDs can remain selected after their cached rows disappear.
+        let existing: Option<i64> = transaction
+            .query_row(
+                "SELECT id FROM mailboxes WHERE account_id=?1 AND name=?2",
+                params![account_id, name],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?;
+        let stable_id = match existing {
+            Some(id) => id,
+            None => transaction.query_row("UPDATE mailbox_id_sequence SET last_id=MAX(last_id,(SELECT COALESCE(MAX(id),0) FROM (SELECT id FROM mailboxes UNION ALL SELECT mailbox_id AS id FROM folder_assignments)))+1 WHERE singleton=1 RETURNING last_id", [], |row| row.get::<_, i64>(0)).map_err(db_error)?,
+        };
         transaction.execute(
-            "INSERT INTO mailboxes (account_id, name, display_name, role, role_source, uid_validity, uid_next, server_unread, server_total, counts_updated_at)
-             VALUES (?1, ?2, ?2, ?3, ?4, ?5, ?6, ?7, ?8, CURRENT_TIMESTAMP)
+            "INSERT INTO mailboxes (id, account_id, name, display_name, role, role_source, uid_validity, uid_next, server_unread, server_total, counts_updated_at)
+             VALUES (?9, ?1, ?2, ?2, ?3, ?4, ?5, ?6, ?7, ?8, CURRENT_TIMESTAMP)
              ON CONFLICT(account_id, name) DO UPDATE SET role=excluded.role, role_source=excluded.role_source, uid_validity=excluded.uid_validity,
              uid_next=excluded.uid_next, server_unread=excluded.server_unread, server_total=excluded.server_total,
-             counts_updated_at=CURRENT_TIMESTAMP, local_total_delta=0, local_unread_delta=0",
-            params![account_id, name, role.as_str(), role_source, uid_validity, uid_next, server_unread, server_total],
+             counts_updated_at=CURRENT_TIMESTAMP, local_total_delta=0, local_unread_delta=0, server_available=1",
+            params![account_id, name, role.as_str(), role_source, uid_validity, uid_next, server_unread, server_total, stable_id],
         ).map_err(db_error)?;
         let id: i64 = transaction
             .query_row(
@@ -102,7 +115,8 @@ impl Database {
     pub fn list_mailboxes(&self, account_id: &str) -> Result<Vec<MailboxSummary>, String> {
         let conn = self.conn()?;
         let mut statement = conn.prepare(
-            "SELECT f.id, f.account_id, f.name, f.display_name, f.role,
+            "SELECT f.id, f.account_id, f.name, f.display_name,
+                    COALESCE((SELECT a.role FROM folder_assignments a WHERE a.account_id=f.account_id AND a.mailbox_id=f.id), CASE WHEN EXISTS(SELECT 1 FROM folder_assignments a WHERE a.account_id=f.account_id AND a.role=f.role) THEN 'other' ELSE f.role END),
                     MAX(0, COALESCE(f.server_unread, SUM(CASE WHEN m.is_read = 0 AND m.pending_move_to IS NULL THEN 1 ELSE 0 END)) + f.local_unread_delta),
                     MAX(0, COALESCE(f.server_total, SUM(CASE WHEN m.pending_move_to IS NULL AND m.id IS NOT NULL THEN 1 ELSE 0 END)) + f.local_total_delta),
                     f.delimiter
@@ -130,7 +144,8 @@ impl Database {
     pub fn list_all_mailboxes(&self) -> Result<Vec<MailboxSummary>, String> {
         let conn = self.conn()?;
         let mut statement = conn.prepare(
-            "SELECT f.id, f.account_id, f.name, f.display_name, f.role,
+            "SELECT f.id, f.account_id, f.name, f.display_name,
+                    COALESCE((SELECT a.role FROM folder_assignments a WHERE a.account_id=f.account_id AND a.mailbox_id=f.id), CASE WHEN EXISTS(SELECT 1 FROM folder_assignments a WHERE a.account_id=f.account_id AND a.role=f.role) THEN 'other' ELSE f.role END),
                     MAX(0, COALESCE(f.server_unread, SUM(CASE WHEN m.is_read = 0 AND m.pending_move_to IS NULL THEN 1 ELSE 0 END)) + f.local_unread_delta),
                     MAX(0, COALESCE(f.server_total, SUM(CASE WHEN m.pending_move_to IS NULL AND m.id IS NOT NULL THEN 1 ELSE 0 END)) + f.local_total_delta),
                     f.delimiter
@@ -183,9 +198,21 @@ impl Database {
         account_id: &str,
         role: &str,
     ) -> Result<Option<(i64, String)>, String> {
-        self.conn()?
+        let conn = self.conn()?;
+        let explicit: Option<i64> = conn
             .query_row(
-                "SELECT id, name FROM mailboxes WHERE account_id = ?1 AND role = ?2 ORDER BY CASE COALESCE(role_source, 'name') WHEN 'specialUse' THEN 0 ELSE 1 END, id LIMIT 1",
+                "SELECT mailbox_id FROM folder_assignments WHERE account_id=?1 AND role=?2",
+                params![account_id, role],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?;
+        if let Some(id) = explicit {
+            return conn.query_row("SELECT id,name FROM mailboxes WHERE account_id=?1 AND id=?2 AND server_available=1", params![account_id,id], |row| Ok((row.get(0)?,row.get(1)?))).optional().map_err(db_error)?.map(Some).ok_or_else(|| "Assigned folder needs attention. Choose another folder or Automatic in Settings.".into());
+        }
+        conn
+            .query_row(
+                "SELECT id, name FROM mailboxes WHERE account_id = ?1 AND role = ?2 AND server_available=1 AND NOT EXISTS(SELECT 1 FROM folder_assignments a WHERE a.account_id=mailboxes.account_id AND a.mailbox_id=mailboxes.id) ORDER BY CASE COALESCE(role_source, 'name') WHEN 'specialUse' THEN 0 ELSE 1 END, id LIMIT 1",
                 params![account_id, role],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
@@ -256,6 +283,20 @@ impl Database {
                 .collect::<Vec<_>>()
         };
         let transaction = conn.transaction().map_err(db_error)?;
+        transaction
+            .execute(
+                "UPDATE mailboxes SET server_available=0 WHERE account_id=?1",
+                [account_id],
+            )
+            .map_err(db_error)?;
+        for name in server_names {
+            transaction
+                .execute(
+                    "UPDATE mailboxes SET server_available=1 WHERE account_id=?1 AND name=?2",
+                    params![account_id, name],
+                )
+                .map_err(db_error)?;
+        }
         for id in stale_ids {
             transaction
                 .execute(

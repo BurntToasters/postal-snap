@@ -1,6 +1,6 @@
-# Postal Snap 0.2 release checklist
+# Postal Snap 0.3.2 release checklist
 
-Record the build commit, tester, date, operating-system version, and result for every manual item. A GitHub 0.2.x release is blocked by any unchecked **required** item. Store items are listed separately and are not a GitHub-train go/no-go.
+Record the build commit, tester, date, operating-system version, and result for every manual item. A GitHub 0.3.2 release is blocked by any unchecked **required** item. Store items are listed separately and are not a GitHub-train go/no-go.
 
 Mocked frontend, Playwright, and unit tests do not by themselves mean the release is ready.
 
@@ -17,9 +17,24 @@ Mocked frontend, Playwright, and unit tests do not by themselves mean the releas
 - [ ] Generated npm and Cargo notices are present in every package.
 - [ ] `src-tauri/tauri.conf.json` updater pubkey is a real minisign key. `TAURI_UPDATER_PUBLIC_KEY` is not required in `.env`; if it is set, it matches the committed key.
 
+## 0.3.2 compatibility and UI evidence
+
+- [ ] `npm run test:bridge-integration` passes with both TLS modes and negative certificate/authentication fixtures; preserve `artifacts/mail-integration/results.json`.
+- [ ] `npm run test:all` and `npm run test:mail-integration` pass on the release commit. Preserve HTML results, synthetic screenshots, and failure traces.
+- [ ] A schema v22 fixture upgrades modified-UTF-7 folder names transactionally before sync while preserving mailbox/message IDs, UID state, assignments, remote drafts, filter targets, and queued flags/keywords/moves.
+- [ ] When `UTF8=ACCEPT` is advertised, the client sends no `ENABLE` until the IMAP parser supports RFC 6855 quoted UTF-8 responses; modified-UTF-7 commands round-trip nested, non-ASCII, and literal ampersand names.
+- [ ] Staged IMAP and SMTP certificate failures retain endpoint-specific guidance without exposing raw server detail; local-storage failures do not suggest that Proton Bridge is unavailable.
+- [ ] Incoming-server identity changes preserve drafts and managed attachments, refuse queued work/unsent mail, and invalidate pooled connections.
+- [ ] Folder assignments stay account-scoped, follow rename, and show missing targets without silent fallback.
+- [ ] Settings search and account forms retain keyboard focus, save rollback, and dirty-form confirmation.
+- [ ] Comfortable and compact density work at 100% and 200% text, light/dark themes, narrow/wide windows, forced colors, and reduced motion.
+- [ ] Real Proton Bridge smoke passes on Windows, macOS, and Linux, including Flatpak loopback access, combined-address and split-address modes, certificate replacement, and Bridge restart. **Pending: keep support experimental until recorded.**
+
+See [mail compatibility](MAIL_COMPATIBILITY.md). Automated fixtures remain separate from the native and signed-package gates below.
+
 ## Mail behavior
 
-Required for GitHub 0.2.x. The live iCloud smoke is a signing-host gate; do not treat it as done because CI passed.
+Required for GitHub 0.3.2. The live iCloud smoke is a signing-host gate; do not treat it as done because CI passed.
 
 - [ ] `npm run test:icloud` passes on a signing host with a dedicated iCloud account and app-specific password.
 - [ ] IMAP local-part fallback and full-address fallback both have coverage.
@@ -73,7 +88,7 @@ Windows creates the GitHub draft. Mac and Linux wait for that draft and never cr
 - [ ] Direct builds update from the correct signed stable or beta GitHub manifest.
 - [ ] Install, upgrade, and uninstall preserve or remove user data exactly as documented.
 
-## Later: store packages (not a GitHub 0.2.x gate)
+## Later: store packages (not a GitHub 0.3.2 gate)
 
 - [ ] Store builds expose no self-updater and report store-managed updates.
 - [ ] Microsoft x64/arm64 MSIX bundle passes Windows App Certification Kit and clean Windows 10/11 VM tests.

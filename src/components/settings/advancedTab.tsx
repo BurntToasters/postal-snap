@@ -17,6 +17,12 @@ export function AdvancedTab({
 
   return (
     <SettingsPanel id="advanced" title={strings.settings.advanced}>
+      <div className="security-summary">
+        <span>
+          <strong>{strings.settings.vaultTitle}</strong>
+          <small>{strings.settings.vaultHelp}</small>
+        </span>
+      </div>
       <p className="settings-lead">{strings.settings.advancedHelp}</p>
       <label className="switch-row">
         <span>

@@ -1,7 +1,5 @@
 import { strings } from "../../i18n";
-import { READING_PANE_CHOICES, TEXT_SCALE_CHOICES } from "./displayChoices";
 import { useAppStore } from "../../store";
-import type { AppSettings } from "../../types";
 import { SettingRow, SettingsPanel } from "./primitives";
 import type { SettingsSaveUpdate } from "./useSettingsSave";
 
@@ -14,44 +12,6 @@ export function ReadingTab({ update }: ReadingTabProps) {
 
   return (
     <SettingsPanel id="reading" title={strings.settings.reading}>
-      <SettingRow
-        title={strings.settings.readingPane}
-        help={strings.settings.readingPaneHelp}
-      >
-        <select
-          aria-label={strings.settings.readingPane}
-          value={settings.readingPane}
-          onChange={(event) =>
-            void update({
-              readingPane: event.target.value as AppSettings["readingPane"],
-            })
-          }
-        >
-          {READING_PANE_CHOICES.map((choice) => (
-            <option key={choice.value} value={choice.value}>
-              {choice.label}
-            </option>
-          ))}
-        </select>
-      </SettingRow>
-      <SettingRow
-        title={strings.settings.textSize}
-        help={strings.settings.textSizeHelp}
-      >
-        <select
-          aria-label={strings.settings.textSize}
-          value={settings.textScale}
-          onChange={(event) =>
-            void update({ textScale: Number(event.target.value) })
-          }
-        >
-          {TEXT_SCALE_CHOICES.map((choice) => (
-            <option key={choice.value} value={choice.value}>
-              {choice.label}
-            </option>
-          ))}
-        </select>
-      </SettingRow>
       <label className="switch-row">
         <span>
           <strong>{strings.settings.groupThreads}</strong>
@@ -65,6 +25,25 @@ export function ReadingTab({ update }: ReadingTabProps) {
           }
         />
       </label>
+      <SettingRow
+        title={strings.mail.undoSendWindow}
+        help={strings.mail.undoSendHelp}
+      >
+        <select
+          aria-label={strings.mail.undoSendWindow}
+          value={settings.undoSendSeconds ?? 10}
+          onChange={(event) =>
+            void update({ undoSendSeconds: Number(event.target.value) })
+          }
+        >
+          <option value={0}>{strings.mail.undoSendOff}</option>
+          {[5, 10, 20, 30].map((seconds) => (
+            <option key={seconds} value={seconds}>
+              {strings.mail.undoSendSeconds(seconds)}
+            </option>
+          ))}
+        </select>
+      </SettingRow>
     </SettingsPanel>
   );
 }

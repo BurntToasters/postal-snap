@@ -22,25 +22,6 @@ pub fn suggest_recipients(
     )
 }
 
-pub(crate) fn folder_role(
-    state: &AppState,
-    account_id: &str,
-    mailbox_id: i64,
-) -> Result<MailboxRole, String> {
-    let (owner, _) = state.db.mailbox(mailbox_id)?;
-    if owner != account_id {
-        return Err("Folder does not belong to this account.".into());
-    }
-    let role = state
-        .db
-        .list_mailboxes(account_id)?
-        .into_iter()
-        .find(|mailbox| mailbox.id == mailbox_id)
-        .map(|mailbox| mailbox.role)
-        .ok_or_else(|| "That folder is no longer available.".to_string())?;
-    Ok(role)
-}
-
 #[tauri::command]
 pub async fn create_folder(
     account_id: String,
@@ -71,7 +52,7 @@ pub async fn rename_folder(
     if state.db.mailbox(mailbox_id)?.0 != account_id {
         return Err("Folder does not belong to this account.".into());
     }
-    if folder_role(&state, &account_id, mailbox_id)? != MailboxRole::Other {
+    if state.db.server_folder_role(mailbox_id)? != MailboxRole::Other {
         return Err("Only personal folders can be renamed.".into());
     }
     let _guard = state.lock_account(&account_id).await?;
@@ -104,7 +85,7 @@ pub async fn delete_folder(
     if state.db.mailbox(mailbox_id)?.0 != account_id {
         return Err("Folder does not belong to this account.".into());
     }
-    if folder_role(&state, &account_id, mailbox_id)? != MailboxRole::Other {
+    if state.db.server_folder_role(mailbox_id)? != MailboxRole::Other {
         return Err("Only personal folders can be deleted.".into());
     }
     let _guard = state.lock_account(&account_id).await?;

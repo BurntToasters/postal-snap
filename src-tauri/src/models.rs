@@ -6,6 +6,7 @@ use zeroize::{Zeroize, Zeroizing};
 pub enum ProviderKind {
     Icloud,
     Manual,
+    ProtonBridge,
 }
 
 impl ProviderKind {
@@ -13,6 +14,7 @@ impl ProviderKind {
         match self {
             Self::Icloud => "icloud",
             Self::Manual => "manual",
+            Self::ProtonBridge => "protonBridge",
         }
     }
 }
@@ -64,6 +66,8 @@ pub struct ServerConfig {
     pub port: u16,
     pub tls_mode: TlsMode,
     pub username: String,
+    #[serde(skip)]
+    pub trusted_certificate: Option<String>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -78,6 +82,8 @@ pub struct AccountSetupRequest {
     /// Download policy chosen during setup; `None` uses the app default.
     #[serde(default)]
     pub cache_policy: Option<CachePolicy>,
+    #[serde(default)]
+    pub certificate_reference: Option<String>,
 }
 
 impl std::fmt::Debug for AccountSetupRequest {
@@ -129,6 +135,13 @@ pub struct AccountRemovalImpact {
     pub unsent_messages: u32,
     pub unsynced_drafts: u32,
     pub queued_changes: u32,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionBlockers {
+    pub queued_changes: u32,
+    pub unsent_messages: u32,
 }
 
 /// Avatar colors an account may use. Kept in sync with the frontend tokens.
@@ -725,11 +738,27 @@ pub struct IpcError {
     pub code: String,
     pub message: String,
     pub retryable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage: Option<ConnectionTestStage>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ConnectionTestStage {
+    Imap,
+    Smtp,
 }
 
 impl From<String> for IpcError {
     fn from(message: String) -> Self {
         let lower = message.to_ascii_lowercase();
+        let stage = if lower.starts_with("imap connection test failed") {
+            Some(ConnectionTestStage::Imap)
+        } else if lower.starts_with("smtp connection test failed") {
+            Some(ConnectionTestStage::Smtp)
+        } else {
+            None
+        };
         let (code, retryable) = classify_ipc_message(&lower);
         let message = match code {
             "accessDenied" => "That item is not available for this account.",
@@ -752,6 +781,11 @@ impl From<String> for IpcError {
                 "Postal Snap could not save settings. Check the destination and available disk space, then try again."
             }
             "authenticationFailed" => "Sign-in failed. Check the email address and password.",
+            "certificateInvalid" => "Choose one valid, unexpired public PEM certificate exported by Bridge, without a private key.",
+            "folderAttention" => "Assigned folder needs attention. Choose another folder or Automatic in Settings.",
+            "identityConfirmation" => "Confirm the incoming server identity change before saving.",
+            "pendingOperations" => "Resolve queued changes and unsent mail before changing the incoming server identity.",
+            "certificateFailed" => "Certificate verification failed. Check the trusted server certificate.",
             "connectionFailed" => "Could not reach the mail server. Check your connection.",
             "localStorageFailed" => "Postal Snap could not access local mail data on your computer.",
             "invalidInput" => "Check the highlighted information and try again.",
@@ -761,6 +795,7 @@ impl From<String> for IpcError {
             code: code.into(),
             message: message.into(),
             retryable,
+            stage,
         }
     }
 }
@@ -810,8 +845,27 @@ fn classify_ipc_message(lower: &str) -> (&'static str, bool) {
     {
         return ("settingsWriteFailed", true);
     }
+    if lower.contains("assigned folder needs attention") {
+        return ("folderAttention", false);
+    }
+    if lower.contains("confirm the incoming server identity change") {
+        return ("identityConfirmation", false);
+    }
+    if lower.contains("resolve queued changes and unsent mail") {
+        return ("pendingOperations", false);
+    }
+    if lower.contains("public pem certificate")
+        || lower.contains("public certificate")
+        || lower.contains("selected certificate")
+        || lower.contains("one public pem")
+    {
+        return ("certificateInvalid", false);
+    }
     if let Some(action) = redacted_mail_action(lower) {
         return classify_mail_action(action);
+    }
+    if lower.contains("certificate verification") {
+        return ("certificateFailed", true);
     }
     if lower.contains("does not belong")
         || lower.contains("between accounts")
@@ -906,12 +960,14 @@ pub fn validated_setup(
             let local = full.split('@').next().unwrap_or(&full).to_string();
             (
                 ServerConfig {
+                    trusted_certificate: None,
                     host: "imap.mail.me.com".into(),
                     port: 993,
                     tls_mode: TlsMode::Tls,
                     username: local,
                 },
                 ServerConfig {
+                    trusted_certificate: None,
                     host: "smtp.mail.me.com".into(),
                     port: 587,
                     tls_mode: TlsMode::StartTls,
@@ -919,7 +975,7 @@ pub fn validated_setup(
                 },
             )
         }
-        ProviderKind::Manual => (
+        ProviderKind::Manual | ProviderKind::ProtonBridge => (
             request
                 .imap
                 .clone()
@@ -932,13 +988,17 @@ pub fn validated_setup(
     };
     validate_server(&imap)?;
     validate_server(&smtp)?;
+    if request.provider == ProviderKind::ProtonBridge {
+        crate::bridge::validate_loopback(&imap.host)?;
+        crate::bridge::validate_loopback(&smtp.host)?;
+    }
     Ok((imap, smtp))
 }
 
 pub fn normalize_setup_password(provider: &ProviderKind, password: &str) -> String {
     match provider {
         ProviderKind::Icloud => password.chars().filter(|ch| !ch.is_whitespace()).collect(),
-        ProviderKind::Manual => password.trim().to_string(),
+        ProviderKind::Manual | ProviderKind::ProtonBridge => password.trim().to_string(),
     }
 }
 
@@ -1158,6 +1218,7 @@ mod tests {
     #[test]
     fn icloud_uses_local_part_for_imap_and_full_address_for_smtp() {
         let request = AccountSetupRequest {
+            certificate_reference: None,
             provider: ProviderKind::Icloud,
             email: "Jane@icloud.com".into(),
             display_name: "Jane".into(),
@@ -1182,17 +1243,20 @@ mod tests {
     #[test]
     fn manual_setup_rejects_unsafe_or_incomplete_servers() {
         let request = AccountSetupRequest {
+            certificate_reference: None,
             provider: ProviderKind::Manual,
             email: "sam@example.com".into(),
             display_name: "Sam".into(),
             password: "secret".into(),
             imap: Some(ServerConfig {
+                trusted_certificate: None,
                 host: "http://imap.example.com".into(),
                 port: 143,
                 tls_mode: TlsMode::StartTls,
                 username: "sam".into(),
             }),
             smtp: Some(ServerConfig {
+                trusted_certificate: None,
                 host: "smtp.example.com".into(),
                 port: 587,
                 tls_mode: TlsMode::StartTls,
@@ -1207,6 +1271,7 @@ mod tests {
     fn server_names_reject_credentials_ports_and_paths() {
         let valid = |host: &str| {
             validate_server(&ServerConfig {
+                trusted_certificate: None,
                 host: host.into(),
                 port: 993,
                 tls_mode: TlsMode::Tls,
@@ -1357,6 +1422,7 @@ mod tests {
     fn icloud_accepts_me_and_mac_addresses() {
         for email in ["Pat@me.com", "pat@mac.com"] {
             let request = AccountSetupRequest {
+                certificate_reference: None,
                 provider: ProviderKind::Icloud,
                 email: email.into(),
                 display_name: "Pat".into(),
@@ -1376,6 +1442,7 @@ mod tests {
     #[test]
     fn take_validated_setup_keeps_password_until_after_validation() {
         let mut request = AccountSetupRequest {
+            certificate_reference: None,
             provider: ProviderKind::Icloud,
             email: "jane@icloud.com".into(),
             display_name: "Jane".into(),
@@ -1392,6 +1459,7 @@ mod tests {
     #[test]
     fn take_validated_setup_rejects_whitespace_only_icloud_password() {
         let mut request = AccountSetupRequest {
+            certificate_reference: None,
             provider: ProviderKind::Icloud,
             email: "jane@icloud.com".into(),
             display_name: "Jane".into(),
@@ -1406,6 +1474,7 @@ mod tests {
     #[test]
     fn taking_password_before_validation_would_fail() {
         let mut request = AccountSetupRequest {
+            certificate_reference: None,
             provider: ProviderKind::Icloud,
             email: "jane@icloud.com".into(),
             display_name: "Jane".into(),
@@ -1421,17 +1490,20 @@ mod tests {
     #[test]
     fn manual_setup_trims_password_without_removing_internal_spaces() {
         let mut request = AccountSetupRequest {
+            certificate_reference: None,
             provider: ProviderKind::Manual,
             email: "sam@example.com".into(),
             display_name: "Sam".into(),
             password: "  phrase with spaces  ".into(),
             imap: Some(ServerConfig {
+                trusted_certificate: None,
                 host: "imap.example.com".into(),
                 port: 993,
                 tls_mode: TlsMode::Tls,
                 username: "sam@example.com".into(),
             }),
             smtp: Some(ServerConfig {
+                trusted_certificate: None,
                 host: "smtp.example.com".into(),
                 port: 587,
                 tls_mode: TlsMode::StartTls,

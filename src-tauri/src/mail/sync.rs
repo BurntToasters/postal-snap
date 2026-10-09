@@ -63,6 +63,10 @@ pub trait SyncHooks: Send {
 
     /// New envelopes were cached in one folder.
     fn folder_changed(&mut self) {}
+    fn validate_connection(&self, _account: &AccountRecord) -> Result<(), String> {
+        Ok(())
+    }
+
     /// Password to reconnect with after a yield. Removal and password changes
     /// run under the account lock while we yielded, so re-read the vault.
     fn current_password(&self, account_id: &str) -> Result<zeroize::Zeroizing<String>, String> {
@@ -101,8 +105,12 @@ pub async fn test_account(
     smtp: &ServerConfig,
     password: &str,
 ) -> Result<(ServerConfig, ServerConfig), String> {
-    let tested_imap = test_imap_with_icloud_fallback(request, imap, password).await?;
-    test_smtp(smtp, &request.email, password).await?;
+    let tested_imap = test_imap_with_icloud_fallback(request, imap, password)
+        .await
+        .map_err(|error| format!("IMAP connection test failed: {error}"))?;
+    test_smtp(smtp, &request.email, password)
+        .await
+        .map_err(|error| format!("SMTP connection test failed: {error}"))?;
     Ok((tested_imap, smtp.clone()))
 }
 
@@ -155,7 +163,10 @@ fn folder_rank(role: &MailboxRole) -> u8 {
     }
 }
 
-async fn list_folders(lease: &mut Lease) -> Result<Vec<ListedFolder>, String> {
+async fn list_folders(
+    lease: &mut Lease,
+    provider: &ProviderKind,
+) -> Result<Vec<ListedFolder>, String> {
     let list_stream = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.list(None, Some("*")))
         .await
         .map_err(|_| "Mailbox discovery timed out.".to_string())?
@@ -188,9 +199,26 @@ async fn list_folders(lease: &mut Lease) -> Result<Vec<ListedFolder>, String> {
         if has("NoSelect") || has("NonExistent") {
             continue;
         }
-        let mailbox_name = name.name().to_string();
-        let (role, role_source) = mailbox_role_assignment(&mailbox_name, &attributes);
-        let skip_prefetch = matches!(role, MailboxRole::Junk | MailboxRole::Trash) || has("All");
+        let mailbox_name = super::utf7::decode(name.name());
+        let lower_name = mailbox_name.to_ascii_lowercase();
+        let bridge_all = *provider == ProviderKind::ProtonBridge
+            && (has("All") || matches!(lower_name.as_str(), "all mail" | "allmail" | "all"));
+        let bridge_label = *provider == ProviderKind::ProtonBridge
+            && (lower_name == "labels"
+                || name
+                    .delimiter()
+                    .filter(|delimiter| !delimiter.is_empty())
+                    .is_some_and(|delimiter| {
+                        lower_name.starts_with(&format!("labels{delimiter}"))
+                    }));
+        // Bridge labels and All Mail retain their hierarchy and names.
+        let (role, role_source) = if bridge_all || bridge_label {
+            (MailboxRole::Other, crate::models::ROLE_SOURCE_NAME)
+        } else {
+            mailbox_role_assignment(&mailbox_name, &attributes)
+        };
+        let skip_prefetch =
+            matches!(role, MailboxRole::Junk | MailboxRole::Trash) || has("All") || bridge_all;
         folders.push(ListedFolder {
             delimiter: name.delimiter().map(ToOwned::to_owned),
             name: mailbox_name,
@@ -217,6 +245,7 @@ async fn yield_point<H: SyncHooks>(
     lease.release();
     hooks.yield_account().await;
     // Never reconnect with a password the user just deleted or replaced.
+    hooks.validate_connection(account)?;
     let current = hooks.current_password(&account.summary.id)?;
     pool::checkout(account, &current).await
 }
@@ -253,7 +282,7 @@ pub async fn sync_account<H: SyncHooks>(
 ) -> Result<SyncOutcome, String> {
     let account_id = &account.summary.id;
     let mut lease = pool::checkout(account, password).await?;
-    let folders = match list_folders(&mut lease).await {
+    let folders = match list_folders(&mut lease, &account.summary.provider).await {
         Ok(folders) => folders,
         Err(error) => {
             lease.discard();
@@ -323,7 +352,8 @@ async fn sync_folder<H: SyncHooks>(
     } else {
         "(MESSAGES UNSEEN UIDNEXT UIDVALIDITY)"
     };
-    let status = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.status(&folder.name, items))
+    let wire_name = lease.mailbox_name(&folder.name);
+    let status = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.status(&wire_name, items))
         .await
         .map_err(|_| "Mailbox status timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Mailbox status"))?;
@@ -384,7 +414,7 @@ async fn sync_folder<H: SyncHooks>(
         db.set_highest_modseq(mailbox_id, status.highest_modseq)?;
         return Ok((false, changed));
     }
-    let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.examine(&folder.name))
+    let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.examine(&wire_name))
         .await
         .map_err(|_| "Mailbox sync timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Mailbox sync"))?;
@@ -949,7 +979,8 @@ pub async fn load_older_messages(
     };
     let mut lease = pool::checkout(account, password).await?;
     let result = async {
-        let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.examine(mailbox))
+        let wire_mailbox = lease.mailbox_name(mailbox);
+        let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.examine(&wire_mailbox))
             .await
             .map_err(|_| "Older mail download timed out.".to_string())?
             .map_err(|error| redact_error(&error, "Older mail download"))?;
@@ -1001,14 +1032,15 @@ pub async fn refresh_mailbox_envelopes(
     let cutoff = policy.cutoff();
     let mut lease = pool::checkout(account, password).await?;
     let refresh = async {
+        let wire_mailbox = lease.mailbox_name(mailbox);
         let status = tokio::time::timeout(
             IMAP_COMMAND_TIMEOUT,
-            lease.status(mailbox, "(MESSAGES UNSEEN UIDNEXT UIDVALIDITY)"),
+            lease.status(&wire_mailbox, "(MESSAGES UNSEEN UIDNEXT UIDVALIDITY)"),
         )
         .await
         .map_err(|_| "Mailbox status timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Mailbox status"))?;
-        let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.examine(mailbox))
+        let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.examine(&wire_mailbox))
             .await
             .map_err(|_| "Mailbox sync timed out.".to_string())?
             .map_err(|error| redact_error(&error, "Mailbox sync"))?;
@@ -1226,7 +1258,8 @@ async fn search_mailboxes(
         if tokio::time::Instant::now() >= deadline {
             break;
         }
-        let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.examine(&name))
+        let wire_name = lease.mailbox_name(&name);
+        let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.examine(&wire_name))
             .await
             .map_err(|_| "Server search timed out.".to_string())?
             .map_err(|error| redact_error(&error, "Server search"))?;
@@ -1335,7 +1368,8 @@ pub async fn download_message(
     })?;
     let mut lease = pool::checkout(account, password).await?;
     let result = async {
-        let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.examine(mailbox))
+        let wire_mailbox = lease.mailbox_name(mailbox);
+        let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.examine(&wire_mailbox))
             .await
             .map_err(|_| "Message download timed out.".to_string())?
             .map_err(|error| redact_error(&error, "Message download"))?;
