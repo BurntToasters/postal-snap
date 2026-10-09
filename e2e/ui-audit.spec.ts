@@ -84,6 +84,8 @@ test("mail rule fields have room between them", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("tab", { name: "Accounts" }).click();
+  await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
+  await page.getByRole("button", { name: "Rules", exact: true }).click();
   const input = await box(page.getByLabel("Rule name").first());
   const nextLabel = await box(page.getByText("Match by").first());
   expect(nextLabel.y - (input.y + input.height)).toBeGreaterThanOrEqual(8);
@@ -157,14 +159,15 @@ test("account settings are split into titled sections", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("tab", { name: "Accounts" }).click();
-  const sections = page.locator(
-    ".account-settings-card > :is(.account-password-section, .account-rules-section, .account-aliases-section)",
-  );
-  expect(await sections.count()).toBeGreaterThanOrEqual(3);
-  for (const width of await sections.evaluateAll((nodes) =>
-    nodes.map((node) => getComputedStyle(node).borderTopWidth),
-  ))
-    expect(width).toBe("1px");
+  await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
+  for (const name of ["Connection", "Folders", "Identity", "Rules"]) {
+    await expect(page.getByRole("button", { name, exact: true })).toBeVisible();
+  }
+  await expect(
+    page.getByRole("button", { name: "Back to accounts", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Rules", exact: true }).click();
+  await expect(page.getByLabel("Rule name")).toBeVisible();
   await page.screenshot({ path: "test-results/ui-audit-accounts.png" });
 });
 

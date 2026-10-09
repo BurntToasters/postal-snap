@@ -35,6 +35,8 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
       fingerprint: "SHA-256: 12:34:56:78:90:AB:CD:EF",
       expiresAt: "2099-01-01T00:00:00Z",
     };
+    let connectionLoadAttempts = 0;
+    let folderLoadAttempts = 0;
     function ownedAccount(id: unknown) {
       const item = accounts.find((candidate) => candidate.id === id);
       if (!item)
@@ -61,7 +63,12 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
           username: item.email,
         },
       };
-      return connections[item.id];
+      return {
+        ...connections[item.id],
+        blockers: params.has("pendingConnectionWork")
+          ? { queuedChanges: 2, unsentMessages: 1 }
+          : { queuedChanges: 0, unsentMessages: 0 },
+      };
     }
     function folderAssignments(id: unknown) {
       const item = ownedAccount(id);
@@ -88,10 +95,42 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
     }
     Object.assign(mock.handlers, {
       get_account_connection(args: Record<string, unknown>) {
+        if (
+          params.has("connectionLoadFailure") &&
+          connectionLoadAttempts++ < 2
+        ) {
+          return new Promise((resolve) =>
+            setTimeout(resolve, params.has("slowAccountLoads") ? 1000 : 0),
+          ).then(() => {
+            throw {
+              code: "localStorageFailed",
+              message:
+                "Postal Snap could not access local mail data on your computer.",
+              retryable: true,
+            };
+          });
+        }
         return structuredClone(connection(args.accountId));
       },
       update_account_connection(args: Record<string, unknown>) {
         const item = ownedAccount(args.accountId);
+        if (params.has("pendingConnectionWork"))
+          throw {
+            code: "pendingOperations",
+            message:
+              "Resolve queued changes and unsent mail before changing the incoming server identity.",
+            retryable: false,
+          };
+        if (
+          params.has("failIncomingConnection") ||
+          params.has("failOutgoingConnection")
+        )
+          throw {
+            code: "connectionFailed",
+            stage: params.has("failIncomingConnection") ? "imap" : "smtp",
+            message: "Synthetic raw connection detail fixture-private-secret.",
+            retryable: true,
+          };
         if (params.has("failConnection"))
           throw {
             code: "connectionFailed",
@@ -104,9 +143,15 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
           imap: structuredClone(args.imap as Server),
           smtp: structuredClone(args.smtp as Server),
         };
-        return { ...item };
+        return structuredClone(connections[item.id]);
       },
       import_bridge_certificate() {
+        if (params.has("invalidCertificate"))
+          throw {
+            code: "certificateInvalid",
+            message: "Choose a valid public certificate.",
+            retryable: false,
+          };
         if (params.has("certificateCancel")) return null;
         certificates.set(certificate.reference, certificate);
         return { ...certificate };
@@ -130,6 +175,18 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
         return undefined;
       },
       get_folder_assignments(args: Record<string, unknown>) {
+        if (params.has("folderLoadFailure") && folderLoadAttempts++ < 2) {
+          return new Promise((resolve) =>
+            setTimeout(resolve, params.has("slowAccountLoads") ? 1000 : 0),
+          ).then(() => {
+            throw {
+              code: "localStorageFailed",
+              message:
+                "Postal Snap could not access local mail data on your computer.",
+              retryable: true,
+            };
+          });
+        }
         return structuredClone(folderAssignments(args.accountId));
       },
       set_folder_assignment(args: Record<string, unknown>) {
@@ -292,8 +349,19 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
         )
           throw {
             code: "certificateFailed",
+            stage:
+              params.get("certificateFailureStage") === "imap"
+                ? "imap"
+                : "smtp",
             message:
-              "Bridge certificate verification failed. Import Bridge's exported public certificate.",
+              "Synthetic certificate failure detail fixture-private-secret.",
+            retryable: true,
+          };
+        if (params.has("setupStorageFail"))
+          throw {
+            code: "localStorageFailed",
+            message:
+              "Postal Snap could not access local mail data on your computer.",
             retryable: true,
           };
         if (location.search.includes("setupFail")) {

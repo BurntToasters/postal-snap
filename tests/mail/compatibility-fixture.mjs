@@ -26,6 +26,19 @@ export async function createCompatibilityFixture({
   password = "fixture-password",
   imapPort = 0,
   smtpPort = 0,
+  folderNames = [
+    "INBOX",
+    "Archive",
+    "Labels",
+    "Labels/Project",
+    "Labels/Sent",
+    "All Mail",
+  ],
+  messages = {},
+  uidValidity = 1,
+  uidValidityOnRestart,
+  interruptMoveAfterCopy = false,
+  interruptAppendAfterCommit = false,
 }) {
   if (!["tls", "startTls"].includes(tlsMode))
     throw new Error("Invalid fixture TLS mode.");
@@ -43,14 +56,112 @@ export async function createCompatibilityFixture({
     messagesAccepted: 0,
     restarts: 0,
     restartFailed: false,
+    interruptedMoves: 0,
+    interruptedAppends: 0,
+    copiedMessages: 0,
+    appendedMessages: 0,
+    fetchCommands: 0,
+    fetchItems: 0,
+    utf8AcceptRequested: 0,
+    utf8AcceptEnabled: 0,
   };
+  const mailboxes = new Map(
+    folderNames.map((name) => [
+      name,
+      (messages[name] ?? []).map((message) => ({
+        ...message,
+        flags: [...(message.flags ?? [])],
+      })),
+    ]),
+  );
+  let currentUidValidity = uidValidity;
+  let interruptMovePending = interruptMoveAfterCopy;
+  let interruptAppendPending = interruptAppendAfterCommit;
   let ports = { imap: imapPort, smtp: smtpPort };
+
+  function encodeMailbox(name) {
+    return name.replace(/[^\x20-\x7e]+|&/g, (part) => {
+      if (part === "&") return "&-";
+      const bytes = Buffer.alloc(part.length * 2);
+      for (let index = 0; index < part.length; index += 1)
+        bytes.writeUInt16BE(part.charCodeAt(index), index * 2);
+      return `&${bytes.toString("base64").replace(/=+$/u, "").replaceAll("/", ",")}-`;
+    });
+  }
+
+  function decodeMailbox(value) {
+    return value.replace(/&([A-Za-z0-9+,]*)-/g, (_match, encoded) => {
+      if (!encoded) return "&";
+      const base64 = encoded.replaceAll(",", "/");
+      const bytes = Buffer.from(
+        base64 + "=".repeat((4 - (base64.length % 4)) % 4),
+        "base64",
+      );
+      let text = "";
+      for (let index = 0; index + 1 < bytes.length; index += 2)
+        text += String.fromCharCode(bytes.readUInt16BE(index));
+      return text;
+    });
+  }
+
+  function messageRaw(message) {
+    if (message.raw) return Buffer.from(message.raw);
+    const subject =
+      currentUidValidity > uidValidity && message.subjectAfterRestart
+        ? message.subjectAfterRestart
+        : (message.subject ?? "Fixture message");
+    return Buffer.from(
+      `From: ${message.from ?? "Fixture Sender <sender@example.test>"}\r\nTo: Fixture <fixture@example.test>\r\nSubject: ${subject}\r\nMessage-ID: ${message.messageId ?? `<fixture-${message.uid}@example.test>`}\r\nDate: Thu, 01 Jan 2026 12:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${message.body ?? "Synthetic fixture body"}`,
+    );
+  }
+
+  function messageId(message) {
+    return (
+      /^Message-ID:\s*(.+)$/im
+        .exec(messageRaw(message).toString("utf8"))?.[1]
+        ?.trim() ?? ""
+    );
+  }
+
+  function selectedMessages(name) {
+    return mailboxes.get(name) ?? [];
+  }
+
+  function nextUid(name) {
+    return (
+      Math.max(
+        0,
+        ...(mailboxes.get(name) ?? []).map((message) => message.uid),
+      ) + 1
+    );
+  }
+
+  function appendMessage(name, raw, flags = []) {
+    const mailbox = mailboxes.get(name);
+    if (!mailbox) return undefined;
+    const bytes = Buffer.from(raw);
+    const text = bytes.toString("utf8");
+    const message = {
+      uid: nextUid(name),
+      raw: bytes,
+      messageId: /^Message-ID:\s*(.+)$/im.exec(text)?.[1]?.trim() ?? "",
+      subject:
+        /^Subject:\s*(.+)$/im.exec(text)?.[1]?.trim() ?? "Fixture message",
+      flags,
+    };
+    mailbox.push(message);
+    counts.appendedMessages++;
+    return message;
+  }
 
   function session(initialSocket, protocol) {
     let socket = initialSocket;
     let secure = tlsMode === "tls";
     let authenticated = false;
-    let buffer = "";
+    let buffer = Buffer.alloc(0);
+    let selectedMailbox = "";
+    let literal = null;
+    let utf8AcceptEnabled = false;
     let authState = null;
     let smtpUser = "";
     let smtpData = false;
@@ -62,6 +173,17 @@ export async function createCompatibilityFixture({
     }
     track(socket);
     const send = (line) => socket.write(`${line}\r\n`);
+    const wireMailbox = (name) => {
+      const value = encodeMailbox(name);
+      return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+    };
+    const sendMailboxResponse = (prefix, name, suffix = "") => {
+      if (!utf8AcceptEnabled) {
+        send(`${prefix}${wireMailbox(name)}${suffix}`);
+        return;
+      }
+      send(`${prefix}"${name.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"${suffix}`);
+    };
     function authenticate(user, secret, prefix = "") {
       authenticated = user === username && secret === password;
       counts[authenticated ? "authenticated" : "rejectedAuthentication"]++;
@@ -76,7 +198,7 @@ export async function createCompatibilityFixture({
     function upgrade() {
       socket.removeListener("data", onData);
       socket.pause();
-      buffer = "";
+      buffer = Buffer.alloc(0);
       socket = new tls.TLSSocket(socket, {
         isServer: true,
         secureContext: context,
@@ -124,6 +246,8 @@ export async function createCompatibilityFixture({
           setImmediate(async () => {
             try {
               await stop();
+              if (uidValidityOnRestart !== undefined)
+                currentUidValidity = uidValidityOnRestart;
               await start();
               counts.restarts++;
             } catch {
@@ -132,27 +256,247 @@ export async function createCompatibilityFixture({
           });
         });
       } else if (command === "ENABLE") {
+        if (args.toUpperCase().includes("UTF8=ACCEPT"))
+          counts.utf8AcceptRequested++;
         if (rejectEnable) send(`${tag} BAD extension unavailable`);
         else {
+          if (args.toUpperCase().includes("UTF8=ACCEPT")) {
+            utf8AcceptEnabled = true;
+            counts.utf8AcceptEnabled++;
+          }
           send(`* ENABLED ${args}`);
           send(`${tag} OK enabled`);
         }
       } else if (command === "NOOP") {
         send(`${tag} OK noop`);
       } else if (command === "LIST" || command === "LSUB") {
-        for (const name of ["INBOX", "Labels", "Labels/Project", "All Mail"]) {
-          send(`* ${command} () "/" "${name}"`);
+        for (const name of mailboxes.keys()) {
+          const flags = name === "All Mail" ? "(\\All)" : "()";
+          sendMailboxResponse(`* ${command} ${flags} "/" `, name);
         }
         send(`${tag} OK listed`);
-      } else if (command === "SELECT" || command === "EXAMINE") {
-        send("* FLAGS (\\Seen \\Answered \\Flagged \\Deleted \\Draft)");
-        send("* 0 EXISTS");
-        send("* OK [UIDVALIDITY 1] generation");
-        send("* OK [UIDNEXT 1] next");
-        send(`${tag} OK [READ-WRITE] selected`);
+      } else if (command === "STATUS") {
+        const rawName = args.match(/^"(?:[^"\\]|\\.)*"|^\S+/)?.[0] ?? "";
+        const mailbox = decodeMailbox(
+          rawName
+            .replace(/^"|"$/g, "")
+            .replaceAll('\\"', '"')
+            .replaceAll("\\\\", "\\"),
+        );
+        const rows = selectedMessages(mailbox);
+        const unseen = rows.filter(
+          (message) => !message.flags?.includes("\\Seen"),
+        ).length;
+        sendMailboxResponse(
+          "* STATUS ",
+          mailbox,
+          ` (MESSAGES ${rows.length} UNSEEN ${unseen} UIDNEXT ${nextUid(mailbox)} UIDVALIDITY ${currentUidValidity} HIGHESTMODSEQ ${currentUidValidity})`,
+        );
+        send(`${tag} OK status`);
+      } else if (
+        (command === "UID" && /^FETCH\b/i.test(args)) ||
+        command === "FETCH"
+      ) {
+        counts.fetchCommands++;
+        const fetchArgs = command === "UID" ? args : `FETCH ${args}`;
+        const [, set = "", query = ""] =
+          /^FETCH\s+(\S+)\s+([\s\S]+)$/i.exec(fetchArgs) ?? [];
+        const uids = new Set(
+          set.split(",").flatMap((part) => {
+            const [start, end] = part.split(":").map(Number);
+            if (!Number.isFinite(start)) return [];
+            if (!Number.isFinite(end)) return [start];
+            return Array.from(
+              { length: Math.max(0, end - start + 1) },
+              (_, offset) => start + offset,
+            );
+          }),
+        );
+        for (const [index, message] of selectedMessages(
+          selectedMailbox,
+        ).entries()) {
+          if (!uids.has(message.uid)) continue;
+          counts.fetchItems++;
+          const raw = messageRaw(message);
+          const flags = message.flags?.length
+            ? `(${message.flags.join(" ")})`
+            : "()";
+          let items = `UID ${message.uid} FLAGS ${flags} RFC822.SIZE ${raw.length} INTERNALDATE "01-Jan-2026 12:00:00 +0000"`;
+          if (query.toUpperCase().includes("ENVELOPE")) {
+            const subject =
+              currentUidValidity > uidValidity && message.subjectAfterRestart
+                ? message.subjectAfterRestart
+                : (message.subject ?? "Fixture message");
+            const address = '(("Fixture Sender" NIL "sender" "example.test"))';
+            items += ` ENVELOPE (NIL "${subject.replaceAll('"', '\\"')}" ${address} ${address} ${address} ${address} NIL NIL NIL "${messageId(message)}")`;
+          }
+          const headerQuery = /BODY(?:\.PEEK)?\[HEADER\.FIELDS[^\]]*\]/i.exec(
+            query,
+          )?.[0];
+          if (headerQuery) {
+            const header = Buffer.from(
+              `Message-ID: ${messageId(message)}\r\nReferences: \r\nContent-Type: text/plain; charset=utf-8\r\n\r\n`,
+            );
+            // PEEK is a request modifier and never appears in FETCH responses.
+            const headerResponse = headerQuery.replace(/^BODY\.PEEK/i, "BODY");
+            items += ` ${headerResponse} {${header.length}}\r\n${header.toString("utf8")}`;
+          } else if (/BODY(?:\.PEEK)?\[\]/i.test(query)) {
+            items += ` BODY[] {${raw.length}}\r\n${raw.toString("utf8")}`;
+          }
+          send(`* ${index + 1} FETCH (${items})`);
+        }
+        send(`${tag} OK fetched`);
       } else if (command === "UID" && /^SEARCH\b/i.test(args)) {
-        send("* SEARCH");
+        const criterion = args.replace(/^SEARCH\s+/i, "");
+        let matches = selectedMessages(selectedMailbox);
+        const headerId = /HEADER\s+MESSAGE-ID\s+"((?:[^"\\]|\\.)*)"/i.exec(
+          criterion,
+        )?.[1];
+        const subject = /SUBJECT\s+"((?:[^"\\]|\\.)*)"/i.exec(criterion)?.[1];
+        if (headerId) {
+          const wanted = headerId
+            .replaceAll('\\"', '"')
+            .replaceAll("\\\\", "\\");
+          matches = matches.filter((message) => messageId(message) === wanted);
+        }
+        if (subject) {
+          const wanted = subject
+            .replaceAll('\\"', '"')
+            .replaceAll("\\\\", "\\")
+            .toLocaleLowerCase();
+          matches = matches.filter((message) =>
+            (message.subject ?? "").toLocaleLowerCase().includes(wanted),
+          );
+        }
+        send(
+          `* SEARCH ${matches.map((message) => message.uid).join(" ")}`.trimEnd(),
+        );
         send(`${tag} OK searched`);
+      } else if (command === "RENAME") {
+        const values = args.match(/"(?:[^"\\]|\\.)*"|\S+/g) ?? [];
+        const unquote = (value = "") =>
+          value.startsWith('"')
+            ? value.slice(1, -1).replace(/\\(.)/g, "$1")
+            : value;
+        const rawNames = values.map(unquote);
+        const validLegacyNames = rawNames.every(
+          (name) =>
+            utf8AcceptEnabled ||
+            (!/[^\x20-\x7e]/u.test(name) &&
+              !/&(?![A-Za-z0-9+,]*-)/u.test(name)),
+        );
+        if (!validLegacyNames) {
+          send(`${tag} BAD mailbox name is not valid modified UTF-7`);
+          return;
+        }
+        const [oldName, newName] = rawNames.map(decodeMailbox);
+        const source = mailboxes.get(oldName);
+        if (!source || mailboxes.has(newName)) {
+          send(`${tag} NO mailbox rename is unavailable`);
+          return;
+        }
+        const descendants = [...mailboxes.keys()].filter((name) =>
+          name.startsWith(`${oldName}/`),
+        );
+        for (const name of [oldName, ...descendants]) {
+          const suffix = name.slice(oldName.length);
+          const nextName = `${newName}${suffix}`;
+          const messages = mailboxes.get(name);
+          mailboxes.delete(name);
+          mailboxes.set(nextName, messages ?? []);
+        }
+        send(`${tag} OK renamed`);
+      } else if (command === "UID" && /^COPY\b/i.test(args)) {
+        const [, set = "", rawDestination = ""] =
+          /^COPY\s+(\S+)\s+([\s\S]+)$/i.exec(args) ?? [];
+        const destination = decodeMailbox(
+          rawDestination
+            .replace(/^"|"$/g, "")
+            .replaceAll('\\"', '"')
+            .replaceAll("\\\\", "\\"),
+        );
+        const selected = selectedMessages(selectedMailbox);
+        const target = mailboxes.get(destination);
+        const wanted = new Set(set.split(",").map(Number));
+        for (const message of selected.filter((row) => wanted.has(row.uid))) {
+          if (target) {
+            target.push({
+              ...message,
+              uid: nextUid(destination),
+              flags: [...(message.flags ?? [])],
+            });
+            counts.copiedMessages++;
+          }
+        }
+        if (interruptMovePending) {
+          interruptMovePending = false;
+          counts.interruptedMoves++;
+          socket.destroy();
+          return;
+        }
+        send(`${tag} OK copied`);
+      } else if (command === "UID" && /^STORE\b/i.test(args)) {
+        const [, set = "", operation = ""] =
+          /^STORE\s+(\S+)\s+([\s\S]+)$/i.exec(args) ?? [];
+        const wanted = new Set(set.split(",").map(Number));
+        for (const message of selectedMessages(selectedMailbox)) {
+          if (!wanted.has(message.uid)) continue;
+          if (operation.includes("\\Deleted") && operation.startsWith("+")) {
+            if (!message.flags.includes("\\Deleted"))
+              message.flags.push("\\Deleted");
+          }
+          if (operation.includes("\\Seen") && operation.startsWith("+")) {
+            if (!message.flags.includes("\\Seen")) message.flags.push("\\Seen");
+          }
+        }
+        send(`${tag} OK stored`);
+      } else if (command === "UID" && /^EXPUNGE\b/i.test(args)) {
+        const wanted = new Set(
+          args
+            .replace(/^EXPUNGE\s+/i, "")
+            .split(",")
+            .map(Number),
+        );
+        const rows = selectedMessages(selectedMailbox);
+        mailboxes.set(
+          selectedMailbox,
+          rows.filter(
+            (message) =>
+              !(wanted.has(message.uid) && message.flags.includes("\\Deleted")),
+          ),
+        );
+        send(`${tag} OK expunged`);
+      } else if (command === "APPEND") {
+        const parsed =
+          /^((?:"(?:[^"\\]|\\.)*"|\S+))(?:\s+\(([^)]*)\))?(?:\s+"[^"]+")?\s+\{(\d+)\}$/i.exec(
+            args,
+          );
+        if (!parsed) return send(`${tag} BAD invalid append`);
+        const rawName = parsed[1]
+          .replace(/^"|"$/g, "")
+          .replaceAll('\\"', '"')
+          .replaceAll("\\\\", "\\");
+        literal = {
+          bytes: Number(parsed[3]),
+          flags: parsed[2] ? parsed[2].split(/\s+/) : [],
+          mailbox: decodeMailbox(rawName),
+          tag,
+        };
+        send("+ continue");
+      } else if (command === "SELECT" || command === "EXAMINE") {
+        const rawName = args.match(/^"(?:[^"\\]|\\.)*"|^\S+/)?.[0] ?? "";
+        selectedMailbox = decodeMailbox(
+          rawName
+            .replace(/^"|"$/g, "")
+            .replaceAll('\\"', '"')
+            .replaceAll("\\\\", "\\"),
+        );
+        const rows = selectedMessages(selectedMailbox);
+        send("* FLAGS (\\Seen \\Answered \\Flagged \\Deleted \\Draft)");
+        send(`* ${rows.length} EXISTS`);
+        send(`* OK [UIDVALIDITY ${currentUidValidity}] generation`);
+        send(`* OK [UIDNEXT ${nextUid(selectedMailbox)}] next`);
+        send(`${tag} OK [READ-WRITE] selected`);
       } else {
         send(`${tag} BAD unsupported fixture command`);
       }
@@ -222,12 +566,34 @@ export async function createCompatibilityFixture({
       } else send("502 5.5.1 unsupported fixture command");
     }
     function onData(chunk) {
-      buffer += chunk.toString();
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      buffer = Buffer.concat([buffer, bytes]);
       if (buffer.length > 1048576) return socket.destroy();
-      while (buffer.includes("\r\n")) {
+      while (true) {
+        if (literal) {
+          if (buffer.length < literal.bytes + 2) return;
+          const raw = buffer.subarray(0, literal.bytes);
+          buffer = buffer.subarray(literal.bytes + 2);
+          const committed = appendMessage(literal.mailbox, raw, literal.flags);
+          const pending = literal;
+          literal = null;
+          if (!committed) {
+            send(`${pending.tag} NO mailbox unavailable`);
+            continue;
+          }
+          if (interruptAppendPending) {
+            interruptAppendPending = false;
+            counts.interruptedAppends++;
+            socket.destroy();
+            return;
+          }
+          send(`${pending.tag} OK appended`);
+          continue;
+        }
         const position = buffer.indexOf("\r\n");
-        const line = buffer.slice(0, position);
-        buffer = buffer.slice(position + 2);
+        if (position < 0) return;
+        const line = buffer.subarray(0, position).toString("utf8");
+        buffer = buffer.subarray(position + 2);
         if (protocol === "imap") imap(line);
         else smtp(line);
       }

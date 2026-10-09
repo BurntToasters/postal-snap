@@ -16,6 +16,14 @@ export const errors = {
   settingsWriteFailed:
     "Postal Snap could not save settings. Check the destination and available disk space, then try again.",
   authenticationFailed: "Sign-in failed. Check the email address and password.",
+  certificateInvalid:
+    "Choose one valid, unexpired public PEM certificate exported by Bridge, without a private key.",
+  folderAttention:
+    "Assigned folder needs attention. Choose another folder or Automatic in Settings.",
+  identityConfirmation:
+    "Confirm the incoming server identity change before saving.",
+  pendingOperations:
+    "Resolve queued changes and unsent mail before changing the incoming server identity.",
   certificateFailed:
     "Certificate verification failed. Check the trusted server certificate.",
   connectionFailed: "Could not reach the mail server. Check your connection.",

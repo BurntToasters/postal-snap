@@ -20,6 +20,14 @@
 
 Postal Snap is a calm, accessible desktop email client. Mail stays on your computer. There is no Postal Snap cloud, telemetry, or account of mine to log into.
 
+## Changes in `v0.3.2:`
+
+- **NEW - Proton Bridge (experimental):** Guided local IMAP/SMTP setup with required TLS, account-scoped public-certificate approval, and explicit certificate replacement. Bridge must remain running. Real Bridge verification across Windows, macOS, Linux, and Flatpak is still pending.
+- **NEW - Searchable Settings:** Search labels and help, jump to a control, and navigate focused sections. Appearance and Privacy & Security group their controls; narrow windows use a section selector.
+- **NEW - Account detail pages:** Connection, Folders, Identity, and Rules replace the all-account control stack. Connection edits test both servers before saving. Incoming-server identity changes require confirmation and rebuild remote cache while preserving local drafts.
+- **NEW - Folder assignments:** Choose Sent, Drafts, Archive, Junk, and Trash folders per account, or retain Automatic. Missing assigned folders require explicit repair.
+- **UI - Mailbox and reader refinement:** Clearer unread and selected messages, wrapping reader metadata and attachments, and account-specific connection repair links.
+
 ## Changes in `v0.3.1:`
 - **FIX - Get Mail no longer stalls:** Get Mail could sit on "Checking mail…" for up to five minutes, because Postal Snap's background check held the account while Get Mail waited. Get Mail now finishes in a second or two.
 - **UI - Compact spacing, redone:** Compact spacing now makes everything denser, like Mail's compact layout: slimmer mailbox rows in the sidebar (before, they got taller), a shorter toolbar, list and message headers that line up, and the item count next to the mailbox name. Comfortable spacing is unchanged.

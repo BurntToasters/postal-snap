@@ -429,6 +429,10 @@ export type IpcErrorCode =
   | "settingsReadFailed"
   | "settingsWriteFailed"
   | "authenticationFailed"
+  | "certificateInvalid"
+  | "pendingOperations"
+  | "folderAttention"
+  | "identityConfirmation"
   | "certificateFailed"
   | "connectionFailed"
   | "localStorageFailed"
@@ -439,6 +443,7 @@ export interface IpcErrorPayload {
   code: IpcErrorCode;
   message: string;
   retryable: boolean;
+  stage?: "imap" | "smtp";
 }
 
 export interface CacheUsage {
@@ -466,6 +471,7 @@ export interface AccountConnection {
   imap: ServerConfig;
   smtp: ServerConfig;
   certificate?: BridgeCertificate | null;
+  blockers?: { queuedChanges: number; unsentMessages: number };
 }
 export interface FolderAssignment {
   role: "sent" | "drafts" | "archive" | "junk" | "trash";

@@ -57,7 +57,7 @@ export function BridgeCertificateControl({
       if (
         !(await api.showNativeConfirm(
           strings.settings.removeCertificate,
-          strings.settings.certificateConfirm,
+          strings.settings.certificateRemoveConfirm,
         ))
       )
         return;

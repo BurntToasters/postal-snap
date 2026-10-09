@@ -1,4 +1,5 @@
 import { strings } from "../../i18n";
+import type { ProviderKind } from "../../types";
 import type { SettingsTab } from "./primitives";
 
 export interface SettingsSearchEntry {
@@ -6,6 +7,8 @@ export interface SettingsSearchEntry {
   title: string;
   help: string;
   keywords: string;
+  provider?: ProviderKind;
+  directUpdates?: boolean;
   accountPage?: "connection" | "folders" | "identity" | "rules";
 }
 const s = strings.settings;
@@ -155,6 +158,7 @@ export const settingsSearchEntries: SettingsSearchEntry[] = [
   },
   {
     section: "updates",
+    directUpdates: true,
     title: s.checkUpdates,
     help: "",
     keywords: "version download restart",
@@ -164,5 +168,60 @@ export const settingsSearchEntries: SettingsSearchEntry[] = [
     title: s.about,
     help: "",
     keywords: "version licenses credits",
+  },
+  {
+    section: "accounts",
+    accountPage: "connection",
+    title: s.updatePassword,
+    help: strings.setup.authHintManual,
+    keywords: "credentials repair sign in authentication",
+  },
+  {
+    section: "accounts",
+    accountPage: "connection",
+    provider: "protonBridge",
+    title: s.importCertificate,
+    help: strings.setup.bridgeCertificateHint,
+    keywords: "proton bridge trust fingerprint expiry tls certificate",
+  },
+  {
+    section: "accounts",
+    accountPage: "identity",
+    title: s.newMessageFormat,
+    help: s.newMessageFormatHelp,
+    keywords: "compose plain text rich html sending",
+  },
+  {
+    section: "accounts",
+    accountPage: "identity",
+    provider: "icloud",
+    title: s.aliasesTitle,
+    help: s.aliasesHelp,
+    keywords: "identity sender addresses custom domain",
+  },
+  {
+    section: "storage",
+    title: s.clearMail,
+    help: s.clearMailHelp,
+    keywords: "cache disk storage remove downloaded",
+  },
+  {
+    section: "updates",
+    directUpdates: true,
+    title: s.updateCheckInterval,
+    help: s.updateCheckIntervalHelp,
+    keywords: "cadence automatic startup frequency interval",
+  },
+  {
+    section: "about",
+    title: s.aboutSource,
+    help: "",
+    keywords: "github repository open source",
+  },
+  {
+    section: "about",
+    title: s.aboutLicense,
+    help: "",
+    keywords: "licenses credits third party",
   },
 ];

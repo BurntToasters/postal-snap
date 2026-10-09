@@ -137,6 +137,13 @@ pub struct AccountRemovalImpact {
     pub queued_changes: u32,
 }
 
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionBlockers {
+    pub queued_changes: u32,
+    pub unsent_messages: u32,
+}
+
 /// Avatar colors an account may use. Kept in sync with the frontend tokens.
 pub const ACCOUNT_COLORS: [&str; 8] = [
     "blue", "teal", "green", "amber", "orange", "red", "pink", "purple",
@@ -731,11 +738,27 @@ pub struct IpcError {
     pub code: String,
     pub message: String,
     pub retryable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage: Option<ConnectionTestStage>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ConnectionTestStage {
+    Imap,
+    Smtp,
 }
 
 impl From<String> for IpcError {
     fn from(message: String) -> Self {
         let lower = message.to_ascii_lowercase();
+        let stage = if lower.starts_with("imap connection test failed") {
+            Some(ConnectionTestStage::Imap)
+        } else if lower.starts_with("smtp connection test failed") {
+            Some(ConnectionTestStage::Smtp)
+        } else {
+            None
+        };
         let (code, retryable) = classify_ipc_message(&lower);
         let message = match code {
             "accessDenied" => "That item is not available for this account.",
@@ -758,6 +781,10 @@ impl From<String> for IpcError {
                 "Postal Snap could not save settings. Check the destination and available disk space, then try again."
             }
             "authenticationFailed" => "Sign-in failed. Check the email address and password.",
+            "certificateInvalid" => "Choose one valid, unexpired public PEM certificate exported by Bridge, without a private key.",
+            "folderAttention" => "Assigned folder needs attention. Choose another folder or Automatic in Settings.",
+            "identityConfirmation" => "Confirm the incoming server identity change before saving.",
+            "pendingOperations" => "Resolve queued changes and unsent mail before changing the incoming server identity.",
             "certificateFailed" => "Certificate verification failed. Check the trusted server certificate.",
             "connectionFailed" => "Could not reach the mail server. Check your connection.",
             "localStorageFailed" => "Postal Snap could not access local mail data on your computer.",
@@ -768,6 +795,7 @@ impl From<String> for IpcError {
             code: code.into(),
             message: message.into(),
             retryable,
+            stage,
         }
     }
 }
@@ -816,6 +844,22 @@ fn classify_ipc_message(lower: &str) -> (&'static str, bool) {
         || lower.contains("settings path has no parent directory")
     {
         return ("settingsWriteFailed", true);
+    }
+    if lower.contains("assigned folder needs attention") {
+        return ("folderAttention", false);
+    }
+    if lower.contains("confirm the incoming server identity change") {
+        return ("identityConfirmation", false);
+    }
+    if lower.contains("resolve queued changes and unsent mail") {
+        return ("pendingOperations", false);
+    }
+    if lower.contains("public pem certificate")
+        || lower.contains("public certificate")
+        || lower.contains("selected certificate")
+        || lower.contains("one public pem")
+    {
+        return ("certificateInvalid", false);
     }
     if let Some(action) = redacted_mail_action(lower) {
         return classify_mail_action(action);

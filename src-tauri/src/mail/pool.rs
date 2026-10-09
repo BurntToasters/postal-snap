@@ -80,6 +80,11 @@ pub struct Lease {
 }
 
 impl Lease {
+    /// Convert a stored Unicode name to the wire form selected for this session.
+    pub fn mailbox_name(&self, name: &str) -> String {
+        super::utf7::encode(name)
+    }
+
     pub fn release(mut self) {
         let Some(session) = self.session.take() else {
             return;

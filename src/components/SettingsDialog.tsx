@@ -83,6 +83,7 @@ export function SettingsDialog({
   onLastAccountRemoved,
 }: Props) {
   const accounts = useAppStore((state) => state.accounts);
+  const settings = useAppStore((state) => state.settings);
   const setAccounts = useAppStore((state) => state.setAccounts);
   const setSettings = useAppStore((state) => state.setSettings);
   const setError = useAppStore((state) => state.setError);
@@ -96,7 +97,6 @@ export function SettingsDialog({
   const [saveError, setSaveError] = useState("");
   const [searchTarget, setSearchTarget] = useState<string>();
   const discardBusy = useRef(false);
-  const dirtyRef = useRef(false);
   const [usage, setUsage] = useState<CacheUsage>();
   const [distribution, setDistribution] = useState<DistributionChannel>();
   const [windowFxSupported, setWindowFxSupported] = useState(false);
@@ -161,7 +161,7 @@ export function SettingsDialog({
     >
   >({});
   const [ruleStatus, setRuleStatus] = useState<Record<string, string>>({});
-  dirtyRef.current =
+  const hasDirtyForms =
     connectionDirty ||
     Object.entries(signatureInputs).some(
       ([id, value]) =>
@@ -177,7 +177,7 @@ export function SettingsDialog({
         draft.target !== "",
     );
   const confirmDiscard = useCallback(async () => {
-    if (!dirtyRef.current) return true;
+    if (!hasDirtyForms) return true;
     if (discardBusy.current) return false;
     discardBusy.current = true;
     try {
@@ -192,12 +192,24 @@ export function SettingsDialog({
       setNewRuleInputs({});
       setConnectionDirty(false);
       setPasswordInputs({});
-      dirtyRef.current = false;
       return true;
+    } catch (cause) {
+      setSaveError(String(cause));
+      return false;
     } finally {
       discardBusy.current = false;
     }
-  }, []);
+  }, [hasDirtyForms]);
+  const openAccountOutbox = useCallback(
+    async (accountId: string) => {
+      if (!(await confirmDiscard())) return;
+      const state = useAppStore.getState();
+      state.selectAccount(accountId);
+      state.selectLocalView("outbox");
+      onClose();
+    },
+    [confirmDiscard, onClose],
+  );
   const requestClose = useCallback(() => {
     if (confirmThreatOff) {
       setConfirmThreatOff(false);
@@ -212,22 +224,54 @@ export function SettingsDialog({
   }, [confirmThreatOff, confirmDiscard, onClose]);
   const dialogRef = useDialogFocus(requestClose);
   async function changeTab(next: SettingsTab) {
+    if (next === tab) return true;
     if (await confirmDiscard()) {
       setTab(next);
       setSaveError("");
+      return true;
     }
+    return false;
   }
-  const results = settingsSearchEntries.filter((entry) =>
-    query
-      .trim()
-      .toLocaleLowerCase()
-      .split(/\s+/)
-      .every((term) =>
-        `${entry.title} ${entry.help} ${entry.keywords}`
-          .toLocaleLowerCase()
-          .includes(term),
-      ),
-  );
+  async function updateSearch(value: string) {
+    if (query || !value.trim() || (await confirmDiscard())) setQuery(value);
+  }
+  const platform = document.documentElement.dataset.platform;
+  const results = settingsSearchEntries
+    .filter(
+      (entry) =>
+        (!entry.accountPage || accounts.length > 0) &&
+        (!entry.provider ||
+          accounts.some((account) => account.provider === entry.provider)) &&
+        (!entry.directUpdates ||
+          distribution?.updatesManagedBy === "postalSnap") &&
+        (entry.title !== strings.settings.cacheDays ||
+          settings.cachePolicy.mode === "recent") &&
+        (entry.title !== strings.settings.windowEffects || windowFxSupported) &&
+        (entry.title !== strings.settings.closeToTrayWindows ||
+          platform === "windows" ||
+          platform === "macos"),
+    )
+    .map((entry) =>
+      entry.title === strings.settings.closeToTrayWindows &&
+      platform === "macos"
+        ? {
+            ...entry,
+            title: strings.settings.closeToTrayMac,
+            help: strings.settings.closeToTrayMacHelp,
+          }
+        : entry,
+    )
+    .filter((entry) =>
+      query
+        .trim()
+        .toLocaleLowerCase()
+        .split(/\s+/)
+        .every((term) =>
+          `${entry.title} ${entry.help} ${entry.keywords}`
+            .toLocaleLowerCase()
+            .includes(term),
+        ),
+    );
   async function openSearchResult(
     entry: (typeof settingsSearchEntries)[number],
   ) {
@@ -236,7 +280,14 @@ export function SettingsDialog({
     setTab(entry.section);
     if (entry.accountPage) {
       setSelectedAccountId(
-        useAppStore.getState().activeAccountId ?? accounts[0]?.id,
+        accounts.find(
+          (account) =>
+            account.id === useAppStore.getState().activeAccountId &&
+            (!entry.provider || account.provider === entry.provider),
+        )?.id ??
+          accounts.find(
+            (account) => !entry.provider || account.provider === entry.provider,
+          )?.id,
       );
       setRequestedAccountPage(entry.accountPage);
     }
@@ -244,10 +295,12 @@ export function SettingsDialog({
   }
   useEffect(() => {
     if (!searchTarget || query) return;
-    const frame = window.requestAnimationFrame(() => {
+    let frame = 0;
+    const deadline = performance.now() + 5000;
+    function focusResult() {
       const controls =
         settingsContentRef.current?.querySelectorAll<HTMLElement>(
-          "label,button,input,select,textarea",
+          "label,button,input,select,textarea,h2,h3,strong",
         );
       const target = Array.from(controls ?? []).find(
         (element) =>
@@ -255,13 +308,27 @@ export function SettingsDialog({
           element.textContent?.trim() === searchTarget ||
           element.querySelector("strong")?.textContent?.trim() === searchTarget,
       );
+      if (!target && performance.now() < deadline) {
+        frame = window.requestAnimationFrame(focusResult);
+        return;
+      }
+      const labeledId = target?.getAttribute("for");
       const focus = target?.matches("input,select,textarea,button")
         ? target
-        : target?.querySelector<HTMLElement>("input,select,textarea,button");
-      (focus ?? target)?.scrollIntoView?.({ block: "nearest" });
-      (focus ?? target)?.focus();
+        : (target?.querySelector<HTMLElement>("input,select,textarea,button") ??
+          (labeledId ? document.getElementById(labeledId) : null) ??
+          target
+            ?.closest(".account-aliases-section")
+            ?.querySelector<HTMLElement>("input,button") ??
+          target);
+      if (focus) {
+        if (focus.matches("h2,h3,strong")) focus.tabIndex = -1;
+        focus.scrollIntoView?.({ block: "nearest" });
+        focus.focus();
+      }
       setSearchTarget(undefined);
-    });
+    }
+    frame = window.requestAnimationFrame(focusResult);
     return () => window.cancelAnimationFrame(frame);
   }, [tab, query, searchTarget]);
 
@@ -763,12 +830,14 @@ export function SettingsDialog({
               tabs.length) %
             tabs.length;
     const next = tabs[nextIndex].id;
-    setTab(next);
-    window.setTimeout(() => {
-      const element = document.getElementById(`settings-tab-${next}`);
-      element?.focus();
-      element?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
-    }, 0);
+    void changeTab(next).then((changed) => {
+      if (!changed) return;
+      window.setTimeout(() => {
+        const element = document.getElementById(`settings-tab-${next}`);
+        element?.focus();
+        element?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+      }, 0);
+    });
   }
 
   return (
@@ -811,7 +880,7 @@ export function SettingsDialog({
             aria-label={strings.settings.search}
             placeholder={strings.settings.search}
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => void updateSearch(event.target.value)}
           />
           {query ? (
             <button
@@ -832,6 +901,7 @@ export function SettingsDialog({
           <label className="settings-section-select">
             <span>{strings.settings.sectionSelector}</span>
             <select
+              aria-label={strings.settings.sectionSelector}
               value={tab}
               onChange={(event) =>
                 void changeTab(event.target.value as SettingsTab)
@@ -935,6 +1005,9 @@ export function SettingsDialog({
                     onSelectAccount={(id) => {
                       setSelectedAccountId(id);
                       setRequestedAccountPage("connection");
+                    }}
+                    onOpenOutbox={(accountId) => {
+                      void openAccountOutbox(accountId);
                     }}
                     beforeNavigate={confirmDiscard}
                     onConnectionDirty={setConnectionDirty}
