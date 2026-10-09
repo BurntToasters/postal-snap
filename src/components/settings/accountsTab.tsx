@@ -3,6 +3,7 @@ import { Mail } from "lucide-react";
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
 import type { FilterRule, MailboxSummary } from "../../types";
+import { SyncStatus } from "../mail/syncStatus";
 import { ConnectionPanel, FoldersPanel } from "./connectionPanel";
 import { BodyFormatControl } from "./bodyFormatControl";
 import { SettingsPanel, SettingsSection } from "./primitives";
@@ -48,6 +49,7 @@ interface AccountsTabProps {
   selectedAccountId?: string;
   initialPage?: "connection" | "folders" | "identity" | "rules";
   onSelectAccount: (id?: string) => void;
+  onOpenOutbox: (accountId: string) => void;
   beforeNavigate: () => Promise<boolean>;
   onConnectionDirty: (dirty: boolean) => void;
   mailboxes: MailboxSummary[];
@@ -89,6 +91,7 @@ export function AccountsTab({
   selectedAccountId,
   initialPage = "connection",
   onSelectAccount,
+  onOpenOutbox,
   beforeNavigate,
   onConnectionDirty,
   mailboxes,
@@ -129,7 +132,7 @@ export function AccountsTab({
     "connection" | "folders" | "identity" | "rules"
   >(initialPage);
   async function navigate(next: typeof page) {
-    if (await beforeNavigate()) setPage(next);
+    if (next !== page && (await beforeNavigate())) setPage(next);
   }
 
   return (
@@ -166,7 +169,7 @@ export function AccountsTab({
                   <small role="alert">{account.error}</small>
                 ) : null}
               </span>
-              <span>{account.syncState}</span>
+              <SyncStatus account={account} sync={undefined} />
             </button>
           ))}
         </div>
@@ -268,6 +271,7 @@ export function AccountsTab({
                 <ConnectionPanel
                   account={account}
                   onDirty={onConnectionDirty}
+                  onOpenOutbox={onOpenOutbox}
                 />
               ) : null}
               {page === "folders" ? (

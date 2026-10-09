@@ -162,7 +162,8 @@ pub async fn ensure_sent_copy(
     bytes: &[u8],
 ) -> Result<(), String> {
     let mut session = super::pool::checkout(account, password).await?;
-    tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(mailbox))
+    let wire_mailbox = session.mailbox_name(mailbox);
+    tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(&wire_mailbox))
         .await
         .map_err(|_| "Sent folder timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Sent folder"))?;
@@ -170,12 +171,12 @@ pub async fn ensure_sent_copy(
     if existing.is_empty() {
         tokio::time::timeout(
             IMAP_COMMAND_TIMEOUT,
-            session.append(mailbox, Some("(\\Seen)"), None, bytes),
+            session.append(&wire_mailbox, Some("(\\Seen)"), None, bytes),
         )
         .await
         .map_err(|_| "Saving the Sent copy timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Save Sent copy"))?;
-        tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(mailbox))
+        tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(&wire_mailbox))
             .await
             .map_err(|_| "Sent folder timed out.".to_string())?
             .map_err(|error| redact_error(&error, "Sent folder"))?;

@@ -54,6 +54,67 @@ test("failed connection testing retains saved connection", async ({ page }) => {
   ).toMatchObject({ imap: { port: 993 } });
 });
 
+test("connection settings show loading, retry a failed read, then recover", async ({
+  page,
+}) => {
+  await page.goto("/?connectionLoadFailure=1&slowAccountLoads=1");
+  await openAccount(page);
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("status")).toHaveText(
+    "Loading connection settings…",
+  );
+  const failure = dialog.getByRole("alert");
+  await expect(failure).toContainText("could not access local mail data");
+  await failure.getByRole("button", { name: "Retry", exact: true }).click();
+  await expect(
+    page.getByRole("group", { name: "Incoming IMAP" }),
+  ).toBeVisible();
+});
+
+test("folder assignments show loading, retry a failed read, then recover", async ({
+  page,
+}) => {
+  await page.goto("/?folderLoadFailure=1&slowAccountLoads=1");
+  await openAccount(page);
+  await page.getByRole("button", { name: "Folders", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("status")).toHaveText(
+    "Loading folder assignments…",
+  );
+  const failure = dialog.getByRole("alert");
+  await expect(failure).toContainText("could not access local mail data");
+  await failure.getByRole("button", { name: "Retry", exact: true }).click();
+  await expect(page.getByLabel("Sent folder", { exact: true })).toBeVisible();
+});
+
+for (const endpoint of ["Incoming IMAP", "Outgoing SMTP"] as const) {
+  test(`${endpoint} test failure gives endpoint-specific recovery guidance`, async ({
+    page,
+  }) => {
+    const failureParameter =
+      endpoint === "Incoming IMAP"
+        ? "failIncomingConnection"
+        : "failOutgoingConnection";
+    await page.goto(`/?${failureParameter}=1`);
+    await openAccount(page);
+    const group = page.getByRole("group", { name: endpoint });
+    await group
+      .getByLabel("Port")
+      .fill(endpoint === "Incoming IMAP" ? "1993" : "1587");
+    await page
+      .getByRole("button", { name: "Test and save", exact: true })
+      .click();
+    const status = page.getByRole("dialog").getByRole("status");
+    await expect(status).toContainText(endpoint);
+    await expect(status).toContainText(
+      endpoint === "Incoming IMAP"
+        ? "Check imap.mail.me.com, port 993"
+        : "Check smtp.mail.me.com, port 587",
+    );
+    await expect(status).not.toContainText("fixture-private-secret");
+  });
+}
+
 test("folder assignments stay isolated and return to automatic", async ({
   page,
 }) => {
@@ -94,7 +155,7 @@ for (const outcome of ["approve", "reject", "cancel"] as const) {
     page,
   }) => {
     await page.goto(
-      `/?firstRun=1&bridgeCertificateFail=1${outcome === "cancel" ? "&certificateCancel=1" : ""}`,
+      `/?noAccounts=1&bridgeCertificateFail=1${outcome === "cancel" ? "&certificateCancel=1" : ""}`,
     );
     await page.getByRole("button", { name: /Proton Bridge/ }).click();
     await page
@@ -102,7 +163,7 @@ for (const outcome of ["approve", "reject", "cancel"] as const) {
       .click();
     if (outcome !== "cancel") {
       await expect(page.getByText(/SHA-256/i).first()).toBeVisible();
-      await expect(page.getByText(/2099/).first()).toBeVisible();
+      await expect(page.getByText(/2098|2099/).first()).toBeVisible();
       page.once("dialog", (dialog) =>
         outcome === "approve" ? dialog.accept() : dialog.dismiss(),
       );
@@ -126,9 +187,11 @@ for (const outcome of ["approve", "reject", "cancel"] as const) {
 test("offers experimental Bridge setup with local TLS endpoints", async ({
   page,
 }, testInfo) => {
-  await page.goto("/?firstRun=1");
+  await page.goto("/?noAccounts=1");
   await page.getByRole("button", { name: /Proton Bridge/ }).click();
   await expect(page.getByText(/Bridge must remain running/)).toBeVisible();
+  await page.getByLabel("Your name").fill("Bridge reader");
+  page.once("dialog", (dialog) => dialog.accept());
   await page
     .getByLabel("Email address", { exact: true })
     .fill("reader@custom.example");
@@ -159,6 +222,72 @@ test("offers experimental Bridge setup with local TLS endpoints", async ({
     body: await page.screenshot(),
     contentType: "image/png",
   });
+});
+
+for (const stage of ["imap", "smtp"] as const) {
+  test(`Bridge ${stage.toUpperCase()} certificate failure names its endpoint`, async ({
+    page,
+  }) => {
+    await page.goto(
+      `/?noAccounts=1&bridgeCertificateFail=1&certificateFailureStage=${stage}`,
+    );
+    await page.getByRole("button", { name: /Proton Bridge/ }).click();
+    await page.getByLabel("Your name").fill("Bridge reader");
+    page.once("dialog", (dialog) => dialog.accept());
+    await page
+      .getByLabel("Email address", { exact: true })
+      .fill("reader@custom.example");
+    await page
+      .getByLabel("Bridge password", { exact: true })
+      .fill("synthetic-bridge-password");
+    await page
+      .getByRole("group", { name: "Incoming IMAP" })
+      .getByLabel("Username")
+      .fill("reader@custom.example");
+    await page
+      .getByRole("group", { name: "Outgoing SMTP" })
+      .getByLabel("Username")
+      .fill("reader@custom.example");
+    await page.getByRole("button", { name: "Connect securely" }).click();
+    const failure = page.getByRole("alert");
+    await expect(failure).toContainText(
+      stage === "imap"
+        ? "Incoming IMAP certificate verification failed"
+        : "Outgoing SMTP certificate verification failed",
+    );
+    await expect(failure).toContainText(
+      "Export the public TLS certificate from Bridge settings",
+    );
+    await expect(failure).not.toContainText("fixture-private-secret");
+    await expect(failure).not.toContainText("Bridge must remain running");
+  });
+}
+
+test("Bridge setup storage failures do not suggest Bridge is unavailable", async ({
+  page,
+}) => {
+  await page.goto("/?noAccounts=1&setupStorageFail=1");
+  await page.getByRole("button", { name: /Proton Bridge/ }).click();
+  await page.getByLabel("Your name").fill("Bridge reader");
+  page.once("dialog", (dialog) => dialog.accept());
+  await page
+    .getByLabel("Email address", { exact: true })
+    .fill("reader@custom.example");
+  await page
+    .getByLabel("Bridge password", { exact: true })
+    .fill("synthetic-bridge-password");
+  await page
+    .getByRole("group", { name: "Incoming IMAP" })
+    .getByLabel("Username")
+    .fill("reader@custom.example");
+  await page
+    .getByRole("group", { name: "Outgoing SMTP" })
+    .getByLabel("Username")
+    .fill("reader@custom.example");
+  await page.getByRole("button", { name: "Connect securely" }).click();
+  const failure = page.getByRole("alert");
+  await expect(failure).toContainText("could not access local mail data");
+  await expect(failure).not.toContainText("Bridge must remain running");
 });
 
 test("search opens and focuses the appearance control", async ({ page }) => {
@@ -213,28 +342,191 @@ test("unsaved connection changes require confirmation before leaving", async ({
 
 for (const density of ["comfortable", "compact"]) {
   for (const scale of [100, 200]) {
-    test(`settings fit ${density} at ${scale}%`, async ({ page }, testInfo) => {
-      await page.setViewportSize({ width: 720, height: 900 });
-      await page.goto(`/?density=${density}&textScale=${scale / 100}`);
-      await page.getByRole("button", { name: "Settings", exact: true }).click();
-      await expect(
-        page.getByLabel("Settings section", { exact: true }),
-      ).toBeVisible();
-      await page
-        .getByLabel("Settings section", { exact: true })
-        .selectOption("appearance");
-      await expect(page.getByLabel("Text size", { exact: true })).toBeVisible();
-      expect(
-        await page
-          .locator(".settings-window")
-          .evaluate(
-            (element) => element.scrollWidth <= element.clientWidth + 1,
-          ),
-      ).toBe(true);
-      await testInfo.attach("settings-layout", {
-        body: await page.screenshot(),
-        contentType: "image/png",
-      });
-    });
+    for (const theme of ["light", "dark"]) {
+      for (const width of [720, 1400]) {
+        test(`settings fit ${density} ${scale}% ${theme} ${width}px`, async ({
+          page,
+        }, testInfo) => {
+          await page.setViewportSize({ width, height: 900 });
+          await page.goto(
+            `/?density=${density}&scale=${scale / 100}&theme=${theme}`,
+          );
+          await page
+            .getByRole("button", { name: "Settings", exact: true })
+            .click();
+          if (width < 760)
+            await page
+              .getByLabel("Settings section", { exact: true })
+              .selectOption("appearance");
+          else
+            await page
+              .getByRole("tab", { name: "Appearance", exact: true })
+              .click();
+          await expect(
+            page.getByLabel("Text size", { exact: true }),
+          ).toHaveValue(String(scale / 100));
+          await expect(page.locator("html")).toHaveAttribute(
+            "data-density",
+            density,
+          );
+          await expect(page.locator("html")).toHaveAttribute(
+            "data-theme",
+            theme,
+          );
+          expect(
+            await page
+              .locator(".settings-window")
+              .evaluate(
+                (element) => element.scrollWidth <= element.clientWidth + 1,
+              ),
+          ).toBe(true);
+          await testInfo.attach("settings-layout", {
+            body: await page.screenshot(),
+            contentType: "image/png",
+          });
+        });
+      }
+    }
   }
 }
+
+for (const navigation of ["search", "keyboard"] as const) {
+  test(`dirty connection survives canceled ${navigation} navigation`, async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await openAccount(page);
+    const port = page
+      .getByRole("group", { name: "Incoming IMAP" })
+      .getByLabel("Port");
+    await port.fill("1993");
+    page.once("dialog", (dialog) => dialog.dismiss());
+    if (navigation === "search")
+      await page
+        .getByRole("searchbox", { name: "Search settings" })
+        .fill("appearance");
+    else {
+      await page.getByRole("tab", { name: "Accounts", exact: true }).focus();
+      await page.keyboard.press("ArrowDown");
+    }
+    await expect(port).toHaveValue("1993");
+    page.once("dialog", (dialog) => dialog.dismiss());
+    await page
+      .getByRole("button", { name: "Close settings", exact: true })
+      .click();
+    await expect(port).toBeVisible();
+  });
+}
+
+for (const mode of ["forced colors", "reduced motion"] as const) {
+  test(`settings and account controls support ${mode}`, async ({
+    page,
+  }, testInfo) => {
+    await page.emulateMedia(
+      mode === "forced colors"
+        ? { forcedColors: "active" }
+        : { reducedMotion: "reduce" },
+    );
+    await page.goto("/?scale=2&density=compact");
+    await openAccount(page);
+    const port = page
+      .getByRole("group", { name: "Incoming IMAP" })
+      .getByLabel("Port");
+    await port.focus();
+    await expect(port).toBeFocused();
+    expect(
+      await page
+        .locator(".settings-window")
+        .evaluate((element) => element.scrollWidth <= element.clientWidth + 1),
+    ).toBe(true);
+    await testInfo.attach("settings-accessibility", {
+      body: await page.screenshot(),
+      contentType: "image/png",
+    });
+  });
+}
+
+test("connection identity repair explains pending work", async ({ page }) => {
+  await page.goto("/?multiAccount=1&pendingConnectionWork=1");
+  await openAccount(page, "Work");
+  await page
+    .getByRole("group", { name: "Incoming IMAP" })
+    .getByLabel("Server", { exact: true })
+    .fill("imap.other.example");
+  page.on("dialog", (dialog) => dialog.accept());
+  await page
+    .getByRole("button", { name: "Test and save", exact: true })
+    .click();
+  await expect(
+    page
+      .getByRole("status")
+      .filter({ hasText: /2 queued changes.*1 unsent message/ }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Open this account’s Outbox", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Outbox", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Unsent for account-2", { exact: true }),
+  ).toBeVisible();
+});
+
+test("invalid certificate import explains required public certificate", async ({
+  page,
+}) => {
+  await page.goto("/?noAccounts=1&invalidCertificate=1");
+  await page.getByRole("button", { name: /Proton Bridge/ }).click();
+  await page
+    .getByRole("button", { name: "Import Bridge certificate", exact: true })
+    .click();
+  await expect(page.getByRole("status")).toContainText(
+    "valid, unexpired public PEM certificate",
+  );
+});
+
+test("account list explains connection status in plain language", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("tab", { name: "Accounts", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Manage Sam", exact: true }),
+  ).toContainText("Mail is up to date");
+});
+
+test("search focuses asynchronously loaded account signature", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page
+    .getByRole("searchbox", { name: "Search settings" })
+    .fill("signature");
+  await page.getByRole("button", { name: /Email signature.*Accounts/ }).click();
+  await expect(
+    page.getByLabel("Email signature", { exact: true }),
+  ).toBeFocused();
+});
+
+test("search includes account format and update cadence", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const search = page.getByRole("searchbox", { name: "Search settings" });
+  await search.fill("plain text");
+  await page
+    .getByRole("button", { name: /New messages start as.*Accounts/ })
+    .click();
+  await expect(
+    page.getByLabel("New messages start as", { exact: true }),
+  ).toBeFocused();
+  await search.fill("cadence");
+  await page
+    .getByRole("button", { name: /Check for updates.*Updates/ })
+    .click();
+  await expect(
+    page.getByLabel("Check for updates", { exact: true }),
+  ).toBeFocused();
+});

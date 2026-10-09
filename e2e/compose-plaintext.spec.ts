@@ -171,6 +171,8 @@ test("account default starts new messages and replies as plain text", async ({
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("tab", { name: "Accounts" }).click();
+  await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
+  await page.getByRole("button", { name: "Identity", exact: true }).click();
   await page
     .getByLabel("New messages start as")
     .selectOption({ label: "Plain text" });

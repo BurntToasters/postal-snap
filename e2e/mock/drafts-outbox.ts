@@ -66,6 +66,21 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
         };
       },
       list_outbox(args: Record<string, unknown>) {
+        if (location.search.includes("pendingConnectionWork")) {
+          const accountId = String(args.accountId ?? "");
+          return [
+            {
+              id: `outbox-${accountId}`,
+              accountId,
+              recipients: "recipient@example.test",
+              subject: `Unsent for ${accountId}`,
+              state: "queued",
+              detail: "Waiting for a secure mail connection.",
+              createdAt: "2026-08-18T11:00:00Z",
+              sendAt: null,
+            },
+          ];
+        }
         if (!location.search.includes("localMail") || state.discarded) {
           return [];
         }

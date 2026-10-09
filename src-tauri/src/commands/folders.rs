@@ -22,7 +22,6 @@ pub fn suggest_recipients(
     )
 }
 
-
 #[tauri::command]
 pub async fn create_folder(
     account_id: String,

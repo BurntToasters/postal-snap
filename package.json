@@ -28,6 +28,7 @@
     "test:rust": "cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets",
     "test:icloud": "dotenv -e .env -- cargo test --locked --manifest-path src-tauri/Cargo.toml icloud_live_connection_smoke -- --ignored",
     "test:mail-integration": "node scripts/test-mail-integration.js",
+    "test:bridge-integration": "node scripts/test-mail-integration.js --bridge-only",
     "test:e2e": "node scripts/run-e2e.js",
     "setup:e2e": "playwright install chromium",
     "test:release-assets": "node scripts/run-release-asset-tests.js",

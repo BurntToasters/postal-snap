@@ -280,6 +280,7 @@ test("claims setup after removing last account before a new connect", async ({
   await expect(page.getByRole("button", { name: "Compose" })).toBeVisible();
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("tab", { name: "Accounts" }).click();
+  await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
   page.once("dialog", async (dialog) => dialog.accept());
   await page
     .locator(".account-settings-card")

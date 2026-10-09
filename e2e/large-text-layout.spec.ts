@@ -44,6 +44,7 @@ test("Settings selects show their whole value at 200% text", async ({
 }) => {
   await page.goto("/?scale=2");
   await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("tab", { name: "Appearance", exact: true }).click();
   const appearance = page.getByRole("combobox", { name: "Appearance" });
   await expect(appearance).toBeVisible();
   const clipped = await appearance.evaluate((element) => {

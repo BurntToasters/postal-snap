@@ -15,6 +15,17 @@ export const settings = {
   testSave: "Test and save",
   connectionSaved: "Connection tested and saved",
   connectionFailed: "Connection test failed. Your saved connection was kept.",
+  connectionLoading: "Loading connection settings…",
+  connectionLoadFailed: "Could not load connection settings.",
+  foldersLoading: "Loading folder assignments…",
+  foldersLoadFailed: "Could not load folder assignments.",
+  retry: "Retry",
+  queuedChangesRemaining: (count: number) =>
+    `${count} queued ${count === 1 ? "change remains" : "changes remain"}. They must sync successfully before the incoming server can change.`,
+  unsentMessagesRemaining: (count: number) =>
+    `${count} unsent ${count === 1 ? "message needs" : "messages need"} attention in this account’s Outbox before the incoming server can change.`,
+  openAccountOutbox: "Open this account’s Outbox",
+  folderSaveFailed: "Folder assignment could not be saved. Try again.",
   automatic: "Automatic",
   folderMissing:
     "Assigned folder needs attention. Choose another folder or Automatic.",
@@ -23,6 +34,8 @@ export const settings = {
   importCertificate: "Import Bridge certificate",
   approveCertificate: "Approve certificate",
   removeCertificate: "Remove certificate",
+  certificateRemoveConfirm:
+    "Remove this account’s imported Bridge certificate and return to ordinary operating-system trust?",
   certificateApproved: "Certificate approved",
   certificateFingerprint: "SHA-256",
   certificateExpiry: "Expires",

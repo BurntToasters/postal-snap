@@ -14,6 +14,10 @@ const codes = new Set<IpcErrorCode>([
   "authenticationFailed",
   "connectionFailed",
   "certificateFailed",
+  "certificateInvalid",
+  "pendingOperations",
+  "folderAttention",
+  "identityConfirmation",
   "localStorageFailed",
   "invalidInput",
   "operationFailed",
@@ -22,12 +26,14 @@ const codes = new Set<IpcErrorCode>([
 export class PostalError extends Error {
   readonly code: IpcErrorCode;
   readonly retryable: boolean;
+  readonly stage?: "imap" | "smtp";
 
   constructor(payload: IpcErrorPayload) {
     super(strings.errors[payload.code]);
     this.name = "PostalError";
     this.code = payload.code;
     this.retryable = payload.retryable;
+    this.stage = payload.stage;
   }
 
   override toString(): string {
@@ -50,9 +56,15 @@ export function describeSetupError(
   provider: ProviderKind,
 ): { text: string; hint?: string; showAppPasswordLink?: boolean } {
   const error = cause instanceof PostalError ? cause : normalizeIpcError(cause);
+  const endpoint = error.stage;
   if (error.code === "authenticationFailed") {
     return {
-      text: error.message,
+      text:
+        endpoint === "imap"
+          ? strings.setup.imapSignInFailed
+          : endpoint === "smtp"
+            ? strings.setup.smtpSignInFailed
+            : error.message,
       hint:
         provider === "icloud"
           ? strings.setup.authHintIcloud
@@ -62,13 +74,39 @@ export function describeSetupError(
       showAppPasswordLink: provider === "icloud",
     };
   }
-  if (provider === "protonBridge") {
+  if (error.code === "pendingOperations" || error.code === "certificateInvalid")
+    return { text: error.message };
+  if (error.code === "certificateFailed" && endpoint) {
     return {
-      text: error.message,
+      text:
+        endpoint === "imap"
+          ? strings.setup.imapCertificateFailed
+          : strings.setup.smtpCertificateFailed,
       hint:
-        error.code === "certificateFailed"
+        provider === "protonBridge"
           ? strings.setup.bridgeCertificateHint
-          : strings.setup.bridgeUnavailableHint,
+          : undefined,
+    };
+  }
+  if (provider === "protonBridge" && error.code === "certificateFailed") {
+    return {
+      text: strings.errors.certificateFailed,
+      hint: strings.setup.bridgeCertificateHint,
+    };
+  }
+  if (error.code === "connectionFailed" && endpoint) {
+    return {
+      text:
+        endpoint === "imap"
+          ? strings.setup.imapConnectionFailed
+          : strings.setup.smtpConnectionFailed,
+      hint: connectionHint(provider, endpoint),
+    };
+  }
+  if (provider === "protonBridge" && error.code === "connectionFailed") {
+    return {
+      text: strings.errors.connectionFailed,
+      hint: strings.setup.bridgeUnavailableHint,
     };
   }
   if (error.code === "connectionFailed") {
@@ -80,6 +118,23 @@ export function describeSetupError(
   return { text: error.message };
 }
 
+function connectionHint(
+  provider: ProviderKind,
+  endpoint: "imap" | "smtp",
+): string {
+  if (provider === "protonBridge")
+    return endpoint === "imap"
+      ? strings.setup.bridgeImapConnectionHint
+      : strings.setup.bridgeSmtpConnectionHint;
+  if (provider === "icloud")
+    return endpoint === "imap"
+      ? strings.setup.icloudImapConnectionHint
+      : strings.setup.icloudSmtpConnectionHint;
+  return endpoint === "imap"
+    ? strings.setup.imapConnectionHint
+    : strings.setup.smtpConnectionHint;
+}
+
 function isPayload(value: unknown): value is IpcErrorPayload {
   if (!value || typeof value !== "object") return false;
   const payload = value as Partial<IpcErrorPayload>;
@@ -87,6 +142,9 @@ function isPayload(value: unknown): value is IpcErrorPayload {
     typeof payload.code === "string" &&
     codes.has(payload.code as IpcErrorCode) &&
     typeof payload.message === "string" &&
-    typeof payload.retryable === "boolean"
+    typeof payload.retryable === "boolean" &&
+    (payload.stage === undefined ||
+      payload.stage === "imap" ||
+      payload.stage === "smtp")
   );
 }

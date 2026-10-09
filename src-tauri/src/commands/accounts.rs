@@ -163,7 +163,9 @@ pub async fn add_account(
         let _ = credentials::remove(&id);
         return Err(error.into());
     }
-    if let Some(reference) = &request.certificate_reference { crate::bridge::consume(reference); }
+    if let Some(reference) = &request.certificate_reference {
+        crate::bridge::consume(reference);
+    }
     let default_policy = state.settings.get()?.cache_policy;
     let policy = request
         .cache_policy

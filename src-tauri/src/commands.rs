@@ -9,9 +9,9 @@ use std::{
 };
 
 pub mod accounts;
-pub mod compatibility;
 pub mod attachments;
 pub mod cache_policy;
+pub mod compatibility;
 pub mod drafts_send;
 pub mod drag_drop;
 pub mod folders;
