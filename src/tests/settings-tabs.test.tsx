@@ -168,7 +168,11 @@ describe("small settings tabs", () => {
     expect(
       credits.parentElement?.querySelector(".license-credits-dismiss"),
     ).toBeTruthy();
-    expect(document.querySelector(".settings-window")).toHaveAttribute("inert");
+    await waitFor(() =>
+      expect(document.querySelector(".settings-window")).toHaveAttribute(
+        "inert",
+      ),
+    );
   });
 
   it("reports when bundled license credits cannot be loaded", async () => {
