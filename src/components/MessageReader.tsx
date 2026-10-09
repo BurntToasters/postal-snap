@@ -649,9 +649,18 @@ export function MessageReader({
   // Shrink fixed-width mail to the pane, like other mail apps, but never
   // below a readable size; past that it scrolls sideways.
   const fitFrameContent = useCallback(() => {
-    const doc = frame.current?.contentDocument;
-    if (!doc?.body) return;
+    const iframe = frame.current;
+    const doc = iframe?.contentDocument;
+    if (!doc?.body || !iframe) return;
     doc.body.style.zoom = "";
+    const header = iframe
+      .closest(".reader-pane")
+      ?.querySelector(".message-header");
+    if (header instanceof HTMLElement) {
+      const style = getComputedStyle(header);
+      doc.body.style.marginLeft = style.paddingLeft;
+      doc.body.style.marginRight = style.paddingRight;
+    }
     const root = doc.documentElement;
     const available = root.clientWidth;
     const needed = root.scrollWidth;
@@ -1201,6 +1210,7 @@ export function MessageReader({
         onOpenMore={() => setMoreOpen(true)}
         onCloseMore={closeMoreMenu}
         onDismissMore={() => setMoreOpen(false)}
+        windowDrag={treatAsOverlay}
       />
       {snoozeOpen ? (
         <SnoozePanel

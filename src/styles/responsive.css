@@ -73,13 +73,10 @@
 }
 
 @media (max-height: 640px) {
-  .pane-heading {
-    min-height: var(--bar-height-md);
-    padding-block: 10px;
-  }
-
+  .pane-heading,
   .reader-actions {
-    min-height: 52px;
+    min-height: var(--bar-height-md);
+    padding-block: var(--bar-pad-block);
   }
 }
 
@@ -168,7 +165,7 @@
   .reader-pane,
   .pane-hidden .reader-pane:not(.reader-hidden):not(.empty-reader) {
     position: fixed;
-    z-index: 15;
+    z-index: 24;
     inset: var(--native-chrome-height, 0px) 0 0;
     display: flex;
     border: 0;
@@ -452,4 +449,16 @@ html[data-text-scale="large"] .settings-row select {
 /* Large text wraps reader actions; a pill shape reads as broken. */
 html[data-text-scale="large"] .reader-action-group {
   border-radius: var(--radius-lg);
+}
+
+/* 200% text: the fixed sidebar wraps "Add account". Grow the folder
+   column only; the reader is the flexible column that gives up the space. */
+@media (min-width: 1050px) {
+  html[data-text-scale="large"] .mail-shell:not(.sidebar-collapsed) {
+    --rendered-folder-width: clamp(
+      210px,
+      max(var(--folder-pane-width, 248px), 300px),
+      26vw
+    );
+  }
 }

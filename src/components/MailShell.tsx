@@ -1441,7 +1441,12 @@ export function MailShell({ onOpenSettings }: Props) {
         }
       />
 
-      <section className="message-pane" id="message-pane" aria-label={heading}>
+      <section
+        className="message-pane"
+        id="message-pane"
+        aria-label={heading}
+        data-list={activeLocalView ? "local" : undefined}
+      >
         <MessagePaneHeader
           heading={heading}
           shownCount={shownCount}

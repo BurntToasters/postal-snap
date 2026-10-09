@@ -11,19 +11,26 @@
   flex-shrink: 0;
 }
 
+/* Chrome stays; the letter fills what is left and scrolls inside it. */
+.reader-pane > .message-body {
+  flex: 1 1 auto;
+  min-height: 6rem;
+}
+
 .pane-hidden .reader-pane.reader-hidden,
 .pane-hidden .reader-pane.empty-reader {
   display: none;
 }
 
+/* Full-screen message. Cover the mailbox, including the title strip. */
 .pane-hidden .reader-pane:not(.reader-hidden):not(.empty-reader) {
   position: fixed;
-  z-index: 12;
-  inset: calc(var(--mail-toolbar-height, var(--toolbar-height)) + 14px)
-    clamp(18px, 5vw, 72px) 18px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow);
+  z-index: 24;
+  inset: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--surface);
+  box-shadow: none;
 }
 
 .reader-actions {
@@ -31,11 +38,11 @@
   z-index: 4;
   top: 0;
   display: flex;
-  min-height: var(--bar-height-md);
+  min-height: var(--pane-heading-height);
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  padding: var(--bar-pad-block) 12px;
+  padding: var(--bar-pad-block) var(--reader-pad-inline);
   overflow: visible;
   border-bottom: 1px solid var(--border);
   /* Soft scroll edge (macOS 27): the message blurs as it passes beneath. */
@@ -116,7 +123,7 @@ html[data-reduce-transparency="true"] .reader-actions {
   display: grid;
   grid-template-columns: 42px minmax(0, 1fr) auto;
   gap: 8px 11px;
-  padding: 20px clamp(18px, 3vw, 30px) 16px;
+  padding: 20px var(--reader-pad-inline) 16px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
 }
 
@@ -331,7 +338,7 @@ html[data-reduce-transparency="true"] .reader-actions {
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 10px 18px;
+  padding: 10px var(--reader-pad-inline);
   color: var(--text);
   background: var(--fill);
   border-bottom: 1px solid var(--border);
@@ -371,7 +378,7 @@ html[data-reduce-transparency="true"] .reader-actions {
   gap: 8px;
   align-items: center;
   min-height: var(--bar-height-sm);
-  padding: 8px 12px;
+  padding: 8px var(--reader-pad-inline);
   border-bottom: 1px solid var(--border);
   background: var(--surface-muted);
 }
@@ -382,8 +389,8 @@ html[data-reduce-transparency="true"] .reader-actions {
 }
 
 .message-body {
-  min-height: 180px;
-  flex: 1 0 180px;
+  min-height: 0;
+  flex: 1 1 auto;
   overflow: auto;
   background: var(--mail-canvas);
   color-scheme: light;
@@ -402,7 +409,7 @@ html[data-reduce-transparency="true"] .reader-actions {
 .message-body pre,
 .plain-text-body {
   margin: 0;
-  padding: 22px;
+  padding: 22px var(--reader-pad-inline);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font: inherit;
@@ -450,7 +457,7 @@ html[data-reduce-transparency="true"] .reader-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 7px;
-  padding: 9px 18px;
+  padding: 9px var(--reader-pad-inline);
   border-top: 1px solid var(--border);
 }
 
@@ -546,7 +553,7 @@ html[data-reduce-transparency="true"] .reader-actions {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  padding: 10px 16px;
+  padding: 10px var(--reader-pad-inline);
   border-bottom: 1px solid var(--border);
   background: var(--surface-muted);
 }
@@ -590,7 +597,7 @@ html[data-reduce-transparency="true"] .reader-actions {
 .invite-card {
   display: grid;
   gap: 6px;
-  margin: 12px 18px 0;
+  margin: 12px var(--reader-pad-inline) 0;
   padding: 14px 16px;
   border: 1px solid var(--border);
   border-left: 4px solid var(--accent);

@@ -10,6 +10,15 @@
     0px,
     calc(100dvh - var(--mail-toolbar-height, var(--toolbar-height)))
   );
+  /* Row margin + padding + unread column + gap. The mailbox title uses it. */
+  --list-text-inset: calc(6px + 10px + 0.625rem + 8px);
+  /* Drafts, Outbox, and Snoozed: padding + icon + gap. The title uses it. */
+  --local-row-inline: var(--toolbar-pad-inline);
+  --local-icon: 24px;
+  --local-gap: 12px;
+  --local-text-inset: calc(
+    var(--local-row-inline) + var(--local-icon) + var(--local-gap)
+  );
   --rendered-reader-height: min(
     var(--reader-pane-height, 360px),
     max(
@@ -143,7 +152,7 @@
   align-items: center;
   flex-wrap: nowrap;
   gap: 8px;
-  padding: var(--toolbar-pad-block) 12px;
+  padding: var(--toolbar-pad-block) var(--toolbar-pad-inline);
   /* A real bar (macOS 27): one solid material and a hairline, no glow. */
   border-bottom: 1px solid var(--border);
   background: var(--bar);
@@ -234,15 +243,15 @@
   min-height: var(--target-size);
   flex: 1 1 16.875rem;
   align-items: center;
-  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
-  border-color: transparent;
+  border: 0;
   border-radius: var(--radius-pill);
   background: var(--fill);
 }
 
 .search-box:focus-within {
-  border-color: color-mix(in srgb, var(--accent) 62%, var(--border));
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 62%, var(--border)),
+    0 0 0 4px color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
 .search-box > svg {
@@ -383,6 +392,11 @@
 .message-pane,
 .reader-pane {
   overflow: auto;
+}
+
+.folder-list,
+.message-list,
+.local-mail-list {
   scrollbar-gutter: stable;
 }
 
@@ -822,9 +836,14 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: var(--pane-heading-pad-block) 14px;
+  padding: var(--pane-heading-pad-block) var(--toolbar-pad-inline);
+  padding-left: var(--list-text-inset);
   border-bottom: 1px solid var(--border);
   background: var(--surface);
+}
+
+.message-pane[data-list="local"] .pane-heading {
+  padding-left: var(--local-text-inset);
 }
 
 .pane-heading > span {
@@ -1155,14 +1174,14 @@
   display: grid;
   min-height: var(--list-row-height);
   align-items: center;
-  gap: 12px;
-  padding: var(--list-row-pad-block) 14px;
+  gap: var(--local-gap);
+  padding: var(--list-row-pad-block) var(--local-row-inline);
   border-bottom: 1px solid var(--border);
 }
 
 .local-mail-row {
   width: 100%;
-  grid-template-columns: 24px minmax(0, 1fr) auto;
+  grid-template-columns: var(--local-icon) minmax(0, 1fr) auto;
   text-align: left;
   border-top: 0;
   border-right: 0;
@@ -1195,7 +1214,7 @@
 /* Subjects are the sender's words: normal text. Only a message that needs
    attention gets the warning icon and status color. */
 .attention-row {
-  grid-template-columns: 24px minmax(0, 1fr);
+  grid-template-columns: var(--local-icon) minmax(0, 1fr);
   color: var(--text);
 }
 
