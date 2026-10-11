@@ -1,8 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../../api";
+import {
+  folderMoveDestinations,
+  type FolderMoveDestination,
+} from "../../folderMove";
+import { folderPathLabel } from "../../i18n/mail";
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
+import type { ComposeDraft, MailboxSummary } from "../../types";
 import { SetupWizard } from "../SetupWizard";
 import { useDialogFocus } from "../useDialogFocus";
 import { useInertBackground } from "../useInertBackground";
@@ -45,6 +51,18 @@ export function SentNoticeToast() {
   async function undoLastSent() {
     try {
       const draft = await api.restoreOutbox(notice.outboxId, notice.accountId);
+      const archived = notice.archivedMessage;
+      if (archived) {
+        try {
+          await api.moveMessageToMailbox(
+            notice.accountId,
+            archived.messageId,
+            archived.mailboxId,
+          );
+        } catch (cause) {
+          setError(String(cause));
+        }
+      }
       setLastSent(undefined);
       openComposer({ draft });
     } catch (cause) {
@@ -82,6 +100,145 @@ export function SentNoticeToast() {
         ×
       </button>
     </div>
+  );
+}
+
+export function MoveFolderDialog({
+  mailbox,
+  mailboxes,
+  busy,
+  onMove,
+  onClose,
+}: {
+  mailbox: MailboxSummary;
+  mailboxes: MailboxSummary[];
+  busy: boolean;
+  onMove: (parentId: number | null) => void;
+  onClose: () => void;
+}) {
+  const dialogRef = useDialogFocus(onClose);
+  useInertBackground();
+  const titleId = useId();
+  const destinations: FolderMoveDestination[] = folderMoveDestinations(
+    mailbox,
+    mailboxes,
+  );
+  return createPortal(
+    <div
+      className="settings-confirm-overlay"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <section
+        className="settings-confirm-card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        ref={dialogRef}
+      >
+        <h2 id={titleId}>{strings.mail.moveFolder}</h2>
+        <p>{strings.mail.moveFolderDetail(folderPathLabel(mailbox))}</p>
+        <div className="move-folder-choices">
+          {destinations.map((destination) => (
+            <button
+              key={destination.parentId ?? "top"}
+              type="button"
+              className="secondary-button"
+              disabled={busy}
+              onClick={() => onMove(destination.parentId)}
+            >
+              {destination.label}
+            </button>
+          ))}
+        </div>
+        <div className="settings-confirm-actions">
+          <button type="button" className="toolbar-button" onClick={onClose}>
+            {strings.common.cancel}
+          </button>
+        </div>
+      </section>
+    </div>,
+    document.body,
+  );
+}
+
+function outboxPlainText(draft: ComposeDraft): string {
+  const text = draft.textBody.split("\u0000").join("").trim();
+  if (text) return text;
+  return draft.htmlBody
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function OutboxPreviewDialog({
+  draft,
+  onClose,
+}: {
+  draft: ComposeDraft;
+  onClose: () => void;
+}) {
+  const dialogRef = useDialogFocus(onClose);
+  useInertBackground();
+  const title = draft.subject.trim() || strings.common.noSubject;
+  const body = outboxPlainText(draft);
+  const lines = [
+    draft.to.length > 0 ? `${strings.reader.to} ${draft.to.join(", ")}` : "",
+    draft.cc.length > 0 ? `${strings.reader.cc} ${draft.cc.join(", ")}` : "",
+    draft.bcc.length > 0 ? `${strings.reader.bcc} ${draft.bcc.join(", ")}` : "",
+  ].filter((line) => line.length > 0);
+  return createPortal(
+    <div className="modal-layer attachment-preview-layer">
+      <button
+        type="button"
+        className="modal-backdrop"
+        aria-label={strings.common.close}
+        onClick={onClose}
+      />
+      <section
+        className="attachment-preview-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        ref={dialogRef}
+      >
+        <header>
+          <div>
+            <h2>{title}</h2>
+          </div>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={onClose}
+            aria-label={strings.common.close}
+            title={strings.common.close}
+          >
+            {strings.common.close}
+          </button>
+        </header>
+        <div className="original-body">
+          {lines.map((line) => (
+            <p key={line}>{line}</p>
+          ))}
+          <pre>{body || strings.mail.outboxEmptyBody}</pre>
+          {draft.attachments.length > 0 ? (
+            <ul>
+              {draft.attachments.map((item) => (
+                <li key={item.token}>{item.filename}</li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      </section>
+    </div>,
+    document.body,
   );
 }
 

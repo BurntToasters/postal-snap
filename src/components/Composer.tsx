@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type SetStateAction,
+} from "react";
 import { Extension } from "@tiptap/core";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
@@ -18,37 +26,60 @@ import {
 } from "@tiptap/extension-table";
 import { Maximize2, Paperclip, TriangleAlert, X } from "lucide-react";
 import { api } from "../api";
+import { formatBytes, formatMessageDate } from "../format";
 import {
   CONTEXT_ACTION_EVENT,
   type ContextMenuActionDetail,
 } from "../contextMenu";
 import { strings } from "../i18n";
-import { htmlToPlainText, sanitizeComposeHtml } from "../security";
+import { sanitizeComposeHtml } from "../security";
+import { readableMessageText } from "./reader/readerUtils";
+import { rememberedComposerSize } from "../composerSize";
+import {
+  addressedFrom,
+  rememberFromAddress,
+  rememberedFromAddress,
+} from "../fromAddress";
 import { useAppStore } from "../store";
 import type { BodyFormat, ComposeAttachment, ComposeDraft } from "../types";
+import { useSettingsSave } from "./settings/useSettingsSave";
 import { useDialogFocus } from "./useDialogFocus";
 import { AddressFields } from "./composer/addressFields";
 import { ConfirmDialog } from "./composer/confirmDialog";
 import { ComposerHeader } from "./composer/composerHeader";
 import { FormatToolbar } from "./composer/formatToolbar";
+import { clipboardImages, readPastedImage } from "./composer/pasteImage";
 import { SendBar } from "./composer/sendBar";
-import { htmlToQuotedPlainText, plainTextToHtml } from "./composer/plainText";
+import {
+  htmlToQuotedPlainText,
+  isPlainPasteShortcut,
+  plainPasteBlocks,
+  plainTextToHtml,
+} from "./composer/plainText";
 import { useComposerPlacement } from "./composer/useComposerPlacement";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { MEDIA_QUERIES } from "../breakpoints";
 import {
   announceLocalMailChanged,
   composerTitle,
+  isRedirectSeed,
   seedBody,
+  bccSelfLine,
   seedRecipients,
   seedReferences,
   seedSource,
   seedSubject,
 } from "./composer/composerSeed";
 import {
+  LARGE_RECIPIENT_COUNT,
+  authoredText,
   hasDraftContent,
   mentionsAttachment,
   splitAddresses,
+  isMailbox,
+  firstNoreplyRecipient,
+  repeatedRecipient,
+  uniqueRecipientCount,
   validateRecipientFields,
   validateSubject,
 } from "./composer/composerValidate";
@@ -170,12 +201,21 @@ interface Props {
 const linkDialogFocusable =
   'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])';
 
+function composeImageFile(item: ComposeAttachment): boolean {
+  if (item.inline) return false;
+  const type = item.contentType?.toLowerCase() ?? "";
+  if (type.startsWith("image/")) return true;
+  return /\.(png|jpe?g|gif|webp)$/i.test(item.filename);
+}
+
 export function Composer({ accountId }: Props) {
   const seed = useAppStore((state) => state.composeSeed);
+  const mailboxes = useAppStore((state) => state.mailboxes);
   const account = useAppStore((state) =>
     state.accounts.find((item) => item.id === accountId),
   );
   const accountEmail = account?.email ?? "";
+  const redirecting = isRedirectSeed(seed);
   const fromValue = account
     ? account.displayName
       ? `${account.displayName} <${account.email}>`
@@ -206,24 +246,49 @@ export function Composer({ accountId }: Props) {
     }
     return list;
   }, [account]);
+  // Only a reply opened from the message knows which folder to restore.
+  const sourceArchive = useMemo(() => {
+    const source = seed?.sourceMessage;
+    const kind = seedSource(seed).sourceKind;
+    if (!source || (kind !== "reply" && kind !== "reply_all")) return undefined;
+    const mailbox = mailboxes.find((item) => item.id === source.mailboxId);
+    if (mailbox?.role === "archive") return undefined;
+    return { messageId: source.id, mailboxId: source.mailboxId };
+  }, [mailboxes, seed]);
 
   const [fromAddress, setFromAddress] = useState(() => {
     if (seed?.draft?.from) return seed.draft.from;
     if (seed?.sourceMessage) {
-      const recipients = splitAddresses(seed.sourceMessage.recipients).map(
-        (recipient) =>
-          (recipient.match(/<([^<>]+)>$/)?.[1] ?? recipient)
-            .trim()
-            .toLowerCase(),
+      const addressed = addressedFrom(
+        seed.sourceMessage,
+        account?.email ?? "",
+        account?.aliases ?? [],
       );
-      for (const alias of account?.aliases ?? []) {
-        if (recipients.includes(alias.toLowerCase())) {
-          return alias;
-        }
-      }
+      if (addressed) return addressed;
     }
-    return account?.email ?? "";
+    const allowed = [account?.email, ...(account?.aliases ?? [])].filter(
+      (address): address is string => Boolean(address),
+    );
+    return (
+      rememberedFromAddress(
+        useAppStore.getState().settings.lastFromAddresses,
+        accountId,
+        allowed,
+      ) ??
+      account?.email ??
+      ""
+    );
   });
+  function chooseFromAddress(value: string) {
+    setFromAddress(value);
+    const next = rememberFromAddress(
+      useAppStore.getState().settings.lastFromAddresses,
+      accountId,
+      value,
+      availableSenders.map((sender) => sender.email),
+    );
+    if (next) void updateSettings({ lastFromAddresses: next });
+  }
 
   const [minimized, setMinimized] = useState(false);
   const [maximized, setMaximized] = useState(false);
@@ -237,14 +302,23 @@ export function Composer({ accountId }: Props) {
     closeComposer();
   }, [closeComposer]);
   const setError = useAppStore((state) => state.setError);
-  const [to, setTo] = useState(
-    seedRecipients(seed, "to", accountEmail, account?.aliases),
-  );
-  const [cc, setCc] = useState(
-    seedRecipients(seed, "cc", accountEmail, account?.aliases),
-  );
+  const seededTo = seedRecipients(seed, "to", accountEmail, account?.aliases);
+  const seededCc = seedRecipients(seed, "cc", accountEmail, account?.aliases);
+  const seededBcc =
+    seed?.draft?.bcc.join(", ") ?? seed?.prefill?.bcc?.join(", ") ?? "";
+  const [to, setTo] = useState(seededTo);
+  const [focusLetter] = useState(() => seededTo.trim().length > 0);
+  const [cc, setCc] = useState(seededCc);
   const [bcc, setBcc] = useState(
-    seed?.draft?.bcc.join(", ") ?? seed?.prefill?.bcc?.join(", ") ?? "",
+    seed?.draft
+      ? seededBcc
+      : bccSelfLine(
+          seededTo,
+          seededCc,
+          seededBcc,
+          accountEmail,
+          useAppStore.getState().settings.bccSelf,
+        ),
   );
   const [subject, setSubject] = useState(seedSubject(seed));
   const [attachments, setAttachments] = useState<ComposeAttachment[]>(
@@ -252,6 +326,23 @@ export function Composer({ accountId }: Props) {
   );
   const [draftId, setDraftId] = useState<string | undefined>(seed?.draft?.id);
   // A saved draft keeps its own format; new messages use the account default.
+  const [includeSignature, setIncludeSignature] = useState(
+    () => !isRedirectSeed(seed) && seed?.draft?.includeSignature !== false,
+  );
+  const [importance, setImportance] = useState<"" | "high" | "low">(() =>
+    seed?.draft?.importance === "high" || seed?.draft?.importance === "low"
+      ? seed.draft.importance
+      : "",
+  );
+  const [requestReceipt, setRequestReceipt] = useState(
+    () => seed?.draft?.requestReceipt === true,
+  );
+  const [replyTo, setReplyTo] = useState(() =>
+    seed?.draft?.replyTo !== undefined
+      ? (seed.draft.replyTo ?? "")
+      : (account?.replyTo ?? ""),
+  );
+  const [replyToError, setReplyToError] = useState<string>();
   const [bodyFormat, setBodyFormat] = useState<BodyFormat>(
     seed?.draft
       ? (seed.draft.bodyFormat ?? "html")
@@ -267,7 +358,34 @@ export function Composer({ accountId }: Props) {
   const [confirmPlain, setConfirmPlain] = useState(false);
   const [attachmentWarning, setAttachmentWarning] = useState<{
     sendAt?: string;
+    archiveSource?: boolean;
   } | null>(null);
+  const [subjectWarning, setSubjectWarning] = useState<{
+    sendAt?: string;
+    archiveSource?: boolean;
+  } | null>(null);
+  const [bodyWarning, setBodyWarning] = useState<{
+    sendAt?: string;
+    archiveSource?: boolean;
+  } | null>(null);
+  const [audienceWarning, setAudienceWarning] = useState<{
+    sendAt?: string;
+    archiveSource?: boolean;
+    count: number;
+  } | null>(null);
+  const [noreplyWarning, setNoreplyWarning] = useState<{
+    sendAt?: string;
+    archiveSource?: boolean;
+    address: string;
+  } | null>(null);
+  const [duplicateWarning, setDuplicateWarning] = useState<{
+    sendAt?: string;
+    archiveSource?: boolean;
+    address: string;
+  } | null>(null);
+  const focusSubjectAfterWarning = useRef(false);
+  const focusBodyAfterWarning = useRef(false);
+  const focusToAfterWarning = useRef(false);
   const [dropActive, setDropActive] = useState(false);
   const [dropNote, setDropNote] = useState("");
   const plainRef = useRef<HTMLTextAreaElement>(null);
@@ -276,7 +394,12 @@ export function Composer({ accountId }: Props) {
   );
   const [sending, setSending] = useState(false);
   const [linkDialogOpen, setLinkDialogOpen] = useState(false);
+  const [attachmentPreview, setAttachmentPreview] = useState<{
+    filename: string;
+    src: string;
+  } | null>(null);
   const [linkValue, setLinkValue] = useState("https://");
+  const [linkCanRemove, setLinkCanRemove] = useState(false);
   const [showCc, setShowCc] = useState(Boolean(cc));
   const [showBcc, setShowBcc] = useState(Boolean(bcc));
   const [formattingOpen, setFormattingOpen] = useState(false);
@@ -288,6 +411,9 @@ export function Composer({ accountId }: Props) {
   const [subjectError, setSubjectError] = useState<string>();
   const [saveState, setSaveState] = useState<"unsaved" | "saving" | "saved">(
     seed?.draft ? "saved" : "unsaved",
+  );
+  const [savedAt, setSavedAt] = useState<string | undefined>(
+    seed?.draft ? seed.draftSummary?.updatedAt : undefined,
   );
   const [draftSyncState, setDraftSyncState] = useState(
     seed?.draftSummary?.syncState,
@@ -312,7 +438,9 @@ export function Composer({ accountId }: Props) {
     draftRevision.current += 1;
     setSaveState("unsaved");
   }, []);
-  const keepSourceVisible = Boolean(seed?.composeMode && !maximized);
+  const keepSourceVisible = Boolean(
+    seed?.composeMode && seed.composeMode !== "editAsNew" && !maximized,
+  );
   const dialogRef = useDialogFocus(
     () => {
       if (linkDialogOpen) {
@@ -325,11 +453,43 @@ export function Composer({ accountId }: Props) {
   );
 
   const narrowViewport = useMediaQuery(MEDIA_QUERIES.narrowViewport);
+  const { update: updateSettings } = useSettingsSave();
+  const composerWidth = useAppStore((state) => state.settings.composerWidth);
+  const composerHeight = useAppStore((state) => state.settings.composerHeight);
+  const remembered = rememberedComposerSize(composerWidth, composerHeight);
   const placement = useComposerPlacement(
     dialogRef,
     !maximized && !narrowViewport,
+    (width, height) => {
+      const size = rememberedComposerSize(width, height);
+      if (!size) return;
+      const current = useAppStore.getState().settings;
+      if (
+        current.composerWidth === size.width &&
+        current.composerHeight === size.height
+      ) {
+        return;
+      }
+      void updateSettings({
+        composerWidth: size.width,
+        composerHeight: size.height,
+      });
+    },
   );
 
+  const pastePlainRef = useRef<() => Promise<void>>(async () => undefined);
+  const pasteImageRef = useRef<
+    (files: File[], tooLarge: boolean) => Promise<void>
+  >(async () => undefined);
+  const takePastedImages = (event: Event) => {
+    const { files, tooLarge } = clipboardImages(
+      (event as ClipboardEvent).clipboardData,
+    );
+    if (files.length === 0 && !tooLarge) return false;
+    event.preventDefault();
+    void pasteImageRef.current(files, tooLarge);
+    return true;
+  };
   const editor = useEditor({
     extensions: [
       StarterKit.configure({ link: false, underline: false }),
@@ -358,6 +518,13 @@ export function Composer({ accountId }: Props) {
       },
       transformPastedHTML: (html) => sanitizeComposeHtml(html),
       handleDOMEvents: {
+        keydown: (_view, event) => {
+          if (!isPlainPasteShortcut(event)) return false;
+          event.preventDefault();
+          void pastePlainRef.current();
+          return true;
+        },
+        paste: (_view, event) => takePastedImages(event),
         contextmenu: (_view, event) => {
           event.preventDefault();
           return true;
@@ -379,6 +546,20 @@ export function Composer({ accountId }: Props) {
   });
 
   const editorRef = useRef(editor);
+  const composerPlace = useRef(0);
+  const didFocusLetter = useRef(false);
+  useEffect(() => {
+    if (!focusLetter || didFocusLetter.current) return;
+    if (bodyFormat === "plain") {
+      if (!plainRef.current) return;
+      plainRef.current.focus();
+      didFocusLetter.current = true;
+      return;
+    }
+    if (!editor) return;
+    editor.commands.focus("start");
+    didFocusLetter.current = true;
+  }, [bodyFormat, editor, focusLetter]);
   const bodyFormatRef = useRef(bodyFormat);
   const plainBodyRef = useRef(plainBody);
   useEffect(() => {
@@ -475,16 +656,27 @@ export function Composer({ accountId }: Props) {
       cc: splitAddresses(cc),
       bcc: splitAddresses(bcc),
       subject: subject.trim(),
-      htmlBody,
-      textBody: plain ? plainBody : htmlToPlainText(htmlBody),
+      htmlBody: redirecting ? "" : htmlBody,
+      textBody: redirecting
+        ? ""
+        : plain
+          ? plainBody
+          : htmlToQuotedPlainText(htmlBody),
       bodyFormat,
-      attachments,
-      inReplyTo:
-        seed?.draft?.inReplyTo ??
-        (seed?.composeMode === "forward"
-          ? undefined
-          : (seed?.sourceMessage?.messageId ?? undefined)),
-      references: seedReferences(seed),
+      attachments: redirecting ? [] : attachments,
+      inReplyTo: redirecting
+        ? undefined
+        : (seed?.draft?.inReplyTo ??
+          (seed?.composeMode === "forward" ||
+          seed?.composeMode === "forwardAttachment" ||
+          seed?.composeMode === "editAsNew"
+            ? undefined
+            : (seed?.sourceMessage?.messageId ?? undefined))),
+      references: redirecting ? undefined : seedReferences(seed),
+      includeSignature: redirecting ? false : includeSignature,
+      importance: redirecting ? "" : importance,
+      requestReceipt: !redirecting && requestReceipt,
+      replyTo: redirecting ? undefined : replyTo.trim(),
       ...seedSource(seed),
     };
   }, [
@@ -496,8 +688,13 @@ export function Composer({ accountId }: Props) {
     draftId,
     editor,
     fromAddress,
+    importance,
+    includeSignature,
+    requestReceipt,
+    replyTo,
     inlineImages,
     plainBody,
+    redirecting,
     seed,
     subject,
     to,
@@ -533,6 +730,7 @@ export function Composer({ accountId }: Props) {
             setDraftId(outcome.id);
             if (draftRevision.current === revision) {
               setSaveState("saved");
+              setSavedAt(new Date().toISOString());
               setDraftSyncState(outcome.syncState);
               setDraftSyncDetail(undefined);
             } else {
@@ -602,6 +800,7 @@ export function Composer({ accountId }: Props) {
         setDraftId(outcome.id);
         if (draftRevision.current === revision) {
           setSaveState("saved");
+          setSavedAt(new Date().toISOString());
           setDraftSyncState(outcome.syncState);
           setDraftSyncDetail(undefined);
         } else {
@@ -766,15 +965,30 @@ export function Composer({ accountId }: Props) {
   const isAttachmentSizeWarning = totalAttachmentBytes > 25 * 1024 * 1024;
 
   const sendMessage = useCallback(
-    async (sendAt?: string, attachmentChecked = false) => {
+    async (
+      sendAt?: string,
+      attachmentChecked = false,
+      archiveAfterSend = false,
+      subjectChecked = false,
+      audienceChecked = false,
+      bodyChecked = false,
+      noreplyChecked = false,
+      duplicatesChecked = false,
+    ) => {
       const validation = validateRecipientFields(to, cc, bcc);
       const subjectValidation = validateSubject(subject);
       setRecipientError(validation);
       setSubjectError(subjectValidation);
+      const replyToValidation =
+        !redirecting && replyTo.trim() && !isMailbox(replyTo.trim())
+          ? strings.settings.replyToAddressInvalid
+          : undefined;
+      setReplyToError(replyToValidation);
       if (
         !canSend ||
         validation ||
         subjectValidation ||
+        replyToValidation ||
         isSending.current ||
         isDiscarding.current
       )
@@ -787,16 +1001,59 @@ export function Composer({ accountId }: Props) {
           return;
         }
       }
+      const noreply = firstNoreplyRecipient(to, cc, bcc);
+      if (!noreplyChecked && noreply) {
+        setNoreplyWarning({
+          sendAt,
+          archiveSource: archiveAfterSend,
+          address: noreply,
+        });
+        return;
+      }
+      const repeated = repeatedRecipient(to, cc, bcc);
+      if (!duplicatesChecked && repeated) {
+        setDuplicateWarning({
+          sendAt,
+          archiveSource: archiveAfterSend,
+          address: repeated,
+        });
+        return;
+      }
+      if (!subjectChecked && subject.trim().length === 0) {
+        setSubjectWarning({ sendAt, archiveSource: archiveAfterSend });
+        return;
+      }
+      const recipientCount = uniqueRecipientCount(to, cc, bcc);
+      if (!audienceChecked && recipientCount >= LARGE_RECIPIENT_COUNT) {
+        setAudienceWarning({
+          sendAt,
+          archiveSource: archiveAfterSend,
+          count: recipientCount,
+        });
+        return;
+      }
       if (
         !attachmentChecked &&
         attachments.length === 0 &&
         mentionsAttachment(
           bodyFormat === "plain" ? plainBody : (editor?.getHTML() ?? ""),
           bodyFormat,
-          account?.signature,
+          includeSignature ? account?.signature : undefined,
         )
       ) {
-        setAttachmentWarning({ sendAt });
+        setAttachmentWarning({ sendAt, archiveSource: archiveAfterSend });
+        return;
+      }
+      if (
+        !bodyChecked &&
+        !redirecting &&
+        !authoredText(
+          bodyFormat === "plain" ? plainBody : (editor?.getHTML() ?? ""),
+          bodyFormat,
+          includeSignature ? account?.signature : undefined,
+        ).trim()
+      ) {
+        setBodyWarning({ sendAt, archiveSource: archiveAfterSend });
         return;
       }
       pendingClose.current = false;
@@ -807,6 +1064,24 @@ export function Composer({ accountId }: Props) {
         const outcome = await api.sendMessage(
           sendAt ? { ...draft, sendAt } : draft,
         );
+        let archivedMessage:
+          { messageId: number; mailboxId: number } | undefined;
+        if (
+          archiveAfterSend &&
+          sourceArchive &&
+          outcome.state !== "needs_attention"
+        ) {
+          try {
+            await api.moveMessage(
+              accountId,
+              sourceArchive.messageId,
+              "archive",
+            );
+            archivedMessage = sourceArchive;
+          } catch (cause) {
+            setError(String(cause));
+          }
+        }
         announceLocalMailChanged(accountId);
         // Uncertain, or queued after a real attempt: never let it look sent.
         // An offline account queues on purpose and needs no warning.
@@ -832,6 +1107,7 @@ export function Composer({ accountId }: Props) {
                   useAppStore.getState().settings.undoSendSeconds ?? 10,
                   30,
                 ),
+            ...(archivedMessage ? { archivedMessage } : {}),
           });
         }
         close();
@@ -845,17 +1121,21 @@ export function Composer({ accountId }: Props) {
     },
     [
       account?.signature,
+      includeSignature,
       accountId,
       attachments.length,
       bcc,
       bodyFormat,
       buildDraft,
       canSend,
+      redirecting,
+      replyTo,
       cc,
       close,
       editor,
       plainBody,
       setError,
+      sourceArchive,
       subject,
       to,
     ],
@@ -866,7 +1146,16 @@ export function Composer({ accountId }: Props) {
       if (event.isComposing || event.keyCode === 229) return;
       if (minimized) return;
       if (document.querySelector(".settings-window")) return;
-      if (attachmentWarning || confirmPlain) return;
+      if (
+        attachmentWarning ||
+        subjectWarning ||
+        audienceWarning ||
+        bodyWarning ||
+        noreplyWarning ||
+        duplicateWarning ||
+        confirmPlain
+      )
+        return;
       if (!(event.metaKey || event.ctrlKey)) return;
       if (event.key === "Enter") {
         event.preventDefault();
@@ -878,7 +1167,73 @@ export function Composer({ accountId }: Props) {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [attachmentWarning, confirmPlain, minimized, saveDraft, sendMessage]);
+  }, [
+    attachmentWarning,
+    audienceWarning,
+    bodyWarning,
+    noreplyWarning,
+    duplicateWarning,
+    confirmPlain,
+    minimized,
+    saveDraft,
+    sendMessage,
+    subjectWarning,
+  ]);
+
+  useLayoutEffect(() => {
+    if (minimized) return;
+    const top = composerPlace.current;
+    if (top <= 0) return;
+    const apply = () => {
+      document
+        .querySelectorAll<HTMLElement>(
+          ".composer-window .tiptap, .composer-plain-editor",
+        )
+        .forEach((node) => {
+          node.scrollTop = top;
+        });
+    };
+    apply();
+    const frame = requestAnimationFrame(apply);
+    return () => cancelAnimationFrame(frame);
+  }, [minimized]);
+
+  function setComposerMinimized(value: SetStateAction<boolean>) {
+    const next = typeof value === "function" ? value(minimized) : value;
+    if (next) {
+      const scrolling = document.querySelector<HTMLElement>(
+        ".composer-window .tiptap, .composer-plain-editor",
+      );
+      composerPlace.current = scrolling?.scrollTop ?? 0;
+    }
+    setMinimized(next);
+  }
+
+  useEffect(() => {
+    if (subjectWarning || !focusSubjectAfterWarning.current) return;
+    focusSubjectAfterWarning.current = false;
+    document.getElementById("composer-subject")?.focus();
+  }, [subjectWarning]);
+
+  useEffect(() => {
+    if (bodyWarning || !focusBodyAfterWarning.current) return;
+    focusBodyAfterWarning.current = false;
+    document
+      .querySelector<HTMLElement>(".composer-plain-editor, .composer-editor")
+      ?.focus();
+  }, [bodyWarning]);
+
+  useEffect(() => {
+    if (
+      audienceWarning ||
+      noreplyWarning ||
+      duplicateWarning ||
+      !focusToAfterWarning.current
+    )
+      return;
+    focusToAfterWarning.current = false;
+    document.getElementById("composer-to")?.focus();
+  }, [audienceWarning, noreplyWarning, duplicateWarning]);
 
   useEffect(() => {
     if (!sendMenuOpen) return;
@@ -1000,6 +1355,45 @@ export function Composer({ accountId }: Props) {
     }
   }
 
+  pasteImageRef.current = async (files, tooLarge) => {
+    if (tooLarge) {
+      setError(strings.composer.pastedImageTooLarge);
+      if (files.length === 0) return;
+    }
+    for (const file of files) {
+      let selectedToken: string | undefined;
+      try {
+        const dataUrl = await readPastedImage(file);
+        const selected = await api.stagePastedImage(accountId, dataUrl);
+        selectedToken = selected.token;
+        if (bodyFormatRef.current === "plain") {
+          setAttachments((items) => [...items, { ...selected, inline: false }]);
+        } else {
+          const contentId = `postal-${crypto.randomUUID()}@inline`;
+          editorRef.current
+            ?.chain()
+            .focus()
+            .setImage({ src: dataUrl, alt: strings.composer.inlineImage })
+            .run();
+          setInlineImages((items) =>
+            new Map(items).set(selected.token, { dataUrl, contentId }),
+          );
+          setAttachments((items) => [
+            ...items,
+            { ...selected, inline: true, contentId },
+          ]);
+        }
+        markUnsaved();
+      } catch (cause) {
+        if (selectedToken)
+          void api
+            .releaseComposeAttachments(accountId, [selectedToken])
+            .catch(() => undefined);
+        setError(String(cause));
+      }
+    }
+  };
+
   async function addInlineImage() {
     let selectedToken: string | undefined;
     try {
@@ -1032,8 +1426,14 @@ export function Composer({ accountId }: Props) {
 
   function addLink() {
     const current = editor?.getAttributes("link").href as string | undefined;
+    setLinkCanRemove(Boolean(current));
     setLinkValue(current ?? "https://");
     setLinkDialogOpen(true);
+  }
+
+  function removeLink() {
+    editor?.chain().focus().extendMarkRange("link").unsetLink().run();
+    setLinkDialogOpen(false);
   }
 
   function applyLink() {
@@ -1060,6 +1460,51 @@ export function Composer({ accountId }: Props) {
     editor.commands.focus();
   }
 
+  function removeAllAttachments() {
+    if (sending || saveState === "saving" || attachments.length < 2) return;
+    const current = attachments;
+    if (editor) {
+      const sources = new Set(
+        current
+          .map((item) => inlineImages.get(item.token)?.dataUrl)
+          .filter((src): src is string => Boolean(src)),
+      );
+      if (sources.size > 0) {
+        const ranges: Array<{ from: number; to: number }> = [];
+        editor.state.doc.descendants((node, position) => {
+          if (
+            node.type.name === "image" &&
+            sources.has(String(node.attrs.src))
+          ) {
+            ranges.push({ from: position, to: position + node.nodeSize });
+          }
+        });
+        const transaction = editor.state.tr;
+        for (const range of ranges.reverse())
+          transaction.delete(range.from, range.to);
+        if (transaction.docChanged) editor.view.dispatch(transaction);
+      }
+    }
+    setInlineImages(new Map());
+    setAttachments([]);
+    markUnsaved();
+    void api
+      .releaseComposeAttachments(
+        accountId,
+        current.map((item) => item.token),
+      )
+      .catch((cause) => setError(String(cause)));
+  }
+
+  async function previewComposeImage(item: ComposeAttachment) {
+    try {
+      const src = await api.readComposeImage(accountId, item.token);
+      setAttachmentPreview({ filename: item.filename, src });
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }
+
   function removeAttachment(index: number) {
     const item = attachments[index];
     const inline = item ? inlineImages.get(item.token) : undefined;
@@ -1084,6 +1529,39 @@ export function Composer({ accountId }: Props) {
         .catch((cause) => setError(String(cause)));
   }
 
+  async function pastePlainText() {
+    let text: string;
+    try {
+      text = await navigator.clipboard.readText();
+    } catch {
+      setError(strings.composer.clipboardUnavailable);
+      return;
+    }
+    const blocks = plainPasteBlocks(text);
+    if (blocks.length === 0) return;
+    if (bodyFormatRef.current === "plain") {
+      const field = plainRef.current;
+      if (!field) return;
+      const start = field.selectionStart ?? field.value.length;
+      const end = field.selectionEnd ?? start;
+      const plain = blocks
+        .map((block) => block.content?.[0]?.text ?? "")
+        .join("\n");
+      setPlainBody(
+        field.value.slice(0, start) + plain + field.value.slice(end),
+      );
+      markUnsaved();
+      const cursor = start + plain.length;
+      window.requestAnimationFrame(() => {
+        field.focus();
+        field.setSelectionRange(cursor, cursor);
+      });
+      return;
+    }
+    editorRef.current?.chain().focus().insertContent(blocks).run();
+  }
+  pastePlainRef.current = pastePlainText;
+
   useEffect(() => {
     const onAction = (event: Event) => {
       const detail = (event as CustomEvent<ContextMenuActionDetail>).detail;
@@ -1093,9 +1571,11 @@ export function Composer({ accountId }: Props) {
         if (detail.id === "undo") document.execCommand("undo");
         if (detail.id === "redo") document.execCommand("redo");
         if (detail.id === "select-all") plainRef.current?.select();
+        if (detail.id === "paste-plain") void pastePlainRef.current();
         return;
       }
       if (detail.target.kind === "composer") {
+        if (detail.id === "paste-plain") void pastePlainRef.current();
         if (detail.id === "undo") editor?.chain().focus().undo().run();
         if (detail.id === "redo") editor?.chain().focus().redo().run();
         if (detail.id === "select-all")
@@ -1133,7 +1613,9 @@ export function Composer({ accountId }: Props) {
             {saveState === "saving"
               ? strings.common.saving
               : saveState === "saved"
-                ? strings.composer.draftSaved
+                ? savedAt
+                  ? strings.composer.draftSavedAt(formatMessageDate(savedAt))
+                  : strings.composer.draftSaved
                 : ""}
           </span>
         </button>
@@ -1161,6 +1643,72 @@ export function Composer({ accountId }: Props) {
     );
   }
 
+  const optionToggles = (
+    <>
+      {redirecting ? null : (
+        <label
+          className="composer-signature-toggle"
+          title={strings.composer.highImportanceHelp}
+        >
+          <input
+            type="checkbox"
+            checked={importance === "high"}
+            onChange={(event) => {
+              setImportance(event.target.checked ? "high" : "");
+              markUnsaved();
+            }}
+          />
+          {strings.composer.highImportance}
+        </label>
+      )}
+      {redirecting ? null : (
+        <label
+          className="composer-signature-toggle"
+          title={strings.composer.lowImportanceHelp}
+        >
+          <input
+            type="checkbox"
+            checked={importance === "low"}
+            onChange={(event) => {
+              setImportance(event.target.checked ? "low" : "");
+              markUnsaved();
+            }}
+          />
+          {strings.composer.lowImportance}
+        </label>
+      )}
+      {redirecting ? null : (
+        <label
+          className="composer-signature-toggle"
+          title={strings.composer.requestReceiptHelp}
+        >
+          <input
+            type="checkbox"
+            checked={requestReceipt}
+            onChange={(event) => {
+              setRequestReceipt(event.target.checked);
+              markUnsaved();
+            }}
+          />
+          {strings.composer.requestReceipt}
+        </label>
+      )}
+      {account?.signature && !redirecting ? (
+        <label className="composer-signature-toggle">
+          <input
+            type="checkbox"
+            checked={includeSignature}
+            onChange={(event) => {
+              setIncludeSignature(event.target.checked);
+              markUnsaved();
+            }}
+          />
+          {strings.composer.includeSignature}
+        </label>
+      ) : null}
+    </>
+  );
+
   return (
     <div
       className={`modal-layer composer-layer${maximized ? " composer-layer-maximized" : ""}${keepSourceVisible ? " composer-layer-followup" : ""}`}
@@ -1181,19 +1729,31 @@ export function Composer({ accountId }: Props) {
       <section
         className={`composer-window${maximized ? " composer-maximized" : ""}${placement.placed ? " composer-placed" : ""}${!maximized && !narrowViewport ? " composer-movable" : ""}`}
         ref={dialogRef}
-        style={placement.style}
+        style={{
+          ...(!placement.placed && !maximized && !narrowViewport && remembered
+            ? {
+                width: remembered.width,
+                height: remembered.height,
+                maxWidth: "100%",
+                maxHeight: "100%",
+              }
+            : {}),
+          ...placement.style,
+        }}
       >
         <ComposerHeader
           dragHandlers={placement.headerHandlers}
           seed={seed}
           saveState={saveState}
+          savedAt={savedAt}
           maximized={maximized}
           sending={sending}
           draftSyncState={draftSyncState}
           draftSyncDetail={draftSyncDetail}
           bodyFormat={bodyFormat}
           onToggleBodyFormat={toggleBodyFormat}
-          setMinimized={setMinimized}
+          hideFormat={redirecting}
+          setMinimized={setComposerMinimized}
           setMaximized={setMaximized}
           requestClose={requestClose}
         />
@@ -1202,7 +1762,7 @@ export function Composer({ accountId }: Props) {
           availableSenders={availableSenders}
           fromAddress={fromAddress}
           fromValue={fromValue}
-          setFromAddress={setFromAddress}
+          setFromAddress={chooseFromAddress}
           to={to}
           setTo={setTo}
           cc={cc}
@@ -1219,9 +1779,35 @@ export function Composer({ accountId }: Props) {
           setRecipientError={setRecipientError}
           subjectError={subjectError}
           setSubjectError={setSubjectError}
+          subjectLocked={redirecting}
+          replyTo={redirecting ? undefined : replyTo}
+          setReplyTo={setReplyTo}
+          replyToError={replyToError}
+          setReplyToError={setReplyToError}
           markUnsaved={markUnsaved}
+          focusTo={!focusLetter}
         />
-        {bodyFormat === "html" ? (
+        {seed?.sourceMessage ? (
+          <details className="compose-original">
+            <summary>{strings.composer.originalMessage}</summary>
+            <p>
+              {seed.sourceMessage.senderName ||
+                seed.sourceMessage.senderAddress}
+              {" — "}
+              {seed.sourceMessage.subject || strings.common.noSubject}
+            </p>
+            <pre>
+              {readableMessageText(seed.sourceMessage) ||
+                strings.composer.originalEmpty}
+            </pre>
+          </details>
+        ) : null}
+        {redirecting ? (
+          <p className="composer-redirect-note">
+            {strings.composer.redirectNote}
+          </p>
+        ) : null}
+        {redirecting ? null : bodyFormat === "html" ? (
           <FormatToolbar
             editor={editor}
             formattingOpen={formattingOpen}
@@ -1230,9 +1816,13 @@ export function Composer({ accountId }: Props) {
             setMoreFormattingOpen={setMoreFormattingOpen}
             adjustIndent={adjustIndent}
             addLink={addLink}
-          />
-        ) : null}
-        {bodyFormat === "html" ? (
+          >
+            {optionToggles}
+          </FormatToolbar>
+        ) : (
+          <div className="composer-toggle-row">{optionToggles}</div>
+        )}
+        {redirecting ? null : bodyFormat === "html" ? (
           <div data-context="composer">
             <EditorContent editor={editor} />
           </div>
@@ -1243,6 +1833,14 @@ export function Composer({ accountId }: Props) {
               className="composer-plain-editor"
               aria-label={strings.composer.plainBodyLabel}
               value={plainBody}
+              onKeyDown={(event) => {
+                if (!isPlainPasteShortcut(event)) return;
+                event.preventDefault();
+                void pastePlainRef.current();
+              }}
+              onPaste={(event) => {
+                takePastedImages(event.nativeEvent);
+              }}
               onChange={(event) => {
                 setPlainBody(event.target.value);
                 markUnsaved();
@@ -1250,7 +1848,10 @@ export function Composer({ accountId }: Props) {
             />
           </div>
         )}
-        {account?.signature && !seed?.draft ? (
+        {account?.signature &&
+        includeSignature &&
+        !seed?.draft &&
+        !redirecting ? (
           <aside className="composer-signature-preview">
             <strong>{strings.composer.signaturePreview}</strong>
             <pre>{account.signature}</pre>
@@ -1266,6 +1867,24 @@ export function Composer({ accountId }: Props) {
               >
                 {item.inline ? strings.composer.imagePrefix : ""}
                 {item.filename}
+                {typeof item.size === "number" ? (
+                  <small className="compose-attachment-size">
+                    {formatBytes(item.size)}
+                  </small>
+                ) : null}
+                {composeImageFile(item) ? (
+                  <button
+                    type="button"
+                    className="compose-attachment-preview"
+                    onClick={() => void previewComposeImage(item)}
+                    disabled={sending || saveState === "saving"}
+                    aria-label={strings.composer.previewAttachment(
+                      item.filename,
+                    )}
+                  >
+                    {strings.reader.preview}
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   onClick={() => removeAttachment(index)}
@@ -1276,6 +1895,23 @@ export function Composer({ accountId }: Props) {
                 </button>
               </span>
             ))}
+            {attachments.length > 1 ? (
+              <button
+                type="button"
+                className="compose-remove-all"
+                onClick={removeAllAttachments}
+                disabled={sending || saveState === "saving"}
+              >
+                {strings.composer.removeAllAttachments}
+              </button>
+            ) : null}
+            {attachments.every((item) => typeof item.size === "number") ? (
+              <p className="compose-attachment-total">
+                {strings.composer.attachmentTotal(
+                  formatBytes(totalAttachmentBytes),
+                )}
+              </p>
+            ) : null}
           </div>
         ) : null}
         {isAttachmentSizeWarning ? (
@@ -1290,6 +1926,11 @@ export function Composer({ accountId }: Props) {
           sendMenuRef={sendMenuRef}
           canSend={canSend}
           sendMessage={sendMessage}
+          sendAndArchive={
+            sourceArchive
+              ? () => void sendMessage(undefined, false, true)
+              : undefined
+          }
           sending={sending}
           sendMenuOpen={sendMenuOpen}
           setSendMenuOpen={setSendMenuOpen}
@@ -1299,6 +1940,8 @@ export function Composer({ accountId }: Props) {
           setScheduleValue={setScheduleValue}
           saveDraft={saveDraft}
           saveState={saveState}
+          savedAt={savedAt}
+          showAttachments={!redirecting}
           addAttachments={addAttachments}
           addInlineImage={addInlineImage}
           discardDraft={discardDraft}
@@ -1324,6 +1967,60 @@ export function Composer({ accountId }: Props) {
         <div className="visually-hidden" aria-live="polite">
           {dropActive ? strings.composer.dropOverlay : dropNote}
         </div>
+        {bodyWarning ? (
+          <ConfirmDialog
+            title={strings.composer.noMessageTitle}
+            detail={strings.composer.noMessageDetail}
+            primaryLabel={strings.composer.writeMessage}
+            secondaryLabel={strings.composer.sendAnyway}
+            onPrimary={() => {
+              focusBodyAfterWarning.current = true;
+              setBodyWarning(null);
+            }}
+            onSecondary={() => {
+              const { sendAt, archiveSource } = bodyWarning;
+              setBodyWarning(null);
+              void sendMessage(
+                sendAt,
+                true,
+                Boolean(archiveSource),
+                true,
+                true,
+                true,
+                true,
+                true,
+              );
+            }}
+            onCancel={() => setBodyWarning(null)}
+          />
+        ) : null}
+        {subjectWarning ? (
+          <ConfirmDialog
+            title={strings.composer.noSubjectTitle}
+            detail={strings.composer.noSubjectDetail}
+            primaryLabel={strings.composer.addSubject}
+            secondaryLabel={strings.composer.sendAnyway}
+            onPrimary={() => {
+              focusSubjectAfterWarning.current = true;
+              setSubjectWarning(null);
+            }}
+            onSecondary={() => {
+              const { sendAt, archiveSource } = subjectWarning;
+              setSubjectWarning(null);
+              void sendMessage(
+                sendAt,
+                false,
+                Boolean(archiveSource),
+                true,
+                false,
+                false,
+                true,
+                true,
+              );
+            }}
+            onCancel={() => setSubjectWarning(null)}
+          />
+        ) : null}
         {attachmentWarning ? (
           <ConfirmDialog
             title={strings.composer.noAttachmentTitle}
@@ -1335,11 +2032,100 @@ export function Composer({ accountId }: Props) {
               void addAttachments();
             }}
             onSecondary={() => {
-              const { sendAt } = attachmentWarning;
+              const { sendAt, archiveSource } = attachmentWarning;
               setAttachmentWarning(null);
-              void sendMessage(sendAt, true);
+              void sendMessage(
+                sendAt,
+                true,
+                Boolean(archiveSource),
+                true,
+                true,
+                false,
+                true,
+                true,
+              );
             }}
             onCancel={() => setAttachmentWarning(null)}
+          />
+        ) : null}
+        {duplicateWarning ? (
+          <ConfirmDialog
+            title={strings.composer.duplicateTitle}
+            detail={strings.composer.duplicateDetail(duplicateWarning.address)}
+            primaryLabel={strings.composer.reviewRecipients}
+            secondaryLabel={strings.composer.sendAnyway}
+            onPrimary={() => {
+              focusToAfterWarning.current = true;
+              setDuplicateWarning(null);
+            }}
+            onSecondary={() => {
+              const { sendAt, archiveSource } = duplicateWarning;
+              setDuplicateWarning(null);
+              void sendMessage(
+                sendAt,
+                false,
+                Boolean(archiveSource),
+                false,
+                false,
+                false,
+                true,
+                true,
+              );
+            }}
+            onCancel={() => setDuplicateWarning(null)}
+          />
+        ) : null}
+        {noreplyWarning ? (
+          <ConfirmDialog
+            title={strings.composer.noreplyTitle}
+            detail={strings.composer.noreplyDetail(noreplyWarning.address)}
+            primaryLabel={strings.composer.reviewRecipients}
+            secondaryLabel={strings.composer.sendAnyway}
+            onPrimary={() => {
+              focusToAfterWarning.current = true;
+              setNoreplyWarning(null);
+            }}
+            onSecondary={() => {
+              const { sendAt, archiveSource } = noreplyWarning;
+              setNoreplyWarning(null);
+              void sendMessage(
+                sendAt,
+                false,
+                Boolean(archiveSource),
+                false,
+                false,
+                false,
+                true,
+              );
+            }}
+            onCancel={() => setNoreplyWarning(null)}
+          />
+        ) : null}
+        {audienceWarning ? (
+          <ConfirmDialog
+            title={strings.composer.largeAudienceTitle}
+            detail={strings.composer.largeAudienceDetail(audienceWarning.count)}
+            primaryLabel={strings.composer.reviewRecipients}
+            secondaryLabel={strings.composer.sendAnyway}
+            onPrimary={() => {
+              focusToAfterWarning.current = true;
+              setAudienceWarning(null);
+            }}
+            onSecondary={() => {
+              const { sendAt, archiveSource } = audienceWarning;
+              setAudienceWarning(null);
+              void sendMessage(
+                sendAt,
+                false,
+                Boolean(archiveSource),
+                true,
+                true,
+                false,
+                true,
+                true,
+              );
+            }}
+            onCancel={() => setAudienceWarning(null)}
           />
         ) : null}
         {confirmPlain ? (
@@ -1352,6 +2138,32 @@ export function Composer({ accountId }: Props) {
             onSecondary={switchToPlain}
             onCancel={() => setConfirmPlain(false)}
           />
+        ) : null}
+        {attachmentPreview ? (
+          <div
+            className="settings-confirm-overlay"
+            role="presentation"
+            onMouseDown={() => setAttachmentPreview(null)}
+          >
+            <div
+              className="settings-confirm-dialog compose-image-preview"
+              role="dialog"
+              aria-label={attachmentPreview.filename}
+              onMouseDown={(event) => event.stopPropagation()}
+            >
+              <img
+                src={attachmentPreview.src}
+                alt={attachmentPreview.filename}
+              />
+              <button
+                type="button"
+                className="toolbar-button"
+                onClick={() => setAttachmentPreview(null)}
+              >
+                {strings.common.close}
+              </button>
+            </div>
+          </div>
         ) : null}
         {linkDialogOpen ? (
           <div
@@ -1407,6 +2219,15 @@ export function Composer({ accountId }: Props) {
                 />
               </label>
               <div className="settings-confirm-actions">
+                {linkCanRemove ? (
+                  <button
+                    className="secondary-button composer-remove-link"
+                    type="button"
+                    onClick={removeLink}
+                  >
+                    {strings.composer.removeLink}
+                  </button>
+                ) : null}
                 <button
                   className="secondary-button"
                   type="button"

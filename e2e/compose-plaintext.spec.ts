@@ -213,6 +213,7 @@ test("quoted plain lines do not trigger the attachment warning", async ({
   await page.goto("/?defaultPlain=1");
   await page.getByRole("button", { name: "Compose", exact: true }).click();
   await page.getByPlaceholder("name@example.com").fill("lee@example.com");
+  await page.getByRole("textbox", { name: "Subject" }).fill("Lunch");
   await plainBox(page).fill(
     "Sounds good\n> you attached the file?\n\n-- \nattached sig",
   );

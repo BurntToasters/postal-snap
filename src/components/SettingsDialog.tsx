@@ -52,10 +52,21 @@ import { AboutTab } from "./settings/aboutTab";
 
 export type { SettingsTab } from "./settings/primitives";
 
+export interface RuleSeed {
+  accountId: string;
+  contains: string;
+  field?: "from" | "to" | "subject";
+}
+
+function seedField(field: RuleSeed["field"]): "from" | "to" | "subject" {
+  return field === "to" || field === "subject" ? field : "from";
+}
+
 interface Props {
   onClose: () => void;
   initialTab?: SettingsTab;
   initialAccountId?: string;
+  initialRuleSeed?: RuleSeed;
   onLastAccountRemoved?: () => void;
 }
 
@@ -76,10 +87,30 @@ const tabs: Array<{
   { id: "about", label: strings.settings.about, icon: Info },
 ];
 
+/** One mailbox, or blank. A blank address means replies use From. */
+function oneReplyAddress(value: string): boolean {
+  if (
+    value.length > 320 ||
+    value.includes(",") ||
+    Array.from(value).some((char) => {
+      const code = char.charCodeAt(0);
+      return code < 0x20 || code === 0x7f;
+    })
+  ) {
+    return false;
+  }
+  const address = "[^\\s@<>]+@[^\\s@<>]+";
+  return (
+    new RegExp(`^${address}$`).test(value) ||
+    new RegExp(`^[^<>]+<${address}>$`).test(value)
+  );
+}
+
 export function SettingsDialog({
   onClose,
   initialTab = "general",
   initialAccountId,
+  initialRuleSeed,
   onLastAccountRemoved,
 }: Props) {
   const accounts = useAppStore((state) => state.accounts);
@@ -92,7 +123,7 @@ export function SettingsDialog({
   const [selectedAccountId, setSelectedAccountId] = useState(initialAccountId);
   const [requestedAccountPage, setRequestedAccountPage] = useState<
     "connection" | "folders" | "identity" | "rules"
-  >("connection");
+  >(initialRuleSeed ? "rules" : "connection");
   const [connectionDirty, setConnectionDirty] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [searchTarget, setSearchTarget] = useState<string>();
@@ -126,6 +157,16 @@ export function SettingsDialog({
     {},
   );
   const [updatingPasswordId, setUpdatingPasswordId] = useState<string>();
+  const [nameInputs, setNameInputs] = useState<Record<string, string>>({});
+  const [nameStatus, setNameStatus] = useState<Record<string, string>>({});
+  const [savingNameId, setSavingNameId] = useState<string>();
+  const [replyToInputs, setReplyToInputs] = useState<Record<string, string>>(
+    {},
+  );
+  const [replyToStatus, setReplyToStatus] = useState<Record<string, string>>(
+    {},
+  );
+  const [savingReplyToId, setSavingReplyToId] = useState<string>();
   const [signatureInputs, setSignatureInputs] = useState<
     Record<string, string>
   >({});
@@ -159,10 +200,32 @@ export function SettingsDialog({
         target: string;
       }
     >
-  >({});
+  >(() => {
+    const contains = initialRuleSeed?.contains.trim() ?? "";
+    if (!initialRuleSeed || !contains) return {};
+    return {
+      [initialRuleSeed.accountId]: {
+        name: contains.slice(0, 80),
+        field: seedField(initialRuleSeed.field),
+        contains: contains.slice(0, 200),
+        action: "move_archive",
+        target: "",
+      },
+    };
+  });
   const [ruleStatus, setRuleStatus] = useState<Record<string, string>>({});
   const hasDirtyForms =
     connectionDirty ||
+    Object.entries(nameInputs).some(
+      ([id, value]) =>
+        value !==
+        (accounts.find((account) => account.id === id)?.displayName ?? ""),
+    ) ||
+    Object.entries(replyToInputs).some(
+      ([id, value]) =>
+        value !==
+        (accounts.find((account) => account.id === id)?.replyTo ?? ""),
+    ) ||
     Object.entries(signatureInputs).some(
       ([id, value]) =>
         value !==
@@ -556,6 +619,27 @@ export function SettingsDialog({
       );
       if (!confirmed) return;
       const result = await api.removeAccount(id);
+      // Rust prunes these too, but a later full save from this copy would
+      // write them back, so drop them here through the same save queue.
+      const latest = useAppStore.getState().settings;
+      const keep = (entry: { accountId: string }) => entry.accountId !== id;
+      const pruned = {
+        lastFromAddresses: (latest.lastFromAddresses ?? []).filter(keep),
+        mailboxViews: (latest.mailboxViews ?? []).filter(keep),
+        pinnedMailboxes: (latest.pinnedMailboxes ?? []).filter(keep),
+        hiddenMailboxes: (latest.hiddenMailboxes ?? []).filter(keep),
+        collapsedMailboxes: (latest.collapsedMailboxes ?? []).filter(keep),
+      };
+      if (
+        Object.entries(pruned).some(
+          ([key, value]) =>
+            value.length !==
+            ((latest[key as keyof typeof pruned] as unknown[] | undefined)
+              ?.length ?? 0),
+        )
+      ) {
+        void update(pruned, undefined, { quiet: true });
+      }
       const remaining = await api.listAccounts();
       setAccounts(remaining);
       if (result?.cleanupPending) {
@@ -674,6 +758,71 @@ export function SettingsDialog({
     }
   }
 
+  async function handleSaveName(accountId: string) {
+    if (savingNameId) return;
+    const account = accounts.find((item) => item.id === accountId);
+    const value = (nameInputs[accountId] ?? account?.displayName ?? "").trim();
+    if (!value) {
+      setError(strings.settings.accountNameHelp);
+      return;
+    }
+    setSavingNameId(accountId);
+    try {
+      const updated = await api.updateAccountDisplayName(accountId, value);
+      setAccounts(
+        useAppStore
+          .getState()
+          .accounts.map((item) => (item.id === accountId ? updated : item)),
+      );
+      setNameInputs((prev) => ({
+        ...prev,
+        [accountId]: updated.displayName,
+      }));
+      setNameStatus((prev) => ({
+        ...prev,
+        [accountId]: strings.settings.accountNameSaved,
+      }));
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setSavingNameId(undefined);
+    }
+  }
+
+  async function handleSaveReplyTo(accountId: string) {
+    if (savingReplyToId) return;
+    const account = accounts.find((item) => item.id === accountId);
+    const value = (replyToInputs[accountId] ?? account?.replyTo ?? "").trim();
+    if (value && !oneReplyAddress(value)) {
+      setReplyToStatus((prev) => ({
+        ...prev,
+        [accountId]: strings.settings.replyToAddressInvalid,
+      }));
+      return;
+    }
+    setSavingReplyToId(accountId);
+    try {
+      const updated = await api.updateAccountReplyTo(accountId, value);
+      setAccounts(
+        useAppStore
+          .getState()
+          .accounts.map((item) => (item.id === accountId ? updated : item)),
+      );
+      setReplyToInputs((prev) => ({
+        ...prev,
+        [accountId]: updated.replyTo ?? "",
+      }));
+      setReplyToStatus((prev) => ({
+        ...prev,
+        [accountId]: strings.settings.replyToAddressSaved,
+      }));
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setSavingReplyToId(undefined);
+    }
+  }
+
   async function handleSaveSignature(accountId: string, fallback: string) {
     if (savingSignatureId) return;
     setSavingSignatureId(accountId);
@@ -767,6 +916,65 @@ export function SettingsDialog({
         ...prev,
         [accountId]: strings.settings.ruleSaved,
       }));
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }
+
+  async function handlePreviewRule(accountId: string) {
+    const input = ruleInput(accountId);
+    if (!input.contains.trim()) {
+      setError(strings.settings.ruleMatchRequired);
+      return;
+    }
+    try {
+      const preview = await api.previewFilterRule({
+        id: "",
+        accountId,
+        name: input.name.trim() || "Preview",
+        field: input.field as FilterRule["field"],
+        contains: input.contains,
+        action: input.action as FilterRule["action"],
+        targetMailbox:
+          input.action === "move_mailbox" ? (input.target ?? "") : null,
+        enabled: true,
+      });
+      const summary = preview.capped
+        ? strings.settings.ruleMatchesCapped
+        : preview.matched === 0
+          ? strings.settings.ruleMatchesNone
+          : strings.settings.ruleMatchesSome(preview.matched);
+      const examples = preview.subjects.filter(Boolean);
+      setRuleStatus((prev) => ({
+        ...prev,
+        [accountId]:
+          examples.length > 0
+            ? `${summary} ${strings.settings.ruleMatchSample(examples.join(", "))}`
+            : summary,
+      }));
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }
+
+  async function handleMoveRule(
+    accountId: string,
+    ruleId: string,
+    direction: -1 | 1,
+  ) {
+    const rules = filterRules[accountId] ?? [];
+    const index = rules.findIndex((rule) => rule.id === ruleId);
+    const next = index + direction;
+    if (index < 0 || next < 0 || next >= rules.length) return;
+    const ordered = [...rules];
+    const [moved] = ordered.splice(index, 1);
+    ordered.splice(next, 0, moved);
+    try {
+      const saved = await api.reorderFilterRules(
+        accountId,
+        ordered.map((rule) => rule.id),
+      );
+      setFilterRules((prev) => ({ ...prev, [accountId]: saved }));
     } catch (cause) {
       setError(String(cause));
     }
@@ -1022,6 +1230,16 @@ export function SettingsDialog({
                     passwordStatus={passwordStatus}
                     updatingPasswordId={updatingPasswordId}
                     handleUpdatePassword={handleUpdatePassword}
+                    nameInputs={nameInputs}
+                    setNameInputs={setNameInputs}
+                    nameStatus={nameStatus}
+                    savingNameId={savingNameId}
+                    handleSaveName={handleSaveName}
+                    replyToInputs={replyToInputs}
+                    setReplyToInputs={setReplyToInputs}
+                    replyToStatus={replyToStatus}
+                    savingReplyToId={savingReplyToId}
+                    handleSaveReplyTo={handleSaveReplyTo}
                     signatureInputs={signatureInputs}
                     setSignatureInputs={setSignatureInputs}
                     signatureStatus={signatureStatus}
@@ -1031,6 +1249,8 @@ export function SettingsDialog({
                     ruleInput={ruleInput}
                     setRuleField={setRuleField}
                     handleAddRule={handleAddRule}
+                    handlePreviewRule={handlePreviewRule}
+                    handleMoveRule={handleMoveRule}
                     handleToggleRule={handleToggleRule}
                     handleDeleteRule={handleDeleteRule}
                     ruleStatus={ruleStatus}

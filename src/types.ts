@@ -1,4 +1,5 @@
-export type ProviderKind = "icloud" | "manual" | "protonBridge";
+export type ProviderKind =
+  "icloud" | "manual" | "protonBridge" | "gmail" | "outlook";
 export type TlsMode = "tls" | "startTls";
 export type MailboxRole =
   "inbox" | "sent" | "drafts" | "archive" | "trash" | "junk" | "other";
@@ -45,7 +46,7 @@ export type MailSettingsDiscovery =
   | { status: "notFound"; domain: string };
 
 export type BodyFormat = "html" | "plain";
-export type DraftSourceKind = "reply" | "reply_all" | "forward";
+export type DraftSourceKind = "reply" | "reply_all" | "forward" | "redirect";
 
 export interface AccountSummary {
   id: string;
@@ -57,6 +58,8 @@ export interface AccountSummary {
   aliases?: string[];
   authMethod?: string;
   signature?: string;
+  /** Where replies to mail from this account should go. Blank uses From. */
+  replyTo?: string;
   color?: string | null;
   defaultBodyFormat?: BodyFormat;
 }
@@ -108,11 +111,26 @@ export interface MessageSummary {
   hasCalendar?: boolean;
   isAnswered?: boolean;
   isForwarded?: boolean;
+  /** Later Inbox mail in this conversation is filed to Archive. */
+  conversationMuted?: boolean;
+  /** `high`, `low`, or empty for a normal message. */
+  importance?: string;
+  /** Local pin. Mail sync leaves it in place. */
+  pinned?: boolean;
+  /** The account address or an alias is in the To header. */
+  toMe?: boolean;
+  /** Server arrival time. Empty when the mailbox has not reported one. */
+  arrivedAt?: string;
+  /** Regular files. A picture in the letter stays out. */
+  attachmentCount?: number;
 }
 
 export interface MessageCursor {
   receivedAt: string;
   uid: number;
+  sort?: "date" | "sender" | "subject" | "size";
+  key?: string;
+  pinned?: boolean;
 }
 
 export interface BulkOutcome {
@@ -153,6 +171,8 @@ export interface AttachmentPreview {
 export interface MessageDetail extends MessageSummary {
   to: string[];
   cc: string[];
+  /** People who received a hidden copy. Empty when the message has none. */
+  bcc?: string[];
   replyTo?: string | null;
   textBody: string;
   htmlBody?: string | null;
@@ -166,7 +186,13 @@ export interface MessageDetail extends MessageSummary {
   listUnsubscribePost?: string | null;
   /** Derived in Rust from the stored headers. */
   unsubscribe?: UnsubscribeOptions | null;
+  /** List-Post address when the list allows posting. */
+  listPost?: string | null;
   invite?: CalendarInvite | null;
+  /** Mailbox that asked for a read receipt. */
+  dispositionTo?: string;
+  /** `sent`, `declined`, or empty when you have not chosen. */
+  receiptChoice?: string;
 }
 
 export interface UnsubscribeOptions {
@@ -233,6 +259,13 @@ export interface ComposeDraft {
   bodyFormat?: BodyFormat;
   sourceMessageId?: number | null;
   sourceKind?: DraftSourceKind | null;
+  includeSignature?: boolean;
+  /** `high` marks the outgoing message important. Empty sends it as normal. */
+  importance?: string;
+  /** Ask recipients to tell you when they open this message. */
+  requestReceipt?: boolean;
+  /** Overrides the account Reply-To. An empty string sends no Reply-To header. */
+  replyTo?: string;
 }
 
 export interface DraftSummary {
@@ -243,6 +276,15 @@ export interface DraftSummary {
   updatedAt: string;
   syncState: "localPending" | "synced" | "localOnly" | "conflict";
   syncDetail?: string | null;
+  /** First line of the draft. Empty when the draft has no message yet. */
+  preview?: string;
+  /** Files attached to the draft. Pictures inside the letter are left out. */
+  attachmentCount?: number;
+  /** Saved From address. Empty when the draft uses the account address. */
+  fromAddress?: string;
+  /** Message this draft answers, forwards, or redirects. */
+  sourceMessageId?: number | null;
+  sourceKind?: DraftSourceKind | null;
 }
 
 export interface DraftSaveOutcome {
@@ -264,6 +306,10 @@ export interface OutboxSummary {
   detail?: string | null;
   createdAt: string;
   sendAt?: string | null;
+  /** First line of the queued message. Empty when the message has no text yet. */
+  preview?: string;
+  /** Files on the queued message. Pictures inside the letter are left out. */
+  attachmentCount?: number;
 }
 
 export interface SnoozedSummary {
@@ -275,12 +321,18 @@ export interface FilterRule {
   id: string;
   accountId: string;
   name: string;
-  field: "from" | "subject";
+  field: "from" | "to" | "subject" | "domain";
   contains: string;
   action:
     "mark_read" | "move_archive" | "move_trash" | "move_junk" | "move_mailbox";
   targetMailbox?: string | null;
   enabled: boolean;
+}
+
+export interface FilterMatchPreview {
+  matched: number;
+  capped: boolean;
+  subjects: string[];
 }
 
 export interface SendOutcome {
@@ -363,6 +415,24 @@ export type SetupStep = "welcome" | "appearance" | "comfort" | "account";
 export type UpdateCheckInterval =
   "startupAnd6h" | "startupAnd12h" | "startupAnd24h" | "startup" | "manual";
 
+export interface LastFromAddress {
+  accountId: string;
+  address: string;
+}
+
+export interface PinnedMailbox {
+  accountId: string;
+  mailboxId: number;
+}
+
+/** List order and filter remembered for one folder. */
+export interface MailboxView {
+  accountId: string;
+  mailboxId: number;
+  sort: AppSettings["mailboxSort"];
+  filter: AppSettings["mailboxFilter"];
+}
+
 export interface AppSettings {
   schemaVersion: 2;
   readingPane: ReadingPane;
@@ -381,7 +451,61 @@ export interface AppSettings {
   undoSendSeconds: number;
   blockAdvertisingAndTracking: boolean;
   blockReportedThreats: boolean;
+  /** Senders whose pictures load when a message opens. Checks still apply. */
+  imageSenders: string[];
   groupThreads: boolean;
+  /** Put this account's address on Bcc for a new message. */
+  bccSelf: boolean;
+  /** Keep the signature above a trailing reply or forward quote. */
+  signatureAboveQuote: boolean;
+  /** The Reply button and the R key write to everyone on the message. */
+  replyToAll: boolean;
+  /** The folder list shows Inbox, the open folder, and folders with unread mail. */
+  unreadFoldersOnly: boolean;
+  /** Floating compose window size. Zero uses the default layout. */
+  composerWidth: number;
+  composerHeight: number;
+  /** From address last chosen for each account. */
+  lastFromAddresses: LastFromAddress[];
+  /** Mailbox order kept for the next launch. */
+  mailboxSort:
+    | "date"
+    | "dateOldest"
+    | "sender"
+    | "senderDesc"
+    | "subject"
+    | "subjectDesc"
+    | "size"
+    | "sizeAsc";
+  /** Mailbox filter kept for the next launch. */
+  mailboxFilter:
+    | "all"
+    | "unread"
+    | "starred"
+    | "attachments"
+    | "pinned"
+    | "toMe"
+    | "invitations";
+  /** List order and filter for folders that differ from the saved default. */
+  mailboxViews: MailboxView[];
+  /** Mailboxes kept at the top of each account's folder list. */
+  pinnedMailboxes: PinnedMailbox[];
+  /** Mailboxes left out of the folder list. */
+  hiddenMailboxes: PinnedMailbox[];
+  /** Nested folders kept closed. */
+  collapsedMailboxes: PinnedMailbox[];
+  /** Last folder chosen from Move to. */
+  recentMoveMailboxId: number | null;
+  /** List rows include the first line of each message. */
+  showMessagePreviews: boolean;
+  /** Play the system mail sound with a new-mail alert. */
+  newMailSound: boolean;
+  /** Local HH:MM when new-mail alerts go quiet. Blank stays off. */
+  quietHoursStart: string;
+  /** Local HH:MM when new-mail alerts resume. Blank stays off. */
+  quietHoursEnd: string;
+  /** When an opened message becomes read. */
+  markRead: "open" | "after2s" | "manual";
   notifyNewMail: boolean;
   closeToTray: boolean;
   updateCheckInterval: UpdateCheckInterval;

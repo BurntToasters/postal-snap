@@ -5,20 +5,35 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import { FormatToolbar } from "../components/composer/formatToolbar";
 import {
+  isPlainPasteShortcut,
+  plainPasteBlocks,
+} from "../components/composer/plainText";
+import {
   announceLocalMailChanged,
   composerTitle,
   escapeHtml,
   highlightColor,
+  messageSelectionQuote,
+  listPostAddress,
+  bccSelfLine,
+  forwardConversationBody,
   seedBody,
+  preferredReplyMode,
+  replyAllAddsRecipients,
   seedRecipients,
   seedReferences,
+  seedSource,
   seedSubject,
 } from "../components/composer/composerSeed";
 import {
+  LARGE_RECIPIENT_COUNT,
   hasControlCharacter,
   hasDraftContent,
   isMailbox,
   splitAddresses,
+  firstNoreplyRecipient,
+  repeatedRecipient,
+  uniqueRecipientCount,
   validateRecipientFields,
   validateSubject,
 } from "../components/composer/composerValidate";
@@ -53,6 +68,29 @@ function draft(overrides: Partial<ComposeDraft> = {}): ComposeDraft {
 }
 
 describe("composer seed helpers", () => {
+  it("adds this account on Bcc only when it is not already listed", () => {
+    expect(bccSelfLine("", "", "", "sam@example.test", false)).toBe("");
+    expect(bccSelfLine("", "", "", "sam@example.test", true)).toBe(
+      "sam@example.test",
+    );
+    expect(
+      bccSelfLine("Sam <Sam@Example.test>", "", "", "sam@example.test", true),
+    ).toBe("");
+    expect(
+      bccSelfLine(
+        "",
+        "sam@example.test",
+        "lee@example.test",
+        "sam@example.test",
+        true,
+      ),
+    ).toBe("lee@example.test");
+    expect(
+      bccSelfLine("", "", "lee@example.test", "sam@example.test", true),
+    ).toBe("lee@example.test, sam@example.test");
+    expect(bccSelfLine("", "", "", "not-an-address", true)).toBe("");
+  });
+
   const source = messageDetail(makeMessage(), {
     to: ["sam@example.test", "friend@example.test"],
     cc: ["copy@example.test"],
@@ -107,6 +145,63 @@ describe("composer seed helpers", () => {
         "sam@example.test",
       ),
     ).toBe("jane@example.test");
+    expect(
+      seedRecipients(
+        { sourceMessage: source, composeMode: "editAsNew" },
+        "to",
+        "sam@example.test",
+      ),
+    ).toBe("sam@example.test, friend@example.test");
+    expect(
+      seedRecipients(
+        { sourceMessage: source, composeMode: "editAsNew" },
+        "cc",
+        "sam@example.test",
+      ),
+    ).toBe("copy@example.test");
+    expect(
+      seedRecipients(
+        {
+          sourceMessage: { ...source, listPost: "list@example.test" },
+          composeMode: "replyList",
+        },
+        "to",
+        "sam@example.test",
+      ),
+    ).toBe("list@example.test");
+    expect(
+      seedRecipients(
+        {
+          sourceMessage: { ...source, listPost: "not an address" },
+          composeMode: "replyList",
+        },
+        "to",
+        "sam@example.test",
+      ),
+    ).toBe("");
+    expect(listPostAddress("list@example.test")).toBe("list@example.test");
+    expect(
+      replyAllAddsRecipients(source, "sam@example.test", [
+        "alias@example.test",
+      ]),
+    ).toBe(true);
+    expect(
+      replyAllAddsRecipients(
+        { ...source, to: ["sam@example.test"], cc: [] },
+        "sam@example.test",
+      ),
+    ).toBe(false);
+    expect(preferredReplyMode(source, false, "sam@example.test")).toBe("reply");
+    expect(preferredReplyMode(source, true, "sam@example.test")).toBe(
+      "replyAll",
+    );
+    expect(
+      preferredReplyMode(
+        { ...source, to: ["sam@example.test"], cc: [] },
+        true,
+        "sam@example.test",
+      ),
+    ).toBe("reply");
   });
 
   it("builds subjects, bodies, references, and titles", () => {
@@ -116,6 +211,9 @@ describe("composer seed helpers", () => {
       `${strings.composer.replyPrefix} ${source.subject}`,
     );
     expect(
+      seedSubject({ sourceMessage: source, composeMode: "replyList" }),
+    ).toBe(`${strings.composer.replyPrefix} ${source.subject}`);
+    expect(
       seedSubject({
         sourceMessage: { ...source, subject: "Re: Existing" },
         composeMode: "replyAll",
@@ -124,6 +222,18 @@ describe("composer seed helpers", () => {
     expect(seedSubject({ sourceMessage: source, composeMode: "forward" })).toBe(
       `${strings.composer.forwardPrefix} ${source.subject}`,
     );
+    expect(
+      seedSubject({
+        sourceMessage: source,
+        composeMode: "forwardAttachment",
+      }),
+    ).toBe(`${strings.composer.forwardPrefix} ${source.subject}`);
+    expect(
+      seedSubject({ sourceMessage: source, composeMode: "editAsNew" }),
+    ).toBe(source.subject);
+    expect(
+      seedSubject({ sourceMessage: source, composeMode: "redirect" }),
+    ).toBe(source.subject);
 
     expect(seedBody()).toBe("<p></p>");
     expect(seedBody({ prefill: { textBody: "<hello>\nworld" } })).toBe(
@@ -135,12 +245,155 @@ describe("composer seed helpers", () => {
     expect(seedBody({ sourceMessage: source, composeMode: "reply" })).toContain(
       "Hello &lt;there&gt;<br>Again",
     );
+    const noted = seedBody({
+      sourceMessage: source,
+      composeMode: "reply",
+      replyNote: "See you <then>",
+    });
+    expect(noted.startsWith("<p>See you &lt;then&gt;</p>")).toBe(true);
+    expect(noted).toContain("Hello &lt;there&gt;<br>Again");
+    expect(
+      seedBody({
+        sourceMessage: source,
+        composeMode: "reply",
+        omitQuote: true,
+        replyNote: "Only this",
+      }),
+    ).toBe("<p>Only this</p>");
+    expect(
+      seedBody({
+        sourceMessage: source,
+        composeMode: "reply",
+        omitQuote: true,
+      }),
+    ).toBe("<p></p>");
+    expect(
+      seedBody({
+        sourceMessage: source,
+        composeMode: "replyAll",
+        omitQuote: true,
+      }),
+    ).toBe("<p></p>");
+    const excerpt = seedBody({
+      sourceMessage: source,
+      composeMode: "reply",
+      quoteExcerpt: "only <this>",
+    });
+    expect(excerpt).toContain("only &lt;this&gt;");
+    expect(excerpt).not.toContain("Hello");
+    const body = document.createElement("div");
+    body.className = "message-body";
+    body.textContent = "Bring the salad";
+    document.body.append(body);
+    const range = document.createRange();
+    range.selectNodeContents(body);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    expect(messageSelectionQuote()).toBe("Bring the salad");
+    body.remove();
+    selection?.removeAllRanges();
+    expect(
+      seedBody({
+        sourceMessage: source,
+        composeMode: "forward",
+        quoteExcerpt: "only this",
+      }),
+    ).toContain("Hello");
     expect(
       seedBody({
         sourceMessage: { ...source, htmlBody: "<p>Rich</p>" },
         composeMode: "forward",
       }),
     ).toContain("<p>Rich</p>");
+    const older = messageDetail(
+      makeMessage({
+        id: 2,
+        subject: "Older <note>",
+        receivedAt: "2026-08-17T12:00:00Z",
+      }),
+      {
+        htmlBody: "<p>Older body</p><script>alert(1)</script>",
+        textBody: "Older body",
+      },
+    );
+    const newer = messageDetail(makeMessage({ id: 3, subject: "Newer note" }), {
+      textBody: "Newer body",
+    });
+    const conversation = seedBody({
+      sourceMessage: newer,
+      composeMode: "forward",
+      forwardMessages: [newer, older],
+    });
+    expect(conversation.indexOf("Older &lt;note&gt;")).toBeLessThan(
+      conversation.indexOf("Newer note"),
+    );
+    expect(conversation).toContain("Older body");
+    expect(conversation).toContain("Newer body");
+    expect(conversation).not.toContain("alert(1)");
+    expect(
+      seedSubject({
+        sourceMessage: newer,
+        composeMode: "forward",
+        forwardMessages: [newer, older],
+      }),
+    ).toBe(`${strings.composer.forwardPrefix} Newer note`);
+    expect(
+      seedRecipients(
+        {
+          sourceMessage: newer,
+          composeMode: "forward",
+          forwardMessages: [newer, older],
+        },
+        "to",
+        "sam@example.test",
+      ),
+    ).toBe("");
+    expect(
+      forwardConversationBody([
+        messageDetail(makeMessage({ id: 1 }), {
+          textBody: "x".repeat(500_000),
+        }),
+        messageDetail(makeMessage({ id: 2 }), { textBody: "y" }),
+      ]),
+    ).toBeUndefined();
+    const edited = seedBody({
+      sourceMessage: {
+        ...source,
+        htmlBody: '<p onclick="bad()">Keep</p>',
+        textBody: "Plain fallback",
+      },
+      composeMode: "editAsNew",
+    });
+    expect(edited).toBe("<p>Keep</p>");
+    expect(edited).not.toContain("wrote");
+    expect(
+      seedBody({ sourceMessage: source, composeMode: "forwardAttachment" }),
+    ).toBe("<p></p>");
+    expect(seedBody({ sourceMessage: source, composeMode: "redirect" })).toBe(
+      "<p></p>",
+    );
+    expect(
+      seedReferences({
+        sourceMessage: source,
+        composeMode: "forwardAttachment",
+      }),
+    ).toBeUndefined();
+    expect(
+      seedSource({ sourceMessage: source, composeMode: "forwardAttachment" }),
+    ).toEqual({ sourceMessageId: source.id, sourceKind: "forward" });
+    expect(
+      seedReferences({ sourceMessage: source, composeMode: "editAsNew" }),
+    ).toBeUndefined();
+    expect(
+      seedReferences({ sourceMessage: source, composeMode: "redirect" }),
+    ).toBeUndefined();
+    expect(
+      seedSource({ sourceMessage: source, composeMode: "redirect" }),
+    ).toEqual({ sourceMessageId: source.id, sourceKind: "redirect" });
+    expect(
+      seedSource({ sourceMessage: source, composeMode: "editAsNew" }),
+    ).toEqual({});
 
     expect(seedReferences()).toBeUndefined();
     expect(
@@ -168,6 +421,23 @@ describe("composer seed helpers", () => {
     expect(composerTitle({ composeMode: "forward" })).toBe(
       strings.composer.forward,
     );
+    expect(composerTitle({ composeMode: "forwardAttachment" })).toBe(
+      strings.reader.forwardAsAttachment,
+    );
+    expect(composerTitle({ composeMode: "editAsNew" })).toBe(
+      strings.reader.editAsNew,
+    );
+    expect(composerTitle({ composeMode: "replyList" })).toBe(
+      strings.reader.replyToList,
+    );
+    expect(composerTitle({ composeMode: "redirect" })).toBe(
+      strings.reader.redirect,
+    );
+    expect(
+      composerTitle({
+        draft: draft({ sourceKind: "redirect", sourceMessageId: 4 }),
+      }),
+    ).toBe(strings.reader.redirect);
   });
 
   it("escapes HTML, chooses theme highlight, and announces local changes", () => {
@@ -219,6 +489,46 @@ describe("composer validation and schedule helpers", () => {
       strings.composer.invalidSubject,
     );
     expect(validateSubject("Good subject")).toBeUndefined();
+    const nine = Array.from(
+      { length: LARGE_RECIPIENT_COUNT - 1 },
+      (_, index) => `person${index}@example.test`,
+    ).join(", ");
+    const ten = `${nine}, Person0 <person0@example.test>, extra@example.test`;
+    expect(firstNoreplyRecipient("noreply@example.test", "", "")).toBe(
+      "noreply@example.test",
+    );
+    expect(firstNoreplyRecipient("News <No-Reply@example.test>", "", "")).toBe(
+      "no-reply@example.test",
+    );
+    expect(
+      firstNoreplyRecipient(
+        "jane@example.test",
+        "do-not-reply@example.test",
+        "",
+      ),
+    ).toBe("do-not-reply@example.test");
+    expect(firstNoreplyRecipient("jane@example.test", "", "")).toBeUndefined();
+    expect(
+      firstNoreplyRecipient("annoreply@example.test", "", ""),
+    ).toBeUndefined();
+    expect(uniqueRecipientCount(nine, "", "")).toBe(LARGE_RECIPIENT_COUNT - 1);
+    expect(uniqueRecipientCount(ten, "extra@example.test", "")).toBe(
+      LARGE_RECIPIENT_COUNT,
+    );
+    expect(
+      uniqueRecipientCount(
+        "Jane <sam@example.test>",
+        "",
+        "Sam <sam@example.test>",
+      ),
+    ).toBe(1);
+    expect(repeatedRecipient("jane@example.test", "", "")).toBeUndefined();
+    expect(
+      repeatedRecipient("jane@example.test, Jane <JANE@example.test>", "", ""),
+    ).toBe("jane@example.test");
+    expect(
+      repeatedRecipient("Pat <pat@example.test>", "pat@example.test", ""),
+    ).toBe("pat@example.test");
 
     expect(hasDraftContent(draft(), "   ")).toBe(false);
     expect(hasDraftContent(draft({ to: ["one@example.test"] }), "")).toBe(true);
@@ -265,6 +575,7 @@ describe("format toolbar", () => {
       "setTextAlign",
       "toggleBulletList",
       "toggleOrderedList",
+      "toggleBlockquote",
       "insertTable",
       "setHorizontalRule",
       "clearNodes",
@@ -342,6 +653,7 @@ describe("format toolbar", () => {
       strings.composer.alignRight,
       strings.composer.bullets,
       strings.composer.numbers,
+      strings.composer.quote,
       strings.composer.indentLess,
       strings.composer.indentMore,
       strings.composer.insertLink,
@@ -364,6 +676,7 @@ describe("format toolbar", () => {
       "center",
       "right",
     ]);
+    expect(chain.toggleBlockquote).toHaveBeenCalled();
     expect(adjustIndent.mock.calls).toEqual([[-1], [1]]);
     expect(addLink).toHaveBeenCalled();
     expect(chain.insertTable).toHaveBeenCalledWith({
@@ -519,5 +832,40 @@ describe("recipient suggestions", () => {
     await act(async () => {
       await vi.runOnlyPendingTimersAsync();
     });
+  });
+});
+
+describe("plain paste", () => {
+  it("keeps tags as text and splits lines", () => {
+    expect(plainPasteBlocks("Hello\r\n<b>there</b>\n")).toEqual([
+      { type: "paragraph", content: [{ type: "text", text: "Hello" }] },
+      {
+        type: "paragraph",
+        content: [{ type: "text", text: "<b>there</b>" }],
+      },
+      { type: "paragraph" },
+    ]);
+    expect(plainPasteBlocks("")).toEqual([]);
+    expect(plainPasteBlocks("a\u0000b")).toEqual([
+      { type: "paragraph", content: [{ type: "text", text: "ab" }] },
+    ]);
+    expect(
+      isPlainPasteShortcut({
+        metaKey: true,
+        ctrlKey: false,
+        shiftKey: true,
+        altKey: false,
+        key: "V",
+      }),
+    ).toBe(true);
+    expect(
+      isPlainPasteShortcut({
+        metaKey: true,
+        ctrlKey: false,
+        shiftKey: false,
+        altKey: false,
+        key: "v",
+      }),
+    ).toBe(false);
   });
 });

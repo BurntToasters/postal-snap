@@ -201,7 +201,7 @@
   }
 
   /* Row 3: base styles lock time to row 2, which pushed the sender aside. */
-  .message-header time {
+  .message-header .message-stamp {
     grid-column: 2 / -1;
     grid-row: 3;
     text-align: left;
@@ -309,11 +309,16 @@
   }
 
   .address-fields label {
-    grid-template-columns: 58px minmax(0, 1fr);
+    grid-template-columns: calc(var(--address-label-width) - 0.75rem) minmax(
+        0,
+        1fr
+      );
   }
 
   .address-fields .to-field {
-    grid-template-columns: 58px minmax(0, 1fr) auto;
+    grid-template-columns:
+      calc(var(--address-label-width) - 0.75rem) minmax(0, 1fr)
+      auto;
   }
 
   .aliases-header {

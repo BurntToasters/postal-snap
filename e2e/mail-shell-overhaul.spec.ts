@@ -10,12 +10,22 @@ test("localizes server folder roles and collapses nested folders", async ({
 
   await expect(page.getByRole("heading", { name: "Inbox" })).toBeVisible();
   await expect(page.getByRole("button", { name: /^INBOX/ })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: /^Projects/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: /^2026/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: /^Launch/ })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Projects", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Projects / 2026, 1 unread" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Projects / 2026 / Launch, 1 unread" }),
+  ).toBeVisible();
 
   await page.getByRole("button", { name: "Collapse Projects" }).click();
-  await expect(page.getByRole("button", { name: /^2026/ })).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Projects / 2026, 1 unread" }),
+  ).toHaveCount(0);
   await page.getByRole("button", { name: "Expand Projects" }).click();
-  await expect(page.getByRole("button", { name: /^2026/ })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Projects / 2026, 1 unread" }),
+  ).toBeVisible();
 });

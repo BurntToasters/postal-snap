@@ -27,32 +27,63 @@
   font-weight: 700;
 }
 
-.account-avatar[data-color="teal"] {
+.account-avatar[data-color="teal"],
+.account-color-swatch[data-color="teal"] {
   background: #00868a;
 }
 
-.account-avatar[data-color="green"] {
+.account-avatar[data-color="green"],
+.account-color-swatch[data-color="green"] {
   background: #27843c;
 }
 
-.account-avatar[data-color="amber"] {
+.account-avatar[data-color="amber"],
+.account-color-swatch[data-color="amber"] {
   background: #9a6700;
 }
 
-.account-avatar[data-color="orange"] {
+.account-avatar[data-color="orange"],
+.account-color-swatch[data-color="orange"] {
   background: #c65300;
 }
 
-.account-avatar[data-color="red"] {
+.account-avatar[data-color="red"],
+.account-color-swatch[data-color="red"] {
   background: #c42b1c;
 }
 
-.account-avatar[data-color="pink"] {
+.account-avatar[data-color="pink"],
+.account-color-swatch[data-color="pink"] {
   background: #bd3975;
 }
 
-.account-avatar[data-color="purple"] {
+.account-avatar[data-color="purple"],
+.account-color-swatch[data-color="purple"] {
   background: #7651c9;
+}
+
+.account-color-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.account-color-swatch {
+  width: var(--target-size);
+  height: var(--target-size);
+  padding: 0;
+  border: 3px solid transparent;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.account-color-swatch[aria-checked="true"] {
+  border-color: var(--text);
+}
+
+.account-color-swatch:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
 }
 
 .sender-avatar {

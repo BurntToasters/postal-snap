@@ -19,6 +19,8 @@
 }
 
 .attachment-preview-dialog {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   width: min(720px, 94vw);
@@ -59,9 +61,10 @@
 
 .attachment-preview-dialog footer {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
-  gap: 8px;
-  padding: 12px 18px;
+  gap: var(--space-2);
+  padding: var(--space-3) 18px;
   border-top: 1px solid var(--border);
 }
 
@@ -172,6 +175,18 @@
 .license-card-body pre {
   max-height: 18rem;
   overflow: auto;
+}
+
+.move-folder-choices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-height: 70vh;
+  overflow: auto;
+}
+
+.move-folder-choices button {
+  justify-content: flex-start;
 }
 
 .modal-layer {

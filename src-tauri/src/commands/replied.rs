@@ -39,6 +39,7 @@ pub(crate) fn keyword_after_send(
     match kind? {
         DraftSourceKind::Reply | DraftSourceKind::ReplyAll => Some(SourceKeyword::Answered),
         DraftSourceKind::Forward => Some(SourceKeyword::Forwarded),
+        DraftSourceKind::Redirect => None,
     }
 }
 

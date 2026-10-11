@@ -6,12 +6,14 @@ use std::{
     task::{Context, Poll},
 };
 
+use async_imap::Authenticator;
 use lettre::{
     address::Envelope,
     message::{
-        header::ContentType, Attachment as LettreAttachment, Mailbox, MultiPart, SinglePart,
+        header::{ContentType, Header, HeaderName, HeaderValue},
+        Attachment as LettreAttachment, Mailbox, MultiPart, SinglePart,
     },
-    transport::smtp::authentication::Credentials,
+    transport::smtp::authentication::{Credentials, Mechanism},
     AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
 };
 use tokio::{
@@ -22,7 +24,7 @@ use zeroize::Zeroizing;
 
 use super::flowed::encode_flowed;
 use super::parse::parse_mailbox;
-use super::remote_drafts::search_message_id;
+use super::remote_drafts::search_header_id;
 use super::{
     ImapSession, PreparedMessage, CONNECT_TIMEOUT, IMAP_COMMAND_TIMEOUT, MAX_ATTACHMENTS,
     MAX_MESSAGE_BYTES, MAX_OUTGOING_BYTES,
@@ -59,6 +61,185 @@ pub async fn prepare_draft_message(
         return Err("The message and its attachments are too large to send safely.".into());
     }
     Ok(bytes)
+}
+
+/// Send the original bytes unchanged, with Resent-* headers in front.
+/// Bcc is an SMTP recipient only and is not written into the message.
+pub fn prepare_redirect(
+    account: &AccountRecord,
+    draft: &ComposeDraft,
+    raw: &[u8],
+) -> Result<PreparedMessage, String> {
+    if raw.is_empty() {
+        return Err("This message has not been downloaded yet.".into());
+    }
+    if raw.len() > MAX_MESSAGE_BYTES {
+        return Err("This message is too large to redirect.".into());
+    }
+    if draft.to.is_empty() && draft.cc.is_empty() && draft.bcc.is_empty() {
+        return Err("Add at least one recipient.".into());
+    }
+    let message_id = format!("<{}@run.rosie.snap>", uuid::Uuid::new_v4());
+    let headers = redirect_headers(account, draft, &message_id)?;
+    let mut bytes = headers.into_bytes();
+    bytes.extend(strip_bcc_headers(raw)?);
+    if bytes.len() > MAX_OUTGOING_BYTES {
+        return Err("The message and its attachments are too large to send safely.".into());
+    }
+    Ok(PreparedMessage { message_id, bytes })
+}
+
+fn redirect_headers(
+    account: &AccountRecord,
+    draft: &ComposeDraft,
+    message_id: &str,
+) -> Result<String, String> {
+    validate_compose_sender(
+        draft.from.as_deref(),
+        &account.summary.email,
+        &account.summary.aliases,
+    )?;
+    let sender_email = draft
+        .from
+        .as_deref()
+        .map(str::trim)
+        .filter(|addr| !addr.is_empty())
+        .unwrap_or(account.summary.email.as_str());
+    let from = redirect_from(&account.summary.display_name, sender_email)?;
+    let date = chrono::Utc::now().to_rfc2822();
+    if date.chars().any(char::is_control) {
+        return Err("The message envelope is invalid.".into());
+    }
+    let mut lines = vec![
+        format!("Resent-From: {from}"),
+        format!("Resent-Date: {date}"),
+        format!("Resent-Message-ID: {message_id}"),
+    ];
+    if let Some(line) = address_header("Resent-To", &draft.to)? {
+        lines.push(line);
+    }
+    if let Some(line) = address_header("Resent-Cc", &draft.cc)? {
+        lines.push(line);
+    }
+    for line in &lines {
+        if line.len() > 998 || line.chars().any(char::is_control) {
+            return Err("Shorten the recipient list.".into());
+        }
+    }
+    Ok(format!("{}\r\n", lines.join("\r\n")))
+}
+
+fn redirect_from(display_name: &str, email: &str) -> Result<String, String> {
+    let address: lettre::Address = email
+        .parse()
+        .map_err(|_| "The sender address is invalid.".to_string())?;
+    let name = display_name.trim();
+    let name = if name.is_empty() {
+        None
+    } else if name.chars().any(char::is_control) {
+        return Err("The sender address is invalid.".into());
+    } else {
+        Some(name.to_string())
+    };
+    let rendered = Mailbox::new(name, address).to_string();
+    if rendered.chars().any(char::is_control) {
+        return Err("The sender address is invalid.".into());
+    }
+    Ok(rendered)
+}
+
+fn address_header(label: &str, values: &[String]) -> Result<Option<String>, String> {
+    if values.is_empty() {
+        return Ok(None);
+    }
+    let mut parts = Vec::with_capacity(values.len());
+    for value in values {
+        let mailbox: Mailbox = value
+            .trim()
+            .parse()
+            .map_err(|_| "One of the recipient addresses is invalid.".to_string())?;
+        let rendered = mailbox.to_string();
+        if rendered.chars().any(char::is_control) {
+            return Err("One of the recipient addresses is invalid.".into());
+        }
+        parts.push(rendered);
+    }
+    Ok(Some(format!("{label}: {}", parts.join(", "))))
+}
+
+/// Sent-copy lookup uses Resent-Message-ID when this send added one.
+pub(crate) fn sent_copy_header(message_id: &str, bytes: &[u8]) -> &'static str {
+    if message_id.is_empty() {
+        return "Message-ID";
+    }
+    let end = header_block_end(bytes);
+    let needle = format!("Resent-Message-ID: {message_id}");
+    if bytes[..end]
+        .windows(needle.len())
+        .any(|window| window == needle.as_bytes())
+    {
+        "Resent-Message-ID"
+    } else {
+        "Message-ID"
+    }
+}
+
+const MAX_REDIRECT_HEADER_BYTES: usize = 64 * 1024;
+
+/// Copy the original bytes without Bcc header fields. The body is copied as-is.
+fn strip_bcc_headers(raw: &[u8]) -> Result<Vec<u8>, String> {
+    let limit = raw.len().min(MAX_REDIRECT_HEADER_BYTES);
+    let mut out = Vec::with_capacity(raw.len());
+    let mut position = 0;
+    // True while inside a Bcc field, including its folded lines.
+    let mut skipping = false;
+    loop {
+        if position >= raw.len() {
+            return Ok(out);
+        }
+        if position >= limit {
+            return Err("This message is too large to redirect.".into());
+        }
+        let line_end = match raw[position..limit].iter().position(|&byte| byte == b'\n') {
+            Some(offset) => position + offset + 1,
+            None if limit == raw.len() => raw.len(),
+            None => return Err("This message is too large to redirect.".into()),
+        };
+        let line = &raw[position..line_end];
+        let content = line.strip_suffix(b"\n").unwrap_or(line);
+        let content = content.strip_suffix(b"\r").unwrap_or(content);
+        if content.is_empty() {
+            out.extend_from_slice(&raw[position..]);
+            return Ok(out);
+        }
+        let folded = matches!(content[0], b' ' | b'\t');
+        if !folded {
+            skipping = header_name_is_bcc(content);
+        }
+        if !skipping {
+            out.extend_from_slice(line);
+        }
+        position = line_end;
+    }
+}
+
+fn header_name_is_bcc(line: &[u8]) -> bool {
+    let Some(colon) = line.iter().position(|&byte| byte == b':') else {
+        return false;
+    };
+    line[..colon].trim_ascii().eq_ignore_ascii_case(b"bcc")
+}
+
+fn header_block_end(bytes: &[u8]) -> usize {
+    let limit = bytes.len().min(64 * 1024);
+    let head = &bytes[..limit];
+    if let Some(position) = head.windows(4).position(|window| window == b"\r\n\r\n") {
+        return position;
+    }
+    if let Some(position) = head.windows(2).position(|window| window == b"\n\n") {
+        return position;
+    }
+    limit
 }
 
 /// What a failed SMTP send means for the message.
@@ -109,8 +290,9 @@ pub async fn send_prepared(
     };
     let envelope = message_envelope(account, draft).map_err(refused)?;
     let password = Zeroizing::new(password.to_string());
+    let xoauth2 = account.summary.auth_method == "oauth";
     if account.smtp.trusted_certificate.is_some() {
-        let mut connection = connect_pinned_smtp(&account.smtp, &password)
+        let mut connection = connect_pinned_smtp(&account.smtp, &password, xoauth2)
             .await
             .map_err(|message| SendError {
                 kind: if message.to_ascii_lowercase().contains("certificate")
@@ -137,7 +319,7 @@ pub async fn send_prepared(
             })?;
         return Ok(());
     }
-    let transport = smtp_transport(&account.smtp, &password).map_err(refused)?;
+    let transport = smtp_transport(&account.smtp, &password, xoauth2).map_err(refused)?;
     transport
         .send_raw(&envelope, bytes)
         .await
@@ -167,7 +349,8 @@ pub async fn ensure_sent_copy(
         .await
         .map_err(|_| "Sent folder timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Sent folder"))?;
-    let existing = search_message_id(&mut session, message_id, "Sent folder").await?;
+    let header = sent_copy_header(message_id, bytes);
+    let existing = search_header_id(&mut session, header, message_id, "Sent folder").await?;
     if existing.is_empty() {
         tokio::time::timeout(
             IMAP_COMMAND_TIMEOUT,
@@ -180,7 +363,7 @@ pub async fn ensure_sent_copy(
             .await
             .map_err(|_| "Sent folder timed out.".to_string())?
             .map_err(|error| redact_error(&error, "Sent folder"))?;
-        if search_message_id(&mut session, message_id, "Sent folder")
+        if search_header_id(&mut session, header, message_id, "Sent folder")
             .await?
             .is_empty()
         {
@@ -195,6 +378,17 @@ pub(crate) async fn connect_imap(
     server: &ServerConfig,
     password: &str,
 ) -> Result<ImapSession, String> {
+    connect_imap_auth(server, password, false).await
+}
+
+pub(crate) async fn connect_imap_auth(
+    server: &ServerConfig,
+    password: &str,
+    xoauth2: bool,
+) -> Result<ImapSession, String> {
+    if xoauth2 {
+        guard_xoauth2_server(server, true)?;
+    }
     let address = (server.host.as_str(), server.port);
     let tcp = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(address))
         .await
@@ -254,11 +448,16 @@ pub(crate) async fn connect_imap(
             async_imap::Client::new(tls)
         }
     };
-    // Only an explicit NO/BAD answer to LOGIN means the credentials were
-    // rejected. Timeouts and dropped connections are transient and must not
-    // park the account as "Sign-in failed".
-    tokio::time::timeout(CONNECT_TIMEOUT, client.login(&server.username, password))
-        .await
+    // Only an explicit NO/BAD answer means the credentials were rejected.
+    // Timeouts and dropped connections are transient and must not park the
+    // account as "Sign-in failed".
+    let authenticated = if xoauth2 {
+        let auth = Xoauth2Authenticator::new(&server.username, password);
+        tokio::time::timeout(CONNECT_TIMEOUT, client.authenticate("XOAUTH2", auth)).await
+    } else {
+        tokio::time::timeout(CONNECT_TIMEOUT, client.login(&server.username, password)).await
+    };
+    authenticated
         .map_err(|_| "Incoming server timed out.".to_string())?
         .map_err(|(error, _)| match error {
             async_imap::error::Error::No(_) | async_imap::error::Error::Bad(_) => {
@@ -266,6 +465,59 @@ pub(crate) async fn connect_imap(
             }
             _ => redact_error(&error, "Incoming connection"),
         })
+}
+
+struct Xoauth2Authenticator {
+    initial: Zeroizing<Vec<u8>>,
+    sent: bool,
+}
+
+impl Xoauth2Authenticator {
+    fn new(username: &str, access_token: &str) -> Self {
+        Self {
+            initial: Zeroizing::new(
+                format!("user={username}\x01auth=Bearer {access_token}\x01\x01").into_bytes(),
+            ),
+            sent: false,
+        }
+    }
+}
+
+impl Authenticator for Xoauth2Authenticator {
+    type Response = Vec<u8>;
+
+    fn process(&mut self, challenge: &[u8]) -> Self::Response {
+        // An empty continuation asks for the initial response. A later
+        // challenge is a failure body; answer empty so the server closes it.
+        if self.sent || !challenge.is_empty() {
+            return Vec::new();
+        }
+        self.sent = true;
+        self.initial.to_vec()
+    }
+}
+
+fn guard_xoauth2_server(server: &ServerConfig, incoming: bool) -> Result<(), String> {
+    if server.trusted_certificate.is_some() {
+        return Err("This sign-in only works with the provider's mail servers.".into());
+    }
+    let tls_ok = if incoming {
+        server.tls_mode == TlsMode::Tls
+    } else {
+        server.tls_mode == TlsMode::StartTls
+    };
+    if !tls_ok {
+        return Err("This sign-in only works with the provider's mail servers.".into());
+    }
+    crate::oauth::allow_xoauth2_server(&server.host, server.port, incoming)
+}
+
+pub(crate) fn smtp_auth_mechanisms(xoauth2: bool) -> Vec<Mechanism> {
+    if xoauth2 {
+        vec![Mechanism::Xoauth2]
+    } else {
+        vec![Mechanism::Plain, Mechanism::Login]
+    }
 }
 
 fn verify_pinned_stream(
@@ -374,11 +626,13 @@ async fn smtp_reply(tcp: &mut TcpStream, expected: &[u8; 3]) -> Result<bool, Str
 async fn connect_pinned_smtp(
     server: &ServerConfig,
     password: &str,
+    xoauth2: bool,
 ) -> Result<lettre::transport::smtp::client::AsyncSmtpConnection, String> {
+    if xoauth2 {
+        return Err("This sign-in only works with the provider's mail servers.".into());
+    }
     tokio::time::timeout(CONNECT_TIMEOUT, async {
-        use lettre::transport::smtp::{
-            authentication::Mechanism, client::AsyncSmtpConnection, extension::ClientId,
-        };
+        use lettre::transport::smtp::{client::AsyncSmtpConnection, extension::ClientId};
         crate::bridge::validate_loopback(&server.host)?;
         let pem = server
             .trusted_certificate
@@ -431,7 +685,7 @@ async fn connect_pinned_smtp(
                 .map_err(|error| redact_error(&error, "Outgoing greeting"))?;
         connection
             .auth(
-                &[Mechanism::Plain, Mechanism::Login],
+                &smtp_auth_mechanisms(false),
                 &Credentials::new(server.username.clone(), password.to_owned()),
             )
             .await
@@ -461,9 +715,18 @@ pub(crate) async fn test_smtp(
     email: &str,
     password: &str,
 ) -> Result<(), String> {
+    test_smtp_auth(server, email, password, false).await
+}
+
+pub(crate) async fn test_smtp_auth(
+    server: &ServerConfig,
+    email: &str,
+    password: &str,
+    xoauth2: bool,
+) -> Result<(), String> {
     let password = Zeroizing::new(password.to_string());
     if server.trusted_certificate.is_some() {
-        let mut connection = connect_pinned_smtp(server, &password).await?;
+        let mut connection = connect_pinned_smtp(server, &password, xoauth2).await?;
         let connected = tokio::time::timeout(CONNECT_TIMEOUT, connection.test_connected())
             .await
             .map_err(|_| "Outgoing server timed out.".to_string())?;
@@ -475,7 +738,7 @@ pub(crate) async fn test_smtp(
             .map_err(|_| "Enter a valid sender address.".to_string())?;
         return Ok(());
     }
-    let transport = smtp_transport(server, &password)?;
+    let transport = smtp_transport(server, &password, xoauth2)?;
     let connected = tokio::time::timeout(CONNECT_TIMEOUT, transport.test_connection())
         .await
         .map_err(|_| "Outgoing server timed out.".to_string())?
@@ -508,7 +771,11 @@ fn alternative_multipart(draft: &ComposeDraft) -> MultiPart {
 fn smtp_transport(
     server: &ServerConfig,
     password: &Zeroizing<String>,
+    xoauth2: bool,
 ) -> Result<AsyncSmtpTransport<Tokio1Executor>, String> {
+    if xoauth2 {
+        guard_xoauth2_server(server, false)?;
+    }
     let credentials = Credentials::new(server.username.clone(), password.as_str().to_owned());
     if server.trusted_certificate.is_some() {
         return Err("Bridge certificate connections require the verified pinned transport.".into());
@@ -528,25 +795,169 @@ fn smtp_transport(
             TlsMode::Tls => Tls::Wrapper(parameters),
             TlsMode::StartTls => Tls::Required(parameters),
         };
-        return Ok(
-            AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&server.host)
-                .port(server.port)
-                .tls(tls)
-                .credentials(credentials)
-                .timeout(Some(CONNECT_TIMEOUT))
-                .build(),
-        );
+        let mut transport = AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&server.host)
+            .port(server.port)
+            .tls(tls)
+            .credentials(credentials)
+            .timeout(Some(CONNECT_TIMEOUT));
+        if xoauth2 {
+            transport = transport.authentication(smtp_auth_mechanisms(true));
+        }
+        return Ok(transport.build());
     }
     let builder = match server.tls_mode {
         TlsMode::Tls => AsyncSmtpTransport::<Tokio1Executor>::relay(&server.host),
         TlsMode::StartTls => AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&server.host),
     }
     .map_err(|error| redact_error(&error, "Outgoing TLS setup"))?;
-    Ok(builder
+    let mut transport = builder
         .port(server.port)
         .credentials(credentials)
-        .timeout(Some(CONNECT_TIMEOUT))
-        .build())
+        .timeout(Some(CONNECT_TIMEOUT));
+    if xoauth2 {
+        transport = transport.authentication(smtp_auth_mechanisms(true));
+    }
+    Ok(transport.build())
+}
+
+macro_rules! importance_header {
+    ($ty:ident, $name:literal) => {
+        #[derive(Clone, Debug)]
+        struct $ty(&'static str);
+
+        impl Header for $ty {
+            fn name() -> HeaderName {
+                HeaderName::new_from_ascii_str($name)
+            }
+
+            fn parse(_value: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+                Err("unused".into())
+            }
+
+            fn display(&self) -> HeaderValue {
+                HeaderValue::new(Self::name(), self.0.to_string())
+            }
+        }
+    };
+}
+
+importance_header!(ImportanceHeader, "Importance");
+importance_header!(XPriorityHeader, "X-Priority");
+importance_header!(PriorityHeader, "Priority");
+
+#[derive(Clone, Debug)]
+struct DispositionNotificationTo(String);
+
+impl Header for DispositionNotificationTo {
+    fn name() -> HeaderName {
+        HeaderName::new_from_ascii_str("Disposition-Notification-To")
+    }
+
+    fn parse(_value: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        Err("unused".into())
+    }
+
+    fn display(&self) -> HeaderValue {
+        HeaderValue::new(Self::name(), self.0.clone())
+    }
+}
+
+fn apply_read_receipt(
+    builder: lettre::message::MessageBuilder,
+    request: bool,
+    sender: &str,
+) -> lettre::message::MessageBuilder {
+    if !request {
+        return builder;
+    }
+    match crate::models::receipt_mailbox(sender) {
+        Some(address) => builder.header(DispositionNotificationTo(address)),
+        None => builder,
+    }
+}
+
+fn apply_importance(
+    builder: lettre::message::MessageBuilder,
+    importance: &str,
+) -> lettre::message::MessageBuilder {
+    match crate::models::canonical_importance(importance) {
+        "high" => builder
+            .header(ImportanceHeader("high"))
+            .header(XPriorityHeader("1"))
+            .header(PriorityHeader("urgent")),
+        "low" => builder
+            .header(ImportanceHeader("low"))
+            .header(XPriorityHeader("5"))
+            .header(PriorityHeader("non-urgent")),
+        _ => builder,
+    }
+}
+
+fn safe_receipt_subject(value: &str) -> String {
+    let cleaned: String = value
+        .chars()
+        .map(|character| {
+            if character.is_control() || character.is_whitespace() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .take(200)
+        .collect();
+    let cleaned = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    if cleaned.is_empty() {
+        "(no subject)".into()
+    } else {
+        cleaned
+    }
+}
+
+fn safe_original_message_id(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.len() > 200
+        || trimmed
+            .chars()
+            .any(|character| character.is_control() || character.is_whitespace())
+    {
+        return None;
+    }
+    let inner = trimmed.trim_start_matches('<').trim_end_matches('>').trim();
+    if inner.is_empty() || inner.contains('<') || inner.contains('>') || !inner.contains('@') {
+        return None;
+    }
+    Some(format!("<{inner}>"))
+}
+
+/// A manual read receipt. The original letter is not included.
+pub(crate) fn read_receipt_bytes(
+    from: &str,
+    to: &str,
+    original_message_id: Option<&str>,
+    subject: &str,
+) -> Result<Vec<u8>, String> {
+    let from = crate::models::receipt_mailbox(from)
+        .ok_or_else(|| "The sender address is invalid.".to_string())?;
+    let to = crate::models::receipt_mailbox(to)
+        .ok_or_else(|| "This message did not ask for a read receipt.".to_string())?;
+    let subject = safe_receipt_subject(subject);
+    let header_subject = if subject.is_ascii() {
+        format!("Read: {subject}")
+    } else {
+        "Read: message".to_string()
+    };
+    let message_id = format!("<{}@run.rosie.snap>", uuid::Uuid::new_v4());
+    let boundary = format!("postal-receipt-{}", uuid::Uuid::new_v4().as_simple());
+    let mut notice = format!("Reporting-UA: Postal Snap\r\nFinal-Recipient: rfc822; {from}\r\n");
+    if let Some(original) = original_message_id.and_then(safe_original_message_id) {
+        notice.push_str(&format!("Original-Message-ID: {original}\r\n"));
+    }
+    notice.push_str("Disposition: manual-action/MDN-sent-manually; displayed\r\n");
+    let human = format!("This is a read receipt for \"{subject}\".\r\n");
+    let message = format!(
+        "From: {from}\r\nTo: {to}\r\nSubject: {header_subject}\r\nMessage-ID: {message_id}\r\nMIME-Version: 1.0\r\nContent-Type: multipart/report; report-type=disposition-notification; boundary=\"{boundary}\"\r\n\r\n--{boundary}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n{human}\r\n--{boundary}\r\nContent-Type: message/disposition-notification\r\n\r\n{notice}\r\n--{boundary}--\r\n"
+    );
+    Ok(message.into_bytes())
 }
 
 #[cfg(test)]
@@ -602,6 +1013,17 @@ async fn build_message_with_id(
         .from(from)
         .subject(draft.subject.clone())
         .message_id(Some(message_id.to_string()));
+    let reply_to = draft
+        .reply_to
+        .as_deref()
+        .unwrap_or(account.summary.reply_to.as_str())
+        .trim();
+    if !reply_to.is_empty() {
+        let mailbox = reply_to
+            .parse::<Mailbox>()
+            .map_err(|_| "Enter one Reply-To address.".to_string())?;
+        builder = builder.reply_to(mailbox);
+    }
     for value in &draft.to {
         builder = builder.to(parse_mailbox(value)?);
     }
@@ -628,6 +1050,8 @@ async fn build_message_with_id(
             builder = builder.references(references);
         }
     }
+    builder = apply_importance(builder, &draft.importance);
+    builder = apply_read_receipt(builder, draft.request_receipt, sender_email);
 
     let mut inline_parts = Vec::new();
     let mut file_parts = Vec::new();
@@ -769,16 +1193,144 @@ fn escape_signature_html(value: &str) -> String {
         .replace('"', "&quot;")
 }
 
-/// Append the account signature once, with the conventional `-- ` marker.
-/// Retries reuse the queued draft, so the contains-check keeps it singular.
-pub fn apply_signature(mut draft: ComposeDraft, signature: &str) -> ComposeDraft {
+/// True when the app's own signature closes the text, or sits right above the
+/// trailing quote. A signature earlier in the body does not count.
+fn signature_present(text: &str, signature: &str) -> bool {
+    let marked = format!("-- \n{signature}");
+    let trimmed = text.trim_end();
+    if trimmed.ends_with(&marked) {
+        return true;
+    }
+    trailing_quote_start(trimmed).is_some_and(|index| {
+        trimmed[..index]
+            .trim_end_matches(['\r', '\n'])
+            .ends_with(&marked)
+    })
+}
+
+/// Index of the first line in a trailing run of `>` quotes.
+fn trailing_quote_start(text: &str) -> Option<usize> {
+    if text.is_empty() {
+        return None;
+    }
+    let mut starts = vec![0usize];
+    for (index, character) in text.char_indices() {
+        if character == '\n' {
+            starts.push(index + 1);
+        }
+    }
+    let mut quote_at = None;
+    for start in starts.into_iter().rev() {
+        let mut line = &text[start..];
+        if let Some(cut) = line.find('\n') {
+            line = &line[..cut];
+        }
+        let line = line.trim_end_matches('\r');
+        if line.is_empty() {
+            if quote_at.is_some() {
+                break;
+            }
+            continue;
+        }
+        if line.starts_with('>') {
+            quote_at = Some(start);
+        } else if quote_at.is_some() {
+            break;
+        } else {
+            return None;
+        }
+    }
+    quote_at
+}
+
+fn insert_plain_signature(text: &str, signature: &str, above_quote: bool) -> String {
+    let trimmed = text.trim_end();
+    if above_quote {
+        if let Some(index) = trailing_quote_start(trimmed) {
+            let head = trimmed[..index].trim_end_matches(['\r', '\n']);
+            let tail = &trimmed[index..];
+            if head.is_empty() {
+                format!("-- \n{signature}\n\n{tail}")
+            } else {
+                format!("{head}\n\n-- \n{signature}\n\n{tail}")
+            }
+        } else {
+            format!("{trimmed}\n\n-- \n{signature}")
+        }
+    } else {
+        format!("{trimmed}\n\n-- \n{signature}")
+    }
+}
+
+/// Start of a `<blockquote>` that closes at the end of the document.
+fn trailing_blockquote_open(html: &str) -> Option<usize> {
+    let end = html.trim_end().len();
+    if end == 0 {
+        return None;
+    }
+    let lower = html[..end].to_ascii_lowercase();
+    if !lower.ends_with("</blockquote>") {
+        return None;
+    }
+    let bytes = lower.as_bytes();
+    let mut stack = Vec::new();
+    let mut last_open = None;
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'<' && lower[index..].starts_with("<blockquote") {
+            let after = index + "<blockquote".len();
+            let boundary = bytes.get(after).copied();
+            if boundary
+                .is_none_or(|byte| byte.is_ascii_whitespace() || byte == b'>' || byte == b'/')
+            {
+                stack.push(index);
+                index = after;
+                continue;
+            }
+        } else if bytes[index] == b'<' && lower[index..].starts_with("</blockquote>") {
+            if let Some(open) = stack.pop() {
+                last_open = Some(open);
+            }
+            index += "</blockquote>".len();
+            continue;
+        }
+        index += 1;
+    }
+    last_open
+}
+
+fn insert_html_signature(html: &str, signature_html: &str, above_quote: bool) -> String {
+    if above_quote {
+        if let Some(index) = trailing_blockquote_open(html) {
+            let mut out = String::with_capacity(html.len() + signature_html.len());
+            out.push_str(&html[..index]);
+            out.push_str(signature_html);
+            out.push_str(&html[index..]);
+            out
+        } else {
+            format!("{html}{signature_html}")
+        }
+    } else {
+        format!("{html}{signature_html}")
+    }
+}
+
+/// Add the account signature once, with the conventional `-- ` marker.
+/// When `above_quote` is set, a trailing reply or forward quote keeps the
+/// signature above that quote. Otherwise the signature follows the message.
+/// Retries reuse the queued draft, so a draft that already contains the
+/// marker is left unchanged.
+pub fn apply_signature(
+    mut draft: ComposeDraft,
+    signature: &str,
+    above_quote: bool,
+) -> ComposeDraft {
     let signature = signature.trim();
-    let plain = draft.body_format == BodyFormat::Plain;
-    let already_applied = draft.text_body.ends_with(&format!("\n\n-- \n{signature}"));
-    if signature.is_empty() || already_applied {
+    if signature.is_empty() || signature_present(&draft.text_body, signature) {
         return draft;
     }
-    draft.text_body = format!("{}\n\n-- \n{signature}", draft.text_body.trim_end());
+    let plain = draft.body_format == BodyFormat::Plain;
+    draft.text_body = insert_plain_signature(&draft.text_body, signature, above_quote);
     if plain {
         return draft;
     }
@@ -786,7 +1338,11 @@ pub fn apply_signature(mut draft: ComposeDraft, signature: &str) -> ComposeDraft
     if draft.html_body.trim().is_empty() {
         draft.html_body = format!("<p>-- </p><p>{html_lines}</p>");
     } else {
-        draft.html_body = format!("{}<br><br>-- <br>{html_lines}", draft.html_body);
+        draft.html_body = insert_html_signature(
+            &draft.html_body,
+            &format!("<br><br>-- <br>{html_lines}"),
+            above_quote,
+        );
     }
     draft
 }
@@ -795,7 +1351,8 @@ pub fn apply_signature(mut draft: ComposeDraft, signature: &str) -> ComposeDraft
 mod plain_tests {
     use super::*;
     use crate::models::{
-        AccountSummary, BodyFormat, ComposeAttachment, ProviderKind, ServerConfig, TlsMode,
+        AccountSummary, BodyFormat, ComposeAttachment, DraftSourceKind, ProviderKind, ServerConfig,
+        TlsMode,
     };
 
     // Failure modes for plain-text sends:
@@ -824,6 +1381,7 @@ mod plain_tests {
                 aliases: vec![],
                 auth_method: "password".into(),
                 signature: String::new(),
+                reply_to: String::new(),
                 color: None,
             },
             imap: ServerConfig {
@@ -848,6 +1406,10 @@ mod plain_tests {
             body_format: format,
             source_message_id: None,
             source_kind: None,
+            include_signature: true,
+            importance: String::new(),
+            request_receipt: false,
+            reply_to: None,
             id: None,
             account_id: "account-1".into(),
             from: None,
@@ -880,6 +1442,52 @@ mod plain_tests {
             content_id: inline.then(|| "cid-1@inline".to_string()),
             size: None,
         }
+    }
+
+    #[tokio::test]
+    async fn reply_to_is_included_only_when_the_account_has_one() {
+        let mut account = account();
+        account.summary.reply_to = "Ada <replies@example.com>".into();
+        let bytes = build_message(&account, &draft(BodyFormat::Plain, "Hello"))
+            .await
+            .unwrap()
+            .formatted();
+        let out = String::from_utf8(bytes).unwrap();
+        let lower = out.to_ascii_lowercase();
+        assert_eq!(lower.matches("reply-to:").count(), 1);
+        assert!(out.contains("replies@example.com"));
+        let plain = rendered(&draft(BodyFormat::Plain, "Hello")).await;
+        assert!(!plain.to_ascii_lowercase().contains("reply-to:"));
+
+        let mut cleared = draft(BodyFormat::Plain, "Hello");
+        cleared.reply_to = Some(String::new());
+        account.summary.reply_to = "replies@example.com".into();
+        let bytes = build_message(&account, &cleared).await.unwrap().formatted();
+        let cleared_out = String::from_utf8(bytes).unwrap();
+        assert!(!cleared_out.to_ascii_lowercase().contains("reply-to:"));
+
+        let mut replaced = draft(BodyFormat::Plain, "Hello");
+        replaced.reply_to = Some("other@example.com".into());
+        let bytes = build_message(&account, &replaced)
+            .await
+            .unwrap()
+            .formatted();
+        let replaced_out = String::from_utf8(bytes).unwrap();
+        assert!(replaced_out.contains("other@example.com"));
+        assert!(!replaced_out.contains("replies@example.com"));
+    }
+
+    #[tokio::test]
+    async fn invalid_draft_reply_to_is_an_error_not_dropped() {
+        // Failure modes:
+        // 1. The message builds without Reply-To (silent drop).
+        // 2. The error text differs from the validation message.
+        let mut bad = draft(BodyFormat::Plain, "Hello");
+        bad.reply_to = Some("not an address".into());
+        assert_eq!(
+            build_message(&account(), &bad).await.err().as_deref(),
+            Some("Enter one Reply-To address.")
+        );
     }
 
     #[tokio::test]
@@ -953,11 +1561,91 @@ mod plain_tests {
     #[test]
     fn plain_signature_is_text_only_and_applied_once() {
         let plain = draft(BodyFormat::Plain, "Hello");
-        let signed = apply_signature(plain.clone(), "Sam\nsam@example.com");
+        let signed = apply_signature(plain.clone(), "Sam\nsam@example.com", true);
         assert_eq!(signed.text_body, "Hello\n\n-- \nSam\nsam@example.com");
         assert_eq!(signed.html_body, plain.html_body);
-        let twice = apply_signature(signed.clone(), "Sam\nsam@example.com");
+        let twice = apply_signature(signed.clone(), "Sam\nsam@example.com", true);
         assert_eq!(twice.text_body, signed.text_body);
+    }
+
+    #[test]
+    fn signature_sits_above_a_trailing_quote() {
+        let mut reply = draft(
+            BodyFormat::Html,
+            "Thanks\n\n> On Monday, Jane wrote:\n> Hello",
+        );
+        reply.html_body = "<p>Thanks</p><blockquote><p>Hello</p></blockquote>".into();
+        let signed = apply_signature(reply, "Best,\nSam <sam>", true);
+        assert_eq!(
+            signed.text_body,
+            "Thanks\n\n-- \nBest,\nSam <sam>\n\n> On Monday, Jane wrote:\n> Hello"
+        );
+        assert!(signed
+            .html_body
+            .contains("<p>Thanks</p><br><br>-- <br>Best,<br>Sam &lt;sam&gt;<blockquote>"));
+        let twice = apply_signature(signed.clone(), "Best,\nSam <sam>", true);
+        assert_eq!(twice.text_body, signed.text_body);
+        assert_eq!(twice.html_body, signed.html_body);
+
+        let mut note = draft(BodyFormat::Html, "Thanks\n\n> Hello\n\nPS");
+        note.html_body = "<p>Thanks</p><blockquote><p>Hello</p></blockquote><p>PS</p>".into();
+        let after = apply_signature(note, "Best", true);
+        assert!(after.text_body.ends_with("PS\n\n-- \nBest"));
+        assert!(after.html_body.ends_with("<p>PS</p><br><br>-- <br>Best"));
+    }
+
+    #[test]
+    fn an_old_signature_in_the_body_does_not_block_a_new_one() {
+        // Failure modes:
+        // 1. A forward whose body holds an older signature gets none.
+        // 2. A signature followed by more text counts as already applied.
+        // 3. A retry after an above-quote signature signs again.
+        // 4. A retry after a signature placed before a leading quote signs again.
+        let sig = "Sam\nsam@example.com";
+        let forward = "Hi\n\n-- \nSam\nsam@example.com\n\nFwd note\n\n> Original text";
+        let signed = apply_signature(draft(BodyFormat::Plain, forward), sig, true);
+        assert_eq!(
+            signed.text_body,
+            "Hi\n\n-- \nSam\nsam@example.com\n\nFwd note\n\n-- \nSam\nsam@example.com\n\n> Original text"
+        );
+        assert_eq!(
+            apply_signature(signed.clone(), sig, true).text_body,
+            signed.text_body
+        );
+
+        let below = apply_signature(
+            draft(BodyFormat::Plain, "Hi\n\n-- \nSam\n\nMore text"),
+            "Sam",
+            false,
+        );
+        assert!(below.text_body.ends_with("More text\n\n-- \nSam"));
+        assert_eq!(
+            apply_signature(below.clone(), "Sam", false).text_body,
+            below.text_body
+        );
+
+        let leading = apply_signature(draft(BodyFormat::Plain, "> quote\n> more"), "Sam", true);
+        assert_eq!(leading.text_body, "-- \nSam\n\n> quote\n> more");
+        assert_eq!(
+            apply_signature(leading.clone(), "Sam", true).text_body,
+            leading.text_body
+        );
+    }
+
+    #[test]
+    fn signature_can_follow_a_trailing_quote() {
+        let mut reply = draft(
+            BodyFormat::Html,
+            "Thanks\n\n> On Monday, Jane wrote:\n> Hello",
+        );
+        reply.html_body = "<p>Thanks</p><blockquote><p>Hello</p></blockquote>".into();
+        let signed = apply_signature(reply, "Best,\nSam <sam>", false);
+        assert!(signed
+            .text_body
+            .ends_with("> Hello\n\n-- \nBest,\nSam <sam>"));
+        assert!(signed
+            .html_body
+            .ends_with("</blockquote><br><br>-- <br>Best,<br>Sam &lt;sam&gt;"));
     }
 
     #[tokio::test]
@@ -968,5 +1656,176 @@ mod plain_tests {
         let out = String::from_utf8(bytes).unwrap();
         assert!(out.contains("format=flowed"));
         assert!(!out.contains("text/html"));
+    }
+
+    #[test]
+    fn redirect_keeps_the_original_and_leaves_bcc_off_the_message() {
+        let mut message = draft(BodyFormat::Html, "ignored");
+        message.subject = "DO-NOT-SEND-SUBJECT".into();
+        message.to = vec!["Jane Doe <jane@example.com>".into()];
+        message.cc = vec!["cc@example.com".into()];
+        message.bcc = vec!["hidden-bcc@example.com".into()];
+        message.source_kind = Some(DraftSourceKind::Redirect);
+        let raw = b"From: ada@example.com\r\nSubject: Picnic\r\n\r\nORIGINAL-BODY";
+        let prepared = prepare_redirect(&account(), &message, raw).unwrap();
+        let text = String::from_utf8(prepared.bytes.clone()).unwrap();
+        assert!(text.starts_with("Resent-From:"));
+        assert!(text.contains("sam@example.com"));
+        assert!(text.contains(&format!("Resent-Message-ID: {}", prepared.message_id)));
+        assert!(text.contains("Resent-To:"));
+        assert!(text.contains("jane@example.com"));
+        assert!(text.contains("Resent-Cc:"));
+        assert!(text.contains("cc@example.com"));
+        assert!(!text.contains("Resent-Bcc"));
+        assert!(!text.contains("hidden-bcc@example.com"));
+        assert!(!text.contains("DO-NOT-SEND-SUBJECT"));
+        assert!(!text.contains("HTMLSECRET"));
+        assert!(!text.contains("ignored"));
+        assert!(prepared.bytes.ends_with(raw));
+        assert_eq!(
+            sent_copy_header(&prepared.message_id, &prepared.bytes),
+            "Resent-Message-ID"
+        );
+        assert_eq!(
+            sent_copy_header("<a@b>", b"Message-ID: <a@b>\r\n\r\nHi"),
+            "Message-ID"
+        );
+
+        message.to.clear();
+        message.cc.clear();
+        let hidden = prepare_redirect(&account(), &message, raw).unwrap();
+        let hidden_text = String::from_utf8(hidden.bytes).unwrap();
+        assert!(!hidden_text.contains("Resent-To"));
+        assert!(!hidden_text.contains("Resent-Cc"));
+        assert!(!hidden_text.contains("hidden-bcc@example.com"));
+        assert!(hidden_text.contains("Resent-From:"));
+
+        message.bcc.clear();
+        assert_eq!(
+            prepare_redirect(&account(), &message, raw).err().as_deref(),
+            Some("Add at least one recipient.")
+        );
+        message.to = vec!["jane@example.com\r\nBcc: hidden-bcc@example.com".into()];
+        assert!(prepare_redirect(&account(), &message, raw).is_err());
+        message.to = vec!["jane@example.com".into()];
+        assert_eq!(
+            prepare_redirect(&account(), &message, b"").err().as_deref(),
+            Some("This message has not been downloaded yet.")
+        );
+    }
+
+    #[test]
+    fn redirect_removes_bcc_from_the_original_headers() {
+        // Failure modes:
+        // 1. A Bcc header in the original header block reaches the output.
+        // 2. Mixed-case names (BCC :, bcc:) survive.
+        // 3. Folded Bcc continuation lines survive.
+        // 4. Bare LF headers are missed.
+        // 5. A Bcc-looking line in the body is stripped.
+        // 6. Other headers such as X-Bcc-Note are stripped.
+        // 7. A header block with no end inside the bound is sent.
+        let message = draft(BodyFormat::Plain, "ignored");
+        let raw = b"From: ada@example.com\r\nBCC : leak1@example.com\r\nSubject: Picnic\r\nbcc: leak2@example.com,\r\n\tleak3@example.com\r\nX-Bcc-Note: keep\r\n\r\nBody line\r\nBcc: body-keep@example.com\r\n";
+        let prepared = prepare_redirect(&account(), &message, raw).unwrap();
+        let text = String::from_utf8(prepared.bytes.clone()).unwrap();
+        let lower = text.to_ascii_lowercase();
+        assert!(!lower.contains("leak1"));
+        assert!(!lower.contains("leak2"));
+        assert!(!lower.contains("leak3"));
+        assert!(text.contains("X-Bcc-Note: keep\r\n"));
+        assert!(text.contains("Subject: Picnic\r\nX-Bcc-Note: keep\r\n\r\n"));
+        assert!(prepared
+            .bytes
+            .ends_with(b"\r\n\r\nBody line\r\nBcc: body-keep@example.com\r\n"));
+
+        let lf = b"From: ada@example.com\nBcc: leak4@example.com\nSubject: Lf\n\nBody\n";
+        let prepared = prepare_redirect(&account(), &message, lf).unwrap();
+        let text = String::from_utf8(prepared.bytes.clone()).unwrap();
+        assert!(!text.contains("leak4"));
+        assert!(prepared.bytes.ends_with(b"Subject: Lf\n\nBody\n"));
+
+        let mut huge = b"From: ada@example.com\r\n".to_vec();
+        while huge.len() < 80 * 1024 {
+            huge.extend_from_slice(b"X-Pad: 1\r\n");
+        }
+        huge.extend_from_slice(b"\r\nBody");
+        assert!(prepare_redirect(&account(), &message, &huge).is_err());
+    }
+
+    #[tokio::test]
+    async fn high_importance_uses_fixed_headers() {
+        let mut message = draft(BodyFormat::Plain, "Hello");
+        message.importance = "high".into();
+        let high = rendered(&message).await;
+        assert!(high.contains("Importance: high"));
+        assert!(high.contains("X-Priority: 1"));
+        assert!(high.contains("Priority: urgent"));
+        message.importance = "low".into();
+        let low = rendered(&message).await;
+        assert!(low.contains("Importance: low"));
+        assert!(low.contains("X-Priority: 5"));
+        assert!(low.contains("Priority: non-urgent"));
+        message.importance = "high\r\nBcc: evil@example.com".into();
+        let rejected = rendered(&message).await;
+        assert!(!rejected.to_ascii_lowercase().contains("importance:"));
+        assert!(!rejected.to_ascii_lowercase().contains("evil@example.com"));
+        message.importance = String::new();
+        let normal = rendered(&message).await;
+        assert!(!normal.to_ascii_lowercase().contains("importance:"));
+    }
+
+    #[tokio::test]
+    async fn read_receipt_request_uses_the_account_address() {
+        let mut message = draft(BodyFormat::Plain, "Hello");
+        message.request_receipt = true;
+        let asked = rendered(&message).await;
+        assert!(asked.contains("Disposition-Notification-To: sam@example.com"));
+        message.request_receipt = false;
+        let plain = rendered(&message).await;
+        assert!(!plain
+            .to_ascii_lowercase()
+            .contains("disposition-notification-to"));
+    }
+
+    #[test]
+    fn read_receipt_omits_the_original_letter() {
+        let bytes = read_receipt_bytes(
+            "Sam@Example.com",
+            "jane@example.com",
+            Some("<note@example.com>"),
+            "Picnic\r\nBcc: evil@example.com",
+        )
+        .unwrap();
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.contains("From: sam@example.com"));
+        assert!(text.contains("To: jane@example.com"));
+        assert!(text.contains("Subject: Read: Picnic Bcc: evil@example.com"));
+        assert!(text.contains("Original-Message-ID: <note@example.com>"));
+        assert!(text.contains("Disposition: manual-action/MDN-sent-manually; displayed"));
+        assert!(!text.contains("\r\nBcc:"));
+        assert!(read_receipt_bytes("sam@example.com", "not-an-address", None, "Hi").is_err());
+        let hidden = read_receipt_bytes(
+            "sam@example.com",
+            "jane@example.com",
+            Some("note\r\nBcc: evil@example.com"),
+            "Hi",
+        )
+        .unwrap();
+        let hidden = String::from_utf8(hidden).unwrap();
+        assert!(!hidden.contains("Original-Message-ID"));
+        assert!(!hidden.contains("evil@example.com"));
+    }
+
+    #[test]
+    fn xoauth2_sends_the_bearer_once() {
+        let mut auth = Xoauth2Authenticator::new("sam@gmail.com", "token-1");
+        let first = Authenticator::process(&mut auth, b"");
+        assert_eq!(first, b"user=sam@gmail.com\x01auth=Bearer token-1\x01\x01");
+        assert!(Authenticator::process(&mut auth, b"{\"status\":\"401\"}").is_empty());
+        assert_eq!(smtp_auth_mechanisms(true), vec![Mechanism::Xoauth2]);
+        assert_eq!(
+            smtp_auth_mechanisms(false),
+            vec![Mechanism::Plain, Mechanism::Login]
+        );
     }
 }

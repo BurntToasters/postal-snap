@@ -37,6 +37,23 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
     };
     let connectionLoadAttempts = 0;
     let folderLoadAttempts = 0;
+    let accountOrder: string[] | null = null;
+    let accountPolicy = {
+      mode: "recent",
+      days: 90,
+      maxBytes: 1_073_741_824,
+    };
+    function listedAccounts() {
+      const listed = (params.has("multiAccount") ? accounts : [account]).map(
+        (item) => ({ ...item, aliases: [...(item.aliases ?? [])] }),
+      );
+      if (!accountOrder) return listed;
+      const byId = new Map(listed.map((item) => [item.id, item]));
+      return accountOrder.flatMap((id) => {
+        const item = byId.get(id);
+        return item ? [item] : [];
+      });
+    }
     function ownedAccount(id: unknown) {
       const item = accounts.find((candidate) => candidate.id === id);
       if (!item)
@@ -232,9 +249,88 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
         ) {
           return [];
         }
-        return (params.has("multiAccount") ? accounts : [account]).map(
-          (item) => ({ ...item, aliases: [...(item.aliases ?? [])] }),
+        return listedAccounts();
+      },
+      get_account_cache_policy() {
+        return { ...accountPolicy };
+      },
+      set_account_cache_policy(args: Record<string, unknown>) {
+        const policy = args.policy as
+          { mode?: string; days?: number; maxBytes?: number } | undefined;
+        if (!policy || (policy.mode !== "recent" && policy.mode !== "full")) {
+          throw {
+            code: "invalidInput",
+            message: "Choose a valid download setting.",
+            retryable: false,
+          };
+        }
+        accountPolicy = {
+          mode: policy.mode,
+          days: Number(policy.days ?? 0),
+          maxBytes: Number(policy.maxBytes ?? 0),
+        };
+        return { ...accountPolicy };
+      },
+      get_account_cache_usage() {
+        return {
+          bytes: 4096,
+          maxBytes: accountPolicy.maxBytes,
+          messageCount: 4,
+        };
+      },
+      clear_account_downloads() {
+        return undefined;
+      },
+      update_account_color(args: Record<string, unknown>) {
+        const allowed = [
+          "blue",
+          "teal",
+          "green",
+          "amber",
+          "orange",
+          "red",
+          "pink",
+          "purple",
+        ];
+        const color = args.color == null ? null : String(args.color);
+        if (color !== null && !allowed.includes(color)) {
+          throw {
+            code: "invalidInput",
+            message: "Choose one of the listed colors.",
+            retryable: false,
+          };
+        }
+        const listed = params.has("multiAccount") ? accounts : [account];
+        const target = listed.find((item) => item.id === args.accountId);
+        if (!target) {
+          throw {
+            code: "notFound",
+            message: "Account not found.",
+            retryable: false,
+          };
+        }
+        target.color = color ?? undefined;
+        return { ...target, aliases: [...(target.aliases ?? [])] };
+      },
+      reorder_accounts(args: Record<string, unknown>) {
+        const ids = args.accountIds;
+        const listed = (params.has("multiAccount") ? accounts : [account]).map(
+          (item) => item.id,
         );
+        if (
+          !Array.isArray(ids) ||
+          ids.length !== listed.length ||
+          new Set(ids).size !== ids.length ||
+          !ids.every((id) => listed.includes(String(id)))
+        ) {
+          throw {
+            code: "invalidInput",
+            message: "Account order is invalid.",
+            retryable: false,
+          };
+        }
+        accountOrder = ids.map((id) => String(id));
+        return listedAccounts();
       },
       test_account(args: Record<string, unknown>) {
         state.setupRequest = args.request;
@@ -306,6 +402,16 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
         account.error = null;
         return { ...account };
       },
+      update_account_display_name(args: Record<string, unknown>) {
+        account.displayName = String(args.displayName ?? "").trim();
+        return { ...account };
+      },
+      update_account_reply_to(args: Record<string, unknown>) {
+        (account as { replyTo?: string }).replyTo = String(
+          args.replyTo ?? "",
+        ).trim();
+        return { ...account };
+      },
       update_account_signature(args: Record<string, unknown>) {
         (account as { signature?: string }).signature = String(args.signature);
         return { ...account };
@@ -318,6 +424,17 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
       },
       list_filter_rules() {
         state.rules = state.rules ?? [];
+        if (params.has("blockedSender") && state.rules.length === 0) {
+          state.rules.push({
+            id: "rule-block",
+            accountId: account.id,
+            name: "Block sender",
+            field: "from",
+            contains: "jane@example.com",
+            action: "move_junk",
+            enabled: true,
+          });
+        }
         return state.rules;
       },
       create_filter_rule(args: Record<string, unknown>) {
@@ -335,6 +452,16 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
           item.id === rule.id ? rule : item,
         );
         return rule;
+      },
+      reorder_filter_rules(args: Record<string, unknown>) {
+        const ids = args.orderedIds as string[];
+        state.rules = ids
+          .map((id) => state.rules.find((rule) => rule.id === id))
+          .filter((rule) => rule !== undefined);
+        return state.rules;
+      },
+      preview_filter_rule() {
+        return { matched: 0, capped: false, subjects: [] };
       },
       delete_filter_rule(args: Record<string, unknown>) {
         state.rules = state.rules.filter((rule) => rule.id !== args.ruleId);

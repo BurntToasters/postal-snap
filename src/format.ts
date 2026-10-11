@@ -31,6 +31,60 @@ export function formatMessageDate(value: string, now = new Date()): string {
   ).format(date);
 }
 
+/** List row date, with the clock time when the label is not already a time. */
+export function formatMessageListWhen(value: string, now = new Date()): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const label = formatMessageDate(value, now);
+  if (date.toDateString() === now.toDateString()) return label;
+  const time = new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+  return `${label}, ${time}`;
+}
+
+/** Calendar-day label for a date-ordered message list. */
+export function messageListDay(value: string, now = new Date()): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  if (date.toDateString() === now.toDateString()) return strings.mail.today;
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (date.toDateString() === yesterday.toDateString())
+    return strings.mail.yesterday;
+  const dayIndex = (item: Date) =>
+    Date.UTC(item.getFullYear(), item.getMonth(), item.getDate());
+  const diffDays = Math.round(
+    (dayIndex(now) - dayIndex(date)) / (24 * 60 * 60 * 1000),
+  );
+  if (diffDays > 1 && diffDays < 7) {
+    return new Intl.DateTimeFormat(undefined, { weekday: "long" }).format(date);
+  }
+  const sameYear = date.getFullYear() === now.getFullYear();
+  return new Intl.DateTimeFormat(
+    undefined,
+    sameYear
+      ? { month: "long", day: "numeric" }
+      : { month: "long", day: "numeric", year: "numeric" },
+  ).format(date);
+}
+
+/** Consecutive rows that share a day label stay under one heading. */
+export function groupByDayLabel<T>(
+  items: readonly T[],
+  labelOf: (item: T) => string,
+): Array<{ label: string; items: T[] }> {
+  const groups: Array<{ label: string; items: T[] }> = [];
+  for (const item of items) {
+    const label = labelOf(item);
+    const last = groups[groups.length - 1];
+    if (last && last.label === label) last.items.push(item);
+    else groups.push({ label, items: [item] });
+  }
+  return groups;
+}
+
 export function shortcutMod(): string {
   return document.documentElement.dataset.platform === "macos" ? "⌘" : "Ctrl";
 }
@@ -84,6 +138,19 @@ export function formatFullMessageDate(value: string, now = new Date()): string {
   }
 
   return relative ? `${fullDate} (${relative})` : fullDate;
+}
+
+/** Server arrival time when it is at least 15 minutes from the Date header. */
+export function notableArrival(
+  receivedAt: string,
+  arrivedAt?: string | null,
+): string | undefined {
+  if (!arrivedAt) return undefined;
+  const received = Date.parse(receivedAt);
+  const arrived = Date.parse(arrivedAt);
+  if (!Number.isFinite(received) || !Number.isFinite(arrived)) return undefined;
+  if (Math.abs(arrived - received) < 15 * 60 * 1000) return undefined;
+  return arrivedAt;
 }
 
 /** When a scheduled message sends: a time today, else a day and time. */

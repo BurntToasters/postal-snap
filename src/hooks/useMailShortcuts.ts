@@ -2,7 +2,13 @@ import { useEffect, useRef, type RefObject } from "react";
 import { TEXT_SCALES } from "../components/settings/displayChoices";
 import type { SettingsSaveUpdate } from "../components/settings/useSettingsSave";
 import { useAppStore } from "../store";
-import { navigationOrder } from "../threads";
+import {
+  inboxMailbox,
+  nextUnreadMailbox,
+  previousUnreadMailbox,
+} from "../components/mail/folderTree";
+import { strings } from "../i18n";
+import { navigationOrder, unreadStep } from "../threads";
 import type { AccountSummary, MessageSummary, ReadingPane } from "../types";
 
 export interface MailShortcutsOptions {
@@ -17,6 +23,14 @@ export interface MailShortcutsOptions {
   searchInput: RefObject<HTMLInputElement | null>;
   chooseMessage: (msg: MessageSummary) => Promise<unknown>;
   relativeMessage: (delta: number) => MessageSummary | undefined;
+}
+
+function archiveShortcutAction(): "archive" | "move-to-inbox" {
+  const state = useAppStore.getState();
+  const mailbox = state.mailboxes.find(
+    (item) => item.id === state.selectedMessage?.mailboxId,
+  );
+  return mailbox?.role === "archive" ? "move-to-inbox" : "archive";
 }
 
 export function useMailShortcuts({
@@ -148,7 +162,7 @@ export function useMailShortcuts({
       if (mod && !event.shiftKey && key === "r") {
         event.preventDefault();
         window.dispatchEvent(
-          new CustomEvent("postal:menu-action", { detail: "reply" }),
+          new CustomEvent("postal:menu-action", { detail: "reply-preferred" }),
         );
         return;
       }
@@ -169,14 +183,18 @@ export function useMailShortcuts({
       if (mod && !event.shiftKey && key === "e") {
         event.preventDefault();
         window.dispatchEvent(
-          new CustomEvent("postal:menu-action", { detail: "archive" }),
+          new CustomEvent("postal:menu-action", {
+            detail: archiveShortcutAction(),
+          }),
         );
         return;
       }
       if (event.ctrlKey && event.metaKey && key === "a") {
         event.preventDefault();
         window.dispatchEvent(
-          new CustomEvent("postal:menu-action", { detail: "archive" }),
+          new CustomEvent("postal:menu-action", {
+            detail: archiveShortcutAction(),
+          }),
         );
         return;
       }
@@ -255,22 +273,103 @@ export function useMailShortcuts({
         return;
       }
       if (isEditing || onChromeControl) return;
+      if (
+        !mod &&
+        !event.altKey &&
+        !event.shiftKey &&
+        (key === "n" || key === "p")
+      ) {
+        const state = useAppStore.getState();
+        const next = unreadStep(
+          state.messages,
+          state.settings.groupThreads &&
+            (state.mailboxSort ?? "date") === "date",
+          state.selectedMessage?.id,
+          key === "n" ? 1 : -1,
+        );
+        if (!next) return;
+        event.preventDefault();
+        void chooseMessage(next);
+        return;
+      }
+      if (!mod && !event.altKey && !event.shiftKey && key === "i") {
+        const state = useAppStore.getState();
+        const inbox = inboxMailbox(state.mailboxes);
+        event.preventDefault();
+        if (!inbox) {
+          state.setError(strings.mail.noInbox);
+          return;
+        }
+        if (inbox.id === state.activeMailboxId && !state.activeLocalView)
+          return;
+        state.selectMailbox(inbox.id);
+        return;
+      }
+      if (
+        !mod &&
+        !event.altKey &&
+        !event.shiftKey &&
+        (event.key === "]" || event.key === "[")
+      ) {
+        const state = useAppStore.getState();
+        const next =
+          event.key === "]"
+            ? nextUnreadMailbox(state.mailboxes, state.activeMailboxId)
+            : previousUnreadMailbox(state.mailboxes, state.activeMailboxId);
+        event.preventDefault();
+        if (!next) {
+          state.setError(strings.mail.noOtherUnreadMailbox);
+          return;
+        }
+        state.selectMailbox(next.id);
+        return;
+      }
       // List rows own arrows/Space/Home/End/j/k through roving tabindex.
       // The global handler must not double-handle them when focus is in list.
       const inMessageList = Boolean(
         target?.closest('[role="listbox"], [role="tree"]'),
       );
 
+      if (
+        !mod &&
+        !event.altKey &&
+        !event.shiftKey &&
+        (key === "r" || key === "a") &&
+        !inMessageList
+      ) {
+        const selected = useAppStore.getState().selectedMessage;
+        if (selected) {
+          event.preventDefault();
+          window.dispatchEvent(
+            new CustomEvent("postal:menu-action", {
+              detail: key === "a" ? "reply-all" : "reply-preferred",
+            }),
+          );
+        }
+        return;
+      }
       if (event.key === "Delete" || (mod && event.key === "Backspace")) {
         const state = useAppStore.getState();
         const currentMsg = state.selectedMessage;
         if (currentMsg) {
-          const trashBox = state.mailboxes.find((m) => m.role === "trash");
-          if (trashBox && trashBox.id !== currentMsg.mailboxId) {
+          const mailbox = state.mailboxes.find(
+            (item) => item.id === currentMsg.mailboxId,
+          );
+          if (mailbox?.role === "trash") {
             event.preventDefault();
             window.dispatchEvent(
-              new CustomEvent("postal:menu-action", { detail: "trash" }),
+              new CustomEvent("postal:menu-action", {
+                detail: "delete-forever",
+              }),
             );
+          } else {
+            const trashBox = state.mailboxes.find((m) => m.role === "trash");
+            if (trashBox && trashBox.id !== currentMsg.mailboxId) {
+              event.preventDefault();
+              window.dispatchEvent(
+                new CustomEvent("postal:menu-action", { detail: "trash" }),
+              );
+            }
           }
         }
       } else if (event.key === "ArrowDown" || event.key === "j") {

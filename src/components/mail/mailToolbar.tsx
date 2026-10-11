@@ -1,4 +1,11 @@
-import { useLayoutEffect, type FormEvent, type RefObject } from "react";
+import {
+  useId,
+  useLayoutEffect,
+  useState,
+  type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type RefObject,
+} from "react";
 import { MailPlus, PanelLeft, RefreshCw, Search, Settings } from "lucide-react";
 import { strings } from "../../i18n";
 import { GetMailMenu } from "./getMailMenu";
@@ -67,25 +74,60 @@ function useToolbarFit(
 interface SearchBoxProps {
   inputRef: RefObject<HTMLInputElement | null>;
   query: string;
+  recentSearches: string[];
   activeLocalView?: LocalView;
   allFolders: boolean;
   onSubmit: () => void;
   onQueryChange: (value: string) => void;
+  onPickRecent: (query: string) => void;
+  onForgetRecent: (query: string) => void;
+  onClearRecent: () => void;
   onToggleScope: () => void;
 }
 
 export function SearchBox({
   inputRef,
   query,
+  recentSearches,
   activeLocalView,
   allFolders,
   onSubmit,
   onQueryChange,
+  onPickRecent,
+  onForgetRecent,
+  onClearRecent,
   onToggleScope,
 }: SearchBoxProps) {
+  const [open, setOpen] = useState(false);
+  const menuId = useId();
+  const showRecent = open && query.trim() === "" && recentSearches.length > 0;
+
   function submit(event: FormEvent) {
     event.preventDefault();
+    setOpen(false);
     onSubmit();
+  }
+
+  function onSearchKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      if (showRecent) {
+        setOpen(false);
+        return;
+      }
+      if (query.trim()) {
+        onQueryChange("");
+        return;
+      }
+      inputRef.current?.blur();
+      return;
+    }
+    if (!showRecent) return;
+    if (event.key !== "ArrowDown") return;
+    event.preventDefault();
+    const menu = document.getElementById(menuId);
+    menu?.querySelector<HTMLButtonElement>("[role='menuitem']")?.focus();
   }
 
   return (
@@ -101,17 +143,67 @@ export function SearchBox({
         type="search"
         value={query}
         onChange={(event) => onQueryChange(event.target.value)}
+        onFocus={() => setOpen(true)}
+        onKeyDown={onSearchKeyDown}
         placeholder={
           activeLocalView ? strings.mail.searchMailboxOnly : strings.mail.search
         }
         aria-label={strings.mail.search}
         aria-keyshortcuts="Meta+F Control+F /"
-        disabled={Boolean(
-          activeLocalView &&
-          activeLocalView !== "drafts" &&
-          activeLocalView !== "outbox",
-        )}
+        aria-controls={showRecent ? menuId : undefined}
       />
+      {showRecent ? (
+        <div
+          id={menuId}
+          className="search-recent app-menu"
+          role="menu"
+          aria-label={strings.mail.recentSearches}
+          onMouseDown={(event) => event.preventDefault()}
+          onKeyDown={(event) => {
+            if (event.key !== "Escape") return;
+            event.preventDefault();
+            event.stopPropagation();
+            setOpen(false);
+            inputRef.current?.focus();
+          }}
+        >
+          <div className="context-menu-heading">
+            {strings.mail.recentSearches}
+          </div>
+          {recentSearches.map((recent) => (
+            <div key={recent} className="search-recent-row">
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setOpen(false);
+                  onPickRecent(recent);
+                }}
+              >
+                {recent}
+              </button>
+              <button
+                type="button"
+                className="search-recent-forget"
+                aria-label={strings.mail.forgetRecentSearch(recent)}
+                onClick={() => onForgetRecent(recent)}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              onClearRecent();
+            }}
+          >
+            {strings.mail.clearRecentSearches}
+          </button>
+        </div>
+      ) : null}
       <SearchTips />
       {!activeLocalView ? (
         <button

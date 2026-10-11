@@ -3,7 +3,9 @@ use super::{
 };
 use rusqlite::{params, OptionalExtension};
 
-use crate::models::{ComposeAttachment, ComposeDraft, FilterRule, OutboxSummary, SnoozedSummary};
+use crate::models::{
+    ComposeAttachment, ComposeDraft, FilterMatchPreview, FilterRule, OutboxSummary, SnoozedSummary,
+};
 
 /// Failed sends are preserved for an explicit user retry, but the outbox does
 /// not silently grow without bound: once this many messages (or bytes of
@@ -133,6 +135,8 @@ impl Database {
                     detail,
                     created_at,
                     send_at,
+                    preview: super::drafts::draft_preview(&draft.text_body, &draft.html_body),
+                    attachment_count: super::drafts::draft_file_count(&draft.attachments),
                 })
             })
             .collect()
@@ -246,6 +250,50 @@ impl Database {
                 params![account_id, message_id, until_iso],
             )
             .map_err(db_error)?;
+        Ok(())
+    }
+
+    /// Snooze every id, or none of them. A missing or foreign message rolls back.
+    pub fn snooze_messages(
+        &self,
+        account_id: &str,
+        message_ids: &[i64],
+        until_iso: &str,
+    ) -> Result<(), String> {
+        if message_ids.is_empty() {
+            return Err("Choose a message to snooze.".into());
+        }
+        if message_ids.len() > 200 {
+            return Err("Select up to 200 messages at a time.".into());
+        }
+        let mut unique = Vec::new();
+        for id in message_ids {
+            if !unique.contains(id) {
+                unique.push(*id);
+            }
+        }
+        let mut conn = self.conn()?;
+        let transaction = conn.transaction().map_err(db_error)?;
+        for id in unique {
+            let owner: Option<String> = transaction
+                .query_row("SELECT account_id FROM messages WHERE id=?1", [id], |row| {
+                    row.get(0)
+                })
+                .optional()
+                .map_err(db_error)?;
+            if owner.as_deref() != Some(account_id) {
+                return Err("Message does not belong to this account.".into());
+            }
+            transaction
+                .execute(
+                    "INSERT INTO snoozed_messages(account_id,message_id,snoozed_until)
+                     VALUES(?1,?2,?3)
+                     ON CONFLICT(account_id,message_id) DO UPDATE SET snoozed_until=excluded.snoozed_until",
+                    params![account_id, id, until_iso],
+                )
+                .map_err(db_error)?;
+        }
+        transaction.commit().map_err(db_error)?;
         Ok(())
     }
 
@@ -384,6 +432,36 @@ impl Database {
         Ok(())
     }
 
+    /// Persist rule order. `ordered_ids` must list this account's rules once.
+    pub fn reorder_filter_rules(
+        &self,
+        account_id: &str,
+        ordered_ids: &[String],
+    ) -> Result<Vec<FilterRule>, String> {
+        let existing = self.list_filter_rules(account_id)?;
+        let have: std::collections::HashSet<&str> =
+            existing.iter().map(|rule| rule.id.as_str()).collect();
+        let requested: std::collections::HashSet<&str> =
+            ordered_ids.iter().map(String::as_str).collect();
+        if requested.len() != ordered_ids.len() || requested != have {
+            return Err("Rule order is invalid.".into());
+        }
+        {
+            let mut conn = self.conn()?;
+            let transaction = conn.transaction().map_err(db_error)?;
+            for (position, id) in ordered_ids.iter().enumerate() {
+                transaction
+                    .execute(
+                        "UPDATE filter_rules SET position=?3 WHERE id=?1 AND account_id=?2",
+                        params![id, account_id, position as i64],
+                    )
+                    .map_err(db_error)?;
+            }
+            transaction.commit().map_err(db_error)?;
+        }
+        self.list_filter_rules(account_id)
+    }
+
     /// Unread inbox candidates for one rule. Bounded so a broad match cannot
     /// flood the offline queue. `newer_than_id` limits evaluation to rows
     /// cached by the current sync pass.
@@ -393,43 +471,71 @@ impl Database {
         rule: &FilterRule,
         newer_than_id: Option<i64>,
     ) -> Result<Vec<(i64, u32, String, i64)>, String> {
-        let needle: String = rule
-            .contains
-            .trim()
-            .to_ascii_lowercase()
-            .chars()
-            .flat_map(|character| match character {
-                '\\' => vec!['\\', '\\'],
-                '%' => vec!['\\', '%'],
-                '_' => vec!['\\', '_'],
-                other => vec![other],
-            })
-            .collect();
-        if needle.is_empty() {
+        let Some((column, like, domain_like)) = rule_match_pattern(rule) else {
             return Ok(Vec::new());
-        }
-        let column = match rule.field.as_str() {
-            "subject" => "m.subject",
-            _ => "(m.sender_name || ' ' || m.sender_address)",
         };
-        let like = format!("%{needle}%");
         let conn = self.conn()?;
         let mut statement = conn
             .prepare(&format!(
                 "SELECT m.id,m.uid,f.name,f.id FROM messages m JOIN mailboxes f ON f.id=m.mailbox_id
                  WHERE m.account_id=?1 AND f.role='inbox' AND m.is_read=0 AND m.pending_move_to IS NULL
                  AND (?3 IS NULL OR m.id > ?3)
-                 AND LOWER({column}) LIKE ?2 ESCAPE '\\' ORDER BY m.uid DESC LIMIT 100"
+                 AND (
+                   LOWER({column}) LIKE ?2 ESCAPE '\\'
+                   OR (LENGTH(?4) > 0 AND LOWER(m.sender_address) LIKE ?4 ESCAPE '\\')
+                 )
+                 ORDER BY m.uid DESC LIMIT 100"
             ))
             .map_err(db_error)?;
         let rows = statement
-            .query_map(params![account_id, like, newer_than_id], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
-            })
+            .query_map(
+                params![account_id, like, newer_than_id, domain_like],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
             .map_err(db_error)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(db_error)?;
         Ok(rows)
+    }
+
+    /// Same unread Inbox scan as filing, without changing mail.
+    pub fn preview_rule_matches(
+        &self,
+        account_id: &str,
+        rule: &FilterRule,
+    ) -> Result<FilterMatchPreview, String> {
+        let Some((column, like, domain_like)) = rule_match_pattern(rule) else {
+            return Ok(FilterMatchPreview {
+                matched: 0,
+                capped: false,
+                subjects: Vec::new(),
+            });
+        };
+        let conn = self.conn()?;
+        let mut statement = conn
+            .prepare(&format!(
+                "SELECT m.subject FROM messages m JOIN mailboxes f ON f.id=m.mailbox_id
+                 WHERE m.account_id=?1 AND f.role='inbox' AND m.is_read=0 AND m.pending_move_to IS NULL
+                 AND (
+                   LOWER({column}) LIKE ?2 ESCAPE '\\'
+                   OR (LENGTH(?3) > 0 AND LOWER(m.sender_address) LIKE ?3 ESCAPE '\\')
+                 )
+                 ORDER BY m.uid DESC LIMIT 100"
+            ))
+            .map_err(db_error)?;
+        let subjects = statement
+            .query_map(params![account_id, like, domain_like], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(db_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_error)?;
+        let capped = subjects.len() == 100;
+        Ok(FilterMatchPreview {
+            matched: subjects.len() as u32,
+            capped,
+            subjects: subjects.into_iter().take(5).map(preview_subject).collect(),
+        })
     }
 
     pub fn list_snoozed(&self, account_id: &str, now: &str) -> Result<Vec<SnoozedSummary>, String> {
@@ -576,4 +682,77 @@ impl Database {
         }
         transaction.commit().map_err(db_error)
     }
+}
+
+fn rule_match_pattern(rule: &FilterRule) -> Option<(&'static str, String, String)> {
+    let needle: String = rule
+        .contains
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .flat_map(|character| match character {
+            '\\' => vec!['\\', '\\'],
+            '%' => vec!['\\', '%'],
+            '_' => vec!['\\', '_'],
+            other => vec![other],
+        })
+        .collect();
+    if needle.is_empty() {
+        return None;
+    }
+    if rule.field == "domain" {
+        if !crate::models::valid_sender_domain(rule.contains.trim()) {
+            return None;
+        }
+        return Some((
+            "m.sender_address",
+            format!("%@{needle}"),
+            format!("%@%.{needle}"),
+        ));
+    }
+    if rule.field == "from" && is_full_address(rule.contains.trim()) {
+        // Exact address: no wildcards, so "me@x.io" never hits "me@x.io.com".
+        return Some(("m.sender_address", needle, String::new()));
+    }
+    let column = match rule.field.as_str() {
+        "subject" => "m.subject",
+        "to" => "m.recipients",
+        "from" => "(m.sender_name || ' ' || m.sender_address)",
+        _ => return None,
+    };
+    Some((column, format!("%{needle}%"), String::new()))
+}
+
+/// One bare `local@domain.tld`: one '@', non-empty local part, dotted domain, no spaces.
+fn is_full_address(value: &str) -> bool {
+    if value.contains(char::is_whitespace) || value.matches('@').count() != 1 {
+        return false;
+    }
+    let Some((local, domain)) = value.split_once('@') else {
+        return false;
+    };
+    !local.is_empty() && domain.contains('.') && !domain.starts_with('.') && !domain.ends_with('.')
+}
+
+fn preview_subject(value: String) -> String {
+    let mut subject = String::new();
+    let mut pending_space = false;
+    for character in value.trim().chars() {
+        if character.is_control() || character.is_whitespace() {
+            pending_space = !subject.is_empty();
+            continue;
+        }
+        if pending_space {
+            if subject.chars().count() + 1 >= 80 {
+                break;
+            }
+            subject.push(' ');
+            pending_space = false;
+        }
+        if subject.chars().count() == 80 {
+            break;
+        }
+        subject.push(character);
+    }
+    subject
 }

@@ -17,6 +17,7 @@ import {
   Type,
   X,
 } from "lucide-react";
+import { formatMessageDate } from "../../format";
 import { strings } from "../../i18n";
 import type { ComposerSeed } from "../../store";
 import type { BodyFormat, DraftSummary } from "../../types";
@@ -27,12 +28,14 @@ export interface ComposerHeaderProps {
   dragHandlers?: HTMLAttributes<HTMLElement>;
   seed: ComposerSeed | undefined;
   saveState: "unsaved" | "saving" | "saved";
+  savedAt?: string;
   maximized: boolean;
   sending: boolean;
   draftSyncState: DraftSummary["syncState"] | undefined;
   draftSyncDetail?: string | null;
   bodyFormat: BodyFormat;
   onToggleBodyFormat: () => void;
+  hideFormat?: boolean;
   setMinimized: Dispatch<SetStateAction<boolean>>;
   setMaximized: Dispatch<SetStateAction<boolean>>;
   requestClose: () => void | Promise<void>;
@@ -42,12 +45,14 @@ export function ComposerHeader({
   dragHandlers = {},
   seed,
   saveState,
+  savedAt,
   maximized,
   sending,
   draftSyncState,
   draftSyncDetail,
   bodyFormat,
   onToggleBodyFormat,
+  hideFormat = false,
   setMinimized,
   setMaximized,
   requestClose,
@@ -95,24 +100,28 @@ export function ComposerHeader({
             {saveState === "saving"
               ? strings.common.saving
               : saveState === "saved"
-                ? strings.composer.draftSaved
+                ? savedAt
+                  ? strings.composer.draftSavedAt(formatMessageDate(savedAt))
+                  : strings.composer.draftSaved
                 : ""}
           </small>
         </span>
         <div className="composer-window-controls">
-          <button
-            className="icon-button"
-            type="button"
-            ref={menuButtonRef}
-            onClick={() => setMenuOpen((open) => !open)}
-            disabled={sending}
-            aria-haspopup="menu"
-            aria-expanded={menuOpen}
-            aria-label={strings.composer.messageOptions}
-            title={strings.composer.messageOptions}
-          >
-            <MoreHorizontal />
-          </button>
+          {hideFormat ? null : (
+            <button
+              className="icon-button"
+              type="button"
+              ref={menuButtonRef}
+              onClick={() => setMenuOpen((open) => !open)}
+              disabled={sending}
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+              aria-label={strings.composer.messageOptions}
+              title={strings.composer.messageOptions}
+            >
+              <MoreHorizontal />
+            </button>
+          )}
           <button
             className="icon-button"
             type="button"
@@ -148,7 +157,7 @@ export function ComposerHeader({
             <X />
           </button>
         </div>
-        {menuOpen ? (
+        {menuOpen && !hideFormat ? (
           <div
             className="composer-options-menu app-menu"
             ref={menuRef}

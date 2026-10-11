@@ -1,4 +1,4 @@
-import type { Dispatch, SetStateAction } from "react";
+import type { Dispatch, ReactNode, SetStateAction } from "react";
 import type { Editor } from "@tiptap/core";
 import {
   AlignCenter,
@@ -12,6 +12,7 @@ import {
   Link as LinkIcon,
   List,
   ListOrdered,
+  Quote,
   Minus,
   MoreHorizontal,
   Redo2,
@@ -33,6 +34,8 @@ export interface FormatToolbarProps {
   setMoreFormattingOpen: Dispatch<SetStateAction<boolean>>;
   adjustIndent: (delta: number) => void;
   addLink: () => void;
+  /** Option toggles that share the formatting row. */
+  children?: ReactNode;
 }
 
 export function FormatToolbar({
@@ -43,10 +46,11 @@ export function FormatToolbar({
   setMoreFormattingOpen,
   adjustIndent,
   addLink,
+  children,
 }: FormatToolbarProps) {
   return (
     <>
-      <div className="format-toggle-row">
+      <div className="composer-toggle-row">
         <button
           type="button"
           className="toolbar-button format-toggle"
@@ -61,6 +65,7 @@ export function FormatToolbar({
             ? strings.composer.hideFormatting
             : strings.composer.showFormatting}
         </button>
+        {children}
       </div>
       <div
         id="composer-formatting"
@@ -291,6 +296,16 @@ export function FormatToolbar({
               title={strings.composer.numbers}
             >
               <ListOrdered />
+            </button>
+            <button
+              type="button"
+              className={editor?.isActive("blockquote") ? "active" : ""}
+              onClick={() => editor?.chain().focus().toggleBlockquote().run()}
+              aria-label={strings.composer.quote}
+              aria-pressed={Boolean(editor?.isActive("blockquote"))}
+              title={strings.composer.quote}
+            >
+              <Quote />
             </button>
             <button
               type="button"

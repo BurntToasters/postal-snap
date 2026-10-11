@@ -10,32 +10,77 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
     const mock = window.__POSTAL_SNAP_MOCK__ as MockShared;
     const state = window.__POSTAL_SNAP_TEST__ as MockState;
     const { account, summary, params } = mock;
+    let duplicatedDraft = false;
+    let discardedDraft = false;
     let lastSendOutcome: string | undefined;
     let lastSendDetail: string | null = null;
     let lastSendAccountId: string | undefined;
+    let recentSearches: string[] = [];
     Object.assign(mock.handlers, {
       list_drafts() {
-        return location.search.includes("localMail")
+        if (!location.search.includes("localMail") || discardedDraft) return [];
+        const original = {
+          id: "draft-1",
+          accountId: account.id,
+          recipients: "pat@example.com",
+          subject: "Family update",
+          updatedAt: "2026-08-18T10:00:00Z",
+          syncState: location.search.includes("conflict")
+            ? "conflict"
+            : "synced",
+          syncDetail: location.search.includes("conflict")
+            ? "A server edit was preserved as this recovered copy."
+            : null,
+          preview: params.has("draftPreview")
+            ? "Seeing the family Friday."
+            : "",
+          attachmentCount: params.has("draftFiles") ? 2 : 0,
+          fromAddress: params.has("draftFrom")
+            ? params.get("draftFrom") === "account"
+              ? account.email
+              : "alias@example.com"
+            : "",
+          sourceMessageId:
+            params.get("replyDraft") === "other"
+              ? 99
+              : params.has("replyDraft")
+                ? 10
+                : null,
+          sourceKind:
+            params.get("replyDraft") === "forward"
+              ? "forward"
+              : params.has("replyDraft") && params.get("replyDraft") !== "other"
+                ? "reply"
+                : null,
+        };
+        if (params.get("replyDraft") === "two") {
+          return [
+            {
+              ...original,
+              id: "draft-2",
+              updatedAt: "2026-08-18T12:00:00Z",
+              syncState: "localPending",
+              syncDetail: null,
+            },
+            original,
+          ];
+        }
+        return duplicatedDraft
           ? [
               {
-                id: "draft-1",
-                accountId: account.id,
-                recipients: "pat@example.com",
-                subject: "Family update",
-                updatedAt: "2026-08-18T10:00:00Z",
-                syncState: location.search.includes("conflict")
-                  ? "conflict"
-                  : "synced",
-                syncDetail: location.search.includes("conflict")
-                  ? "A server edit was preserved as this recovered copy."
-                  : null,
+                ...original,
+                id: "draft-2",
+                updatedAt: "2026-08-18T12:00:00Z",
+                syncState: "localPending",
+                syncDetail: null,
               },
+              original,
             ]
-          : [];
+          : [original];
       },
-      get_draft() {
+      get_draft(args: Record<string, unknown>) {
         return {
-          id: "draft-1",
+          id: String(args.draftId ?? "draft-1"),
           accountId: account.id,
           from: null,
           to: ["pat@example.com"],
@@ -96,13 +141,17 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
                 ? "scheduled"
                 : "needs_attention");
         if (outcome === "sent") return [];
-        return [
+        const rows = [
           {
             id: "outbox-1",
             accountId: lastSendAccountId ?? account.id,
             recipients: "lee@example.com",
             subject: "Could not confirm",
             state: outcome,
+            preview: params.has("outboxPreview")
+              ? "Please review the notes."
+              : "",
+            attachmentCount: params.has("outboxFiles") ? 2 : 0,
             detail:
               lastSendDetail ??
               (outcome === "sent_copy_pending"
@@ -112,7 +161,7 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
                   : outcome === "scheduled"
                     ? "Held for review. Undo anytime before it sends."
                     : "Delivery could not be confirmed."),
-            createdAt: "2026-08-18T11:00:00Z",
+            createdAt: params.has("noQueuedTime") ? "" : "2026-08-18T11:00:00Z",
             sendAt:
               outcome === "scheduled"
                 ? new Date(
@@ -124,8 +173,17 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
                 : null,
           },
         ];
+        if (params.has("attentionPair") && outcome === "needs_attention") {
+          rows.push({
+            ...rows[0],
+            id: "outbox-2",
+            subject: "Second unsent",
+          });
+        }
+        return rows;
       },
       get_outbox() {
+        const empty = location.search.includes("emptyOutbox");
         return {
           accountId: account.id,
           from: null,
@@ -133,9 +191,17 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
           cc: [],
           bcc: [],
           subject: "Could not confirm",
-          htmlBody: "<p>Please review</p>",
-          textBody: "Please review",
-          attachments: [],
+          htmlBody: empty ? "<p></p>" : "<p>Please review</p>",
+          textBody: empty ? "" : "Please review",
+          attachments: empty
+            ? []
+            : [
+                {
+                  token: "file-1",
+                  filename: "notes.txt",
+                  inline: false,
+                },
+              ],
           inReplyTo: null,
           references: null,
           sendAt: null,
@@ -172,17 +238,88 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
       set_mail_shortcut_guard() {
         return undefined;
       },
-      snooze_message() {
+      snooze_message(args: Record<string, unknown>) {
         state.snoozed = true;
+        if (typeof args.messageId === "number")
+          state.snoozedIds.push(args.messageId);
         return undefined;
       },
-      unsnooze_message() {
+      snooze_messages(args: Record<string, unknown>) {
+        state.snoozed = true;
+        if (Array.isArray(args.messageIds)) {
+          for (const id of args.messageIds) {
+            if (typeof id === "number") state.snoozedIds.push(id);
+          }
+        }
+        return undefined;
+      },
+      unsnooze_message(args: Record<string, unknown>) {
+        state.snoozedIds = state.snoozedIds.filter(
+          (id) => id !== args.messageId,
+        );
         return undefined;
       },
       list_snoozed() {
-        return [];
+        if (!location.search.includes("snoozedList")) return [];
+        const row = (
+          id: number,
+          subject: string,
+          senderName: string,
+          senderAddress: string,
+        ) => ({
+          message: {
+            id,
+            accountId: "account-1",
+            mailboxId: 1,
+            uid: id,
+            messageId: `<snooze-${id}@example.com>`,
+            subject,
+            senderName,
+            senderAddress,
+            recipients: "sam@icloud.com",
+            receivedAt: "2026-08-18T12:00:00Z",
+            preview: "",
+            isRead: true,
+            isStarred: false,
+            hasAttachments: false,
+            size: 256,
+          },
+          snoozedUntil: "2026-08-19T16:00:00Z",
+        });
+        return [
+          row(81, "Dentist reminder", "Clinic", "clinic@example.com"),
+          row(82, "Weekend plans", "Jane", "jane@example.com"),
+        ];
       },
       delete_draft() {
+        discardedDraft = true;
+        return undefined;
+      },
+      list_recent_searches() {
+        return recentSearches.slice();
+      },
+      remember_search(args: Record<string, unknown>) {
+        const text = String(args.query ?? "").trim();
+        if (!text) return recentSearches.slice();
+        recentSearches = [
+          text,
+          ...recentSearches.filter(
+            (query) => query.toLowerCase() !== text.toLowerCase(),
+          ),
+        ].slice(0, 8);
+        return recentSearches.slice();
+      },
+      forget_recent_search(args: Record<string, unknown>) {
+        const text = String(args.query ?? "")
+          .trim()
+          .toLowerCase();
+        recentSearches = recentSearches.filter(
+          (query) => query.toLowerCase() !== text,
+        );
+        return recentSearches.slice();
+      },
+      forget_recent_searches() {
+        recentSearches = [];
         return undefined;
       },
       search_cached_messages(args: Record<string, unknown>) {
@@ -190,6 +327,65 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
           { allFolders?: boolean; text?: string } | undefined;
         // "bodyonly" text: only the server has the match.
         if (search?.text?.includes("bodyonly")) return [];
+        const text = search?.text?.toLowerCase() ?? "";
+        if (text.includes("elsewhere")) {
+          return search?.allFolders
+            ? [{ ...summary, id: 46, uid: 46, subject: "Across account" }]
+            : [];
+        }
+        if (text.includes("on:")) {
+          return [
+            {
+              ...summary,
+              id: 45,
+              uid: 45,
+              subject: "August letter",
+            },
+          ];
+        }
+        if (text.includes("body:")) {
+          return [
+            {
+              ...summary,
+              id: 44,
+              uid: 44,
+              subject: "Receipt inside",
+            },
+          ];
+        }
+        if (text.includes("is:important")) {
+          return [
+            {
+              ...summary,
+              id: 41,
+              uid: 41,
+              subject: "Budget approval",
+              importance: "high",
+            },
+          ];
+        }
+        if (text.includes("is:pinned")) {
+          return [
+            {
+              ...summary,
+              id: 43,
+              uid: 43,
+              subject: "Kept note",
+              pinned: true,
+            },
+          ];
+        }
+        if (text.includes("is:low")) {
+          return [
+            {
+              ...summary,
+              id: 42,
+              uid: 42,
+              subject: "Optional note",
+              importance: "low",
+            },
+          ];
+        }
         return [
           {
             ...summary,
@@ -204,6 +400,35 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
           return [
             { ...summary, id: 77, uid: 77, subject: "Server body match" },
           ];
+        const text = search?.text?.toLowerCase() ?? "";
+        if (text.includes("elsewhere")) return [];
+        // Importance is stored locally, so the server has nothing to add.
+        if (text.includes("on:")) {
+          return [
+            {
+              ...summary,
+              id: 79,
+              uid: 79,
+              subject: "Server august",
+            },
+          ];
+        }
+        if (text.includes("body:")) {
+          return [
+            {
+              ...summary,
+              id: 78,
+              uid: 78,
+              subject: "Server receipt",
+            },
+          ];
+        }
+        if (
+          text.includes("is:important") ||
+          text.includes("is:low") ||
+          text.includes("is:pinned")
+        )
+          return [];
         return [
           {
             ...summary,
@@ -211,8 +436,13 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
           },
         ];
       },
-      save_draft() {
-        return { id: "draft-1", syncState: "localPending" };
+      save_draft(args: Record<string, unknown>) {
+        const draft = args.draft as { id?: string | null } | undefined;
+        if (!draft?.id) {
+          duplicatedDraft = true;
+          return { id: "draft-2", syncState: "localPending" };
+        }
+        return { id: draft.id, syncState: "localPending" };
       },
       send_message(args: Record<string, unknown>) {
         state.sentDraft = args.draft;
@@ -266,19 +496,55 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
           detail: lastSendDetail,
         };
       },
+      stage_pasted_image() {
+        return {
+          token: "pasted-token",
+          filename: "Pasted image.png",
+          contentType: "image/png",
+          inline: false,
+          contentId: null,
+          size: 68,
+        };
+      },
       choose_attachments() {
-        return location.search.includes("pickFile")
-          ? [
-              {
-                token: "picked-token-1",
-                filename: "budget.pdf",
-                contentType: "application/pdf",
-                inline: false,
-                contentId: null,
-                size: 4096,
-              },
-            ]
-          : [];
+        if (location.search.includes("pickImage")) {
+          return [
+            {
+              token: "picked-image",
+              filename: "family-photo.jpg",
+              contentType: "image/jpeg",
+              inline: false,
+              contentId: null,
+              size: 2048,
+            },
+          ];
+        }
+        if (
+          !location.search.includes("pickFile") &&
+          !location.search.includes("pickPair")
+        ) {
+          return [];
+        }
+        const budget = {
+          token: "picked-token-1",
+          filename: "budget.pdf",
+          contentType: "application/pdf",
+          inline: false,
+          contentId: null,
+          ...(location.search.includes("sizeMissing") ? {} : { size: 4096 }),
+        };
+        if (!location.search.includes("pickPair")) return [budget];
+        return [
+          budget,
+          {
+            token: "picked-token-2",
+            filename: "notes.txt",
+            contentType: "text/plain",
+            inline: false,
+            contentId: null,
+            size: 64,
+          },
+        ];
       },
       attach_dropped_files() {
         // Rust holds the paths; the UI only ever sees opaque tokens.
@@ -303,7 +569,16 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
               },
             ];
       },
-      preview_attachment() {
+      preview_attachment(args: Record<string, unknown>) {
+        if (args.attachmentId === "attach-2") {
+          return {
+            filename: "notes.txt",
+            contentType: "text/plain",
+            size: 64,
+            text: "Bring the salad.",
+            imageDataUrl: null,
+          };
+        }
         return {
           filename: "family.png",
           contentType: "image/png",
@@ -318,6 +593,18 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
             address: "jane@example.com",
             name: "Jane",
             useCount: 3,
+          },
+        ];
+      },
+      prepare_reply_attachments() {
+        return [
+          {
+            token: "reply-file",
+            filename: "family.png",
+            contentType: "image/png",
+            inline: false,
+            contentId: null,
+            size: 128,
           },
         ];
       },

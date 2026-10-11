@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AttachmentList } from "../components/reader/attachmentList";
 import { MessageHeader } from "../components/reader/messageHeader";
 import { ReaderToolbar } from "../components/reader/readerToolbar";
-import { SnoozePanel } from "../components/reader/snoozePanel";
+import { laterTodayIso, SnoozePanel } from "../components/reader/snoozePanel";
 import { strings } from "../i18n";
 import {
   makeAccount,
@@ -46,7 +46,8 @@ describe("message header", () => {
     expect(
       screen.getByRole("heading", { name: message.subject }),
     ).toHaveAttribute("tabindex", "-1");
-    expect(screen.getByText("2.0 KB")).toBeVisible();
+    expect(screen.getByText("2.0 KB", { selector: "dd" })).toBeVisible();
+    expect(screen.queryByRole("note")).toBeNull();
     expect(screen.getByText(/Sam.*Inbox/)).toBeVisible();
     fireEvent.click(
       screen.getByRole("button", { name: strings.reader.hideDetails }),
@@ -118,6 +119,130 @@ describe("message header", () => {
     expect(
       screen.getByRole("button", { name: strings.reader.copyAddress }),
     ).toBeVisible();
+    rerender(
+      <MessageHeader
+        message={messageDetail(
+          makeMessage({
+            senderName: "PayPal <service@paypal.com>",
+            senderAddress: "jane@example.com",
+          }),
+        )}
+        showDetails={false}
+        onToggleDetails={vi.fn()}
+        titleRef={createRef()}
+        treatAsOverlay={false}
+      />,
+    );
+    expect(
+      screen.getByRole("note", {
+        name: strings.reader.nameIncludesDifferentAddress("service@paypal.com"),
+      }),
+    ).toBeVisible();
+  });
+
+  it("names a mailing list on the message and in the details", () => {
+    const message = messageDetail(makeMessage(), {
+      listPost: "list@example.test",
+    });
+    const { rerender } = render(
+      <MessageHeader
+        message={message}
+        showDetails={false}
+        onToggleDetails={vi.fn()}
+        titleRef={createRef()}
+        treatAsOverlay={false}
+      />,
+    );
+    expect(
+      screen.getByRole("note", {
+        name: strings.reader.mailingList("list@example.test"),
+      }),
+    ).toBeVisible();
+    rerender(
+      <MessageHeader
+        message={messageDetail(makeMessage(), { listPost: "not-a-list" })}
+        showDetails
+        onToggleDetails={vi.fn()}
+        titleRef={createRef()}
+        treatAsOverlay={false}
+      />,
+    );
+    expect(screen.queryByRole("note", { name: /Mailing list/i })).toBeNull();
+    rerender(
+      <MessageHeader
+        message={message}
+        showDetails
+        onToggleDetails={vi.fn()}
+        titleRef={createRef()}
+        treatAsOverlay={false}
+      />,
+    );
+    expect(screen.getByText(strings.reader.mailingListLabel)).toBeVisible();
+    expect(screen.getByText("list@example.test")).toBeVisible();
+  });
+
+  it("shows a hidden copy when the message has one", () => {
+    const message = messageDetail(makeMessage(), {
+      to: ["sam@example.test"],
+      bcc: ["hidden@example.test"],
+    });
+    const { rerender } = render(
+      <MessageHeader
+        message={message}
+        showDetails
+        onToggleDetails={vi.fn()}
+        titleRef={createRef()}
+        treatAsOverlay={false}
+      />,
+    );
+    expect(
+      screen.getByText(strings.reader.bcc, { selector: "dt" }),
+    ).toBeVisible();
+    expect(screen.getAllByText("hidden@example.test")[0]).toBeVisible();
+    rerender(
+      <MessageHeader
+        message={messageDetail(makeMessage(), { bcc: [] })}
+        showDetails
+        onToggleDetails={vi.fn()}
+        titleRef={createRef()}
+        treatAsOverlay={false}
+      />,
+    );
+    expect(screen.queryByText(strings.reader.bcc)).toBeNull();
+  });
+
+  it("shows when the server received a message long after its date", () => {
+    const message = messageDetail(
+      makeMessage({
+        receivedAt: "2026-08-18T12:00:00Z",
+        arrivedAt: "2026-08-18T18:00:00Z",
+      }),
+    );
+    const { rerender } = render(
+      <MessageHeader
+        message={message}
+        showDetails
+        onToggleDetails={vi.fn()}
+        titleRef={createRef()}
+        treatAsOverlay={false}
+      />,
+    );
+    expect(screen.getByText(strings.reader.arrived)).toBeVisible();
+    rerender(
+      <MessageHeader
+        message={messageDetail(
+          makeMessage({
+            receivedAt: "2026-08-18T12:00:00Z",
+            arrivedAt: "2026-08-18T12:05:00Z",
+          }),
+        )}
+        showDetails
+        onToggleDetails={vi.fn()}
+        titleRef={createRef()}
+        treatAsOverlay={false}
+      />,
+    );
+    expect(screen.queryByText(strings.reader.arrived)).toBeNull();
   });
 });
 
@@ -130,14 +255,20 @@ describe("reader toolbar", () => {
     onArchive: vi.fn(),
     onTrash: vi.fn(),
     onPrint: vi.fn(),
+    onCopyMessageText: vi.fn(),
     onToggleRead: vi.fn(),
     onToggleStar: vi.fn(),
     onMoveJunk: vi.fn(),
+    onBlockSender: vi.fn(),
+    onMuteConversation: vi.fn(),
     onMoveToInbox: vi.fn(),
     onMoveToMailbox: vi.fn(),
     onOpenSnooze: vi.fn(),
+    onCreateRule: vi.fn(),
+    onMessagesFromSender: vi.fn(),
     onUnsubscribe: vi.fn(),
     onShowOriginal: vi.fn(),
+    onTogglePlain: vi.fn(),
     onToggleMore: vi.fn(),
     onOpenMore: vi.fn(),
     onCloseMore: vi.fn(),
@@ -207,10 +338,15 @@ describe("reader toolbar", () => {
 
     for (const label of [
       strings.reader.print,
+      strings.reader.copyMessageText,
       strings.reader.markRead,
       strings.reader.addStar,
       strings.reader.junk,
+      strings.reader.blockSender,
+      strings.reader.muteConversation,
       strings.reader.snooze,
+      strings.reader.createRuleFromSender,
+      strings.reader.messagesFromSender,
     ]) {
       fireEvent.click(screen.getByRole("menuitem", { name: label }));
     }
@@ -229,11 +365,307 @@ describe("reader toolbar", () => {
     expect(callbacks.onToggleMore).toHaveBeenCalled();
     expect(callbacks.onOpenMore).toHaveBeenCalledTimes(2);
     expect(callbacks.onPrint).toHaveBeenCalled();
+    expect(callbacks.onCopyMessageText).toHaveBeenCalled();
     expect(callbacks.onToggleRead).toHaveBeenCalled();
     expect(callbacks.onToggleStar).toHaveBeenCalled();
     expect(callbacks.onMoveJunk).toHaveBeenCalled();
+    expect(callbacks.onBlockSender).toHaveBeenCalled();
+    expect(callbacks.onMuteConversation).toHaveBeenCalled();
     expect(callbacks.onOpenSnooze).toHaveBeenCalled();
+    expect(callbacks.onCreateRule).toHaveBeenCalled();
+    expect(callbacks.onMessagesFromSender).toHaveBeenCalled();
+    expect(
+      screen.queryByRole("menuitem", { name: strings.reader.viewPlain }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("menuitem", {
+        name: strings.reader.markConversationRead,
+      }),
+    ).not.toBeInTheDocument();
     expect(callbacks.onMoveToMailbox).toHaveBeenCalledWith(2);
+  });
+
+  it("starts a subject rule from the message menu", () => {
+    const onCreateSubjectRule = vi.fn();
+    render(toolbar({ onCreateSubjectRule }));
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: strings.reader.createRuleFromSubject,
+      }),
+    );
+    expect(onCreateSubjectRule).toHaveBeenCalledOnce();
+  });
+
+  it("replies with attachments from the message menu", () => {
+    const onReplyWithAttachments = vi.fn();
+    const onReplyAllWithAttachments = vi.fn();
+    render(toolbar({ onReplyWithAttachments, onReplyAllWithAttachments }));
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: strings.reader.replyWithAttachments,
+      }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: strings.reader.replyAllWithAttachments,
+      }),
+    );
+    expect(onReplyWithAttachments).toHaveBeenCalledOnce();
+    expect(onReplyAllWithAttachments).toHaveBeenCalledOnce();
+    expect(callbacks.onCloseMore).toHaveBeenCalledTimes(2);
+  });
+
+  it("steps to the previous and next message", () => {
+    const onPrevious = vi.fn();
+    const onNext = vi.fn();
+    const { rerender } = render(toolbar({ onNext }));
+    expect(
+      screen.getByRole("button", { name: strings.reader.previousMessage }),
+    ).toBeDisabled();
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.reader.nextMessage }),
+    );
+    expect(onNext).toHaveBeenCalledOnce();
+    rerender(toolbar({ onPrevious }));
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.reader.previousMessage }),
+    );
+    expect(onPrevious).toHaveBeenCalledOnce();
+    expect(
+      screen.getByRole("button", { name: strings.reader.nextMessage }),
+    ).toBeDisabled();
+  });
+
+  it("replies to the list when that action is available", () => {
+    const onReplyToList = vi.fn();
+    render(toolbar({ onReplyToList }));
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.reader.replyToList }),
+    );
+    expect(onReplyToList).toHaveBeenCalledOnce();
+  });
+
+  it("redirects the open message", () => {
+    const onRedirect = vi.fn();
+    render(toolbar({ onRedirect }));
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: strings.reader.redirect }),
+    );
+    expect(onRedirect).toHaveBeenCalledOnce();
+  });
+
+  it("forwards the open message as an attachment", () => {
+    const onForwardAsAttachment = vi.fn();
+    render(toolbar({ onForwardAsAttachment }));
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: strings.reader.forwardAsAttachment,
+      }),
+    );
+    expect(onForwardAsAttachment).toHaveBeenCalledOnce();
+  });
+
+  it("starts a new message from the open message", () => {
+    const onEditAsNew = vi.fn();
+    render(toolbar({ onEditAsNew }));
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: strings.reader.editAsNew }),
+    );
+    expect(onEditAsNew).toHaveBeenCalledOnce();
+  });
+
+  it("marks the conversation read from the message menu", () => {
+    const onMarkConversationRead = vi.fn();
+    render(toolbar({ onMarkConversationRead }));
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: strings.reader.markConversationRead,
+      }),
+    );
+    expect(onMarkConversationRead).toHaveBeenCalledOnce();
+  });
+
+  it("archives the conversation from the message menu", () => {
+    const onArchiveConversation = vi.fn();
+    render(toolbar({ onArchiveConversation }));
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: strings.reader.archiveConversation,
+      }),
+    );
+    expect(onArchiveConversation).toHaveBeenCalledOnce();
+  });
+
+  it("marks the conversation as junk from the message menu", () => {
+    const onJunkConversation = vi.fn();
+    render(toolbar({ onJunkConversation }));
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: strings.reader.junkConversation,
+      }),
+    );
+    expect(onJunkConversation).toHaveBeenCalledOnce();
+  });
+
+  it("pins the open message from the message menu", () => {
+    const onPin = vi.fn();
+    render(toolbar({ onPin }));
+    fireEvent.click(screen.getByRole("menuitem", { name: strings.reader.pin }));
+    expect(onPin).toHaveBeenCalledOnce();
+  });
+
+  it("forwards the conversation from the message menu", () => {
+    const onForwardConversation = vi.fn();
+    render(toolbar({ onForwardConversation }));
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: strings.reader.forwardConversation,
+      }),
+    );
+    expect(onForwardConversation).toHaveBeenCalledOnce();
+  });
+
+  it("copies the conversation from the message menu", () => {
+    const onCopyConversationText = vi.fn();
+    render(toolbar({ onCopyConversationText }));
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: strings.reader.copyConversationText,
+      }),
+    );
+    expect(onCopyConversationText).toHaveBeenCalledOnce();
+  });
+
+  it("prints the conversation from the message menu", () => {
+    const onPrintConversation = vi.fn();
+    render(toolbar({ onPrintConversation }));
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: strings.reader.printConversation,
+      }),
+    );
+    expect(onPrintConversation).toHaveBeenCalledOnce();
+  });
+
+  it("moves the conversation from the message menu", () => {
+    const onMoveConversationToMailbox = vi.fn();
+    render(toolbar({ onMoveConversationToMailbox }));
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: strings.contextMenu.moveConversationToFolder("Projects"),
+      }),
+    );
+    expect(onMoveConversationToMailbox).toHaveBeenCalledWith(2);
+  });
+
+  it("copies the conversation from the message menu", () => {
+    const onCopyConversationToMailbox = vi.fn();
+    render(toolbar({ onCopyConversationToMailbox }));
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: strings.contextMenu.copyConversationToFolder("Projects"),
+      }),
+    );
+    expect(onCopyConversationToMailbox).toHaveBeenCalledWith(2);
+  });
+
+  it("saves the conversation files from the message menu", () => {
+    const onSaveConversationFiles = vi.fn();
+    render(toolbar({ onSaveConversationFiles }));
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: strings.reader.saveConversationFiles,
+      }),
+    );
+    expect(onSaveConversationFiles).toHaveBeenCalledOnce();
+  });
+
+  it("snoozes the conversation from the message menu", () => {
+    const onSnoozeConversation = vi.fn();
+    render(toolbar({ onSnoozeConversation }));
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: strings.reader.snoozeConversation,
+      }),
+    );
+    expect(onSnoozeConversation).toHaveBeenCalledOnce();
+  });
+
+  it("selects the conversation from the message menu", () => {
+    const onSelectConversation = vi.fn();
+    render(toolbar({ onSelectConversation }));
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: strings.reader.selectConversation,
+      }),
+    );
+    expect(onSelectConversation).toHaveBeenCalledOnce();
+  });
+
+  it("stars the conversation from the message menu", () => {
+    const onStarConversation = vi.fn();
+    render(toolbar({ onStarConversation }));
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: strings.reader.starConversation,
+      }),
+    );
+    expect(onStarConversation).toHaveBeenCalledOnce();
+  });
+
+  it("marks the conversation unread from the message menu", () => {
+    const onMarkConversationUnread = vi.fn();
+    render(toolbar({ onMarkConversationUnread }));
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: strings.reader.markConversationUnread,
+      }),
+    );
+    expect(onMarkConversationUnread).toHaveBeenCalledOnce();
+  });
+
+  it("unblocks a sender from the message menu", () => {
+    const onUnblockSender = vi.fn();
+    render(
+      toolbar({
+        senderBlocked: true,
+        onUnblockSender,
+      }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: strings.reader.unblockSender,
+      }),
+    );
+    expect(onUnblockSender).toHaveBeenCalledOnce();
+    expect(
+      screen.queryByRole("menuitem", {
+        name: strings.reader.blockSender,
+      }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("deletes a conversation from the message menu", () => {
+    const onDeleteConversation = vi.fn();
+    render(toolbar({ isTrashMailbox: true, onDeleteConversation }));
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: strings.reader.deleteConversation,
+      }),
+    );
+    expect(onDeleteConversation).toHaveBeenCalledOnce();
+  });
+
+  it("switches a formatted message to plain text", () => {
+    render(toolbar({ canViewPlain: true }));
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: strings.reader.viewPlain }),
+    );
+    expect(callbacks.onTogglePlain).toHaveBeenCalled();
+    render(toolbar({ canViewPlain: true, viewingPlain: true }));
+    expect(
+      screen.getByRole("menuitem", { name: strings.reader.viewFormatted }),
+    ).toBeVisible();
   });
 
   it("reflects selected mailbox and message states", () => {
@@ -250,12 +682,19 @@ describe("reader toolbar", () => {
     expect(
       screen.getByRole("button", { name: strings.reader.preparing }),
     ).toBeDisabled();
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.reader.moveToInbox }),
+    );
+    expect(callbacks.onMoveToInbox).toHaveBeenCalledOnce();
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.mail.deleteForever }),
+    );
+    expect(callbacks.onTrash).toHaveBeenCalledOnce();
     expect(
-      screen.getByRole("button", { name: strings.reader.archive }),
-    ).toBeDisabled();
-    expect(
-      screen.getByRole("button", { name: strings.reader.trash }),
-    ).toBeDisabled();
+      screen.queryByRole("menuitem", {
+        name: strings.reader.deleteConversation,
+      }),
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: strings.reader.closeMessage }),
     ).not.toBeInTheDocument();
@@ -268,7 +707,7 @@ describe("reader toolbar", () => {
     fireEvent.click(
       screen.getByRole("menuitem", { name: strings.reader.notJunk }),
     );
-    expect(callbacks.onMoveToInbox).toHaveBeenCalled();
+    expect(callbacks.onMoveToInbox).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -302,6 +741,7 @@ describe("attachments", () => {
   it("previews and downloads regular attachments", () => {
     const onPreview = vi.fn();
     const onDownload = vi.fn();
+    const onSaveAll = vi.fn();
     const onPreviewDownload = vi.fn();
     const onPreviewClose = vi.fn();
     const { rerender } = render(
@@ -309,6 +749,7 @@ describe("attachments", () => {
         message={message}
         preview={{
           messageId: message.id,
+          attachmentId: "image",
           preview: {
             filename: "photo.png",
             contentType: "image/png",
@@ -319,10 +760,15 @@ describe("attachments", () => {
         isPreviewable={(attachment) => attachment.contentType === "image/png"}
         onPreview={onPreview}
         onDownload={onDownload}
+        onSaveAll={onSaveAll}
         onPreviewDownload={onPreviewDownload}
         onPreviewClose={onPreviewClose}
       />,
     );
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.reader.saveAllFiles }),
+    );
+    expect(onSaveAll).toHaveBeenCalled();
     expect(
       screen.getByRole("region", { name: strings.reader.attachments }),
     ).toHaveTextContent("2");
@@ -351,6 +797,7 @@ describe("attachments", () => {
         message={message}
         preview={{
           messageId: message.id,
+          attachmentId: "image",
           preview: {
             filename: "notes.txt",
             contentType: "text/plain",
@@ -363,6 +810,7 @@ describe("attachments", () => {
         isPreviewable={() => true}
         onPreview={onPreview}
         onDownload={onDownload}
+        onSaveAll={onSaveAll}
         onPreviewDownload={onPreviewDownload}
         onPreviewClose={onPreviewClose}
       />,
@@ -383,6 +831,7 @@ describe("attachments", () => {
         })}
         preview={{
           messageId: 999,
+          attachmentId: "old",
           preview: {
             filename: "old.txt",
             contentType: "text/plain",
@@ -393,6 +842,7 @@ describe("attachments", () => {
         isPreviewable={() => false}
         onPreview={vi.fn()}
         onDownload={vi.fn()}
+        onSaveAll={vi.fn()}
         onPreviewDownload={vi.fn()}
         onPreviewClose={vi.fn()}
       />,
@@ -405,6 +855,17 @@ describe("attachments", () => {
 });
 
 describe("snooze panel", () => {
+  it("offers later today while 6 PM is still an hour away", () => {
+    expect(laterTodayIso(new Date(2026, 9, 9, 15, 0, 0))).toBe(
+      new Date(2026, 9, 9, 18, 0, 0).toISOString(),
+    );
+    expect(laterTodayIso(new Date(2026, 9, 9, 17, 0, 0))).toBe(
+      new Date(2026, 9, 9, 18, 0, 0).toISOString(),
+    );
+    expect(laterTodayIso(new Date(2026, 9, 9, 17, 30, 0))).toBeUndefined();
+    expect(laterTodayIso(new Date(2026, 9, 9, 19, 0, 0))).toBeUndefined();
+  });
+
   it("offers tomorrow, next week, custom time, and cancel", () => {
     const onSnooze = vi.fn();
     const onClose = vi.fn();

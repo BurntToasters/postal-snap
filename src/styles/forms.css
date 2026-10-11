@@ -111,7 +111,7 @@ legend {
   position: relative;
   display: grid;
   min-height: var(--target-size);
-  grid-template-columns: 70px 1fr;
+  grid-template-columns: var(--address-label-width) minmax(0, 1fr);
   align-items: center;
   border-bottom: 1px solid var(--border);
 }
@@ -159,7 +159,7 @@ legend {
 }
 
 .address-fields .to-field {
-  grid-template-columns: 70px minmax(0, 1fr);
+  grid-template-columns: var(--address-label-width) minmax(0, 1fr);
   flex: 1;
   min-width: 0;
   border-bottom: 0;
@@ -201,6 +201,23 @@ legend {
 
 .settings-row select {
   width: min(220px, 48%);
+}
+
+.switch-row > span.quiet-hours-times {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: flex-end;
+  gap: 0.75rem;
+}
+
+.quiet-hours-times label {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.quiet-hours-times input {
+  min-height: var(--control-height);
 }
 
 .settings-panel small,

@@ -94,6 +94,59 @@ fn accepted_uris(raw: &str) -> Vec<Uri> {
     uris
 }
 
+const MAX_LIST_POST_SCAN: usize = 16_384;
+
+fn header_block_end(raw: &[u8]) -> usize {
+    let scan = raw.len().min(MAX_LIST_POST_SCAN);
+    let bytes = &raw[..scan];
+    if let Some(end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+        return end;
+    }
+    if let Some(end) = bytes.windows(2).position(|window| window == b"\n\n") {
+        return end;
+    }
+    scan
+}
+
+fn mailto_address(value: &str) -> Option<String> {
+    accepted_uris(value).into_iter().find_map(|uri| match uri {
+        Uri::Mailto(mailto) => {
+            let address = mailto["mailto:".len()..].split('?').next()?.trim();
+            (!address.is_empty()).then(|| address.to_string())
+        }
+        Uri::Https(_) => None,
+    })
+}
+
+/// First safe `mailto:` address in List-Post. `NO` and http archive links are ignored.
+/// Only the header block is read, so a List-Post line in the body cannot change the address.
+pub(crate) fn list_post_address(raw: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(&raw[..header_block_end(raw)]).ok()?;
+    let mut current: Option<String> = None;
+    for line in text.split('\n') {
+        let line = line.trim_end_matches('\r');
+        if line.is_empty() {
+            break;
+        }
+        if line.starts_with([' ', '\t']) {
+            if let Some(value) = current.as_mut() {
+                value.push(' ');
+                value.push_str(line.trim());
+            }
+            continue;
+        }
+        if let Some(address) = current.take().as_deref().and_then(mailto_address) {
+            return Some(address);
+        }
+        if let Some((name, value)) = line.split_once(':') {
+            if name.trim().eq_ignore_ascii_case("list-post") {
+                current = Some(value.trim().to_string());
+            }
+        }
+    }
+    current.as_deref().and_then(mailto_address)
+}
+
 /// Bounded, re-serialized header: only accepted URIs, in original order.
 pub(crate) fn normalize_list_unsubscribe(raw: &str) -> Option<String> {
     let uris = accepted_uris(raw);
@@ -155,6 +208,24 @@ mod tests {
     use super::*;
 
     const POST: &str = "List-Unsubscribe=One-Click";
+
+    #[test]
+    fn list_post_uses_the_first_mailto_and_ignores_the_body() {
+        let raw = b"From: a@example.test\r\nList-Post: <https://list.example/archive>,\r\n <mailto:list@example.test?subject=hi>\r\nSubject: News\r\n\r\nList-Post: <mailto:evil@example.test>\r\n";
+        assert_eq!(list_post_address(raw).as_deref(), Some("list@example.test"));
+        assert_eq!(
+            list_post_address(b"List-Post: NO (posting not allowed)\r\n\r\n"),
+            None
+        );
+        assert_eq!(
+            list_post_address(b"List-Post: <mailto:no-at>\r\n\r\n"),
+            None
+        );
+        assert_eq!(
+            list_post_address(b"List-Post: <https://list.example/post>\r\n\r\n"),
+            None
+        );
+    }
 
     #[test]
     fn keeps_only_https_and_mailto() {

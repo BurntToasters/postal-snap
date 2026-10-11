@@ -9,6 +9,7 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import { SettingsDialog } from "../components/SettingsDialog";
+import { strings } from "../i18n";
 import { defaultSettings, useAppStore } from "../store";
 import type { AccountSummary, FilterRule } from "../types";
 import { mockSaveSettingsPassthrough } from "./helpers/api-mocks";
@@ -37,6 +38,8 @@ vi.mock("../api", () => ({
     testAccount: vi.fn(),
     testSavedAccount: vi.fn(),
     updateAccountPassword: vi.fn(),
+    updateAccountDisplayName: vi.fn(),
+    updateAccountReplyTo: vi.fn(),
     updateAccountSignature: vi.fn(),
     updateAccountAliases: vi.fn(),
     discoverAccountAliases: vi.fn(),
@@ -44,8 +47,16 @@ vi.mock("../api", () => ({
     createFilterRule: vi.fn(),
     updateFilterRule: vi.fn(),
     deleteFilterRule: vi.fn(),
+    reorderFilterRules: vi.fn(),
+    previewFilterRule: vi.fn(),
     syncAccount: vi.fn(),
     removeAccount: vi.fn(),
+    reorderAccounts: vi.fn(),
+    updateAccountColor: vi.fn(),
+    getAccountCachePolicy: vi.fn(),
+    setAccountCachePolicy: vi.fn(),
+    getAccountCacheUsage: vi.fn(),
+    clearAccountDownloads: vi.fn(),
     eraseAllData: vi.fn(),
     relaunch: vi.fn(),
     exportSettings: vi.fn(),
@@ -96,6 +107,20 @@ beforeEach(() => {
   });
   vi.mocked(api.getFolderAssignments).mockResolvedValue([]);
   vi.mocked(api.listAccounts).mockResolvedValue([account]);
+  vi.mocked(api.getAccountCachePolicy).mockResolvedValue({
+    mode: "recent",
+    days: 90,
+    maxBytes: 1_073_741_824,
+  });
+  vi.mocked(api.getAccountCacheUsage).mockResolvedValue({
+    bytes: 2048,
+    maxBytes: 1_073_741_824,
+    messageCount: 4,
+  });
+  vi.mocked(api.setAccountCachePolicy).mockImplementation(
+    async (_accountId, policy) => policy,
+  );
+  vi.mocked(api.clearAccountDownloads).mockResolvedValue(undefined);
   vi.mocked(api.listAllMailboxes).mockImplementation(async () =>
     useAppStore.getState().mailboxes.map((mailbox) => ({ ...mailbox })),
   );
@@ -135,6 +160,89 @@ async function accountPage(page: "Connection" | "Identity" | "Rules") {
 }
 
 describe("SettingsDialog component", () => {
+  it("moves an account earlier in the list", async () => {
+    const work = makeAccount("account-2", "manual", {
+      email: "work@example.com",
+      displayName: "Work",
+    });
+    resetStore({
+      accounts: [account, work],
+      activeAccountId: account.id,
+      settings: { ...defaultSettings, windowEffects: false },
+    });
+    vi.mocked(api.reorderAccounts).mockResolvedValue([work, account]);
+    render(<SettingsDialog initialTab="accounts" onClose={vi.fn()} />);
+    expect(
+      screen.getByRole("button", {
+        name: strings.settings.moveAccountUp("Work"),
+      }),
+    ).toBeEnabled();
+    expect(
+      screen.getByRole("button", {
+        name: strings.settings.moveAccountUp("Test User"),
+      }),
+    ).toBeDisabled();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: strings.settings.moveAccountUp("Work"),
+      }),
+    );
+    await waitFor(() => {
+      expect(api.reorderAccounts).toHaveBeenCalledWith([
+        "account-2",
+        "account-1",
+      ]);
+    });
+    expect(
+      screen
+        .getAllByRole("button", { name: /^Manage / })
+        .map((button) => button.getAttribute("aria-label")),
+    ).toEqual(["Manage Work", "Manage Test User"]);
+  });
+
+  it("saves the color used for an account", async () => {
+    vi.mocked(api.updateAccountColor).mockImplementation(
+      async (_accountId, color) => ({ ...account, color }),
+    );
+    render(<SettingsDialog initialTab="accounts" onClose={vi.fn()} />);
+    await manageAccount("Identity");
+    fireEvent.click(
+      screen.getByRole("radio", {
+        name: strings.settings.accountColors.purple,
+      }),
+    );
+    await waitFor(() => {
+      expect(api.updateAccountColor).toHaveBeenCalledWith(
+        "account-1",
+        "purple",
+      );
+    });
+    expect(
+      screen.getByRole("radio", {
+        name: strings.settings.accountColors.purple,
+      }),
+    ).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("saves how much mail one account keeps", async () => {
+    render(<SettingsDialog initialTab="accounts" onClose={vi.fn()} />);
+    await manageAccount("Connection");
+    fireEvent.change(
+      await screen.findByRole("combobox", { name: strings.settings.cacheDays }),
+      { target: { value: "30" } },
+    );
+    await waitFor(() => {
+      expect(api.setAccountCachePolicy).toHaveBeenCalledWith("account-1", {
+        mode: "recent",
+        days: 30,
+        maxBytes: 1_073_741_824,
+      });
+    });
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      strings.settings.accountDownloadSaved,
+    );
+  });
+
   it("renders accounts tab with existing aliases and allows adding new alias", async () => {
     const onClose = vi.fn();
     render(<SettingsDialog initialTab="accounts" onClose={onClose} />);
@@ -474,6 +582,62 @@ describe("SettingsDialog component", () => {
     expect(await screen.findByText(/Password updated/)).toBeVisible();
   });
 
+  it("saves the name recipients see", async () => {
+    vi.mocked(api.updateAccountDisplayName).mockResolvedValue({
+      ...account,
+      displayName: "Sam at home",
+    });
+    render(<SettingsDialog initialTab="accounts" onClose={vi.fn()} />);
+    await manageAccount("Identity");
+    const input = await screen.findByLabelText("Name on mail you send");
+    fireEvent.change(input, { target: { value: "Sam at home" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save name" }));
+    });
+    expect(api.updateAccountDisplayName).toHaveBeenCalledWith(
+      account.id,
+      "Sam at home",
+    );
+    expect(await screen.findByText("Name saved.")).toBeVisible();
+    expect(screen.getByLabelText("Name on mail you send")).toHaveValue(
+      "Sam at home",
+    );
+    expect(
+      screen.getByText("Sam at home", { selector: "strong" }),
+    ).toBeVisible();
+  });
+
+  it("saves a Reply-To address and rejects more than one", async () => {
+    vi.mocked(api.updateAccountReplyTo).mockResolvedValue({
+      ...account,
+      replyTo: "replies@example.com",
+    });
+    render(<SettingsDialog initialTab="accounts" onClose={vi.fn()} />);
+    await manageAccount("Identity");
+    const input = await screen.findByLabelText("Reply-To address");
+    fireEvent.change(input, { target: { value: "not an address" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save Reply-To" }));
+    });
+    expect(api.updateAccountReplyTo).not.toHaveBeenCalled();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Enter one email address.",
+    );
+
+    fireEvent.change(input, { target: { value: "replies@example.com" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save Reply-To" }));
+    });
+    expect(api.updateAccountReplyTo).toHaveBeenCalledWith(
+      account.id,
+      "replies@example.com",
+    );
+    expect(await screen.findByText("Reply-To address saved.")).toBeVisible();
+    expect(screen.getByLabelText("Reply-To address")).toHaveValue(
+      "replies@example.com",
+    );
+  });
+
   it("saves per-account signatures", async () => {
     vi.mocked(api.updateAccountSignature).mockResolvedValue({
       ...account,
@@ -525,10 +689,27 @@ describe("SettingsDialog component", () => {
       targetMailbox: null,
       enabled: true,
     };
-    vi.mocked(api.listFilterRules).mockResolvedValue([existing]);
-    vi.mocked(api.createFilterRule).mockResolvedValue({
+    const later: FilterRule = {
       ...existing,
       id: "rule-2",
+      name: "News",
+      contains: "news.example.com",
+    };
+    vi.mocked(api.listFilterRules).mockResolvedValue([existing, later]);
+    vi.mocked(api.reorderFilterRules).mockImplementation(
+      async (_accountId, ids) =>
+        ids.map(
+          (id) => [existing, later].find((rule) => rule.id === id) ?? existing,
+        ),
+    );
+    vi.mocked(api.previewFilterRule).mockResolvedValue({
+      matched: 1,
+      capped: false,
+      subjects: ["August power bill"],
+    });
+    vi.mocked(api.createFilterRule).mockResolvedValue({
+      ...existing,
+      id: "rule-3",
       name: "Picnics",
       field: "subject",
       contains: "picnic",
@@ -543,13 +724,38 @@ describe("SettingsDialog component", () => {
     await manageAccount("Rules");
 
     await screen.findByText("Bills");
-    const toggle = screen.getByRole("button", { name: /Bills/ });
+    const toggle = screen.getByRole("button", { name: /Bills: On/ });
     await act(async () => {
       fireEvent.click(toggle);
     });
     expect(api.updateFilterRule).toHaveBeenCalledWith(
       expect.objectContaining({ id: "rule-1", enabled: false }),
     );
+
+    const billsRow = screen.getByText("Bills").closest("li") as HTMLElement;
+    await act(async () => {
+      fireEvent.click(
+        within(billsRow).getByRole("button", { name: "Move “Bills” later" }),
+      );
+    });
+    expect(api.reorderFilterRules).toHaveBeenCalledWith(account.id, [
+      "rule-2",
+      "rule-1",
+    ]);
+
+    fireEvent.change(screen.getByLabelText("Text to match"), {
+      target: { value: "power" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Check matches" }));
+    });
+    expect(api.previewFilterRule).toHaveBeenCalledWith(
+      expect.objectContaining({ contains: "power", accountId: account.id }),
+    );
+    expect(
+      await screen.findByText(/1 unread Inbox message matches/),
+    ).toBeVisible();
+    expect(screen.getByText(/August power bill/)).toBeVisible();
 
     fireEvent.change(screen.getByLabelText("Rule name"), {
       target: { value: "Picnics" },
@@ -572,15 +778,58 @@ describe("SettingsDialog component", () => {
     );
     expect(await screen.findByText(/Rule saved/)).toBeVisible();
 
-    const billsRow = screen.getByText("Bills").closest("li") as HTMLElement;
+    const billsAfterSave = screen
+      .getByText("Bills")
+      .closest("li") as HTMLElement;
     await act(async () => {
       fireEvent.click(
-        within(billsRow).getByRole("button", { name: /^Remove$/ }),
+        within(billsAfterSave).getByRole("button", { name: /^Remove$/ }),
       );
     });
     expect(api.showNativeConfirm).toHaveBeenCalled();
     expect(api.deleteFilterRule).toHaveBeenCalledWith(account.id, "rule-1");
     expect(await screen.findByText(/Rule removed/)).toBeVisible();
+  });
+
+  it("starts a sender rule from the message that opened settings", async () => {
+    render(
+      <SettingsDialog
+        initialTab="accounts"
+        initialAccountId={account.id}
+        initialRuleSeed={{
+          accountId: account.id,
+          contains: "jane@example.test",
+        }}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(await screen.findByLabelText("Text to match")).toHaveValue(
+      "jane@example.test",
+    );
+    expect(screen.getByLabelText("Rule name")).toHaveValue("jane@example.test");
+    expect(screen.getByLabelText("Match by")).toHaveValue("from");
+    expect(screen.getByLabelText("Then")).toHaveValue("move_archive");
+  });
+
+  it("starts a subject rule from the message that opened settings", async () => {
+    render(
+      <SettingsDialog
+        initialTab="accounts"
+        initialAccountId={account.id}
+        initialRuleSeed={{
+          accountId: account.id,
+          contains: "Weekend plans",
+          field: "subject",
+        }}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(await screen.findByLabelText("Text to match")).toHaveValue(
+      "Weekend plans",
+    );
+    expect(screen.getByLabelText("Rule name")).toHaveValue("Weekend plans");
+    expect(screen.getByLabelText("Match by")).toHaveValue("subject");
+    expect(screen.getByLabelText("Then")).toHaveValue("move_archive");
   });
 
   it("describes filter rules with localized actions and folder names", async () => {
@@ -605,6 +854,16 @@ describe("SettingsDialog component", () => {
         targetMailbox: "1",
         enabled: true,
       },
+      {
+        id: "rule-to",
+        accountId: account.id,
+        name: "List mail",
+        field: "to",
+        contains: "list@example.test",
+        action: "move_archive",
+        targetMailbox: null,
+        enabled: true,
+      },
     ];
     vi.mocked(api.listFilterRules).mockResolvedValue(rules);
     render(<SettingsDialog initialTab="accounts" onClose={vi.fn()} />);
@@ -612,6 +871,11 @@ describe("SettingsDialog component", () => {
 
     await screen.findByText("Read note");
     expect(screen.getByText(/Mark as read\./)).toBeVisible();
+    expect(
+      screen.getByText(
+        "If Recipient contains “list@example.test”, Move to Archive.",
+      ),
+    ).toBeVisible();
     expect(screen.getByText(/Move to \u201CInbox\u201D\./)).toBeVisible();
     expect(screen.queryByText(/mark_read/)).toBeNull();
     expect(screen.queryByText(/move_mailbox/)).toBeNull();
