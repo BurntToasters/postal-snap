@@ -446,6 +446,16 @@ impl Database {
             .ok_or_else(|| "Mailbox not found.".into())
     }
 
+    pub fn mailbox_delimiter(&self, id: i64) -> Result<Option<String>, String> {
+        self.conn()?
+            .query_row("SELECT delimiter FROM mailboxes WHERE id=?1", [id], |row| {
+                row.get(0)
+            })
+            .optional()
+            .map_err(db_error)?
+            .ok_or_else(|| "Mailbox not found.".into())
+    }
+
     pub fn max_uid(&self, mailbox_id: i64) -> Result<u32, String> {
         self.conn()?
             .query_row(

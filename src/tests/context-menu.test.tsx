@@ -13,11 +13,21 @@ import {
   CONTEXT_ACTION_EVENT,
   CONTEXT_DISMISS_EVENT,
   IFRAME_CONTEXT_EVENT,
+  earlierHeaderId,
   iframeTargetFromDetail,
   itemsForTarget,
   resolveContextTarget,
+  senderSearchQuery,
+  subjectSearchQuery,
 } from "../contextMenu";
+import {
+  clearBlockedSenders,
+  domainIsBlocked,
+  rememberBlockedSenders,
+  senderDomain,
+} from "../blockedSenders";
 import { strings } from "../i18n";
+import { clearRecentMoveMailbox, rememberMoveMailbox } from "../recentMailbox";
 import { useAppStore } from "../store";
 import { makeAccount, makeMailbox, makeMessage } from "./helpers/fixtures";
 import { resetStore } from "./helpers/store";
@@ -45,6 +55,8 @@ const account = makeAccount();
 
 beforeEach(() => {
   vi.clearAllMocks();
+  clearBlockedSenders();
+  clearRecentMoveMailbox();
   resetStore({
     accounts: [account],
     activeAccountId: account.id,
@@ -57,6 +69,51 @@ beforeEach(() => {
   vi.mocked(api.openExternalUrl).mockResolvedValue(undefined);
   Object.assign(navigator, {
     clipboard: { writeText: vi.fn().mockResolvedValue(undefined) },
+  });
+});
+
+describe("sender search query", () => {
+  it("quotes a usable address and drops an unusable one", () => {
+    expect(senderSearchQuery(" Jane@Example.test ")).toBe(
+      'from:"Jane@Example.test"',
+    );
+    expect(senderSearchQuery('a"b@example.test')).toBe(
+      'from:"ab@example.test"',
+    );
+    expect(senderSearchQuery("Jane Doe <jane@example.test>")).toBe(
+      'from:"jane@example.test"',
+    );
+    expect(senderSearchQuery("")).toBeUndefined();
+    expect(senderSearchQuery("@@@")).toBeUndefined();
+  });
+});
+
+describe("subject search query", () => {
+  it("drops reply prefixes and unusable subjects", () => {
+    expect(subjectSearchQuery(" Re: Fwd: Picnic plans ")).toBe(
+      'subject:"Picnic plans"',
+    );
+    expect(subjectSearchQuery("FW: Re: Notes")).toBe('subject:"Notes"');
+    expect(subjectSearchQuery("Re:")).toBeUndefined();
+    expect(subjectSearchQuery('Say "hello"')).toBeUndefined();
+    expect(subjectSearchQuery("!!!")).toBeUndefined();
+    expect(subjectSearchQuery("")).toBeUndefined();
+  });
+});
+
+describe("earlier message id", () => {
+  it("uses the nearest reference and skips this message", () => {
+    expect(
+      earlierHeaderId({
+        messageId: "<weekend@example.test>",
+        references: [
+          "<root@example.test>",
+          "<parent@example.test>",
+          "<weekend@example.test>",
+        ],
+      }),
+    ).toBe("<parent@example.test>");
+    expect(earlierHeaderId({ references: [] })).toBeUndefined();
   });
 });
 
@@ -237,6 +294,18 @@ describe("product context menu", () => {
         expect.objectContaining({
           id: "copy",
           label: strings.contextMenu.copy,
+        }),
+        expect.objectContaining({
+          id: "copy-message-text",
+          label: strings.reader.copyMessageText,
+        }),
+        expect.objectContaining({
+          id: "copy-subject",
+          label: strings.reader.copySubject,
+        }),
+        expect.objectContaining({
+          id: "copy-sender-address",
+          label: strings.reader.copySenderAddress,
         }),
       ]),
     );
@@ -631,6 +700,45 @@ describe("context target resolution", () => {
 });
 
 describe("context menu items", () => {
+  it("lists the last chosen folder first", () => {
+    const inbox = makeMailbox();
+    const receipts = makeMailbox({
+      id: 5,
+      name: "Receipts",
+      displayName: "Receipts",
+      role: "other",
+    });
+    const travel = makeMailbox({
+      id: 6,
+      name: "Travel",
+      displayName: "Travel",
+      role: "other",
+    });
+    const message = makeMessage({ id: 1, mailboxId: inbox.id });
+    resetStore({
+      mailboxes: [inbox, receipts, travel],
+      messages: [message],
+    });
+    rememberMoveMailbox(travel);
+    const ids = itemsForTarget({ kind: "message", messageId: 1 }).flatMap(
+      (entry) =>
+        entry.type === "item" && entry.id.startsWith("move-mailbox:")
+          ? [entry.id]
+          : [],
+    );
+    expect(ids).toEqual(["move-mailbox:6", "move-mailbox:5"]);
+    rememberMoveMailbox(inbox);
+    const afterInbox = itemsForTarget({
+      kind: "message",
+      messageId: 1,
+    }).flatMap((entry) =>
+      entry.type === "item" && entry.id.startsWith("move-mailbox:")
+        ? [entry.id]
+        : [],
+    );
+    expect(afterInbox).toEqual(["move-mailbox:6", "move-mailbox:5"]);
+  });
+
   it("builds message, folder, outbox, and attachment actions", () => {
     const inbox = makeMailbox();
     const archive = makeMailbox({
@@ -720,10 +828,87 @@ describe("context menu items", () => {
           label: strings.reader.markRead,
         }),
         expect.objectContaining({
+          id: "edit-as-new",
+          label: strings.reader.editAsNew,
+        }),
+        expect.objectContaining({
+          id: "copy-message-text",
+          label: strings.reader.copyMessageText,
+        }),
+        expect.objectContaining({
+          id: "copy-subject",
+          label: strings.reader.copySubject,
+        }),
+        expect.objectContaining({
+          id: "copy-sender-address",
+          label: strings.reader.copySenderAddress,
+        }),
+        expect.objectContaining({
+          id: "forward-attachment",
+          label: strings.reader.forwardAsAttachment,
+        }),
+        expect.objectContaining({
+          id: "redirect",
+          label: strings.reader.redirect,
+        }),
+        expect.objectContaining({
           id: "toggle-star",
           label: strings.reader.addStar,
         }),
         expect.objectContaining({ id: "move-mailbox:5" }),
+        expect.objectContaining({
+          id: "copy-mailbox:5",
+          ariaLabel: strings.contextMenu.copyToFolder("Projects"),
+        }),
+        expect.objectContaining({
+          id: "create-rule",
+          label: strings.reader.createRuleFromSender,
+        }),
+        expect.objectContaining({
+          id: "create-subject-rule",
+          label: strings.reader.createRuleFromSubject,
+        }),
+        expect.objectContaining({
+          id: "block-sender",
+          label: strings.reader.blockSender,
+        }),
+        expect.objectContaining({
+          id: "mute-conversation",
+          label: strings.reader.muteConversation,
+        }),
+      ]),
+    );
+    const muted = makeMessage({
+      id: 8,
+      conversationMuted: true,
+    });
+    const unnamed = makeMessage({ id: 9, messageId: "" });
+    useAppStore.setState({
+      messages: [unread, starred, junked, trashed, muted, unnamed],
+    });
+    expect(itemsForTarget({ kind: "message", messageId: 8 })).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "mute-conversation",
+          label: strings.reader.unmuteConversation,
+        }),
+      ]),
+    );
+    expect(
+      itemsForTarget({ kind: "message", messageId: 9 }).some(
+        (item) => item.type === "item" && item.id === "mute-conversation",
+      ),
+    ).toBe(false);
+    expect(unreadItems).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "messages-from-sender",
+          label: strings.reader.messagesFromSender,
+        }),
+        expect.objectContaining({
+          id: "messages-with-subject",
+          label: strings.reader.messagesWithSubject,
+        }),
       ]),
     );
 
@@ -738,7 +923,10 @@ describe("context menu items", () => {
           id: "toggle-star",
           label: strings.reader.removeStar,
         }),
-        expect.objectContaining({ id: "archive", disabled: true }),
+        expect.objectContaining({
+          id: "move-to-inbox",
+          label: strings.reader.moveToInbox,
+        }),
       ]),
     );
     expect(itemsForTarget({ kind: "message", messageId: 3 })).toEqual(
@@ -749,14 +937,218 @@ describe("context menu items", () => {
         }),
       ]),
     );
+    const threaded = makeMessage({
+      id: 6,
+      mailboxId: inbox.id,
+      isRead: false,
+      threadRoot: "<thread@example.test>",
+      subject: "Threaded",
+    });
+    const threadedReply = makeMessage({
+      id: 7,
+      mailboxId: inbox.id,
+      isRead: true,
+      threadRoot: "<thread@example.test>",
+      subject: "Threaded reply",
+    });
+    useAppStore.setState({
+      messages: [unread, starred, junked, trashed, threaded, threadedReply],
+    });
+    expect(itemsForTarget({ kind: "message", messageId: 6 })).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "mark-conversation-read",
+          label: strings.reader.markConversationRead,
+        }),
+        expect.objectContaining({
+          id: "mark-conversation-unread",
+          label: strings.reader.markConversationUnread,
+        }),
+        expect.objectContaining({
+          id: "archive-conversation",
+          label: strings.reader.archiveConversation,
+        }),
+        expect.objectContaining({
+          id: "trash-conversation",
+          label: strings.reader.trashConversation,
+        }),
+        expect.objectContaining({
+          id: "star-conversation",
+          label: strings.reader.starConversation,
+        }),
+        expect.objectContaining({
+          id: "select-conversation",
+          label: strings.reader.selectConversation,
+        }),
+        expect.objectContaining({
+          id: "select-from-sender",
+          label: strings.reader.selectFromSender,
+        }),
+        expect.objectContaining({
+          id: "snooze-conversation",
+          label: strings.reader.snoozeConversation,
+        }),
+        expect.objectContaining({
+          id: "junk-conversation",
+          label: strings.reader.junkConversation,
+        }),
+        expect.objectContaining({
+          id: "move-conversation:5",
+          label: "Projects",
+          ariaLabel: strings.contextMenu.moveConversationToFolder("Projects"),
+        }),
+        expect.objectContaining({
+          id: "copy-conversation:5",
+          label: "Projects",
+          ariaLabel: strings.contextMenu.copyConversationToFolder("Projects"),
+        }),
+        expect.objectContaining({
+          id: "print-conversation",
+          label: strings.reader.printConversation,
+        }),
+        expect.objectContaining({
+          id: "copy-conversation-text",
+          label: strings.reader.copyConversationText,
+        }),
+        expect.objectContaining({
+          id: "forward-conversation",
+          label: strings.reader.forwardConversation,
+        }),
+        expect.objectContaining({
+          id: "pin",
+          label: strings.reader.pin,
+        }),
+        expect.objectContaining({
+          id: "pin-conversation",
+          label: strings.reader.pinConversation,
+        }),
+      ]),
+    );
+    expect(
+      itemsForTarget({ kind: "message", messageId: 6 }).some(
+        (entry) => entry.type === "item" && entry.id === "unstar-conversation",
+      ),
+    ).toBe(false);
+    expect(
+      itemsForTarget({ kind: "message", messageId: 1 }).some(
+        (entry) => entry.type === "item" && entry.id === "forward-conversation",
+      ),
+    ).toBe(false);
+    expect(
+      itemsForTarget({ kind: "message", messageId: 6 }).some(
+        (entry) =>
+          entry.type === "item" && entry.id === "save-conversation-files",
+      ),
+    ).toBe(false);
+    useAppStore.setState({
+      messages: [
+        unread,
+        starred,
+        junked,
+        trashed,
+        threaded,
+        { ...threadedReply, hasAttachments: true },
+      ],
+    });
+    expect(itemsForTarget({ kind: "message", messageId: 6 })).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "save-conversation-files",
+          label: strings.reader.saveConversationFiles,
+        }),
+      ]),
+    );
+    expect(itemsForTarget({ kind: "message", messageId: 1 })).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "archive-conversation" }),
+      ]),
+    );
+    expect(itemsForTarget({ kind: "message", messageId: 1 })).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "copy-conversation:5" }),
+      ]),
+    );
+    expect(itemsForTarget({ kind: "message", messageId: 1 })).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "print-conversation" }),
+        expect.objectContaining({ id: "copy-conversation-text" }),
+        expect.objectContaining({ id: "move-conversation:5" }),
+      ]),
+    );
+    expect(itemsForTarget({ kind: "message", messageId: 1 })).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "mark-conversation-read" }),
+      ]),
+    );
+
     expect(itemsForTarget({ kind: "message", messageId: 4 })).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ id: "trash", disabled: true }),
+        expect.objectContaining({
+          id: "delete-forever",
+          label: strings.mail.deleteForever,
+          danger: true,
+        }),
+      ]),
+    );
+    expect(unreadItems).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "delete-forever" }),
+      ]),
+    );
+    const trashNewer = makeMessage({
+      id: 8,
+      mailboxId: trash.id,
+      threadRoot: "<trash@example.test>",
+      subject: "Old receipt",
+    });
+    const trashOlder = makeMessage({
+      id: 9,
+      mailboxId: trash.id,
+      threadRoot: "<trash@example.test>",
+      subject: "Older receipt",
+    });
+    useAppStore.setState((state) => ({
+      messages: [...state.messages, trashNewer, trashOlder],
+    }));
+    expect(itemsForTarget({ kind: "message", messageId: 8 })).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "delete-conversation",
+          label: strings.reader.deleteConversation,
+          danger: true,
+        }),
+      ]),
+    );
+    expect(itemsForTarget({ kind: "message", messageId: 4 })).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "delete-conversation" }),
+      ]),
+    );
+    expect(itemsForTarget({ kind: "message", messageId: 6 })).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "delete-conversation" }),
       ]),
     );
 
     expect(itemsForTarget({ kind: "folder", mailboxId: inbox.id })).toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: "open" })]),
+      expect.arrayContaining([
+        expect.objectContaining({ id: "open" }),
+        expect.objectContaining({
+          id: "pin-folder",
+          label: strings.contextMenu.pinMailbox,
+        }),
+      ]),
+    );
+    expect(itemsForTarget({ kind: "folder", mailboxId: inbox.id })).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "hide-folder" })]),
+    );
+    expect(itemsForTarget({ kind: "folder", mailboxId: other.id })).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "hide-folder",
+          label: strings.contextMenu.hideMailbox,
+        }),
+      ]),
     );
     expect(itemsForTarget({ kind: "folder", mailboxId: trash.id })).toEqual(
       expect.arrayContaining([
@@ -779,7 +1171,10 @@ describe("context menu items", () => {
       expect.objectContaining({ id: "open" }),
     ]);
     expect(itemsForTarget({ kind: "draft", draftId: "d1" })).toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: "open" })]),
+      expect.arrayContaining([
+        expect.objectContaining({ id: "open" }),
+        expect.objectContaining({ id: "duplicate-draft", label: "Duplicate" }),
+      ]),
     );
     expect(itemsForTarget({ kind: "snoozed", messageId: 1 })).toEqual(
       expect.arrayContaining([
@@ -788,10 +1183,13 @@ describe("context menu items", () => {
       ]),
     );
     expect(itemsForTarget({ kind: "outbox", outboxId: "queued-1" })).toEqual([
+      expect.objectContaining({ id: "open", label: strings.contextMenu.open }),
+      expect.objectContaining({ id: "edit", label: strings.mail.editQueued }),
       expect.objectContaining({ id: "discard", danger: true }),
     ]);
     expect(itemsForTarget({ kind: "outbox", outboxId: "retry-1" })).toEqual(
       expect.arrayContaining([
+        expect.objectContaining({ id: "edit", label: strings.mail.editQueued }),
         expect.objectContaining({ id: "retry" }),
         expect.objectContaining({ id: "discard", danger: true }),
       ]),
@@ -848,19 +1246,149 @@ describe("context menu items", () => {
     ).toEqual([expect.objectContaining({ id: "download" })]);
     expect(
       itemsForTarget({ kind: "address", address: "sam@example.test" }),
-    ).toEqual([expect.objectContaining({ id: "copy-address" })]);
+    ).toEqual([
+      expect.objectContaining({
+        id: "compose-to-address",
+        label: strings.reader.newMessageToAddress,
+      }),
+      expect.objectContaining({
+        id: "messages-from-sender",
+        label: strings.reader.messagesFromSender,
+      }),
+      expect.objectContaining({
+        id: "messages-to-address",
+        label: strings.reader.messagesToAddress,
+      }),
+      expect.objectContaining({
+        id: "create-address-rule",
+        label: strings.reader.createRuleForAddress,
+      }),
+      { type: "separator" },
+      expect.objectContaining({ id: "copy-address" }),
+    ]);
+    expect(itemsForTarget({ kind: "address", address: "@@@" })).toEqual([
+      expect.objectContaining({ id: "copy-address" }),
+    ]);
     expect(itemsForTarget({ kind: "composer" })).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: "cut" }),
         expect.objectContaining({ id: "paste" }),
+        expect.objectContaining({
+          id: "paste-plain",
+          label: strings.composer.pasteWithoutFormatting,
+        }),
       ]),
     );
-    expect(itemsForTarget({ kind: "editable" })).toEqual(
-      itemsForTarget({ kind: "composer" }),
+    expect(itemsForTarget({ kind: "editable" })).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "paste-plain" })]),
     );
     expect(itemsForTarget({ kind: "composer-attachment", index: 0 })).toEqual([
       expect.objectContaining({ id: "remove-attachment" }),
     ]);
+  });
+
+  it("offers reply with attachments only when the message has a file", () => {
+    const inbox = makeMailbox();
+    const withFile = makeMessage({ hasAttachments: true });
+    resetStore({ mailboxes: [inbox], messages: [withFile] });
+    const fileIds = itemsForTarget({
+      kind: "message",
+      messageId: withFile.id,
+    }).flatMap((item) => (item.type === "item" ? [item.id] : []));
+    expect(fileIds).toContain("reply-with-attachments");
+    expect(fileIds).toContain("reply-all-with-attachments");
+
+    // Another domain: Block domain is hidden for the account's own domain.
+    const plain = makeMessage({
+      id: 2,
+      hasAttachments: false,
+      senderAddress: "jane@other.test",
+    });
+    resetStore({ mailboxes: [inbox], messages: [plain] });
+    const plainIds = itemsForTarget({
+      kind: "message",
+      messageId: plain.id,
+    }).flatMap((item) => (item.type === "item" ? [item.id] : []));
+    expect(plainIds).toContain("copy-recipients");
+    expect(plainIds).toContain("block-domain");
+    expect(plainIds).toContain("save-eml");
+    expect(plainIds).toContain("reply-bare");
+    expect(plainIds).toContain("reply-all-bare");
+    expect(plainIds).not.toContain("reply-with-attachments");
+    expect(plainIds).not.toContain("reply-all-with-attachments");
+  });
+
+  it("offers unblock when this sender is already blocked", () => {
+    const inbox = makeMailbox();
+    const message = makeMessage({ senderAddress: "Jane@Example.test" });
+    resetStore({ mailboxes: [inbox], messages: [message] });
+    rememberBlockedSenders(message.accountId, [
+      {
+        id: "rule-1",
+        accountId: message.accountId,
+        name: "Block sender",
+        field: "from",
+        contains: "jane@example.test",
+        action: "move_junk",
+        enabled: true,
+      },
+    ]);
+    const blocked = itemsForTarget({
+      kind: "message",
+      messageId: message.id,
+    }).flatMap((item) => (item.type === "item" ? [item.id] : []));
+    expect(blocked).toContain("unblock-sender");
+    expect(blocked).not.toContain("block-sender");
+    expect(senderDomain("Jane <Jane@Mail.Example.com>")).toBe(
+      "mail.example.com",
+    );
+    expect(senderDomain("not-an-address")).toBeUndefined();
+    rememberBlockedSenders(message.accountId, [
+      {
+        id: "rule-2",
+        accountId: message.accountId,
+        name: "Block example.com",
+        field: "domain",
+        contains: "example.com",
+        action: "move_junk",
+        enabled: true,
+      },
+    ]);
+    expect(domainIsBlocked(message.accountId, "a@mail.example.com")).toBe(true);
+    expect(domainIsBlocked(message.accountId, "a@example.com.evil.test")).toBe(
+      false,
+    );
+    const covered = makeMessage({
+      id: 3,
+      senderAddress: "jane@mail.example.com",
+    });
+    resetStore({ mailboxes: [inbox], messages: [covered] });
+    rememberBlockedSenders(covered.accountId, [
+      {
+        id: "rule-2",
+        accountId: covered.accountId,
+        name: "Block example.com",
+        field: "domain",
+        contains: "example.com",
+        action: "move_junk",
+        enabled: true,
+      },
+    ]);
+    const domainBlocked = itemsForTarget({
+      kind: "message",
+      messageId: covered.id,
+    }).flatMap((item) => (item.type === "item" ? [item.id] : []));
+    expect(domainBlocked).toContain("unblock-domain");
+    expect(domainBlocked).not.toContain("block-domain");
+
+    resetStore({ mailboxes: [inbox], messages: [message] });
+    clearBlockedSenders();
+    const open = itemsForTarget({
+      kind: "message",
+      messageId: message.id,
+    }).flatMap((item) => (item.type === "item" ? [item.id] : []));
+    expect(open).toContain("block-sender");
+    expect(open).not.toContain("unblock-sender");
   });
 
   it("treats a busy outbox row as disabled even without CSS.escape", () => {
@@ -887,6 +1415,8 @@ describe("context menu items", () => {
       ],
     });
     expect(itemsForTarget({ kind: "outbox", outboxId: "busy-1" })).toEqual([
+      expect.objectContaining({ id: "open" }),
+      expect.objectContaining({ id: "edit", disabled: true }),
       expect.objectContaining({ id: "discard", disabled: true }),
     ]);
     node.remove();

@@ -70,6 +70,10 @@
   /* Density tokens: size UI with these, never literals, so compact
      (below) can restyle everything by overriding them. */
   --target-size: 44px;
+  /* Composer field labels; rem so the column grows with text size. */
+  --address-label-width: 5rem;
+  /* The letter keeps a readable height; the reader scrolls past it in short windows. */
+  --reader-body-min: max(6rem, 40dvh);
   --target-size-inset: var(--target-size);
   --bar-height-sm: 48px;
   --bar-height-md: 56px;

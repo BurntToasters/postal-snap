@@ -5,11 +5,29 @@ const REMOTE_IMAGE = /^(?:https?:)?\/\//i;
 export interface SanitizedMail {
   html: string;
   blockedImages: number;
+  /** Hosts of blocked remote images, in document order, up to 8. */
+  blockedImageHosts: string[];
 }
 
 export function sanitizeReceivedHtml(input: string): SanitizedMail {
   const doc = new DOMParser().parseFromString(input, "text/html");
   let blockedImages = 0;
+  const blockedImageHosts: string[] = [];
+
+  function noteBlockedImage(url: string) {
+    blockedImages += 1;
+    if (blockedImageHosts.length >= 8) return;
+    let host: string;
+    try {
+      host = new URL(
+        url.startsWith("//") ? `https:${url}` : url,
+      ).hostname.toLowerCase();
+    } catch {
+      return;
+    }
+    if (!host || blockedImageHosts.includes(host)) return;
+    blockedImageHosts.push(host);
+  }
 
   for (const element of doc.querySelectorAll(
     "script, iframe, frame, object, embed, form, input, button, textarea, select, meta, base, link, audio, video, source, track, picture",
@@ -52,7 +70,7 @@ export function sanitizeReceivedHtml(input: string): SanitizedMail {
       image.removeAttribute("src");
       image.alt = image.alt || "Remote image blocked";
       image.classList.add("remote-image-blocked");
-      blockedImages += 1;
+      noteBlockedImage(image.dataset.remoteSrc);
     } else if (/^cid:/i.test(src)) {
       image.dataset.inlineCid = src
         .slice(4)
@@ -68,7 +86,7 @@ export function sanitizeReceivedHtml(input: string): SanitizedMail {
       image.removeAttribute("src");
       image.alt = image.alt || "Remote image blocked";
       image.classList.add("remote-image-blocked");
-      blockedImages += 1;
+      noteBlockedImage(image.dataset.remoteSrc);
     } else if (markedCid) {
       image.dataset.inlineCid = markedCid.replace(/^<|>$/g, "").slice(0, 512);
       image.removeAttribute("src");
@@ -142,7 +160,7 @@ export function sanitizeReceivedHtml(input: string): SanitizedMail {
     ],
   });
 
-  return { html: clean, blockedImages };
+  return { html: clean, blockedImages, blockedImageHosts };
 }
 
 export function sanitizeComposeHtml(input: string): string {
@@ -203,7 +221,7 @@ const BLOCKED_IMAGE_GLYPH =
   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%238e8e93' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='18' height='18' rx='2'/%3E%3Ccircle cx='9' cy='9' r='2'/%3E%3Cpath d='m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21'/%3E%3C/svg%3E";
 
 const DARK_FRAME_STYLE =
-  "html,body{background:#1c1c1e !important;color-scheme:dark}body{color:#e8e8ea}a{color:#6cb6ff}.remote-image-blocked{background:#2c2c2e;border-color:#48484a}";
+  "html,body{background:#1c1c1e !important;color-scheme:dark}body{color:#e8e8ea}a{color:#6cb6ff}mark{background:#7a6200;color:#fff}.remote-image-blocked{background:#2c2c2e;border-color:#48484a}details.quoted-mail>summary{color:#aeaeb2}";
 
 export function messageFrameDocument(
   html: string,
@@ -221,7 +239,61 @@ export function messageFrameDocument(
     "object-src 'none'",
     "base-uri 'none'",
   ].join("; ");
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${policy}"><meta http-equiv="x-dns-prefetch-control" content="off"><meta name="referrer" content="no-referrer"><style>html,body{background:#ffffff !important;color-scheme:light}body{font:${fontSize}px/1.55 system-ui,sans-serif;color:#20252b;margin:16px;overflow-wrap:anywhere}img{max-width:100%;height:auto}.remote-image-blocked{display:inline-block;min-width:120px;min-height:40px;background:#eef2f6;border:1px solid #c8d2dc;border-radius:6px;object-fit:none;content:url("${BLOCKED_IMAGE_GLYPH}")}a{color:#1264a3}${dark ? DARK_FRAME_STYLE : ""}</style></head><body>${html}</body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${policy}"><meta http-equiv="x-dns-prefetch-control" content="off"><meta name="referrer" content="no-referrer"><style>html,body{background:#ffffff !important;color-scheme:light}body{font:${fontSize}px/1.55 system-ui,sans-serif;color:#20252b;margin:16px;overflow-wrap:anywhere}img{max-width:100%;height:auto}.remote-image-blocked{display:inline-block;min-width:120px;min-height:40px;background:#eef2f6;border:1px solid #c8d2dc;border-radius:6px;object-fit:none;content:url("${BLOCKED_IMAGE_GLYPH}")}a{color:#1264a3}mark{background:#fff1a8;color:inherit}details.quoted-mail{margin-top:0.75em}details.quoted-mail>summary{cursor:pointer;color:#667085;min-height:2.75em;display:flex;align-items:center}details.quoted-mail>summary:focus-visible{outline:2px solid #1264a3;outline-offset:2px}${dark ? DARK_FRAME_STYLE : ""}</style></head><body>${html}</body></html>`;
+}
+
+function linkHost(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 2000) return undefined;
+  const withScheme = /^[a-z][a-z0-9+.-]*:/i.test(trimmed)
+    ? trimmed
+    : `https://${trimmed}`;
+  try {
+    const url = new URL(withScheme);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
+    const host = url.hostname.replace(/\.$/, "").toLowerCase();
+    return host.includes(".") ? host : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The visible text is itself an address for a different place than the link.
+ * Ordinary words, and a site name that matches the destination host, stay quiet.
+ */
+export function differentLinkAddress(
+  text: string,
+  destination: string,
+): string | undefined {
+  const shown = text
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[.,!?;:)]+$/, "");
+  const dest = destination.trim();
+  if (!shown || shown.length > 300 || !dest) return undefined;
+  if (/^[^\s/@]+@[^\s/@]+\.[^\s/@]+$/i.test(shown)) {
+    if (/^mailto:/i.test(dest)) {
+      const mailbox = dest
+        .replace(/^mailto:/i, "")
+        .split("?")[0]
+        .trim()
+        .toLowerCase();
+      if (mailbox === shown.toLowerCase()) return undefined;
+    }
+    return shown;
+  }
+  const shownHost = linkHost(shown);
+  if (!shownHost) return undefined;
+  if (/^mailto:/i.test(dest)) return shown;
+  const destHost = linkHost(dest);
+  if (!destHost || shownHost === destHost) {
+    const bait = shown.match(/^https?:\/\/([^/@\s]+)@/i);
+    const baitHost = bait ? linkHost(bait[1]) : undefined;
+    if (baitHost && destHost && baitHost !== destHost) return shown;
+    return undefined;
+  }
+  return shown;
 }
 
 export function htmlToPlainText(html: string): string {

@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import { Composer } from "../components/Composer";
+import { clipboardImages } from "../components/composer/pasteImage";
 import { strings } from "../i18n";
 import { CONTEXT_ACTION_EVENT } from "../contextMenu";
 import { useAppStore } from "../store";
@@ -13,12 +14,15 @@ vi.mock("../api", () => ({
   api: {
     saveDraft: vi.fn(),
     sendMessage: vi.fn(),
+    moveMessage: vi.fn(),
     deleteDraft: vi.fn(),
     releaseComposeAttachments: vi.fn(),
     readComposeImage: vi.fn(),
     chooseAttachments: vi.fn(),
+    stagePastedImage: vi.fn(),
     suggestRecipients: vi.fn().mockResolvedValue([]),
     showNativeConfirm: vi.fn().mockResolvedValue(true),
+    saveSettings: vi.fn(async (settings: unknown) => settings),
     onDraftSyncChanged: vi.fn().mockResolvedValue(() => undefined),
     onComposeDrag: vi.fn().mockResolvedValue(() => undefined),
     attachDroppedFiles: vi.fn().mockResolvedValue([]),
@@ -29,6 +33,16 @@ vi.mock("../api", () => ({
 const account = makeAccount();
 
 const mockedSaveDraft = vi.mocked(api.saveDraft);
+
+function confirmEmptyMessage() {
+  const dialog = screen.queryByRole("alertdialog", {
+    name: strings.composer.noMessageTitle,
+  });
+  if (!dialog) return;
+  fireEvent.click(
+    within(dialog).getByRole("button", { name: strings.composer.sendAnyway }),
+  );
+}
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -120,7 +134,7 @@ describe("composer draft persistence", () => {
     });
 
     expect(mockedSaveDraft).toHaveBeenCalledTimes(2);
-    expect(screen.getAllByText("Draft saved").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/^Draft saved/).length).toBeGreaterThan(0);
   });
 
   it("minimizes into docked pill and restores back to full composer", () => {
@@ -135,6 +149,22 @@ describe("composer draft persistence", () => {
 
     fireEvent.click(restoreBtn);
     expect(screen.getByRole("dialog", { name: /New message/i })).toBeVisible();
+  });
+
+  it("starts a new message from the address last chosen", () => {
+    useAppStore.setState({
+      accounts: [{ ...account, aliases: ["work@example.test"] }],
+      settings: {
+        ...useAppStore.getState().settings,
+        lastFromAddresses: [
+          { accountId: account.id, address: "work@example.test" },
+        ],
+      },
+    });
+    render(<Composer accountId={account.id} />);
+    expect((screen.getByLabelText("From") as HTMLSelectElement).value).toBe(
+      "work@example.test",
+    );
   });
 
   it("renders from alias selector when account has aliases", () => {
@@ -154,6 +184,238 @@ describe("composer draft persistence", () => {
 
     fireEvent.change(select, { target: { value: "alias1@example.test" } });
     expect(select.value).toBe("alias1@example.test");
+  });
+
+  it("shows the account Reply-To and can leave it off this message", async () => {
+    useAppStore.setState({
+      accounts: [{ ...account, replyTo: "replies@example.com" }],
+    });
+    const send = vi.mocked(api.sendMessage);
+    send.mockResolvedValue({ id: "outbox-1", state: "sent", detail: null });
+    render(<Composer accountId={account.id} />);
+    const field = screen.getByRole("textbox", { name: "Reply-To" });
+    expect(field).toHaveValue("replies@example.com");
+    fireEvent.change(field, { target: { value: "not an address" } });
+    fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
+      target: { value: "jane@example.test" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Subject" }), {
+      target: { value: "Tonight" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.composer.send }),
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(send).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Enter one email address.",
+    );
+
+    fireEvent.change(field, { target: { value: "" } });
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.composer.send }),
+    );
+    confirmEmptyMessage();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyTo: "",
+        to: ["jane@example.test"],
+      }),
+    );
+  });
+
+  it("puts this account on Bcc when that preference is on", () => {
+    useAppStore.setState({
+      settings: { ...useAppStore.getState().settings, bccSelf: true },
+    });
+    render(<Composer accountId={account.id} />);
+    expect(screen.getByRole("combobox", { name: "Bcc" })).toHaveValue(
+      account.email,
+    );
+  });
+
+  it("marks a new message high importance and keeps that on a saved draft", async () => {
+    const send = vi.mocked(api.sendMessage);
+    send.mockResolvedValue({ id: "outbox-1", state: "sent", detail: null });
+    const view = render(<Composer accountId={account.id} />);
+    const box = screen.getByRole("checkbox", { name: "High importance" });
+    expect(box).not.toBeChecked();
+    fireEvent.click(box);
+    fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
+      target: { value: "jane@example.test" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Subject" }), {
+      target: { value: "Tonight" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.composer.send }),
+    );
+    confirmEmptyMessage();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        importance: "high",
+        subject: "Tonight",
+        to: ["jane@example.test"],
+      }),
+    );
+
+    view.unmount();
+    useAppStore.setState({
+      composeSeed: {
+        draft: {
+          id: "draft-1",
+          accountId: account.id,
+          to: ["jane@example.test"],
+          cc: [],
+          bcc: [],
+          subject: "Draft",
+          htmlBody: "<p>Note</p>",
+          textBody: "Note",
+          attachments: [],
+          importance: "high",
+        },
+      },
+    });
+    render(<Composer accountId={account.id} />);
+    expect(
+      screen.getByRole("checkbox", { name: "High importance" }),
+    ).toBeChecked();
+  });
+
+  it("marks a new message low importance and clears high importance", async () => {
+    const send = vi.mocked(api.sendMessage);
+    send.mockResolvedValue({ id: "outbox-1", state: "sent", detail: null });
+    const view = render(<Composer accountId={account.id} />);
+    const high = screen.getByRole("checkbox", { name: "High importance" });
+    const low = screen.getByRole("checkbox", { name: "Low importance" });
+    expect(low).not.toBeChecked();
+    fireEvent.click(high);
+    fireEvent.click(low);
+    expect(high).not.toBeChecked();
+    expect(low).toBeChecked();
+    fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
+      target: { value: "jane@example.test" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Subject" }), {
+      target: { value: "Whenever" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.composer.send }),
+    );
+    confirmEmptyMessage();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        importance: "low",
+        subject: "Whenever",
+      }),
+    );
+
+    view.unmount();
+    useAppStore.setState({
+      composeSeed: {
+        draft: {
+          id: "draft-low",
+          accountId: account.id,
+          to: ["jane@example.test"],
+          cc: [],
+          bcc: [],
+          subject: "Later",
+          htmlBody: "<p>Note</p>",
+          textBody: "Note",
+          attachments: [],
+          importance: "low",
+        },
+      },
+    });
+    render(<Composer accountId={account.id} />);
+    expect(
+      screen.getByRole("checkbox", { name: "Low importance" }),
+    ).toBeChecked();
+    expect(
+      screen.getByRole("checkbox", { name: "High importance" }),
+    ).not.toBeChecked();
+  });
+
+  it("requests a read receipt only when that option is on", async () => {
+    const send = vi.mocked(api.sendMessage);
+    send.mockResolvedValue({ id: "outbox-1", state: "sent", detail: null });
+    const view = render(<Composer accountId={account.id} />);
+    const box = screen.getByRole("checkbox", {
+      name: "Request a read receipt",
+    });
+    expect(box).not.toBeChecked();
+    fireEvent.click(box);
+    fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
+      target: { value: "jane@example.test" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Subject" }), {
+      target: { value: "Tonight" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.composer.send }),
+    );
+    confirmEmptyMessage();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({ requestReceipt: true, subject: "Tonight" }),
+    );
+    view.unmount();
+    useAppStore.setState({
+      composeSeed: {
+        draft: {
+          id: "draft-1",
+          accountId: account.id,
+          to: ["jane@example.test"],
+          cc: [],
+          bcc: [],
+          subject: "Draft",
+          htmlBody: "<p>Note</p>",
+          textBody: "Note",
+          attachments: [],
+          requestReceipt: true,
+        },
+      },
+    });
+    render(<Composer accountId={account.id} />);
+    expect(
+      screen.getByRole("checkbox", { name: "Request a read receipt" }),
+    ).toBeChecked();
+  });
+
+  it("keeps a saved draft's Bcc when the preference is on", () => {
+    useAppStore.setState({
+      settings: { ...useAppStore.getState().settings, bccSelf: true },
+      composeSeed: {
+        draft: {
+          id: "draft-1",
+          accountId: account.id,
+          to: ["jane@example.test"],
+          cc: [],
+          bcc: [],
+          subject: "Draft",
+          htmlBody: "<p>Note</p>",
+          textBody: "Note",
+          attachments: [],
+        },
+      },
+    });
+    render(<Composer accountId={account.id} />);
+    expect(
+      screen.queryByRole("combobox", { name: "Bcc" }),
+    ).not.toBeInTheDocument();
   });
 
   it("exposes Cc and Bcc toggles separately for assistive tech", () => {
@@ -242,6 +504,9 @@ describe("composer draft persistence", () => {
     fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
       target: { value: "jane@example.test" },
     });
+    fireEvent.change(screen.getByRole("textbox", { name: "Subject" }), {
+      target: { value: "Picnic" },
+    });
 
     const settings = document.createElement("div");
     settings.className = "settings-window";
@@ -251,6 +516,7 @@ describe("composer draft persistence", () => {
 
     settings.remove();
     fireEvent.keyDown(window, { key: "Enter", metaKey: true });
+    confirmEmptyMessage();
     await act(async () => {
       await Promise.resolve();
     });
@@ -397,8 +663,15 @@ describe("composer draft persistence", () => {
     fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
       target: { value: "jane@example.test" },
     });
+    fireEvent.change(screen.getByRole("textbox", { name: "Subject" }), {
+      target: { value: "Picnic" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Send options" }));
+    expect(
+      screen.queryByRole("menuitem", { name: "Send and archive" }),
+    ).toBeNull();
     fireEvent.click(screen.getByRole("menuitem", { name: /tonight/i }));
+    confirmEmptyMessage();
     await act(async () => {
       await Promise.resolve();
     });
@@ -409,6 +682,216 @@ describe("composer draft persistence", () => {
     expect(useAppStore.getState().lastSent).toEqual(
       expect.objectContaining({ outboxId: "outbox-9", scheduled: true }),
     );
+  });
+
+  it("sends a redirect with the original subject and no new letter", async () => {
+    const send = vi.mocked(api.sendMessage);
+    send.mockResolvedValue({
+      id: "outbox-9",
+      state: "scheduled",
+      detail: null,
+    });
+    useAppStore.setState({
+      accounts: [{ ...account, signature: "Best, Sam" }],
+      composeSeed: {
+        composeMode: "redirect",
+        sourceMessage: {
+          id: 1,
+          accountId: account.id,
+          mailboxId: 1,
+          uid: 1,
+          messageId: "<parent@example.test>",
+          subject: "Family picnic",
+          senderName: "Jane",
+          senderAddress: "jane@example.test",
+          recipients: account.email,
+          receivedAt: "2026-08-18T12:00:00Z",
+          preview: "Bring sandwiches",
+          isRead: true,
+          isStarred: false,
+          hasAttachments: false,
+          size: 100,
+          to: [account.email],
+          cc: [],
+          replyTo: null,
+          textBody: "Bring sandwiches",
+          htmlBody: "<p>Bring sandwiches</p>",
+          remoteImagesBlocked: false,
+          attachments: [],
+          references: ["<root@example.test>"],
+        },
+      },
+    });
+    render(<Composer accountId={account.id} />);
+    expect(
+      screen.getByRole("dialog", { name: strings.reader.redirect }),
+    ).toBeVisible();
+    expect(screen.getByText(strings.composer.redirectNote)).toBeVisible();
+    const subject = screen.getByLabelText(strings.composer.subject);
+    expect(subject).toHaveValue("Family picnic");
+    expect(subject).toHaveAttribute("readonly");
+    expect(
+      screen.queryByRole("button", { name: strings.composer.attach }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: strings.composer.picture }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("checkbox", {
+        name: strings.composer.includeSignature,
+      }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("checkbox", {
+        name: strings.composer.highImportance,
+      }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("checkbox", {
+        name: strings.composer.lowImportance,
+      }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("checkbox", {
+        name: strings.composer.requestReceipt,
+      }),
+    ).toBeNull();
+    fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
+      target: { value: "lee@example.test" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.composer.send }),
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: ["lee@example.test"],
+        subject: "Family picnic",
+        htmlBody: "",
+        textBody: "",
+        attachments: [],
+        includeSignature: false,
+        importance: "",
+        requestReceipt: false,
+        sourceMessageId: 1,
+        sourceKind: "redirect",
+        inReplyTo: undefined,
+        references: undefined,
+      }),
+    );
+  });
+
+  it("archives the message a reply answers, and skips that when sending is uncertain", async () => {
+    const send = vi.mocked(api.sendMessage);
+    const move = vi.mocked(api.moveMessage);
+    send.mockResolvedValue({
+      id: "outbox-9",
+      state: "scheduled",
+      detail: null,
+    });
+    move.mockResolvedValue(undefined);
+    useAppStore.setState({
+      composeSeed: {
+        composeMode: "reply",
+        sourceMessage: {
+          id: 7,
+          accountId: account.id,
+          mailboxId: 4,
+          uid: 7,
+          messageId: "<parent@example.test>",
+          subject: "Family picnic",
+          senderName: "Jane",
+          senderAddress: "jane@example.test",
+          recipients: account.email,
+          receivedAt: "2026-08-18T12:00:00Z",
+          preview: "Bring sandwiches",
+          isRead: true,
+          isStarred: false,
+          hasAttachments: false,
+          size: 100,
+          to: [account.email],
+          cc: [],
+          replyTo: null,
+          textBody: "Bring sandwiches",
+          htmlBody: null,
+          remoteImagesBlocked: false,
+          attachments: [],
+        },
+      },
+    });
+    render(<Composer accountId={account.id} />);
+    fireEvent.click(screen.getByRole("button", { name: "Send options" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Send and archive" }));
+    confirmEmptyMessage();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        textBody: expect.stringContaining("> Bring sandwiches"),
+      }),
+    );
+    expect(move).toHaveBeenCalledWith(account.id, 7, "archive");
+    expect(useAppStore.getState().lastSent).toEqual(
+      expect.objectContaining({
+        outboxId: "outbox-9",
+        archivedMessage: { messageId: 7, mailboxId: 4 },
+      }),
+    );
+
+    send.mockClear();
+    move.mockClear();
+    send.mockResolvedValue({
+      id: "outbox-10",
+      state: "needs_attention",
+      detail: "The mail server did not confirm delivery.",
+    });
+    useAppStore.setState({
+      composerOpen: true,
+      composeSeed: {
+        composeMode: "reply",
+        sourceMessage: {
+          id: 7,
+          accountId: account.id,
+          mailboxId: 4,
+          uid: 7,
+          messageId: "<parent@example.test>",
+          subject: "Family picnic",
+          senderName: "Jane",
+          senderAddress: "jane@example.test",
+          recipients: account.email,
+          receivedAt: "2026-08-18T12:00:00Z",
+          preview: "Bring sandwiches",
+          isRead: true,
+          isStarred: false,
+          hasAttachments: false,
+          size: 100,
+          to: [account.email],
+          cc: [],
+          replyTo: null,
+          textBody: "Bring sandwiches",
+          htmlBody: null,
+          remoteImagesBlocked: false,
+          attachments: [],
+        },
+      },
+    });
+    render(<Composer accountId={account.id} />);
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Send options" }).at(-1)!,
+    );
+    fireEvent.click(
+      screen.getAllByRole("menuitem", { name: "Send and archive" }).at(-1)!,
+    );
+    confirmEmptyMessage();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(move).not.toHaveBeenCalled();
   });
 
   it("rejects a past scheduled time without calling send", async () => {
@@ -467,6 +950,60 @@ describe("composer draft persistence", () => {
     expect(screen.queryByText("archive.zip")).not.toBeInTheDocument();
   });
 
+  it("pastes clipboard text without formatting", async () => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        readText: vi.fn().mockResolvedValue("Hello\n<b>there</b>\r\nThird"),
+      },
+    });
+    render(<Composer accountId={account.id} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent(CONTEXT_ACTION_EVENT, {
+          detail: { id: "paste-plain", target: { kind: "composer" } },
+        }),
+      );
+      await Promise.resolve();
+    });
+    const body = document.querySelector(".composer-editor");
+    expect(body?.textContent).toContain("Hello");
+    expect(body?.textContent).toContain("<b>there</b>");
+    expect(body?.textContent).toContain("Third");
+    expect(body?.querySelector("b")).toBeNull();
+  });
+
+  it("inserts clipboard text into a plain-text message", async () => {
+    useAppStore.setState({
+      accounts: [{ ...account, defaultBodyFormat: "plain" }],
+    });
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        readText: vi.fn().mockResolvedValue("Hello\n<b>there</b>"),
+      },
+    });
+    render(<Composer accountId={account.id} />);
+    const plain = screen.getByRole("textbox", {
+      name: strings.composer.plainBodyLabel,
+    });
+    fireEvent.change(plain, { target: { value: "Keep " } });
+    plain.focus();
+    (plain as HTMLTextAreaElement).setSelectionRange(5, 5);
+    await act(async () => {
+      fireEvent.keyDown(plain, {
+        key: "v",
+        metaKey: true,
+        shiftKey: true,
+      });
+      await Promise.resolve();
+    });
+    expect(plain).toHaveValue("Keep Hello\n<b>there</b>");
+  });
+
   it("runs composer undo, select-all, and attachment context actions", async () => {
     vi.mocked(api.chooseAttachments).mockResolvedValue([
       {
@@ -513,6 +1050,58 @@ describe("composer draft persistence", () => {
       "ctx-file",
     ]);
     expect(screen.queryByText("note.txt")).not.toBeInTheDocument();
+  });
+
+  it("leaves letter text alone when a paste also has words", () => {
+    const file = new File([new Uint8Array([1, 2, 3])], "shot.png", {
+      type: "image/png",
+    });
+    expect(
+      clipboardImages({
+        types: ["text/plain", "Files"],
+        items: [{ kind: "file", getAsFile: () => file }],
+      }),
+    ).toEqual({ files: [], tooLarge: false });
+  });
+
+  it("adds a pasted image as an inline picture", async () => {
+    vi.useRealTimers();
+    vi.mocked(api.stagePastedImage).mockResolvedValue({
+      token: "pasted-file",
+      filename: "Pasted image.png",
+      contentType: "image/png",
+      inline: false,
+      size: 68,
+    });
+    render(<Composer accountId={account.id} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const editor = document.querySelector(".composer-editor");
+    if (!editor) throw new Error("missing editor");
+    const png = Uint8Array.from(
+      atob(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+      ),
+      (char) => char.charCodeAt(0),
+    );
+    const file = new File([png], "shot.png", { type: "image/png" });
+    const clipboard = {
+      types: ["Files"],
+      items: [{ kind: "file", getAsFile: () => file }],
+      files: [file],
+    };
+    const event = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", { value: clipboard });
+    await act(async () => {
+      editor?.dispatchEvent(event);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    });
+    expect(api.stagePastedImage).toHaveBeenCalledWith(
+      account.id,
+      expect.stringMatching(/^data:image\/png;base64,/),
+    );
+    expect(screen.getByText(/Image: Pasted image\.png/)).toBeVisible();
   });
 
   it("adds inline images and releases their token when removed", async () => {
@@ -706,6 +1295,155 @@ describe("composer draft persistence", () => {
     expect(useAppStore.getState().error).toBe("Error: delete failed");
   });
 
+  it("asks before sending to 10 or more people", async () => {
+    const send = vi.mocked(api.sendMessage);
+    send.mockResolvedValue({ id: "outbox-1", state: "sent", detail: null });
+    const people = Array.from(
+      { length: 10 },
+      (_, index) => `person${index}@example.test`,
+    ).join(", ");
+    render(<Composer accountId={account.id} />);
+    fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
+      target: { value: people },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Subject" }), {
+      target: { value: "Hello" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(
+      screen.getByRole("alertdialog", {
+        name: strings.composer.largeAudienceTitle,
+      }),
+    ).toHaveTextContent(strings.composer.largeAudienceDetail(10));
+    expect(send).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.composer.reviewRecipients }),
+    );
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(document.getElementById("composer-to")).toHaveFocus();
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    fireEvent.click(screen.getByRole("button", { name: "Send anyway" }));
+    confirmEmptyMessage();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: people.split(", ").map((address) => address),
+        subject: "Hello",
+      }),
+    );
+  });
+
+  it("asks before sending to an address that may not accept mail", async () => {
+    const send = vi.mocked(api.sendMessage);
+    send.mockResolvedValue({ id: "outbox-1", state: "sent", detail: null });
+    render(<Composer accountId={account.id} />);
+    fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
+      target: { value: "noreply@example.test" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Subject" }), {
+      target: { value: "Hello" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(
+      screen.getByRole("alertdialog", { name: strings.composer.noreplyTitle }),
+    ).toBeVisible();
+    expect(send).not.toHaveBeenCalled();
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.composer.reviewRecipients }),
+    );
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(document.getElementById("composer-to")).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    fireEvent.click(screen.getByRole("button", { name: "Send anyway" }));
+    fireEvent.click(screen.getByRole("button", { name: "Send anyway" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: ["noreply@example.test"],
+        subject: "Hello",
+      }),
+    );
+  });
+
+  it("asks before sending a message with no text", async () => {
+    const send = vi.mocked(api.sendMessage);
+    send.mockResolvedValue({ id: "outbox-1", state: "sent", detail: null });
+    render(<Composer accountId={account.id} />);
+    fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
+      target: { value: "jane@example.test" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Subject" }), {
+      target: { value: "Hello" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(
+      screen.getByRole("alertdialog", {
+        name: strings.composer.noMessageTitle,
+      }),
+    ).toBeVisible();
+    expect(send).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.composer.writeMessage }),
+    );
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(document.querySelector(".composer-editor")).toHaveFocus();
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    fireEvent.click(screen.getByRole("button", { name: "Send anyway" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: ["jane@example.test"],
+        subject: "Hello",
+      }),
+    );
+  });
+
+  it("asks before sending a message with no subject", async () => {
+    const send = vi.mocked(api.sendMessage);
+    send.mockResolvedValue({ id: "outbox-1", state: "sent", detail: null });
+    render(<Composer accountId={account.id} />);
+    fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
+      target: { value: "jane@example.test" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Subject" }), {
+      target: { value: "   " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(
+      screen.getByRole("alertdialog", {
+        name: "Send without a subject?",
+      }),
+    ).toBeVisible();
+    expect(send).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Add a subject" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.getByRole("textbox", { name: "Subject" })).toHaveFocus();
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    fireEvent.click(screen.getByRole("button", { name: "Send anyway" }));
+    confirmEmptyMessage();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: ["jane@example.test"],
+        subject: "",
+      }),
+    );
+  });
+
   it("surfaces send failures and uncertain SMTP outcomes", async () => {
     const send = vi.mocked(api.sendMessage);
     send.mockRejectedValueOnce(new Error("send failed"));
@@ -713,7 +1451,11 @@ describe("composer draft persistence", () => {
     fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
       target: { value: "jane@example.test" },
     });
+    fireEvent.change(screen.getByRole("textbox", { name: "Subject" }), {
+      target: { value: "Picnic" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    confirmEmptyMessage();
     await act(async () => {
       await Promise.resolve();
     });
@@ -725,6 +1467,7 @@ describe("composer draft persistence", () => {
       detail: "Delivery outcome uncertain.",
     });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    confirmEmptyMessage();
     await act(async () => {
       await Promise.resolve();
     });
@@ -900,6 +1643,10 @@ describe("composer draft persistence", () => {
     });
     const { container } = render(<Composer accountId={account.id} />);
     expect(screen.getByText("Best, Sam")).toBeVisible();
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Include signature" }),
+    );
+    expect(screen.queryByText("Best, Sam")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Maximize editor" }));
     expect(container.querySelector(".composer-maximized")).toBeInTheDocument();
 
@@ -910,7 +1657,9 @@ describe("composer draft persistence", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(mockedSaveDraft).toHaveBeenCalled();
+    expect(mockedSaveDraft).toHaveBeenCalledWith(
+      expect.objectContaining({ includeSignature: false }),
+    );
   });
 
   it("formats, indents, links, and closes an empty draft", async () => {
@@ -1060,7 +1809,7 @@ describe("composer draft persistence", () => {
     });
     expect(mockedSaveDraft).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
-    expect(screen.getAllByText("Draft saved").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/^Draft saved/).length).toBeGreaterThan(0);
   });
 
   it("unsubscribes from draft sync events on unmount", async () => {

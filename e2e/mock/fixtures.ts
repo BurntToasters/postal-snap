@@ -19,7 +19,12 @@ export async function registerMockFixtures(page: Page): Promise<void> {
         : null,
       color: "blue",
       defaultBodyFormat: params.has("defaultPlain") ? "plain" : "html",
-      aliases: params.has("aliasCollision") ? ["alias@example.test"] : [],
+      aliases: params.has("aliasCollision")
+        ? ["alias@example.test"]
+        : params.has("fromAlias")
+          ? ["work@example.com"]
+          : [],
+      replyTo: params.has("accountReplyTo") ? "replies@example.com" : "",
     };
     const secondAccount = {
       id: "account-2",
@@ -38,7 +43,9 @@ export async function registerMockFixtures(page: Page): Promise<void> {
         displayName: "INBOX",
         role: "inbox",
         unreadCount: 1,
-        totalCount: 1,
+        totalCount: params.has("folderTotal")
+          ? Number(params.get("folderTotal")) || 1
+          : 1,
         delimiter: "/",
       },
       {
@@ -47,8 +54,8 @@ export async function registerMockFixtures(page: Page): Promise<void> {
         name: "Archive",
         displayName: "Archive",
         role: "archive",
-        unreadCount: 0,
-        totalCount: 0,
+        unreadCount: params.has("unreadArchive") ? 2 : 0,
+        totalCount: params.has("unreadArchive") ? 2 : 0,
         delimiter: "/",
       },
       {
@@ -57,7 +64,7 @@ export async function registerMockFixtures(page: Page): Promise<void> {
         name: "Deleted Messages",
         displayName: "Deleted Messages",
         role: "trash",
-        unreadCount: 0,
+        unreadCount: params.has("unreadTrash") ? 1 : 0,
         totalCount: 2,
         delimiter: "/",
       },
@@ -82,6 +89,60 @@ export async function registerMockFixtures(page: Page): Promise<void> {
         delimiter: "/",
       },
     ];
+    if (params.has("manyFolders")) {
+      mailboxes.push(
+        {
+          id: 8,
+          accountId: account.id,
+          name: "Receipts",
+          displayName: "Receipts",
+          role: "other",
+          unreadCount: 0,
+          totalCount: 0,
+          delimiter: "/",
+        },
+        {
+          id: 9,
+          accountId: account.id,
+          name: "Travel",
+          displayName: "Travel",
+          role: "other",
+          unreadCount: 0,
+          totalCount: 0,
+          delimiter: "/",
+        },
+        {
+          id: 10,
+          accountId: account.id,
+          name: "Newsletters",
+          displayName: "Newsletters",
+          role: "other",
+          unreadCount: 0,
+          totalCount: 0,
+          delimiter: "/",
+        },
+        {
+          id: 12,
+          accountId: account.id,
+          name: "School",
+          displayName: "School",
+          role: "other",
+          unreadCount: 0,
+          totalCount: 0,
+          delimiter: "/",
+        },
+        {
+          id: 13,
+          accountId: account.id,
+          name: "Projects/Launch",
+          displayName: "Projects/Launch",
+          role: "other",
+          unreadCount: 0,
+          totalCount: 0,
+          delimiter: "/",
+        },
+      );
+    }
     if (params.has("nestedFolders")) {
       mailboxes.push(
         {
@@ -115,6 +176,42 @@ export async function registerMockFixtures(page: Page): Promise<void> {
           delimiter: "/",
         },
       );
+    }
+    if (params.has("sentRow")) {
+      mailboxes.push({
+        id: 7,
+        accountId: account.id,
+        name: "Sent",
+        displayName: "Sent",
+        role: "sent",
+        unreadCount: 0,
+        totalCount: 1,
+        delimiter: "/",
+      });
+    }
+    if (params.has("junkFolder")) {
+      mailboxes.push({
+        id: 11,
+        accountId: account.id,
+        name: "Junk",
+        displayName: "Junk",
+        role: "junk",
+        unreadCount: 0,
+        totalCount: 0,
+        delimiter: "/",
+      });
+    }
+    if (params.has("junkRow")) {
+      mailboxes.push({
+        id: 6,
+        accountId: account.id,
+        name: "Junk",
+        displayName: "Junk",
+        role: "junk",
+        unreadCount: 0,
+        totalCount: 0,
+        delimiter: "/",
+      });
     }
     if (params.has("nestedRoleFolders")) {
       mailboxes.push(
@@ -156,20 +253,49 @@ export async function registerMockFixtures(page: Page): Promise<void> {
       mailboxId: 1,
       uid: 44,
       messageId: "<weekend@example.com>",
-      subject: "Weekend plans",
-      senderName: "Jane",
-      senderAddress: "jane@example.com",
+      subject: params.has("blankSubject")
+        ? ""
+        : params.has("subjectPrefix")
+          ? "Re: Fwd: Weekend plans"
+          : "Weekend plans",
+      senderName: params.has("nameConflict")
+        ? "PayPal <service@paypal.com>"
+        : params.has("senderIsAddress")
+          ? "jane@example.com"
+          : "Jane",
+      senderAddress: params.has("blankSender")
+        ? ""
+        : (params.get("sender") ?? "jane@example.com"),
       recipients: "sam@icloud.com",
       receivedAt: "2026-08-18T12:00:00Z",
+      arrivedAt: params.has("arrived") ? "2026-08-18T18:00:00Z" : undefined,
       preview: "Are we still meeting on Saturday?",
       isRead: false,
       isStarred: false,
-      hasAttachments: false,
-      size: 512,
+      hasAttachments: params.has("fileCount") || params.has("inlineFile"),
+      attachmentCount: params.has("fileCount")
+        ? Number(params.get("fileCount")) || 0
+        : 0,
+      size: params.has("emptySize") ? 0 : 512,
       threadRoot: null as string | null,
+      conversationMuted: params.has("conversationMuted"),
+      importance: params.has("highImportance")
+        ? "high"
+        : params.has("lowImportance")
+          ? "low"
+          : "",
     };
     if (params.has("aliasCollision")) {
       summary.recipients = "notalias@example.test";
+    }
+    // A Sent-folder row should name recipients, not the account owner.
+    if (params.has("sentRow")) {
+      summary.mailboxId = 7;
+      summary.senderName = "Sam";
+      summary.senderAddress = "sam@icloud.com";
+      summary.recipients = "jane@example.com, lee@example.com";
+      summary.subject = "Sent note";
+      summary.isRead = true;
     }
     // A message the user sent, as seen in Sent.
     if (params.has("fromSelf")) {
@@ -183,6 +309,22 @@ export async function registerMockFixtures(page: Page): Promise<void> {
       summary.senderAddress = "sam@icloud.com";
       summary.recipients = "sam@icloud.com";
     }
+    if (params.has("inJunk")) {
+      if (!mailboxes.some((mailbox) => mailbox.role === "junk")) {
+        mailboxes.push({
+          id: 6,
+          accountId: account.id,
+          name: "Junk",
+          displayName: "Junk",
+          role: "junk",
+          unreadCount: 0,
+          totalCount: 1,
+          delimiter: "/",
+        });
+      }
+      summary.mailboxId = 6;
+    }
+    if (params.has("inTrash")) summary.mailboxId = 3;
     const olderSummary = {
       ...summary,
       id: 9,
@@ -190,6 +332,10 @@ export async function registerMockFixtures(page: Page): Promise<void> {
       messageId: "<older@example.com>",
       subject: "Older family note",
       receivedAt: "2026-08-17T12:00:00Z",
+      hasAttachments: params.has("threadMarks"),
+      hasCalendar: params.has("threadMarks"),
+      isAnswered: params.has("threadMarks"),
+      isForwarded: params.has("threadMarks"),
     };
     const secondSummary = {
       ...summary,

@@ -101,6 +101,11 @@ impl Database {
                     updated_at,
                     sync_state,
                     sync_detail,
+                    preview: draft_preview(&draft.text_body, &draft.html_body),
+                    attachment_count: draft_file_count(&draft.attachments),
+                    from_address: draft_from_address(draft.from.as_deref()),
+                    source_message_id: draft.source_message_id,
+                    source_kind: draft.source_kind,
                 })
             })
             .collect()
@@ -472,5 +477,187 @@ impl Database {
                 .map_err(db_error)?;
         }
         transaction.commit().map_err(db_error)
+    }
+}
+
+const PREVIEW_CHARS: usize = 180;
+
+/// The first line a person wrote. Quoted reply lines and script blocks stay out.
+pub(crate) fn draft_preview(text_body: &str, html_body: &str) -> String {
+    let plain = if text_body.trim().is_empty() {
+        html_to_plain(html_body)
+    } else {
+        text_body.to_string()
+    };
+    let line = plain
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with('>'))
+        .unwrap_or("");
+    let cleaned = line
+        .chars()
+        .filter(|character| !character.is_control())
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    cleaned.chars().take(PREVIEW_CHARS).collect()
+}
+
+fn html_to_plain(html: &str) -> String {
+    let without_script = strip_element(html, "script");
+    let without_style = strip_element(&without_script, "style");
+    let mut out = String::new();
+    let mut chars = without_style.chars().peekable();
+    while let Some(character) = chars.next() {
+        if character == '<' {
+            let mut tag = String::new();
+            for inner in chars.by_ref() {
+                if inner == '>' {
+                    break;
+                }
+                tag.push(inner);
+            }
+            let name = tag
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .trim_start_matches('/')
+                .to_ascii_lowercase();
+            if matches!(
+                name.as_str(),
+                "br" | "p" | "div" | "li" | "tr" | "h1" | "h2" | "h3" | "blockquote"
+            ) {
+                out.push('\n');
+            }
+            continue;
+        }
+        if character == '&' {
+            let mut entity = String::new();
+            while let Some(next) = chars.peek() {
+                if *next == ';' || entity.len() > 12 {
+                    break;
+                }
+                entity.push(chars.next().unwrap());
+            }
+            if chars.peek() == Some(&';') {
+                chars.next();
+                out.push_str(&decode_entity(&entity));
+            } else {
+                out.push('&');
+                out.push_str(&entity);
+            }
+            continue;
+        }
+        out.push(character);
+    }
+    out
+}
+
+fn strip_element(html: &str, name: &str) -> String {
+    let lower = html.to_ascii_lowercase();
+    let open = format!("<{name}");
+    let close = format!("</{name}>");
+    let mut out = String::new();
+    let mut rest = html;
+    let mut lower_rest = lower.as_str();
+    while let Some(start) = lower_rest.find(&open) {
+        out.push_str(&rest[..start]);
+        let after_open = start + open.len();
+        let Some(relative_end) = lower_rest[after_open..].find(&close) else {
+            return out;
+        };
+        let next = after_open + relative_end + close.len();
+        rest = &rest[next..];
+        lower_rest = &lower_rest[next..];
+    }
+    out.push_str(rest);
+    out
+}
+
+pub(crate) fn draft_file_count(attachments: &[crate::models::ComposeAttachment]) -> usize {
+    attachments.iter().filter(|item| !item.inline).count()
+}
+
+fn draft_from_address(from: Option<&str>) -> String {
+    from.unwrap_or("").trim().to_string()
+}
+
+fn decode_entity(entity: &str) -> String {
+    match entity {
+        "amp" => "&".into(),
+        "lt" => "<".into(),
+        "gt" => ">".into(),
+        "quot" => "\"".into(),
+        "apos" => "'".into(),
+        "nbsp" => " ".into(),
+        _ => decode_numeric_entity(entity).unwrap_or_else(|| format!("&{entity};")),
+    }
+}
+
+fn decode_numeric_entity(entity: &str) -> Option<String> {
+    let hex = entity
+        .strip_prefix("#x")
+        .or_else(|| entity.strip_prefix("#X"));
+    let code = if let Some(digits) = hex {
+        u32::from_str_radix(digits, 16).ok()?
+    } else {
+        let digits = entity.strip_prefix('#')?;
+        digits.parse::<u32>().ok()?
+    };
+    char::from_u32(code).map(|character| character.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{draft_file_count, draft_from_address, draft_preview};
+    use crate::models::ComposeAttachment;
+
+    fn file(inline: bool) -> ComposeAttachment {
+        ComposeAttachment {
+            token: "token".into(),
+            filename: "notes.txt".into(),
+            content_type: None,
+            inline,
+            content_id: None,
+            size: Some(4),
+        }
+    }
+
+    #[test]
+    fn draft_from_address_keeps_a_saved_address() {
+        assert_eq!(draft_from_address(None), "");
+        assert_eq!(draft_from_address(Some("  ")), "");
+        assert_eq!(
+            draft_from_address(Some(" alias@example.com ")),
+            "alias@example.com"
+        );
+    }
+
+    #[test]
+    fn draft_file_count_skips_pictures_in_the_letter() {
+        assert_eq!(draft_file_count(&[]), 0);
+        assert_eq!(draft_file_count(&[file(true)]), 0);
+        assert_eq!(draft_file_count(&[file(false), file(true)]), 1);
+    }
+
+    #[test]
+    fn draft_preview_keeps_the_written_line() {
+        assert_eq!(draft_preview("   ", "   "), "");
+        assert_eq!(
+            draft_preview("Thanks for the note\n\n> older line", ""),
+            "Thanks for the note"
+        );
+        assert_eq!(
+            draft_preview(
+                "",
+                "<script>alert(1)</script><style>p{}</style><p>Hello&amp; welcome</p><blockquote>old</blockquote>"
+            ),
+            "Hello& welcome"
+        );
+        let long = "a".repeat(200);
+        assert_eq!(draft_preview(&long, "").chars().count(), 180);
+        assert_eq!(draft_preview("Line\u{0007} two", ""), "Line two");
+        assert_eq!(draft_preview("", "<p>&#39;Yes&#39;</p>"), "'Yes'");
     }
 }

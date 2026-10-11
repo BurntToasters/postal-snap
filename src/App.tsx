@@ -21,10 +21,15 @@ import { parseMailto } from "./mailto";
 import { SetupWizard } from "./components/SetupWizard";
 import { SetupFlow } from "./components/SetupFlow";
 import { MailShell } from "./components/MailShell";
-import { SettingsDialog, type SettingsTab } from "./components/SettingsDialog";
+import {
+  SettingsDialog,
+  type RuleSeed,
+  type SettingsTab,
+} from "./components/SettingsDialog";
 import { useAppStore } from "./store";
 import { useSettingsSave } from "./components/settings/useSettingsSave";
 import { applySettings } from "./settings";
+import { mailboxWindowTitle, unreadBadgeCount } from "./windowTitle";
 import {
   checkUpdateInteractive,
   checksUpdatesOnStartup,
@@ -45,6 +50,8 @@ const Composer = lazy(() =>
 
 export default function App() {
   const accounts = useAppStore((state) => state.accounts);
+  const activeAccountId = useAppStore((state) => state.activeAccountId);
+  const mailboxes = useAppStore((state) => state.mailboxes);
   const settings = useAppStore((state) => state.settings);
   const setAccounts = useAppStore((state) => state.setAccounts);
   const setSettings = useAppStore((state) => state.setSettings);
@@ -58,6 +65,7 @@ export default function App() {
   const openComposer = useAppStore((state) => state.openComposer);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsAccountId, setSettingsAccountId] = useState<string>();
+  const [settingsRuleSeed, setSettingsRuleSeed] = useState<RuleSeed>();
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
   const [settingsRouteRequest, setSettingsRouteRequest] = useState(0);
   const [startupError, setStartupError] = useState<string>();
@@ -82,9 +90,10 @@ export default function App() {
   const { update: repairSettings } = useSettingsSave();
 
   const openSettings = useCallback(
-    (tab: SettingsTab = "general", accountId?: string) => {
+    (tab: SettingsTab = "general", accountId?: string, ruleSeed?: RuleSeed) => {
       setSettingsTab(tab);
       setSettingsAccountId(accountId);
+      setSettingsRuleSeed(ruleSeed);
       setSettingsRouteRequest((value) => value + 1);
       setSettingsOpen(true);
     },
@@ -148,6 +157,47 @@ export default function App() {
     await loadAccounts();
     setSetupSession(null);
   }, [loadAccounts]);
+
+  useEffect(() => {
+    const account = accounts.find((item) => item.id === activeAccountId);
+    const inbox = mailboxes.find(
+      (mailbox) =>
+        mailbox.accountId === activeAccountId && mailbox.role === "inbox",
+    );
+    const unread = inbox?.unreadCount ?? 0;
+    document.title = mailboxWindowTitle({
+      unread,
+      accountLabel: account?.displayName || account?.email,
+      severalAccounts: accounts.length > 1,
+    });
+    const badge = unreadBadgeCount(unread);
+    void api.setUnreadBadge(badge ?? 0).catch(() => undefined);
+  }, [accounts, activeAccountId, mailboxes]);
+
+  useEffect(() => {
+    const onCreateRule = (event: Event) => {
+      const detail = (
+        event as CustomEvent<{
+          accountId?: string;
+          contains?: string;
+          field?: RuleSeed["field"];
+        }>
+      ).detail;
+      const contains = detail?.contains?.trim();
+      if (!detail?.accountId || !contains) return;
+      const field =
+        detail.field === "to" || detail.field === "subject"
+          ? detail.field
+          : "from";
+      openSettings("accounts", detail.accountId, {
+        accountId: detail.accountId,
+        contains,
+        field,
+      });
+    };
+    window.addEventListener("postal:create-rule", onCreateRule);
+    return () => window.removeEventListener("postal:create-rule", onCreateRule);
+  }, [openSettings]);
 
   useEffect(() => {
     if (!inTauri()) return;
@@ -400,6 +450,7 @@ export default function App() {
           key={`${settingsTab}:${settingsRouteRequest}`}
           initialTab={settingsTab}
           initialAccountId={settingsAccountId}
+          initialRuleSeed={settingsRuleSeed}
           onClose={() => setSettingsOpen(false)}
           onLastAccountRemoved={claimAccountlessSetup}
         />

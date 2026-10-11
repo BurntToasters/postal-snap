@@ -8,6 +8,7 @@ import {
   type PointerEvent,
   type RefObject,
 } from "react";
+import { COMPOSER_MIN_HEIGHT, COMPOSER_MIN_WIDTH } from "../../composerSize";
 
 export interface ComposerRect {
   x: number;
@@ -16,8 +17,8 @@ export interface ComposerRect {
   h: number;
 }
 
-const MIN_WIDTH = 480;
-const MIN_HEIGHT = 360;
+const MIN_WIDTH = COMPOSER_MIN_WIDTH;
+const MIN_HEIGHT = COMPOSER_MIN_HEIGHT;
 /** Part of the header that must stay on screen to drag it back. */
 const KEEP_VISIBLE = 80;
 const HEADER_FALLBACK = 56;
@@ -61,6 +62,7 @@ const interactive = "button, input, select, textarea, a, [role='button']";
 export function useComposerPlacement(
   windowRef: RefObject<HTMLElement | null>,
   enabled: boolean,
+  onResize?: (width: number, height: number) => void,
 ) {
   const [rect, setRect] = useState<ComposerRect | null>(null);
   /** Last known app area; updated on window resize and gesture start. */
@@ -74,7 +76,9 @@ export function useComposerPlacement(
     startX: number;
     startY: number;
     start: ComposerRect;
+    moved: boolean;
   } | null>(null);
+  const latest = useRef<ComposerRect | null>(null);
 
   const layerSize = useCallback(() => {
     const layer = windowRef.current?.parentElement;
@@ -132,6 +136,7 @@ export function useComposerPlacement(
       startX: event.clientX,
       startY: event.clientY,
       start,
+      moved: false,
     };
   };
 
@@ -141,7 +146,7 @@ export function useComposerPlacement(
     const dx = event.clientX - active.startX;
     const dy = event.clientY - active.startY;
     const { w, h, headerH } = layerSize();
-    setRect(
+    const next =
       active.kind === "move"
         ? clampRect(
             { ...active.start, x: active.start.x + dx, y: active.start.y + dy },
@@ -153,14 +158,20 @@ export function useComposerPlacement(
             { ...active.start, w: active.start.w + dx, h: active.start.h + dy },
             w,
             h,
-          ),
-    );
+          );
+    active.moved = true;
+    latest.current = next;
+    setRect(next);
   };
 
   const end = (event: PointerEvent<HTMLElement>) => {
-    if (!gesture.current) return;
+    const active = gesture.current;
+    if (!active) return;
     gesture.current = null;
     event.currentTarget.releasePointerCapture?.(event.pointerId);
+    if (active.kind === "resize" && active.moved && latest.current) {
+      onResize?.(latest.current.w, latest.current.h);
+    }
   };
 
   const resizeByKey = (event: KeyboardEvent<HTMLElement>) => {
@@ -175,9 +186,14 @@ export function useComposerPlacement(
     if (!step || !start) return;
     event.preventDefault();
     const { w, h } = layerSize();
-    setRect(
-      clampSize({ ...start, w: start.w + step[0], h: start.h + step[1] }, w, h),
+    const next = clampSize(
+      { ...start, w: start.w + step[0], h: start.h + step[1] },
+      w,
+      h,
     );
+    latest.current = next;
+    setRect(next);
+    onResize?.(next.w, next.h);
   };
 
   // Track the app area while mounted, including while maximized.

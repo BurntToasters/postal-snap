@@ -1,12 +1,22 @@
 import { useState } from "react";
 import { strings } from "../../i18n";
 
+/** 6 PM local time, when that is still at least an hour away. */
+export function laterTodayIso(now = new Date()): string | undefined {
+  const target = new Date(now);
+  target.setHours(18, 0, 0, 0);
+  if (target.getTime() - now.getTime() < 60 * 60 * 1000) return undefined;
+  return target.toISOString();
+}
+
 export function SnoozePanel({
   onSnooze,
   onClose,
+  label = strings.reader.snooze,
 }: {
   onSnooze: (untilIso: string) => void;
   onClose: () => void;
+  label?: string;
 }) {
   const [custom, setCustom] = useState("");
   function atMorning(date: Date): string {
@@ -23,12 +33,14 @@ export function SnoozePanel({
     date.setDate(date.getDate() + ((8 - date.getDay()) % 7 || 7));
     return atMorning(date);
   }
+  const laterToday = laterTodayIso();
   return (
-    <div
-      className="snooze-panel"
-      role="group"
-      aria-label={strings.reader.snooze}
-    >
+    <div className="snooze-panel" role="group" aria-label={label}>
+      {laterToday ? (
+        <button type="button" onClick={() => onSnooze(laterToday)}>
+          {strings.reader.snoozeLaterToday}
+        </button>
+      ) : null}
       <button
         type="button"
         autoFocus

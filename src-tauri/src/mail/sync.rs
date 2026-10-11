@@ -99,6 +99,23 @@ pub struct SyncOutcome {
     pub folder_errors: u32,
 }
 
+pub async fn probe_mail_login(
+    imap: &ServerConfig,
+    smtp: &ServerConfig,
+    email: &str,
+    secret: &str,
+    xoauth2: bool,
+) -> Result<(), String> {
+    let mut session = super::send::connect_imap_auth(imap, secret, xoauth2)
+        .await
+        .map_err(|error| format!("IMAP connection test failed: {error}"))?;
+    let _ = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.logout()).await;
+    super::send::test_smtp_auth(smtp, email, secret, xoauth2)
+        .await
+        .map_err(|error| format!("SMTP connection test failed: {error}"))?;
+    Ok(())
+}
+
 pub async fn test_account(
     request: &AccountSetupRequest,
     imap: &ServerConfig,
@@ -244,9 +261,13 @@ async fn yield_point<H: SyncHooks>(
     }
     lease.release();
     hooks.yield_account().await;
-    // Never reconnect with a password the user just deleted or replaced.
+    // Never reconnect with a secret the user just deleted or replaced.
     hooks.validate_connection(account)?;
-    let current = hooks.current_password(&account.summary.id)?;
+    let current = if account.summary.auth_method == "oauth" {
+        crate::oauth::session_secret(account).await?
+    } else {
+        hooks.current_password(&account.summary.id)?
+    };
     pool::checkout(account, &current).await
 }
 
@@ -1200,33 +1221,55 @@ pub async fn server_search(
     password: &str,
     query: &SearchQuery,
 ) -> Result<Vec<MessageSummary>, String> {
-    let mailboxes = if query.all_folders {
+    let parsed = crate::search_query::parse(&query.text);
+    let mut mailboxes = if query.all_folders {
         db.list_mailboxes(&account.summary.id)?
-            .into_iter()
-            .map(|mailbox| (mailbox.id, mailbox.name))
-            .collect::<Vec<_>>()
     } else if let Some(id) = query.mailbox_id {
-        let (account_id, name) = db.mailbox(id)?;
+        let (account_id, _) = db.mailbox(id)?;
         if account_id != account.summary.id {
             return Err("Mailbox does not belong to this account.".into());
         }
-        vec![(id, name)]
+        db.list_mailboxes(&account.summary.id)?
+            .into_iter()
+            .filter(|mailbox| mailbox.id == id)
+            .collect()
     } else {
         Vec::new()
     };
-    let parsed = crate::search_query::parse(&query.text);
-    let Some(criteria) = parsed.imap_criteria() else {
+    if !parsed.folders.is_empty() {
+        mailboxes.retain(|mailbox| {
+            parsed.folders.iter().any(|needle| {
+                crate::search_query::folder_needle_matches(
+                    needle,
+                    mailbox.role.as_str(),
+                    &mailbox.name,
+                    &mailbox.display_name,
+                    mailbox.delimiter.as_deref(),
+                )
+            })
+        });
+        if mailboxes.is_empty() {
+            return Ok(Vec::new());
+        }
+    }
+    let mailboxes = mailboxes
+        .into_iter()
+        .map(|mailbox| (mailbox.id, mailbox.name))
+        .collect::<Vec<_>>();
+    let identities =
+        crate::search_query::search_identities(&account.summary.email, &account.summary.aliases);
+    let Some(criteria) = parsed.imap_criteria_with(&identities) else {
         return Ok(Vec::new());
     };
     let mut lease = pool::checkout(account, password).await?;
+    let filter = ServerHitFilter {
+        require_attachment: parsed.has_attachment,
+        filenames: parsed.filenames,
+        larger_than: parsed.larger_than,
+        smaller_than: parsed.smaller_than,
+    };
     match search_mailboxes(
-        &mut lease,
-        db,
-        account,
-        query,
-        &criteria,
-        parsed.has_attachment,
-        mailboxes,
+        &mut lease, db, account, query, &criteria, &filter, mailboxes,
     )
     .await
     {
@@ -1241,13 +1284,49 @@ pub async fn server_search(
     }
 }
 
+struct ServerHitFilter {
+    require_attachment: bool,
+    filenames: Vec<String>,
+    larger_than: Option<i64>,
+    smaller_than: Option<i64>,
+}
+
+impl ServerHitFilter {
+    fn matches(&self, summary: &MessageSummary, names: &[String]) -> bool {
+        if self.require_attachment && !summary.has_attachments {
+            return false;
+        }
+        if self
+            .larger_than
+            .is_some_and(|min| summary.size <= min as u64)
+        {
+            return false;
+        }
+        if self
+            .smaller_than
+            .is_some_and(|max| summary.size >= max as u64)
+        {
+            return false;
+        }
+        // Names are empty when the body is not cached; keep the hit then.
+        if names.is_empty() && summary.has_attachments {
+            return true;
+        }
+        self.filenames.iter().all(|needle| {
+            names
+                .iter()
+                .any(|name| crate::search_query::filename_matches(name, needle))
+        })
+    }
+}
+
 async fn search_mailboxes(
     lease: &mut Lease,
     db: &Database,
     account: &AccountRecord,
     query: &SearchQuery,
     criteria: &str,
-    require_attachment: bool,
+    filter: &ServerHitFilter,
     mailboxes: Vec<(i64, String)>,
 ) -> Result<Vec<MessageSummary>, String> {
     let mut results = Vec::new();
@@ -1315,8 +1394,14 @@ async fn search_mailboxes(
         db.upsert_envelopes(&account.summary.id, mailbox_id, &parsed)?;
         for message in &parsed {
             if let Some(summary) = db.message_summary_by_uid(mailbox_id, message.uid)? {
-                // IMAP has no attachment key; the envelope hint filters.
-                if !require_attachment || summary.has_attachments {
+                // Attachment names are not an IMAP key. Size and the
+                // envelope attachment hint are checked on the cached row.
+                let names = if filter.filenames.is_empty() {
+                    Vec::new()
+                } else {
+                    db.attachment_filenames(mailbox_id, message.uid)?
+                };
+                if filter.matches(&summary, &names) {
                     results.push(summary);
                 }
             }
@@ -1426,7 +1511,54 @@ pub(crate) fn body_fetch_query(prefix: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{refresh_window_start, should_purge_stale_generation, INITIAL_MESSAGE_BATCH};
+    use super::{
+        refresh_window_start, should_purge_stale_generation, ServerHitFilter, INITIAL_MESSAGE_BATCH,
+    };
+
+    fn summary(has_attachments: bool) -> crate::models::MessageSummary {
+        crate::models::MessageSummary {
+            id: 1,
+            account_id: "account-1".into(),
+            mailbox_id: 1,
+            uid: 1,
+            message_id: None,
+            subject: "Invoice".into(),
+            sender_name: String::new(),
+            sender_address: "billing@example.test".into(),
+            recipients: String::new(),
+            received_at: "2026-08-18T12:00:00Z".into(),
+            preview: String::new(),
+            is_read: true,
+            is_starred: false,
+            has_attachments,
+            size: 4096,
+            thread_root: None,
+            has_calendar: false,
+            is_answered: false,
+            is_forwarded: false,
+            conversation_muted: false,
+            importance: String::new(),
+            pinned: false,
+            to_me: false,
+            arrived_at: String::new(),
+            attachment_count: 0,
+        }
+    }
+
+    #[test]
+    fn server_filename_hits_keep_uncached_names_and_drop_mismatches() {
+        // Ways this can fail: an uncached attachment hit is dropped, a cached
+        // mismatch is kept, or a matching name is dropped.
+        let filter = ServerHitFilter {
+            require_attachment: false,
+            filenames: vec!["invoice".into()],
+            larger_than: None,
+            smaller_than: None,
+        };
+        assert!(filter.matches(&summary(true), &[]));
+        assert!(!filter.matches(&summary(true), &["notes.txt".into()]));
+        assert!(filter.matches(&summary(true), &["Invoice-2026.pdf".into()]));
+    }
 
     #[test]
     fn refresh_window_bounds_post_purge_fetch_to_initial_batch() {

@@ -1,4 +1,5 @@
 use tauri::{AppHandle, State};
+use tauri_plugin_opener::OpenerExt;
 use zeroize::Zeroizing;
 
 use super::sync::sync_one;
@@ -10,9 +11,10 @@ use crate::{
     credentials, mail,
     models::{
         take_validated_setup, AccountInboxCount, AccountRecord, AccountRemovalImpact,
-        AccountRemovalOutcome, AccountSetupRequest, AccountSummary, AppSettings, ProviderKind,
-        ACCOUNT_COLORS,
+        AccountRemovalOutcome, AccountSetupRequest, AccountSummary, AppSettings, BodyFormat,
+        ProviderKind, ServerConfig, TlsMode, ACCOUNT_COLORS,
     },
+    oauth,
 };
 
 #[tauri::command]
@@ -35,10 +37,18 @@ pub async fn test_saved_account(
 ) -> CommandResult<()> {
     let _guard = state.lock_account(&account_id).await?;
     let account = state.db.account(&account_id)?;
-    if account.summary.auth_method != "password" {
-        return Err("This account signs in without a password. Reconnect it instead.".into());
+    let password = crate::oauth::session_secret(&account).await?;
+    if account.summary.auth_method == "oauth" {
+        mail::probe_mail_login(
+            &account.imap,
+            &account.smtp,
+            &account.summary.email,
+            &password,
+            true,
+        )
+        .await?;
+        return Ok(());
     }
-    let password = credentials::load(&account_id)?;
     let request = AccountSetupRequest {
         certificate_reference: None,
         provider: account.summary.provider.clone(),
@@ -146,6 +156,7 @@ pub async fn add_account(
         aliases,
         auth_method: "password".into(),
         signature: String::new(),
+        reply_to: String::new(),
         color: Some(
             ACCOUNT_COLORS[state.db.account_count().unwrap_or(0) % ACCOUNT_COLORS.len()].into(),
         ),
@@ -185,6 +196,115 @@ pub async fn add_account(
         );
     }
     Ok(summary)
+}
+
+#[tauri::command]
+pub async fn connect_oauth_account(
+    provider: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<AccountSummary> {
+    command_result(save_oauth_account(&provider, &app, &state).await)
+}
+
+async fn save_oauth_account(
+    provider_name: &str,
+    app: &AppHandle,
+    state: &AppState,
+) -> Result<AccountSummary, String> {
+    let provider = oauth::parse_oauth_provider(provider_name)?;
+    let pending = oauth::begin_sign_in(provider).await?;
+    let authorization_url = pending.authorization_url.clone();
+    authorize_provider_page(provider, &authorization_url)?;
+    app.opener()
+        .open_url(authorization_url, None::<&str>)
+        .map_err(|_| "Postal Snap could not open the sign-in page.".to_string())?;
+    let signed = oauth::finish_sign_in(pending).await?;
+    if state.db.email_taken(&signed.email)? {
+        return Err("An account with this email address is already set up.".into());
+    }
+    let (imap, smtp) = oauth_servers(provider, &signed.email);
+    mail::probe_mail_login(&imap, &smtp, &signed.email, &signed.access_token, true).await?;
+    let id = uuid::Uuid::new_v4().to_string();
+    let summary = AccountSummary {
+        default_body_format: BodyFormat::Html,
+        id: id.clone(),
+        provider: match provider {
+            oauth::OAuthProvider::Gmail => ProviderKind::Gmail,
+            oauth::OAuthProvider::Outlook => ProviderKind::Outlook,
+        },
+        email: signed.email,
+        display_name: signed.display_name,
+        sync_state: "idle".into(),
+        error: None,
+        aliases: Vec::new(),
+        auth_method: "oauth".into(),
+        signature: String::new(),
+        reply_to: String::new(),
+        color: Some(
+            ACCOUNT_COLORS[state.db.account_count().unwrap_or(0) % ACCOUNT_COLORS.len()].into(),
+        ),
+    };
+    let account = AccountRecord {
+        summary: summary.clone(),
+        imap,
+        smtp,
+    };
+    state.db.insert_account(&account)?;
+    if let Err(error) = oauth::store_tokens(&id, &signed.tokens) {
+        let _ = state.db.remove_account(&id);
+        return Err(error);
+    }
+    let default_policy = state.settings.get()?.cache_policy;
+    let _ = state
+        .db
+        .set_account_cache_policy(&id, &default_policy, &default_policy);
+    refresh_mail_menu(app, state);
+    if state.ensure_watcher(id, app.clone()).is_err() {
+        let _ = state.db.set_account_state(
+            &summary.id,
+            "offline",
+            Some("Background sync is unavailable. Use Get Mail to retry."),
+        );
+    }
+    Ok(summary)
+}
+
+fn authorize_provider_page(
+    provider: oauth::OAuthProvider,
+    authorization_url: &str,
+) -> Result<(), String> {
+    let url = url::Url::parse(authorization_url)
+        .map_err(|_| "The sign-in address is invalid.".to_string())?;
+    let host = match provider {
+        oauth::OAuthProvider::Gmail => "accounts.google.com",
+        oauth::OAuthProvider::Outlook => "login.microsoftonline.com",
+    };
+    if url.scheme() == "https" && url.host_str() == Some(host) {
+        Ok(())
+    } else {
+        Err("The sign-in address is invalid.".into())
+    }
+}
+
+fn oauth_servers(provider: oauth::OAuthProvider, email: &str) -> (ServerConfig, ServerConfig) {
+    let email = email.to_lowercase();
+    (
+        ServerConfig {
+            trusted_certificate: None,
+            host: provider.imap_host().into(),
+            port: provider.imap_port(),
+            tls_mode: TlsMode::Tls,
+            username: email.clone(),
+        },
+        ServerConfig {
+            trusted_certificate: None,
+            host: provider.smtp_host().into(),
+            port: provider.smtp_port(),
+            tls_mode: provider.smtp_tls_mode(),
+            username: email,
+        },
+    )
 }
 
 #[tauri::command]
@@ -228,6 +348,47 @@ pub async fn erase_all_data(app: AppHandle, state: State<'_, AppState>) -> Comma
     Ok(removed)
 }
 
+/// Drop per-account UI entries. Best effort: a save failure never fails removal.
+fn prune_account_settings(state: &State<'_, AppState>, account_id: &str) {
+    let Ok(settings) = state.settings.get() else {
+        return;
+    };
+    if let Some(pruned) = settings_without_account(settings, account_id) {
+        let _ = state.settings.save(pruned);
+    }
+}
+
+/// Drop one account's remembered entries. `None` when nothing matched.
+/// Uses get() then save(): the store has no atomic read-modify-write.
+fn settings_without_account(mut settings: AppSettings, account_id: &str) -> Option<AppSettings> {
+    let before = settings.last_from_addresses.len()
+        + settings.mailbox_views.len()
+        + settings.pinned_mailboxes.len()
+        + settings.hidden_mailboxes.len()
+        + settings.collapsed_mailboxes.len();
+    settings
+        .last_from_addresses
+        .retain(|entry| entry.account_id != account_id);
+    settings
+        .mailbox_views
+        .retain(|entry| entry.account_id != account_id);
+    settings
+        .pinned_mailboxes
+        .retain(|entry| entry.account_id != account_id);
+    settings
+        .hidden_mailboxes
+        .retain(|entry| entry.account_id != account_id);
+    settings
+        .collapsed_mailboxes
+        .retain(|entry| entry.account_id != account_id);
+    let after = settings.last_from_addresses.len()
+        + settings.mailbox_views.len()
+        + settings.pinned_mailboxes.len()
+        + settings.hidden_mailboxes.len()
+        + settings.collapsed_mailboxes.len();
+    (before != after).then_some(settings)
+}
+
 async fn remove_single_account(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -263,6 +424,7 @@ async fn remove_single_account(
     // Removal has committed; a count failure must not turn it into a reported
     // command failure. Disable mail actions rather than allowing commands with
     // unknown ownership.
+    prune_account_settings(state, account_id);
     refresh_mail_menu(app, state);
     let cleanup_pending =
         attachment_dir.exists() && tokio::fs::remove_dir_all(attachment_dir).await.is_err();
@@ -320,18 +482,44 @@ pub fn update_account_aliases(
     Ok(updated)
 }
 
+/// One mailbox, or blank. A blank address means replies use From.
+pub(crate) fn normalize_reply_to(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(String::new());
+    }
+    if trimmed.chars().count() > 320
+        || trimmed.contains(char::is_control)
+        || trimmed.contains(',')
+        || trimmed.parse::<lettre::message::Mailbox>().is_err()
+    {
+        return Err("Enter one email address.".into());
+    }
+    Ok(trimmed.to_string())
+}
+
+#[tauri::command]
+pub fn update_account_reply_to(
+    account_id: String,
+    reply_to: String,
+    state: State<'_, AppState>,
+) -> CommandResult<AccountSummary> {
+    let reply_to = normalize_reply_to(&reply_to)?;
+    command_result(state.db.update_account_reply_to(&account_id, &reply_to))
+}
+
 #[tauri::command]
 pub fn update_account_display_name(
     account_id: String,
     display_name: String,
     state: State<'_, AppState>,
-) -> CommandResult<()> {
+) -> CommandResult<AccountSummary> {
     let trimmed = display_name.trim();
-    if trimmed.is_empty() || trimmed.len() > 120 || trimmed.contains(char::is_control) {
-        return Err("Account name is invalid.".into());
+    if trimmed.is_empty() || trimmed.chars().count() > 120 || trimmed.contains(char::is_control) {
+        return Err("Enter a name up to 120 characters.".into());
     }
-    state.db.account(&account_id)?;
-    command_result(state.db.update_account_display_name(&account_id, trimmed))
+    state.db.update_account_display_name(&account_id, trimmed)?;
+    Ok(state.db.account(&account_id)?.summary)
 }
 
 #[tauri::command]
@@ -400,4 +588,86 @@ pub fn get_account_removal_impact(
 ) -> CommandResult<AccountRemovalImpact> {
     state.db.account(&account_id)?;
     command_result(state.db.account_removal_impact(&account_id))
+}
+
+#[cfg(test)]
+mod settings_prune_tests {
+    use super::settings_without_account;
+    use crate::models::{AppSettings, LastFromAddress, MailboxView, PinnedMailbox};
+
+    #[test]
+    fn removing_an_account_keeps_other_accounts_entries() {
+        // Ways this can fail: another account's entries are dropped, the removed
+        // account's entries survive, or an unchanged set reports a write.
+        let gone = "00000000-0000-4000-8000-000000000001";
+        let kept = "00000000-0000-4000-8000-000000000002";
+        let settings = AppSettings {
+            last_from_addresses: vec![
+                LastFromAddress {
+                    account_id: gone.into(),
+                    address: "a@example.test".into(),
+                },
+                LastFromAddress {
+                    account_id: kept.into(),
+                    address: "b@example.test".into(),
+                },
+            ],
+            mailbox_views: vec![MailboxView {
+                account_id: gone.into(),
+                mailbox_id: 1,
+                sort: "date".into(),
+                filter: "all".into(),
+            }],
+            pinned_mailboxes: vec![
+                PinnedMailbox {
+                    account_id: kept.into(),
+                    mailbox_id: 2,
+                },
+                PinnedMailbox {
+                    account_id: gone.into(),
+                    mailbox_id: 3,
+                },
+            ],
+            hidden_mailboxes: vec![PinnedMailbox {
+                account_id: gone.into(),
+                mailbox_id: 4,
+            }],
+            collapsed_mailboxes: vec![PinnedMailbox {
+                account_id: kept.into(),
+                mailbox_id: 5,
+            }],
+            ..AppSettings::default()
+        };
+
+        let pruned = settings_without_account(settings, gone).unwrap();
+        assert_eq!(pruned.last_from_addresses.len(), 1);
+        assert_eq!(pruned.last_from_addresses[0].account_id, kept);
+        assert!(pruned.mailbox_views.is_empty());
+        assert_eq!(pruned.pinned_mailboxes.len(), 1);
+        assert_eq!(pruned.pinned_mailboxes[0].mailbox_id, 2);
+        assert!(pruned.hidden_mailboxes.is_empty());
+        assert_eq!(pruned.collapsed_mailboxes.len(), 1);
+        assert!(settings_without_account(pruned, "missing-account").is_none());
+    }
+}
+
+#[cfg(test)]
+mod reply_to_tests {
+    use super::normalize_reply_to;
+
+    #[test]
+    fn reply_to_is_one_address_or_blank() {
+        assert_eq!(normalize_reply_to("  ").unwrap(), "");
+        assert_eq!(
+            normalize_reply_to("  replies@example.com ").unwrap(),
+            "replies@example.com"
+        );
+        assert_eq!(
+            normalize_reply_to("Ada <replies@example.com>").unwrap(),
+            "Ada <replies@example.com>"
+        );
+        assert!(normalize_reply_to("not an address").is_err());
+        assert!(normalize_reply_to("a@example.com, b@example.com").is_err());
+        assert!(normalize_reply_to("a@example.com\r\nBcc: x").is_err());
+    }
 }

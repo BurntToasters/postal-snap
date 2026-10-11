@@ -8,8 +8,18 @@ import {
   Reply,
   ShieldCheck,
 } from "lucide-react";
-import { formatBytes, formatFullMessageDate } from "../../format";
+import {
+  formatBytes,
+  formatFullMessageDate,
+  notableArrival,
+} from "../../format";
 import { strings } from "../../i18n";
+import { recipientLines, recipientPreview } from "./readerUtils";
+import { listPostAddress } from "../composer/composerSeed";
+import { conflictingNameAddress } from "../../senderName";
+import { HighlightedText } from "../HighlightedText";
+import { highlightTerms } from "../../searchHighlight";
+import { folderPathLabel } from "../../i18n/mail";
 import type {
   AccountSummary,
   MailboxSummary,
@@ -64,6 +74,19 @@ export function CopyButton({ text, title }: { text: string; title: string }) {
   );
 }
 
+function RecipientPreview({ addresses }: { addresses: string[] }) {
+  const full = addresses.join(", ");
+  const extra = addresses.length > 2;
+  return (
+    <span className="recipient-preview" title={extra ? full : undefined}>
+      <span aria-hidden={extra ? true : undefined}>
+        {recipientPreview(addresses)}
+      </span>
+      {extra ? <span className="visually-hidden">{full}</span> : null}
+    </span>
+  );
+}
+
 export function MessageHeader({
   message,
   account,
@@ -74,6 +97,9 @@ export function MessageHeader({
   treatAsOverlay,
   answered = false,
   forwarded = false,
+  onShowInFolder,
+  onOpenEarlier,
+  searchQuery,
 }: {
   message: MessageDetail;
   account?: AccountSummary;
@@ -84,7 +110,29 @@ export function MessageHeader({
   treatAsOverlay: boolean;
   answered?: boolean;
   forwarded?: boolean;
+  onShowInFolder?: () => void;
+  onOpenEarlier?: () => void;
+  searchQuery?: string;
 }) {
+  const folderName = currentMailbox
+    ? folderPathLabel(currentMailbox)
+    : strings.mail.mailboxFallback;
+  const nameConflict = conflictingNameAddress(
+    message.senderName,
+    message.senderAddress,
+  );
+  const arrived = notableArrival(message.receivedAt, message.arrivedAt);
+  const nameConflictLabel = nameConflict
+    ? strings.reader.nameIncludesDifferentAddress(nameConflict)
+    : "";
+  const listAddress = listPostAddress(message.listPost);
+  const files = message.attachments.filter((item) => !item.inline);
+  const fileCount = files.length;
+  const fileBytes = files.reduce((total, item) => total + item.size, 0);
+  const mailingListLabel = listAddress
+    ? strings.reader.mailingList(listAddress)
+    : "";
+  const marks = highlightTerms(searchQuery ?? "");
   return (
     <header className="message-header">
       <h1
@@ -92,7 +140,10 @@ export function MessageHeader({
         ref={titleRef}
         tabIndex={treatAsOverlay ? -1 : undefined}
       >
-        {message.subject || strings.common.noSubject}
+        <HighlightedText
+          text={message.subject || strings.common.noSubject}
+          terms={marks.subject}
+        />
       </h1>
       <div className="sender-avatar" aria-hidden="true">
         {(message.senderName || message.senderAddress)
@@ -106,7 +157,10 @@ export function MessageHeader({
           data-address={message.senderAddress}
         >
           <strong className="sender-name">
-            {message.senderName || message.senderAddress}
+            <HighlightedText
+              text={message.senderName || message.senderAddress}
+              terms={marks.correspondent}
+            />
           </strong>
           {message.senderName &&
           message.senderName !== message.senderAddress ? (
@@ -115,6 +169,39 @@ export function MessageHeader({
             </span>
           ) : null}
         </div>
+        {nameConflictLabel ? (
+          <p
+            className="sender-name-conflict"
+            role="note"
+            aria-label={nameConflictLabel}
+          >
+            {nameConflictLabel}
+          </p>
+        ) : null}
+        {mailingListLabel ? (
+          <p
+            className="mailing-list-note"
+            role="note"
+            aria-label={mailingListLabel}
+          >
+            {mailingListLabel}
+          </p>
+        ) : null}
+        {message.conversationMuted ? (
+          <p className="message-muted" role="status">
+            {strings.mail.muted}
+          </p>
+        ) : null}
+        {message.importance === "high" || message.importance === "low" ? (
+          <p
+            className={`message-importance ${message.importance}`}
+            role="status"
+          >
+            {message.importance === "high"
+              ? strings.mail.highImportance
+              : strings.mail.lowImportance}
+          </p>
+        ) : null}
         {answered || forwarded ? (
           <div className="reply-state" data-testid="reply-state">
             {answered ? (
@@ -133,12 +220,64 @@ export function MessageHeader({
         ) : null}
         <div className="recipient-summary">
           <span className="recipient-label">{strings.reader.to}</span>
-          <span className="recipient-preview">
-            {message.to.length > 0
-              ? message.to.join(", ")
-              : strings.reader.noRecipients}
-          </span>
+          {message.to.length > 0 ? (
+            <RecipientPreview addresses={message.to} />
+          ) : (
+            <span className="recipient-preview">
+              {strings.reader.noRecipients}
+            </span>
+          )}
         </div>
+        {message.cc && message.cc.length > 0 ? (
+          <div className="recipient-summary">
+            <span className="recipient-label">{strings.reader.cc}</span>
+            <RecipientPreview addresses={message.cc} />
+          </div>
+        ) : null}
+        {message.bcc && message.bcc.length > 0 ? (
+          <div className="recipient-summary">
+            <span className="recipient-label">{strings.reader.bcc}</span>
+            <RecipientPreview addresses={message.bcc} />
+          </div>
+        ) : null}
+        {message.replyTo && message.replyTo !== message.senderAddress ? (
+          <div className="recipient-summary">
+            <span className="recipient-label">{strings.reader.replyTo}</span>
+            <span className="recipient-preview">{message.replyTo}</span>
+          </div>
+        ) : null}
+        {onOpenEarlier ? (
+          <button
+            type="button"
+            className="header-files"
+            onClick={onOpenEarlier}
+          >
+            {strings.reader.openEarlier}
+          </button>
+        ) : null}
+        {fileCount > 0 ? (
+          <button
+            type="button"
+            className="header-files"
+            onClick={() => {
+              const target = document.getElementById("message-attachments");
+              target?.scrollIntoView({ block: "nearest" });
+              target?.focus();
+            }}
+          >
+            {strings.reader.showFiles(fileCount)}
+            <span className="header-file-size">{formatBytes(fileBytes)}</span>
+          </button>
+        ) : null}
+        {onShowInFolder && currentMailbox ? (
+          <button
+            type="button"
+            className="header-files"
+            onClick={onShowInFolder}
+          >
+            {strings.reader.showInFolder(folderName)}
+          </button>
+        ) : null}
         <button
           type="button"
           className="details-toggle"
@@ -164,12 +303,18 @@ export function MessageHeader({
           )}
         </button>
       </div>
-      <time dateTime={message.receivedAt}>
-        {new Intl.DateTimeFormat(undefined, {
-          dateStyle: "medium",
-          timeStyle: "short",
-        }).format(new Date(message.receivedAt))}
-      </time>
+      <div className="message-stamp">
+        <time
+          dateTime={message.receivedAt}
+          title={formatFullMessageDate(message.receivedAt)}
+        >
+          {new Intl.DateTimeFormat(undefined, {
+            dateStyle: "medium",
+            timeStyle: "short",
+          }).format(new Date(message.receivedAt))}
+        </time>
+        <span className="message-header-size">{formatBytes(message.size)}</span>
+      </div>
       {showDetails ? (
         <div
           id="message-details-panel"
@@ -198,6 +343,24 @@ export function MessageHeader({
                 title={strings.reader.copyAddress}
               />
             </dd>
+            {listAddress ? (
+              <>
+                <dt>{strings.reader.mailingListLabel}</dt>
+                <dd className="address-row">
+                  <span
+                    className="address-chip"
+                    data-context="address"
+                    data-address={listAddress}
+                  >
+                    {listAddress}
+                  </span>
+                  <CopyButton
+                    text={listAddress}
+                    title={strings.reader.copyAddress}
+                  />
+                </dd>
+              </>
+            ) : null}
             {message.replyTo && message.replyTo !== message.senderAddress ? (
               <>
                 <dt>{strings.reader.replyTo}</dt>
@@ -232,6 +395,12 @@ export function MessageHeader({
               ) : (
                 <span>{strings.reader.noRecipients}</span>
               )}
+              {recipientLines(message.to, message.cc, message.bcc) ? (
+                <CopyButton
+                  text={recipientLines(message.to, message.cc, message.bcc)}
+                  title={strings.reader.copyRecipients}
+                />
+              ) : null}
             </dd>
             {message.cc && message.cc.length > 0 ? (
               <>
@@ -250,14 +419,52 @@ export function MessageHeader({
                 </dd>
               </>
             ) : null}
+            {message.bcc && message.bcc.length > 0 ? (
+              <>
+                <dt>{strings.reader.bcc}</dt>
+                <dd className="recipients-list">
+                  {message.bcc.map((addr) => (
+                    <span
+                      key={`bcc-${addr}`}
+                      className="address-chip"
+                      data-context="address"
+                      data-address={addr}
+                    >
+                      {addr}
+                    </span>
+                  ))}
+                </dd>
+              </>
+            ) : null}
             <dt>{strings.reader.date}</dt>
             <dd>{formatFullMessageDate(message.receivedAt)}</dd>
+            {arrived ? (
+              <>
+                <dt>{strings.reader.arrived}</dt>
+                <dd>{formatFullMessageDate(arrived)}</dd>
+              </>
+            ) : null}
             <dt>{strings.reader.subject}</dt>
-            <dd>{message.subject || strings.common.noSubject}</dd>
+            <dd className="message-id-row">
+              <span>
+                <HighlightedText
+                  text={message.subject || strings.common.noSubject}
+                  terms={marks.subject}
+                />
+              </span>
+              {message.subject.trim() ? (
+                <CopyButton
+                  text={message.subject}
+                  title={strings.reader.copySubject}
+                />
+              ) : null}
+            </dd>
             <dt>{strings.reader.folder}</dt>
-            <dd>
-              {account ? `${account.displayName || account.email} › ` : ""}
-              {currentMailbox?.displayName || strings.mail.mailboxFallback}
+            <dd className="message-id-row">
+              <span>
+                {account ? `${account.displayName || account.email} › ` : ""}
+                {folderName}
+              </span>
             </dd>
             <dt>{strings.reader.security}</dt>
             <dd className="security-badge">

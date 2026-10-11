@@ -1,3 +1,4 @@
+import { getShortcutsRegistry } from "../shortcuts";
 import {
   fireEvent,
   render,
@@ -263,13 +264,49 @@ describe("small settings tabs", () => {
   it("updates both notification preferences", () => {
     const update = vi.fn().mockResolvedValue(defaultSettings);
     render(<NotificationsTab update={update} />);
-    const toggles = screen.getAllByRole("checkbox");
-    fireEvent.click(toggles[0]);
-    fireEvent.click(toggles[1]);
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: new RegExp(strings.settings.notifyNewMail),
+      }),
+    );
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: new RegExp(strings.settings.newMailSound),
+      }),
+    );
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: new RegExp(strings.settings.privateNotifications),
+      }),
+    );
     expect(update.mock.calls).toEqual([
       [{ notifyNewMail: false }],
+      [{ newMailSound: false }],
       [{ privateNotifications: true }],
     ]);
+  });
+
+  it("saves quiet hours and refuses the same time twice", () => {
+    const update = vi.fn().mockResolvedValue(defaultSettings);
+    useAppStore.setState({
+      settings: {
+        ...defaultSettings,
+        quietHoursStart: "22:00",
+      },
+    });
+    render(<NotificationsTab update={update} />);
+    fireEvent.change(screen.getByLabelText(strings.settings.quietHoursUntil), {
+      target: { value: "07:00" },
+    });
+    fireEvent.change(screen.getByLabelText(strings.settings.quietHoursUntil), {
+      target: { value: "22:00" },
+    });
+    expect(update.mock.calls).toEqual([
+      [{ quietHoursStart: "22:00", quietHoursEnd: "07:00" }],
+    ]);
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      strings.settings.quietHoursSame,
+    );
   });
 
   it("updates reading pane, text size, and thread grouping", () => {
@@ -293,17 +330,59 @@ describe("small settings tabs", () => {
         name: new RegExp(strings.settings.groupThreads),
       }),
     );
+    fireEvent.change(
+      screen.getByRole("combobox", { name: strings.settings.markRead }),
+      { target: { value: "manual" } },
+    );
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: new RegExp(strings.settings.bccSelf),
+      }),
+    );
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: new RegExp(strings.settings.signatureAboveQuote),
+      }),
+    );
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: new RegExp(strings.settings.showMessagePreviews),
+      }),
+    );
     expect(update.mock.calls).toEqual([
       [{ readingPane: "bottom" }],
       [{ textScale: 1.5 }],
       [{ groupThreads: false }],
+      [{ markRead: "manual" }],
+      [{ bccSelf: true }],
+      [{ signatureAboveQuote: false }],
+      [{ showMessagePreviews: false }],
     ]);
+  });
+
+  it("removes a sender whose images load automatically", () => {
+    resetStore({
+      settings: {
+        ...defaultSettings,
+        imageSenders: ["jane@example.test"],
+      },
+    });
+    const update = vi.fn().mockResolvedValue(undefined);
+    render(<ReadingTab update={update} />);
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: strings.settings.stopImageSenderLabel("jane@example.test"),
+      }),
+    );
+    expect(update).toHaveBeenCalledWith({ imageSenders: [] });
   });
 
   it("renders platform-aware shortcut reference", () => {
     document.documentElement.dataset.platform = "macos";
     const { container } = render(<ShortcutsTab />);
-    expect(container.querySelectorAll("kbd")).toHaveLength(22);
+    expect(container.querySelectorAll("kbd")).toHaveLength(
+      getShortcutsRegistry().length,
+    );
     expect(container).toHaveTextContent("⌘ N");
     expect(container).toHaveTextContent("⌥⌘ F");
   });

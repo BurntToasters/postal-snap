@@ -540,6 +540,67 @@
   margin-top: 0;
 }
 
+.image-sender-panel {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.image-sender-panel .settings-note {
+  margin: 0;
+}
+
+.image-sender-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.image-sender-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.image-sender-list button {
+  min-height: var(--target-size);
+  padding-inline: 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+}
+
+.rule-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rule-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.rule-item-text {
+  display: grid;
+  min-width: 12rem;
+  flex: 1 1 16rem;
+}
+
+.rule-order,
+.rule-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 /* One titled section per job in the account card: password, signature,
    mail rules, and addresses, split by hairlines. */
 .account-settings-card
@@ -610,9 +671,24 @@
   grid-column: 1 / -1;
   color: var(--text-muted);
 }
+.account-overview-item {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-2);
+}
+.account-overview-order {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--space-1);
+}
+.account-overview-order button {
+  min-height: var(--target-size);
+}
 .account-overview-row {
   display: flex;
   align-items: center;
+  flex: 1 1 auto;
   gap: var(--space-3);
   min-height: var(--target-size);
   padding: var(--space-4);

@@ -10,6 +10,7 @@ use std::{
 
 pub mod accounts;
 pub mod attachments;
+pub mod badge;
 pub mod cache_policy;
 pub mod compatibility;
 pub mod drafts_send;
@@ -30,13 +31,13 @@ use tokio::sync::{Mutex as AsyncMutex, Notify, OwnedMutexGuard};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::{
-    credentials,
     db::Database,
     mail,
     models::{
         normalize_setup_password, validate_compose_draft, validate_compose_sender, AccountRecord,
         CachePolicy, ComposeDraft, IpcError, SyncState,
     },
+    oauth,
     settings::SettingsStore,
 };
 
@@ -412,23 +413,30 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
         let Ok(account) = state.db.account(account_id) else {
             break;
         };
-        let Ok(password) = credentials::load(account_id) else {
-            drop(guard);
-            let detail =
-                "The saved password is unavailable. Update the password in Settings > Accounts.";
-            // A locked vault can unlock later (for example after sign-in on
-            // macOS), so retry with backoff instead of parking.
-            let _ = state
-                .db
-                .set_account_state(account_id, "offline", Some(detail));
-            emit_sync(app, account_id, "offline", Some(detail), None);
-            tokio::select! {
-                _ = tokio::time::sleep(reconnect_delay(account_id, backoff, attempt)) => {},
-                _ = wait_for(&actor, wake::SYNC | wake::CREDENTIALS | wake::SLEEP) => {},
+        let password = match oauth::session_secret(&account).await {
+            Ok(password) => password,
+            Err(error) => {
+                drop(guard);
+                let detail = if account.summary.auth_method == "oauth" {
+                    error
+                } else {
+                    "The saved password is unavailable. Update the password in Settings > Accounts."
+                        .into()
+                };
+                // A locked vault can unlock later (for example after sign-in on
+                // macOS), so retry with backoff instead of parking.
+                let _ = state
+                    .db
+                    .set_account_state(account_id, "offline", Some(&detail));
+                emit_sync(app, account_id, "offline", Some(&detail), None);
+                tokio::select! {
+                    _ = tokio::time::sleep(reconnect_delay(account_id, backoff, attempt)) => {},
+                    _ = wait_for(&actor, wake::SYNC | wake::CREDENTIALS | wake::SLEEP) => {},
+                }
+                backoff = (backoff * 2).min(120);
+                attempt = attempt.wrapping_add(1);
+                continue;
             }
-            backoff = (backoff * 2).min(120);
-            attempt = attempt.wrapping_add(1);
-            continue;
         };
         let next_send = state
             .db
@@ -625,6 +633,7 @@ enum ValidatedReplay {
     Flags(FlagOperation),
     Keyword(replied::KeywordOperation),
     Move(MoveOperation),
+    Copy(MoveOperation),
 }
 
 /// Validate a queued operation against current local ownership and mailbox
@@ -697,6 +706,30 @@ fn validate_queued_operation(
                 return Ok(ValidatedReplay::ClearPending(operation.message_id));
             }
             Ok(ValidatedReplay::Move(operation))
+        }
+        "copy" => {
+            let Ok(operation) = serde_json::from_str::<MoveOperation>(payload) else {
+                return Ok(ValidatedReplay::Drop);
+            };
+            let Ok((owner, source, uid)) = db.message_location(operation.message_id) else {
+                return Ok(ValidatedReplay::Drop);
+            };
+            if owner != account_id
+                || source != operation.source
+                || uid != operation.uid
+                || operation.source == operation.destination
+            {
+                return Ok(ValidatedReplay::Drop);
+            }
+            let Some(expected_uid_validity) = operation.uid_validity else {
+                return Ok(ValidatedReplay::Drop);
+            };
+            if db.mailbox_uid_validity(account_id, &operation.source)?
+                != Some(expected_uid_validity)
+            {
+                return Ok(ValidatedReplay::Drop);
+            }
+            Ok(ValidatedReplay::Copy(operation))
         }
         _ => Ok(ValidatedReplay::Drop),
     }
@@ -807,6 +840,37 @@ async fn replay_offline_operations(
                         continue;
                     }
                 }
+            }
+            ValidatedReplay::Copy(operation) => {
+                let remote_message_id = db.message_rfc_id(operation.message_id).ok().flatten();
+                let result = mail::copy_remote(
+                    account,
+                    password,
+                    &operation.source,
+                    &operation.destination,
+                    operation.uid,
+                    operation.uid_validity,
+                    mail::CopyOptions {
+                        message_id: remote_message_id.as_deref(),
+                        dedupe_existing: true,
+                    },
+                )
+                .await;
+                if let Err(error) = result {
+                    if error.terminal {
+                        db.remove_operation(account_id, id)?;
+                        dropped = dropped.saturating_add(1);
+                    }
+                    continue;
+                }
+                let _ = mail::refresh_mailbox_envelopes(
+                    account,
+                    password,
+                    &operation.destination,
+                    db,
+                    policy,
+                )
+                .await;
             }
         }
         db.remove_operation(account_id, id)?;
@@ -946,13 +1010,18 @@ fn notify_new_mail(
         return;
     }
     let settings = app.state::<AppState>().settings.get().ok();
-    if settings
-        .as_ref()
-        .is_some_and(|settings| !settings.notify_new_mail)
-    {
+    if settings.as_ref().is_some_and(|settings| {
+        !settings.notify_new_mail
+            || crate::settings::quiet_hours_active(
+                &settings.quiet_hours_start,
+                &settings.quiet_hours_end,
+                local_minutes_now(),
+            )
+    }) {
         return;
     }
     let private = settings
+        .as_ref()
         .map(|settings| settings.private_notifications)
         .unwrap_or(true);
     // With several accounts, say which one received the mail. The account's
@@ -988,7 +1057,37 @@ fn notify_new_mail(
             },
         )
     };
-    let _ = app.notification().builder().title(title).body(body).show();
+    let play_sound = settings
+        .as_ref()
+        .map(|settings| settings.new_mail_sound)
+        .unwrap_or(true);
+    let mut notice = app.notification().builder().title(title).body(body);
+    if play_sound {
+        notice = notice.sound(new_mail_sound_name());
+    }
+    let _ = notice.show();
+}
+
+fn local_minutes_now() -> u32 {
+    use chrono::Timelike;
+    let now = chrono::Local::now();
+    now.hour() * 60 + now.minute()
+}
+
+/// System sound for a new-mail alert. Each desktop has its own name.
+fn new_mail_sound_name() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "Mail"
+    } else if cfg!(target_os = "macos") {
+        "Ping"
+    } else {
+        "message-new-email"
+    }
+}
+
+#[cfg(test)]
+fn mail_alert_sound(play: bool) -> Option<&'static str> {
+    play.then(new_mail_sound_name)
 }
 
 #[cfg(test)]
@@ -1041,7 +1140,7 @@ mod tests {
 
     use super::{
         attachments::preview_text, drafts_send::resolve_requested_send_at, is_new_mail,
-        sync::apply_filter_rules,
+        mail_alert_sound, new_mail_sound_name, sync::apply_filter_rules,
     };
     use super::{cleanup_orphaned_account_dirs, take_normalized_account_password};
 
@@ -1052,6 +1151,10 @@ mod tests {
             body_format: crate::models::BodyFormat::Html,
             source_message_id: None,
             source_kind: None,
+            include_signature: true,
+            importance: String::new(),
+            request_receipt: false,
+            reply_to: None,
             id: None,
             account_id: "account-1".into(),
             from: None,
@@ -1066,13 +1169,17 @@ mod tests {
             references: None,
             send_at: None,
         };
-        let (stored, signed) = sign_for_outbox(draft, "Sam");
+        let (stored, signed) = sign_for_outbox(draft, "Sam", true);
         assert_eq!(stored.text_body, "Hello");
         assert!(signed.text_body.ends_with("\n\n-- \nSam"));
+        let mut skipped = stored.clone();
+        skipped.include_signature = false;
+        let (_, unsigned) = sign_for_outbox(skipped, "Sam", true);
+        assert_eq!(unsigned.text_body, "Hello");
         // Undo returns `stored`; sending it again signs exactly once.
-        let (mut restored, _) = sign_for_outbox(stored, "Sam");
+        let (mut restored, _) = sign_for_outbox(stored, "Sam", true);
         restored.text_body.push_str(" and more");
-        let (_, resent) = sign_for_outbox(restored, "Sam");
+        let (_, resent) = sign_for_outbox(restored, "Sam", true);
         assert_eq!(resent.text_body.matches("-- \nSam").count(), 1);
     }
 
@@ -1122,6 +1229,9 @@ mod tests {
         assert!(!is_new_mail(Some(7), 7, false));
         assert!(!is_new_mail(Some(9), 7, false));
         assert!(!is_new_mail(Some(6), 7, true));
+        assert_eq!(mail_alert_sound(false), None);
+        assert_eq!(mail_alert_sound(true), Some(new_mail_sound_name()));
+        assert!(!new_mail_sound_name().is_empty());
     }
     use crate::db::{CachedMessage, Database};
     use crate::models::{
@@ -1141,6 +1251,7 @@ mod tests {
                 aliases: vec![],
                 auth_method: "password".into(),
                 signature: String::new(),
+                reply_to: String::new(),
                 color: None,
             },
             imap: ServerConfig {
@@ -1181,6 +1292,7 @@ mod tests {
             size: 32,
             to: vec!["sam@example.com".into()],
             cc: vec![],
+            bcc: vec![],
             reply_to: None,
             thread_parent: None,
             text_body: "Pay by Friday".into(),
@@ -1194,6 +1306,8 @@ mod tests {
             calendar_json: None,
             list_unsubscribe: None,
             list_unsubscribe_post: None,
+            importance: String::new(),
+            disposition_to: String::new(),
         };
         message.sender_address = "bills@power.example.com".into();
         db.upsert_message(account_id, inbox, &message).unwrap();
@@ -1467,6 +1581,33 @@ mod tests {
             ),
             Ok(ValidatedReplay::ClearPending(value)) if value == id
         ));
+        assert!(matches!(
+            validate_queued_operation(
+                &db,
+                account_id,
+                "copy",
+                &move_payload(&move_operation("Archive", Some(1)))
+            ),
+            Ok(ValidatedReplay::Copy(_))
+        ));
+        assert!(matches!(
+            validate_queued_operation(
+                &db,
+                account_id,
+                "copy",
+                &move_payload(&move_operation("INBOX", Some(1)))
+            ),
+            Ok(ValidatedReplay::Drop)
+        ));
+        assert!(matches!(
+            validate_queued_operation(
+                &db,
+                account_id,
+                "copy",
+                &move_payload(&move_operation("Archive", Some(99)))
+            ),
+            Ok(ValidatedReplay::Drop)
+        ));
     }
 
     #[test]
@@ -1505,7 +1646,7 @@ mod tests {
     fn keyword_only_after_confirmed_send() {
         use super::replied::{keyword_after_send, SourceKeyword};
         use crate::mail::SendFailure;
-        use crate::models::DraftSourceKind::{Forward, Reply, ReplyAll};
+        use crate::models::DraftSourceKind::{Forward, Redirect, Reply, ReplyAll};
         assert_eq!(
             keyword_after_send(Some(Reply), &Ok(())),
             Some(SourceKeyword::Answered)
@@ -1518,13 +1659,14 @@ mod tests {
             keyword_after_send(Some(Forward), &Ok(())),
             Some(SourceKeyword::Forwarded)
         );
+        assert_eq!(keyword_after_send(Some(Redirect), &Ok(())), None);
         assert_eq!(keyword_after_send(None, &Ok(())), None);
         for failure in [
             SendFailure::NotSentRetry,
             SendFailure::NotSentRefused,
             SendFailure::Uncertain,
         ] {
-            for kind in [Reply, ReplyAll, Forward] {
+            for kind in [Reply, ReplyAll, Forward, Redirect] {
                 assert_eq!(keyword_after_send(Some(kind), &Err(failure)), None);
             }
         }

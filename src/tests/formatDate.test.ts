@@ -2,7 +2,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   formatBytes,
   formatFullMessageDate,
+  notableArrival,
   formatMessageDate,
+  groupByDayLabel,
+  messageListDay,
   shortcutAltMod,
   shortcutMod,
   shortcutShiftMod,
@@ -57,6 +60,41 @@ describe("formatMessageDate", () => {
   });
 });
 
+describe("message list days", () => {
+  const now = new Date(2026, 7, 27, 15, 0, 0);
+
+  it("names today, yesterday, a weekday, and an older date", () => {
+    expect(
+      messageListDay(new Date(2026, 7, 27, 9, 30, 0).toISOString(), now),
+    ).toBe(strings.mail.today);
+    expect(
+      messageListDay(new Date(2026, 7, 26, 18, 0, 0).toISOString(), now),
+    ).toBe(strings.mail.yesterday);
+    expect(
+      messageListDay(new Date(2026, 7, 24, 12, 0, 0).toISOString(), now),
+    ).toMatch(/monday/i);
+    expect(
+      messageListDay(new Date(2026, 0, 5, 12, 0, 0).toISOString(), now),
+    ).toMatch(/january/i);
+    expect(
+      messageListDay(new Date(2024, 11, 1, 12, 0, 0).toISOString(), now),
+    ).toMatch(/2024/);
+    expect(messageListDay("not-a-date", now)).toBe("");
+  });
+
+  it("keeps one heading for a shared day and starts again when the day returns", () => {
+    expect(groupByDayLabel(["a", "a", "b"], (item) => item)).toEqual([
+      { label: "a", items: ["a", "a"] },
+      { label: "b", items: ["b"] },
+    ]);
+    expect(groupByDayLabel(["a", "b", "a"], (item) => item)).toEqual([
+      { label: "a", items: ["a"] },
+      { label: "b", items: ["b"] },
+      { label: "a", items: ["a"] },
+    ]);
+  });
+});
+
 describe("full dates and byte sizes", () => {
   const now = new Date(2026, 7, 27, 15, 0, 0);
 
@@ -78,6 +116,19 @@ describe("full dates and byte sizes", () => {
     expect(
       formatFullMessageDate(new Date(2026, 8, 1).toISOString(), now),
     ).not.toContain("(");
+  });
+
+  it("names a server arrival that is at least 15 minutes from the date", () => {
+    const received = "2026-08-18T12:00:00Z";
+    expect(notableArrival(received, "2026-08-18T12:10:00Z")).toBeUndefined();
+    expect(notableArrival(received, "2026-08-18T12:20:00Z")).toBe(
+      "2026-08-18T12:20:00Z",
+    );
+    expect(notableArrival(received, received)).toBeUndefined();
+    expect(notableArrival(received, "")).toBeUndefined();
+    expect(
+      notableArrival("not-a-date", "2026-08-18T18:00:00Z"),
+    ).toBeUndefined();
   });
 
   it("formats bytes through B, KB, MB, and GB", () => {

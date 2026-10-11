@@ -23,7 +23,7 @@ The v0.2 scope is deliberately focused:
 - No telemetry, analytics, licensing server, trial logic, or Postal Snap cloud.
 - English-US first, with UI strings kept central for later localization.
 
-Do not add Gmail/Outlook OAuth UI, POP, plaintext transport, contacts, templates, calendar, or a cloud backend unless the user expands scope. Keep `oauth.rs` compiled but unwired; do not register `run.rosie.snap://oauth/callback`. Parked cross-account search APIs stay unused by the mailbox UI.
+Do not add Gmail/Outlook OAuth setup UI, POP, plaintext transport, contacts, templates, calendar, or a cloud backend unless the user expands scope. OAuth sign-in is wired in Rust (loopback `http://127.0.0.1`, PKCE, keychain, XOAUTH2) and hidden from setup. User-facing OAuth is not a 0.4.0 requirement; it can wait until 0.5.0. Do not register `run.rosie.snap://oauth/callback`. Client IDs come from the build, never a client secret. Registration steps are in `docs/OAUTH.md`. Parked cross-account search APIs stay unused by the mailbox UI.
 
 ## Stack and layout
 

@@ -40,6 +40,31 @@ export function getShortcutsRegistry(): ShortcutItem[] {
     },
     { id: "settings", label: strings.mail.settings, keys: `${mod} ,` },
     {
+      id: "next-unread",
+      label: strings.settings.shortcutNextUnread,
+      keys: "n",
+    },
+    {
+      id: "go-to-inbox",
+      label: strings.settings.shortcutGoToInbox,
+      keys: "i",
+    },
+    {
+      id: "next-unread-mailbox",
+      label: strings.settings.shortcutNextUnreadMailbox,
+      keys: "]",
+    },
+    {
+      id: "previous-unread-mailbox",
+      label: strings.settings.shortcutPreviousUnreadMailbox,
+      keys: "[",
+    },
+    {
+      id: "previous-unread",
+      label: strings.settings.shortcutPreviousUnread,
+      keys: "p",
+    },
+    {
       id: "next-message",
       label: strings.settings.shortcutNextMessage,
       keys: "j / ↓",
@@ -69,6 +94,46 @@ export function getShortcutsRegistry(): ShortcutItem[] {
       id: "toggle-star",
       label: strings.settings.shortcutStarMessage,
       keys: `${shiftMod} L`,
+    },
+    {
+      id: "star-focused",
+      label: strings.settings.shortcutStarFocused,
+      keys: "s",
+    },
+    {
+      id: "read-focused",
+      label: strings.settings.shortcutReadFocused,
+      keys: "u",
+    },
+    {
+      id: "check-focused",
+      label: strings.settings.shortcutCheckFocused,
+      keys: "x",
+    },
+    {
+      id: "archive-focused",
+      label: strings.settings.shortcutArchiveFocused,
+      keys: "e",
+    },
+    {
+      id: "trash-focused",
+      label: strings.settings.shortcutTrashFocused,
+      keys: "Delete / #",
+    },
+    {
+      id: "junk-focused",
+      label: strings.settings.shortcutJunkFocused,
+      keys: "!",
+    },
+    {
+      id: "reply-focused",
+      label: strings.settings.shortcutReplyFocused,
+      keys: "r",
+    },
+    {
+      id: "reply-all-focused",
+      label: strings.settings.shortcutReplyAllFocused,
+      keys: "a",
     },
     { id: "print", label: strings.reader.print, keys: `${mod} P` },
   ];

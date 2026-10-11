@@ -10,13 +10,17 @@ import {
   AlarmClockOff,
   Archive,
   ArrowUpRight,
+  Bell,
+  BellOff,
   CheckCheck,
   Clipboard,
   Clock,
   Copy,
   Download,
   Eye,
+  Filter,
   FolderOpen,
+  Inbox,
   FolderPlus,
   Forward,
   Link,
@@ -24,6 +28,8 @@ import {
   MailOpen,
   MailPlus,
   Pencil,
+  Pin,
+  PinOff,
   Printer,
   Redo2,
   RefreshCw,
@@ -75,12 +81,16 @@ const menuIcons: Record<
   "mark-unread": Mail,
   star: Star,
   unstar: StarOff,
+  pin: Pin,
+  unpin: PinOff,
   archive: Archive,
+  inbox: Inbox,
   junk: ShieldAlert,
   "not-junk": ShieldCheck,
   trash: Trash2,
   snooze: Clock,
   unsnooze: AlarmClockOff,
+  filter: Filter,
   open: FolderOpen,
   refresh: RefreshCw,
   "mark-all-read": CheckCheck,
@@ -106,6 +116,8 @@ const menuIcons: Record<
   download: Download,
   remove: X,
   settings: Settings,
+  mute: BellOff,
+  unmute: Bell,
 };
 
 function iconFor(icon: ContextMenuIcon | undefined): LucideIcon | undefined {
@@ -252,7 +264,7 @@ async function runHostAction(
     return true;
   }
   if (id === "open-link" && target.kind === "link") {
-    void inspectAndOpenExternalLink(target.href);
+    void inspectAndOpenExternalLink(target.href, target.text);
     return true;
   }
   if (id === "open" && target.kind === "mailto") {
@@ -260,6 +272,10 @@ async function runHostAction(
     return true;
   }
   if (id === "copy" && target.kind === "reader") return false;
+  if (id === "paste-plain") {
+    restoreEditSelection(savedEdit);
+    return false;
+  }
   if (id === "cut" || id === "copy" || id === "paste") {
     restoreEditSelection(savedEdit);
     document.execCommand(id);

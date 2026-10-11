@@ -206,6 +206,12 @@ export async function registerMockReading(page: Page): Promise<void> {
       save_message_eml() {
         return undefined;
       },
+      save_conversation_attachments() {
+        return 2;
+      },
+      save_messages_eml() {
+        return 2;
+      },
     });
   });
 }

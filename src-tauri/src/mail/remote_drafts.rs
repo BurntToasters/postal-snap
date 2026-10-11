@@ -333,6 +333,19 @@ pub(crate) async fn search_message_id(
     message_id: &str,
     context: &str,
 ) -> Result<Vec<u32>, String> {
+    search_header_id(session, "Message-ID", message_id, context).await
+}
+
+/// `header` is one of the two names this client writes. Anything else is refused.
+pub(crate) async fn search_header_id(
+    session: &mut ImapSession,
+    header: &str,
+    message_id: &str,
+    context: &str,
+) -> Result<Vec<u32>, String> {
+    if header != "Message-ID" && header != "Resent-Message-ID" {
+        return Err(format!("{context} could not be confirmed."));
+    }
     let value = message_id
         .chars()
         .filter(|character| !character.is_control())
@@ -342,7 +355,7 @@ pub(crate) async fn search_message_id(
         .replace('"', "\\\"");
     let mut matches = tokio::time::timeout(
         IMAP_COMMAND_TIMEOUT,
-        session.uid_search(format!("HEADER Message-ID \"{value}\"")),
+        session.uid_search(format!("HEADER {header} \"{value}\"")),
     )
     .await
     .map_err(|_| format!("{context} timed out."))?
