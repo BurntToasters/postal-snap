@@ -158,16 +158,17 @@ for (const [platform, userAgent] of Object.entries(platforms)) {
       });
       await trigger.focus();
       await page.keyboard.press("ArrowDown");
-      await expect(
-        page.getByRole("menuitem", { name: "Mark all read" }),
-      ).toBeFocused();
+      const items = page
+        .getByRole("menu", { name: "More mailbox actions" })
+        .locator(
+          "[role='menuitem'], [role='menuitemradio'], [role='menuitemcheckbox']",
+        );
+      await expect(items.first()).toBeFocused();
       await page.keyboard.press("Escape");
       await expect(trigger).toBeFocused();
       await expect(page.getByRole("menu")).toHaveCount(0);
       await page.keyboard.press("Enter");
-      await expect(
-        page.getByRole("menuitem", { name: "Mark all read" }),
-      ).toBeFocused();
+      await expect(items.first()).toBeFocused();
       await page.keyboard.press("Tab");
       await expect(page.getByRole("menu")).toHaveCount(0);
     });
@@ -180,17 +181,16 @@ for (const [platform, userAgent] of Object.entries(platforms)) {
       const trigger = page.getByRole("button", { name: "More actions" });
       await trigger.focus();
       await page.keyboard.press("ArrowDown");
-      await expect(page.getByRole("menuitem", { name: "Print" })).toBeFocused();
+      const items = page
+        .getByRole("menu", { name: "More actions" })
+        .getByRole("menuitem");
+      await expect(items.first()).toBeFocused();
       await page.keyboard.press("ArrowDown");
-      await expect(
-        page.getByRole("menuitem", { name: "Mark unread" }),
-      ).toBeFocused();
+      await expect(items.nth(1)).toBeFocused();
       await page.keyboard.press("End");
-      await expect(
-        page.getByRole("menuitem", { name: "Show original" }),
-      ).toBeFocused();
+      await expect(items.last()).toBeFocused();
       await page.keyboard.press("Home");
-      await expect(page.getByRole("menuitem", { name: "Print" })).toBeFocused();
+      await expect(items.first()).toBeFocused();
       await page.keyboard.press("Escape");
       await expect(trigger).toBeFocused();
       await expect(
@@ -472,10 +472,11 @@ for (const [platform, userAgent] of Object.entries(platforms)) {
           animations: "disabled",
           path: testInfo.outputPath(`${platform}-${pane}-populated.png`),
         });
+        // The app re-applies its own text size, so use the real 200% setting.
+        await page.goto(`/?pane=${pane}&theme=dark&scale=2`);
         await page.setViewportSize({ width: 620, height: 540 });
-        await page.evaluate(() => {
-          document.documentElement.style.fontSize = "32px";
-        });
+        await page.getByRole("option", { name: /Weekend plans/ }).click();
+        await expect(page.locator("html")).toHaveCSS("font-size", "32px");
         const body = page.locator(".message-body");
         await body.scrollIntoViewIfNeeded();
         await expect(body).toBeInViewport();

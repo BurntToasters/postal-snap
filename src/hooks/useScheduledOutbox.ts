@@ -5,6 +5,9 @@ import { holdBackgroundUpdate } from "../update";
 import { useAppStore } from "../store";
 import type { OutboxSummary, SyncState } from "../types";
 
+// Browsers overflow setTimeout delays above ~24.8 days, so re-check hourly.
+const MAX_TIMER_MS = 60 * 60 * 1000;
+
 export function useScheduledOutbox(
   activeAccountId: string | undefined,
   outbox: OutboxSummary[],
@@ -13,6 +16,8 @@ export function useScheduledOutbox(
   setError: (error: string) => void,
 ) {
   const scheduledOutboxInFlight = useRef(new Set<string>());
+  // Bumped to re-arm a clamped timer without an IPC reload.
+  const [scheduleTick, setScheduleTick] = useState(0);
   const [scheduledSendInFlight, setScheduledSendInFlight] = useState<
     Set<string>
   >(() => new Set());
@@ -91,40 +96,53 @@ export function useScheduledOutbox(
       }
       return;
     }
-    const timer = window.setTimeout(() => {
-      const current = useAppStore.getState();
-      const ready = current.outbox.find(
-        (item) =>
-          item.state === "scheduled" &&
-          item.accountId === current.activeAccountId &&
-          item.sendAt &&
-          new Date(item.sendAt).getTime() <= Date.now(),
-      );
-      const currentAccount = current.accounts.find(
-        (item) => item.id === current.activeAccountId,
-      );
-      const liveSync = current.activeAccountId
-        ? current.sync[current.activeAccountId]
-        : undefined;
-      if (
-        ready &&
-        current.activeAccountId &&
-        !accountCannotSend(currentAccount, liveSync)
-      ) {
-        const request = beginScheduledSend(ready.id, current.activeAccountId);
-        if (request)
-          void request
-            .catch((cause) => setError(String(cause)))
-            .finally(() => void loadAccountData());
-      } else {
-        void loadAccountData();
-      }
-    }, wait);
+    const timer = window.setTimeout(
+      () => {
+        const current = useAppStore.getState();
+        const ready = current.outbox.find(
+          (item) =>
+            item.state === "scheduled" &&
+            item.accountId === current.activeAccountId &&
+            item.sendAt &&
+            new Date(item.sendAt).getTime() <= Date.now(),
+        );
+        const currentAccount = current.accounts.find(
+          (item) => item.id === current.activeAccountId,
+        );
+        const liveSync = current.activeAccountId
+          ? current.sync[current.activeAccountId]
+          : undefined;
+        if (
+          ready &&
+          current.activeAccountId &&
+          !accountCannotSend(currentAccount, liveSync)
+        ) {
+          const request = beginScheduledSend(ready.id, current.activeAccountId);
+          if (request)
+            void request
+              .catch((cause) => setError(String(cause)))
+              .finally(() => void loadAccountData());
+        } else {
+          const stillScheduled = current.outbox.some(
+            (item) =>
+              item.state === "scheduled" &&
+              item.accountId === current.activeAccountId &&
+              item.sendAt &&
+              new Date(item.sendAt).getTime() > Date.now(),
+          );
+          // The clamp period ended before the send time: re-arm only.
+          if (stillScheduled) setScheduleTick((tick) => tick + 1);
+          else void loadAccountData();
+        }
+      },
+      Math.min(wait, MAX_TIMER_MS),
+    );
     return () => window.clearTimeout(timer);
   }, [
     outbox,
     activeAccountId,
     sync,
+    scheduleTick,
     beginScheduledSend,
     loadAccountData,
     setError,

@@ -1,6 +1,6 @@
 use super::{wake, AppState, CommandResult};
 use crate::{
-    bridge, credentials, mail,
+    bridge, mail,
     models::{AccountSetupRequest, ProviderKind, ServerConfig},
 };
 use serde::Serialize;
@@ -77,8 +77,13 @@ pub async fn update_account_connection(
         cache_policy: None,
         certificate_reference: None,
     };
-    let password = credentials::load(&account_id)?;
-    let (imap, smtp) = mail::test_account(&request, &imap, &smtp, &password).await?;
+    let password = crate::oauth::session_secret(&account).await?;
+    let (imap, smtp) = if account.summary.auth_method == "oauth" {
+        mail::probe_mail_login(&imap, &smtp, &account.summary.email, &password, true).await?;
+        (imap, smtp)
+    } else {
+        mail::test_account(&request, &imap, &smtp, &password).await?
+    };
     state
         .db
         .save_account_connection(&account_id, &imap, &smtp, changed)?;
@@ -151,13 +156,19 @@ pub async fn approve_bridge_certificate(
             cache_policy: None,
             certificate_reference: None,
         };
-        mail::test_account(
-            &request,
-            &account.imap,
-            &account.smtp,
-            &credentials::load(&id)?,
-        )
-        .await?;
+        let secret = crate::oauth::session_secret(&account).await?;
+        if account.summary.auth_method == "oauth" {
+            mail::probe_mail_login(
+                &account.imap,
+                &account.smtp,
+                &account.summary.email,
+                &secret,
+                true,
+            )
+            .await?;
+        } else {
+            mail::test_account(&request, &account.imap, &account.smtp, &secret).await?;
+        }
         state.db.save_bridge_certificate(&id, Some(&pem))?;
         mail::pool::forget(&id);
         state.actor(&id)?.request(wake::CREDENTIALS | wake::SYNC);

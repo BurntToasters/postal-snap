@@ -18,6 +18,43 @@ export function htmlToQuotedPlainText(html: string): string {
   return htmlToPlainText(doc.body.innerHTML);
 }
 
+/** Clipboard text as paragraphs. Tags stay as text. */
+export function plainPasteBlocks(text: string): Array<{
+  type: "paragraph";
+  content?: Array<{ type: "text"; text: string }>;
+}> {
+  let normalized = "";
+  for (const character of text.replace(/\r\n/g, "\n").replace(/\r/g, "\n")) {
+    const code = character.charCodeAt(0);
+    if (code === 10 || code === 9 || (code >= 32 && code !== 127)) {
+      normalized += character;
+    }
+  }
+  if (!normalized) return [];
+  return normalized
+    .split("\n")
+    .map((line) =>
+      line.length > 0
+        ? { type: "paragraph", content: [{ type: "text", text: line }] }
+        : { type: "paragraph" },
+    );
+}
+
+export function isPlainPasteShortcut(event: {
+  metaKey: boolean;
+  ctrlKey: boolean;
+  shiftKey: boolean;
+  altKey: boolean;
+  key: string;
+}): boolean {
+  return (
+    (event.metaKey || event.ctrlKey) &&
+    event.shiftKey &&
+    !event.altKey &&
+    event.key.toLowerCase() === "v"
+  );
+}
+
 /** Plain text to editor HTML: escaped, blank lines split paragraphs. */
 export function plainTextToHtml(text: string): string {
   const paragraphs = text

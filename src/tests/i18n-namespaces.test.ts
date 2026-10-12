@@ -35,8 +35,11 @@ describe("i18n namespaces", () => {
   });
 
   it("never claims a confirmed threat verdict", () => {
-    // Allowed words that legitimately contain the substring "confirmed".
-    const allowed = [/unconfirmed/i];
+    // Allowed copy that says delivery is unknown, not a threat verdict.
+    const allowed = [
+      /unconfirmed/i,
+      /^Delivery of this message could not be confirmed\. /,
+    ];
     const values: string[] = [];
     collectStrings(strings, values);
     const violations = values.filter(

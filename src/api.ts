@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { normalizeIpcError } from "./errors";
+import type { MessageListFilter } from "./listFilter";
+import type { MessageListSort } from "./listSort";
 import type {
   AccountConnection,
   BridgeCertificate,
@@ -16,6 +18,7 @@ import type {
   ComposeDragEvent,
   MailSettingsDiscovery,
   AppSettings,
+  CachePolicy,
   CacheUsage,
   ComposeAttachment,
   ComposeDraft,
@@ -40,6 +43,7 @@ import type {
   OutboxSummary,
   OutboxChangeEvent,
   SnoozedSummary,
+  FilterMatchPreview,
   FilterRule,
   SearchQuery,
   SyncState,
@@ -95,6 +99,8 @@ export type NativeCommand =
   | "remove_account"
   | "get_account_removal_impact"
   | "erase_all_data"
+  | "update_account_display_name"
+  | "update_account_reply_to"
   | "update_account_signature"
   | "update_account_default_body_format"
   | "attach_dropped_files"
@@ -108,22 +114,37 @@ export type NativeCommand =
   | "set_message_flags"
   | "move_message"
   | "move_message_to_mailbox"
+  | "copy_message_to_mailbox"
+  | "copy_messages_to_mailbox"
   | "set_messages_flags"
+  | "set_messages_pinned"
   | "move_messages_to_mailbox"
   | "mark_mailbox_read"
   | "suggest_recipients"
   | "create_folder"
   | "rename_folder"
+  | "move_folder"
   | "delete_folder"
+  | "delete_trash_messages"
   | "empty_trash"
   | "empty_junk"
   | "search_cached_messages"
   | "search_server_messages"
+  | "find_cached_message"
+  | "snooze_messages"
+  | "stage_pasted_image"
+  | "list_recent_searches"
+  | "remember_search"
+  | "forget_recent_search"
+  | "forget_recent_searches"
+  | "set_unread_badge"
   | "save_draft"
   | "list_drafts"
   | "get_draft"
   | "delete_draft"
   | "send_message"
+  | "send_read_receipt"
+  | "decline_read_receipt"
   | "list_outbox"
   | "get_outbox"
   | "restore_outbox"
@@ -134,13 +155,29 @@ export type NativeCommand =
   | "unsnooze_message"
   | "list_snoozed"
   | "list_filter_rules"
+  | "mute_conversation"
+  | "unmute_conversation"
   | "create_filter_rule"
   | "update_filter_rule"
   | "delete_filter_rule"
+  | "update_account_color"
+  | "get_account_cache_policy"
+  | "set_account_cache_policy"
+  | "get_account_cache_usage"
+  | "clear_account_downloads"
+  | "reorder_accounts"
+  | "reorder_filter_rules"
+  | "preview_filter_rule"
   | "delete_outbox"
   | "save_attachment"
+  | "save_all_attachments"
+  | "save_chosen_attachments"
+  | "save_conversation_attachments"
+  | "save_messages_eml"
   | "preview_attachment"
   | "prepare_forward_attachments"
+  | "prepare_reply_attachments"
+  | "prepare_forwarded_message"
   | "choose_attachments"
   | "fetch_remote_image"
   | "inspect_external_url"
@@ -232,6 +269,18 @@ export const api = {
       mailboxId,
     }),
   listAccounts: () => call<AccountSummary[]>("list_accounts"),
+  reorderAccounts: (accountIds: string[]) =>
+    call<AccountSummary[]>("reorder_accounts", { accountIds }),
+  updateAccountColor: (accountId: string, color: string) =>
+    call<AccountSummary>("update_account_color", { accountId, color }),
+  getAccountCachePolicy: (accountId: string) =>
+    call<CachePolicy>("get_account_cache_policy", { accountId }),
+  setAccountCachePolicy: (accountId: string, policy: CachePolicy) =>
+    call<CachePolicy>("set_account_cache_policy", { accountId, policy }),
+  getAccountCacheUsage: (accountId: string) =>
+    call<CacheUsage>("get_account_cache_usage", { accountId }),
+  clearAccountDownloads: (accountId: string) =>
+    call<void>("clear_account_downloads", { accountId }),
   testAccount: (request: AccountSetupRequest) =>
     call<void>("test_account", { request }),
   discoverMailSettings: (email: string) =>
@@ -253,6 +302,13 @@ export const api = {
       return removed;
     });
   },
+  updateAccountDisplayName: (accountId: string, displayName: string) =>
+    call<AccountSummary>("update_account_display_name", {
+      accountId,
+      displayName,
+    }),
+  updateAccountReplyTo: (accountId: string, replyTo: string) =>
+    call<AccountSummary>("update_account_reply_to", { accountId, replyTo }),
   updateAccountSignature: (accountId: string, signature: string) =>
     call<AccountSummary>("update_account_signature", { accountId, signature }),
   updateAccountDefaultBodyFormat: (accountId: string, format: BodyFormat) =>
@@ -272,10 +328,21 @@ export const api = {
     mailboxId: number,
     cursor?: MessageCursor,
     limit = 100,
+    filter?: MessageListFilter,
+    sort?: MessageListSort,
   ) =>
-    call<MessagePage>("list_messages", { accountId, mailboxId, cursor, limit }),
+    call<MessagePage>("list_messages", {
+      accountId,
+      mailboxId,
+      cursor,
+      limit,
+      filter: filter && filter !== "all" ? filter : undefined,
+      sort: sort && sort !== "date" ? sort : undefined,
+    }),
   getMessage: (accountId: string, messageId: number) =>
     call<MessageDetail>("get_message", { accountId, messageId }),
+  findCachedMessage: (accountId: string, headerId: string) =>
+    call<MessageSummary | null>("find_cached_message", { accountId, headerId }),
   getMessageSource: (accountId: string, messageId: number) =>
     call<MessageSource>("get_message_source", { accountId, messageId }),
   saveMessageEml: (accountId: string, messageId: number) =>
@@ -306,6 +373,16 @@ export const api = {
       messageId,
       destinationMailboxId,
     }),
+  copyMessageToMailbox: (
+    accountId: string,
+    messageId: number,
+    destinationMailboxId: number,
+  ) =>
+    call<void>("copy_message_to_mailbox", {
+      accountId,
+      messageId,
+      destinationMailboxId,
+    }),
   setMessagesFlags: (
     accountId: string,
     messageIds: number[],
@@ -317,6 +394,26 @@ export const api = {
       messageIds,
       isRead,
       isStarred,
+    }),
+  setMessagesPinned: (
+    accountId: string,
+    messageIds: number[],
+    pinned: boolean,
+  ) =>
+    call<number>("set_messages_pinned", {
+      accountId,
+      messageIds,
+      pinned,
+    }),
+  copyMessagesToMailbox: (
+    accountId: string,
+    messageIds: number[],
+    destinationMailboxId: number,
+  ) =>
+    call<BulkOutcome>("copy_messages_to_mailbox", {
+      accountId,
+      messageIds,
+      destinationMailboxId,
     }),
   moveMessagesToMailbox: (
     accountId: string,
@@ -336,18 +433,45 @@ export const api = {
       prefix,
       limit,
     }),
-  createFolder: (accountId: string, name: string) =>
-    call<void>("create_folder", { accountId, name }),
+  createFolder: (accountId: string, name: string, parentMailboxId?: number) =>
+    call<void>(
+      "create_folder",
+      parentMailboxId == null
+        ? { accountId, name }
+        : { accountId, name, parentMailboxId },
+    ),
   renameFolder: (accountId: string, mailboxId: number, name: string) =>
     call<void>("rename_folder", { accountId, mailboxId, name }),
+  moveFolder: (
+    accountId: string,
+    mailboxId: number,
+    parentMailboxId?: number,
+  ) =>
+    call<void>(
+      "move_folder",
+      parentMailboxId == null
+        ? { accountId, mailboxId }
+        : { accountId, mailboxId, parentMailboxId },
+    ),
   deleteFolder: (accountId: string, mailboxId: number) =>
     call<void>("delete_folder", { accountId, mailboxId }),
+  deleteTrashMessages: (accountId: string, messageIds: number[]) =>
+    call<void>("delete_trash_messages", { accountId, messageIds }),
   emptyTrash: (accountId: string) => call<void>("empty_trash", { accountId }),
   emptyJunk: (accountId: string) => call<void>("empty_junk", { accountId }),
   searchCached: (query: SearchQuery) =>
     call<MessageSummary[]>("search_cached_messages", { query }),
   searchServer: (query: SearchQuery) =>
     call<MessageSummary[]>("search_server_messages", { query }),
+  listRecentSearches: (accountId: string) =>
+    call<string[]>("list_recent_searches", { accountId }),
+  rememberSearch: (accountId: string, query: string) =>
+    call<string[]>("remember_search", { accountId, query }),
+  forgetRecentSearch: (accountId: string, query: string) =>
+    call<string[]>("forget_recent_search", { accountId, query }),
+  forgetRecentSearches: (accountId: string) =>
+    call<void>("forget_recent_searches", { accountId }),
+  setUnreadBadge: (count: number) => call<void>("set_unread_badge", { count }),
   saveDraft: (draft: ComposeDraft) =>
     call<DraftSaveOutcome>("save_draft", { draft }),
   listDrafts: (accountId: string) =>
@@ -358,6 +482,10 @@ export const api = {
     call<void>("delete_draft", { draftId, accountId }),
   sendMessage: (draft: ComposeDraft) =>
     call<SendOutcome>("send_message", { draft }),
+  sendReadReceipt: (accountId: string, messageId: number) =>
+    call<string>("send_read_receipt", { accountId, messageId }),
+  declineReadReceipt: (accountId: string, messageId: number) =>
+    call<string>("decline_read_receipt", { accountId, messageId }),
   listOutbox: (accountId: string) =>
     call<OutboxSummary[]>("list_outbox", { accountId }),
   getOutbox: (outboxId: string, accountId: string) =>
@@ -372,18 +500,28 @@ export const api = {
     call<SendOutcome>("send_scheduled_outbox", { outboxId, accountId }),
   snoozeMessage: (accountId: string, messageId: number, untilIso: string) =>
     call<void>("snooze_message", { accountId, messageId, untilIso }),
+  snoozeMessages: (accountId: string, messageIds: number[], untilIso: string) =>
+    call<void>("snooze_messages", { accountId, messageIds, untilIso }),
   unsnoozeMessage: (accountId: string, messageId: number) =>
     call<void>("unsnooze_message", { accountId, messageId }),
   listSnoozed: (accountId: string) =>
     call<SnoozedSummary[]>("list_snoozed", { accountId }),
   listFilterRules: (accountId: string) =>
     call<FilterRule[]>("list_filter_rules", { accountId }),
+  muteConversation: (accountId: string, messageId: number) =>
+    call<number[]>("mute_conversation", { accountId, messageId }),
+  unmuteConversation: (accountId: string, messageId: number) =>
+    call<void>("unmute_conversation", { accountId, messageId }),
   createFilterRule: (rule: FilterRule) =>
     call<FilterRule>("create_filter_rule", { rule }),
   updateFilterRule: (rule: FilterRule) =>
     call<FilterRule>("update_filter_rule", { rule }),
   deleteFilterRule: (accountId: string, ruleId: string) =>
     call<void>("delete_filter_rule", { accountId, ruleId }),
+  reorderFilterRules: (accountId: string, orderedIds: string[]) =>
+    call<FilterRule[]>("reorder_filter_rules", { accountId, orderedIds }),
+  previewFilterRule: (rule: FilterRule) =>
+    call<FilterMatchPreview>("preview_filter_rule", { rule }),
   deleteOutbox: (outboxId: string, accountId: string) =>
     call<void>("delete_outbox", { outboxId, accountId }),
   saveAttachment: (
@@ -398,6 +536,22 @@ export const api = {
       attachmentId,
       suggestedFilename,
     }),
+  saveAllAttachments: (accountId: string, messageId: number) =>
+    call<number>("save_all_attachments", { accountId, messageId }),
+  saveChosenAttachments: (
+    accountId: string,
+    messageId: number,
+    attachmentIds: string[],
+  ) =>
+    call<number>("save_chosen_attachments", {
+      accountId,
+      messageId,
+      attachmentIds,
+    }),
+  saveConversationAttachments: (accountId: string, messageIds: number[]) =>
+    call<number>("save_conversation_attachments", { accountId, messageIds }),
+  saveMessagesEml: (accountId: string, messageIds: number[]) =>
+    call<number>("save_messages_eml", { accountId, messageIds }),
   previewAttachment: (
     accountId: string,
     messageId: number,
@@ -413,8 +567,20 @@ export const api = {
       accountId,
       messageId,
     }),
+  prepareReplyAttachments: (accountId: string, messageId: number) =>
+    call<ComposeAttachment[]>("prepare_reply_attachments", {
+      accountId,
+      messageId,
+    }),
+  prepareForwardedMessage: (accountId: string, messageId: number) =>
+    call<ComposeAttachment>("prepare_forwarded_message", {
+      accountId,
+      messageId,
+    }),
   chooseAttachments: (accountId: string, inline: boolean) =>
     call<ComposeAttachment[]>("choose_attachments", { accountId, inline }),
+  stagePastedImage: (accountId: string, data: string) =>
+    call<ComposeAttachment>("stage_pasted_image", { accountId, data }),
   attachDroppedFiles: (accountId: string) =>
     call<ComposeAttachment[]>("attach_dropped_files", { accountId }),
   fetchRemoteImage: (url: string) =>

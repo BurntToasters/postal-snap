@@ -6,6 +6,7 @@ mod commands;
 mod content_blocking;
 mod credentials;
 mod db;
+mod download_mark;
 mod html_sanitize;
 mod mail;
 mod models;
@@ -93,8 +94,15 @@ fn main() {
             let relaunch = update_relaunch::take(&data_dir);
             // Windows keeps the mail database in the local (non-roaming)
             // profile; migrate any legacy roaming database first.
-            let mail_dir = storage::mail_data_dir(app.handle())?;
-            storage::migrate_legacy_mail_data(&data_dir, &mail_dir);
+            let target_dir = storage::mail_data_dir(app.handle())?;
+            let mail_dir = match storage::migrate_legacy_mail_data(&data_dir, &target_dir) {
+                Ok(_) => target_dir,
+                Err(_) => {
+                    // Keep using the legacy folder so no mail is hidden.
+                    eprintln!("Mail data migration did not complete; using the previous folder.");
+                    data_dir.clone()
+                }
+            };
             std::fs::create_dir_all(&mail_dir)?;
             #[cfg(unix)]
             {
@@ -106,6 +114,15 @@ fn main() {
             std::fs::create_dir_all(&attachment_dir)?;
             let orphan_cleanup_dir = attachment_dir.clone();
             let database = db::Database::open(&database_path).map_err(std::io::Error::other)?;
+            // Idempotent: also repairs grants left behind by an earlier
+            // migration whose rebase did not finish.
+            if mail_dir != data_dir
+                && database
+                    .rebase_file_grant_paths(&data_dir.join(storage::ATTACHMENT_DIR), &attachment_dir)
+                    .is_err()
+            {
+                eprintln!("Saved attachment locations could not be updated.");
+            }
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
@@ -289,33 +306,45 @@ fn main() {
             commands::compatibility::remove_bridge_certificate,
             commands::compatibility::get_folder_assignments,
             commands::compatibility::set_folder_assignment,
+            commands::badge::set_unread_badge,
             commands::accounts::list_accounts,
             commands::accounts::test_account,
             providers::discover_mail_settings,
             commands::accounts::test_saved_account,
             commands::accounts::update_account_password,
             commands::accounts::add_account,
+            commands::accounts::connect_oauth_account,
             commands::accounts::remove_account,
             commands::accounts::erase_all_data,
             commands::sync::list_mailboxes,
             commands::sync::sync_account,
             commands::messages::list_messages,
             commands::messages::get_message,
+            commands::messages::find_cached_message,
             commands::messages::get_message_source,
             commands::messages::save_message_eml,
             commands::messages::unsubscribe_one_click,
             commands::messages::set_message_flags,
             commands::messages::set_messages_flags,
+            commands::messages::set_messages_pinned,
             commands::messages::move_message,
             commands::messages::move_message_to_mailbox,
+            commands::messages::copy_message_to_mailbox,
+            commands::messages::copy_messages_to_mailbox,
             commands::messages::move_messages_to_mailbox,
             commands::messages::mark_mailbox_read,
             commands::folders::suggest_recipients,
             commands::folders::create_folder,
             commands::folders::rename_folder,
+            commands::folders::move_folder,
             commands::folders::delete_folder,
+            commands::folders::delete_trash_messages,
             commands::folders::empty_trash,
             commands::folders::empty_junk,
+            commands::messages::list_recent_searches,
+            commands::messages::remember_search,
+            commands::messages::forget_recent_search,
+            commands::messages::forget_recent_searches,
             commands::messages::search_cached_messages,
             commands::messages::search_server_messages,
             commands::drafts_send::save_draft,
@@ -323,24 +352,38 @@ fn main() {
             commands::drafts_send::get_draft,
             commands::drafts_send::delete_draft,
             commands::drafts_send::send_message,
+            commands::drafts_send::send_read_receipt,
+            commands::drafts_send::decline_read_receipt,
             commands::outbox::list_outbox,
             commands::outbox::get_outbox,
             commands::outbox::retry_outbox,
             commands::outbox::retry_sent_copy,
             commands::drafts_send::send_scheduled_outbox,
             commands::snooze_filters::snooze_message,
+            commands::snooze_filters::snooze_messages,
             commands::snooze_filters::unsnooze_message,
             commands::snooze_filters::list_snoozed,
             commands::snooze_filters::list_filter_rules,
             commands::snooze_filters::create_filter_rule,
             commands::snooze_filters::update_filter_rule,
             commands::snooze_filters::delete_filter_rule,
+            commands::snooze_filters::reorder_filter_rules,
+            commands::snooze_filters::preview_filter_rule,
+            commands::snooze_filters::mute_conversation,
+            commands::snooze_filters::unmute_conversation,
             commands::outbox::delete_outbox,
             commands::outbox::restore_outbox,
             commands::attachments::save_attachment,
+            commands::attachments::save_all_attachments,
+            commands::attachments::save_chosen_attachments,
+            commands::attachments::save_conversation_attachments,
+            commands::attachments::save_messages_eml,
             commands::attachments::preview_attachment,
             commands::attachments::prepare_forward_attachments,
+            commands::attachments::prepare_reply_attachments,
+            commands::attachments::prepare_forwarded_message,
             commands::attachments::choose_attachments,
+            commands::attachments::stage_pasted_image,
             commands::drag_drop::attach_dropped_files,
             commands::security_net::fetch_remote_image,
             commands::security_net::inspect_external_url,
@@ -363,6 +406,7 @@ fn main() {
             commands::accounts::discover_account_aliases,
             commands::accounts::update_account_aliases,
             commands::accounts::update_account_display_name,
+            commands::accounts::update_account_reply_to,
             commands::accounts::update_account_signature,
             commands::accounts::update_account_default_body_format,
             commands::accounts::get_account_inbox_counts,
@@ -464,6 +508,9 @@ fn build_application_menu<R: Runtime>(
         .enabled(has_accounts)
         .accelerator("CmdOrCtrl+Shift+F")
         .build(handle)?;
+    let redirect = MenuItemBuilder::with_id("redirect", "Redirect")
+        .enabled(has_accounts)
+        .build(handle)?;
     let archive = MenuItemBuilder::with_id("archive", "Archive")
         .enabled(has_accounts)
         .accelerator("CmdOrCtrl+E")
@@ -557,6 +604,7 @@ fn build_application_menu<R: Runtime>(
         .item(&reply)
         .item(&reply_all)
         .item(&forward)
+        .item(&redirect)
         .separator()
         .item(&archive)
         .item(&junk)
@@ -643,6 +691,7 @@ fn set_mail_menu_items_enabled<R: Runtime>(menu: &Menu<R>, enabled: bool) -> Res
                 "reply",
                 "reply-all",
                 "forward",
+                "redirect",
                 "archive",
                 "junk",
                 "trash",
@@ -844,6 +893,7 @@ mod tests {
                     "reply",
                     "reply-all",
                     "forward",
+                    "redirect",
                     "archive",
                     "junk",
                     "trash",

@@ -1,4 +1,6 @@
 import { strings } from "../../i18n";
+import type { AppSettings } from "../../types";
+import { normalizeImageSender } from "../../settings";
 import { useAppStore } from "../../store";
 import { SettingRow, SettingsPanel } from "./primitives";
 import type { SettingsSaveUpdate } from "./useSettingsSave";
@@ -9,9 +11,25 @@ interface ReadingTabProps {
 
 export function ReadingTab({ update }: ReadingTabProps) {
   const settings = useAppStore((state) => state.settings);
+  const imageSenders = (settings.imageSenders ?? [])
+    .map((address) => normalizeImageSender(address))
+    .filter((address) => address.length > 0);
 
   return (
     <SettingsPanel id="reading" title={strings.settings.reading}>
+      <label className="switch-row">
+        <span>
+          <strong>{strings.settings.showMessagePreviews}</strong>
+          <small>{strings.settings.showMessagePreviewsHelp}</small>
+        </span>
+        <input
+          type="checkbox"
+          checked={settings.showMessagePreviews}
+          onChange={(event) =>
+            void update({ showMessagePreviews: event.target.checked })
+          }
+        />
+      </label>
       <label className="switch-row">
         <span>
           <strong>{strings.settings.groupThreads}</strong>
@@ -25,6 +43,91 @@ export function ReadingTab({ update }: ReadingTabProps) {
           }
         />
       </label>
+      <label className="switch-row">
+        <span>
+          <strong>{strings.settings.bccSelf}</strong>
+          <small>{strings.settings.bccSelfHelp}</small>
+        </span>
+        <input
+          type="checkbox"
+          checked={settings.bccSelf}
+          onChange={(event) => void update({ bccSelf: event.target.checked })}
+        />
+      </label>
+      <label className="switch-row">
+        <span>
+          <strong>{strings.settings.replyToAll}</strong>
+          <small>{strings.settings.replyToAllHelp}</small>
+        </span>
+        <input
+          type="checkbox"
+          checked={settings.replyToAll}
+          onChange={(event) =>
+            void update({ replyToAll: event.target.checked })
+          }
+        />
+      </label>
+      <label className="switch-row">
+        <span>
+          <strong>{strings.settings.signatureAboveQuote}</strong>
+          <small>{strings.settings.signatureAboveQuoteHelp}</small>
+        </span>
+        <input
+          type="checkbox"
+          checked={settings.signatureAboveQuote}
+          onChange={(event) =>
+            void update({ signatureAboveQuote: event.target.checked })
+          }
+        />
+      </label>
+      <div className="settings-row image-sender-panel">
+        <span>
+          <strong>{strings.settings.imageSenders}</strong>
+          <small>{strings.settings.imageSendersHelp}</small>
+        </span>
+        {imageSenders.length === 0 ? (
+          <p className="settings-note">{strings.settings.imageSendersEmpty}</p>
+        ) : (
+          <ul className="image-sender-list">
+            {imageSenders.map((address) => (
+              <li key={address}>
+                <span>{address}</span>
+                <button
+                  type="button"
+                  aria-label={strings.settings.stopImageSenderLabel(address)}
+                  onClick={() =>
+                    void update({
+                      imageSenders: imageSenders.filter(
+                        (item) => item !== address,
+                      ),
+                    })
+                  }
+                >
+                  {strings.settings.stopImageSender}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      <SettingRow
+        title={strings.settings.markRead}
+        help={strings.settings.markReadHelp}
+      >
+        <select
+          aria-label={strings.settings.markRead}
+          value={settings.markRead ?? "open"}
+          onChange={(event) =>
+            void update({
+              markRead: event.target.value as AppSettings["markRead"],
+            })
+          }
+        >
+          <option value="open">{strings.settings.markReadOpen}</option>
+          <option value="after2s">{strings.settings.markReadAfter2s}</option>
+          <option value="manual">{strings.settings.markReadManual}</option>
+        </select>
+      </SettingRow>
       <SettingRow
         title={strings.mail.undoSendWindow}
         help={strings.mail.undoSendHelp}

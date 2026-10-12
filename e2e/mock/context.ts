@@ -15,6 +15,7 @@ export interface MockAccount {
   signature?: string;
   aliases?: string[];
   defaultBodyFormat?: string;
+  color?: string | null;
 }
 
 export interface MockMailbox {
@@ -45,9 +46,11 @@ export interface MockMessageSummary {
   hasAttachments: boolean;
   size: number;
   threadRoot: string | null;
+  conversationMuted?: boolean;
   hasCalendar?: boolean;
   isAnswered?: boolean;
   isForwarded?: boolean;
+  importance?: string;
 }
 
 export interface MockState {
@@ -63,6 +66,7 @@ export interface MockState {
   accountLoads: number;
   discarded: boolean;
   snoozed: boolean;
+  snoozedIds: number[];
   sentDraft: unknown;
   setupRequest: unknown;
   remoteFetches: number;
@@ -70,6 +74,8 @@ export interface MockState {
   inlineReads: number;
   retried: boolean;
   moved: boolean;
+  muted: { accountId: string; messageId: number } | null;
+  unmuted: number | null;
   exportedSettings: number;
   importedSettings: number;
   printCalls: number;
@@ -97,6 +103,7 @@ export interface MockShared {
   secondSummary: MockMessageSummary;
   params: URLSearchParams;
   handlers: Record<string, MockInvokeHandler>;
+  arrivedMessages?: MockMessageSummary[];
 }
 
 declare global {

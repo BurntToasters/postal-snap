@@ -8,6 +8,7 @@ import {
   type SetStateAction,
 } from "react";
 import {
+  Archive,
   ChevronDown,
   Clock,
   ImagePlus,
@@ -17,7 +18,7 @@ import {
   Send,
   Sunrise,
 } from "lucide-react";
-import { shortcutMod } from "../../format";
+import { formatMessageDate, shortcutMod } from "../../format";
 import { strings } from "../../i18n";
 import { moveMenuFocus } from "../toolbarNav";
 import { tonightAtNine, tomorrowAtEight } from "./schedule";
@@ -26,6 +27,7 @@ export interface SendBarProps {
   sendMenuRef: RefObject<HTMLDivElement | null>;
   canSend: boolean;
   sendMessage: (sendAt?: string) => void | Promise<void>;
+  sendAndArchive?: () => void | Promise<void>;
   sending: boolean;
   sendMenuOpen: boolean;
   setSendMenuOpen: Dispatch<SetStateAction<boolean>>;
@@ -35,9 +37,11 @@ export interface SendBarProps {
   setScheduleValue: Dispatch<SetStateAction<string>>;
   saveDraft: (showStatus?: boolean) => void | Promise<void>;
   saveState: "unsaved" | "saving" | "saved";
+  savedAt?: string;
   addAttachments: () => void | Promise<void>;
   addInlineImage: () => void | Promise<void>;
   discardDraft: () => void | Promise<void>;
+  showAttachments?: boolean;
   /** Resize grip for the floating composer. */
   children?: ReactNode;
 }
@@ -46,6 +50,7 @@ export function SendBar({
   sendMenuRef,
   canSend,
   sendMessage,
+  sendAndArchive,
   sending,
   sendMenuOpen,
   setSendMenuOpen,
@@ -55,9 +60,11 @@ export function SendBar({
   setScheduleValue,
   saveDraft,
   saveState,
+  savedAt,
   addAttachments,
   addInlineImage,
   discardDraft,
+  showAttachments = true,
   children,
 }: SendBarProps) {
   const chevronRef = useRef<HTMLButtonElement>(null);
@@ -144,6 +151,19 @@ export function SendBar({
               <Send aria-hidden="true" />
               {strings.composer.sendNow}
             </button>
+            {sendAndArchive ? (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setSendMenuOpen(false);
+                  void sendAndArchive();
+                }}
+              >
+                <Archive aria-hidden="true" />
+                {strings.composer.sendAndArchive}
+              </button>
+            ) : null}
             <button
               type="button"
               role="menuitem"
@@ -219,27 +239,33 @@ export function SendBar({
         {saveState === "saving"
           ? strings.common.saving
           : saveState === "saved"
-            ? strings.composer.draftSaved
+            ? savedAt
+              ? strings.composer.draftSavedAt(formatMessageDate(savedAt))
+              : strings.composer.draftSaved
             : strings.composer.saveDraft}
       </button>
-      <button
-        className="toolbar-button"
-        type="button"
-        onClick={() => void addAttachments()}
-        disabled={sending}
-      >
-        <Paperclip />
-        {strings.composer.attach}
-      </button>
-      <button
-        className="toolbar-button"
-        type="button"
-        onClick={() => void addInlineImage()}
-        disabled={sending}
-      >
-        <ImagePlus />
-        {strings.composer.picture}
-      </button>
+      {showAttachments ? (
+        <button
+          className="toolbar-button"
+          type="button"
+          onClick={() => void addAttachments()}
+          disabled={sending}
+        >
+          <Paperclip />
+          {strings.composer.attach}
+        </button>
+      ) : null}
+      {showAttachments ? (
+        <button
+          className="toolbar-button"
+          type="button"
+          onClick={() => void addInlineImage()}
+          disabled={sending}
+        >
+          <ImagePlus />
+          {strings.composer.picture}
+        </button>
+      ) : null}
       <button
         className="discard-button"
         type="button"

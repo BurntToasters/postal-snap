@@ -49,7 +49,7 @@ function focusMenuItemByLetter(event: KeyboardEvent<HTMLElement>) {
   const letter = event.key.toLocaleLowerCase();
   const items = [
     ...event.currentTarget.querySelectorAll<HTMLElement>(
-      '[role="menuitem"]:not([disabled])',
+      '[role="menuitem"]:not([disabled]), [role="menuitemradio"]:not([disabled])',
     ),
   ];
   const start = items.findIndex((item) => item === document.activeElement);
@@ -86,7 +86,7 @@ export function moveMenuFocus(event: KeyboardEvent<HTMLElement>) {
   }
   const items = [
     ...event.currentTarget.querySelectorAll<HTMLElement>(
-      '[role="menuitem"]:not([disabled]), select:not([disabled])',
+      '[role="menuitem"]:not([disabled]), [role="menuitemradio"]:not([disabled]), select:not([disabled])',
     ),
   ].filter(
     (item) =>

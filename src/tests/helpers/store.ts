@@ -1,9 +1,15 @@
 import { defaultSettings, useAppStore } from "../../store";
+import { clearRecentMoveMailbox } from "../../recentMailbox";
+import { clearRememberedExpandedThreads } from "../../threadExpand";
+import { clearRememberedOpenMessages } from "../../recentMessage";
 import { makeAccount, makeMailbox } from "./fixtures";
 
 type StoreOverrides = Partial<ReturnType<typeof useAppStore.getState>>;
 
 export function resetStore(overrides: StoreOverrides = {}): void {
+  clearRememberedOpenMessages();
+  clearRememberedExpandedThreads();
+  clearRecentMoveMailbox();
   const account = makeAccount();
   const inbox = makeMailbox();
   const trash = makeMailbox({

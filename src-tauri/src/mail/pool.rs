@@ -14,7 +14,10 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-use super::{send::connect_imap, ImapSession, IMAP_COMMAND_TIMEOUT};
+use super::{
+    send::{connect_imap, connect_imap_auth},
+    ImapSession, IMAP_COMMAND_TIMEOUT,
+};
 use crate::{models::AccountRecord, security::redact_error};
 
 /// A parked session idle longer than this is probed with NOOP before reuse.
@@ -192,7 +195,11 @@ pub async fn checkout(account: &AccountRecord, password: &str) -> Result<Lease, 
             }
         }
     }
-    let mut session = connect_imap(&account.imap, password).await?;
+    let mut session = if account.summary.auth_method == "oauth" {
+        connect_imap_auth(&account.imap, password, true).await?
+    } else {
+        connect_imap(&account.imap, password).await?
+    };
     let capabilities = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.capabilities())
         .await
         .map_err(|_| "IMAP capability check timed out.".to_string())?

@@ -263,9 +263,10 @@ test("context menu supports Tab, typeahead, groups, and dismissal", async ({
 
   await page.keyboard.press("m");
   await expect(menu.getByRole("menuitem", { name: "Mark read" })).toBeFocused();
+  // The next "m" item in menu order is "Messages from this sender".
   await page.keyboard.press("m");
   await expect(
-    menu.getByRole("menuitem", { name: "Mark as junk" }),
+    menu.getByRole("menuitem", { name: "Messages from this sender" }),
   ).toBeFocused();
   await page.keyboard.press("p");
   await expect(

@@ -11,19 +11,77 @@
   flex-shrink: 0;
 }
 
+/* Chrome stays; the letter fills what is left and scrolls inside it. */
+.reader-pane > .message-body {
+  flex: 1 1 auto;
+  min-height: 6rem;
+}
+
+/* The bottom pane is short by design; elsewhere the letter keeps a readable height. */
+.mail-shell:not(.pane-bottom) .reader-pane > .message-body {
+  min-height: var(--reader-body-min);
+}
+
+/* Short windows: quick reply scrolls with the letter instead of covering it. */
+@media (max-height: 640px) {
+  .quick-reply {
+    position: static;
+  }
+}
+
+.quick-reply {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-2);
+  margin-top: auto;
+  padding-block: var(--bar-pad-block-lg);
+  padding-inline: var(--space-4);
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.quick-reply-to {
+  flex: 1 0 100%;
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.quick-reply-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.quick-reply textarea {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: var(--control-height);
+  max-height: 8rem;
+  resize: vertical;
+}
+
+.quick-reply button {
+  flex: 0 0 auto;
+  min-height: var(--target-size);
+}
+
 .pane-hidden .reader-pane.reader-hidden,
 .pane-hidden .reader-pane.empty-reader {
   display: none;
 }
 
+/* Full-screen message. Cover the mailbox, including the title strip. */
 .pane-hidden .reader-pane:not(.reader-hidden):not(.empty-reader) {
   position: fixed;
-  z-index: 12;
-  inset: calc(var(--mail-toolbar-height, var(--toolbar-height)) + 14px)
-    clamp(18px, 5vw, 72px) 18px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow);
+  z-index: 24;
+  inset: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--surface);
+  box-shadow: none;
 }
 
 .reader-actions {
@@ -31,11 +89,11 @@
   z-index: 4;
   top: 0;
   display: flex;
-  min-height: var(--bar-height-md);
+  min-height: var(--pane-heading-height);
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  padding: var(--bar-pad-block) 12px;
+  padding: var(--bar-pad-block) var(--reader-pad-inline);
   overflow: visible;
   border-bottom: 1px solid var(--border);
   /* Soft scroll edge (macOS 27): the message blurs as it passes beneath. */
@@ -76,6 +134,13 @@ html[data-reduce-transparency="true"] .reader-actions {
   background: var(--fill);
 }
 
+.reader-position {
+  padding-inline: 0.35rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .reader-actions button {
   display: inline-flex;
   min-height: var(--target-size-inset);
@@ -112,12 +177,83 @@ html[data-reduce-transparency="true"] .reader-actions {
   flex: 1;
 }
 
+.conversation-index {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: var(--space-2) var(--reader-pad-inline);
+  border-bottom: 1px solid var(--border);
+}
+
+.conversation-index button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-height: var(--target-size);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  text-align: start;
+}
+
+.conversation-index button[aria-current="true"] {
+  background: var(--accent-soft);
+  font-weight: 700;
+}
+
+.conversation-index button:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.conversation-index span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-index-sender {
+  flex: 0 1 40%;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.conversation-index-unread {
+  flex: none;
+  color: var(--accent);
+  font-weight: 650;
+}
+
 .message-header {
   display: grid;
   grid-template-columns: 42px minmax(0, 1fr) auto;
   gap: 8px 11px;
-  padding: 20px clamp(18px, 3vw, 30px) 16px;
+  padding: 20px var(--reader-pad-inline) 16px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+}
+
+.message-header mark,
+.plain-text-body mark {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  color: inherit;
+  border-radius: 0.2em;
+}
+
+@media (forced-colors: active) {
+  .message-header mark,
+  .plain-text-body mark {
+    background: Highlight;
+    color: HighlightText;
+  }
+
+  .conversation-index-unread {
+    color: Highlight;
+  }
 }
 
 .message-header h1 {
@@ -174,10 +310,13 @@ html[data-reduce-transparency="true"] .reader-actions {
   white-space: nowrap;
 }
 
-.message-header time {
+.message-header .message-stamp {
   grid-column: 3;
   grid-row: 2;
   align-self: start;
+  display: grid;
+  justify-items: end;
+  gap: 2px;
   color: var(--text-muted);
   font-size: 0.82rem;
   text-align: right;
@@ -185,6 +324,25 @@ html[data-reduce-transparency="true"] .reader-actions {
   white-space: normal;
   line-height: 1.5;
   overflow-wrap: anywhere;
+}
+
+.header-files {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  min-height: var(--target-size);
+  align-items: center;
+  gap: var(--space-2);
+  padding-inline: var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  background: transparent;
+}
+
+.header-file-size {
+  color: var(--text-muted);
+  font-weight: 400;
 }
 
 .details-toggle {
@@ -329,9 +487,10 @@ html[data-reduce-transparency="true"] .reader-actions {
    Only a reported threat keeps the warning color. */
 .remote-content-banner {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 9px;
-  padding: 10px 18px;
+  padding: 10px var(--reader-pad-inline);
   color: var(--text);
   background: var(--fill);
   border-bottom: 1px solid var(--border);
@@ -357,6 +516,22 @@ html[data-reduce-transparency="true"] .reader-actions {
   flex: 1;
 }
 
+.continue-draft {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-block: var(--space-2);
+}
+
+.continue-draft p {
+  margin: 0;
+}
+
+.remote-image-hosts {
+  overflow-wrap: anywhere;
+}
+
 .remote-content-banner button {
   min-height: var(--target-size);
   padding-inline: 14px;
@@ -371,7 +546,7 @@ html[data-reduce-transparency="true"] .reader-actions {
   gap: 8px;
   align-items: center;
   min-height: var(--bar-height-sm);
-  padding: 8px 12px;
+  padding: 8px var(--reader-pad-inline);
   border-bottom: 1px solid var(--border);
   background: var(--surface-muted);
 }
@@ -381,9 +556,14 @@ html[data-reduce-transparency="true"] .reader-actions {
   min-height: var(--target-size);
 }
 
+.message-find-status {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
 .message-body {
-  min-height: 180px;
-  flex: 1 0 180px;
+  min-height: 0;
+  flex: 1 1 auto;
   overflow: auto;
   background: var(--mail-canvas);
   color-scheme: light;
@@ -402,7 +582,7 @@ html[data-reduce-transparency="true"] .reader-actions {
 .message-body pre,
 .plain-text-body {
   margin: 0;
-  padding: 22px;
+  padding: 22px var(--reader-pad-inline);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font: inherit;
@@ -450,17 +630,26 @@ html[data-reduce-transparency="true"] .reader-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 7px;
-  padding: 9px 18px;
+  padding: 9px var(--reader-pad-inline);
   border-top: 1px solid var(--border);
 }
 
-.attachment-list h2 {
+.attachment-list-header {
+  display: flex;
   width: 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.attachment-list h2 {
+  width: auto;
   margin: 0;
   font-size: 0.86rem;
 }
 
-.attachment-list button {
+.attachment-row button {
   display: flex;
   min-height: var(--target-size);
   max-width: 100%;
@@ -473,18 +662,27 @@ html[data-reduce-transparency="true"] .reader-actions {
   background: var(--surface-muted);
 }
 
-.attachment-list button span {
+.attachment-row button span {
   display: grid;
   min-width: 0;
   overflow-wrap: anywhere;
 }
 
-.attachment-list button svg {
+.attachment-row button svg {
   flex: 0 0 auto;
 }
 
 .attachment-list small {
   color: var(--text-muted);
+}
+
+.attachment-choose {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--target-size);
+  min-height: var(--target-size);
 }
 
 .attachment-row {
@@ -546,7 +744,7 @@ html[data-reduce-transparency="true"] .reader-actions {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  padding: 10px 16px;
+  padding: 10px var(--reader-pad-inline);
   border-bottom: 1px solid var(--border);
   background: var(--surface-muted);
 }
@@ -571,6 +769,41 @@ html[data-reduce-transparency="true"] .reader-actions {
   width: auto;
 }
 
+.sender-name-conflict {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--warning-ink);
+}
+
+.mailing-list-note {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.message-header .message-muted {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+.message-importance {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.message-importance.high {
+  color: var(--danger-ink);
+}
+
+.message-importance.low {
+  color: var(--text-muted);
+}
+
 /* Replied / forwarded state in the header */
 .reply-state {
   display: flex;
@@ -590,7 +823,7 @@ html[data-reduce-transparency="true"] .reader-actions {
 .invite-card {
   display: grid;
   gap: 6px;
-  margin: 12px 18px 0;
+  margin: 12px var(--reader-pad-inline) 0;
   padding: 14px 16px;
   border: 1px solid var(--border);
   border-left: 4px solid var(--accent);

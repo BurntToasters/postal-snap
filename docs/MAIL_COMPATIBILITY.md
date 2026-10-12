@@ -1,6 +1,6 @@
 # Mail compatibility in 0.3.2
 
-Postal Snap connects through verified IMAP and SMTP using implicit TLS or required STARTTLS. Accounts remain isolated. OAuth-only configurations, POP, and plaintext connections are unsupported.
+Postal Snap connects through verified IMAP and SMTP using implicit TLS or required STARTTLS. Accounts remain isolated. The setup screen still declines Gmail and Outlook passwords. User-facing OAuth can wait until 0.5.0. Registration steps for that later release are in `docs/OAUTH.md`. POP and plaintext connections are unsupported.
 
 ## Proton Bridge — experimental
 

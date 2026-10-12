@@ -93,23 +93,23 @@ pub struct RemoteDraftSnapshot {
 }
 
 pub use folders::{
-    create_folder, delete_folder, empty_folder, mark_folder_read, move_remote, move_remote_uids,
-    rename_folder, set_remote_flags, set_remote_keyword, set_remote_uid_flags, MoveOptions,
-    SourceKeyword,
+    copy_remote, copy_remote_uids, create_folder, delete_folder, empty_folder, expunge_uids,
+    mark_folder_read, move_remote, move_remote_uids, rename_folder, set_remote_flags,
+    set_remote_keyword, set_remote_uid_flags, CopyOptions, MoveOptions, SourceKeyword,
 };
 pub use icloud::discover_icloud_aliases;
 pub use remote_drafts::{
     delete_remote_draft, extract_attachment, fetch_remote_drafts, upsert_remote_draft,
 };
 pub use send::{
-    apply_signature, ensure_sent_copy, prepare_draft_message, prepare_message, send_prepared,
-    SendFailure,
+    apply_signature, ensure_sent_copy, prepare_draft_message, prepare_message, prepare_redirect,
+    send_prepared, SendFailure,
 };
 #[cfg(test)]
 pub use sync::Uncontended;
 pub use sync::{
-    download_message, idle_inbox, load_older_messages, refresh_mailbox_envelopes, server_search,
-    sync_account, test_account, IdleOutcome, SyncHooks, SyncOutcome,
+    download_message, idle_inbox, load_older_messages, probe_mail_login, refresh_mailbox_envelopes,
+    server_search, sync_account, test_account, IdleOutcome, SyncHooks, SyncOutcome,
 };
 
 #[cfg(test)]
@@ -170,6 +170,7 @@ mod tests {
                 aliases: vec![],
                 auth_method: "password".into(),
                 signature: String::new(),
+                reply_to: String::new(),
                 color: None,
                 default_body_format: crate::models::BodyFormat::Plain,
             },
@@ -261,6 +262,7 @@ mod tests {
             size: 48,
             to: vec!["legacy@example.test".into()],
             cc: vec![],
+            bcc: vec![],
             reply_to: None,
             thread_parent: None,
             text_body: "Legacy cached message".into(),
@@ -275,6 +277,8 @@ mod tests {
             calendar_json: None,
             list_unsubscribe: None,
             list_unsubscribe_post: None,
+            importance: String::new(),
+            disposition_to: String::new(),
         };
         legacy_db
             .upsert_message(
@@ -324,6 +328,10 @@ mod tests {
             body_format: crate::models::BodyFormat::Plain,
             source_message_id: None,
             source_kind: None,
+            include_signature: true,
+            importance: String::new(),
+            request_receipt: false,
+            reply_to: None,
         };
         let legacy_draft_id = legacy_db.save_draft(&legacy_draft).unwrap();
         legacy_db
@@ -384,7 +392,7 @@ mod tests {
             .unwrap();
         recovery_findings.push((
             "legacy mailbox cache migration runs before mailbox sync",
-            migrated_schema_version == 23
+            migrated_schema_version == crate::db::CURRENT_SCHEMA_VERSION
                 && legacy_db
                     .mailbox_id_for_name(&legacy_account.summary.id, "Projects/日本語")
                     .unwrap()
@@ -849,6 +857,10 @@ mod tests {
             body_format: crate::models::BodyFormat::Plain,
             source_message_id: None,
             source_kind: None,
+            include_signature: true,
+            importance: String::new(),
+            request_receipt: false,
+            reply_to: None,
         };
         let bytes = prepare_draft_message(&account, &draft, draft_message_id)
             .await
@@ -996,6 +1008,7 @@ mod tests {
                 aliases: vec![],
                 auth_method: "password".into(),
                 signature: String::new(),
+                reply_to: String::new(),
                 color: None,
             },
             imap: ServerConfig {
@@ -1017,6 +1030,10 @@ mod tests {
             body_format: crate::models::BodyFormat::Html,
             source_message_id: None,
             source_kind: None,
+            include_signature: true,
+            importance: String::new(),
+            request_receipt: false,
+            reply_to: None,
             id: None,
             account_id: account.summary.id.clone(),
             from: None,
@@ -1057,6 +1074,10 @@ mod tests {
             body_format: crate::models::BodyFormat::Html,
             source_message_id: None,
             source_kind: None,
+            include_signature: true,
+            importance: String::new(),
+            request_receipt: false,
+            reply_to: None,
             id: None,
             account_id: "account-1".into(),
             from: None,
@@ -1086,6 +1107,7 @@ mod tests {
                 aliases: vec![],
                 auth_method: "password".into(),
                 signature: String::new(),
+                reply_to: String::new(),
                 color: None,
             },
             imap: ServerConfig {
@@ -1150,12 +1172,12 @@ mod tests {
 
     #[test]
     fn signatures_append_once_with_escaping() {
-        let plain = apply_signature(blank_draft(), "");
+        let plain = apply_signature(blank_draft(), "", true);
         assert_eq!(plain.text_body, "Hello");
-        let signed = apply_signature(blank_draft(), "Best,\nSam <sam>");
+        let signed = apply_signature(blank_draft(), "Best,\nSam <sam>", true);
         assert!(signed.text_body.ends_with("\n\n-- \nBest,\nSam <sam>"));
         assert!(signed.html_body.contains("-- <br>Best,<br>Sam &lt;sam&gt;"));
-        let twice = apply_signature(signed.clone(), "Best,\nSam <sam>");
+        let twice = apply_signature(signed.clone(), "Best,\nSam <sam>", true);
         assert_eq!(twice.text_body, signed.text_body);
         assert_eq!(twice.html_body, signed.html_body);
     }
@@ -1248,6 +1270,7 @@ mod tests {
                 aliases: vec![],
                 auth_method: "password".into(),
                 signature: String::new(),
+                reply_to: String::new(),
                 color: None,
             },
             imap: ServerConfig {
@@ -1316,6 +1339,7 @@ mod tests {
                 aliases: vec![],
                 auth_method: "password".into(),
                 signature: String::new(),
+                reply_to: String::new(),
                 color: None,
             },
             imap: ServerConfig {
@@ -1337,6 +1361,10 @@ mod tests {
             body_format: crate::models::BodyFormat::Html,
             source_message_id: None,
             source_kind: None,
+            include_signature: true,
+            importance: String::new(),
+            request_receipt: false,
+            reply_to: None,
             id: None,
             account_id: account.summary.id.clone(),
             from: None,
@@ -1373,6 +1401,7 @@ mod tests {
                 aliases: vec![],
                 auth_method: "password".into(),
                 signature: String::new(),
+                reply_to: String::new(),
                 color: None,
             },
             imap: ServerConfig {
@@ -1394,6 +1423,10 @@ mod tests {
             body_format: crate::models::BodyFormat::Html,
             source_message_id: None,
             source_kind: None,
+            include_signature: true,
+            importance: String::new(),
+            request_receipt: false,
+            reply_to: None,
             id: None,
             account_id: account.summary.id.clone(),
             from: None,
@@ -1452,6 +1485,7 @@ mod tests {
                 aliases: vec![],
                 auth_method: "password".into(),
                 signature: String::new(),
+                reply_to: String::new(),
                 color: None,
                 default_body_format: crate::models::BodyFormat::Plain,
             },
@@ -1475,6 +1509,10 @@ mod tests {
             body_format: crate::models::BodyFormat::Plain,
             source_message_id: None,
             source_kind: None,
+            include_signature: true,
+            importance: String::new(),
+            request_receipt: false,
+            reply_to: None,
         };
         for variable in [
             "POSTAL_SNAP_BRIDGE_EXPIRED_CERT",
@@ -1721,6 +1759,7 @@ mod tests {
                 aliases: vec![],
                 auth_method: "password".into(),
                 signature: String::new(),
+                reply_to: String::new(),
                 color: None,
             },
             imap: ServerConfig {
@@ -1766,6 +1805,10 @@ mod tests {
             body_format: crate::models::BodyFormat::Html,
             source_message_id: None,
             source_kind: None,
+            include_signature: true,
+            importance: String::new(),
+            request_receipt: false,
+            reply_to: None,
             id: None,
             account_id: account.summary.id.clone(),
             from: None,
@@ -2097,6 +2140,7 @@ mod tests {
                 aliases: vec![],
                 auth_method: "password".into(),
                 signature: String::new(),
+                reply_to: String::new(),
                 color: None,
             },
             imap: ServerConfig {
@@ -2402,6 +2446,7 @@ mod tests {
                 aliases: vec![],
                 auth_method: "password".into(),
                 signature: String::new(),
+                reply_to: String::new(),
                 color: None,
             },
             imap,

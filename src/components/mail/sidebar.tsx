@@ -12,16 +12,21 @@ import {
   X,
 } from "lucide-react";
 import { strings } from "../../i18n";
+import { folderLabel, folderPathLabel } from "../../i18n/mail";
+import { mailboxIsPinned } from "../../pinnedMailboxes";
+import { parentMailboxIds } from "./folderTree";
 import type {
   AccountInboxCount,
   AccountSummary,
   MailboxRole,
   MailboxSummary,
+  PinnedMailbox,
+  SyncProgress,
   SyncState,
 } from "../../types";
 import { AccountSwitcher } from "./accountSwitcher";
 import { FolderButton } from "./folderButton";
-import { FolderTree } from "./folderTree";
+import { FolderTree, mailboxesForUnreadView } from "./folderTree";
 import { SyncStatus } from "./syncStatus";
 
 export type LocalFolderView = "drafts" | "outbox" | "snoozed";
@@ -33,6 +38,7 @@ export interface SidebarProps {
   accountCounts: AccountInboxCount[];
   syncByAccount: Record<string, SyncState>;
   activeSync: SyncState | undefined;
+  syncProgress?: SyncProgress;
   accountSwitcherOpen: boolean;
   syncingAllAccounts: boolean;
   onAccountSwitcherOpenChange: (open: boolean) => void;
@@ -47,10 +53,20 @@ export interface SidebarProps {
   snoozedCount: number;
   onSelectLocalView: (view: LocalFolderView) => void;
   mailboxes: MailboxSummary[];
+  pinnedMailboxes: PinnedMailbox[];
+  hiddenMailboxes: PinnedMailbox[];
+  collapsedMailboxIds: number[];
+  onToggleCollapsed: (mailboxId: number, collapsed: boolean) => void;
+  onCollapseFolders?: () => void;
+  onExpandFolders?: () => void;
+  unreadFoldersOnly: boolean;
+  onUnreadFoldersOnlyChange: (unreadOnly: boolean) => void;
   activeMailboxId: number | undefined;
   folderIcons: Record<MailboxRole, typeof Inbox>;
   folderDialog:
-    { mode: "create" } | { mode: "rename"; id: number; name: string } | null;
+    | { mode: "create"; parentId?: number; parentLabel?: string }
+    | { mode: "rename"; id: number; name: string; parentLabel?: string }
+    | null;
   folderName: string;
   folderBusy: boolean;
   newFolderButtonRef: RefObject<HTMLButtonElement | null>;
@@ -62,11 +78,14 @@ export interface SidebarProps {
   onFolderDialogSubmit: () => void;
   onFolderDialogClose: () => void;
   onOpenFolderDialog: (
-    dialog: { mode: "create" } | { mode: "rename"; id: number; name: string },
+    dialog:
+      | { mode: "create"; parentId?: number; parentLabel?: string }
+      | { mode: "rename"; id: number; name: string; parentLabel?: string },
   ) => void;
   activeMailbox: MailboxSummary | undefined;
   onEmptyTrash: () => void;
   onEmptyJunk: () => void;
+  onDropMessages?: (mailboxId: number, payload: string) => void;
 }
 
 export function Sidebar({
@@ -76,6 +95,7 @@ export function Sidebar({
   accountCounts,
   syncByAccount,
   activeSync,
+  syncProgress,
   accountSwitcherOpen,
   syncingAllAccounts,
   onAccountSwitcherOpenChange,
@@ -90,6 +110,14 @@ export function Sidebar({
   snoozedCount,
   onSelectLocalView,
   mailboxes,
+  pinnedMailboxes,
+  hiddenMailboxes,
+  collapsedMailboxIds,
+  onToggleCollapsed,
+  onCollapseFolders,
+  onExpandFolders,
+  unreadFoldersOnly,
+  onUnreadFoldersOnlyChange,
   activeMailboxId,
   folderIcons,
   folderDialog,
@@ -107,6 +135,7 @@ export function Sidebar({
   activeMailbox,
   onEmptyTrash,
   onEmptyJunk,
+  onDropMessages,
 }: SidebarProps) {
   return (
     <aside
@@ -180,9 +209,36 @@ export function Sidebar({
           localView="snoozed"
           onClick={() => onSelectLocalView("snoozed")}
         />
-        <p className="sidebar-section-title">{strings.mail.mailboxes}</p>
+        <PinnedFolders
+          mailboxes={listedMailboxes(
+            mailboxes,
+            hiddenMailboxes,
+            activeAccount?.id,
+          )}
+          pins={pinnedMailboxes}
+          accountId={activeAccount?.id}
+          activeMailboxId={activeLocalView ? undefined : activeMailboxId}
+          folderIcons={folderIcons}
+          onFolderClick={onFolderClick}
+          onDropMessages={onDropMessages}
+        />
+        <div className="sidebar-section-heading">
+          <p className="sidebar-section-title">{strings.mail.mailboxes}</p>
+          <button
+            type="button"
+            className="unread-folders-toggle"
+            aria-pressed={unreadFoldersOnly}
+            onClick={() => onUnreadFoldersOnlyChange(!unreadFoldersOnly)}
+          >
+            {strings.mail.unreadFolders}
+          </button>
+        </div>
         <FolderTree
-          mailboxes={mailboxes}
+          mailboxes={mailboxesForUnreadView(
+            listedMailboxes(mailboxes, hiddenMailboxes, activeAccount?.id),
+            unreadFoldersOnly,
+            activeLocalView ? undefined : activeMailboxId,
+          )}
           activeMailboxId={activeMailboxId}
           folderIcons={folderIcons}
           folderDialog={folderDialog}
@@ -195,6 +251,24 @@ export function Sidebar({
           onFolderNameChange={onFolderNameChange}
           onFolderDialogSubmit={onFolderDialogSubmit}
           onFolderDialogClose={onFolderDialogClose}
+          onDropMessages={onDropMessages}
+          collapsedMailboxIds={collapsedMailboxIds}
+          onToggleCollapsed={onToggleCollapsed}
+        />
+        <FolderTreeActions
+          mailboxes={mailboxes}
+          collapsedMailboxIds={collapsedMailboxIds}
+          onCollapseFolders={onCollapseFolders}
+          onExpandFolders={onExpandFolders}
+        />
+        <HiddenFolders
+          mailboxes={mailboxes}
+          hidden={hiddenMailboxes}
+          accountId={activeAccount?.id}
+          activeMailboxId={activeLocalView ? undefined : activeMailboxId}
+          folderIcons={folderIcons}
+          onFolderClick={onFolderClick}
+          onDropMessages={onDropMessages}
         />
         {folderDialog?.mode === "create" ? (
           <form
@@ -205,6 +279,11 @@ export function Sidebar({
               onFolderDialogSubmit();
             }}
           >
+            {folderDialog.parentLabel ? (
+              <p className="folder-dialog-parent">
+                {strings.mail.newFolderInside(folderDialog.parentLabel)}
+              </p>
+            ) : null}
             <label>
               <span className="visually-hidden">{strings.mail.folderName}</span>
               <input
@@ -266,8 +345,149 @@ export function Sidebar({
       <SyncStatus
         account={activeAccount}
         sync={activeSync}
+        progress={syncProgress}
         onOpenSettings={onOpenSettings}
       />
     </aside>
+  );
+}
+
+function FolderTreeActions({
+  mailboxes,
+  collapsedMailboxIds,
+  onCollapseFolders,
+  onExpandFolders,
+}: {
+  mailboxes: MailboxSummary[];
+  collapsedMailboxIds: number[];
+  onCollapseFolders?: () => void;
+  onExpandFolders?: () => void;
+}) {
+  const parents = parentMailboxIds(mailboxes);
+  if (parents.length === 0 || !onCollapseFolders || !onExpandFolders)
+    return null;
+  const collapsed = parents.filter((id) => collapsedMailboxIds.includes(id));
+  return (
+    <div className="folder-tree-actions">
+      {collapsed.length < parents.length ? (
+        <button
+          type="button"
+          className="unread-folders-toggle"
+          onClick={onCollapseFolders}
+        >
+          {strings.mail.collapseFolders}
+        </button>
+      ) : null}
+      {collapsed.length > 0 ? (
+        <button
+          type="button"
+          className="unread-folders-toggle"
+          onClick={onExpandFolders}
+        >
+          {strings.mail.expandFolders}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function listedMailboxes(
+  mailboxes: MailboxSummary[],
+  hidden: PinnedMailbox[],
+  accountId: string | undefined,
+): MailboxSummary[] {
+  return mailboxes.filter(
+    (mailbox) =>
+      mailbox.role === "inbox" ||
+      !mailboxIsPinned(hidden, accountId, mailbox.id),
+  );
+}
+
+function HiddenFolders({
+  mailboxes,
+  hidden,
+  accountId,
+  activeMailboxId,
+  folderIcons,
+  onFolderClick,
+  onDropMessages,
+}: {
+  mailboxes: MailboxSummary[];
+  hidden: PinnedMailbox[];
+  accountId: string | undefined;
+  activeMailboxId: number | undefined;
+  folderIcons: Record<MailboxRole, typeof Inbox>;
+  onFolderClick: (mailbox: MailboxSummary) => void;
+  onDropMessages?: (mailboxId: number, payload: string) => void;
+}) {
+  if (!accountId) return null;
+  const concealed = hidden.flatMap((entry) => {
+    if (entry.accountId !== accountId) return [];
+    const mailbox = mailboxes.find((box) => box.id === entry.mailboxId);
+    if (!mailbox || mailbox.role === "inbox") return [];
+    return [mailbox];
+  });
+  if (concealed.length === 0) return null;
+  return (
+    <div role="group" aria-label={strings.mail.hiddenFolders}>
+      <p className="sidebar-section-title">{strings.mail.hiddenFolders}</p>
+      {concealed.map((mailbox) => (
+        <FolderButton
+          key={mailbox.id}
+          icon={folderIcons[mailbox.role]}
+          label={folderLabel(mailbox)}
+          pathLabel={folderPathLabel(mailbox)}
+          count={mailbox.unreadCount}
+          active={activeMailboxId === mailbox.id}
+          mailboxId={mailbox.id}
+          onClick={() => onFolderClick(mailbox)}
+          onDropMessages={onDropMessages}
+        />
+      ))}
+    </div>
+  );
+}
+
+function PinnedFolders({
+  mailboxes,
+  pins,
+  accountId,
+  activeMailboxId,
+  folderIcons,
+  onFolderClick,
+  onDropMessages,
+}: {
+  mailboxes: MailboxSummary[];
+  pins: PinnedMailbox[];
+  accountId: string | undefined;
+  activeMailboxId: number | undefined;
+  folderIcons: Record<MailboxRole, typeof Inbox>;
+  onFolderClick: (mailbox: MailboxSummary) => void;
+  onDropMessages?: (mailboxId: number, payload: string) => void;
+}) {
+  if (!accountId) return null;
+  const pinned = pins.flatMap((pin) => {
+    if (pin.accountId !== accountId) return [];
+    const mailbox = mailboxes.find((box) => box.id === pin.mailboxId);
+    return mailbox ? [mailbox] : [];
+  });
+  if (pinned.length === 0) return null;
+  return (
+    <div role="group" aria-label={strings.mail.pinnedFolders}>
+      <p className="sidebar-section-title">{strings.mail.pinnedFolders}</p>
+      {pinned.map((mailbox) => (
+        <FolderButton
+          key={mailbox.id}
+          icon={folderIcons[mailbox.role]}
+          label={folderLabel(mailbox)}
+          pathLabel={folderPathLabel(mailbox)}
+          count={mailbox.unreadCount}
+          active={activeMailboxId === mailbox.id}
+          mailboxId={mailbox.id}
+          onClick={() => onFolderClick(mailbox)}
+          onDropMessages={onDropMessages}
+        />
+      ))}
+    </div>
   );
 }

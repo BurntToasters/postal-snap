@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { strings } from "../../i18n";
 import { validateRecipientFields, validateSubject } from "./composerValidate";
@@ -25,7 +26,14 @@ export interface AddressFieldsProps {
   setRecipientError: (value: string | undefined) => void;
   subjectError?: string;
   setSubjectError: (value: string | undefined) => void;
+  subjectLocked?: boolean;
+  replyTo?: string;
+  setReplyTo?: (value: string) => void;
+  replyToError?: string;
+  setReplyToError?: (value: string | undefined) => void;
   markUnsaved: () => void;
+  /** When the letter already has recipients, the cursor starts in the letter. */
+  focusTo?: boolean;
 }
 
 export function AddressFields({
@@ -50,8 +58,20 @@ export function AddressFields({
   setRecipientError,
   subjectError,
   setSubjectError,
+  subjectLocked = false,
+  replyTo,
+  setReplyTo,
+  replyToError,
+  setReplyToError,
   markUnsaved,
+  focusTo = true,
 }: AddressFieldsProps) {
+  // Reply-To stays tucked away like Cc and Bcc unless it already has a value.
+  const [showReplyTo, setShowReplyTo] = useState(() =>
+    Boolean(replyTo?.trim()),
+  );
+  const replyToOpen =
+    Boolean(setReplyTo) && (showReplyTo || Boolean(replyToError));
   return (
     <div className="address-fields">
       <label className="from-field">
@@ -76,6 +96,31 @@ export function AddressFields({
           <input readOnly value={fromValue} aria-readonly="true" />
         )}
       </label>
+      {replyToOpen && setReplyTo ? (
+        <label className="from-field">
+          <span>{strings.composer.replyTo}</span>
+          <input
+            id="composer-reply-to"
+            value={replyTo ?? ""}
+            maxLength={320}
+            autoComplete="off"
+            spellCheck={false}
+            placeholder={strings.composer.replyToPlaceholder}
+            aria-invalid={Boolean(replyToError)}
+            aria-describedby={replyToError ? "reply-to-error" : undefined}
+            onChange={(event) => {
+              setReplyTo(event.target.value);
+              if (replyToError) setReplyToError?.(undefined);
+              markUnsaved();
+            }}
+          />
+        </label>
+      ) : null}
+      {replyToError ? (
+        <p id="reply-to-error" className="field-error" role="alert">
+          {replyToError}
+        </p>
+      ) : null}
       <div className="to-field-row">
         <label className="to-field">
           <span>{strings.composer.to}</span>
@@ -96,7 +141,7 @@ export function AddressFields({
               }
             }}
             placeholder={strings.composer.addressPlaceholder}
-            autoFocus
+            autoFocus={focusTo}
             ariaInvalid={Boolean(recipientError)}
             ariaDescribedBy={recipientError ? "recipient-error" : undefined}
           />
@@ -125,6 +170,20 @@ export function AddressFields({
         >
           {strings.composer.bcc}
         </button>
+        {setReplyTo ? (
+          <button
+            type="button"
+            className="cc-toggle"
+            aria-expanded={replyToOpen}
+            aria-pressed={replyToOpen}
+            onClick={(event) => {
+              event.preventDefault();
+              setShowReplyTo((value) => !value);
+            }}
+          >
+            {strings.composer.replyTo}
+          </button>
+        ) : null}
       </div>
       {showCc ? (
         <label>
@@ -180,8 +239,11 @@ export function AddressFields({
       <label>
         <span>{strings.composer.subject}</span>
         <input
+          id="composer-subject"
           value={subject}
+          readOnly={subjectLocked}
           onChange={(event) => {
+            if (subjectLocked) return;
             setSubject(event.target.value);
             markUnsaved();
           }}

@@ -34,6 +34,7 @@ pub(crate) fn parse_envelope(
     let sender_address = sender.and_then(imap_address).unwrap_or_default();
     let to = imap_addresses(envelope.to.as_deref());
     let cc = imap_addresses(envelope.cc.as_deref());
+    let bcc = imap_addresses(envelope.bcc.as_deref());
     let reply_to = envelope
         .reply_to
         .as_deref()
@@ -81,6 +82,7 @@ pub(crate) fn parse_envelope(
         size: fetch.size.unwrap_or_default() as u64,
         to,
         cc,
+        bcc,
         reply_to,
         thread_parent: thread_parent_from_fetch(fetch),
         text_body: String::new(),
@@ -97,6 +99,12 @@ pub(crate) fn parse_envelope(
         calendar_json: None,
         list_unsubscribe: None,
         list_unsubscribe_post: None,
+        importance: importance_from_headers(
+            &fetch.header().map(header_block_text).unwrap_or_default(),
+        ),
+        disposition_to: disposition_notification_address(
+            &fetch.header().map(header_block_text).unwrap_or_default(),
+        ),
     })
 }
 
@@ -104,9 +112,11 @@ pub(crate) fn parse_envelope(
 /// used instead of BODYSTRUCTURE: a hostile, deeply nested structure can make
 /// the whole envelope batch unparseable. The downloaded body corrects it.
 fn header_suggests_attachments(fetch: &async_imap::types::Fetch) -> bool {
-    let Some(text) = fetch.header().and_then(|raw| std::str::from_utf8(raw).ok()) else {
-        return false;
-    };
+    fetch.header().is_some_and(header_bytes_suggest_attachments)
+}
+
+fn header_bytes_suggest_attachments(raw: &[u8]) -> bool {
+    let text = header_block_text(raw);
     let mut content_type = String::new();
     let mut in_content_type = false;
     for line in text.lines() {
@@ -166,8 +176,11 @@ fn part_looks_like_file(common: &imap_proto::types::BodyContentCommon<'_>) -> bo
 /// Thread parent (normalized In-Reply-To, else last References id) from an
 /// IMAP ENVELOPE+HEADER.FIELDS fetch. Missing on servers that omit headers.
 fn thread_parent_from_fetch(fetch: &async_imap::types::Fetch) -> Option<String> {
-    let raw = fetch.header()?;
-    let text = std::str::from_utf8(raw).ok()?;
+    thread_parent_from_header(fetch.header()?)
+}
+
+fn thread_parent_from_header(raw: &[u8]) -> Option<String> {
+    let text = header_block_text(raw);
     let mut unfolded = String::with_capacity(text.len());
     for line in text.lines() {
         if line.starts_with([' ', '\t']) {
@@ -314,6 +327,7 @@ pub(crate) fn parse_message(
         .to_string();
     let to = parsed_addresses(message.to());
     let cc = parsed_addresses(message.cc());
+    let bcc = parsed_addresses(message.bcc());
     let reply_to = parsed_addresses(message.reply_to()).into_iter().next();
     let text_body = message
         .body_text(0)
@@ -383,6 +397,7 @@ pub(crate) fn parse_message(
         size: raw.len() as u64,
         to,
         cc,
+        bcc,
         reply_to,
         thread_parent: message
             .in_reply_to()
@@ -407,6 +422,8 @@ pub(crate) fn parse_message(
         calendar_json: invite.and_then(|invite| serde_json::to_string(&invite).ok()),
         list_unsubscribe,
         list_unsubscribe_post,
+        importance: importance_from_headers(&header_block_text(raw)),
+        disposition_to: disposition_notification_address(&header_block_text(raw)),
     })
 }
 
@@ -430,6 +447,146 @@ fn calendar_invite(message: &mail_parser::Message<'_>) -> Option<super::ics::Cal
         .iter()
         .filter(|part| is_calendar_part(part))
         .find_map(|part| super::ics::parse_invite(part.contents()))
+}
+
+/// Header block only (up to the first blank line, bounded), decoded lossily
+/// so one stray non-UTF-8 byte in a body cannot drop header values.
+pub(crate) fn header_block_text(raw: &[u8]) -> String {
+    const HEADER_SCAN_LIMIT: usize = 64 * 1024;
+    let head = &raw[..raw.len().min(HEADER_SCAN_LIMIT)];
+    let end = [&b"\n\n"[..], &b"\n\r\n"[..]]
+        .iter()
+        .filter_map(|needle| {
+            head.windows(needle.len())
+                .position(|window| window == *needle)
+        })
+        .min()
+        .map_or(head.len(), |pos| pos + 1);
+    String::from_utf8_lossy(&head[..end]).into_owned()
+}
+
+/// `high`, `low`, or empty. Importance wins when it names one of those.
+/// X-Priority, X-MSMail-Priority, and Priority fill in when it does not.
+/// A value that is not exactly those words is ignored, including a folded
+/// continuation that would smuggle another header.
+pub(crate) fn importance_from_headers(raw: &str) -> String {
+    let mut named = String::new();
+    let mut priority = String::new();
+    let mut current_name = String::new();
+    let mut current_value = String::new();
+    for line in raw.split('\n') {
+        let line = line.trim_end_matches('\r');
+        if line.starts_with(' ') || line.starts_with('\t') {
+            if !current_name.is_empty() {
+                current_value.push(' ');
+                current_value.push_str(line.trim());
+            }
+            continue;
+        }
+        if !current_name.is_empty() {
+            note_importance(&current_name, &current_value, &mut named, &mut priority);
+        }
+        if line.is_empty() {
+            current_name.clear();
+            current_value.clear();
+            break;
+        }
+        let Some((name, value)) = line.split_once(':') else {
+            current_name.clear();
+            current_value.clear();
+            continue;
+        };
+        current_name = name.trim().to_string();
+        current_value = value.trim().to_string();
+    }
+    if !current_name.is_empty() {
+        note_importance(&current_name, &current_value, &mut named, &mut priority);
+    }
+    if named == "high" || named == "low" {
+        named
+    } else if priority == "high" || priority == "low" {
+        priority
+    } else {
+        String::new()
+    }
+}
+
+fn note_importance(name: &str, value: &str, named: &mut String, priority: &mut String) {
+    if named.is_empty() && name.eq_ignore_ascii_case("importance") {
+        *named = crate::models::canonical_importance(value).to_string();
+    } else if priority.is_empty() && name.eq_ignore_ascii_case("x-priority") {
+        *priority = x_priority_importance(value).to_string();
+    } else if priority.is_empty() && name.eq_ignore_ascii_case("x-msmail-priority") {
+        *priority = crate::models::canonical_importance(value).to_string();
+    } else if priority.is_empty() && name.eq_ignore_ascii_case("priority") {
+        *priority = priority_word_importance(value).to_string();
+    }
+}
+
+/// One Disposition-Notification-To mailbox, or empty.
+pub(crate) fn disposition_notification_address(raw: &str) -> String {
+    let Some(value) = first_header_value(raw, "disposition-notification-to") else {
+        return String::new();
+    };
+    if value.contains(',') {
+        return String::new();
+    }
+    parse_mailbox(value.trim())
+        .ok()
+        .and_then(|mailbox| crate::models::receipt_mailbox(mailbox.email.as_ref()))
+        .unwrap_or_default()
+}
+
+fn first_header_value(raw: &str, field: &str) -> Option<String> {
+    let mut current_name = String::new();
+    let mut current_value = String::new();
+    let mut found = None;
+    for line in raw.split('\n') {
+        let line = line.trim_end_matches('\r');
+        if line.starts_with(' ') || line.starts_with('\t') {
+            if !current_name.is_empty() {
+                current_value.push(' ');
+                current_value.push_str(line.trim());
+            }
+            continue;
+        }
+        if found.is_none() && current_name.eq_ignore_ascii_case(field) {
+            found = Some(std::mem::take(&mut current_value));
+        }
+        if line.is_empty() {
+            break;
+        }
+        let Some((name, value)) = line.split_once(':') else {
+            current_name.clear();
+            current_value.clear();
+            continue;
+        };
+        current_name = name.trim().to_string();
+        current_value = value.trim().to_string();
+    }
+    if found.is_none() && current_name.eq_ignore_ascii_case(field) {
+        found = Some(current_value);
+    }
+    found
+}
+
+fn x_priority_importance(value: &str) -> &'static str {
+    match value.trim().chars().next() {
+        Some('1' | '2') => "high",
+        Some('4' | '5') => "low",
+        _ => "",
+    }
+}
+
+fn priority_word_importance(value: &str) -> &'static str {
+    let word = value.trim().to_ascii_lowercase();
+    if word == "non-urgent" {
+        "low"
+    } else if word == "urgent" {
+        "high"
+    } else {
+        ""
+    }
 }
 
 /// Bounded List-Unsubscribe headers; see `list_unsubscribe`.
@@ -521,16 +678,190 @@ pub(crate) fn legacy_attachment_id(index: usize, filename: &str) -> String {
         .collect()
 }
 
+/// Normalizes a Message-ID to `<id>`, or None when it is unsafe for IMAP.
 pub(crate) fn normalize_rfc_message_id(value: &str) -> Option<String> {
     let trimmed = value.trim();
+    if trimmed.len() > 998 {
+        return None;
+    }
     let inner = trimmed
         .strip_prefix('<')
         .and_then(|value| value.strip_suffix('>'))
         .unwrap_or(trimmed)
         .trim();
-    if inner.is_empty() {
+    if inner.is_empty()
+        || inner.chars().any(|character| {
+            character.is_control()
+                || character.is_whitespace()
+                || matches!(character, '<' | '>' | '"')
+        })
+    {
         None
     } else {
         Some(format!("<{inner}>"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{importance_from_headers, normalize_rfc_message_id, parse_message};
+
+    // Failure modes for normalize_rfc_message_id:
+    // 1. CR or LF inside the id would inject IMAP/SMTP lines.
+    // 2. Whitespace inside the id breaks the single-token header value.
+    // 3. Other control characters (NUL, tab) reach raw IMAP SEARCH.
+    // 4. Inner `<` or `>` produce a malformed msg-id.
+    // 5. A double quote would break the quoted IMAP SEARCH string.
+    // 6. Ids over 998 bytes exceed the RFC 5322 line limit.
+    // 7. Empty or bracket-only input must not yield "<>".
+    // 8. Normal ids, bracketed or bare, must keep working.
+    #[test]
+    fn normalize_rejects_unsafe_message_ids() {
+        let long = format!("<{}@example.com>", "a".repeat(999));
+        for bad in [
+            "<one@example.com>\r\nA1 LOGOUT",
+            "<one@example.com>\nX",
+            "<one\r@example.com>",
+            "<one @example.com>",
+            "one two@example.com",
+            "<one\u{0}@example.com>",
+            "<one\t@example.com>",
+            "<one<x>@example.com>",
+            "<one\"@example.com>",
+            long.as_str(),
+            "",
+            "<>",
+        ] {
+            assert_eq!(normalize_rfc_message_id(bad), None, "accepted {bad:?}");
+        }
+    }
+
+    #[test]
+    fn normalize_keeps_normal_message_ids() {
+        assert_eq!(
+            normalize_rfc_message_id("<abc.123@mail.example.com>").as_deref(),
+            Some("<abc.123@mail.example.com>")
+        );
+        assert_eq!(
+            normalize_rfc_message_id("  abc@example.com  ").as_deref(),
+            Some("<abc@example.com>")
+        );
+        let edge = format!("<{}@example.com>", "a".repeat(900));
+        assert_eq!(
+            normalize_rfc_message_id(&edge).as_deref(),
+            Some(edge.as_str())
+        );
+    }
+
+    #[test]
+    fn importance_reads_standard_and_priority_headers() {
+        assert_eq!(
+            importance_from_headers("Importance: high\r\n\r\nHi"),
+            "high"
+        );
+        assert_eq!(
+            importance_from_headers("X-Priority: 5 (Lowest)\r\n\r\nHi"),
+            "low"
+        );
+        assert_eq!(
+            importance_from_headers("X-MSMail-Priority: High\r\n\r\nHi"),
+            "high"
+        );
+        assert_eq!(
+            importance_from_headers("Priority: urgent\r\n\r\nHi"),
+            "high"
+        );
+        assert_eq!(
+            importance_from_headers("Priority: non-urgent\r\n\r\nHi"),
+            "low"
+        );
+        assert_eq!(
+            importance_from_headers("Importance: normal\r\nX-Priority: 3\r\n\r\nHi"),
+            ""
+        );
+        assert_eq!(
+            importance_from_headers("Importance: low\r\nX-Priority: 1\r\n\r\nHi"),
+            "low"
+        );
+        assert_eq!(
+            importance_from_headers("Importance: high\r\n Bcc: evil@example.com\r\n\r\nHi"),
+            ""
+        );
+        assert_eq!(importance_from_headers("Subject: Hello\r\n\r\nHi"), "");
+    }
+
+    #[test]
+    fn disposition_notification_keeps_one_mailbox() {
+        assert_eq!(
+            super::disposition_notification_address(
+                "Disposition-Notification-To: Jane <Jane@Example.com>\r\n\r\nHi"
+            ),
+            "jane@example.com"
+        );
+        assert_eq!(
+            super::disposition_notification_address(
+                "Disposition-Notification-To: jane@example.com, lee@example.com\r\n\r\nHi"
+            ),
+            ""
+        );
+        assert_eq!(
+            super::disposition_notification_address(
+                "Disposition-Notification-To: jane@example.com\r\n Bcc: evil@example.com\r\n\r\nHi"
+            ),
+            ""
+        );
+        assert_eq!(
+            super::disposition_notification_address("Subject: Hello\r\n\r\nHi"),
+            ""
+        );
+    }
+
+    #[test]
+    fn header_flags_survive_non_utf8_bytes() {
+        // Ways this can fail: a body byte drops importance or receipts, a non-UTF-8
+        // byte in an earlier header hides a later one, or a folded line adds a header.
+        let body = b"From: Jane <jane@example.com>\r\nSubject: Picnic\r\nImportance: high\r\nDisposition-Notification-To: jane@example.com\r\n\r\nHi \xff\xfe body";
+        let message = parse_message(1, body, false, false, None).unwrap();
+        assert_eq!(message.importance, "high");
+        assert_eq!(message.disposition_to, "jane@example.com");
+
+        let header = b"Subject: caf\xe9\r\nImportance: low\r\nDisposition-Notification-To: jane@example.com\r\n\r\nHi";
+        let text = super::header_block_text(header);
+        assert_eq!(importance_from_headers(&text), "low");
+        assert_eq!(
+            super::disposition_notification_address(&text),
+            "jane@example.com"
+        );
+
+        let smuggled = b"Subject: caf\xe9\r\nImportance: high\r\n Bcc: evil@example.com\r\n\r\nHi";
+        assert_eq!(
+            importance_from_headers(&super::header_block_text(smuggled)),
+            ""
+        );
+    }
+
+    #[test]
+    fn threading_and_attachment_hints_survive_non_utf8_headers() {
+        // Ways this can fail: a stray byte drops In-Reply-To or References, the
+        // attachment hint is lost, or an invalid byte turns into a fake parent.
+        let raw = b"Subject: caf\xe9\r\nIn-Reply-To: <parent@example.com>\r\nContent-Type: multipart/mixed; boundary=x\r\n\r\n";
+        assert_eq!(
+            super::thread_parent_from_header(raw).as_deref(),
+            Some("<parent@example.com>")
+        );
+        assert!(super::header_bytes_suggest_attachments(raw));
+        let plain = b"Subject: caf\xe9\r\nContent-Type: text/plain\r\n\r\n";
+        assert!(!super::header_bytes_suggest_attachments(plain));
+        assert_eq!(super::thread_parent_from_header(plain), None);
+    }
+
+    #[test]
+    fn bcc_stays_out_of_the_visible_recipient_list() {
+        let raw = b"From: Jane <jane@example.com>\r\nTo: sam@example.com\r\nCc: copy@example.com\r\nBcc: hidden@example.com\r\nSubject: Picnic\r\n\r\nHi\r\n";
+        let message = parse_message(1, raw, false, false, None).unwrap();
+        assert_eq!(message.to, vec!["sam@example.com"]);
+        assert_eq!(message.cc, vec!["copy@example.com"]);
+        assert_eq!(message.bcc, vec!["hidden@example.com"]);
+        assert!(!message.recipients.contains("hidden@example.com"));
     }
 }
