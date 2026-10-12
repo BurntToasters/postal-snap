@@ -46,7 +46,8 @@ function queryTexts(calls: Call[], command: string) {
 test("operator text reaches cached and server search unchanged", async ({
   page,
 }) => {
-  const text = 'from:jane subject:"trip plans" is:unread before:2026-09-01';
+  const text =
+    'from:me to:me is:starred from:jane subject:"trip plans" is:unread before:2026-09-01';
   await page.goto("/");
   await searchFor(page, text);
   await expect(
@@ -81,6 +82,97 @@ test("server-only body matches are listed after an empty cache", async ({
   );
 });
 
+test("a search result can return to its folder", async ({ page }) => {
+  await page.goto("/");
+  await searchFor(page, "weekend");
+  await page.getByRole("option", { name: /Current mailbox/i }).click();
+  await page.getByRole("button", { name: "Details" }).click();
+  await expect(
+    page.getByRole("button", { name: "Copy subject" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Show in Inbox" }).click();
+  await expect(
+    page.getByRole("searchbox", { name: "Search mail" }),
+  ).toHaveValue("");
+  await expect(
+    page.getByRole("heading", { name: "Weekend plans" }),
+  ).toBeVisible();
+});
+
+test("on: lists mail from one date", async ({ page }) => {
+  await page.goto("/");
+  await searchFor(page, "on:2026-08-18");
+  await expect(
+    page.getByRole("option", { name: /August letter/ }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("option", { name: /Server august/ }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("option", { name: /Weekend plans/i }),
+  ).toHaveCount(0);
+  const calls = await ipcCalls(page);
+  expect(queryTexts(calls, "search_cached_messages")).toContain(
+    "on:2026-08-18",
+  );
+  expect(queryTexts(calls, "search_server_messages")).toContain(
+    "on:2026-08-18",
+  );
+});
+
+test("body: lists words in the message text", async ({ page }) => {
+  await page.goto("/");
+  await searchFor(page, "body:sandwiches");
+  await expect(
+    page.getByRole("option", { name: /Receipt inside/ }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("option", { name: /Server receipt/ }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("option", { name: /Weekend plans/i }),
+  ).toHaveCount(0);
+  const calls = await ipcCalls(page);
+  expect(queryTexts(calls, "search_cached_messages")).toContain(
+    "body:sandwiches",
+  );
+  expect(queryTexts(calls, "search_server_messages")).toContain(
+    "body:sandwiches",
+  );
+});
+
+test("is:pinned lists mail pinned on this computer", async ({ page }) => {
+  await page.goto("/");
+  await searchFor(page, "is:pinned");
+  await expect(
+    page.getByRole("option", { name: /Pinned[\s\S]*Kept note/ }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("option", { name: /Weekend plans/i }),
+  ).toHaveCount(0);
+  const calls = await ipcCalls(page);
+  expect(queryTexts(calls, "search_cached_messages")).toContain("is:pinned");
+  expect(queryTexts(calls, "search_server_messages")).toContain("is:pinned");
+});
+
+test("is:important lists high-importance mail", async ({ page }) => {
+  await page.goto("/");
+  await searchFor(page, "is:important");
+  await expect(
+    page.getByRole("option", { name: /Budget approval[\s\S]*High importance/ }),
+  ).toBeVisible();
+  await expect(page.getByRole("option", { name: /Optional note/ })).toHaveCount(
+    0,
+  );
+  await searchFor(page, "is:low");
+  await expect(
+    page.getByRole("option", { name: /Optional note[\s\S]*Low importance/ }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("option", { name: /Budget approval/ }),
+  ).toHaveCount(0);
+});
+
 test("search tips open and close from the keyboard", async ({ page }) => {
   await page.goto("/");
   const tips = page.getByRole("button", { name: "Search tips", exact: true });
@@ -91,13 +183,28 @@ test("search tips open and close from the keyboard", async ({ page }) => {
   await expect(panel).toBeVisible();
   for (const syntax of [
     "from:jane",
+    "from:me",
     "to:sam@example.com",
+    "to:me",
+    "cc:lee@example.com",
+    "cc:me",
     'subject:"trip plans"',
+    "body:invoice",
     "has:attachment",
+    "filename:plan.pdf",
+    "larger:5M",
+    "smaller:1M",
     "is:unread",
     "is:flagged",
+    "is:muted",
+    "is:pinned",
+    "is:important",
+    "is:replied",
+    "is:forwarded",
     "after:2026-08-01",
     "before:2026-09-01",
+    "on:2026-08-18",
+    "in:inbox",
   ]) {
     await expect(panel.getByText(syntax, { exact: true })).toBeVisible();
   }

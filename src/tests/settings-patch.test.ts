@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { applySettingsPatch, mergeSettingsPatches } from "../settings";
+import {
+  applySettingsPatch,
+  mergeSettingsPatches,
+  normalizeImageSender,
+} from "../settings";
 import { defaultSettings } from "../store";
 
 describe("settings patches", () => {
@@ -31,5 +35,13 @@ describe("settings patches", () => {
       maxBytes: 1_073_741_824,
     });
     expect(next.theme).toBe(defaultSettings.theme);
+  });
+
+  it("stores an image sender as a lowercase address", () => {
+    expect(normalizeImageSender("  Ada@Example.test ")).toBe(
+      "ada@example.test",
+    );
+    expect(normalizeImageSender("not an address")).toBe("");
+    expect(normalizeImageSender("ada\n@example.test")).toBe("");
   });
 });

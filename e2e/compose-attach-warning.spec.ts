@@ -155,6 +155,7 @@ test("no keyword and existing attachments send without a dialog", async ({
   await page.goto("/?pickFile=1");
   await page.getByRole("button", { name: "Compose", exact: true }).click();
   await page.getByPlaceholder("name@example.com").fill("lee@example.com");
+  await page.getByRole("textbox", { name: "Subject" }).fill("Budget");
   await page.getByLabel("Message body").pressSequentially("See attached.");
   await page.getByRole("button", { name: "Attach", exact: true }).click();
   await expect(page.locator(".compose-attachments")).toContainText(

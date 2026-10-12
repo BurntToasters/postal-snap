@@ -1,4 +1,6 @@
 import { create } from "zustand";
+import type { MessageListSort } from "./listSort";
+import { rememberOpenMessage } from "./recentMessage";
 import type {
   AccountSummary,
   AppSettings,
@@ -20,6 +22,8 @@ export interface SentNotice {
   scheduled: boolean;
   /** Undo-send hold length in seconds; undefined for explicit Send Later. */
   undoSeconds?: number;
+  /** Original moved to Archive with this send. Undo puts it back. */
+  archivedMessage?: { messageId: number; mailboxId: number };
 }
 
 export interface ComposerSeed {
@@ -32,7 +36,22 @@ export interface ComposerSeed {
     >
   >;
   sourceMessage?: MessageDetail;
-  composeMode?: "reply" | "replyAll" | "forward";
+  /** Loaded messages quoted together when forwarding a conversation. */
+  forwardMessages?: MessageDetail[];
+  composeMode?:
+    | "reply"
+    | "replyAll"
+    | "forward"
+    | "forwardAttachment"
+    | "editAsNew"
+    | "replyList"
+    | "redirect";
+  /** Plain text the user had selected in the open message. */
+  quoteExcerpt?: string;
+  /** Text written in the reader's reply box. */
+  replyNote?: string;
+  /** Reply or reply-all with an empty letter. Recipients and subject stay. */
+  omitQuote?: boolean;
 }
 
 export const defaultSettings: AppSettings = {
@@ -53,7 +72,27 @@ export const defaultSettings: AppSettings = {
   undoSendSeconds: 10,
   blockAdvertisingAndTracking: true,
   blockReportedThreats: true,
+  imageSenders: [],
   groupThreads: true,
+  bccSelf: false,
+  signatureAboveQuote: true,
+  replyToAll: false,
+  unreadFoldersOnly: false,
+  composerWidth: 0,
+  composerHeight: 0,
+  lastFromAddresses: [],
+  mailboxSort: "date",
+  mailboxFilter: "all",
+  mailboxViews: [],
+  pinnedMailboxes: [],
+  hiddenMailboxes: [],
+  collapsedMailboxes: [],
+  recentMoveMailboxId: null,
+  showMessagePreviews: true,
+  newMailSound: true,
+  quietHoursStart: "",
+  quietHoursEnd: "",
+  markRead: "open",
   notifyNewMail: true,
   closeToTray: true,
   updateCheckInterval: "startupAnd6h",
@@ -69,6 +108,7 @@ interface AppState {
   activeMailboxId?: number;
   activeLocalView?: "drafts" | "outbox" | "snoozed";
   messages: MessageSummary[];
+  mailboxSort?: MessageListSort;
   messageCursor?: MessageCursor;
   hasMoreMessages: boolean;
   drafts: DraftSummary[];
@@ -113,6 +153,21 @@ interface AppState {
   setBusy: (busy: boolean) => void;
   setError: (error?: string) => void;
   setLastSent: (notice?: SentNotice) => void;
+}
+
+function keepOpenMessage(state: AppState) {
+  const message = state.selectedMessage;
+  if (
+    !state.activeAccountId ||
+    !state.activeMailboxId ||
+    state.activeLocalView ||
+    !message ||
+    message.accountId !== state.activeAccountId ||
+    message.mailboxId !== state.activeMailboxId
+  ) {
+    return;
+  }
+  rememberOpenMessage(state.activeAccountId, state.activeMailboxId, message.id);
 }
 
 function pendingComposerState(
@@ -204,6 +259,7 @@ export const useAppStore = create<AppState>((set) => ({
     }),
   selectAccount: (activeAccountId) =>
     set((state) => {
+      keepOpenMessage(state);
       const lastMailboxByAccount = { ...state.lastMailboxByAccount };
       if (state.activeAccountId && state.activeMailboxId) {
         lastMailboxByAccount[state.activeAccountId] = state.activeMailboxId;
@@ -250,32 +306,37 @@ export const useAppStore = create<AppState>((set) => ({
             )?.id,
     })),
   selectMailbox: (activeMailboxId) =>
-    set((state) =>
-      state.activeMailboxId === activeMailboxId && !state.activeLocalView
-        ? {}
-        : {
-            activeMailboxId,
-            lastMailboxByAccount: state.activeAccountId
-              ? {
-                  ...state.lastMailboxByAccount,
-                  [state.activeAccountId]: activeMailboxId,
-                }
-              : state.lastMailboxByAccount,
-            activeLocalView: undefined,
-            messages: [],
-            messageCursor: undefined,
-            hasMoreMessages: false,
-            selectedMessage: undefined,
-          },
-    ),
+    set((state) => {
+      if (state.activeMailboxId === activeMailboxId && !state.activeLocalView) {
+        return {};
+      }
+      keepOpenMessage(state);
+      return {
+        activeMailboxId,
+        lastMailboxByAccount: state.activeAccountId
+          ? {
+              ...state.lastMailboxByAccount,
+              [state.activeAccountId]: activeMailboxId,
+            }
+          : state.lastMailboxByAccount,
+        activeLocalView: undefined,
+        messages: [],
+        messageCursor: undefined,
+        hasMoreMessages: false,
+        selectedMessage: undefined,
+      };
+    }),
   selectLocalView: (activeLocalView) =>
-    set({
-      activeLocalView,
-      activeMailboxId: undefined,
-      messages: [],
-      messageCursor: undefined,
-      hasMoreMessages: false,
-      selectedMessage: undefined,
+    set((state) => {
+      keepOpenMessage(state);
+      return {
+        activeLocalView,
+        activeMailboxId: undefined,
+        messages: [],
+        messageCursor: undefined,
+        hasMoreMessages: false,
+        selectedMessage: undefined,
+      };
     }),
   setMessages: (messages, messageCursor, hasMoreMessages = false) =>
     set({ messages, messageCursor, hasMoreMessages }),

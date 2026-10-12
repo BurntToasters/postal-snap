@@ -5,7 +5,7 @@ use super::{
     validate_owned_compose, AppState, CommandResult,
 };
 use crate::{
-    credentials, mail,
+    mail,
     models::{validate_compose_draft, ComposeDraft, OutboxSummary, SendOutcome},
 };
 
@@ -171,18 +171,52 @@ pub(crate) async fn deliver_outbox_locked(
         return outbox_preparation_failed(outbox_id, account_id, app, state, error);
     }
     if message_id.is_empty() || mime_bytes.is_empty() {
-        // The queue keeps the unsigned draft for Undo; sign what goes out.
-        let signed = mail::apply_signature(draft.clone(), &account.summary.signature);
-        let resolved = match resolve_draft_files(&state.db, &signed) {
-            Ok(draft) => draft,
-            Err(error) => {
-                return outbox_preparation_failed(outbox_id, account_id, app, state, error);
+        let prepared = if draft.source_kind == Some(crate::models::DraftSourceKind::Redirect) {
+            let Some(source_id) = draft.source_message_id else {
+                return outbox_preparation_failed(
+                    outbox_id,
+                    account_id,
+                    app,
+                    state,
+                    "Choose a message to redirect.".into(),
+                );
+            };
+            let raw = match state.db.raw_message(source_id, account_id) {
+                Ok(raw) => raw,
+                Err(error) => {
+                    return outbox_preparation_failed(outbox_id, account_id, app, state, error);
+                }
+            };
+            match mail::prepare_redirect(&account, &draft, &raw) {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    return outbox_preparation_failed(outbox_id, account_id, app, state, error);
+                }
             }
-        };
-        let prepared = match mail::prepare_message(&account, &resolved).await {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                return outbox_preparation_failed(outbox_id, account_id, app, state, error);
+        } else {
+            // The queue keeps the unsigned draft for Undo; sign what goes out.
+            let signature = if draft.include_signature {
+                account.summary.signature.as_str()
+            } else {
+                ""
+            };
+            let above_quote = state
+                .settings
+                .get()
+                .map(|settings| settings.signature_above_quote)
+                .unwrap_or(true);
+            let signed = mail::apply_signature(draft.clone(), signature, above_quote);
+            let resolved = match resolve_draft_files(&state.db, &signed) {
+                Ok(draft) => draft,
+                Err(error) => {
+                    return outbox_preparation_failed(outbox_id, account_id, app, state, error);
+                }
+            };
+            match mail::prepare_message(&account, &resolved).await {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    return outbox_preparation_failed(outbox_id, account_id, app, state, error);
+                }
             }
         };
         if let Err(error) = state.db.prepare_queued_outbox(
@@ -196,7 +230,7 @@ pub(crate) async fn deliver_outbox_locked(
         message_id = prepared.message_id;
         mime_bytes = prepared.bytes;
     }
-    let password = match credentials::load(account_id) {
+    let password = match crate::oauth::session_secret(&account).await {
         Ok(password) => password,
         Err(error) => {
             return outbox_preparation_failed(outbox_id, account_id, app, state, error);
@@ -340,7 +374,7 @@ pub(crate) async fn retry_sent_copy_locked(
         return Err("Only a pending Sent copy can be saved again.".into());
     }
     let account = state.db.account(account_id)?;
-    let password = credentials::load(account_id)?;
+    let password = crate::oauth::session_secret(&account).await?;
     let (_, mailbox) = state
         .db
         .mailbox_for_role(account_id, "sent")?

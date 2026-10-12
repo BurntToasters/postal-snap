@@ -5,6 +5,7 @@ pub mod files_cache;
 pub mod mailboxes;
 pub mod messages;
 pub mod outbox;
+pub mod recent_searches;
 
 use std::{
     path::Path,
@@ -21,7 +22,7 @@ use crate::models::{
 };
 use crate::models::{Attachment, ComposeDraft, MailboxRole, MessageSummary, ProviderKind, TlsMode};
 
-const CURRENT_SCHEMA_VERSION: u32 = 23;
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 30;
 
 pub type MailboxSyncState = (Option<u32>, Option<u32>, u32, Option<u32>);
 
@@ -47,6 +48,7 @@ pub struct CachedMessage {
     pub size: u64,
     pub to: Vec<String>,
     pub cc: Vec<String>,
+    pub bcc: Vec<String>,
     pub reply_to: Option<String>,
     pub thread_parent: Option<String>,
     pub text_body: String,
@@ -60,6 +62,12 @@ pub struct CachedMessage {
     pub calendar_json: Option<String>,
     pub list_unsubscribe: Option<String>,
     pub list_unsubscribe_post: Option<String>,
+    /// `high`, `low`, or empty. Envelope fetches leave this empty when the
+    /// header block does not name importance.
+    pub importance: String,
+    /// Address that asked for a read receipt. Empty when the header is absent
+    /// or not a single usable mailbox.
+    pub disposition_to: String,
 }
 
 #[derive(Clone, Debug)]
@@ -129,8 +137,8 @@ impl Database {
     }
 }
 
-pub(crate) const MESSAGE_SUMMARY_SELECT: &str = "SELECT m.id,m.account_id,m.mailbox_id,m.uid,m.message_id,m.subject,m.sender_name,m.sender_address,m.recipients,m.received_at,m.preview,m.is_read,m.is_starred,m.has_attachments,m.size,m.thread_root,m.has_calendar,m.is_answered,m.is_forwarded FROM messages m";
-pub(crate) const MESSAGE_DETAIL_SELECT: &str = "SELECT m.id,m.account_id,m.mailbox_id,m.uid,m.message_id,m.subject,m.sender_name,m.sender_address,m.recipients,m.received_at,m.preview,m.is_read,m.is_starred,m.has_attachments,m.size,m.to_json,m.cc_json,m.reply_to,m.text_body,m.html_body,m.attachments_json,m.list_unsubscribe,m.list_unsubscribe_post,m.has_calendar,m.is_answered,m.is_forwarded,m.calendar_json,m.thread_root FROM messages m";
+pub(crate) const MESSAGE_SUMMARY_SELECT: &str = "SELECT m.id,m.account_id,m.mailbox_id,m.uid,m.message_id,m.subject,m.sender_name,m.sender_address,m.recipients,m.received_at,m.preview,m.is_read,m.is_starred,m.has_attachments,m.size,m.thread_root,m.has_calendar,m.is_answered,m.is_forwarded,m.importance,m.pinned,EXISTS(SELECT 1 FROM muted_ids mu WHERE mu.account_id=m.account_id AND (mu.message_id=m.message_id OR mu.message_id=m.thread_parent)) AS conversation_muted,EXISTS (SELECT 1 FROM accounts a WHERE a.id=m.account_id AND EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(m.to_json) THEN m.to_json ELSE '[]' END) AS addr WHERE lower(addr.value)=lower(a.email) OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(a.aliases_json) THEN a.aliases_json ELSE '[]' END) AS alias WHERE lower(alias.value)=lower(addr.value)))) AS to_me,m.internal_at AS arrived_at,(SELECT COUNT(*) FROM json_each(CASE WHEN json_valid(m.attachments_json) THEN m.attachments_json ELSE '[]' END) AS file WHERE COALESCE(json_extract(file.value, '$.inline'), 0) NOT IN (1, 'true')) AS attachment_count FROM messages m";
+pub(crate) const MESSAGE_DETAIL_SELECT: &str = "SELECT m.id,m.account_id,m.mailbox_id,m.uid,m.message_id,m.subject,m.sender_name,m.sender_address,m.recipients,m.received_at,m.preview,m.is_read,m.is_starred,m.has_attachments,m.size,m.to_json,m.cc_json,m.reply_to,m.text_body,m.html_body,m.attachments_json,m.list_unsubscribe,m.list_unsubscribe_post,m.has_calendar,m.is_answered,m.is_forwarded,m.calendar_json,m.thread_root,m.importance,m.disposition_to,m.receipt_choice,m.pinned,m.bcc_json,EXISTS(SELECT 1 FROM muted_ids mu WHERE mu.account_id=m.account_id AND (mu.message_id=m.message_id OR mu.message_id=m.thread_parent)) AS conversation_muted,EXISTS (SELECT 1 FROM accounts a WHERE a.id=m.account_id AND EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(m.to_json) THEN m.to_json ELSE '[]' END) AS addr WHERE lower(addr.value)=lower(a.email) OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(a.aliases_json) THEN a.aliases_json ELSE '[]' END) AS alias WHERE lower(alias.value)=lower(addr.value)))) AS to_me,m.internal_at AS arrived_at,(SELECT COUNT(*) FROM json_each(CASE WHEN json_valid(m.attachments_json) THEN m.attachments_json ELSE '[]' END) AS file WHERE COALESCE(json_extract(file.value, '$.inline'), 0) NOT IN (1, 'true')) AS attachment_count FROM messages m";
 
 pub(crate) fn map_message_summary(row: &Row<'_>) -> rusqlite::Result<MessageSummary> {
     Ok(MessageSummary {
@@ -154,6 +162,15 @@ pub(crate) fn map_message_summary(row: &Row<'_>) -> rusqlite::Result<MessageSumm
         has_calendar: row.get::<_, i64>("has_calendar")? != 0,
         is_answered: row.get::<_, i64>("is_answered")? != 0,
         is_forwarded: row.get::<_, i64>("is_forwarded")? != 0,
+        conversation_muted: row.get::<_, i64>("conversation_muted")? != 0,
+        importance: crate::models::canonical_importance(&row.get::<_, String>("importance")?)
+            .to_string(),
+        pinned: row.get::<_, i64>("pinned")? != 0,
+        to_me: row.get::<_, i64>("to_me")? != 0,
+        arrived_at: row
+            .get::<_, Option<String>>("arrived_at")?
+            .unwrap_or_default(),
+        attachment_count: row.get::<_, i64>("attachment_count")?.max(0) as usize,
     })
 }
 
@@ -161,6 +178,8 @@ pub(crate) fn parse_provider(value: &str) -> ProviderKind {
     match value {
         "icloud" => ProviderKind::Icloud,
         "protonBridge" => ProviderKind::ProtonBridge,
+        "gmail" => ProviderKind::Gmail,
+        "outlook" => ProviderKind::Outlook,
         _ => ProviderKind::Manual,
     }
 }
@@ -832,6 +851,82 @@ fn migrate_schema(connection: &mut Connection) -> Result<(), String> {
             .pragma_update(None, "user_version", 23)
             .map_err(db_error)?;
     }
+    if version < 24 {
+        transaction
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS muted_ids (
+            account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            message_id TEXT NOT NULL,
+            group_id TEXT NOT NULL,
+            PRIMARY KEY(account_id, message_id));",
+            )
+            .map_err(db_error)?;
+        transaction
+            .pragma_update(None, "user_version", 24)
+            .map_err(db_error)?;
+    }
+    if version < 25 {
+        // Existing rows stay normal. A later body or envelope write fills this.
+        ensure_column(
+            &transaction,
+            "messages",
+            "importance",
+            "ALTER TABLE messages ADD COLUMN importance TEXT NOT NULL DEFAULT ''",
+        )?;
+    }
+    if version < 26 {
+        // Existing mail did not ask for a receipt, and no choice is stored yet.
+        ensure_column(
+            &transaction,
+            "messages",
+            "disposition_to",
+            "ALTER TABLE messages ADD COLUMN disposition_to TEXT NOT NULL DEFAULT ''",
+        )?;
+        ensure_column(
+            &transaction,
+            "messages",
+            "receipt_choice",
+            "ALTER TABLE messages ADD COLUMN receipt_choice TEXT NOT NULL DEFAULT ''",
+        )?;
+    }
+    if version < 27 {
+        // Pins stay on this computer. Existing rows start unpinned.
+        ensure_column(
+            &transaction,
+            "messages",
+            "pinned",
+            "ALTER TABLE messages ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0",
+        )?;
+    }
+    if version < 28 {
+        transaction
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS recent_searches (
+            account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            query TEXT NOT NULL,
+            used_at TEXT NOT NULL,
+            PRIMARY KEY(account_id, query));",
+            )
+            .map_err(db_error)?;
+    }
+    if version < 29 {
+        // Existing accounts keep using From until a Reply-To address is saved.
+        ensure_column(
+            &transaction,
+            "accounts",
+            "reply_to",
+            "ALTER TABLE accounts ADD COLUMN reply_to TEXT NOT NULL DEFAULT ''",
+        )?;
+    }
+    if version < 30 {
+        // Bcc is absent on most received mail. Sent copies often still have it.
+        ensure_column(
+            &transaction,
+            "messages",
+            "bcc_json",
+            "ALTER TABLE messages ADD COLUMN bcc_json TEXT NOT NULL DEFAULT '[]'",
+        )?;
+    }
     // Also initialize this sequence for earlier development snapshots of v22.
     transaction.execute_batch("CREATE TABLE IF NOT EXISTS mailbox_id_sequence (
         singleton INTEGER PRIMARY KEY CHECK(singleton=1),
@@ -1408,7 +1503,7 @@ CREATE TABLE IF NOT EXISTS messages (
   message_id TEXT, subject TEXT NOT NULL DEFAULT '', sender_name TEXT NOT NULL DEFAULT '', sender_address TEXT NOT NULL DEFAULT '',
   recipients TEXT NOT NULL DEFAULT '', received_at TEXT NOT NULL, preview TEXT NOT NULL DEFAULT '',
   is_read INTEGER NOT NULL DEFAULT 0, is_starred INTEGER NOT NULL DEFAULT 0, has_attachments INTEGER NOT NULL DEFAULT 0,
-  size INTEGER NOT NULL DEFAULT 0, to_json TEXT NOT NULL DEFAULT '[]', cc_json TEXT NOT NULL DEFAULT '[]', reply_to TEXT,
+  size INTEGER NOT NULL DEFAULT 0, to_json TEXT NOT NULL DEFAULT '[]', cc_json TEXT NOT NULL DEFAULT '[]', bcc_json TEXT NOT NULL DEFAULT '[]', reply_to TEXT,
   text_body TEXT NOT NULL DEFAULT '', html_body TEXT, attachments_json TEXT NOT NULL DEFAULT '[]', raw_message BLOB NOT NULL DEFAULT X'',
   accessed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, pending_move_to INTEGER, thread_parent TEXT, thread_root TEXT, UNIQUE(mailbox_id,uid)
 );
@@ -1421,6 +1516,7 @@ CREATE TABLE IF NOT EXISTS snoozed_messages (account_id TEXT NOT NULL REFERENCES
 CREATE INDEX IF NOT EXISTS snoozed_messages_due ON snoozed_messages(account_id,snoozed_until);
 CREATE TABLE IF NOT EXISTS filter_rules (id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, name TEXT NOT NULL DEFAULT '', field TEXT NOT NULL DEFAULT 'from', contains TEXT NOT NULL DEFAULT '', action TEXT NOT NULL DEFAULT 'mark_read', target_mailbox TEXT, enabled INTEGER NOT NULL DEFAULT 1, position INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE INDEX IF NOT EXISTS filter_rules_account ON filter_rules(account_id,position);
+CREATE TABLE IF NOT EXISTS recent_searches (account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, query TEXT NOT NULL, used_at TEXT NOT NULL, PRIMARY KEY(account_id, query));
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS file_grants (token TEXT PRIMARY KEY, path TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE INDEX IF NOT EXISTS messages_mailbox_date ON messages(mailbox_id,received_at DESC);
@@ -1447,6 +1543,7 @@ mod tests {
                 aliases: vec![],
                 auth_method: "password".into(),
                 signature: String::new(),
+                reply_to: String::new(),
                 color: None,
             },
             imap: ServerConfig {
@@ -1492,6 +1589,7 @@ mod tests {
             size: 32,
             to: vec!["sam@example.com".into()],
             cc: vec![],
+            bcc: vec![],
             reply_to: None,
             thread_parent: None,
             text_body: "Bring sandwiches".into(),
@@ -1505,6 +1603,8 @@ mod tests {
             calendar_json: None,
             list_unsubscribe: None,
             list_unsubscribe_post: None,
+            importance: String::new(),
+            disposition_to: String::new(),
         }
     }
 
@@ -1513,6 +1613,10 @@ mod tests {
             body_format: crate::models::BodyFormat::Html,
             source_message_id: None,
             source_kind: None,
+            include_signature: true,
+            importance: String::new(),
+            request_receipt: false,
+            reply_to: None,
             id: None,
             account_id: account_id.into(),
             from: None,
@@ -1774,6 +1878,28 @@ mod tests {
     }
 
     #[test]
+    fn listed_drafts_keep_the_message_they_answer() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let plain = db.save_draft(&draft(&account.summary.id)).unwrap();
+        let mut reply = draft(&account.summary.id);
+        reply.source_message_id = Some(10);
+        reply.source_kind = Some(crate::models::DraftSourceKind::Reply);
+        let reply_id = db.save_draft(&reply).unwrap();
+        let listed = db.list_drafts(&account.summary.id).unwrap();
+        let saved = listed.iter().find(|item| item.id == reply_id).unwrap();
+        assert_eq!(saved.source_message_id, Some(10));
+        assert_eq!(
+            saved.source_kind,
+            Some(crate::models::DraftSourceKind::Reply)
+        );
+        let fresh = listed.iter().find(|item| item.id == plain).unwrap();
+        assert_eq!(fresh.source_message_id, None);
+        assert_eq!(fresh.source_kind, None);
+    }
+
+    #[test]
     fn draft_times_are_utc_rfc3339_even_for_legacy_rows() {
         let db = Database::memory();
         let account = account();
@@ -1861,6 +1987,128 @@ mod tests {
     }
 
     #[test]
+    fn trash_expunge_plan_is_limited_to_one_trash_folder() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, &account.summary.id, "INBOX", &MailboxRole::Inbox);
+        let trash = mailbox(&db, &account.summary.id, "Trash", &MailboxRole::Trash);
+        let other_trash = mailbox(
+            &db,
+            &account.summary.id,
+            "Deleted Messages",
+            &MailboxRole::Trash,
+        );
+        db.upsert_message(
+            &account.summary.id,
+            trash,
+            &message(9, "2026-08-18T12:00:00Z"),
+        )
+        .unwrap();
+        db.upsert_message(
+            &account.summary.id,
+            trash,
+            &message(4, "2026-08-18T11:00:00Z"),
+        )
+        .unwrap();
+        db.upsert_message(
+            &account.summary.id,
+            inbox,
+            &message(1, "2026-08-18T10:00:00Z"),
+        )
+        .unwrap();
+        db.upsert_message(
+            &account.summary.id,
+            other_trash,
+            &message(2, "2026-08-18T09:00:00Z"),
+        )
+        .unwrap();
+        let id_for = |mailbox_id: i64, uid: u32| -> i64 {
+            db.conn()
+                .unwrap()
+                .query_row(
+                    "SELECT id FROM messages WHERE mailbox_id=?1 AND uid=?2",
+                    rusqlite::params![mailbox_id, uid],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        let first = id_for(trash, 9);
+        let second = id_for(trash, 4);
+        let inbox_id = id_for(inbox, 1);
+        let other_id = id_for(other_trash, 2);
+        let plan = db
+            .trash_expunge_plan(&account.summary.id, &[second, first, second])
+            .unwrap();
+        assert_eq!(plan.mailbox_name, "Trash");
+        assert_eq!(plan.uid_validity, 1);
+        assert_eq!(plan.uids, vec![4, 9]);
+        assert!(db
+            .trash_expunge_plan(&account.summary.id, &[])
+            .unwrap_err()
+            .contains("Choose a message"));
+        let too_many: Vec<i64> = (1..=201).collect();
+        assert!(db
+            .trash_expunge_plan(&account.summary.id, &too_many)
+            .unwrap_err()
+            .contains("200"));
+        assert!(db
+            .trash_expunge_plan(&account.summary.id, &[99])
+            .unwrap_err()
+            .contains("not found"));
+        assert!(db
+            .trash_expunge_plan("someone-else", &[first])
+            .unwrap_err()
+            .contains("does not belong"));
+        assert!(db
+            .trash_expunge_plan(&account.summary.id, &[inbox_id])
+            .unwrap_err()
+            .contains("Move the message"));
+        assert!(db
+            .trash_expunge_plan(&account.summary.id, &[first, other_id])
+            .unwrap_err()
+            .contains("one folder"));
+        db.mark_pending_move(first, inbox).unwrap();
+        assert!(db
+            .trash_expunge_plan(&account.summary.id, &[first])
+            .unwrap_err()
+            .contains("still moving"));
+        let unnamed = db
+            .upsert_mailbox(
+                &account.summary.id,
+                "Trash Copy",
+                &MailboxRole::Trash,
+                None,
+                Some(2),
+                Some(0),
+                0,
+            )
+            .unwrap();
+        db.upsert_message(
+            &account.summary.id,
+            unnamed,
+            &message(3, "2026-08-18T08:00:00Z"),
+        )
+        .unwrap();
+        let unnamed_id = id_for(unnamed, 3);
+        assert!(db
+            .trash_expunge_plan(&account.summary.id, &[unnamed_id])
+            .unwrap_err()
+            .contains("identity is unavailable"));
+        db.upsert_message(
+            &account.summary.id,
+            trash,
+            &message(0, "2026-08-18T07:00:00Z"),
+        )
+        .unwrap();
+        let zero = id_for(trash, 0);
+        assert!(db
+            .trash_expunge_plan(&account.summary.id, &[zero])
+            .unwrap_err()
+            .contains("refresh mail"));
+    }
+
+    #[test]
     fn cursor_pagination_clamps_zero_limit_without_panicking() {
         let db = Database::memory();
         let account = account();
@@ -1875,6 +2123,458 @@ mod tests {
         let page = db.list_messages(mailbox, None, 0).unwrap();
         assert_eq!(page.items.len(), 1);
         assert!(page.next_cursor.is_none());
+    }
+
+    #[test]
+    fn message_list_filter_pages_only_matching_rows() {
+        use crate::models::{Attachment, MessageListFilter, MessageListSort};
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let mailbox = mailbox(&db, &account.summary.id, "INBOX", &MailboxRole::Inbox);
+        let mut newest = message(3, "2026-08-18T12:00:00Z");
+        newest.is_starred = true;
+        let middle = message(2, "2026-08-18T11:00:00Z");
+        let mut oldest = message(1, "2026-08-18T10:00:00Z");
+        oldest.is_read = true;
+        oldest.attachments.push(Attachment {
+            id: "notes".into(),
+            filename: "notes.txt".into(),
+            content_type: "text/plain".into(),
+            size: 4,
+            content_id: None,
+            inline: false,
+        });
+        oldest.attachments.push(Attachment {
+            id: "photo".into(),
+            filename: "photo.png".into(),
+            content_type: "image/png".into(),
+            size: 8,
+            content_id: Some("photo@example.com".into()),
+            inline: true,
+        });
+        db.upsert_message(&account.summary.id, mailbox, &newest)
+            .unwrap();
+        db.upsert_message(&account.summary.id, mailbox, &middle)
+            .unwrap();
+        db.upsert_message(&account.summary.id, mailbox, &oldest)
+            .unwrap();
+
+        let listed = db.list_messages(mailbox, None, 10).unwrap();
+        assert_eq!(listed.items.len(), 3);
+        assert_eq!(
+            listed
+                .items
+                .iter()
+                .find(|item| item.uid == 1)
+                .unwrap()
+                .attachment_count,
+            1
+        );
+        assert_eq!(
+            listed
+                .items
+                .iter()
+                .find(|item| item.uid == 3)
+                .unwrap()
+                .attachment_count,
+            0
+        );
+
+        let first = db
+            .list_messages_filtered(
+                mailbox,
+                None,
+                1,
+                MessageListFilter::Unread,
+                MessageListSort::Date,
+            )
+            .unwrap();
+        assert_eq!(first.items.len(), 1);
+        assert_eq!(first.items[0].uid, 3);
+        let second = db
+            .list_messages_filtered(
+                mailbox,
+                first.next_cursor.as_ref(),
+                1,
+                MessageListFilter::Unread,
+                MessageListSort::Date,
+            )
+            .unwrap();
+        assert_eq!(second.items.len(), 1);
+        assert_eq!(second.items[0].uid, 2);
+        assert!(!second.has_more);
+
+        let starred = db
+            .list_messages_filtered(
+                mailbox,
+                None,
+                10,
+                MessageListFilter::Starred,
+                MessageListSort::Date,
+            )
+            .unwrap();
+        assert_eq!(starred.items.len(), 1);
+        assert!(starred.items[0].is_starred);
+
+        let files = db
+            .list_messages_filtered(
+                mailbox,
+                None,
+                10,
+                MessageListFilter::Attachments,
+                MessageListSort::Date,
+            )
+            .unwrap();
+        assert_eq!(files.items.len(), 1);
+        assert!(files.items[0].has_attachments);
+        assert!(files.items[0].is_read);
+
+        let none = db
+            .list_messages_filtered(
+                mailbox,
+                None,
+                10,
+                MessageListFilter::Pinned,
+                MessageListSort::Date,
+            )
+            .unwrap();
+        assert!(none.items.is_empty());
+        let newest_row = db.message_summary_by_uid(mailbox, 3).unwrap().unwrap();
+        let middle_row = db.message_summary_by_uid(mailbox, 2).unwrap().unwrap();
+        assert_eq!(
+            db.set_pinned(&account.summary.id, &[newest_row.id, middle_row.id], true,)
+                .unwrap(),
+            2
+        );
+        let first_pinned = db
+            .list_messages_filtered(
+                mailbox,
+                None,
+                1,
+                MessageListFilter::Pinned,
+                MessageListSort::Date,
+            )
+            .unwrap();
+        assert_eq!(first_pinned.items.len(), 1);
+        assert_eq!(first_pinned.items[0].uid, 3);
+        assert!(first_pinned.items[0].pinned);
+        let next_pinned = db
+            .list_messages_filtered(
+                mailbox,
+                first_pinned.next_cursor.as_ref(),
+                1,
+                MessageListFilter::Pinned,
+                MessageListSort::Date,
+            )
+            .unwrap();
+        assert_eq!(next_pinned.items.len(), 1);
+        assert_eq!(next_pinned.items[0].uid, 2);
+        assert!(!next_pinned.has_more);
+
+        let mut copied = message(4, "2026-08-18T09:00:00Z");
+        copied.to = vec!["lee@example.com".into()];
+        copied.cc = vec!["sam@example.com".into()];
+        copied.recipients = "lee@example.com, sam@example.com".into();
+        db.upsert_message(&account.summary.id, mailbox, &copied)
+            .unwrap();
+        let addressed = db
+            .list_messages_filtered(
+                mailbox,
+                None,
+                10,
+                MessageListFilter::ToMe,
+                MessageListSort::Date,
+            )
+            .unwrap();
+        assert!(addressed.items.iter().all(|item| item.to_me));
+        assert!(addressed.items.iter().any(|item| item.uid == 3));
+        assert!(addressed.items.iter().all(|item| item.uid != 4));
+
+        let mut invite = message(5, "2026-08-18T08:00:00Z");
+        invite.has_calendar = true;
+        db.upsert_message(&account.summary.id, mailbox, &invite)
+            .unwrap();
+        let invitations = db
+            .list_messages_filtered(
+                mailbox,
+                None,
+                10,
+                MessageListFilter::Invitations,
+                MessageListSort::Date,
+            )
+            .unwrap();
+        assert_eq!(invitations.items.len(), 1);
+        assert_eq!(invitations.items[0].uid, 5);
+        assert!(invitations.items[0].has_calendar);
+    }
+
+    #[test]
+    fn message_list_sort_pages_from_subject_and_size() {
+        use crate::models::{MessageListFilter, MessageListSort};
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let mailbox = mailbox(&db, &account.summary.id, "INBOX", &MailboxRole::Inbox);
+        let mut zoe = message(1, "2026-08-18T12:00:00Z");
+        zoe.sender_name = "Zoe".into();
+        zoe.sender_address = "zoe@example.com".into();
+        zoe.subject = "Zoo".into();
+        zoe.size = 100;
+        let mut ada_newer = message(4, "2026-08-18T09:00:00Z");
+        ada_newer.sender_name = "Ada".into();
+        ada_newer.subject = "Picnic".into();
+        ada_newer.size = 9;
+        let mut ada_older = message(2, "2026-08-18T10:00:00Z");
+        ada_older.sender_name = "ada".into();
+        ada_older.subject = "Picnic".into();
+        ada_older.size = 9;
+        let mut address_only = message(3, "2026-08-18T11:00:00Z");
+        address_only.sender_name = String::new();
+        address_only.sender_address = "aaron@example.com".into();
+        address_only.subject = "Middle".into();
+        address_only.size = 1;
+        for item in [&zoe, &ada_newer, &ada_older, &address_only] {
+            db.upsert_message(&account.summary.id, mailbox, item)
+                .unwrap();
+        }
+
+        let mut page = db
+            .list_messages_filtered(
+                mailbox,
+                None,
+                1,
+                MessageListFilter::All,
+                MessageListSort::Sender,
+            )
+            .unwrap();
+        assert_eq!(page.items[0].uid, 3);
+        assert_eq!(page.next_cursor.as_ref().unwrap().key, "aaron@example.com");
+        page = db
+            .list_messages_filtered(
+                mailbox,
+                page.next_cursor.as_ref(),
+                1,
+                MessageListFilter::All,
+                MessageListSort::Sender,
+            )
+            .unwrap();
+        assert_eq!(page.items[0].uid, 4);
+        assert_eq!(page.next_cursor.as_ref().unwrap().key, "Ada");
+        page = db
+            .list_messages_filtered(
+                mailbox,
+                page.next_cursor.as_ref(),
+                1,
+                MessageListFilter::All,
+                MessageListSort::Sender,
+            )
+            .unwrap();
+        assert_eq!(page.items[0].uid, 2);
+        page = db
+            .list_messages_filtered(
+                mailbox,
+                page.next_cursor.as_ref(),
+                1,
+                MessageListFilter::All,
+                MessageListSort::Sender,
+            )
+            .unwrap();
+        assert_eq!(page.items[0].uid, 1);
+        assert!(!page.has_more);
+
+        page = db
+            .list_messages_filtered(
+                mailbox,
+                None,
+                2,
+                MessageListFilter::All,
+                MessageListSort::Subject,
+            )
+            .unwrap();
+        assert_eq!(
+            page.items.iter().map(|item| item.uid).collect::<Vec<_>>(),
+            vec![3, 4]
+        );
+        page = db
+            .list_messages_filtered(
+                mailbox,
+                page.next_cursor.as_ref(),
+                2,
+                MessageListFilter::All,
+                MessageListSort::Subject,
+            )
+            .unwrap();
+        assert_eq!(
+            page.items.iter().map(|item| item.uid).collect::<Vec<_>>(),
+            vec![2, 1]
+        );
+        assert!(!page.has_more);
+
+        page = db
+            .list_messages_filtered(
+                mailbox,
+                None,
+                1,
+                MessageListFilter::All,
+                MessageListSort::Size,
+            )
+            .unwrap();
+        assert_eq!(page.items[0].uid, 1);
+        page = db
+            .list_messages_filtered(
+                mailbox,
+                page.next_cursor.as_ref(),
+                1,
+                MessageListFilter::All,
+                MessageListSort::Size,
+            )
+            .unwrap();
+        assert_eq!(page.items[0].uid, 4);
+        page = db
+            .list_messages_filtered(
+                mailbox,
+                page.next_cursor.as_ref(),
+                2,
+                MessageListFilter::All,
+                MessageListSort::Size,
+            )
+            .unwrap();
+        assert_eq!(
+            page.items.iter().map(|item| item.uid).collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+        assert!(!page.has_more);
+
+        let newest = db
+            .list_messages_filtered(
+                mailbox,
+                None,
+                1,
+                MessageListFilter::All,
+                MessageListSort::Date,
+            )
+            .unwrap();
+        assert_eq!(newest.items[0].uid, 1);
+
+        page = db
+            .list_messages_filtered(
+                mailbox,
+                None,
+                1,
+                MessageListFilter::All,
+                MessageListSort::DateOldest,
+            )
+            .unwrap();
+        assert_eq!(page.items[0].uid, 4);
+        page = db
+            .list_messages_filtered(
+                mailbox,
+                page.next_cursor.as_ref(),
+                1,
+                MessageListFilter::All,
+                MessageListSort::DateOldest,
+            )
+            .unwrap();
+        assert_eq!(page.items[0].uid, 2);
+        page = db
+            .list_messages_filtered(
+                mailbox,
+                page.next_cursor.as_ref(),
+                2,
+                MessageListFilter::All,
+                MessageListSort::DateOldest,
+            )
+            .unwrap();
+        assert_eq!(
+            page.items.iter().map(|item| item.uid).collect::<Vec<_>>(),
+            vec![3, 1]
+        );
+        assert!(!page.has_more);
+
+        page = db
+            .list_messages_filtered(
+                mailbox,
+                None,
+                2,
+                MessageListFilter::All,
+                MessageListSort::SenderDesc,
+            )
+            .unwrap();
+        assert_eq!(
+            page.items.iter().map(|item| item.uid).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        page = db
+            .list_messages_filtered(
+                mailbox,
+                page.next_cursor.as_ref(),
+                2,
+                MessageListFilter::All,
+                MessageListSort::SenderDesc,
+            )
+            .unwrap();
+        assert_eq!(
+            page.items.iter().map(|item| item.uid).collect::<Vec<_>>(),
+            vec![4, 3]
+        );
+        assert!(!page.has_more);
+
+        page = db
+            .list_messages_filtered(
+                mailbox,
+                None,
+                2,
+                MessageListFilter::All,
+                MessageListSort::SubjectDesc,
+            )
+            .unwrap();
+        assert_eq!(
+            page.items.iter().map(|item| item.uid).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        page = db
+            .list_messages_filtered(
+                mailbox,
+                page.next_cursor.as_ref(),
+                2,
+                MessageListFilter::All,
+                MessageListSort::SubjectDesc,
+            )
+            .unwrap();
+        assert_eq!(
+            page.items.iter().map(|item| item.uid).collect::<Vec<_>>(),
+            vec![4, 3]
+        );
+        assert!(!page.has_more);
+
+        page = db
+            .list_messages_filtered(
+                mailbox,
+                None,
+                2,
+                MessageListFilter::All,
+                MessageListSort::SizeAsc,
+            )
+            .unwrap();
+        assert_eq!(
+            page.items.iter().map(|item| item.uid).collect::<Vec<_>>(),
+            vec![3, 2]
+        );
+        page = db
+            .list_messages_filtered(
+                mailbox,
+                page.next_cursor.as_ref(),
+                2,
+                MessageListFilter::All,
+                MessageListSort::SizeAsc,
+            )
+            .unwrap();
+        assert_eq!(
+            page.items.iter().map(|item| item.uid).collect::<Vec<_>>(),
+            vec![4, 1]
+        );
+        assert!(!page.has_more);
     }
 
     #[test]
@@ -2046,6 +2746,124 @@ mod tests {
             "{items:?}"
         );
     }
+
+    #[test]
+    fn muted_conversation_files_later_inbox_replies_and_unmute_stops() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, &account.summary.id, "INBOX", &MailboxRole::Inbox);
+        let archive = mailbox(&db, &account.summary.id, "Archive", &MailboxRole::Archive);
+        let sent = mailbox(&db, &account.summary.id, "Sent", &MailboxRole::Sent);
+        let parent = message(1, "2026-08-18T12:00:00Z");
+        db.upsert_envelope(&account.summary.id, inbox, &parent)
+            .unwrap();
+        let parent_id = db.list_messages(inbox, None, 10).unwrap().items[0].id;
+        assert!(!db.list_messages(inbox, None, 10).unwrap().items[0].conversation_muted);
+        db.remember_muted_conversation(&account.summary.id, parent_id)
+            .unwrap();
+        assert!(db.list_messages(inbox, None, 10).unwrap().items[0].conversation_muted);
+        assert_eq!(
+            db.file_muted_inbox(&account.summary.id).unwrap(),
+            vec![parent_id]
+        );
+        assert!(db.file_muted_inbox(&account.summary.id).unwrap().is_empty());
+        assert!(db.list_messages(inbox, None, 10).unwrap().items.is_empty());
+        let (is_read, pending): (i64, i64) = db
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT is_read, pending_move_to FROM messages WHERE id=?1",
+                [parent_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(is_read, 1);
+        assert_eq!(pending, archive);
+
+        let mut sent_reply = message(4, "2026-08-18T15:00:00Z");
+        sent_reply.thread_parent = Some("<1@example.com>".into());
+        db.upsert_envelope(&account.summary.id, sent, &sent_reply)
+            .unwrap();
+
+        let mut child = message(2, "2026-08-18T13:00:00Z");
+        child.thread_parent = Some("<1@example.com>".into());
+        db.upsert_envelope(&account.summary.id, inbox, &child)
+            .unwrap();
+        let child_row = db.list_messages(inbox, None, 10).unwrap().items;
+        assert_eq!(child_row.len(), 1);
+        assert!(child_row[0].conversation_muted);
+        let child_id = child_row[0].id;
+        assert_eq!(
+            db.file_muted_inbox(&account.summary.id).unwrap(),
+            vec![child_id]
+        );
+
+        let mut grandchild = message(3, "2026-08-18T14:00:00Z");
+        grandchild.thread_parent = Some("<2@example.com>".into());
+        db.upsert_envelope(&account.summary.id, inbox, &grandchild)
+            .unwrap();
+        let grand = db.list_messages(inbox, None, 10).unwrap().items;
+        assert!(grand[0].conversation_muted);
+        let grand_id = grand[0].id;
+        assert_eq!(
+            db.file_muted_inbox(&account.summary.id).unwrap(),
+            vec![grand_id]
+        );
+        assert_eq!(db.list_messages(sent, None, 10).unwrap().items.len(), 1);
+
+        db.forget_muted_conversation(&account.summary.id, grand_id)
+            .unwrap();
+        let mut later = message(5, "2026-08-18T16:00:00Z");
+        later.thread_parent = Some("<3@example.com>".into());
+        db.upsert_envelope(&account.summary.id, inbox, &later)
+            .unwrap();
+        let later_rows = db.list_messages(inbox, None, 10).unwrap().items;
+        assert!(!later_rows[0].conversation_muted);
+        assert!(db.file_muted_inbox(&account.summary.id).unwrap().is_empty());
+
+        let other = account_with_id("account-2", "lee@example.com");
+        db.insert_account(&other).unwrap();
+        let other_inbox = mailbox(&db, &other.summary.id, "INBOX", &MailboxRole::Inbox);
+        db.upsert_envelope(&other.summary.id, other_inbox, &parent)
+            .unwrap();
+        let other_id = db.list_messages(other_inbox, None, 10).unwrap().items[0].id;
+        assert!(db
+            .remember_muted_conversation(&account.summary.id, other_id)
+            .is_err());
+        assert!(db.file_muted_inbox(&other.summary.id).unwrap().is_empty());
+
+        let mut nameless = message(9, "2026-08-18T17:00:00Z");
+        nameless.message_id = None;
+        db.upsert_envelope(&account.summary.id, inbox, &nameless)
+            .unwrap();
+        let nameless_id = db
+            .list_messages(inbox, None, 10)
+            .unwrap()
+            .items
+            .iter()
+            .find(|item| item.uid == 9)
+            .unwrap()
+            .id;
+        assert!(db
+            .remember_muted_conversation(&account.summary.id, nameless_id)
+            .is_err());
+
+        let lone = account_with_id("account-3", "pat@example.com");
+        db.insert_account(&lone).unwrap();
+        let lone_inbox = mailbox(&db, &lone.summary.id, "INBOX", &MailboxRole::Inbox);
+        db.upsert_envelope(&lone.summary.id, lone_inbox, &parent)
+            .unwrap();
+        let lone_id = db.list_messages(lone_inbox, None, 10).unwrap().items[0].id;
+        db.remember_muted_conversation(&lone.summary.id, lone_id)
+            .unwrap();
+        assert!(db.file_muted_inbox(&lone.summary.id).unwrap().is_empty());
+        assert_eq!(
+            db.list_messages(lone_inbox, None, 10).unwrap().items.len(),
+            1
+        );
+    }
+
     // Failure modes: detail select shifts columns so summary.thread_root
     // reads to_json; root is null for unthreaded mail; detail body fields
     // (to/cc) must still map after any select reorder.
@@ -2074,6 +2892,41 @@ mod tests {
             Some("<1@example.com>")
         );
         assert!(!detail.to.is_empty(), "{:?}", detail.to);
+    }
+
+    #[test]
+    fn message_detail_opens_envelope_only_and_evicted_messages() {
+        // Ways this can fail: empty raw_message errors, evicted rows keep a stale
+        // List-Post, or a missing row reports a different error.
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let mailbox = mailbox(&db, &account.summary.id, "INBOX", &MailboxRole::Inbox);
+        let mut cached = message(1, "2026-08-18T12:00:00Z");
+        cached.raw_message =
+            b"List-Post: <mailto:list@example.com>\r\nSubject: Family picnic\r\n\r\nBody".to_vec();
+        db.upsert_message(&account.summary.id, mailbox, &cached)
+            .unwrap();
+        db.upsert_envelope(
+            &account.summary.id,
+            mailbox,
+            &envelope_only(2, "2026-08-18T13:00:00Z"),
+        )
+        .unwrap();
+        let rows = db.list_messages(mailbox, None, 10).unwrap().items;
+        let full = rows.iter().find(|row| row.uid == 1).unwrap().id;
+        let envelope = rows.iter().find(|row| row.uid == 2).unwrap().id;
+
+        let before = db.message_detail(full, &account.summary.id).unwrap();
+        assert!(before.list_post.is_some());
+        let blank = db.message_detail(envelope, &account.summary.id).unwrap();
+        assert_eq!(blank.list_post, None);
+
+        db.clear_downloaded_mail().unwrap();
+        let evicted = db.message_detail(full, &account.summary.id).unwrap();
+        assert_eq!(evicted.list_post, None);
+        assert!(evicted.html_body.is_none());
+        assert!(db.message_detail(9999, &account.summary.id).is_err());
     }
 
     #[test]
@@ -2114,6 +2967,8 @@ mod tests {
         let mailbox = mailbox(&db, &account.summary.id, "INBOX", &MailboxRole::Inbox);
         let mut cached = message(1, "2026-08-18T12:00:00Z");
         cached.cc = vec!["family@example.com".into()];
+        cached.bcc = vec!["hidden@example.com".into()];
+        cached.internal_at = Some("2026-08-18T18:00:00Z".into());
         cached.reply_to = Some("reply@example.com".into());
         cached.html_body =
             Some(r#"<p>Bring sandwiches</p><img src="https://images.example.com/pic.png">"#.into());
@@ -2132,7 +2987,27 @@ mod tests {
         let detail = db.message_detail(id, &account.summary.id).unwrap();
         assert_eq!(detail.to, vec!["sam@example.com"]);
         assert_eq!(detail.cc, vec!["family@example.com"]);
+        assert_eq!(detail.bcc, vec!["hidden@example.com"]);
         assert_eq!(detail.reply_to.as_deref(), Some("reply@example.com"));
+        assert_eq!(detail.summary.arrived_at, "2026-08-18T18:00:00Z");
+        assert_eq!(
+            db.search(&SearchQuery {
+                account_id: account.summary.id.clone(),
+                mailbox_id: Some(mailbox),
+                text: "hidden@example.com".into(),
+                all_folders: false,
+                limit: 10,
+            })
+            .unwrap()
+            .len(),
+            1
+        );
+        let blank = envelope_only(1, "2026-08-18T12:00:00Z");
+        db.upsert_envelope(&account.summary.id, mailbox, &blank)
+            .unwrap();
+        let kept = db.message_detail(id, &account.summary.id).unwrap();
+        assert_eq!(kept.bcc, vec!["hidden@example.com"]);
+        assert_eq!(kept.summary.arrived_at, "2026-08-18T18:00:00Z");
         assert!(detail
             .html_body
             .as_deref()
@@ -2476,6 +3351,50 @@ mod tests {
     }
 
     #[test]
+    fn reorder_accounts_keeps_every_account_in_the_chosen_order() {
+        let db = Database::memory();
+        db.insert_account(&account_with_id("account-1", "sam@example.com"))
+            .unwrap();
+        db.insert_account(&account_with_id("account-2", "work@example.com"))
+            .unwrap();
+        db.reorder_accounts(&["account-2".into(), "account-1".into()])
+            .unwrap();
+        let ids: Vec<String> = db
+            .list_accounts()
+            .unwrap()
+            .into_iter()
+            .map(|account| account.id)
+            .collect();
+        assert_eq!(ids, vec!["account-2", "account-1"]);
+        assert!(db.reorder_accounts(&["account-2".into()]).is_err());
+        assert!(db
+            .reorder_accounts(&["account-2".into(), "account-2".into()])
+            .is_err());
+        let still: Vec<String> = db
+            .list_accounts()
+            .unwrap()
+            .into_iter()
+            .map(|account| account.id)
+            .collect();
+        assert_eq!(still, vec!["account-2", "account-1"]);
+    }
+
+    #[test]
+    fn account_color_is_saved_and_listed() {
+        let db = Database::memory();
+        db.insert_account(&account()).unwrap();
+        db.update_account_color("account-1", Some("purple"))
+            .unwrap();
+        assert_eq!(
+            db.list_accounts().unwrap()[0].color.as_deref(),
+            Some("purple")
+        );
+        db.update_account_color("account-1", None).unwrap();
+        assert_eq!(db.list_accounts().unwrap()[0].color, None);
+        assert!(db.update_account_color("missing", Some("purple")).is_err());
+    }
+
+    #[test]
     fn outbox_reads_resanitize_html_bodies() {
         let db = Database::memory();
         let account = account();
@@ -2762,6 +3681,61 @@ mod tests {
         assert!(db.unsnooze_message(&account.summary.id, id).is_err());
     }
 
+    #[test]
+    fn snooze_messages_hides_the_set_or_none_of_it() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let mailbox = mailbox(&db, &account.summary.id, "INBOX", &MailboxRole::Inbox);
+        db.upsert_message(
+            &account.summary.id,
+            mailbox,
+            &message(1, "2026-08-18T12:00:00Z"),
+        )
+        .unwrap();
+        db.upsert_message(
+            &account.summary.id,
+            mailbox,
+            &message(2, "2026-08-18T13:00:00Z"),
+        )
+        .unwrap();
+        let ids = db
+            .list_messages(mailbox, None, 10)
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|item| item.id)
+            .collect::<Vec<_>>();
+        assert!(db
+            .snooze_messages(&account.summary.id, &[], "2999-01-01T00:00:00+00:00")
+            .is_err());
+        assert!(db
+            .snooze_messages(
+                &account.summary.id,
+                &[ids[0], 999],
+                "2999-01-01T00:00:00+00:00",
+            )
+            .is_err());
+        assert_eq!(db.list_messages(mailbox, None, 10).unwrap().items.len(), 2);
+        db.snooze_messages(
+            &account.summary.id,
+            &[ids[0], ids[1], ids[0]],
+            "2999-01-01T00:00:00+00:00",
+        )
+        .unwrap();
+        assert!(db
+            .list_messages(mailbox, None, 10)
+            .unwrap()
+            .items
+            .is_empty());
+        assert_eq!(
+            db.list_snoozed(&account.summary.id, "2026-01-01T00:00:00+00:00")
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
     fn filter_rule(account_id: &str) -> FilterRule {
         FilterRule {
             id: String::new(),
@@ -2776,6 +3750,52 @@ mod tests {
     }
 
     #[test]
+    fn from_rule_with_full_address_matches_only_that_sender() {
+        // Ways this can fail: a suffix domain (x.io.com) or subdomain (some.me@x.io)
+        // matches, a display name holding the address matches, or LIKE wildcards in
+        // the needle act as patterns. A non-address needle must stay a substring.
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, &account.summary.id, "INBOX", &MailboxRole::Inbox);
+        let cases = [
+            (1, "me@x.io", "Me", "exact"),
+            (2, "ME@X.IO", "Me", "upper"),
+            (3, "me@x.io.com", "Me", "suffix"),
+            (4, "some.me@x.io", "Me", "subdomain"),
+            (5, "lee@example.test", "me@x.io", "display"),
+            (6, "a_b@example.test", "A", "underscore"),
+            (7, "axb@example.test", "A", "not-underscore"),
+        ];
+        for (uid, address, name, subject) in cases {
+            let mut value = message(uid, "2026-08-18T12:00:00Z");
+            value.sender_address = address.into();
+            value.sender_name = name.into();
+            value.subject = subject.into();
+            db.upsert_message(&account.summary.id, inbox, &value)
+                .unwrap();
+        }
+        let mut rule = filter_rule(&account.summary.id);
+        rule.contains = "me@x.io".into();
+        let preview = db.preview_rule_matches(&account.summary.id, &rule).unwrap();
+        let mut subjects = preview.subjects.clone();
+        subjects.sort();
+        assert_eq!(subjects, vec!["exact", "upper"]);
+
+        rule.contains = "a_b@".into();
+        let literal = db.preview_rule_matches(&account.summary.id, &rule).unwrap();
+        assert_eq!(literal.subjects, vec!["underscore"]);
+
+        rule.contains = "billing".into();
+        assert_eq!(
+            db.preview_rule_matches(&account.summary.id, &rule)
+                .unwrap()
+                .matched,
+            0
+        );
+    }
+
+    #[test]
     fn filter_rules_match_unread_inbox_case_insensitively() {
         let db = Database::memory();
         let account = account();
@@ -2784,6 +3804,7 @@ mod tests {
         let mut bill = message(1, "2026-08-18T12:00:00Z");
         bill.sender_address = "bills@power.example.com".into();
         bill.sender_name = "Power Co".into();
+        bill.recipients = "billing@power.example.com, sam@example.com".into();
         db.upsert_message(&account.summary.id, inbox, &bill)
             .unwrap();
         let family = message(2, "2026-08-18T13:00:00Z");
@@ -2807,6 +3828,27 @@ mod tests {
             .find_rule_matches(&account.summary.id, &subject_rule, None)
             .unwrap();
         assert_eq!(subject_matches.len(), 1);
+
+        let mut recipient_rule = filter_rule(&account.summary.id);
+        recipient_rule.field = "to".into();
+        recipient_rule.contains = "Billing@Power".into();
+        let recipient_matches = db
+            .find_rule_matches(&account.summary.id, &recipient_rule, None)
+            .unwrap();
+        assert_eq!(recipient_matches.len(), 1);
+        assert_eq!(recipient_matches[0].1, 1);
+        let preview = db
+            .preview_rule_matches(&account.summary.id, &recipient_rule)
+            .unwrap();
+        assert_eq!(preview.matched, 1);
+        assert_eq!(preview.subjects, vec!["Family picnic"]);
+
+        let mut unknown = filter_rule(&account.summary.id);
+        unknown.field = "body".into();
+        assert!(db
+            .find_rule_matches(&account.summary.id, &unknown, None)
+            .unwrap()
+            .is_empty());
 
         // LIKE metacharacters match literally.
         let mut wild = filter_rule(&account.summary.id);
@@ -2833,6 +3875,82 @@ mod tests {
         assert!(db
             .delete_filter_rule(&account.summary.id, &created.id)
             .is_err());
+    }
+
+    #[test]
+    fn domain_rules_match_that_host_and_its_subdomains() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, &account.summary.id, "INBOX", &MailboxRole::Inbox);
+        let mut host = message(1, "2026-08-18T12:00:00Z");
+        host.sender_address = "jane@example.com".into();
+        host.subject = "At the host".into();
+        db.upsert_message(&account.summary.id, inbox, &host)
+            .unwrap();
+        let mut child = message(2, "2026-08-18T12:01:00Z");
+        child.sender_address = "jane@mail.example.com".into();
+        child.subject = "At a subdomain".into();
+        db.upsert_message(&account.summary.id, inbox, &child)
+            .unwrap();
+        let mut lookalike = message(3, "2026-08-18T12:02:00Z");
+        lookalike.sender_address = "jane@example.com.evil.test".into();
+        lookalike.subject = "Lookalike host".into();
+        db.upsert_message(&account.summary.id, inbox, &lookalike)
+            .unwrap();
+        let mut rule = filter_rule(&account.summary.id);
+        rule.field = "domain".into();
+        rule.contains = "Example.COM".into();
+        let matches = db
+            .find_rule_matches(&account.summary.id, &rule, None)
+            .unwrap();
+        let uids: Vec<u32> = matches.iter().map(|item| item.1).collect();
+        assert!(uids.contains(&1));
+        assert!(uids.contains(&2));
+        assert!(!uids.contains(&3));
+        assert_eq!(uids.len(), 2);
+    }
+
+    #[test]
+    fn filter_rule_order_and_preview_do_not_file_mail() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, &account.summary.id, "INBOX", &MailboxRole::Inbox);
+        let mut bill = message(1, "2026-08-18T12:00:00Z");
+        bill.sender_address = "bills@power.example.com".into();
+        bill.subject = "August power\nbill".into();
+        db.upsert_message(&account.summary.id, inbox, &bill)
+            .unwrap();
+        let id = db.list_messages(inbox, None, 10).unwrap().items[0].id;
+
+        let mut first = filter_rule(&account.summary.id);
+        first.name = "First".into();
+        let mut second = filter_rule(&account.summary.id);
+        second.name = "Second".into();
+        second.contains = "no-such-sender".into();
+        let first = db.create_filter_rule(&first).unwrap();
+        let second = db.create_filter_rule(&second).unwrap();
+        let ordered = db
+            .reorder_filter_rules(&account.summary.id, &[second.id.clone(), first.id.clone()])
+            .unwrap();
+        assert_eq!(ordered[0].id, second.id);
+        assert_eq!(ordered[1].id, first.id);
+        assert!(db
+            .reorder_filter_rules(&account.summary.id, std::slice::from_ref(&first.id),)
+            .is_err());
+
+        let preview = db
+            .preview_rule_matches(&account.summary.id, &first)
+            .unwrap();
+        assert_eq!(preview.matched, 1);
+        assert!(!preview.capped);
+        assert_eq!(preview.subjects, vec!["August power bill"]);
+        assert!(db
+            .unread_message_ids(inbox)
+            .unwrap()
+            .iter()
+            .any(|(unread_id, _)| unread_id == &id));
     }
 
     #[test]
@@ -3263,6 +4381,42 @@ mod tests {
     }
 
     #[test]
+    fn find_message_by_header_id_prefers_a_live_folder() {
+        let db = Database::memory();
+        let account = account();
+        let other = account_with_id("account-2", "two@example.com");
+        db.insert_account(&account).unwrap();
+        db.insert_account(&other).unwrap();
+        let inbox = mailbox(&db, &account.summary.id, "INBOX", &MailboxRole::Inbox);
+        let trash = mailbox(&db, &account.summary.id, "Trash", &MailboxRole::Trash);
+        let other_inbox = mailbox(&db, &other.summary.id, "INBOX", &MailboxRole::Inbox);
+        let mut archived = message(1, "2026-08-17T12:00:00Z");
+        archived.message_id = Some("<parent@example.test>".into());
+        archived.subject = "Earlier note".into();
+        db.upsert_message(&account.summary.id, inbox, &archived)
+            .unwrap();
+        let mut trashed = message(2, "2026-08-19T12:00:00Z");
+        trashed.message_id = Some("<parent@example.test>".into());
+        trashed.subject = "Trashed copy".into();
+        db.upsert_message(&account.summary.id, trash, &trashed)
+            .unwrap();
+        let mut foreign = message(3, "2026-08-19T12:00:00Z");
+        foreign.message_id = Some("<parent@example.test>".into());
+        db.upsert_message(&other.summary.id, other_inbox, &foreign)
+            .unwrap();
+        let found = db
+            .find_message_by_header_id(&account.summary.id, "<parent@example.test>")
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.subject, "Earlier note");
+        assert_eq!(found.mailbox_id, inbox);
+        assert!(db
+            .find_message_by_header_id(&account.summary.id, "<missing@example.test>")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
     fn uncached_message_uids_returns_newest_empty_bodies() {
         let db = Database::memory();
         let account = account();
@@ -3414,6 +4568,19 @@ mod tests {
         assert_eq!(
             db.account("acc-1").unwrap().summary.display_name,
             "Work Mail"
+        );
+        let saved = db
+            .update_account_reply_to("acc-1", "replies@example.com")
+            .unwrap();
+        assert_eq!(saved.reply_to, "replies@example.com");
+        assert_eq!(
+            db.list_accounts()
+                .unwrap()
+                .into_iter()
+                .find(|account| account.id == "acc-1")
+                .unwrap()
+                .reply_to,
+            "replies@example.com"
         );
         assert_eq!(
             db.account("acc-2").unwrap().summary.display_name,
@@ -3590,6 +4757,125 @@ mod tests {
     fn cached(db: &Database, mailbox: i64, uid: u32, account_id: &str) -> bool {
         let id = db.message_summary_by_uid(mailbox, uid).unwrap().unwrap().id;
         db.message_content_cached(id, account_id).unwrap()
+    }
+
+    #[test]
+    fn importance_round_trips_and_an_envelope_without_it_keeps_the_stored_value() {
+        let db = Database::memory();
+        let account = account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        let mut full = message(1, "2026-08-18T12:00:00Z");
+        full.importance = "HIGH".into();
+        db.upsert_message(account_id, inbox, &full).unwrap();
+        let blank = envelope_only(1, "2026-08-18T12:00:00Z");
+        db.upsert_envelope(account_id, inbox, &blank).unwrap();
+        let kept = db.message_summary_by_uid(inbox, 1).unwrap().unwrap();
+        assert_eq!(kept.importance, "high");
+
+        let mut injected = message(2, "2026-08-18T12:00:00Z");
+        injected.importance = "high\r\nBcc: evil@example.com".into();
+        db.upsert_message(account_id, inbox, &injected).unwrap();
+        let rejected = db.message_summary_by_uid(inbox, 2).unwrap().unwrap();
+        assert_eq!(rejected.importance, "");
+
+        let mut envelope = envelope_only(3, "2026-08-18T12:00:00Z");
+        envelope.importance = "low".into();
+        db.upsert_envelope(account_id, inbox, &envelope).unwrap();
+        let listed = db.message_summary_by_uid(inbox, 3).unwrap().unwrap();
+        assert_eq!(listed.importance, "low");
+    }
+
+    #[test]
+    fn read_receipt_choice_survives_a_later_body_write() {
+        let db = Database::memory();
+        let account = account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        let mut full = message(1, "2026-08-18T12:00:00Z");
+        full.disposition_to = "Jane <jane@example.com>".into();
+        full.raw_message = b"Disposition-Notification-To: Jane <jane@example.com>\r\nSubject: Family picnic\r\n\r\nBring sandwiches".to_vec();
+        db.upsert_message(account_id, inbox, &full).unwrap();
+        let id = db.message_summary_by_uid(inbox, 1).unwrap().unwrap().id;
+        let detail = db.message_detail(id, account_id).unwrap();
+        assert_eq!(detail.disposition_to, "");
+        full.disposition_to = "jane@example.com".into();
+        db.upsert_message(account_id, inbox, &full).unwrap();
+        let detail = db.message_detail(id, account_id).unwrap();
+        assert_eq!(detail.disposition_to, "jane@example.com");
+        assert_eq!(detail.receipt_choice, "");
+        assert_eq!(
+            db.set_receipt_choice(id, account_id, "declined").unwrap(),
+            "declined"
+        );
+        full.disposition_to = "lee@example.com".into();
+        db.upsert_message(account_id, inbox, &full).unwrap();
+        let detail = db.message_detail(id, account_id).unwrap();
+        assert_eq!(detail.disposition_to, "lee@example.com");
+        assert_eq!(detail.receipt_choice, "declined");
+        assert_eq!(
+            db.set_receipt_choice(id, account_id, "sent").unwrap(),
+            "declined"
+        );
+        let mut envelope = envelope_only(1, "2026-08-18T12:00:00Z");
+        envelope.disposition_to = "evil@example.com".into();
+        db.upsert_envelope(account_id, inbox, &envelope).unwrap();
+        let detail = db.message_detail(id, account_id).unwrap();
+        assert_eq!(detail.disposition_to, "lee@example.com");
+        assert_eq!(detail.receipt_choice, "declined");
+    }
+
+    #[test]
+    fn pin_stays_through_an_envelope_refresh_and_sorts_first() {
+        let db = Database::memory();
+        let account = account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        db.upsert_message(account_id, inbox, &message(3, "2026-08-18T12:00:00Z"))
+            .unwrap();
+        db.upsert_message(account_id, inbox, &message(2, "2026-08-17T12:00:00Z"))
+            .unwrap();
+        db.upsert_message(account_id, inbox, &message(1, "2026-08-16T12:00:00Z"))
+            .unwrap();
+        let oldest = db.message_summary_by_uid(inbox, 1).unwrap().unwrap();
+        assert!(!oldest.pinned);
+        assert_eq!(db.set_pinned(account_id, &[oldest.id], true).unwrap(), 1);
+        assert_eq!(
+            db.set_pinned("other-account", &[oldest.id], false).unwrap(),
+            0
+        );
+        let blank = envelope_only(1, "2026-08-16T12:00:00Z");
+        db.upsert_envelope(account_id, inbox, &blank).unwrap();
+        let first = db.list_messages(inbox, None, 2).unwrap();
+        assert_eq!(
+            first.items.iter().map(|item| item.uid).collect::<Vec<_>>(),
+            vec![1, 3]
+        );
+        assert!(first.items[0].pinned);
+        assert!(first.has_more);
+        let second = db
+            .list_messages(inbox, first.next_cursor.as_ref(), 2)
+            .unwrap();
+        assert_eq!(
+            second.items.iter().map(|item| item.uid).collect::<Vec<_>>(),
+            vec![2]
+        );
+        assert!(!second.has_more);
+        assert_eq!(db.set_pinned(account_id, &[oldest.id], false).unwrap(), 1);
+        let unpinned = db.list_messages(inbox, None, 3).unwrap();
+        assert_eq!(
+            unpinned
+                .items
+                .iter()
+                .map(|item| item.uid)
+                .collect::<Vec<_>>(),
+            vec![3, 2, 1]
+        );
+        let too_many = vec![0_i64; 201];
+        assert!(db.set_pinned(account_id, &too_many, true).is_err());
     }
 
     #[test]
@@ -4076,6 +5362,10 @@ mod tests {
         assert!(serde_json::from_str::<BodyFormat>("\"rtf\"").is_err());
         assert!(serde_json::from_str::<DraftSourceKind>("\"bounce\"").is_err());
         assert_eq!(
+            serde_json::from_str::<DraftSourceKind>("\"redirect\"").unwrap(),
+            DraftSourceKind::Redirect
+        );
+        assert_eq!(
             serde_json::from_str::<DraftSourceKind>("\"reply_all\"").unwrap(),
             DraftSourceKind::ReplyAll
         );
@@ -4164,6 +5454,7 @@ mod tests {
         let mut first = message(1, "2026-08-10T09:00:00+00:00");
         first.subject = "Budget review".into();
         first.text_body = "numbers inside".into();
+        first.importance = "high".into();
         let mut second = message(2, "2026-08-20T09:00:00+00:00");
         second.subject = "Lunch".into();
         second.sender_name = "Bob".into();
@@ -4171,9 +5462,11 @@ mod tests {
         second.text_body = "the budget came from jane".into();
         second.is_read = true;
         second.is_starred = true;
+        second.importance = "low".into();
+        second.size = 2_000_000;
         second.attachments = vec![Attachment {
             id: "a1".into(),
-            filename: "plan.pdf".into(),
+            filename: "100%plan.pdf".into(),
             content_type: "application/pdf".into(),
             size: 10,
             content_id: None,
@@ -4184,12 +5477,26 @@ mod tests {
         third.recipients = "sam@example.com, lee@example.com".into();
         third.text_body = "photos".into();
         third.is_read = true;
+        third.size = 500;
         for item in [&first, &second, &third] {
             db.upsert_message(account_id, inbox, item).unwrap();
         }
         let mut stray = message(1, "2026-08-11T09:00:00+00:00");
         stray.subject = "Budget elsewhere".into();
         db.upsert_message(account_id, other, &stray).unwrap();
+        let id_for = |uid: u32| -> i64 {
+            db.conn()
+                .unwrap()
+                .query_row(
+                    "SELECT id FROM messages WHERE mailbox_id=?1 AND uid=?2",
+                    rusqlite::params![inbox, uid],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        db.mark_replied(id_for(2), account_id, true, false).unwrap();
+        db.mark_replied(id_for(3), account_id, false, true).unwrap();
+        assert_eq!(db.set_pinned(account_id, &[id_for(1)], true).unwrap(), 1);
 
         let run = |text: &str| -> Vec<u32> {
             db.search(&SearchQuery {
@@ -4211,12 +5518,69 @@ mod tests {
         assert_eq!(from, vec![1, 3]);
         assert_eq!(run("from:jane is:unread"), vec![1]);
         assert_eq!(run("is:flagged"), vec![2]);
+        assert_eq!(run("is:starred"), vec![2]);
+        assert_eq!(run("is:pinned"), vec![1]);
+        assert_eq!(run("is:pinned is:important"), vec![1]);
+        assert!(run("is:pinned is:starred").is_empty());
+        assert!(run("is:pin").is_empty());
+        assert_eq!(run("is:important"), vec![1]);
+        assert_eq!(run("is:high"), vec![1]);
+        assert_eq!(run("is:low"), vec![2]);
+        assert_eq!(run("is:important from:jane"), vec![1]);
+        assert!(run("is:important from:bob@example.com").is_empty());
+        assert_eq!(run("is:important is:low"), vec![2]);
+        assert!(run("is:urgent").is_empty());
+        assert_eq!(run("is:replied"), vec![2]);
+        assert_eq!(run("is:answered"), vec![2]);
+        assert_eq!(run("is:forwarded"), vec![3]);
         assert_eq!(run("has:attachment"), vec![2]);
+        assert_eq!(run("filename:plan"), vec![2]);
+        assert_eq!(run("filename:PLAN"), vec![2]);
+        assert_eq!(run("filename:100%"), vec![2]);
+        assert!(run("filename:1000").is_empty());
+        assert_eq!(run("larger:1M"), vec![2]);
+        assert_eq!(run("smaller:1K"), vec![3, 1]);
+        assert_eq!(run("larger:100 smaller:1K"), vec![3]);
+        let run_all = |text: &str| -> Vec<(i64, u32)> {
+            db.search(&SearchQuery {
+                account_id: account_id.clone(),
+                mailbox_id: Some(inbox),
+                text: text.into(),
+                all_folders: true,
+                limit: 10,
+            })
+            .unwrap()
+            .into_iter()
+            .map(|item| (item.mailbox_id, item.uid))
+            .collect()
+        };
+        assert_eq!(
+            run_all("in:inbox")
+                .into_iter()
+                .map(|(_, uid)| uid)
+                .collect::<Vec<_>>(),
+            vec![3, 2, 1]
+        );
+        assert_eq!(run_all("in:other"), vec![(other, 1)]);
+        assert_eq!(run_all("in:inbox subject:budget"), vec![(inbox, 1)]);
+        assert!(run_all("in:no-such-folder").is_empty());
         assert_eq!(run("to:lee"), vec![3]);
         assert_eq!(run("subject:budget"), vec![1]);
+        assert_eq!(run("body:budget"), vec![2]);
+        assert_eq!(run("body:numbers"), vec![1]);
+        assert_eq!(run("body:numbers from:jane"), vec![1]);
+        assert!(run("body:budget from:jane").is_empty());
+        assert!(run("body:").is_empty());
+        assert!(run("bodies:budget").is_empty());
         assert_eq!(run("is:read after:2026-08-20 before:2026-09-01"), vec![2]);
         assert_eq!(run("after:2026-08-11"), vec![3, 2]);
         assert_eq!(run("before:2026-08-11"), vec![1]);
+        assert_eq!(run("on:2026-08-20"), vec![2]);
+        assert_eq!(run("on:2026-08-10"), vec![1]);
+        assert!(run("on:2026-08-21").is_empty());
+        assert_eq!(run("on:2026-08-20 from:bob@example.com"), vec![2]);
+        assert!(run("on:2026-08-20 from:jane").is_empty());
+        assert!(run("on:2026-13-45").is_empty());
         // Unknown operators fall back to plain text; no match here.
         assert!(run("nosuch:thing").is_empty());
         // FTS syntax stays literal.
@@ -4230,8 +5594,167 @@ mod tests {
         ] {
             let _ = run(hostile);
         }
+        assert!(run("cc:sam@example.com").is_empty());
+        assert!(run("is:muted").is_empty());
         assert!(run("sender:jane").is_empty());
         assert!(run("").is_empty());
+    }
+
+    #[test]
+    fn search_me_matches_this_account_not_a_lookalike() {
+        let db = Database::memory();
+        let mut account = account();
+        account.summary.aliases = vec!["Alias@Example.com".into()];
+        db.insert_account(&account).unwrap();
+        let account_id = &account.summary.id;
+        let inbox = mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        let mut outbound = message(1, "2026-08-18T12:00:00Z");
+        outbound.sender_address = "sam@example.com".into();
+        outbound.sender_name = "Sam".into();
+        outbound.recipients = "lee@example.com".into();
+        outbound.to = vec!["lee@example.com".into()];
+        outbound.subject = "Outbound".into();
+        outbound.text_body = "hello".into();
+        let mut inbound = message(2, "2026-08-18T13:00:00Z");
+        inbound.sender_address = "jane@example.com".into();
+        inbound.recipients = "sam@example.com".into();
+        inbound.to = vec!["sam@example.com".into()];
+        inbound.subject = "Inbound".into();
+        inbound.text_body = "hi".into();
+        let mut alias_copy = message(3, "2026-08-18T14:00:00Z");
+        alias_copy.sender_address = "Alias@Example.com".into();
+        alias_copy.recipients = "lee@example.com, sam@example.com".into();
+        alias_copy.to = vec!["lee@example.com".into()];
+        alias_copy.cc = vec!["sam@example.com".into()];
+        alias_copy.subject = "Alias".into();
+        alias_copy.text_body = "copy".into();
+        let mut lookalike = message(4, "2026-08-18T15:00:00Z");
+        lookalike.sender_address = "notsam@example.com".into();
+        lookalike.sender_name = "Sam".into();
+        lookalike.recipients = "notsam@example.com".into();
+        lookalike.to = vec!["notsam@example.com".into()];
+        lookalike.subject = "Lookalike".into();
+        lookalike.text_body = "no".into();
+        for item in [&outbound, &inbound, &alias_copy, &lookalike] {
+            db.upsert_message(account_id, inbox, item).unwrap();
+        }
+        let run = |text: &str| -> Vec<u32> {
+            db.search(&SearchQuery {
+                account_id: account_id.clone(),
+                mailbox_id: Some(inbox),
+                text: text.into(),
+                all_folders: false,
+                limit: 10,
+            })
+            .unwrap()
+            .into_iter()
+            .map(|item| item.uid)
+            .collect()
+        };
+        assert_eq!(run("from:me"), vec![3, 1]);
+        assert_eq!(run("FROM:ME"), vec![3, 1]);
+        assert_eq!(run("to:me"), vec![3, 2]);
+        assert_eq!(run("from:me to:me"), vec![3]);
+        assert!(run("from:medea").is_empty());
+        assert!(run("from:me@example.com").is_empty());
+    }
+
+    #[test]
+    fn search_cc_matches_copied_addresses_only() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let account_id = &account.summary.id;
+        let inbox = mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        let mut copied = message(1, "2026-08-18T12:00:00Z");
+        copied.to = vec!["lee@example.com".into()];
+        copied.cc = vec!["Sam@Example.com".into()];
+        copied.recipients = "lee@example.com, Sam@Example.com".into();
+        copied.subject = "Copied".into();
+        copied.text_body = "copy".into();
+        let mut direct = message(2, "2026-08-18T13:00:00Z");
+        direct.to = vec!["sam@example.com".into()];
+        direct.cc = vec!["lee@example.com".into()];
+        direct.recipients = "sam@example.com, lee@example.com".into();
+        direct.subject = "Direct".into();
+        direct.text_body = "to".into();
+        let mut lookalike = message(3, "2026-08-18T14:00:00Z");
+        lookalike.to = vec!["lee@example.com".into()];
+        lookalike.cc = vec!["notlee@example.com".into()];
+        lookalike.recipients = "lee@example.com, notlee@example.com".into();
+        lookalike.subject = "Lookalike".into();
+        lookalike.text_body = "no".into();
+        for item in [&copied, &direct, &lookalike] {
+            db.upsert_message(account_id, inbox, item).unwrap();
+        }
+        let run = |text: &str| -> Vec<u32> {
+            db.search(&SearchQuery {
+                account_id: account_id.clone(),
+                mailbox_id: Some(inbox),
+                text: text.into(),
+                all_folders: false,
+                limit: 10,
+            })
+            .unwrap()
+            .into_iter()
+            .map(|item| item.uid)
+            .collect()
+        };
+        assert_eq!(run("cc:me"), vec![1]);
+        assert_eq!(run("CC:ME"), vec![1]);
+        assert_eq!(run("cc:lee@example.com"), vec![2]);
+        assert_eq!(run("cc:lee"), vec![2]);
+        assert_eq!(run("to:me"), vec![2, 1]);
+        assert!(run("cc:notsam@example.com").is_empty());
+    }
+
+    #[test]
+    fn search_muted_matches_the_conversation_only() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let account_id = &account.summary.id;
+        let inbox = mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        let parent = message(1, "2026-08-18T12:00:00Z");
+        let mut child = message(2, "2026-08-18T13:00:00Z");
+        child.thread_parent = Some("<1@example.com>".into());
+        child.subject = "Reply".into();
+        let other = message(3, "2026-08-18T14:00:00Z");
+        for item in [&parent, &child, &other] {
+            db.upsert_message(account_id, inbox, item).unwrap();
+        }
+        let rows = db.list_messages(inbox, None, 10).unwrap().items;
+        let parent_id = rows.iter().find(|item| item.uid == 1).unwrap().id;
+        assert!(db
+            .search(&SearchQuery {
+                account_id: account_id.clone(),
+                mailbox_id: Some(inbox),
+                text: "is:muted".into(),
+                all_folders: false,
+                limit: 10,
+            })
+            .unwrap()
+            .is_empty());
+        db.remember_muted_conversation(account_id, parent_id)
+            .unwrap();
+        let run = |text: &str| -> Vec<u32> {
+            db.search(&SearchQuery {
+                account_id: account_id.clone(),
+                mailbox_id: Some(inbox),
+                text: text.into(),
+                all_folders: false,
+                limit: 10,
+            })
+            .unwrap()
+            .into_iter()
+            .map(|item| item.uid)
+            .collect()
+        };
+        assert_eq!(run("is:muted"), vec![2, 1]);
+        assert_eq!(run("IS:MUTED"), vec![2, 1]);
+        assert!(run("is:muted from:lee@example.com").is_empty());
+        db.forget_muted_conversation(account_id, parent_id).unwrap();
+        assert!(run("is:muted").is_empty());
     }
 
     #[test]

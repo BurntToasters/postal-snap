@@ -34,7 +34,45 @@ export async function registerMockSettingsSystem(page: Page): Promise<void> {
       undoSendSeconds: params.has("undoSendOff") ? 0 : 10,
       blockAdvertisingAndTracking: true,
       blockReportedThreats: true,
+      imageSenders: params.has("imageSender")
+        ? [params.get("imageSender") ?? ""]
+        : [],
       groupThreads: true,
+      bccSelf: false,
+      signatureAboveQuote: true,
+      replyToAll: params.has("replyAllPref"),
+      unreadFoldersOnly: params.get("unreadFolders") === "1",
+      composerWidth: Number(params.get("composerWidth") ?? 0),
+      composerHeight: Number(params.get("composerHeight") ?? 0),
+      lastFromAddresses: params.has("lastFrom")
+        ? [{ accountId: "account-1", address: params.get("lastFrom") }]
+        : [],
+      mailboxSort: params.get("mailboxSort") ?? "date",
+      mailboxFilter: params.get("mailboxFilter") ?? "all",
+      mailboxViews: [],
+      pinnedMailboxes: params.has("pinnedBoth")
+        ? [
+            { accountId: "account-1", mailboxId: 4 },
+            { accountId: "account-2", mailboxId: 9 },
+          ]
+        : [],
+      hiddenMailboxes: [],
+      collapsedMailboxes: params.has("collapsedFolder")
+        ? [
+            {
+              accountId: "account-1",
+              mailboxId: Number(params.get("collapsedFolder")),
+            },
+          ]
+        : [],
+      recentMoveMailboxId: params.has("recentFolder")
+        ? Number(params.get("recentFolder"))
+        : null,
+      showMessagePreviews: params.get("showPreviews") !== "0",
+      newMailSound: params.get("mailSound") !== "0",
+      quietHoursStart: "",
+      quietHoursEnd: "",
+      markRead: "open",
       notifyNewMail: true,
       closeToTray: true,
       updateCheckInterval: "startupAnd6h",
@@ -49,6 +87,9 @@ export async function registerMockSettingsSystem(page: Page): Promise<void> {
     Object.assign(mock.handlers, {
       get_settings() {
         return copySettings();
+      },
+      set_unread_badge() {
+        return undefined;
       },
       supports_workspace_window_fx() {
         return windowFxSupported;
@@ -110,8 +151,14 @@ export async function registerMockSettingsSystem(page: Page): Promise<void> {
           readerPaneHeight: 360,
           blockAdvertisingAndTracking: true,
           blockReportedThreats: true,
+          imageSenders: [],
           groupThreads: true,
+          bccSelf: false,
+          signatureAboveQuote: true,
+          markRead: "open",
           notifyNewMail: true,
+          quietHoursStart: "",
+          quietHoursEnd: "",
           closeToTray: true,
           updateCheckInterval: "startupAnd6h",
           setupCompleted: true,

@@ -31,6 +31,7 @@ async function sentDraft(page: Page) {
 }
 
 async function send(page: Page) {
+  await page.getByLabel("Message body").pressSequentially("Thanks");
   await page.getByRole("button", { name: "Send", exact: true }).click();
   await expect(page.locator(".composer-window")).toHaveCount(0);
 }

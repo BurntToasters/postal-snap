@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { MessageBody } from "../components/reader/messageBody";
 import { strings } from "../i18n";
 import {
+  differentLinkAddress,
   htmlToPlainText,
   messageFrameDocument,
   sanitizeComposeHtml,
@@ -19,6 +20,20 @@ describe("received mail isolation", () => {
     expect(result.html).not.toContain("data-content-blocked");
     expect(result.html).not.toContain("data-threat-blocked");
     expect(result.blockedImages).toBe(1);
+    expect(result.blockedImageHosts).toEqual(["images.example.test"]);
+  });
+
+  it("names each remote image host once", () => {
+    const result = sanitizeReceivedHtml(`
+      <img src="https://images.example.test/a.png">
+      <img src="//images.example.test/b.png">
+      <img src="https://cdn.example.test/c.png">
+    `);
+    expect(result.blockedImages).toBe(3);
+    expect(result.blockedImageHosts).toEqual([
+      "images.example.test",
+      "cdn.example.test",
+    ]);
   });
 
   it("never labels a reported address as confirmed or Safe", () => {
@@ -43,6 +58,43 @@ describe("received mail isolation", () => {
     ].join("\n");
     expect(text).not.toMatch(/confirmed/i);
     expect(text).not.toMatch(/\bSafe\b/);
+  });
+
+  it("names a link text address only when it is a different place", () => {
+    expect(
+      differentLinkAddress(
+        "https://bank.example/login",
+        "https://phish.example.test/login",
+      ),
+    ).toBe("https://bank.example/login");
+    expect(
+      differentLinkAddress(
+        "https://bank.example@evil.test/login",
+        "https://evil.test/login",
+      ),
+    ).toBe("https://bank.example@evil.test/login");
+    expect(
+      differentLinkAddress("paypal.com", "https://paypal.com/login"),
+    ).toBeUndefined();
+    expect(
+      differentLinkAddress("Open site", "https://library.example.test/hours"),
+    ).toBeUndefined();
+    expect(
+      differentLinkAddress("jane@example.test", "mailto:jane@example.test"),
+    ).toBeUndefined();
+    expect(
+      differentLinkAddress("jane@example.test", "mailto:other@example.test"),
+    ).toBe("jane@example.test");
+    const note = strings.reader.openLink(
+      "phish.example.test",
+      "https://phish.example.test/login",
+      "https://bank.example/login",
+    );
+    expect(note).toContain(
+      "The link text shows a different address: https://bank.example/login",
+    );
+    expect(note).not.toMatch(/confirmed/i);
+    expect(note).not.toMatch(/\bSafe\b/);
   });
   it("removes active content and unsafe schemes", () => {
     const result = sanitizeReceivedHtml(`
@@ -128,6 +180,7 @@ describe("received mail isolation", () => {
         onFindQueryChange: () => undefined,
         onCloseFind: () => undefined,
         onSubmitFind: () => undefined,
+        onFindPrevious: () => undefined,
         onLoadImages: () => undefined,
         onFrameLoad: () => undefined,
         onOpenLink: () => undefined,

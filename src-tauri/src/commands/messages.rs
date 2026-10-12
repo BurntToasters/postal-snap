@@ -5,8 +5,11 @@ use tauri_plugin_dialog::DialogExt;
 use super::sync::account_policy;
 use super::{command_result, emit_folder_counts, emit_message_change, AppState, CommandResult};
 use crate::{
-    credentials, mail,
-    models::{IpcError, MessageCursor, MessageDetail, MessagePage, MessageSummary, SearchQuery},
+    mail,
+    models::{
+        IpcError, MessageCursor, MessageDetail, MessageListFilter, MessageListSort, MessagePage,
+        MessageSummary, SearchQuery,
+    },
 };
 
 #[tauri::command]
@@ -15,15 +18,25 @@ pub async fn list_messages(
     mailbox_id: i64,
     cursor: Option<MessageCursor>,
     limit: u32,
+    filter: Option<MessageListFilter>,
+    sort: Option<MessageListSort>,
     state: State<'_, AppState>,
 ) -> CommandResult<MessagePage> {
     let db = state.db.clone();
+    let list_filter = filter.unwrap_or_default();
+    let list_sort = sort.unwrap_or_default();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let (owner, _) = db.mailbox(mailbox_id)?;
         if owner != account_id {
             return Err("Mailbox does not belong to this account.".to_string());
         }
-        db.list_messages(mailbox_id, cursor.as_ref(), limit.clamp(1, 200))
+        db.list_messages_filtered(
+            mailbox_id,
+            cursor.as_ref(),
+            limit.clamp(1, 200),
+            list_filter,
+            list_sort,
+        )
     })
     .await
     .map_err(|_| "Postal Snap could not list messages.".to_string())?;
@@ -52,7 +65,7 @@ pub(crate) async fn ensure_message_content(
     }
     let uid_validity = state.db.mailbox_uid_validity(account_id, &mailbox)?;
     let account = state.db.account(account_id)?;
-    let password = credentials::load(account_id)?;
+    let password = crate::oauth::session_secret(&account).await?;
     let cached_received_at = state.db.message_received_at(message_id).ok().flatten();
     let message = mail::download_message(
         &account,
@@ -108,6 +121,39 @@ pub async fn get_message(
     detail.references = state.db.message_references(message_id, &account_id)?;
     detail.body_status = body_status.into();
     Ok(detail)
+}
+
+fn header_message_id(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.len() > 254
+        || trimmed.chars().any(|character| {
+            character.is_control() || character.is_whitespace() || character == '"'
+        })
+    {
+        return None;
+    }
+    let bare = trimmed.trim_start_matches('<').trim_end_matches('>');
+    if bare.is_empty() || bare.contains('<') || bare.contains('>') || !bare.contains('@') {
+        return None;
+    }
+    Some(format!("<{bare}>"))
+}
+
+/// The cached message with this Message-ID, if this account already has it.
+#[tauri::command]
+pub async fn find_cached_message(
+    account_id: String,
+    header_id: String,
+    state: State<'_, AppState>,
+) -> CommandResult<Option<MessageSummary>> {
+    let Some(header_id) = header_message_id(&header_id) else {
+        return Ok(None);
+    };
+    let db = state.db.clone();
+    tokio::task::spawn_blocking(move || db.find_message_by_header_id(&account_id, &header_id))
+        .await
+        .map_err(|_| "Postal Snap could not look up that message.".to_string())?
+        .map_err(Into::into)
 }
 
 /// Raw source for "Show original". Uses the same on-demand download as the
@@ -203,7 +249,7 @@ pub async fn load_older_messages(
     let _guard = state.lock_account(&account_id).await?;
     let (_, name) = state.db.mailbox(mailbox_id)?;
     let account = state.db.account(&account_id)?;
-    let password = credentials::load(&account_id)?;
+    let password = crate::oauth::session_secret(&account).await?;
     let (added, has_more) =
         mail::load_older_messages(&state.db, &account, &password, &name).await?;
     emit_message_change(&app, &account_id, None, "synced");
@@ -253,7 +299,7 @@ pub async fn set_message_flags(
     };
     let remote_result = {
         let account = state.db.account(&account_id)?;
-        let password = credentials::load(&account_id)?;
+        let password = crate::oauth::session_secret(&account).await?;
         mail::set_remote_flags(
             &account,
             &password,
@@ -364,6 +410,100 @@ pub async fn move_message_to_mailbox(
     )
 }
 
+#[tauri::command]
+pub async fn copy_message_to_mailbox(
+    account_id: String,
+    message_id: i64,
+    destination_mailbox_id: i64,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<()> {
+    let _guard = state.lock_account(&account_id).await?;
+    let (owner_id, source, uid) = state.db.message_location(message_id)?;
+    if owner_id != account_id {
+        return Err("Message does not belong to this account.".into());
+    }
+    let (destination_account_id, destination) = state.db.mailbox(destination_mailbox_id)?;
+    if destination_account_id != account_id {
+        return Err("Messages cannot be copied between accounts.".into());
+    }
+    if source == destination {
+        return Ok(());
+    }
+    command_result(
+        copy_message_inner(
+            message_id,
+            account_id,
+            source,
+            uid,
+            destination,
+            &app,
+            &state,
+        )
+        .await,
+    )
+}
+
+async fn copy_message_inner(
+    message_id: i64,
+    account_id: String,
+    source: String,
+    uid: u32,
+    destination: String,
+    app: &AppHandle,
+    state: &AppState,
+) -> Result<(), String> {
+    let operation = MoveOperation {
+        message_id,
+        uid,
+        source: source.clone(),
+        destination: destination.clone(),
+        uid_validity: Some(
+            state
+                .db
+                .mailbox_uid_validity(&account_id, &source)?
+                .ok_or_else(|| {
+                    "Mailbox identity is unavailable; refresh mail and try again.".to_string()
+                })?,
+        ),
+    };
+    let account = state.db.account(&account_id)?;
+    let password = crate::oauth::session_secret(&account).await?;
+    let remote_message_id = state.db.message_rfc_id(message_id).ok().flatten();
+    let remote_result = mail::copy_remote(
+        &account,
+        &password,
+        &source,
+        &destination,
+        uid,
+        operation.uid_validity,
+        mail::CopyOptions {
+            message_id: remote_message_id.as_deref(),
+            dedupe_existing: false,
+        },
+    )
+    .await;
+    if let Err(error) = remote_result {
+        if error.terminal {
+            return Err(error.message);
+        }
+        let dedupe_key = format!("copy:{message_id}:{destination}");
+        state
+            .db
+            .queue_operation(&account_id, "copy", &operation, Some(&dedupe_key))?;
+        return Err(
+            "The copy could not be finished. It will be tried again when this account reconnects."
+                .into(),
+        );
+    }
+    let policy = account_policy(state, &account_id).unwrap_or_default();
+    let _ = mail::refresh_mailbox_envelopes(&account, &password, &destination, &state.db, &policy)
+        .await;
+    emit_message_change(app, &account_id, Some(message_id), "copied");
+    emit_folder_counts(app, &account_id);
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn move_message_inner(
     message_id: i64,
@@ -390,7 +530,7 @@ async fn move_message_inner(
         ),
     };
     let account = state.db.account(&account_id)?;
-    let password = credentials::load(&account_id)?;
+    let password = crate::oauth::session_secret(&account).await?;
     let remote_message_id = state.db.message_rfc_id(message_id).ok().flatten();
     let remote_result = mail::move_remote(
         &account,
@@ -451,7 +591,7 @@ async fn bulk_apply_flags(
     let mut mailboxes: Vec<_> = groups.into_iter().collect();
     mailboxes.sort_by(|left, right| left.0.cmp(&right.0));
     let account = state.db.account(account_id)?;
-    let password = credentials::load(account_id)?;
+    let password = crate::oauth::session_secret(&account).await?;
     let mut updated = 0usize;
     let mut queued = 0usize;
     let mut failed = 0usize;
@@ -510,6 +650,22 @@ async fn bulk_apply_flags(
         queued,
         failed,
     })
+}
+
+#[tauri::command]
+pub async fn set_messages_pinned(
+    account_id: String,
+    message_ids: Vec<i64>,
+    pinned: bool,
+    state: State<'_, AppState>,
+) -> CommandResult<u32> {
+    let db = state.db.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        db.set_pinned(&account_id, &message_ids, pinned)
+    })
+    .await
+    .map_err(|_| "Postal Snap could not pin those messages.".to_string())?;
+    command_result(result)
 }
 
 #[tauri::command]
@@ -576,7 +732,7 @@ pub async fn move_messages_to_mailbox(
     let mut sources: Vec<_> = groups.into_iter().collect();
     sources.sort_by(|left, right| left.0.cmp(&right.0));
     let account = state.db.account(&account_id)?;
-    let password = credentials::load(&account_id)?;
+    let password = crate::oauth::session_secret(&account).await?;
     let mut updated = 0usize;
     let mut queued = 0usize;
     let mut failed = 0usize;
@@ -636,6 +792,95 @@ pub async fn move_messages_to_mailbox(
 }
 
 #[tauri::command]
+pub async fn copy_messages_to_mailbox(
+    account_id: String,
+    message_ids: Vec<i64>,
+    destination_mailbox_id: i64,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<BulkOutcome> {
+    if message_ids.len() > 200 {
+        return Err("Select up to 200 messages at a time.".into());
+    }
+    let _guard = state.lock_account(&account_id).await?;
+    let (destination_account_id, destination) = state.db.mailbox(destination_mailbox_id)?;
+    if destination_account_id != account_id {
+        return Err("Messages cannot be copied between accounts.".into());
+    }
+    let mut groups: std::collections::HashMap<String, Vec<(i64, u32)>> =
+        std::collections::HashMap::new();
+    for id in message_ids {
+        let Ok((owner, source, uid)) = state.db.message_location(id) else {
+            continue;
+        };
+        if owner != account_id {
+            return Err("Message does not belong to this account.".into());
+        }
+        if source == destination {
+            continue;
+        }
+        groups.entry(source).or_default().push((id, uid));
+    }
+    let mut sources: Vec<_> = groups.into_iter().collect();
+    sources.sort_by(|left, right| left.0.cmp(&right.0));
+    let account = state.db.account(&account_id)?;
+    let password = crate::oauth::session_secret(&account).await?;
+    let mut updated = 0usize;
+    let mut queued = 0usize;
+    let mut failed = 0usize;
+    for (source, entries) in sources {
+        let Some(validity) = state.db.mailbox_uid_validity(&account_id, &source)? else {
+            failed += entries.len();
+            continue;
+        };
+        let uids: Vec<u32> = entries.iter().map(|(_, uid)| *uid).collect();
+        let remote = mail::copy_remote_uids(
+            &account,
+            &password,
+            &source,
+            &destination,
+            &uids,
+            Some(validity),
+        )
+        .await;
+        if remote.is_ok() {
+            updated += entries.len();
+        } else if remote.as_ref().is_err_and(|error| error.terminal) {
+            failed += entries.len();
+        } else {
+            for (id, uid) in &entries {
+                let operation = MoveOperation {
+                    message_id: *id,
+                    uid: *uid,
+                    source: source.clone(),
+                    destination: destination.clone(),
+                    uid_validity: Some(validity),
+                };
+                let dedupe_key = format!("copy:{id}:{destination}");
+                let _ =
+                    state
+                        .db
+                        .queue_operation(&account_id, "copy", &operation, Some(&dedupe_key));
+            }
+            queued += entries.len();
+        }
+    }
+    if updated > 0 {
+        let policy = account_policy(&state, &account_id).unwrap_or_default();
+        let _ =
+            mail::refresh_mailbox_envelopes(&account, &password, &destination, &state.db, &policy)
+                .await;
+    }
+    emit_message_change(&app, &account_id, None, "copied");
+    emit_folder_counts(&app, &account_id);
+    Ok(BulkOutcome {
+        updated,
+        queued,
+        failed,
+    })
+}
+
+#[tauri::command]
 pub async fn mark_mailbox_read(
     account_id: String,
     mailbox_id: i64,
@@ -667,10 +912,12 @@ pub async fn mark_mailbox_read(
     // Only cached rows were flagged above; older unread mail exists only on
     // the server. Mark everything up to the current UIDNEXT there too, so the
     // authoritative STATUS count agrees on the next refresh.
-    if let (Ok(account), Ok(password)) = (
-        state.db.account(&account_id),
-        credentials::load(&account_id),
-    ) {
+    if let Ok(account) = state.db.account(&account_id) {
+        let Ok(password) = crate::oauth::session_secret(&account).await else {
+            emit_message_change(&app, &account_id, None, "flags");
+            emit_folder_counts(&app, &account_id);
+            return Ok(outcome);
+        };
         if let Some(validity) = state.db.mailbox_uid_validity(&account_id, &name)? {
             if mail::mark_folder_read(&account, &password, &name, validity)
                 .await
@@ -686,6 +933,59 @@ pub async fn mark_mailbox_read(
     emit_message_change(&app, &account_id, None, "flags");
     emit_folder_counts(&app, &account_id);
     Ok(outcome)
+}
+
+#[tauri::command]
+pub async fn list_recent_searches(
+    account_id: String,
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<String>> {
+    let db = state.db.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || db.list_recent_searches(&account_id))
+        .await
+        .map_err(|_| "Postal Snap could not open recent searches.".to_string())?;
+    command_result(result)
+}
+
+#[tauri::command]
+pub async fn remember_search(
+    account_id: String,
+    query: String,
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<String>> {
+    let db = state.db.clone();
+    let result =
+        tauri::async_runtime::spawn_blocking(move || db.remember_search(&account_id, &query))
+            .await
+            .map_err(|_| "Postal Snap could not save this search.".to_string())?;
+    command_result(result)
+}
+
+#[tauri::command]
+pub async fn forget_recent_search(
+    account_id: String,
+    query: String,
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<String>> {
+    let db = state.db.clone();
+    let result =
+        tauri::async_runtime::spawn_blocking(move || db.forget_recent_search(&account_id, &query))
+            .await
+            .map_err(|_| "Postal Snap could not remove this search.".to_string())?;
+    command_result(result)
+}
+
+#[tauri::command]
+pub async fn forget_recent_searches(
+    account_id: String,
+    state: State<'_, AppState>,
+) -> CommandResult<()> {
+    let db = state.db.clone();
+    let result =
+        tauri::async_runtime::spawn_blocking(move || db.forget_recent_searches(&account_id))
+            .await
+            .map_err(|_| "Postal Snap could not clear recent searches.".to_string())?;
+    command_result(result)
 }
 
 #[tauri::command]
@@ -719,6 +1019,6 @@ pub async fn search_server_messages(
     // account's sync state, which may be reporting "Sign-in failed".
     let _guard = state.lock_account(&query.account_id).await?;
     let account = state.db.account(&query.account_id)?;
-    let password = credentials::load(&query.account_id)?;
+    let password = crate::oauth::session_secret(&account).await?;
     command_result(mail::server_search(&state.db, &account, &password, &query).await)
 }

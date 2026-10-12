@@ -6,7 +6,8 @@ use super::{
 use rusqlite::{params, OptionalExtension};
 
 use crate::models::{
-    MessageCursor, MessageDetail, MessagePage, MessageSummary, RecipientSuggestion, SearchQuery,
+    MessageCursor, MessageDetail, MessageListFilter, MessageListSort, MessagePage, MessageSummary,
+    RecipientSuggestion, SearchQuery,
 };
 
 impl Database {
@@ -238,11 +239,29 @@ impl Database {
         transaction.commit().map_err(db_error)
     }
 
+    #[cfg(test)]
     pub fn list_messages(
         &self,
         mailbox_id: i64,
         cursor: Option<&MessageCursor>,
         limit: u32,
+    ) -> Result<MessagePage, String> {
+        self.list_messages_filtered(
+            mailbox_id,
+            cursor,
+            limit,
+            MessageListFilter::All,
+            MessageListSort::Date,
+        )
+    }
+
+    pub fn list_messages_filtered(
+        &self,
+        mailbox_id: i64,
+        cursor: Option<&MessageCursor>,
+        limit: u32,
+        filter: MessageListFilter,
+        sort: MessageListSort,
     ) -> Result<MessagePage, String> {
         let conn = self.conn()?;
         let page_size = limit.clamp(1, 200);
@@ -254,25 +273,105 @@ impl Database {
             [mailbox_id],
         )
         .map_err(db_error)?;
+        let filter_sql = match filter {
+            MessageListFilter::All => "",
+            MessageListFilter::Unread => " AND m.is_read=0",
+            MessageListFilter::Starred => " AND m.is_starred=1",
+            MessageListFilter::Attachments => " AND m.has_attachments=1",
+            MessageListFilter::Pinned => " AND m.pinned=1",
+            MessageListFilter::ToMe => " AND EXISTS (SELECT 1 FROM accounts a WHERE a.id=m.account_id AND EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(m.to_json) THEN m.to_json ELSE '[]' END) AS addr WHERE lower(addr.value)=lower(a.email) OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(a.aliases_json) THEN a.aliases_json ELSE '[]' END) AS alias WHERE lower(alias.value)=lower(addr.value))))",
+            MessageListFilter::Invitations => " AND m.has_calendar=1",
+        };
+        // A cursor from another order would skip the wrong rows.
+        let cursor = cursor.filter(|item| item.sort == sort);
+        let sender_sort = "(CASE WHEN sender_name != '' THEN sender_name ELSE sender_address END)";
+        // Pins stay above the chosen order. The cursor remembers whether the
+        // last row was pinned so the next page does not repeat it.
+        let (inner_cursor, order_sql) = match sort {
+            MessageListSort::Date => (
+                "(?2 IS NULL OR received_at < ?2 OR (received_at = ?2 AND uid < ?3))",
+                "ORDER BY pinned DESC, received_at DESC, uid DESC",
+            ),
+            MessageListSort::DateOldest => (
+                "(?2 IS NULL OR received_at > ?2 OR (received_at = ?2 AND uid > ?3))",
+                "ORDER BY pinned DESC, received_at ASC, uid ASC",
+            ),
+            MessageListSort::Sender => (
+                "(?2 IS NULL OR sender_sort > ?2 COLLATE NOCASE OR (sender_sort = ?2 COLLATE NOCASE AND uid < ?3))",
+                "ORDER BY pinned DESC, sender_sort COLLATE NOCASE ASC, uid DESC",
+            ),
+            MessageListSort::SenderDesc => (
+                "(?2 IS NULL OR sender_sort < ?2 COLLATE NOCASE OR (sender_sort = ?2 COLLATE NOCASE AND uid > ?3))",
+                "ORDER BY pinned DESC, sender_sort COLLATE NOCASE DESC, uid ASC",
+            ),
+            MessageListSort::Subject => (
+                "(?2 IS NULL OR subject > ?2 COLLATE NOCASE OR (subject = ?2 COLLATE NOCASE AND uid < ?3))",
+                "ORDER BY pinned DESC, subject COLLATE NOCASE ASC, uid DESC",
+            ),
+            MessageListSort::SubjectDesc => (
+                "(?2 IS NULL OR subject < ?2 COLLATE NOCASE OR (subject = ?2 COLLATE NOCASE AND uid > ?3))",
+                "ORDER BY pinned DESC, subject COLLATE NOCASE DESC, uid ASC",
+            ),
+            MessageListSort::Size => (
+                "(?2 IS NULL OR size < ?2 OR (size = ?2 AND uid < ?3))",
+                "ORDER BY pinned DESC, size DESC, uid DESC",
+            ),
+            MessageListSort::SizeAsc => (
+                "(?2 IS NULL OR size > ?2 OR (size = ?2 AND uid > ?3))",
+                "ORDER BY pinned DESC, size ASC, uid ASC",
+            ),
+        };
+        let cursor_sql =
+            format!("AND (?5 IS NULL OR pinned < ?5 OR (pinned = ?5 AND {inner_cursor}))")
+                .replace("sender_sort", sender_sort);
+        let order_sql = order_sql.replace("sender_sort", sender_sort);
         let mut statement = conn
             .prepare(&format!(
                 "{} WHERE mailbox_id = ?1 AND pending_move_to IS NULL
                  AND NOT EXISTS (SELECT 1 FROM snoozed_messages s WHERE s.message_id=m.id)
-                 AND (?2 IS NULL OR received_at < ?2 OR (received_at = ?2 AND uid < ?3))
-                 ORDER BY received_at DESC, uid DESC LIMIT ?4",
+                 {filter_sql}
+                 {cursor_sql}
+                 {order_sql} LIMIT ?4",
                 MESSAGE_SUMMARY_SELECT,
             ))
             .map_err(db_error)?;
-        let cursor_date = cursor.map(|value| value.received_at.as_str());
         let cursor_uid = cursor.map(|value| value.uid);
-        let mut items = statement
-            .query_map(
-                params![mailbox_id, cursor_date, cursor_uid, page_size + 1],
-                map_message_summary,
-            )
-            .map_err(db_error)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(db_error)?;
+        let cursor_pin = cursor.map(|item| i64::from(i32::from(item.pinned)));
+        let mut items = if sort == MessageListSort::Size || sort == MessageListSort::SizeAsc {
+            let size_key = cursor.and_then(|item| item.key.parse::<i64>().ok());
+            statement
+                .query_map(
+                    params![mailbox_id, size_key, cursor_uid, page_size + 1, cursor_pin],
+                    map_message_summary,
+                )
+                .map_err(db_error)?
+                .collect::<Result<Vec<_>, _>>()
+        } else if sort == MessageListSort::Date || sort == MessageListSort::DateOldest {
+            let cursor_date = cursor.map(|value| value.received_at.as_str());
+            statement
+                .query_map(
+                    params![
+                        mailbox_id,
+                        cursor_date,
+                        cursor_uid,
+                        page_size + 1,
+                        cursor_pin
+                    ],
+                    map_message_summary,
+                )
+                .map_err(db_error)?
+                .collect::<Result<Vec<_>, _>>()
+        } else {
+            let text_key = cursor.map(|item| item.key.clone());
+            statement
+                .query_map(
+                    params![mailbox_id, text_key, cursor_uid, page_size + 1, cursor_pin],
+                    map_message_summary,
+                )
+                .map_err(db_error)?
+                .collect::<Result<Vec<_>, _>>()
+        }
+        .map_err(db_error)?;
         let has_more = items.len() > page_size as usize;
         if has_more {
             items.truncate(page_size as usize);
@@ -280,10 +379,7 @@ impl Database {
         let next_cursor = has_more
             .then(|| items.last())
             .flatten()
-            .map(|last| MessageCursor {
-                received_at: last.received_at.clone(),
-                uid: last.uid,
-            });
+            .map(|last| list_cursor(sort, last));
         Ok(MessagePage {
             items,
             next_cursor,
@@ -324,48 +420,97 @@ impl Database {
             params![id, account_id],
         )
         .map_err(db_error)?;
-        conn.query_row(
-            &format!(
-                "{} WHERE m.id = ?1 AND m.account_id = ?2",
-                MESSAGE_DETAIL_SELECT
-            ),
-            params![id, account_id],
-            |row| {
-                let html_body: Option<String> = row.get(19)?;
-                let sanitized = html_body
-                    .as_deref()
-                    .map(crate::html_sanitize::sanitize_received_html);
-                let list_unsubscribe: Option<String> = row.get("list_unsubscribe")?;
-                let list_unsubscribe_post: Option<String> = row.get("list_unsubscribe_post")?;
-                let calendar_json: Option<String> = row.get("calendar_json")?;
-                Ok(MessageDetail {
-                    summary: map_message_summary(row)?,
-                    to: json_or_default(row.get::<_, String>(15)?),
-                    cc: json_or_default(row.get::<_, String>(16)?),
-                    reply_to: row.get(17)?,
-                    text_body: row.get(18)?,
-                    remote_images_blocked: sanitized.as_ref().is_some_and(|item| {
-                        item.blocked_images > 0 || has_remote_images(&item.html)
-                    }),
-                    html_body: sanitized.map(|item| item.html),
-                    attachments: json_or_default(row.get::<_, String>(20)?),
-                    references: Vec::new(),
-                    body_status: "available".into(),
-                    unsubscribe: crate::mail::list_unsubscribe::options(
-                        list_unsubscribe.as_deref(),
-                        list_unsubscribe_post.as_deref(),
-                    ),
-                    list_unsubscribe,
-                    list_unsubscribe_post,
-                    invite: calendar_json
+        let mut detail = conn
+            .query_row(
+                &format!(
+                    "{} WHERE m.id = ?1 AND m.account_id = ?2",
+                    MESSAGE_DETAIL_SELECT
+                ),
+                params![id, account_id],
+                |row| {
+                    let html_body: Option<String> = row.get(19)?;
+                    let sanitized = html_body
                         .as_deref()
-                        .and_then(|json| serde_json::from_str(json).ok()),
-                })
-            },
+                        .map(crate::html_sanitize::sanitize_received_html);
+                    let list_unsubscribe: Option<String> = row.get("list_unsubscribe")?;
+                    let list_unsubscribe_post: Option<String> = row.get("list_unsubscribe_post")?;
+                    let calendar_json: Option<String> = row.get("calendar_json")?;
+                    Ok(MessageDetail {
+                        summary: map_message_summary(row)?,
+                        to: json_or_default(row.get::<_, String>(15)?),
+                        cc: json_or_default(row.get::<_, String>(16)?),
+                        bcc: json_or_default(row.get::<_, String>("bcc_json")?),
+                        reply_to: row.get(17)?,
+                        text_body: row.get(18)?,
+                        remote_images_blocked: sanitized.as_ref().is_some_and(|item| {
+                            item.blocked_images > 0 || has_remote_images(&item.html)
+                        }),
+                        html_body: sanitized.map(|item| item.html),
+                        attachments: json_or_default(row.get::<_, String>(20)?),
+                        references: Vec::new(),
+                        body_status: "available".into(),
+                        unsubscribe: crate::mail::list_unsubscribe::options(
+                            list_unsubscribe.as_deref(),
+                            list_unsubscribe_post.as_deref(),
+                        ),
+                        list_unsubscribe,
+                        list_unsubscribe_post,
+                        list_post: None,
+                        invite: calendar_json
+                            .as_deref()
+                            .and_then(|json| serde_json::from_str(json).ok()),
+                        disposition_to: crate::models::receipt_mailbox(
+                            &row.get::<_, String>("disposition_to")?,
+                        )
+                        .unwrap_or_default(),
+                        receipt_choice: match row.get::<_, String>("receipt_choice")?.as_str() {
+                            "sent" => "sent".to_string(),
+                            "declined" => "declined".to_string(),
+                            _ => String::new(),
+                        },
+                    })
+                },
+            )
+            .optional()
+            .map_err(db_error)?
+            .ok_or_else(|| "Message not found in the local cache.".to_string())?;
+        let raw: Option<Vec<u8>> = conn
+            .query_row(
+                // substr() of an empty or NULL blob is NULL; coalesce to an empty blob.
+                "SELECT COALESCE(substr(raw_message, 1, 16384), X'') FROM messages WHERE id=?1 AND account_id=?2",
+                params![id, account_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?;
+        if let Some(raw) = raw {
+            detail.list_post = crate::mail::list_unsubscribe::list_post_address(&raw);
+        }
+        Ok(detail)
+    }
+
+    /// Record a read-receipt choice once. A later choice does not replace it.
+    pub fn set_receipt_choice(
+        &self,
+        id: i64,
+        account_id: &str,
+        choice: &str,
+    ) -> Result<String, String> {
+        if choice != "sent" && choice != "declined" {
+            return Err("Could not save that choice.".into());
+        }
+        let conn = self.conn()?;
+        conn.execute(
+            "UPDATE messages SET receipt_choice=?1 WHERE id=?2 AND account_id=?3 AND receipt_choice=''",
+            params![choice, id, account_id],
         )
-        .optional()
-        .map_err(db_error)?
-        .ok_or_else(|| "Message not found in the local cache.".into())
+        .map_err(db_error)?;
+        conn.query_row(
+            "SELECT receipt_choice FROM messages WHERE id=?1 AND account_id=?2",
+            params![id, account_id],
+            |row| row.get(0),
+        )
+        .map_err(|_| "Message not found in the local cache.".to_string())
     }
 
     pub fn message_references(&self, id: i64, account_id: &str) -> Result<Vec<String>, String> {
@@ -386,6 +531,30 @@ impl Database {
             }
         }
         Ok(references)
+    }
+
+    /// The cached copy of a Message-ID. A trash or junk copy loses to any other folder.
+    pub fn find_message_by_header_id(
+        &self,
+        account_id: &str,
+        header_id: &str,
+    ) -> Result<Option<MessageSummary>, String> {
+        if header_id.is_empty() {
+            return Ok(None);
+        }
+        self.conn()?
+            .query_row(
+                &format!(
+                    "{MESSAGE_SUMMARY_SELECT} JOIN mailboxes box ON box.id=m.mailbox_id \
+                     WHERE m.account_id=?1 AND m.message_id=?2 AND m.pending_move_to IS NULL \
+                     ORDER BY CASE WHEN box.role IN ('trash','junk') THEN 1 ELSE 0 END, \
+                     m.received_at DESC, m.uid DESC LIMIT 1"
+                ),
+                params![account_id, header_id],
+                map_message_summary,
+            )
+            .optional()
+            .map_err(db_error)
     }
 
     pub fn raw_message(&self, id: i64, account_id: &str) -> Result<Vec<u8>, String> {
@@ -450,6 +619,30 @@ impl Database {
         }
         transaction.commit().map_err(db_error)?;
         Ok(())
+    }
+
+    /// Local pin. Sync and envelope refresh leave the stored value alone.
+    pub fn set_pinned(&self, account_id: &str, ids: &[i64], pinned: bool) -> Result<u32, String> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        if ids.len() > 200 {
+            return Err("Select up to 200 messages at a time.".into());
+        }
+        let mut conn = self.conn()?;
+        let transaction = conn.transaction().map_err(db_error)?;
+        let mut updated = 0u32;
+        for id in ids {
+            let changed = transaction
+                .execute(
+                    "UPDATE messages SET pinned=?1 WHERE id=?2 AND account_id=?3",
+                    params![i32::from(pinned), id, account_id],
+                )
+                .map_err(db_error)?;
+            updated += u32::try_from(changed).unwrap_or(0);
+        }
+        transaction.commit().map_err(db_error)?;
+        Ok(updated)
     }
 
     pub fn set_flags_bulk(
@@ -830,11 +1023,41 @@ impl Database {
 
     pub fn search(&self, query: &SearchQuery) -> Result<Vec<MessageSummary>, String> {
         use rusqlite::types::Value;
-        let conn = self.conn()?;
         let parsed = crate::search_query::parse(&query.text);
         if parsed.is_empty() {
             return Ok(Vec::new());
         }
+        let folder_ids = if parsed.folders.is_empty() {
+            None
+        } else {
+            let ids = self
+                .list_mailboxes(&query.account_id)?
+                .into_iter()
+                .filter(|mailbox| {
+                    parsed.folders.iter().any(|needle| {
+                        crate::search_query::folder_needle_matches(
+                            needle,
+                            mailbox.role.as_str(),
+                            &mailbox.name,
+                            &mailbox.display_name,
+                            mailbox.delimiter.as_deref(),
+                        )
+                    })
+                })
+                .map(|mailbox| mailbox.id)
+                .collect::<Vec<_>>();
+            if ids.is_empty() {
+                return Ok(Vec::new());
+            }
+            Some(ids)
+        };
+        let identities = if parsed.from_self || parsed.to_self || parsed.cc_self {
+            let account = self.account(&query.account_id)?;
+            crate::search_query::search_identities(&account.summary.email, &account.summary.aliases)
+        } else {
+            Vec::new()
+        };
+        let conn = self.conn()?;
         let expression = parsed.fts_match();
         let mut values = vec![Value::from(query.account_id.clone())];
         let mut sql = MESSAGE_SUMMARY_SELECT.to_string();
@@ -850,6 +1073,14 @@ impl Database {
             values.push(Value::from(mailbox_id));
             sql.push_str(&format!(" AND m.mailbox_id = ?{}", values.len()));
         }
+        if let Some(ids) = &folder_ids {
+            let mut marks = Vec::with_capacity(ids.len());
+            for id in ids {
+                values.push(Value::from(*id));
+                marks.push(format!("?{}", values.len()));
+            }
+            sql.push_str(&format!(" AND m.mailbox_id IN ({})", marks.join(",")));
+        }
         if parsed.has_attachment {
             sql.push_str(" AND m.has_attachments=1");
         }
@@ -861,6 +1092,109 @@ impl Database {
         if parsed.flagged {
             sql.push_str(" AND m.is_starred=1");
         }
+        let identity_json = if parsed.from_self || parsed.to_self || parsed.cc_self {
+            let json = serde_json::to_string(&identities).unwrap_or_else(|_| "[]".into());
+            values.push(Value::from(json));
+            Some(values.len())
+        } else {
+            None
+        };
+        if let Some(index) = identity_json.filter(|_| parsed.from_self) {
+            sql.push_str(&format!(
+                " AND EXISTS (SELECT 1 FROM json_each(?{index}) AS me WHERE lower(m.sender_address)=me.value)"
+            ));
+        }
+        if let Some(index) = identity_json.filter(|_| parsed.to_self) {
+            sql.push_str(&format!(
+                " AND EXISTS (
+                    SELECT 1 FROM json_each(?{index}) AS me
+                    WHERE EXISTS (
+                        SELECT 1 FROM json_each(CASE WHEN json_valid(m.to_json) THEN m.to_json ELSE '[]' END) AS addr
+                        WHERE lower(addr.value)=me.value
+                    )
+                    OR EXISTS (
+                        SELECT 1 FROM json_each(CASE WHEN json_valid(m.cc_json) THEN m.cc_json ELSE '[]' END) AS addr
+                        WHERE lower(addr.value)=me.value
+                    )
+                    OR instr(',' || replace(lower(m.recipients), ' ', '') || ',', ',' || me.value || ',') > 0
+                )"
+            ));
+        }
+        if let Some(index) = identity_json.filter(|_| parsed.cc_self) {
+            sql.push_str(&format!(
+                " AND EXISTS (
+                    SELECT 1 FROM json_each(?{index}) AS me
+                    WHERE EXISTS (
+                        SELECT 1 FROM json_each(CASE WHEN json_valid(m.cc_json) THEN m.cc_json ELSE '[]' END) AS addr
+                        WHERE lower(addr.value)=me.value
+                    )
+                )"
+            ));
+        }
+        for needle in &parsed.cc {
+            let lowered = needle.to_ascii_lowercase();
+            values.push(Value::from(lowered.clone()));
+            let index = values.len();
+            if lowered.contains('@') {
+                sql.push_str(&format!(
+                    " AND EXISTS (
+                        SELECT 1 FROM json_each(CASE WHEN json_valid(m.cc_json) THEN m.cc_json ELSE '[]' END) AS addr
+                        WHERE lower(addr.value)=?{index}
+                    )"
+                ));
+            } else {
+                values.push(Value::from(crate::search_query::cc_local_like(&lowered)));
+                let like_index = values.len();
+                sql.push_str(&format!(
+                    " AND EXISTS (
+                        SELECT 1 FROM json_each(CASE WHEN json_valid(m.cc_json) THEN m.cc_json ELSE '[]' END) AS addr
+                        WHERE lower(addr.value)=?{index}
+                           OR lower(addr.value) LIKE ?{like_index} ESCAPE '\\'
+                    )"
+                ));
+            }
+        }
+        if parsed.answered {
+            sql.push_str(" AND m.is_answered=1");
+        }
+        if parsed.forwarded {
+            sql.push_str(" AND m.is_forwarded=1");
+        }
+        if parsed.muted {
+            sql.push_str(
+                " AND EXISTS (SELECT 1 FROM muted_ids mu WHERE mu.account_id=m.account_id AND (mu.message_id=m.message_id OR mu.message_id=m.thread_parent))",
+            );
+        }
+        if parsed.pinned {
+            sql.push_str(" AND m.pinned=1");
+        }
+        if let Some(importance) = parsed.importance {
+            values.push(Value::from(importance.to_string()));
+            sql.push_str(&format!(" AND m.importance=?{}", values.len()));
+        }
+        for needle in &parsed.filenames {
+            values.push(Value::from(crate::search_query::filename_like_pattern(
+                needle,
+            )));
+            sql.push_str(&format!(
+                " AND EXISTS (
+                    SELECT 1 FROM json_each(
+                        CASE WHEN json_valid(m.attachments_json) THEN m.attachments_json ELSE '[]' END
+                    ) AS attachment
+                    WHERE lower(COALESCE(json_extract(attachment.value, '$.filename'), ''))
+                          LIKE ?{} ESCAPE '\\'
+                 )",
+                values.len()
+            ));
+        }
+        if let Some(min) = parsed.larger_than {
+            values.push(Value::from(min));
+            sql.push_str(&format!(" AND m.size > ?{}", values.len()));
+        }
+        if let Some(max) = parsed.smaller_than {
+            values.push(Value::from(max));
+            sql.push_str(&format!(" AND m.size < ?{}", values.len()));
+        }
         // Dates are UTC days; received_at is RFC 3339, so text compares.
         if let Some(date) = parsed.after {
             values.push(Value::from(date.format("%Y-%m-%d").to_string()));
@@ -869,6 +1203,14 @@ impl Database {
         if let Some(date) = parsed.before {
             values.push(Value::from(date.format("%Y-%m-%d").to_string()));
             sql.push_str(&format!(" AND m.received_at < ?{}", values.len()));
+        }
+        if let Some(date) = parsed.on {
+            values.push(Value::from(date.format("%Y-%m-%d").to_string()));
+            sql.push_str(&format!(" AND m.received_at >= ?{}", values.len()));
+            if let Some(next) = date.checked_add_signed(chrono::Duration::days(1)) {
+                values.push(Value::from(next.format("%Y-%m-%d").to_string()));
+                sql.push_str(&format!(" AND m.received_at < ?{}", values.len()));
+            }
         }
         // Weights: subject, sender, recipients, body.
         sql.push_str(if expression.is_some() {
@@ -881,6 +1223,26 @@ impl Database {
         let mut statement = conn.prepare(&sql).map_err(db_error)?;
         let rows = statement
             .query_map(rusqlite::params_from_iter(values), map_message_summary)
+            .map_err(db_error)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+    }
+
+    /// Attachment names stored with a downloaded message. Empty when only the
+    /// envelope is cached.
+    pub fn attachment_filenames(&self, mailbox_id: i64, uid: u32) -> Result<Vec<String>, String> {
+        let conn = self.conn()?;
+        let mut statement = conn
+            .prepare(
+                "SELECT json_extract(attachment.value, '$.filename')
+                 FROM messages m, json_each(
+                    CASE WHEN json_valid(m.attachments_json) THEN m.attachments_json ELSE '[]' END
+                 ) AS attachment
+                 WHERE m.mailbox_id=?1 AND m.uid=?2
+                   AND json_extract(attachment.value, '$.filename') IS NOT NULL",
+            )
+            .map_err(db_error)?;
+        let rows = statement
+            .query_map(params![mailbox_id, uid], |row| row.get(0))
             .map_err(db_error)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
     }
@@ -908,6 +1270,241 @@ impl Database {
             .map_err(db_error)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
     }
+
+    /// Messages already in Trash that can be removed by UID EXPUNGE.
+    pub fn trash_expunge_plan(
+        &self,
+        account_id: &str,
+        message_ids: &[i64],
+    ) -> Result<TrashExpungePlan, String> {
+        if message_ids.is_empty() {
+            return Err("Choose a message to delete.".into());
+        }
+        let mut ids = message_ids.to_vec();
+        ids.sort_unstable();
+        ids.dedup();
+        if ids.len() > 200 {
+            return Err("Choose up to 200 messages.".into());
+        }
+        let conn = self.conn()?;
+        let mut mailbox_id: Option<i64> = None;
+        let mut mailbox_name = String::new();
+        let mut uid_validity = 0u32;
+        let mut uids = Vec::with_capacity(ids.len());
+        for id in ids {
+            let row = trash_row(&conn, id)?;
+            let Some(row) = row else {
+                return Err("Message not found.".into());
+            };
+            if row.account_id != account_id {
+                return Err("Message does not belong to this account.".into());
+            }
+            if row.role != "trash" {
+                return Err("Move the message to Trash before deleting it.".into());
+            }
+            if row.pending_move_to.is_some() {
+                return Err("A message is still moving. Try again after it finishes.".into());
+            }
+            if row.uid == 0 {
+                return Err("This mailbox changed; refresh mail and try again.".into());
+            }
+            let validity = row.uid_validity.ok_or_else(|| {
+                "Mailbox identity is unavailable; refresh mail and try again.".to_string()
+            })?;
+            match mailbox_id {
+                Some(existing) if existing != row.mailbox_id => {
+                    return Err("Delete messages from one folder at a time.".into());
+                }
+                Some(_) => {}
+                None => {
+                    mailbox_id = Some(row.mailbox_id);
+                    mailbox_name = row.name;
+                    uid_validity = validity;
+                }
+            }
+            uids.push(row.uid);
+        }
+        uids.sort_unstable();
+        uids.dedup();
+        Ok(TrashExpungePlan {
+            mailbox_name,
+            uid_validity,
+            uids,
+        })
+    }
+
+    /// Remember this conversation so later Inbox copies are filed to Archive.
+    pub fn remember_muted_conversation(
+        &self,
+        account_id: &str,
+        message_id: i64,
+    ) -> Result<(), String> {
+        let mut conn = self.conn()?;
+        let transaction = conn.transaction().map_err(db_error)?;
+        let ids = conversation_mute_ids(&transaction, account_id, message_id)?;
+        let mut group_id: Option<String> = None;
+        for id in &ids {
+            let found: Option<String> = transaction
+                .query_row(
+                    "SELECT group_id FROM muted_ids WHERE account_id=?1 AND message_id=?2",
+                    params![account_id, id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(db_error)?;
+            if found.is_some() {
+                group_id = found;
+                break;
+            }
+        }
+        let group_id = group_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        for id in ids {
+            transaction
+                .execute(
+                    "INSERT OR IGNORE INTO muted_ids(account_id,message_id,group_id) VALUES(?1,?2,?3)",
+                    params![account_id, id, group_id],
+                )
+                .map_err(db_error)?;
+        }
+        transaction.commit().map_err(db_error)
+    }
+
+    /// Stop filing later mail in this conversation. Mail already moved stays put.
+    pub fn forget_muted_conversation(
+        &self,
+        account_id: &str,
+        message_id: i64,
+    ) -> Result<(), String> {
+        let mut conn = self.conn()?;
+        let transaction = conn.transaction().map_err(db_error)?;
+        let ids = conversation_mute_ids(&transaction, account_id, message_id)?;
+        let mut groups = Vec::new();
+        for id in &ids {
+            let found: Option<String> = transaction
+                .query_row(
+                    "SELECT group_id FROM muted_ids WHERE account_id=?1 AND message_id=?2",
+                    params![account_id, id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(db_error)?;
+            if let Some(group_id) = found {
+                if !groups.contains(&group_id) {
+                    groups.push(group_id);
+                }
+            }
+        }
+        for group_id in groups {
+            transaction
+                .execute(
+                    "DELETE FROM muted_ids WHERE account_id=?1 AND group_id=?2",
+                    params![account_id, group_id],
+                )
+                .map_err(db_error)?;
+        }
+        transaction.commit().map_err(db_error)
+    }
+
+    /// Mark matching Inbox mail read and queue a move to Archive.
+    /// Runs again after sync so a reply that arrives later is filed too.
+    pub fn file_muted_inbox(&self, account_id: &str) -> Result<Vec<i64>, String> {
+        let Some((destination_id, destination)) = self.mailbox_for_role(account_id, "archive")?
+        else {
+            return Ok(Vec::new());
+        };
+        let mut filed = Vec::new();
+        for _ in 0..5 {
+            let hits = muted_inbox_hits(self, account_id)?;
+            if hits.is_empty() {
+                break;
+            }
+            let mut progressed = false;
+            for hit in hits {
+                if hit.mailbox == destination {
+                    continue;
+                }
+                let Some(validity) = self.mailbox_uid_validity(account_id, &hit.mailbox)? else {
+                    continue;
+                };
+                self.set_flags(hit.id, Some(true), None)?;
+                let flag = serde_json::json!({
+                    "messageId": hit.id,
+                    "uid": hit.uid,
+                    "mailbox": hit.mailbox,
+                    "uidValidity": validity,
+                    "isRead": true,
+                    "isStarred": null,
+                });
+                self.queue_operation(
+                    account_id,
+                    "flags",
+                    &flag,
+                    Some(&format!("flags:{}:true:false", hit.id)),
+                )?;
+                if let Some(rfc_id) = hit.message_id.as_deref() {
+                    remember_reply_id(self, account_id, rfc_id, hit.thread_parent.as_deref())?;
+                }
+                let operation = serde_json::json!({
+                    "messageId": hit.id,
+                    "uid": hit.uid,
+                    "source": hit.mailbox,
+                    "destination": destination,
+                    "uidValidity": validity,
+                });
+                self.queue_operation(
+                    account_id,
+                    "move",
+                    &operation,
+                    Some(&format!("move:{}", hit.id)),
+                )?;
+                self.mark_pending_move(hit.id, destination_id)?;
+                filed.push(hit.id);
+                progressed = true;
+            }
+            if !progressed {
+                break;
+            }
+        }
+        Ok(filed)
+    }
+}
+
+struct TrashRow {
+    account_id: String,
+    mailbox_id: i64,
+    name: String,
+    role: String,
+    uid: u32,
+    pending_move_to: Option<i64>,
+    uid_validity: Option<u32>,
+}
+
+fn trash_row(conn: &rusqlite::Connection, id: i64) -> Result<Option<TrashRow>, String> {
+    conn.query_row(
+        "SELECT m.account_id, m.mailbox_id, f.name, f.role, m.uid, m.pending_move_to, f.uid_validity
+         FROM messages m JOIN mailboxes f ON f.id = m.mailbox_id WHERE m.id=?1",
+        [id],
+        |row| {
+            Ok(TrashRow {
+                account_id: row.get(0)?,
+                mailbox_id: row.get(1)?,
+                name: row.get(2)?,
+                role: row.get(3)?,
+                uid: row.get(4)?,
+                pending_move_to: row.get(5)?,
+                uid_validity: row.get(6)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(db_error)
+}
+
+#[derive(Debug)]
+pub struct TrashExpungePlan {
+    pub mailbox_name: String,
+    pub uid_validity: u32,
+    pub uids: Vec<u32>,
 }
 
 // IDs may outlive cache rows in an open reader or composer.
@@ -942,6 +1539,8 @@ fn write_full_message(
         .map_err(|_| "Could not index recipients.".to_string())?;
     let cc_json = serde_json::to_string(&message.cc)
         .map_err(|_| "Could not index recipients.".to_string())?;
+    let bcc_json = serde_json::to_string(&message.bcc)
+        .map_err(|_| "Could not index recipients.".to_string())?;
     // Bodies are cached as a unit with the raw MIME; without it nothing counts
     // toward the cache and the row stays a prefetch candidate.
     let body_bytes = if message.raw_message.is_empty() {
@@ -957,24 +1556,28 @@ fn write_full_message(
     transaction.execute(
         "INSERT INTO messages (
             id, account_id, mailbox_id, uid, message_id, subject, sender_name, sender_address, recipients,
-            received_at, preview, is_read, is_starred, has_attachments, size, to_json, cc_json,
+            received_at, preview, is_read, is_starred, has_attachments, size, to_json, cc_json, bcc_json,
             reply_to, thread_parent, thread_root, text_body, html_body, attachments_json, raw_message, accessed_at,
             internal_at, body_bytes, prefetch_failures, prefetch_retry_at,
-            has_calendar, calendar_json, list_unsubscribe, list_unsubscribe_post
-         ) VALUES (?30,?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,'1970-01-01 00:00:00',
-            COALESCE(?24,?9),?25,0,NULL,?26,?27,?28,?29)
+            has_calendar, calendar_json, list_unsubscribe, list_unsubscribe_post, importance,
+            disposition_to
+         ) VALUES (?30,?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?33,?17,?18,?19,?20,?21,?22,?23,'1970-01-01 00:00:00',
+            COALESCE(?24,?9),?25,0,NULL,?26,?27,?28,?29,?31,?32)
          ON CONFLICT(mailbox_id, uid) DO UPDATE SET
             message_id=excluded.message_id, subject=excluded.subject, sender_name=excluded.sender_name,
             sender_address=excluded.sender_address, recipients=excluded.recipients, received_at=excluded.received_at,
             preview=excluded.preview, is_read=excluded.is_read, is_starred=excluded.is_starred,
             has_attachments=excluded.has_attachments, size=excluded.size, to_json=excluded.to_json,
-            cc_json=excluded.cc_json, reply_to=excluded.reply_to, thread_parent=excluded.thread_parent,
+            cc_json=excluded.cc_json,
+            bcc_json=CASE WHEN excluded.bcc_json != '[]' THEN excluded.bcc_json ELSE messages.bcc_json END,
+            reply_to=excluded.reply_to, thread_parent=excluded.thread_parent,
             thread_root=excluded.thread_root, text_body=excluded.text_body,
             html_body=excluded.html_body, attachments_json=excluded.attachments_json, raw_message=excluded.raw_message,
             internal_at=COALESCE(?24, messages.internal_at, excluded.received_at),
             body_bytes=excluded.body_bytes, prefetch_failures=0, prefetch_retry_at=NULL,
             has_calendar=excluded.has_calendar, calendar_json=excluded.calendar_json,
-            list_unsubscribe=excluded.list_unsubscribe, list_unsubscribe_post=excluded.list_unsubscribe_post",
+            list_unsubscribe=excluded.list_unsubscribe, list_unsubscribe_post=excluded.list_unsubscribe_post,
+            importance=excluded.importance, disposition_to=excluded.disposition_to",
         params![
             account_id, mailbox_id, message.uid, message.message_id, message.subject, message.sender_name,
             message.sender_address, message.recipients, message.received_at, message.preview,
@@ -985,6 +1588,9 @@ fn write_full_message(
             body_bytes.min(i64::MAX as usize) as i64,
             message.has_calendar as i32, message.calendar_json, message.list_unsubscribe,
             message.list_unsubscribe_post, stable_id,
+            crate::models::canonical_importance(&message.importance),
+            crate::models::receipt_mailbox(&message.disposition_to).unwrap_or_default(),
+            bcc_json,
         ],
     ).map_err(db_error)?;
     let id: i64 = transaction
@@ -998,8 +1604,12 @@ fn write_full_message(
         .execute("DELETE FROM message_fts WHERE rowid = ?1", [id])
         .map_err(db_error)?;
     transaction.execute(
-        "INSERT INTO message_fts(rowid, subject, sender, recipients, body) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![id, message.subject, format!("{} {}", message.sender_name, message.sender_address), message.recipients, message.text_body],
+        "INSERT INTO message_fts(rowid, subject, sender, recipients, body)
+         SELECT id, subject, sender_name || ' ' || sender_address,
+            recipients || ' ' || IFNULL((SELECT group_concat(j.value, ' ') FROM json_each(messages.bcc_json) AS j), ''),
+            text_body
+         FROM messages WHERE id=?1",
+        [id],
     ).map_err(db_error)?;
     Ok(id)
 }
@@ -1014,25 +1624,30 @@ fn write_envelope(
         .map_err(|_| "Could not index recipients.".to_string())?;
     let cc_json = serde_json::to_string(&message.cc)
         .map_err(|_| "Could not index recipients.".to_string())?;
+    let bcc_json = serde_json::to_string(&message.bcc)
+        .map_err(|_| "Could not index recipients.".to_string())?;
     let (thread_parent, thread_root) =
         provisional_thread_root(transaction, account_id, mailbox_id, message)?;
     let stable_id = stable_message_id(transaction, mailbox_id, message.uid)?;
     transaction.execute(
         "INSERT INTO messages (
             id, account_id, mailbox_id, uid, message_id, subject, sender_name, sender_address, recipients,
-            received_at, preview, is_read, is_starred, has_attachments, size, to_json, cc_json,
+            received_at, preview, is_read, is_starred, has_attachments, size, to_json, cc_json, bcc_json,
             reply_to, thread_parent, thread_root, text_body, html_body, attachments_json, raw_message, accessed_at,
-            internal_at, is_answered, is_forwarded
-         ) VALUES (?22,?1,?2,?3,?4,?5,?6,?7,?8,?9,'',?10,?11,?12,?13,?14,?15,?16,?17,?18,'',NULL,'[]',X'','1970-01-01 00:00:00',
-            COALESCE(?19,?9),?20,?21)
+            internal_at, is_answered, is_forwarded, importance
+         ) VALUES (?22,?1,?2,?3,?4,?5,?6,?7,?8,?9,'',?10,?11,?12,?13,?14,?15,?24,?16,?17,?18,'',NULL,'[]',X'','1970-01-01 00:00:00',
+            COALESCE(?19,?9),?20,?21,?23)
          ON CONFLICT(mailbox_id, uid) DO UPDATE SET
             message_id=excluded.message_id, subject=excluded.subject, sender_name=excluded.sender_name,
             sender_address=excluded.sender_address, recipients=excluded.recipients, received_at=excluded.received_at,
             is_read=excluded.is_read, is_starred=excluded.is_starred, size=excluded.size,
             is_answered=excluded.is_answered, is_forwarded=excluded.is_forwarded,
-            to_json=excluded.to_json, cc_json=excluded.cc_json, reply_to=excluded.reply_to,
+            to_json=excluded.to_json, cc_json=excluded.cc_json,
+            bcc_json=CASE WHEN excluded.bcc_json != '[]' THEN excluded.bcc_json ELSE messages.bcc_json END,
+            reply_to=excluded.reply_to,
             thread_parent=excluded.thread_parent, thread_root=excluded.thread_root,
             internal_at=COALESCE(?19, messages.internal_at, excluded.received_at),
+            importance=CASE WHEN excluded.importance != '' THEN excluded.importance ELSE messages.importance END,
             has_attachments=CASE WHEN excluded.has_attachments=1 THEN 1 ELSE has_attachments END",
         params![
             account_id,
@@ -1055,7 +1670,10 @@ fn write_envelope(
             thread_root,
             message.internal_at,
             message.is_answered as i32,
-            message.is_forwarded as i32, stable_id,
+            message.is_forwarded as i32,
+            stable_id,
+            crate::models::canonical_importance(&message.importance),
+            bcc_json,
         ],
     ).map_err(db_error)?;
     let id: i64 = transaction
@@ -1070,8 +1688,202 @@ fn write_envelope(
         .map_err(db_error)?;
     transaction.execute(
         "INSERT INTO message_fts(rowid,subject,sender,recipients,body)
-         SELECT id,subject,sender_name || ' ' || sender_address,recipients,text_body FROM messages WHERE id=?1",
+         SELECT id,subject,sender_name || ' ' || sender_address,
+            recipients || ' ' || IFNULL((SELECT group_concat(j.value, ' ') FROM json_each(messages.bcc_json) AS j), ''),
+            text_body
+         FROM messages WHERE id=?1",
         [id],
     ).map_err(db_error)?;
     Ok(id)
+}
+
+fn acceptable_mute_id(value: &str) -> Option<&str> {
+    let id = value.trim();
+    if id.is_empty() || id.len() > 998 || id.chars().any(char::is_control) {
+        None
+    } else {
+        Some(id)
+    }
+}
+
+fn push_mute_id(ids: &mut Vec<String>, value: Option<&str>) {
+    let Some(value) = value.and_then(acceptable_mute_id) else {
+        return;
+    };
+    if !ids.iter().any(|id| id == value) {
+        ids.push(value.to_string());
+    }
+}
+
+struct MuteSeed {
+    owner: String,
+    message_id: Option<String>,
+    thread_parent: Option<String>,
+    thread_root: Option<String>,
+}
+
+fn conversation_mute_ids(
+    transaction: &rusqlite::Transaction,
+    account_id: &str,
+    message_id: i64,
+) -> Result<Vec<String>, String> {
+    let row = transaction
+        .query_row(
+            "SELECT account_id, message_id, thread_parent, thread_root FROM messages WHERE id=?1",
+            [message_id],
+            |row| {
+                Ok(MuteSeed {
+                    owner: row.get(0)?,
+                    message_id: row.get(1)?,
+                    thread_parent: row.get(2)?,
+                    thread_root: row.get(3)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(db_error)?;
+    let Some(MuteSeed {
+        owner,
+        message_id: rfc_id,
+        thread_parent: parent,
+        thread_root: root,
+    }) = row
+    else {
+        return Err("Message not found.".into());
+    };
+    if owner != account_id {
+        return Err("Message does not belong to this account.".into());
+    }
+    let mut ids = Vec::new();
+    push_mute_id(&mut ids, rfc_id.as_deref());
+    push_mute_id(&mut ids, parent.as_deref());
+    if let Some(root) = root.as_deref().and_then(acceptable_mute_id) {
+        let mut statement = transaction
+            .prepare(
+                "SELECT message_id, thread_parent FROM messages WHERE account_id=?1 AND thread_root=?2",
+            )
+            .map_err(db_error)?;
+        let pairs = statement
+            .query_map(params![account_id, root], |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                ))
+            })
+            .map_err(db_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_error)?;
+        drop(statement);
+        for (id, parent) in pairs {
+            push_mute_id(&mut ids, id.as_deref());
+            push_mute_id(&mut ids, parent.as_deref());
+        }
+    }
+    if ids.is_empty() {
+        return Err("This message cannot be muted.".into());
+    }
+    Ok(ids)
+}
+
+struct MuteHit {
+    id: i64,
+    uid: u32,
+    message_id: Option<String>,
+    thread_parent: Option<String>,
+    mailbox: String,
+}
+
+fn muted_inbox_hits(db: &Database, account_id: &str) -> Result<Vec<MuteHit>, String> {
+    let conn = db.conn()?;
+    let mut statement = conn
+        .prepare(
+            "SELECT m.id, m.uid, m.message_id, m.thread_parent, box.name
+             FROM messages m
+             JOIN mailboxes box ON box.id = m.mailbox_id
+             WHERE m.account_id=?1 AND box.role='inbox' AND box.server_available=1
+               AND m.pending_move_to IS NULL
+               AND (
+                 m.message_id IN (SELECT message_id FROM muted_ids WHERE account_id=?1)
+                 OR m.thread_parent IN (SELECT message_id FROM muted_ids WHERE account_id=?1)
+               )
+             LIMIT 100",
+        )
+        .map_err(db_error)?;
+    let rows = statement
+        .query_map(params![account_id], |row| {
+            Ok(MuteHit {
+                id: row.get(0)?,
+                uid: row.get(1)?,
+                message_id: row.get(2)?,
+                thread_parent: row.get(3)?,
+                mailbox: row.get(4)?,
+            })
+        })
+        .map_err(db_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(db_error)?;
+    Ok(rows)
+}
+
+fn remember_reply_id(
+    db: &Database,
+    account_id: &str,
+    message_id: &str,
+    parent: Option<&str>,
+) -> Result<(), String> {
+    let Some(id) = acceptable_mute_id(message_id) else {
+        return Ok(());
+    };
+    let conn = db.conn()?;
+    let mut group: Option<String> = conn
+        .query_row(
+            "SELECT group_id FROM muted_ids WHERE account_id=?1 AND message_id=?2",
+            params![account_id, id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(db_error)?;
+    if group.is_none() {
+        if let Some(parent) = parent.and_then(acceptable_mute_id) {
+            group = conn
+                .query_row(
+                    "SELECT group_id FROM muted_ids WHERE account_id=?1 AND message_id=?2",
+                    params![account_id, parent],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(db_error)?;
+        }
+    }
+    let Some(group) = group else {
+        return Ok(());
+    };
+    conn.execute(
+        "INSERT OR IGNORE INTO muted_ids(account_id,message_id,group_id) VALUES(?1,?2,?3)",
+        params![account_id, id, group],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+fn list_cursor(sort: MessageListSort, last: &MessageSummary) -> MessageCursor {
+    let key = match sort {
+        MessageListSort::Date | MessageListSort::DateOldest => String::new(),
+        MessageListSort::Sender | MessageListSort::SenderDesc => {
+            if last.sender_name.is_empty() {
+                last.sender_address.clone()
+            } else {
+                last.sender_name.clone()
+            }
+        }
+        MessageListSort::Subject | MessageListSort::SubjectDesc => last.subject.clone(),
+        MessageListSort::Size | MessageListSort::SizeAsc => last.size.to_string(),
+    };
+    MessageCursor {
+        received_at: last.received_at.clone(),
+        uid: last.uid,
+        sort,
+        key,
+        pinned: last.pinned,
+    }
 }

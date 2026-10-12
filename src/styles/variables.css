@@ -70,16 +70,23 @@
   /* Density tokens: size UI with these, never literals, so compact
      (below) can restyle everything by overriding them. */
   --target-size: 44px;
+  /* Composer field labels; rem so the column grows with text size. */
+  --address-label-width: 5rem;
+  /* The letter keeps a readable height; the reader scrolls past it in short windows. */
+  --reader-body-min: max(6rem, 40dvh);
   --target-size-inset: var(--target-size);
   --bar-height-sm: 48px;
   --bar-height-md: 56px;
   --control-pad-block: 8px;
   --row-pad-block: 7px;
   --toolbar-pad-block: 7px;
+  --toolbar-pad-inline: 16px;
+  /* Reader chrome and the message share one inset. */
+  --reader-pad-inline: clamp(18px, 3vw, 30px);
   --bar-pad-block: 6px;
   --bar-pad-block-lg: 10px;
   --sidebar-gap: 3px;
-  --pane-heading-height: 62px;
+  --pane-heading-height: 4.125rem;
   --pane-heading-pad-block: 9px;
   --message-row-height: 88px;
   --message-row-pad-block: 10px;
@@ -233,6 +240,8 @@
   --control-pad-block: 4px;
   --row-pad-block: 4px;
   --toolbar-pad-block: 5px;
+  --toolbar-pad-inline: 12px;
+  --reader-pad-inline: 16px;
   --bar-pad-block: 4px;
   --bar-pad-block-lg: 4px;
   --sidebar-gap: 1px;

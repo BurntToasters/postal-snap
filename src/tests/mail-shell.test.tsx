@@ -8,13 +8,19 @@ import {
 } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
+import { seedBody } from "../components/composer/composerSeed";
 import { MailShell } from "../components/MailShell";
 import { ContextMenuHost } from "../components/ContextMenu";
 import { CONTEXT_ACTION_EVENT } from "../contextMenu";
+import { formatMessageDate } from "../format";
 import { strings } from "../i18n";
 import { defaultSettings, useAppStore } from "../store";
 import { applyPendingUpdate } from "../update";
-import type { MessageChangeEvent, MessageSummary } from "../types";
+import type {
+  MessageChangeEvent,
+  MessageSummary,
+  SyncProgress,
+} from "../types";
 import { mockSaveSettingsPassthrough } from "./helpers/api-mocks";
 import {
   makeAccount,
@@ -34,13 +40,20 @@ vi.mock("../api", () => ({
     syncAccount: vi.fn(),
     createFolder: vi.fn(),
     renameFolder: vi.fn(),
+    moveFolder: vi.fn(),
     deleteFolder: vi.fn(),
     getDraft: vi.fn(),
+    saveDraft: vi.fn(),
+    deleteDraft: vi.fn(),
     snoozeMessage: vi.fn(),
+    snoozeMessages: vi.fn(),
+    saveConversationAttachments: vi.fn(),
+    saveMessagesEml: vi.fn(),
     unsnoozeMessage: vi.fn(),
     retryOutbox: vi.fn(),
     retrySentCopy: vi.fn(),
     sendScheduledOutbox: vi.fn(),
+    deleteTrashMessages: vi.fn(),
     emptyTrash: vi.fn(),
     emptyJunk: vi.fn(),
     deleteOutbox: vi.fn(),
@@ -48,16 +61,28 @@ vi.mock("../api", () => ({
     getOutbox: vi.fn(),
     listMessages: vi.fn(),
     getMessage: vi.fn(),
+    findCachedMessage: vi.fn().mockResolvedValue(null),
     setMessageFlags: vi.fn(),
     setMessagesFlags: vi.fn(),
+    setMessagesPinned: vi.fn(),
     moveMessagesToMailbox: vi.fn(),
+    moveMessageToMailbox: vi.fn(),
+    copyMessagesToMailbox: vi.fn(),
     markMailboxRead: vi.fn(),
     moveMessage: vi.fn().mockRejectedValue(new Error("move unavailable")),
+    listFilterRules: vi.fn().mockResolvedValue([]),
+    createFilterRule: vi.fn(),
+    muteConversation: vi.fn().mockResolvedValue([]),
+    unmuteConversation: vi.fn().mockResolvedValue(undefined),
     searchCached: vi.fn(),
+    listRecentSearches: vi.fn().mockResolvedValue([]),
+    rememberSearch: vi.fn().mockResolvedValue([]),
+    forgetRecentSearches: vi.fn().mockResolvedValue(undefined),
     searchServer: vi.fn(),
     saveSettings: vi.fn(),
     onFolderCountsChanged: vi.fn(),
     onMessageChanged: vi.fn(),
+    onSyncProgress: vi.fn(),
     onFrameLink: vi.fn().mockResolvedValue(() => undefined),
     onDraftSyncChanged: vi.fn().mockResolvedValue(() => undefined),
     onOutboxChanged: vi.fn().mockResolvedValue(() => undefined),
@@ -106,12 +131,14 @@ const mockedCreateFolder = vi.mocked(api.createFolder);
 const mockedRenameFolder = vi.mocked(api.renameFolder);
 const mockedDeleteFolder = vi.mocked(api.deleteFolder);
 const mockedGetDraft = vi.mocked(api.getDraft);
+const mockedSaveDraft = vi.mocked(api.saveDraft);
 const mockedUnsnoozeMessage = vi.mocked(api.unsnoozeMessage);
 const mockedListMessages = vi.mocked(api.listMessages);
 const mockedGetMessage = vi.mocked(api.getMessage);
 const mockedSetMessageFlags = vi.mocked(api.setMessageFlags);
 const mockedSetMessagesFlags = vi.mocked(api.setMessagesFlags);
 const mockedMoveMessagesToMailbox = vi.mocked(api.moveMessagesToMailbox);
+const mockedCopyMessagesToMailbox = vi.mocked(api.copyMessagesToMailbox);
 const mockedMarkMailboxRead = vi.mocked(api.markMailboxRead);
 const mockedSearchCached = vi.mocked(api.searchCached);
 const mockedSearchServer = vi.mocked(api.searchServer);
@@ -145,9 +172,28 @@ function switchToAccount(accountId: string) {
   );
 }
 
+function messageDragTransfer() {
+  const stored = new Map<string, string>();
+  return {
+    effectAllowed: "move",
+    dropEffect: "none",
+    types: ["application/x-postal-snap-messages"],
+    setData(type: string, value: string) {
+      stored.set(type, value);
+    },
+    getData(type: string) {
+      return stored.get(type) ?? "";
+    },
+  };
+}
+
 describe("mail shell", () => {
   beforeEach(() => {
+    document
+      .querySelectorAll("iframe, .print-host")
+      .forEach((node) => node.remove());
     vi.clearAllMocks();
+    mockedSaveSettings.mockImplementation(async (next) => next);
     resetStore({
       accounts: [account],
       activeAccountId: account.id,
@@ -176,10 +222,537 @@ describe("mail shell", () => {
     });
     mockedSetMessageFlags.mockResolvedValue(undefined);
     vi.mocked(api.moveMessage).mockRejectedValue(new Error("move unavailable"));
+    vi.mocked(api.listFilterRules).mockResolvedValue([]);
+    vi.mocked(api.createFilterRule).mockResolvedValue({
+      id: "rule-1",
+      accountId: "account-1",
+      name: "Block sender",
+      field: "from",
+      contains: "jane@example.test",
+      action: "move_junk",
+      enabled: true,
+    });
+    vi.mocked(api.muteConversation).mockResolvedValue([]);
+    vi.mocked(api.unmuteConversation).mockResolvedValue(undefined);
     mockSaveSettingsPassthrough();
     mockedOnFolderCountsChanged.mockResolvedValue(() => undefined);
     mockedOnMessageChanged.mockResolvedValue(() => undefined);
+    vi.mocked(api.onSyncProgress).mockResolvedValue(() => undefined);
     mockedSearchCached.mockResolvedValue([]);
+  });
+
+  it("shows how much mail is downloading", async () => {
+    let report: ((progress: SyncProgress) => void) | undefined;
+    vi.mocked(api.onSyncProgress).mockImplementation(async (handler) => {
+      report = handler;
+      return () => undefined;
+    });
+    resetStore({
+      activeMailboxId: inbox.id,
+      sync: {
+        "account-1": { accountId: "account-1", phase: "syncing" },
+      },
+    });
+    renderShell();
+    await screen.findByRole("option", { name: /First message/i });
+    act(() => {
+      report?.({
+        accountId: "account-1",
+        envelopesDone: 3,
+        envelopesTotal: 10,
+        bodiesDone: 0,
+        bodiesTotal: 0,
+        backfilling: true,
+      });
+    });
+    expect(await screen.findByText("Downloading 3 of 10")).toBeVisible();
+    expect(screen.getByRole("progressbar")).toHaveAttribute("value", "3");
+  });
+
+  it("hides the first line of each message when previews are off", async () => {
+    resetStore({
+      activeMailboxId: inbox.id,
+      settings: { ...defaultSettings, showMessagePreviews: false },
+      messages: [firstMessage],
+    });
+    mockedListMessages.mockResolvedValue({
+      items: [firstMessage],
+      nextCursor: null,
+      hasMore: false,
+    });
+    renderShell();
+    const row = await screen.findByRole("option", { name: /First message/i });
+    expect(row).toHaveTextContent("First message");
+    expect(row).not.toHaveTextContent("First preview");
+  });
+
+  it("lists the mailbox oldest first and can return to newest", async () => {
+    const newer = makeMessage({
+      id: 1,
+      subject: "Newer note",
+      receivedAt: "2026-08-18T12:00:00Z",
+    });
+    const older = makeMessage({
+      id: 2,
+      subject: "Older note",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    mockedListMessages.mockImplementation(async (...args: unknown[]) => ({
+      items: args[5] === "dateOldest" ? [older, newer] : [newer, older],
+      nextCursor: null,
+      hasMore: false,
+    }));
+    resetStore({ activeMailboxId: inbox.id });
+    renderShell();
+
+    await screen.findByRole("option", { name: /Newer note/i });
+    expect(screen.getAllByRole("option")[0]).toHaveTextContent("Newer note");
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitemcheckbox", { name: strings.mail.sortOldest }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getAllByRole("option")[0]).toHaveTextContent("Older note"),
+    );
+    expect(mockedListMessages).toHaveBeenCalledWith(
+      "account-1",
+      inbox.id,
+      undefined,
+      100,
+      undefined,
+      "dateOldest",
+    );
+    expect(screen.getAllByRole("option")[1]).toHaveTextContent("Newer note");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitemradio", { name: strings.mail.sortDate }),
+    );
+    await waitFor(() =>
+      expect(screen.getAllByRole("option")[0]).toHaveTextContent("Newer note"),
+    );
+  });
+
+  it("opens with the saved mailbox order and stores a new choice", async () => {
+    const newer = makeMessage({
+      id: 1,
+      subject: "Newer note",
+      receivedAt: "2026-08-18T12:00:00Z",
+    });
+    const older = makeMessage({
+      id: 2,
+      subject: "Older note",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    mockedListMessages.mockImplementation(async (...args: unknown[]) => ({
+      items: args[5] === "dateOldest" ? [older, newer] : [newer, older],
+      nextCursor: null,
+      hasMore: false,
+    }));
+    resetStore({
+      activeMailboxId: inbox.id,
+      settings: {
+        ...defaultSettings,
+        mailboxSort: "dateOldest",
+        mailboxFilter: "unread",
+      },
+    });
+    renderShell();
+
+    await waitFor(() =>
+      expect(mockedListMessages).toHaveBeenCalledWith(
+        "account-1",
+        inbox.id,
+        undefined,
+        100,
+        "unread",
+        "dateOldest",
+      ),
+    );
+    expect(screen.getAllByRole("option")[0]).toHaveTextContent("Older note");
+    expect(screen.getByRole("radio", { name: "Unread" })).toBeChecked();
+
+    fireEvent.click(screen.getByRole("radio", { name: "All" }));
+    await waitFor(() =>
+      expect(mockedSaveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mailboxViews: [
+            expect.objectContaining({
+              accountId: "account-1",
+              mailboxId: inbox.id,
+              filter: "all",
+            }),
+          ],
+        }),
+      ),
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitemradio", { name: strings.mail.sortDate }),
+    );
+    await waitFor(() =>
+      expect(mockedSaveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mailboxViews: [
+            expect.objectContaining({
+              accountId: "account-1",
+              mailboxId: inbox.id,
+              sort: "date",
+              filter: "all",
+            }),
+          ],
+        }),
+      ),
+    );
+  });
+
+  it("lists subjects from Z to A and can return to A to Z", async () => {
+    const alpha = makeMessage({ id: 1, subject: "Alpha note" });
+    const zoo = makeMessage({ id: 2, subject: "Zoo note" });
+    mockedListMessages.mockImplementation(async (...args: unknown[]) => ({
+      items: args[5] === "subjectDesc" ? [zoo, alpha] : [alpha, zoo],
+      nextCursor: null,
+      hasMore: false,
+    }));
+    resetStore({ activeMailboxId: inbox.id });
+    renderShell();
+
+    await screen.findByRole("option", { name: /Alpha note/i });
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitemradio", { name: strings.mail.sortSubject }),
+    );
+    await waitFor(() =>
+      expect(mockedListMessages).toHaveBeenCalledWith(
+        "account-1",
+        inbox.id,
+        undefined,
+        100,
+        undefined,
+        "subject",
+      ),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitemcheckbox", {
+        name: strings.mail.sortDescending,
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getAllByRole("option")[0]).toHaveTextContent("Zoo note"),
+    );
+    expect(screen.getAllByRole("option")[1]).toHaveTextContent("Alpha note");
+    expect(mockedListMessages).toHaveBeenCalledWith(
+      "account-1",
+      inbox.id,
+      undefined,
+      100,
+      undefined,
+      "subjectDesc",
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitemradio", { name: strings.mail.sortSubject }),
+    );
+    await waitFor(() =>
+      expect(screen.getAllByRole("option")[0]).toHaveTextContent("Alpha note"),
+    );
+  });
+
+  it("copies message text from the list without opening it", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    renderShell();
+    await screen.findByRole("option", { name: /First message/i });
+    window.dispatchEvent(
+      new CustomEvent(CONTEXT_ACTION_EVENT, {
+        detail: {
+          id: "copy-message-text",
+          target: { kind: "message", messageId: firstMessage.id },
+        },
+      }),
+    );
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith(firstMessage.preview),
+    );
+    expect(
+      screen.queryByRole("heading", { name: "First message" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("copies a loaded conversation without opening it", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    const newer = makeMessage({
+      id: 1,
+      threadRoot: "<thread@example.test>",
+      subject: "Newer note",
+    });
+    const older = makeMessage({
+      id: 2,
+      threadRoot: "<thread@example.test>",
+      subject: "Older note",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    mockedListMessages.mockResolvedValue({
+      items: [newer, older],
+      nextCursor: null,
+      hasMore: false,
+    });
+    mockedGetMessage.mockImplementation(async (_accountId, id) => {
+      const summary = id === older.id ? older : newer;
+      return toDetail(summary, {
+        textBody: `${summary.subject} body`,
+        htmlBody: `<p>${summary.subject}</p><script>alert(1)</script>`,
+      });
+    });
+    resetStore({ activeMailboxId: inbox.id });
+    renderShell();
+
+    await screen.findByRole("treeitem", { name: /Newer note/i });
+    window.dispatchEvent(
+      new CustomEvent(CONTEXT_ACTION_EVENT, {
+        detail: {
+          id: "copy-conversation-text",
+          target: { kind: "message", messageId: 1 },
+        },
+      }),
+    );
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledOnce());
+    const copied = String(writeText.mock.calls[0]?.[0]);
+    expect(copied.indexOf("Older note")).toBeLessThan(
+      copied.indexOf("Newer note"),
+    );
+    expect(copied).not.toContain("alert(1)");
+    expect(
+      screen.queryByRole("heading", { name: "Newer note" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("blocks a sender by filing later mail to Junk", async () => {
+    vi.mocked(api.showNativeConfirm).mockResolvedValueOnce(false);
+    vi.mocked(api.moveMessage).mockResolvedValue(undefined);
+    vi.mocked(api.createFilterRule).mockImplementation(async (rule) => ({
+      ...rule,
+      id: "rule-1",
+    }));
+    renderShell();
+    fireEvent.click(
+      await screen.findByRole("option", { name: /First message/i }),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "First message" }),
+    ).toBeVisible();
+    window.dispatchEvent(
+      new CustomEvent("postal:menu-action", { detail: "block-sender" }),
+    );
+    await waitFor(() =>
+      expect(api.showNativeConfirm).toHaveBeenCalledWith(
+        strings.reader.blockSender,
+        strings.reader.blockSenderQuestion,
+      ),
+    );
+    expect(api.createFilterRule).not.toHaveBeenCalled();
+    expect(api.moveMessage).not.toHaveBeenCalled();
+
+    vi.mocked(api.showNativeConfirm).mockResolvedValueOnce(true);
+    window.dispatchEvent(
+      new CustomEvent("postal:menu-action", { detail: "block-sender" }),
+    );
+    await waitFor(() =>
+      expect(api.createFilterRule).toHaveBeenCalledWith(
+        expect.objectContaining({
+          accountId: "account-1",
+          field: "from",
+          contains: "jane@example.test",
+          action: "move_junk",
+          enabled: true,
+        }),
+      ),
+    );
+    expect(api.moveMessage).toHaveBeenCalledWith(
+      "account-1",
+      firstMessage.id,
+      "junk",
+    );
+  });
+
+  it("mutes a conversation and files the open message", async () => {
+    vi.mocked(api.showNativeConfirm).mockResolvedValueOnce(false);
+    vi.mocked(api.muteConversation).mockResolvedValue([firstMessage.id]);
+    renderShell();
+    fireEvent.click(
+      await screen.findByRole("option", { name: /First message/i }),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "First message" }),
+    ).toBeVisible();
+    window.dispatchEvent(
+      new CustomEvent("postal:menu-action", { detail: "mute-conversation" }),
+    );
+    await waitFor(() =>
+      expect(api.showNativeConfirm).toHaveBeenCalledWith(
+        strings.reader.muteConversation,
+        strings.reader.muteConversationQuestion,
+      ),
+    );
+    expect(api.muteConversation).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("heading", { name: "First message" }),
+    ).toBeVisible();
+
+    vi.mocked(api.showNativeConfirm).mockResolvedValueOnce(true);
+    window.dispatchEvent(
+      new CustomEvent("postal:menu-action", { detail: "mute-conversation" }),
+    );
+    await waitFor(() =>
+      expect(api.muteConversation).toHaveBeenCalledWith(
+        "account-1",
+        firstMessage.id,
+      ),
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("heading", { name: "First message" }),
+      ).not.toBeInTheDocument(),
+    );
+  });
+
+  it("unmutes a conversation without moving the message", async () => {
+    mockedGetMessage.mockImplementation(async (_accountId, messageId) => {
+      const summary = messages.find((item) => item.id === messageId);
+      if (!summary) throw new Error("message missing");
+      return { ...detail(summary), conversationMuted: true };
+    });
+    renderShell();
+    fireEvent.click(
+      await screen.findByRole("option", { name: /First message/i }),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "First message" }),
+    ).toBeVisible();
+    window.dispatchEvent(
+      new CustomEvent("postal:menu-action", { detail: "mute-conversation" }),
+    );
+    await waitFor(() =>
+      expect(api.unmuteConversation).toHaveBeenCalledWith(
+        "account-1",
+        firstMessage.id,
+      ),
+    );
+    expect(api.muteConversation).not.toHaveBeenCalled();
+    expect(api.showNativeConfirm).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("heading", { name: "First message" }),
+    ).toBeVisible();
+  });
+
+  it("does not add a second Junk rule for the same sender", async () => {
+    vi.mocked(api.showNativeConfirm).mockResolvedValue(true);
+    vi.mocked(api.moveMessage).mockResolvedValue(undefined);
+    vi.mocked(api.listFilterRules).mockResolvedValue([
+      {
+        id: "rule-1",
+        accountId: "account-1",
+        name: "Block sender",
+        field: "from",
+        contains: "Jane@Example.test",
+        action: "move_junk",
+        enabled: true,
+      },
+    ]);
+    renderShell();
+    fireEvent.click(
+      await screen.findByRole("option", { name: /First message/i }),
+    );
+    await screen.findByRole("heading", { name: "First message" });
+    window.dispatchEvent(
+      new CustomEvent("postal:menu-action", { detail: "block-sender" }),
+    );
+    await waitFor(() =>
+      expect(api.moveMessage).toHaveBeenCalledWith(
+        "account-1",
+        firstMessage.id,
+        "junk",
+      ),
+    );
+    expect(api.createFilterRule).not.toHaveBeenCalled();
+  });
+
+  it("opens the next and previous message from the reader", async () => {
+    const older = makeMessage({
+      id: 11,
+      uid: 11,
+      subject: "Older note",
+      receivedAt: "2026-08-17T12:00:00Z",
+      isRead: true,
+    });
+    const newer = makeMessage({
+      id: 12,
+      uid: 12,
+      subject: "Newer note",
+      receivedAt: "2026-08-18T12:00:00Z",
+      isRead: true,
+    });
+    mockedListMessages.mockResolvedValue({
+      items: [older, newer],
+      nextCursor: null,
+      hasMore: false,
+    });
+    mockedGetMessage.mockImplementation(async (_accountId, messageId) => {
+      const summary = [older, newer].find((item) => item.id === messageId);
+      if (!summary) throw new Error("message missing");
+      return toDetail(summary);
+    });
+    renderShell();
+    fireEvent.click(await screen.findByRole("option", { name: /Newer note/i }));
+    expect(
+      await screen.findByRole("heading", { name: "Newer note" }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: strings.reader.previousMessage }),
+    ).toBeDisabled();
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.reader.nextMessage }),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Older note" }),
+    ).toBeVisible();
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.reader.previousMessage }),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Newer note" }),
+    ).toBeVisible();
+  });
+
+  it("leaves an opened message unread until it is marked read", async () => {
+    resetStore({
+      settings: { ...defaultSettings, markRead: "manual" },
+    });
+    renderShell();
+    await screen.findByRole("option", { name: /First message/i });
+    fireEvent.click(screen.getByRole("option", { name: /First message/i }));
+    expect(
+      await screen.findByRole("heading", { name: "First message" }),
+    ).toBeVisible();
+    expect(mockedSetMessageFlags).not.toHaveBeenCalled();
   });
 
   it("keeps newer message selected when older read update finishes late", async () => {
@@ -207,6 +780,53 @@ describe("mail shell", () => {
         screen.getByRole("heading", { name: "Second message" }),
       ).toBeVisible(),
     );
+  });
+
+  it("offers a recent search and can clear it", async () => {
+    const recent: string[] = [];
+    vi.mocked(api.rememberSearch).mockImplementation(
+      async (_accountId, query) => {
+        const text = String(query).trim();
+        const next = [
+          text,
+          ...recent.filter((item) => item.toLowerCase() !== text.toLowerCase()),
+        ];
+        recent.splice(0, recent.length, ...next);
+        return next;
+      },
+    );
+    mockedSearchCached.mockResolvedValue([]);
+    mockedSearchServer.mockResolvedValue([]);
+    renderShell();
+    await screen.findByRole("option", { name: /First message/i });
+
+    const search = screen.getByRole("searchbox", { name: "Search mail" });
+    fireEvent.change(search, { target: { value: "Picnic" } });
+    fireEvent.submit(screen.getByRole("search"));
+    await waitFor(() =>
+      expect(api.rememberSearch).toHaveBeenCalledWith("account-1", "Picnic"),
+    );
+
+    fireEvent.change(search, { target: { value: "" } });
+    fireEvent.focus(search);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Picnic" }));
+    await waitFor(() =>
+      expect(mockedSearchCached).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "Picnic" }),
+      ),
+    );
+
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search mail" }), {
+      target: { value: "" },
+    });
+    fireEvent.focus(screen.getByRole("searchbox", { name: "Search mail" }));
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Clear recent searches" }),
+    );
+    expect(api.forgetRecentSearches).toHaveBeenCalledWith("account-1");
+    expect(
+      screen.queryByRole("menuitem", { name: "Picnic" }),
+    ).not.toBeInTheDocument();
   });
 
   it("does not let stale search results replace a cleared mailbox", async () => {
@@ -286,6 +906,1377 @@ describe("mail shell", () => {
     ).toBeVisible();
   });
 
+  it("selects every message between two shift-clicked rows", async () => {
+    const third = makeMessage({
+      id: 3,
+      uid: 3,
+      messageId: "<third@example.test>",
+      subject: "Third message",
+      preview: "Third preview",
+    });
+    mockedListMessages.mockResolvedValue({
+      items: [...messages, third],
+      nextCursor: null,
+      hasMore: false,
+    });
+    renderShell();
+
+    await screen.findByRole("option", { name: /Third message/i });
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /First message/i }));
+    fireEvent.click(screen.getByRole("option", { name: /Third message/i }), {
+      shiftKey: true,
+    });
+
+    expect(
+      screen.getByRole("checkbox", { name: /First message/i }),
+    ).toBeChecked();
+    expect(
+      screen.getByRole("checkbox", { name: /Second message/i }),
+    ).toBeChecked();
+    expect(
+      screen.getByRole("checkbox", { name: /Third message/i }),
+    ).toBeChecked();
+
+    fireEvent.click(screen.getByRole("option", { name: /Second message/i }), {
+      shiftKey: true,
+    });
+    expect(
+      screen.getByRole("checkbox", { name: /First message/i }),
+    ).toBeChecked();
+    expect(
+      screen.getByRole("checkbox", { name: /Second message/i }),
+    ).toBeChecked();
+    expect(
+      screen.getByRole("checkbox", { name: /Third message/i }),
+    ).not.toBeChecked();
+  });
+
+  it("selects every loaded message", async () => {
+    renderShell();
+
+    await screen.findByRole("option", { name: /First message/i });
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select all" }));
+
+    expect(
+      screen.getByRole("checkbox", { name: /First message/i }),
+    ).toBeChecked();
+    expect(
+      screen.getByRole("checkbox", { name: /Second message/i }),
+    ).toBeChecked();
+    expect(screen.getByRole("toolbar", { name: "2 selected" })).toBeVisible();
+  });
+
+  it("selects only the loaded unread messages", async () => {
+    const read = makeMessage({
+      id: 1,
+      isRead: true,
+      threadRoot: "<thread@example.test>",
+      subject: "Read note",
+    });
+    const unread = makeMessage({
+      id: 2,
+      isRead: false,
+      threadRoot: "<thread@example.test>",
+      subject: "Unread note",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    mockedListMessages.mockResolvedValue({
+      items: [read, unread],
+      nextCursor: null,
+      hasMore: false,
+    });
+    renderShell();
+
+    await screen.findByRole("treeitem", { name: /Read note/i });
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: strings.contextMenu.selectUnread }),
+    );
+
+    expect(
+      screen.getByRole("checkbox", { name: "Select Unread note" }),
+    ).toBeChecked();
+    expect(
+      screen.getByRole("checkbox", { name: "Select Read note" }),
+    ).not.toBeChecked();
+    expect(screen.getByRole("toolbar", { name: "1 selected" })).toBeVisible();
+  });
+
+  it("disables select unread when every loaded message is read", async () => {
+    mockedListMessages.mockResolvedValue({
+      items: [
+        makeMessage({ id: 1, isRead: true, subject: "Read note" }),
+        makeMessage({ id: 2, isRead: true, subject: "Other note" }),
+      ],
+      nextCursor: null,
+      hasMore: false,
+    });
+    renderShell();
+
+    await screen.findByRole("option", { name: /Read note/i });
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    expect(
+      screen.getByRole("menuitem", { name: strings.contextMenu.selectUnread }),
+    ).toBeDisabled();
+  });
+
+  it("snoozes the selected messages and opens the next one", async () => {
+    const first = makeMessage({ id: 1, subject: "First note" });
+    const keep = makeMessage({
+      id: 2,
+      subject: "Keep note",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    const third = makeMessage({
+      id: 3,
+      subject: "Third note",
+      receivedAt: "2026-08-16T12:00:00Z",
+    });
+    const loaded = [first, keep, third];
+    mockedListMessages.mockResolvedValue({
+      items: loaded,
+      nextCursor: null,
+      hasMore: false,
+    });
+    mockedGetMessage.mockImplementation(async (_accountId, messageId) => {
+      const summary = loaded.find((item) => item.id === messageId);
+      if (!summary) throw new Error("message missing");
+      return toDetail(summary);
+    });
+    vi.mocked(api.snoozeMessages).mockImplementation(async () => {
+      mockedListMessages.mockResolvedValue({
+        items: [keep],
+        nextCursor: null,
+        hasMore: false,
+      });
+    });
+    renderShell();
+
+    fireEvent.click(await screen.findByRole("option", { name: /First note/i }));
+    await screen.findByRole("heading", { name: "First note" });
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select First note" }),
+    );
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select Third note" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: strings.mail.snoozeSelected }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.reader.snoozeTomorrow }),
+    );
+
+    await waitFor(() =>
+      expect(api.snoozeMessages).toHaveBeenCalledWith(
+        "account-1",
+        [1, 3],
+        expect.any(String),
+      ),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Keep note" }),
+    ).toBeVisible();
+    expect(screen.queryByRole("option", { name: /First note/i })).toBeNull();
+    expect(screen.queryByRole("option", { name: /Third note/i })).toBeNull();
+    expect(screen.getByRole("option", { name: /Keep note/i })).toBeVisible();
+    expect(screen.queryByRole("toolbar", { name: /selected/i })).toBeNull();
+  });
+
+  it("leaves the selection in place when snooze fails", async () => {
+    vi.mocked(api.snoozeMessages).mockRejectedValue(new Error("disk full"));
+    renderShell();
+
+    await screen.findByRole("option", { name: /First message/i });
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /First message/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    expect(
+      screen.getByRole("menuitem", { name: strings.mail.snoozeSelected }),
+    ).toBeEnabled();
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: strings.mail.snoozeSelected }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.reader.snoozeTomorrow }),
+    );
+
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toBe("Error: disk full"),
+    );
+    expect(
+      screen.getByRole("checkbox", { name: /First message/i }),
+    ).toBeChecked();
+    expect(
+      screen.getByRole("group", { name: strings.mail.snoozeSelected }),
+    ).toBeVisible();
+  });
+
+  it("disables snooze until a message is selected", async () => {
+    renderShell();
+    await screen.findByRole("option", { name: /First message/i });
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    expect(
+      screen.getByRole("menuitem", { name: strings.mail.snoozeSelected }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("menuitem", { name: strings.mail.pinSelected }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("menuitem", { name: strings.mail.unpinSelected }),
+    ).toBeDisabled();
+  });
+
+  it("pins the selected messages and leaves one that is already pinned out", async () => {
+    const newer = makeMessage({
+      id: 1,
+      subject: "Newer note",
+      receivedAt: "2026-08-18T12:00:00Z",
+    });
+    const middle = makeMessage({
+      id: 2,
+      subject: "Middle note",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    const older = makeMessage({
+      id: 3,
+      subject: "Older note",
+      receivedAt: "2026-08-16T12:00:00Z",
+      pinned: true,
+    });
+    mockedListMessages.mockResolvedValue({
+      items: [newer, middle, older],
+      nextCursor: null,
+      hasMore: false,
+    });
+    vi.mocked(api.setMessagesPinned).mockResolvedValue(1);
+    resetStore({ activeMailboxId: inbox.id });
+    renderShell();
+
+    await screen.findByRole("option", { name: /Newer note/i });
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select Middle note" }),
+    );
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select Older note" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    expect(
+      screen.getByRole("menuitem", { name: strings.mail.unpinSelected }),
+    ).toBeEnabled();
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: strings.mail.pinSelected }),
+    );
+
+    await waitFor(() =>
+      expect(api.setMessagesPinned).toHaveBeenCalledWith(
+        "account-1",
+        [2],
+        true,
+      ),
+    );
+    expect(screen.getAllByRole("option")[0]).toHaveAttribute(
+      "aria-label",
+      expect.stringMatching(/Pinned[\s\S]*Middle note/),
+    );
+    expect(screen.getAllByRole("option")[2]).toHaveAttribute(
+      "aria-label",
+      expect.stringMatching(/Newer note/),
+    );
+    expect(
+      screen.getByRole("checkbox", { name: "Select Middle note" }),
+    ).toBeChecked();
+  });
+
+  it("unpins the selected messages that are pinned", async () => {
+    const newer = makeMessage({
+      id: 1,
+      subject: "Newer note",
+      receivedAt: "2026-08-18T12:00:00Z",
+    });
+    const older = makeMessage({
+      id: 2,
+      subject: "Older note",
+      receivedAt: "2026-08-17T12:00:00Z",
+      pinned: true,
+    });
+    mockedListMessages.mockResolvedValue({
+      items: [newer, older],
+      nextCursor: null,
+      hasMore: false,
+    });
+    vi.mocked(api.setMessagesPinned).mockResolvedValue(1);
+    resetStore({ activeMailboxId: inbox.id });
+    renderShell();
+
+    await screen.findByRole("option", { name: /Pinned[\s\S]*Older note/i });
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select Older note" }),
+    );
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select Newer note" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    expect(
+      screen.getByRole("menuitem", { name: strings.mail.pinSelected }),
+    ).toBeEnabled();
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: strings.mail.unpinSelected }),
+    );
+
+    await waitFor(() =>
+      expect(api.setMessagesPinned).toHaveBeenCalledWith(
+        "account-1",
+        [2],
+        false,
+      ),
+    );
+    expect(screen.getAllByRole("option")[0]).toHaveAttribute(
+      "aria-label",
+      expect.stringMatching(/Newer note/),
+    );
+    expect(
+      useAppStore.getState().messages.find((item) => item.id === 2)?.pinned,
+    ).toBe(false);
+  });
+
+  it("leaves the selection unpinned when the pin cannot be saved", async () => {
+    const newer = makeMessage({
+      id: 1,
+      subject: "Newer note",
+      receivedAt: "2026-08-18T12:00:00Z",
+    });
+    const older = makeMessage({
+      id: 2,
+      subject: "Older note",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    mockedListMessages.mockResolvedValue({
+      items: [newer, older],
+      nextCursor: null,
+      hasMore: false,
+    });
+    vi.mocked(api.setMessagesPinned).mockRejectedValue(new Error("disk full"));
+    resetStore({ activeMailboxId: inbox.id });
+    renderShell();
+
+    await screen.findByRole("option", { name: /Newer note/i });
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select Older note" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: strings.mail.pinSelected }),
+    );
+
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toBe("Error: disk full"),
+    );
+    expect(screen.getAllByRole("option")[0]).toHaveAttribute(
+      "aria-label",
+      expect.stringMatching(/Newer note/),
+    );
+    expect(
+      useAppStore.getState().messages.find((item) => item.id === 2)?.pinned,
+    ).toBe(false);
+    expect(
+      screen.getByRole("checkbox", { name: "Select Older note" }),
+    ).toBeChecked();
+  });
+
+  it("moves a loaded conversation to junk", async () => {
+    const junk = makeMailbox({
+      id: 5,
+      name: "Junk",
+      displayName: "Junk",
+      role: "junk",
+      unreadCount: 0,
+      totalCount: 0,
+    });
+    const newer = makeMessage({
+      id: 1,
+      isRead: false,
+      threadRoot: "<thread@example.test>",
+    });
+    const older = makeMessage({
+      id: 2,
+      isRead: true,
+      threadRoot: "<thread@example.test>",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    const other = makeMessage({ id: 3, isRead: true, subject: "Other note" });
+    mockedListMailboxes.mockResolvedValue([inbox, trash, junk]);
+    mockedListMessages.mockResolvedValue({
+      items: [newer, older, other],
+      nextCursor: null,
+      hasMore: false,
+    });
+    mockedMoveMessagesToMailbox.mockResolvedValue({
+      updated: 2,
+      queued: 0,
+      failed: 0,
+    });
+    resetStore({
+      mailboxes: [inbox, trash, junk],
+      activeMailboxId: inbox.id,
+    });
+    renderShell();
+
+    await screen.findByRole("treeitem", { name: /First message/i });
+    window.dispatchEvent(
+      new CustomEvent(CONTEXT_ACTION_EVENT, {
+        detail: {
+          id: "junk-conversation",
+          target: { kind: "message", messageId: 1 },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(mockedMoveMessagesToMailbox).toHaveBeenCalledWith(
+        "account-1",
+        [1, 2],
+        5,
+      ),
+    );
+    expect(useAppStore.getState().messages.map((item) => item.id)).toEqual([3]);
+    expect(mockedGetMessage).not.toHaveBeenCalled();
+  });
+
+  it("opens the older and newer message in the loaded conversation", async () => {
+    const newer = makeMessage({
+      id: 1,
+      threadRoot: "<thread@example.test>",
+    });
+    const older = makeMessage({
+      id: 2,
+      threadRoot: "<thread@example.test>",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    mockedListMessages.mockResolvedValue({
+      items: [newer, older],
+      nextCursor: null,
+      hasMore: false,
+    });
+    mockedGetMessage.mockImplementation(async (_accountId, messageId) => {
+      const summary = [newer, older].find((item) => item.id === messageId);
+      if (!summary) throw new Error("message missing");
+      return detail(summary);
+    });
+    renderShell();
+    fireEvent.click(
+      await screen.findByRole("treeitem", { name: /First message/i }),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "First message" }),
+    ).toBeVisible();
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.reader.moreActions }),
+    );
+    expect(
+      screen.queryByRole("menuitem", {
+        name: strings.reader.newerInConversation,
+      }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: strings.reader.olderInConversation,
+      }),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Second message" }),
+    ).toBeVisible();
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.reader.moreActions }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: strings.reader.newerInConversation,
+      }),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "First message" }),
+    ).toBeVisible();
+  });
+
+  it("opens the unread message in the loaded conversation", async () => {
+    const newer = makeMessage({
+      id: 1,
+      threadRoot: "<thread@example.test>",
+      isRead: true,
+    });
+    const older = makeMessage({
+      id: 2,
+      subject: "Unread family note",
+      threadRoot: "<thread@example.test>",
+      receivedAt: "2026-08-17T12:00:00Z",
+      isRead: false,
+    });
+    mockedListMessages.mockResolvedValue({
+      items: [newer, older],
+      nextCursor: null,
+      hasMore: false,
+    });
+    mockedGetMessage.mockImplementation(async (_accountId, messageId) => {
+      const summary = [newer, older].find((item) => item.id === messageId);
+      if (!summary) throw new Error("message missing");
+      return detail(summary);
+    });
+    renderShell();
+    fireEvent.click(
+      await screen.findByRole("treeitem", {
+        name: /Conversation.*First message/i,
+      }),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "First message" }),
+    ).toBeVisible();
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.reader.moreActions }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: strings.reader.unreadInConversation,
+      }),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Unread family note" }),
+    ).toBeVisible();
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.reader.moreActions }),
+    );
+    expect(
+      screen.queryByRole("menuitem", {
+        name: strings.reader.unreadInConversation,
+      }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("selects every loaded message in a conversation", async () => {
+    const newer = makeMessage({
+      id: 1,
+      threadRoot: "<thread@example.test>",
+    });
+    const older = makeMessage({
+      id: 2,
+      threadRoot: "<thread@example.test>",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    const other = makeMessage({ id: 3, subject: "Other note" });
+    mockedListMessages.mockResolvedValue({
+      items: [newer, older, other],
+      nextCursor: null,
+      hasMore: false,
+    });
+    renderShell();
+
+    await screen.findByRole("treeitem", { name: /First message/i });
+    window.dispatchEvent(
+      new CustomEvent(CONTEXT_ACTION_EVENT, {
+        detail: {
+          id: "select-conversation",
+          target: { kind: "message", messageId: 1 },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("checkbox", { name: /First message/i }),
+      ).toBeChecked(),
+    );
+    expect(
+      screen.getByRole("checkbox", { name: /Second message/i }),
+    ).toBeChecked();
+    expect(
+      screen.getByRole("checkbox", { name: /Other note/i }),
+    ).not.toBeChecked();
+    expect(screen.getByRole("toolbar", { name: "2 selected" })).toBeVisible();
+    expect(mockedGetMessage).not.toHaveBeenCalled();
+  });
+
+  it("selects loaded messages from the same sender", async () => {
+    const jane = makeMessage({ id: 1, subject: "Weekend plans" });
+    const janeAgain = makeMessage({
+      id: 2,
+      subject: "Saturday note",
+      senderAddress: "Jane@Example.test",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    const morgan = makeMessage({
+      id: 3,
+      subject: "Library hours",
+      senderAddress: "morgan@fastmail.com",
+      senderName: "Morgan",
+    });
+    mockedListMessages.mockResolvedValue({
+      items: [jane, janeAgain, morgan],
+      nextCursor: null,
+      hasMore: false,
+    });
+    renderShell();
+
+    await screen.findByRole("option", { name: /Weekend plans/i });
+    window.dispatchEvent(
+      new CustomEvent(CONTEXT_ACTION_EVENT, {
+        detail: {
+          id: "select-from-sender",
+          target: { kind: "message", messageId: 1 },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("checkbox", { name: /Weekend plans/i }),
+      ).toBeChecked(),
+    );
+    expect(
+      screen.getByRole("checkbox", { name: /Saturday note/i }),
+    ).toBeChecked();
+    expect(
+      screen.getByRole("checkbox", { name: /Library hours/i }),
+    ).not.toBeChecked();
+    expect(screen.getByRole("toolbar", { name: "2 selected" })).toBeVisible();
+    expect(mockedGetMessage).not.toHaveBeenCalled();
+  });
+
+  it("opens an earlier message stored in another folder", async () => {
+    const current = makeMessage({
+      id: 1,
+      subject: "Weekend plans",
+      messageId: "<weekend@example.test>",
+    });
+    const earlier = makeMessage({
+      id: 2,
+      mailboxId: trash.id,
+      subject: "Earlier note",
+      messageId: "<parent@example.test>",
+      isRead: true,
+    });
+    mockedListMessages.mockImplementation(async (_accountId, mailboxId) => ({
+      items: mailboxId === trash.id ? [earlier] : [current],
+      nextCursor: null,
+      hasMore: false,
+    }));
+    mockedGetMessage.mockImplementation(async (_accountId, messageId) => ({
+      ...detail(messageId === earlier.id ? earlier : current),
+      references: messageId === current.id ? ["<parent@example.test>"] : [],
+    }));
+    vi.mocked(api.findCachedMessage).mockResolvedValue(earlier);
+    renderShell();
+
+    fireEvent.click(
+      await screen.findByRole("option", { name: /Weekend plans/i }),
+    );
+    await screen.findByRole("heading", { name: "Weekend plans" });
+    window.dispatchEvent(
+      new CustomEvent(CONTEXT_ACTION_EVENT, {
+        detail: {
+          id: "open-earlier",
+          target: { kind: "message", messageId: current.id },
+        },
+      }),
+    );
+
+    expect(
+      await screen.findByRole("heading", { name: "Earlier note" }),
+    ).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Trash" })).toBeVisible();
+    expect(api.findCachedMessage).toHaveBeenCalledWith(
+      "account-1",
+      "<parent@example.test>",
+    );
+  });
+
+  it("marks a loaded conversation read without opening it", async () => {
+    const newer = makeMessage({
+      id: 1,
+      isRead: false,
+      threadRoot: "<thread@example.test>",
+    });
+    const older = makeMessage({
+      id: 2,
+      isRead: false,
+      threadRoot: "<thread@example.test>",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    mockedListMessages.mockResolvedValue({
+      items: [newer, older],
+      nextCursor: null,
+      hasMore: false,
+    });
+    mockedSetMessagesFlags.mockResolvedValue({
+      updated: 2,
+      queued: 0,
+      failed: 0,
+    });
+    renderShell();
+
+    await screen.findByRole("treeitem", { name: /First message/i });
+    window.dispatchEvent(
+      new CustomEvent(CONTEXT_ACTION_EVENT, {
+        detail: {
+          id: "mark-conversation-read",
+          target: { kind: "message", messageId: 1 },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(mockedSetMessagesFlags).toHaveBeenCalledWith(
+        "account-1",
+        [1, 2],
+        true,
+        undefined,
+      ),
+    );
+    expect(mockedGetMessage).not.toHaveBeenCalled();
+    expect(useAppStore.getState().messages.every((item) => item.isRead)).toBe(
+      true,
+    );
+    expect(
+      useAppStore.getState().mailboxes.find((mailbox) => mailbox.id === 1)
+        ?.unreadCount,
+    ).toBe(0);
+  });
+
+  it("archives a loaded conversation without opening it", async () => {
+    const archive = makeMailbox({
+      id: 4,
+      name: "Archive",
+      displayName: "Archive",
+      role: "archive",
+      unreadCount: 0,
+      totalCount: 0,
+    });
+    const newer = makeMessage({
+      id: 1,
+      isRead: false,
+      threadRoot: "<thread@example.test>",
+    });
+    const older = makeMessage({
+      id: 2,
+      isRead: true,
+      threadRoot: "<thread@example.test>",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    const other = makeMessage({ id: 3, isRead: true, subject: "Other note" });
+    mockedListMailboxes.mockResolvedValue([inbox, trash, archive]);
+    mockedListMessages.mockResolvedValue({
+      items: [newer, older, other],
+      nextCursor: null,
+      hasMore: false,
+    });
+    mockedMoveMessagesToMailbox.mockResolvedValue({
+      updated: 2,
+      queued: 0,
+      failed: 0,
+    });
+    resetStore({
+      mailboxes: [inbox, trash, archive],
+      activeMailboxId: inbox.id,
+    });
+    renderShell();
+
+    await screen.findByRole("treeitem", { name: /First message/i });
+    window.dispatchEvent(
+      new CustomEvent(CONTEXT_ACTION_EVENT, {
+        detail: {
+          id: "archive-conversation",
+          target: { kind: "message", messageId: 1 },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(mockedMoveMessagesToMailbox).toHaveBeenCalledWith(
+        "account-1",
+        [1, 2],
+        4,
+      ),
+    );
+    expect(useAppStore.getState().messages.map((item) => item.id)).toEqual([3]);
+    expect(mockedGetMessage).not.toHaveBeenCalled();
+    const boxes = useAppStore.getState().mailboxes;
+    expect(boxes.find((mailbox) => mailbox.id === 1)?.totalCount).toBe(0);
+    expect(boxes.find((mailbox) => mailbox.id === 4)?.totalCount).toBe(2);
+  });
+
+  it("saves files from a loaded conversation without opening it", async () => {
+    const newer = makeMessage({
+      id: 1,
+      threadRoot: "<thread@example.test>",
+    });
+    const older = makeMessage({
+      id: 2,
+      threadRoot: "<thread@example.test>",
+      receivedAt: "2026-08-17T12:00:00Z",
+      hasAttachments: true,
+    });
+    const other = makeMessage({ id: 3, subject: "Other note" });
+    mockedListMessages.mockResolvedValue({
+      items: [newer, older, other],
+      nextCursor: null,
+      hasMore: false,
+    });
+    vi.mocked(api.saveConversationAttachments).mockResolvedValue(2);
+    resetStore({ activeMailboxId: inbox.id });
+    renderShell();
+
+    await screen.findByRole("treeitem", { name: /First message/i });
+    window.dispatchEvent(
+      new CustomEvent(CONTEXT_ACTION_EVENT, {
+        detail: {
+          id: "save-conversation-files",
+          target: { kind: "message", messageId: 3 },
+        },
+      }),
+    );
+    window.dispatchEvent(
+      new CustomEvent(CONTEXT_ACTION_EVENT, {
+        detail: {
+          id: "save-conversation-files",
+          target: { kind: "message", messageId: 1 },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(api.saveConversationAttachments).toHaveBeenCalledWith(
+        "account-1",
+        [1, 2],
+      ),
+    );
+    expect(api.saveConversationAttachments).toHaveBeenCalledTimes(1);
+    expect(mockedGetMessage).not.toHaveBeenCalled();
+    expect(useAppStore.getState().messages.map((item) => item.id)).toEqual([
+      1, 2, 3,
+    ]);
+  });
+
+  it("saves files from the selected messages that have them", async () => {
+    const withFile = makeMessage({
+      id: 1,
+      subject: "With file",
+      hasAttachments: true,
+    });
+    const plain = makeMessage({ id: 2, subject: "Plain note" });
+    const otherFile = makeMessage({
+      id: 3,
+      subject: "Other file",
+      hasAttachments: true,
+    });
+    mockedListMessages.mockResolvedValue({
+      items: [withFile, plain, otherFile],
+      nextCursor: null,
+      hasMore: false,
+    });
+    vi.mocked(api.saveConversationAttachments).mockResolvedValue(2);
+    resetStore({ activeMailboxId: inbox.id });
+    renderShell();
+
+    await screen.findByRole("option", { name: /With file/i });
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select With file" }));
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select Plain note" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: strings.reader.saveSelectedFiles }),
+    );
+
+    await waitFor(() =>
+      expect(api.saveConversationAttachments).toHaveBeenCalledWith(
+        "account-1",
+        [1],
+      ),
+    );
+    expect(
+      screen.getByRole("checkbox", { name: "Select With file" }),
+    ).toBeChecked();
+    expect(useAppStore.getState().messages).toHaveLength(3);
+  });
+
+  it("disables save selected files until a checked message has a file", async () => {
+    renderShell();
+    await screen.findByRole("option", { name: /First message/i });
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    expect(
+      screen.getByRole("menuitem", { name: strings.reader.saveSelectedFiles }),
+    ).toBeDisabled();
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select First message" }),
+    );
+    expect(
+      screen.getByRole("menuitem", { name: strings.reader.saveSelectedFiles }),
+    ).toBeDisabled();
+  });
+
+  it("leaves the selection in place when selected files cannot be saved", async () => {
+    const withFile = makeMessage({
+      id: 1,
+      subject: "With file",
+      hasAttachments: true,
+    });
+    mockedListMessages.mockResolvedValue({
+      items: [withFile],
+      nextCursor: null,
+      hasMore: false,
+    });
+    vi.mocked(api.saveConversationAttachments).mockRejectedValue(
+      new Error("disk full"),
+    );
+    resetStore({ activeMailboxId: inbox.id });
+    renderShell();
+
+    await screen.findByRole("option", { name: /With file/i });
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select With file" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: strings.reader.saveSelectedFiles }),
+    );
+
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toBe("Error: disk full"),
+    );
+    expect(
+      screen.getByRole("checkbox", { name: "Select With file" }),
+    ).toBeChecked();
+  });
+
+  it("saves the selected messages as eml files and leaves the checks", async () => {
+    const withFile = makeMessage({
+      id: 1,
+      subject: "With file",
+      hasAttachments: true,
+    });
+    const plain = makeMessage({ id: 2, subject: "Plain note" });
+    mockedListMessages.mockResolvedValue({
+      items: [withFile, plain],
+      nextCursor: null,
+      hasMore: false,
+    });
+    vi.mocked(api.saveMessagesEml).mockResolvedValue(2);
+    resetStore({ activeMailboxId: inbox.id });
+    renderShell();
+
+    await screen.findByRole("option", { name: /With file/i });
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select With file" }));
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select Plain note" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: strings.reader.saveSelectedMessages,
+      }),
+    );
+
+    await waitFor(() =>
+      expect(api.saveMessagesEml).toHaveBeenCalledWith("account-1", [1, 2]),
+    );
+    expect(
+      screen.getByRole("checkbox", { name: "Select Plain note" }),
+    ).toBeChecked();
+    expect(useAppStore.getState().messages).toHaveLength(2);
+  });
+
+  it("leaves the selection in place when selected messages cannot be saved", async () => {
+    const plain = makeMessage({ id: 1, subject: "Plain note" });
+    mockedListMessages.mockResolvedValue({
+      items: [plain],
+      nextCursor: null,
+      hasMore: false,
+    });
+    vi.mocked(api.saveMessagesEml).mockRejectedValue(new Error("disk full"));
+    resetStore({ activeMailboxId: inbox.id });
+    renderShell();
+
+    await screen.findByRole("option", { name: /Plain note/i });
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select Plain note" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: strings.reader.saveSelectedMessages,
+      }),
+    );
+
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toBe("Error: disk full"),
+    );
+    expect(
+      screen.getByRole("checkbox", { name: "Select Plain note" }),
+    ).toBeChecked();
+    expect(api.saveConversationAttachments).not.toHaveBeenCalled();
+  });
+
+  it("starts a recipient rule from an address on the message", () => {
+    const seen: Array<{ field?: string; contains?: string }> = [];
+    const onRule = (event: Event) => {
+      seen.push(
+        (event as CustomEvent<{ field?: string; contains?: string }>).detail,
+      );
+    };
+    window.addEventListener("postal:create-rule", onRule);
+    resetStore({
+      activeMailboxId: inbox.id,
+      messages: [firstMessage],
+      selectedMessage: toDetail(firstMessage),
+    });
+    renderShell();
+    fireEvent(
+      window,
+      new CustomEvent(CONTEXT_ACTION_EVENT, {
+        detail: {
+          id: "create-address-rule",
+          target: { kind: "address", address: "Sam <sam@example.test>" },
+        },
+      }),
+    );
+    fireEvent(
+      window,
+      new CustomEvent(CONTEXT_ACTION_EVENT, {
+        detail: {
+          id: "create-address-rule",
+          target: { kind: "address", address: "Jane <jane@example.test>" },
+        },
+      }),
+    );
+    window.removeEventListener("postal:create-rule", onRule);
+    expect(seen).toEqual([
+      {
+        accountId: "account-1",
+        contains: "sam@example.test",
+        field: "to",
+      },
+      {
+        accountId: "account-1",
+        contains: "jane@example.test",
+        field: "from",
+      },
+    ]);
+  });
+
+  it("puts a conversation back when the move fails", async () => {
+    const archive = makeMailbox({
+      id: 4,
+      name: "Archive",
+      displayName: "Archive",
+      role: "archive",
+      unreadCount: 0,
+      totalCount: 0,
+    });
+    const newer = makeMessage({
+      id: 1,
+      threadRoot: "<thread@example.test>",
+    });
+    const older = makeMessage({
+      id: 2,
+      threadRoot: "<thread@example.test>",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    mockedListMailboxes.mockResolvedValue([inbox, trash, archive]);
+    mockedListMessages.mockResolvedValue({
+      items: [newer, older],
+      nextCursor: null,
+      hasMore: false,
+    });
+    mockedMoveMessagesToMailbox.mockRejectedValueOnce(new Error("offline"));
+    resetStore({
+      mailboxes: [inbox, trash, archive],
+      activeMailboxId: inbox.id,
+    });
+    renderShell();
+
+    await screen.findByRole("treeitem", { name: /First message/i });
+    window.dispatchEvent(
+      new CustomEvent(CONTEXT_ACTION_EVENT, {
+        detail: {
+          id: "archive-conversation",
+          target: { kind: "message", messageId: 1 },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toBe("Error: offline"),
+    );
+    expect(useAppStore.getState().messages.map((item) => item.id)).toEqual([
+      1, 2,
+    ]);
+  });
+
+  it("stars a loaded conversation without opening it", async () => {
+    const newer = makeMessage({
+      id: 1,
+      isStarred: false,
+      threadRoot: "<thread@example.test>",
+    });
+    const older = makeMessage({
+      id: 2,
+      isStarred: true,
+      threadRoot: "<thread@example.test>",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    mockedListMessages.mockResolvedValue({
+      items: [newer, older],
+      nextCursor: null,
+      hasMore: false,
+    });
+    mockedSetMessagesFlags.mockResolvedValue({
+      updated: 1,
+      queued: 0,
+      failed: 0,
+    });
+    renderShell();
+
+    await screen.findByRole("treeitem", { name: /Starred/i });
+    window.dispatchEvent(
+      new CustomEvent(CONTEXT_ACTION_EVENT, {
+        detail: {
+          id: "star-conversation",
+          target: { kind: "message", messageId: 1 },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(mockedSetMessagesFlags).toHaveBeenCalledWith(
+        "account-1",
+        [1],
+        undefined,
+        true,
+      ),
+    );
+    expect(mockedGetMessage).not.toHaveBeenCalled();
+    expect(
+      useAppStore.getState().messages.every((item) => item.isStarred),
+    ).toBe(true);
+  });
+
+  it("removes stars from a loaded conversation", async () => {
+    const newer = makeMessage({
+      id: 1,
+      isStarred: true,
+      threadRoot: "<thread@example.test>",
+    });
+    const older = makeMessage({
+      id: 2,
+      isStarred: true,
+      threadRoot: "<thread@example.test>",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    mockedListMessages.mockResolvedValue({
+      items: [newer, older],
+      nextCursor: null,
+      hasMore: false,
+    });
+    mockedSetMessagesFlags.mockResolvedValue({
+      updated: 2,
+      queued: 0,
+      failed: 0,
+    });
+    renderShell();
+
+    await screen.findByRole("treeitem", { name: /Starred/i });
+    window.dispatchEvent(
+      new CustomEvent(CONTEXT_ACTION_EVENT, {
+        detail: {
+          id: "unstar-conversation",
+          target: { kind: "message", messageId: 1 },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(mockedSetMessagesFlags).toHaveBeenCalledWith(
+        "account-1",
+        [1, 2],
+        undefined,
+        false,
+      ),
+    );
+    expect(
+      screen.queryByRole("treeitem", { name: /Starred/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("puts conversation stars back when the update fails", async () => {
+    const newer = makeMessage({
+      id: 1,
+      isStarred: false,
+      threadRoot: "<thread@example.test>",
+    });
+    const older = makeMessage({
+      id: 2,
+      isStarred: false,
+      threadRoot: "<thread@example.test>",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    mockedListMessages.mockResolvedValue({
+      items: [newer, older],
+      nextCursor: null,
+      hasMore: false,
+    });
+    mockedSetMessagesFlags.mockRejectedValueOnce(new Error("offline"));
+    renderShell();
+
+    await screen.findByRole("treeitem", { name: /First message/i });
+    window.dispatchEvent(
+      new CustomEvent(CONTEXT_ACTION_EVENT, {
+        detail: {
+          id: "star-conversation",
+          target: { kind: "message", messageId: 1 },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toBe("Error: offline"),
+    );
+    expect(
+      useAppStore.getState().messages.every((item) => !item.isStarred),
+    ).toBe(true);
+  });
+
+  it("marks a loaded conversation unread without opening it", async () => {
+    const newer = makeMessage({
+      id: 1,
+      isRead: true,
+      threadRoot: "<thread@example.test>",
+    });
+    const older = makeMessage({
+      id: 2,
+      isRead: false,
+      threadRoot: "<thread@example.test>",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    mockedListMessages.mockResolvedValue({
+      items: [newer, older],
+      nextCursor: null,
+      hasMore: false,
+    });
+    mockedSetMessagesFlags.mockResolvedValue({
+      updated: 1,
+      queued: 0,
+      failed: 0,
+    });
+    renderShell();
+
+    await screen.findByRole("treeitem", { name: /First message/i });
+    window.dispatchEvent(
+      new CustomEvent(CONTEXT_ACTION_EVENT, {
+        detail: {
+          id: "mark-conversation-unread",
+          target: { kind: "message", messageId: 2 },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(mockedSetMessagesFlags).toHaveBeenCalledWith(
+        "account-1",
+        [1],
+        false,
+        undefined,
+      ),
+    );
+    expect(mockedGetMessage).not.toHaveBeenCalled();
+    expect(useAppStore.getState().messages.every((item) => !item.isRead)).toBe(
+      true,
+    );
+    expect(
+      useAppStore.getState().mailboxes.find((mailbox) => mailbox.id === 1)
+        ?.unreadCount,
+    ).toBe(3);
+  });
+
+  it("opens the next unread message from the mailbox menu", async () => {
+    const read = makeMessage({ id: 1, isRead: true });
+    const unread = makeMessage({ id: 2, isRead: false });
+    mockedListMessages.mockResolvedValue({
+      items: [read, unread],
+      nextCursor: null,
+      hasMore: false,
+    });
+    renderShell();
+
+    await screen.findByRole("option", { name: /First message/i });
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Next unread" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "Second message" }),
+    ).toBeVisible();
+  });
+
+  it("opens the next unread message from the keyboard", async () => {
+    const read = makeMessage({ id: 1, isRead: true });
+    const unread = makeMessage({ id: 2, isRead: false });
+    mockedListMessages.mockResolvedValue({
+      items: [read, unread],
+      nextCursor: null,
+      hasMore: false,
+    });
+    renderShell();
+
+    await screen.findByRole("option", { name: /First message/i });
+    fireEvent.keyDown(document.body, { key: "n" });
+
+    expect(
+      await screen.findByRole("heading", { name: "Second message" }),
+    ).toBeVisible();
+  });
+
   it("marks selected messages read in bulk", async () => {
     mockedSetMessagesFlags.mockResolvedValue({
       updated: 2,
@@ -314,6 +2305,32 @@ describe("mail shell", () => {
     );
   });
 
+  it("stars selected messages in bulk", async () => {
+    mockedSetMessagesFlags.mockResolvedValue({
+      updated: 1,
+      queued: 0,
+      failed: 0,
+    });
+    renderShell();
+
+    await screen.findByRole("option", { name: /First message/i });
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /First message/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Add star" }));
+
+    await waitFor(() =>
+      expect(mockedSetMessagesFlags).toHaveBeenCalledWith(
+        "account-1",
+        [1],
+        undefined,
+        true,
+      ),
+    );
+  });
+
   it("marks the whole mailbox read at once", async () => {
     mockedMarkMailboxRead.mockResolvedValue({
       updated: 2,
@@ -330,6 +2347,177 @@ describe("mail shell", () => {
 
     await waitFor(() =>
       expect(mockedMarkMailboxRead).toHaveBeenCalledWith("account-1", 1),
+    );
+  });
+
+  it("permanently deletes a selection that is already in Trash", async () => {
+    renderShell();
+    await screen.findByRole("option", { name: /First message/i });
+    const listed = mockedListMessages.mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: /^Trash/ }));
+    await waitFor(() =>
+      expect(mockedListMessages.mock.calls.length).toBeGreaterThan(listed),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /First message/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.mail.deleteForever }),
+    );
+
+    await waitFor(() =>
+      expect(api.deleteTrashMessages).toHaveBeenCalledWith("account-1", [1]),
+    );
+    expect(api.showNativeConfirm).toHaveBeenCalledWith(
+      strings.mail.deleteForever,
+      strings.mail.deleteForeverQuestion(1),
+    );
+    expect(api.moveMessagesToMailbox).not.toHaveBeenCalled();
+  });
+
+  it("deletes a Trash conversation and opens the next message", async () => {
+    const newer = makeMessage({
+      id: 1,
+      mailboxId: trash.id,
+      threadRoot: "<trash@example.test>",
+      subject: "Old receipt",
+      isRead: true,
+    });
+    const older = makeMessage({
+      id: 2,
+      mailboxId: trash.id,
+      threadRoot: "<trash@example.test>",
+      subject: "Older receipt",
+      isRead: true,
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    const keep = makeMessage({
+      id: 3,
+      mailboxId: trash.id,
+      subject: "Keep this",
+      isRead: true,
+      receivedAt: "2026-08-16T12:00:00Z",
+    });
+    const loaded = [newer, older, keep];
+    const countedTrash = { ...trash, totalCount: 3, unreadCount: 0 };
+    mockedListMailboxes.mockResolvedValue([inbox, countedTrash]);
+    mockedListMessages.mockResolvedValue({
+      items: loaded,
+      nextCursor: null,
+      hasMore: false,
+    });
+    mockedGetMessage.mockImplementation(async (_accountId, messageId) => {
+      const summary = loaded.find((item) => item.id === messageId);
+      if (!summary) throw new Error("message missing");
+      return detail(summary);
+    });
+    vi.mocked(api.deleteTrashMessages).mockResolvedValue(undefined);
+    resetStore({
+      accounts: [account],
+      activeAccountId: account.id,
+      mailboxes: [inbox, countedTrash],
+      activeMailboxId: countedTrash.id,
+    });
+    renderShell();
+
+    fireEvent.click(
+      await screen.findByRole("treeitem", { name: /Old receipt/i }),
+    );
+    await screen.findByRole("heading", { name: "Old receipt" });
+    window.dispatchEvent(
+      new CustomEvent(CONTEXT_ACTION_EVENT, {
+        detail: {
+          id: "delete-conversation",
+          target: { kind: "message", messageId: 1 },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(api.deleteTrashMessages).toHaveBeenCalledWith("account-1", [1, 2]),
+    );
+    expect(api.showNativeConfirm).toHaveBeenCalledWith(
+      strings.reader.deleteConversation,
+      strings.mail.deleteForeverQuestion(2),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Keep this" }),
+    ).toBeVisible();
+    expect(screen.queryByRole("treeitem", { name: /Old receipt/i })).toBeNull();
+    const updated = useAppStore
+      .getState()
+      .mailboxes.find((item) => item.id === trash.id);
+    expect(updated?.totalCount).toBe(1);
+    expect(updated?.unreadCount).toBe(0);
+  });
+
+  it("does not delete an Inbox conversation", async () => {
+    const newer = makeMessage({
+      id: 1,
+      threadRoot: "<thread@example.test>",
+    });
+    const older = makeMessage({
+      id: 2,
+      threadRoot: "<thread@example.test>",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    mockedListMessages.mockResolvedValue({
+      items: [newer, older],
+      nextCursor: null,
+      hasMore: false,
+    });
+    renderShell();
+    await screen.findByRole("treeitem", { name: /First message/i });
+    window.dispatchEvent(
+      new CustomEvent(CONTEXT_ACTION_EVENT, {
+        detail: {
+          id: "delete-conversation",
+          target: { kind: "message", messageId: 1 },
+        },
+      }),
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(api.showNativeConfirm).not.toHaveBeenCalled();
+    expect(api.deleteTrashMessages).not.toHaveBeenCalled();
+  });
+
+  it("moves a selection from Archive back to Inbox", async () => {
+    const archive = makeMailbox({
+      id: 2,
+      name: "Archive",
+      displayName: "Archive",
+      role: "archive",
+      unreadCount: 0,
+      totalCount: 2,
+    });
+    resetStore({
+      accounts: [account],
+      activeAccountId: account.id,
+      mailboxes: [inbox, archive],
+      activeMailboxId: archive.id,
+    });
+    mockedListMailboxes.mockResolvedValue([inbox, archive]);
+    mockedMoveMessagesToMailbox.mockResolvedValue({
+      updated: 1,
+      queued: 0,
+      failed: 0,
+    });
+    renderShell();
+
+    await screen.findByRole("option", { name: /First message/i });
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /First message/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.reader.moveToInbox }),
+    );
+
+    await waitFor(() =>
+      expect(mockedMoveMessagesToMailbox).toHaveBeenCalledWith(
+        "account-1",
+        [1],
+        inbox.id,
+      ),
     );
   });
 
@@ -352,6 +2540,1221 @@ describe("mail shell", () => {
         [1],
         3,
       ),
+    );
+  });
+
+  it("moves selected messages into a chosen folder", async () => {
+    const projects = makeMailbox({
+      id: 4,
+      name: "Projects",
+      displayName: "Projects",
+      role: "other",
+      unreadCount: 0,
+      totalCount: 0,
+    });
+    resetStore({
+      accounts: [account],
+      activeAccountId: account.id,
+      mailboxes: [inbox, trash, projects],
+      activeMailboxId: inbox.id,
+    });
+    mockedListMailboxes.mockResolvedValue([inbox, trash, projects]);
+    mockedMoveMessagesToMailbox.mockResolvedValue({
+      updated: 1,
+      queued: 0,
+      failed: 0,
+    });
+    renderShell();
+
+    await screen.findByRole("option", { name: /First message/i });
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /First message/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Move to Projects" }));
+
+    await waitFor(() =>
+      expect(mockedMoveMessagesToMailbox).toHaveBeenCalledWith(
+        "account-1",
+        [1],
+        4,
+      ),
+    );
+  });
+
+  it("copies selected messages into a chosen folder and leaves them in place", async () => {
+    const projects = makeMailbox({
+      id: 4,
+      name: "Projects",
+      displayName: "Projects",
+      role: "other",
+      unreadCount: 0,
+      totalCount: 0,
+    });
+    resetStore({
+      accounts: [account],
+      activeAccountId: account.id,
+      mailboxes: [inbox, trash, projects],
+      activeMailboxId: inbox.id,
+    });
+    mockedListMailboxes.mockResolvedValue([inbox, trash, projects]);
+    mockedCopyMessagesToMailbox.mockResolvedValue({
+      updated: 1,
+      queued: 0,
+      failed: 0,
+    });
+    renderShell();
+
+    await screen.findByRole("option", { name: /First message/i });
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /First message/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Copy to Projects" }));
+
+    await waitFor(() =>
+      expect(mockedCopyMessagesToMailbox).toHaveBeenCalledWith(
+        "account-1",
+        [1],
+        4,
+      ),
+    );
+    expect(
+      screen.getByRole("checkbox", { name: /First message/i }),
+    ).toBeChecked();
+  });
+
+  it("prints a loaded conversation without opening it", async () => {
+    const newer = makeMessage({
+      id: 1,
+      threadRoot: "<thread@example.test>",
+      subject: "Newer note",
+    });
+    const older = makeMessage({
+      id: 2,
+      threadRoot: "<thread@example.test>",
+      subject: "Older note",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    mockedListMessages.mockResolvedValue({
+      items: [newer, older],
+      nextCursor: null,
+      hasMore: false,
+    });
+    mockedGetMessage.mockImplementation(async (_accountId, id) => {
+      const summary = id === older.id ? older : newer;
+      return toDetail(summary, {
+        textBody: summary.subject,
+        htmlBody: `<p>${summary.subject}</p><script>alert(1)</script>`,
+      });
+    });
+    resetStore({ activeMailboxId: inbox.id });
+    renderShell();
+
+    await screen.findByRole("treeitem", { name: /Newer note/i });
+    window.dispatchEvent(
+      new CustomEvent(CONTEXT_ACTION_EVENT, {
+        detail: {
+          id: "print-conversation",
+          target: { kind: "message", messageId: 1 },
+        },
+      }),
+    );
+
+    const frame = await waitFor(() => {
+      const printer = document.querySelector("iframe");
+      if (!printer?.srcdoc.includes("Older note"))
+        throw new Error("print document is not ready");
+      return printer;
+    });
+    expect(frame.srcdoc.indexOf("Older note")).toBeLessThan(
+      frame.srcdoc.indexOf("Newer note"),
+    );
+    expect(frame.srcdoc).not.toContain("alert(1)");
+    expect(mockedGetMessage).toHaveBeenCalledWith("account-1", 1);
+    expect(mockedGetMessage).toHaveBeenCalledWith("account-1", 2);
+    expect(useAppStore.getState().selectedMessage).toBeUndefined();
+  });
+
+  it("prints the selected messages oldest first", async () => {
+    const newer = makeMessage({
+      id: 1,
+      subject: "Newer note",
+      receivedAt: "2026-08-18T12:00:00Z",
+    });
+    const older = makeMessage({
+      id: 2,
+      subject: "Older note",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    const skipped = makeMessage({
+      id: 3,
+      subject: "Skipped note",
+      receivedAt: "2026-08-16T12:00:00Z",
+    });
+    const loaded = [newer, older, skipped];
+    mockedListMessages.mockResolvedValue({
+      items: loaded,
+      nextCursor: null,
+      hasMore: false,
+    });
+    mockedGetMessage.mockImplementation(async (_accountId, id) => {
+      const summary = loaded.find((item) => item.id === id) ?? newer;
+      return toDetail(summary, {
+        textBody: summary.subject,
+        htmlBody: `<p>${summary.subject}</p><script>alert(1)</script>`,
+      });
+    });
+    resetStore({ activeMailboxId: inbox.id });
+    renderShell();
+
+    await screen.findByRole("option", { name: /Newer note/i });
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select Newer note" }),
+    );
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select Older note" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: strings.reader.printSelected }),
+    );
+
+    const frame = await waitFor(() => {
+      const printer = document.querySelector("iframe");
+      if (!printer?.srcdoc.includes("Older note"))
+        throw new Error("print document is not ready");
+      return printer;
+    });
+    expect(frame.srcdoc.indexOf("Older note")).toBeLessThan(
+      frame.srcdoc.indexOf("Newer note"),
+    );
+    expect(frame.srcdoc).not.toContain("Skipped note");
+    expect(frame.srcdoc).not.toContain("alert(1)");
+    expect(
+      screen.getByRole("checkbox", { name: "Select Newer note" }),
+    ).toBeChecked();
+    frame.remove();
+  });
+
+  it("leaves the selection in place when a selected message cannot be printed", async () => {
+    const newer = makeMessage({ id: 1, subject: "Newer note" });
+    const older = makeMessage({
+      id: 2,
+      subject: "Older note",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    mockedListMessages.mockResolvedValue({
+      items: [newer, older],
+      nextCursor: null,
+      hasMore: false,
+    });
+    mockedGetMessage.mockRejectedValue(new Error("offline"));
+    resetStore({ activeMailboxId: inbox.id });
+    renderShell();
+
+    await screen.findByRole("option", { name: /Newer note/i });
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select Older note" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: strings.reader.printSelected }),
+    );
+    useAppStore.getState().setError(undefined);
+
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toMatch(/offline/),
+    );
+    expect(document.querySelector("iframe")).toBeNull();
+    expect(
+      screen.getByRole("checkbox", { name: "Select Older note" }),
+    ).toBeChecked();
+  });
+
+  it("forwards a loaded conversation without opening it", async () => {
+    const newer = makeMessage({
+      id: 1,
+      threadRoot: "<thread@example.test>",
+      subject: "Newer note",
+    });
+    const older = makeMessage({
+      id: 2,
+      threadRoot: "<thread@example.test>",
+      subject: "Older note",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    mockedListMessages.mockResolvedValue({
+      items: [newer, older],
+      nextCursor: null,
+      hasMore: false,
+    });
+    mockedGetMessage.mockImplementation(async (_accountId, id) => {
+      const summary = id === older.id ? older : newer;
+      return toDetail(summary, {
+        textBody: summary.subject,
+        htmlBody: `<p>${summary.subject}</p><script>alert(1)</script>`,
+      });
+    });
+    resetStore({ activeMailboxId: inbox.id });
+    renderShell();
+
+    await screen.findByRole("treeitem", { name: /Newer note/i });
+    window.dispatchEvent(
+      new CustomEvent(CONTEXT_ACTION_EVENT, {
+        detail: {
+          id: "forward-conversation",
+          target: { kind: "message", messageId: 1 },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(useAppStore.getState().composeSeed?.forwardMessages).toHaveLength(
+        2,
+      ),
+    );
+    const seed = useAppStore.getState().composeSeed;
+    expect(seed?.composeMode).toBe("forward");
+    expect(seed?.sourceMessage?.subject).toBe("Newer note");
+    const quoted = seedBody(seed);
+    expect(quoted.indexOf("Older note")).toBeLessThan(
+      quoted.indexOf("Newer note"),
+    );
+    expect(quoted).not.toContain("alert(1)");
+    expect(useAppStore.getState().selectedMessage).toBeUndefined();
+    expect(mockedGetMessage).toHaveBeenCalledWith("account-1", 1);
+    expect(mockedGetMessage).toHaveBeenCalledWith("account-1", 2);
+  });
+
+  it("leaves the list in place when a conversation cannot be forwarded", async () => {
+    const newer = makeMessage({
+      id: 1,
+      threadRoot: "<thread@example.test>",
+    });
+    const older = makeMessage({
+      id: 2,
+      threadRoot: "<thread@example.test>",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    mockedListMessages.mockResolvedValue({
+      items: [newer, older],
+      nextCursor: null,
+      hasMore: false,
+    });
+    mockedGetMessage.mockRejectedValue(new Error("body unavailable"));
+    resetStore({ activeMailboxId: inbox.id });
+    renderShell();
+
+    await screen.findByRole("treeitem", { name: /First message/i });
+    window.dispatchEvent(
+      new CustomEvent(CONTEXT_ACTION_EVENT, {
+        detail: {
+          id: "forward-conversation",
+          target: { kind: "message", messageId: 1 },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toBe("Error: body unavailable"),
+    );
+    expect(useAppStore.getState().composeSeed).toBeUndefined();
+    expect(useAppStore.getState().selectedMessage).toBeUndefined();
+  });
+
+  it("leaves the list in place when a conversation is too large to forward", async () => {
+    const newer = makeMessage({
+      id: 1,
+      threadRoot: "<thread@example.test>",
+      subject: "Newer note",
+    });
+    const older = makeMessage({
+      id: 2,
+      threadRoot: "<thread@example.test>",
+      subject: "Older note",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    mockedListMessages.mockResolvedValue({
+      items: [newer, older],
+      nextCursor: null,
+      hasMore: false,
+    });
+    mockedGetMessage.mockImplementation(async (_accountId, id) =>
+      toDetail(id === older.id ? older : newer, {
+        textBody: "x".repeat(500_000),
+      }),
+    );
+    resetStore({ activeMailboxId: inbox.id });
+    renderShell();
+
+    await screen.findByRole("treeitem", { name: /Newer note/i });
+    window.dispatchEvent(
+      new CustomEvent(CONTEXT_ACTION_EVENT, {
+        detail: {
+          id: "forward-conversation",
+          target: { kind: "message", messageId: 1 },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toBe(
+        strings.composer.conversationTooLarge,
+      ),
+    );
+    expect(useAppStore.getState().composeSeed).toBeUndefined();
+  });
+
+  it("forwards the selected messages oldest first", async () => {
+    const newer = makeMessage({
+      id: 1,
+      subject: "Newer note",
+      receivedAt: "2026-08-18T12:00:00Z",
+    });
+    const older = makeMessage({
+      id: 2,
+      subject: "Older note",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    const skipped = makeMessage({
+      id: 3,
+      subject: "Skipped note",
+      receivedAt: "2026-08-16T12:00:00Z",
+    });
+    const loaded = [newer, older, skipped];
+    mockedListMessages.mockResolvedValue({
+      items: loaded,
+      nextCursor: null,
+      hasMore: false,
+    });
+    mockedGetMessage.mockImplementation(async (_accountId, id) => {
+      const summary = loaded.find((item) => item.id === id) ?? newer;
+      return toDetail(summary, {
+        textBody: summary.subject,
+        htmlBody: `<p>${summary.subject}</p><script>alert(1)</script>`,
+      });
+    });
+    resetStore({ activeMailboxId: inbox.id });
+    renderShell();
+
+    await screen.findByRole("option", { name: /Newer note/i });
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select Newer note" }),
+    );
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select Older note" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: strings.reader.forwardSelected }),
+    );
+
+    await waitFor(() =>
+      expect(useAppStore.getState().composeSeed?.forwardMessages).toHaveLength(
+        2,
+      ),
+    );
+    const seed = useAppStore.getState().composeSeed;
+    expect(seed?.composeMode).toBe("forward");
+    expect(seed?.sourceMessage?.subject).toBe("Newer note");
+    const quoted = seedBody(seed);
+    expect(quoted.indexOf("Older note")).toBeLessThan(
+      quoted.indexOf("Newer note"),
+    );
+    expect(quoted).not.toContain("Skipped note");
+    expect(quoted).not.toContain("alert(1)");
+    expect(
+      screen.getByRole("checkbox", { name: "Select Newer note" }),
+    ).toBeChecked();
+  });
+
+  it("leaves the selection in place when a selected message cannot be forwarded", async () => {
+    const newer = makeMessage({ id: 1, subject: "Newer note" });
+    const older = makeMessage({
+      id: 2,
+      subject: "Older note",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    mockedListMessages.mockResolvedValue({
+      items: [newer, older],
+      nextCursor: null,
+      hasMore: false,
+    });
+    mockedGetMessage.mockRejectedValue(new Error("body unavailable"));
+    resetStore({ activeMailboxId: inbox.id });
+    renderShell();
+
+    await screen.findByRole("option", { name: /Newer note/i });
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select Older note" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: strings.reader.forwardSelected }),
+    );
+
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toBe("Error: body unavailable"),
+    );
+    expect(useAppStore.getState().composeSeed).toBeUndefined();
+    expect(
+      screen.getByRole("checkbox", { name: "Select Older note" }),
+    ).toBeChecked();
+  });
+
+  it("leaves the selection in place when the selected messages are too large to forward", async () => {
+    const newer = makeMessage({
+      id: 1,
+      subject: "Newer note",
+      receivedAt: "2026-08-18T12:00:00Z",
+    });
+    const older = makeMessage({
+      id: 2,
+      subject: "Older note",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    mockedListMessages.mockResolvedValue({
+      items: [newer, older],
+      nextCursor: null,
+      hasMore: false,
+    });
+    mockedGetMessage.mockImplementation(async (_accountId, id) =>
+      toDetail(id === older.id ? older : newer, {
+        textBody: "x".repeat(500_000),
+      }),
+    );
+    resetStore({ activeMailboxId: inbox.id });
+    renderShell();
+
+    await screen.findByRole("option", { name: /Newer note/i });
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select Newer note" }),
+    );
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select Older note" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: strings.reader.forwardSelected }),
+    );
+
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toBe(
+        strings.composer.selectionTooLarge,
+      ),
+    );
+    expect(useAppStore.getState().composeSeed).toBeUndefined();
+    expect(
+      screen.getByRole("checkbox", { name: "Select Newer note" }),
+    ).toBeChecked();
+  });
+
+  it("copies the selected messages oldest first", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    const newer = makeMessage({
+      id: 1,
+      subject: "Newer note",
+      receivedAt: "2026-08-18T12:00:00Z",
+    });
+    const older = makeMessage({
+      id: 2,
+      subject: "Older note",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    const skipped = makeMessage({
+      id: 3,
+      subject: "Skipped note",
+      receivedAt: "2026-08-16T12:00:00Z",
+    });
+    const loaded = [newer, older, skipped];
+    mockedListMessages.mockResolvedValue({
+      items: loaded,
+      nextCursor: null,
+      hasMore: false,
+    });
+    mockedGetMessage.mockImplementation(async (_accountId, id) => {
+      const summary = loaded.find((item) => item.id === id) ?? newer;
+      return toDetail(summary, {
+        textBody: id === skipped.id ? "" : `${summary.subject} body`,
+        htmlBody:
+          id === skipped.id
+            ? null
+            : `<p>${summary.subject}</p><script>alert(1)</script>`,
+      });
+    });
+    resetStore({ activeMailboxId: inbox.id });
+    renderShell();
+
+    await screen.findByRole("option", { name: /Newer note/i });
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select Newer note" }),
+    );
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select Older note" }),
+    );
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select Skipped note" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: strings.reader.copySelectedText }),
+    );
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledOnce());
+    const copied = String(writeText.mock.calls[0]?.[0]);
+    expect(copied.indexOf("Older note")).toBeLessThan(
+      copied.indexOf("Newer note"),
+    );
+    expect(copied).toContain("Older note body");
+    expect(copied).toContain("Newer note body");
+    expect(copied).not.toContain("Skipped");
+    expect(copied).not.toContain("alert(1)");
+    expect(
+      screen.getByRole("checkbox", { name: "Select Newer note" }),
+    ).toBeChecked();
+  });
+
+  it("leaves the selection in place when selected text cannot be copied", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    const newer = makeMessage({ id: 1, subject: "Newer note" });
+    mockedListMessages.mockResolvedValue({
+      items: [newer],
+      nextCursor: null,
+      hasMore: false,
+    });
+    mockedGetMessage.mockResolvedValue(
+      toDetail(newer, { textBody: "", htmlBody: null }),
+    );
+    resetStore({ activeMailboxId: inbox.id });
+    renderShell();
+
+    await screen.findByRole("option", { name: /Newer note/i });
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select Newer note" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: strings.reader.copySelectedText }),
+    );
+
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toBe(strings.reader.noSelectedText),
+    );
+    expect(writeText).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("checkbox", { name: "Select Newer note" }),
+    ).toBeChecked();
+  });
+
+  it("leaves the selection in place when the clipboard rejects the copy", async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error("clipboard locked"));
+    Object.assign(navigator, { clipboard: { writeText } });
+    const newer = makeMessage({ id: 1, subject: "Newer note" });
+    mockedListMessages.mockResolvedValue({
+      items: [newer],
+      nextCursor: null,
+      hasMore: false,
+    });
+    mockedGetMessage.mockResolvedValue(
+      toDetail(newer, { textBody: "Bring the notes" }),
+    );
+    resetStore({ activeMailboxId: inbox.id });
+    renderShell();
+
+    await screen.findByRole("option", { name: /Newer note/i });
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select Newer note" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: strings.reader.copySelectedText }),
+    );
+
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toBe("Error: clipboard locked"),
+    );
+    expect(
+      screen.getByRole("checkbox", { name: "Select Newer note" }),
+    ).toBeChecked();
+  });
+
+  it("pins an older message above newer mail", async () => {
+    const newer = makeMessage({
+      id: 1,
+      subject: "Newer note",
+      receivedAt: "2026-08-18T12:00:00Z",
+    });
+    const older = makeMessage({
+      id: 2,
+      subject: "Older note",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    mockedListMessages.mockResolvedValue({
+      items: [newer, older],
+      nextCursor: null,
+      hasMore: false,
+    });
+    vi.mocked(api.setMessagesPinned).mockResolvedValue(1);
+    resetStore({ activeMailboxId: inbox.id });
+    renderShell();
+
+    await screen.findByRole("option", { name: /Newer note/i });
+    expect(screen.getAllByRole("option")[0]).toHaveAttribute(
+      "aria-label",
+      expect.stringMatching(/Newer note/),
+    );
+    window.dispatchEvent(
+      new CustomEvent(CONTEXT_ACTION_EVENT, {
+        detail: {
+          id: "pin",
+          target: { kind: "message", messageId: 2 },
+        },
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getAllByRole("option")[0]).toHaveAttribute(
+        "aria-label",
+        expect.stringMatching(/Pinned[\s\S]*Older note/),
+      ),
+    );
+    expect(api.setMessagesPinned).toHaveBeenCalledWith("account-1", [2], true);
+    expect(
+      screen.getByRole("group", { name: strings.mail.pinned }),
+    ).toBeInTheDocument();
+    expect(useAppStore.getState().selectedMessage).toBeUndefined();
+  });
+
+  it("leaves a message unpinned when the pin cannot be saved", async () => {
+    const newer = makeMessage({
+      id: 1,
+      subject: "Newer note",
+      receivedAt: "2026-08-18T12:00:00Z",
+    });
+    const older = makeMessage({
+      id: 2,
+      subject: "Older note",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    mockedListMessages.mockResolvedValue({
+      items: [newer, older],
+      nextCursor: null,
+      hasMore: false,
+    });
+    vi.mocked(api.setMessagesPinned).mockRejectedValue(new Error("disk full"));
+    resetStore({ activeMailboxId: inbox.id });
+    renderShell();
+
+    await screen.findByRole("option", { name: /Newer note/i });
+    window.dispatchEvent(
+      new CustomEvent(CONTEXT_ACTION_EVENT, {
+        detail: {
+          id: "pin",
+          target: { kind: "message", messageId: 2 },
+        },
+      }),
+    );
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toBe("Error: disk full"),
+    );
+    expect(screen.getAllByRole("option")[0]).toHaveAttribute(
+      "aria-label",
+      expect.stringMatching(/Newer note/),
+    );
+    expect(
+      useAppStore.getState().messages.find((item) => item.id === 2)?.pinned,
+    ).toBe(false);
+  });
+
+  it("leaves the list in place when a conversation print cannot load", async () => {
+    const newer = makeMessage({
+      id: 1,
+      threadRoot: "<thread@example.test>",
+    });
+    const older = makeMessage({
+      id: 2,
+      threadRoot: "<thread@example.test>",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    mockedListMessages.mockResolvedValue({
+      items: [newer, older],
+      nextCursor: null,
+      hasMore: false,
+    });
+    mockedGetMessage.mockRejectedValue(new Error("body unavailable"));
+    resetStore({ activeMailboxId: inbox.id });
+    renderShell();
+
+    await screen.findByRole("treeitem", { name: /First message/i });
+    document.querySelectorAll("iframe").forEach((frame) => frame.remove());
+    window.dispatchEvent(
+      new CustomEvent(CONTEXT_ACTION_EVENT, {
+        detail: {
+          id: "print-conversation",
+          target: { kind: "message", messageId: 1 },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toBe("Error: body unavailable"),
+    );
+    expect(document.querySelector("iframe")).toBeNull();
+    expect(useAppStore.getState().selectedMessage).toBeUndefined();
+  });
+
+  it("copies a loaded conversation into another folder and leaves it in place", async () => {
+    const projects = makeMailbox({
+      id: 4,
+      name: "Projects",
+      displayName: "Projects",
+      role: "other",
+      unreadCount: 0,
+      totalCount: 0,
+    });
+    const newer = makeMessage({
+      id: 1,
+      threadRoot: "<thread@example.test>",
+    });
+    const older = makeMessage({
+      id: 2,
+      threadRoot: "<thread@example.test>",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    const other = makeMessage({ id: 3, subject: "Other note" });
+    mockedListMailboxes.mockResolvedValue([inbox, trash, projects]);
+    mockedListMessages.mockResolvedValue({
+      items: [newer, older, other],
+      nextCursor: null,
+      hasMore: false,
+    });
+    mockedCopyMessagesToMailbox.mockResolvedValue({
+      updated: 2,
+      queued: 0,
+      failed: 0,
+    });
+    resetStore({
+      mailboxes: [inbox, trash, projects],
+      activeMailboxId: inbox.id,
+    });
+    renderShell();
+
+    await screen.findByRole("treeitem", { name: /First message/i });
+    window.dispatchEvent(
+      new CustomEvent(CONTEXT_ACTION_EVENT, {
+        detail: {
+          id: "copy-conversation:4",
+          target: { kind: "message", messageId: 1 },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(mockedCopyMessagesToMailbox).toHaveBeenCalledWith(
+        "account-1",
+        [1, 2],
+        4,
+      ),
+    );
+    expect(mockedGetMessage).not.toHaveBeenCalled();
+    expect(useAppStore.getState().messages.map((item) => item.id)).toEqual([
+      1, 2, 3,
+    ]);
+    expect(useAppStore.getState().selectedMessage).toBeUndefined();
+  });
+
+  it("leaves a conversation in place when the copy fails", async () => {
+    const projects = makeMailbox({
+      id: 4,
+      name: "Projects",
+      displayName: "Projects",
+      role: "other",
+    });
+    const newer = makeMessage({
+      id: 1,
+      threadRoot: "<thread@example.test>",
+    });
+    const older = makeMessage({
+      id: 2,
+      threadRoot: "<thread@example.test>",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    mockedListMailboxes.mockResolvedValue([inbox, trash, projects]);
+    mockedListMessages.mockResolvedValue({
+      items: [newer, older],
+      nextCursor: null,
+      hasMore: false,
+    });
+    mockedCopyMessagesToMailbox.mockRejectedValue(new Error("copy failed"));
+    resetStore({
+      mailboxes: [inbox, trash, projects],
+      activeMailboxId: inbox.id,
+    });
+    renderShell();
+
+    await screen.findByRole("treeitem", { name: /First message/i });
+    window.dispatchEvent(
+      new CustomEvent(CONTEXT_ACTION_EVENT, {
+        detail: {
+          id: "copy-conversation:4",
+          target: { kind: "message", messageId: 1 },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toBe("Error: copy failed"),
+    );
+    expect(useAppStore.getState().messages.map((item) => item.id)).toEqual([
+      1, 2,
+    ]);
+  });
+
+  it("moves a loaded conversation into another folder and opens the next message", async () => {
+    const projects = makeMailbox({
+      id: 4,
+      name: "Projects",
+      displayName: "Projects",
+      role: "other",
+      unreadCount: 0,
+      totalCount: 0,
+    });
+    const newer = makeMessage({
+      id: 1,
+      isRead: false,
+      threadRoot: "<thread@example.test>",
+    });
+    const older = makeMessage({
+      id: 2,
+      isRead: true,
+      threadRoot: "<thread@example.test>",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    const other = makeMessage({ id: 3, isRead: true, subject: "Other note" });
+    mockedListMailboxes.mockResolvedValue([inbox, trash, projects]);
+    mockedListMessages.mockResolvedValue({
+      items: [newer, older, other],
+      nextCursor: null,
+      hasMore: false,
+    });
+    mockedMoveMessagesToMailbox.mockResolvedValue({
+      updated: 2,
+      queued: 0,
+      failed: 0,
+    });
+    resetStore({
+      mailboxes: [inbox, trash, projects],
+      activeMailboxId: inbox.id,
+    });
+    renderShell();
+
+    await screen.findByRole("treeitem", { name: /First message/i });
+    window.dispatchEvent(
+      new CustomEvent(CONTEXT_ACTION_EVENT, {
+        detail: {
+          id: "move-conversation:4",
+          target: { kind: "message", messageId: 1 },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(mockedMoveMessagesToMailbox).toHaveBeenCalledWith(
+        "account-1",
+        [1, 2],
+        4,
+      ),
+    );
+    expect(useAppStore.getState().messages.map((item) => item.id)).toEqual([3]);
+    expect(mockedGetMessage).not.toHaveBeenCalled();
+    const boxes = useAppStore.getState().mailboxes;
+    expect(boxes.find((mailbox) => mailbox.id === 1)?.totalCount).toBe(0);
+    expect(boxes.find((mailbox) => mailbox.id === 4)?.totalCount).toBe(2);
+  });
+
+  it("puts a conversation back when moving it to a folder fails", async () => {
+    const projects = makeMailbox({
+      id: 4,
+      name: "Projects",
+      displayName: "Projects",
+      role: "other",
+    });
+    const newer = makeMessage({
+      id: 1,
+      threadRoot: "<thread@example.test>",
+    });
+    const older = makeMessage({
+      id: 2,
+      threadRoot: "<thread@example.test>",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    mockedListMailboxes.mockResolvedValue([inbox, trash, projects]);
+    mockedListMessages.mockResolvedValue({
+      items: [newer, older],
+      nextCursor: null,
+      hasMore: false,
+    });
+    mockedMoveMessagesToMailbox.mockRejectedValue(new Error("offline"));
+    resetStore({
+      mailboxes: [inbox, trash, projects],
+      activeMailboxId: inbox.id,
+    });
+    renderShell();
+
+    await screen.findByRole("treeitem", { name: /First message/i });
+    window.dispatchEvent(
+      new CustomEvent(CONTEXT_ACTION_EVENT, {
+        detail: {
+          id: "move-conversation:4",
+          target: { kind: "message", messageId: 1 },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toBe("Error: offline"),
+    );
+    expect(useAppStore.getState().messages.map((item) => item.id)).toEqual([
+      1, 2,
+    ]);
+  });
+
+  it("moves a dragged message into the folder it is dropped on", async () => {
+    const moveOne = vi.mocked(api.moveMessageToMailbox);
+    moveOne.mockResolvedValue(undefined);
+    renderShell();
+    const row = await screen.findByRole("option", { name: /First message/i });
+    const dataTransfer = messageDragTransfer();
+    fireEvent.dragStart(row, { dataTransfer });
+    const trash = screen.getByRole("button", { name: "Trash" });
+    fireEvent.dragOver(trash, { dataTransfer });
+    expect(trash).toHaveClass("drop-target");
+    fireEvent.drop(trash, { dataTransfer });
+
+    await waitFor(() =>
+      expect(moveOne).toHaveBeenCalledWith("account-1", 1, 3),
+    );
+    expect(dataTransfer.getData("application/x-postal-snap-messages")).toBe(
+      "account-1\n1",
+    );
+  });
+
+  it("moves every selected message when one of them is dropped on a folder", async () => {
+    mockedMoveMessagesToMailbox.mockResolvedValue({
+      updated: 2,
+      queued: 0,
+      failed: 0,
+    });
+    renderShell();
+    await screen.findByRole("option", { name: /First message/i });
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /First message/i }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /Second message/i }));
+    const dataTransfer = messageDragTransfer();
+    fireEvent.dragStart(
+      screen.getByRole("option", { name: /First message/i }),
+      { dataTransfer },
+    );
+    fireEvent.drop(screen.getByRole("button", { name: "Trash" }), {
+      dataTransfer,
+    });
+
+    await waitFor(() =>
+      expect(mockedMoveMessagesToMailbox).toHaveBeenCalledWith(
+        "account-1",
+        [1, 2],
+        3,
+      ),
+    );
+  });
+
+  it("moves every loaded message when a conversation is dropped on a folder", async () => {
+    const newer = makeMessage({
+      id: 1,
+      threadRoot: "<thread@example.test>",
+    });
+    const older = makeMessage({
+      id: 2,
+      threadRoot: "<thread@example.test>",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    mockedListMessages.mockResolvedValue({
+      items: [newer, older],
+      nextCursor: null,
+      hasMore: false,
+    });
+    mockedMoveMessagesToMailbox.mockResolvedValue({
+      updated: 2,
+      queued: 0,
+      failed: 0,
+    });
+    renderShell();
+    const header = await screen.findByRole("treeitem", {
+      name: /First message/i,
+    });
+    const dataTransfer = messageDragTransfer();
+    fireEvent.dragStart(header, { dataTransfer });
+    fireEvent.drop(screen.getByRole("button", { name: "Trash" }), {
+      dataTransfer,
+    });
+
+    await waitFor(() =>
+      expect(mockedMoveMessagesToMailbox).toHaveBeenCalledWith(
+        "account-1",
+        [1, 2],
+        3,
+      ),
+    );
+  });
+
+  it("moves only the message that was dragged out of an open conversation", async () => {
+    const newer = makeMessage({
+      id: 1,
+      threadRoot: "<thread@example.test>",
+    });
+    const older = makeMessage({
+      id: 2,
+      threadRoot: "<thread@example.test>",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    mockedListMessages.mockResolvedValue({
+      items: [newer, older],
+      nextCursor: null,
+      hasMore: false,
+    });
+    const moveOne = vi.mocked(api.moveMessageToMailbox);
+    moveOne.mockResolvedValue(undefined);
+    renderShell();
+    const header = await screen.findByRole("treeitem", {
+      name: /Conversation/i,
+    });
+    fireEvent.click(header);
+    const dataTransfer = messageDragTransfer();
+    fireEvent.dragStart(
+      await screen.findByRole("treeitem", { name: /Second message/i }),
+      { dataTransfer },
+    );
+    fireEvent.drop(screen.getByRole("button", { name: "Trash" }), {
+      dataTransfer,
+    });
+
+    await waitFor(() =>
+      expect(moveOne).toHaveBeenCalledWith("account-1", 2, 3),
+    );
+    expect(mockedMoveMessagesToMailbox).not.toHaveBeenCalled();
+  });
+
+  it("leaves a message in its folder when dropped on that same folder", async () => {
+    const moveOne = vi.mocked(api.moveMessageToMailbox);
+    renderShell();
+    const row = await screen.findByRole("option", { name: /First message/i });
+    const dataTransfer = messageDragTransfer();
+    fireEvent.dragStart(row, { dataTransfer });
+    const inboxButton = screen.getByRole("button", { name: /^Inbox/ });
+    fireEvent.drop(inboxButton, { dataTransfer });
+    expect(inboxButton).not.toHaveClass("drop-target");
+    expect(moveOne).not.toHaveBeenCalled();
+  });
+
+  it("shows attachment, invitation, reply, and forward marks for a conversation", async () => {
+    const newer = makeMessage({
+      id: 1,
+      threadRoot: "<thread@example.test>",
+    });
+    const older = makeMessage({
+      id: 2,
+      threadRoot: "<thread@example.test>",
+      receivedAt: "2026-08-17T12:00:00Z",
+      hasAttachments: true,
+      hasCalendar: true,
+      isAnswered: true,
+      isForwarded: true,
+    });
+    mockedListMessages.mockResolvedValue({
+      items: [newer, older],
+      nextCursor: null,
+      hasMore: false,
+    });
+    renderShell();
+    const header = await screen.findByRole("treeitem", {
+      name: /Conversation/i,
+    });
+    expect(header).toHaveAccessibleName(/Has attachments/);
+    expect(header).toHaveAccessibleName(/Calendar invitation/);
+    expect(header).toHaveAccessibleName(/Replied/);
+    expect(header).toHaveAccessibleName(/Forwarded/);
+    expect(header.querySelectorAll(".message-subject svg")).toHaveLength(4);
+  });
+
+  it("names high importance on a message and on a conversation", async () => {
+    const urgent = makeMessage({
+      id: 1,
+      subject: "Urgent note",
+      importance: "high",
+      threadRoot: "<urgent@example.test>",
+    });
+    const older = makeMessage({
+      id: 2,
+      subject: "Earlier note",
+      importance: "low",
+      threadRoot: "<urgent@example.test>",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    mockedListMessages.mockResolvedValue({
+      items: [urgent, older],
+      nextCursor: null,
+      hasMore: false,
+    });
+    renderShell();
+    const header = await screen.findByRole("treeitem", {
+      name: /Urgent note/i,
+    });
+    expect(header).toHaveAccessibleName(/High importance/);
+    expect(header.querySelector(".importance-high")).toBeTruthy();
+  });
+
+  it("shows when mail was last checked", async () => {
+    const checked = new Date().toISOString();
+    useAppStore.setState({
+      sync: {
+        [account.id]: {
+          accountId: account.id,
+          phase: "idle",
+          lastSuccessAt: checked,
+        },
+      },
+    });
+    renderShell();
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      `${strings.mail.mailUpToDate}. ${strings.mail.checkedAt(formatMessageDate(checked))}`,
     );
   });
 
@@ -761,9 +4164,11 @@ describe("mail shell", () => {
     const search = screen.getByRole("searchbox", { name: "Search mail" });
     fireEvent.change(search, { target: { value: "project" } });
     fireEvent.submit(screen.getByRole("search"));
-    expect(
-      await screen.findByRole("option", { name: /Cached match/i }),
-    ).toBeVisible();
+    const cachedRow = await screen.findByRole("option", {
+      name: /Cached match/i,
+    });
+    expect(cachedRow).toBeVisible();
+    expect(cachedRow).not.toHaveAccessibleName(/In Inbox/);
     expect(
       await screen.findByRole("option", { name: /Server match/i }),
     ).toBeVisible();
@@ -784,6 +4189,430 @@ describe("mail shell", () => {
     expect(
       screen.getByRole("button", { name: "This account" }),
     ).toHaveAttribute("aria-pressed", "true");
+    expect(
+      screen.getByRole("option", { name: /Cached match/i }),
+    ).toHaveAccessibleName(/In Inbox/);
+  });
+
+  it("archives the focused message with e and leaves it closed", async () => {
+    renderShell();
+    const row = await screen.findByRole("option", { name: /First message/i });
+    fireEvent.keyDown(row, { key: "e" });
+    expect(useAppStore.getState().error).toMatch(/does not have that folder/i);
+    expect(api.moveMessage).not.toHaveBeenCalled();
+    expect(row).toBeInTheDocument();
+
+    const archive = makeMailbox({
+      id: 4,
+      name: "Archive",
+      displayName: "Archive",
+      role: "archive",
+      unreadCount: 0,
+      totalCount: 0,
+    });
+    useAppStore.setState({ mailboxes: [inbox, archive, trash] });
+    vi.mocked(api.moveMessage).mockResolvedValue(undefined);
+    fireEvent.keyDown(row, { key: "e" });
+    await waitFor(() =>
+      expect(api.moveMessage).toHaveBeenCalledWith(
+        "account-1",
+        firstMessage.id,
+        "archive",
+      ),
+    );
+    expect(
+      screen.queryByRole("option", { name: /First message/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "First message" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("replies to the focused message without opening it", async () => {
+    mockedGetMessage.mockRejectedValueOnce(new Error("message missing"));
+    renderShell();
+    const row = await screen.findByRole("option", { name: /First message/i });
+    fireEvent.keyDown(row, { key: "r" });
+    await waitFor(() =>
+      expect(useAppStore.getState().error).toMatch(/message missing/i),
+    );
+    expect(useAppStore.getState().composerOpen).toBe(false);
+
+    useAppStore.setState({ error: undefined });
+    fireEvent.keyDown(row, { key: "r" });
+    await waitFor(() =>
+      expect(useAppStore.getState().composeSeed?.composeMode).toBe("reply"),
+    );
+    expect(useAppStore.getState().composeSeed?.sourceMessage?.id).toBe(
+      firstMessage.id,
+    );
+    expect(useAppStore.getState().composerOpen).toBe(true);
+    expect(
+      screen.queryByRole("heading", { name: "First message" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.keyDown(row, { key: "a" });
+    await waitFor(() =>
+      expect(useAppStore.getState().composeSeed?.composeMode).toBe("replyAll"),
+    );
+
+    useAppStore.getState().closeComposer();
+    fireEvent.click(row);
+    expect(
+      await screen.findByRole("heading", { name: "First message" }),
+    ).toBeVisible();
+    fireEvent.keyDown(document.body, { key: "r" });
+    await waitFor(() =>
+      expect(useAppStore.getState().composeSeed?.composeMode).toBe("reply"),
+    );
+  });
+
+  it("marks the focused message as junk without opening it", async () => {
+    renderShell();
+    const row = await screen.findByRole("option", { name: /First message/i });
+    fireEvent.keyDown(row, { key: "!" });
+    expect(useAppStore.getState().error).toMatch(/does not have that folder/i);
+    expect(api.moveMessage).not.toHaveBeenCalled();
+    expect(row).toBeInTheDocument();
+
+    const junk = makeMailbox({
+      id: 6,
+      name: "Junk",
+      displayName: "Junk",
+      role: "junk",
+      unreadCount: 0,
+      totalCount: 0,
+    });
+    useAppStore.setState({
+      mailboxes: [inbox, junk, trash],
+      error: undefined,
+    });
+    vi.mocked(api.moveMessage).mockResolvedValue(undefined);
+    fireEvent.keyDown(row, { key: "!" });
+    await waitFor(() =>
+      expect(api.moveMessage).toHaveBeenCalledWith(
+        "account-1",
+        firstMessage.id,
+        "junk",
+      ),
+    );
+    expect(
+      screen.queryByRole("option", { name: /First message/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "First message" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("moves a focused Junk message to Inbox", async () => {
+    const junk = makeMailbox({
+      id: 6,
+      name: "Junk",
+      displayName: "Junk",
+      role: "junk",
+      unreadCount: 0,
+      totalCount: 1,
+    });
+    const filed = makeMessage({
+      id: 4,
+      mailboxId: junk.id,
+      subject: "Junk note",
+    });
+    mockedListMailboxes.mockResolvedValue([inbox, junk, trash]);
+    mockedListMessages.mockResolvedValue({
+      items: [filed],
+      nextCursor: null,
+      hasMore: false,
+    });
+    useAppStore.setState({
+      mailboxes: [inbox, junk, trash],
+      activeMailboxId: junk.id,
+    });
+    vi.mocked(api.moveMessageToMailbox).mockResolvedValue(undefined);
+    renderShell();
+    fireEvent.keyDown(
+      await screen.findByRole("option", { name: /Junk note/i }),
+      { key: "!" },
+    );
+    await waitFor(() =>
+      expect(api.moveMessageToMailbox).toHaveBeenCalledWith(
+        "account-1",
+        filed.id,
+        inbox.id,
+      ),
+    );
+    expect(
+      screen.queryByRole("heading", { name: "Junk note" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("moves the focused message to Trash without opening it", async () => {
+    mockedListMailboxes.mockResolvedValue([inbox]);
+    useAppStore.setState({ mailboxes: [inbox] });
+    renderShell();
+    const row = await screen.findByRole("option", { name: /First message/i });
+    await waitFor(() =>
+      expect(
+        useAppStore.getState().mailboxes.some((box) => box.role === "trash"),
+      ).toBe(false),
+    );
+    fireEvent.keyDown(row, { key: "Delete" });
+    expect(useAppStore.getState().error).toMatch(/does not have that folder/i);
+    expect(api.moveMessage).not.toHaveBeenCalled();
+
+    useAppStore.setState({ mailboxes: [inbox, trash], error: undefined });
+    vi.mocked(api.moveMessage).mockResolvedValue(undefined);
+    fireEvent.keyDown(row, { key: "#" });
+    await waitFor(() =>
+      expect(api.moveMessage).toHaveBeenCalledWith(
+        "account-1",
+        firstMessage.id,
+        "trash",
+      ),
+    );
+    expect(
+      screen.queryByRole("option", { name: /First message/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "First message" }),
+    ).not.toBeInTheDocument();
+    expect(api.showNativeConfirm).not.toHaveBeenCalled();
+  });
+
+  it("deletes a focused Trash message after confirmation", async () => {
+    const filed = makeMessage({
+      id: 3,
+      mailboxId: trash.id,
+      subject: "Filed note",
+    });
+    mockedListMessages.mockResolvedValue({
+      items: [filed],
+      nextCursor: null,
+      hasMore: false,
+    });
+    useAppStore.setState({ activeMailboxId: trash.id });
+    vi.mocked(api.showNativeConfirm).mockResolvedValueOnce(false);
+    vi.mocked(api.deleteTrashMessages).mockResolvedValue(undefined);
+    renderShell();
+    const row = await screen.findByRole("option", { name: /Filed note/i });
+    fireEvent.keyDown(row, { key: "Delete" });
+    await waitFor(() => expect(api.showNativeConfirm).toHaveBeenCalled());
+    expect(api.deleteTrashMessages).not.toHaveBeenCalled();
+    expect(row).toBeInTheDocument();
+
+    vi.mocked(api.showNativeConfirm).mockResolvedValueOnce(true);
+    fireEvent.keyDown(row, { key: "Delete" });
+    await waitFor(() =>
+      expect(api.deleteTrashMessages).toHaveBeenCalledWith("account-1", [
+        filed.id,
+      ]),
+    );
+    expect(
+      screen.queryByRole("option", { name: /Filed note/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("moves a focused Archive message to Inbox", async () => {
+    const archive = makeMailbox({
+      id: 4,
+      name: "Archive",
+      displayName: "Archive",
+      role: "archive",
+      unreadCount: 0,
+      totalCount: 1,
+    });
+    const filed = makeMessage({
+      id: 3,
+      mailboxId: archive.id,
+      subject: "Filed note",
+    });
+    mockedListMailboxes.mockResolvedValue([inbox, archive, trash]);
+    mockedListMessages.mockResolvedValue({
+      items: [filed],
+      nextCursor: null,
+      hasMore: false,
+    });
+    useAppStore.setState({
+      mailboxes: [inbox, archive, trash],
+      activeMailboxId: archive.id,
+    });
+    vi.mocked(api.moveMessageToMailbox).mockResolvedValue(undefined);
+    renderShell();
+    fireEvent.keyDown(
+      await screen.findByRole("option", { name: /Filed note/i }),
+      { key: "e" },
+    );
+    await waitFor(() =>
+      expect(api.moveMessageToMailbox).toHaveBeenCalledWith(
+        "account-1",
+        filed.id,
+        inbox.id,
+      ),
+    );
+    expect(
+      screen.queryByRole("heading", { name: "Filed note" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("checks the focused message with x and leaves it closed", async () => {
+    renderShell();
+    const row = await screen.findByRole("option", { name: /First message/i });
+    fireEvent.keyDown(row, { key: "x" });
+    expect(
+      await screen.findByRole("toolbar", { name: "1 selected" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("heading", { name: "First message" }),
+    ).not.toBeInTheDocument();
+    fireEvent.keyDown(row, { key: "x" });
+    expect(
+      await screen.findByRole("toolbar", { name: "0 selected" }),
+    ).toBeVisible();
+  });
+
+  it("searches the whole account for mail from the sender", async () => {
+    mockedSearchCached.mockResolvedValue([]);
+    mockedSearchServer.mockResolvedValue([]);
+    renderShell();
+    await screen.findByRole("option", { name: /First message/i });
+    window.dispatchEvent(
+      new CustomEvent(CONTEXT_ACTION_EVENT, {
+        detail: {
+          id: "messages-from-sender",
+          target: { kind: "message", messageId: firstMessage.id },
+        },
+      }),
+    );
+    await waitFor(() =>
+      expect(mockedSearchCached).toHaveBeenCalledWith({
+        accountId: "account-1",
+        mailboxId: inbox.id,
+        text: 'from:"jane@example.test"',
+        allFolders: true,
+        limit: 250,
+      }),
+    );
+    expect(screen.getByRole("searchbox", { name: "Search mail" })).toHaveValue(
+      'from:"jane@example.test"',
+    );
+    expect(
+      screen.getByRole("button", { name: strings.mail.thisAccount }),
+    ).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("searches the whole account for mail with this subject", async () => {
+    const reply = { ...firstMessage, subject: "Re: Fwd: Picnic plans" };
+    mockedListMessages.mockResolvedValue({
+      items: [reply],
+      nextCursor: null,
+      hasMore: false,
+    });
+    mockedSearchCached.mockResolvedValue([]);
+    mockedSearchServer.mockResolvedValue([]);
+    renderShell();
+    await screen.findByRole("option", { name: /Picnic plans/i });
+    window.dispatchEvent(
+      new CustomEvent(CONTEXT_ACTION_EVENT, {
+        detail: {
+          id: "messages-with-subject",
+          target: { kind: "message", messageId: reply.id },
+        },
+      }),
+    );
+    await waitFor(() =>
+      expect(mockedSearchCached).toHaveBeenCalledWith({
+        accountId: "account-1",
+        mailboxId: inbox.id,
+        text: 'subject:"Picnic plans"',
+        allFolders: true,
+        limit: 250,
+      }),
+    );
+    expect(screen.getByRole("searchbox", { name: "Search mail" })).toHaveValue(
+      'subject:"Picnic plans"',
+    );
+  });
+
+  it("writes to an address and searches mail sent to it", async () => {
+    mockedSearchCached.mockResolvedValue([]);
+    mockedSearchServer.mockResolvedValue([]);
+    renderShell();
+    await screen.findByRole("option", { name: /First message/i });
+    window.dispatchEvent(
+      new CustomEvent(CONTEXT_ACTION_EVENT, {
+        detail: {
+          id: "compose-to-address",
+          target: {
+            kind: "address",
+            address: "Lee <lee@example.test>",
+          },
+        },
+      }),
+    );
+    expect(useAppStore.getState().composeSeed?.prefill?.to).toEqual([
+      "lee@example.test",
+    ]);
+    useAppStore.getState().closeComposer();
+    window.dispatchEvent(
+      new CustomEvent(CONTEXT_ACTION_EVENT, {
+        detail: {
+          id: "messages-to-address",
+          target: { kind: "address", address: "Lee <lee@example.test>" },
+        },
+      }),
+    );
+    await waitFor(() =>
+      expect(mockedSearchCached).toHaveBeenCalledWith({
+        accountId: "account-1",
+        mailboxId: inbox.id,
+        text: 'to:"lee@example.test"',
+        allFolders: true,
+        limit: 250,
+      }),
+    );
+    expect(screen.getByRole("searchbox", { name: "Search mail" })).toHaveValue(
+      'to:"lee@example.test"',
+    );
+  });
+
+  it("leaves search and opens the folder a result came from", async () => {
+    const filed = makeMessage({
+      id: 8,
+      mailboxId: trash.id,
+      subject: "Filed away",
+    });
+    mockedSearchCached.mockResolvedValue([filed]);
+    mockedSearchServer.mockResolvedValue([]);
+    mockedGetMessage.mockImplementation(async (_accountId, messageId) => {
+      if (messageId === filed.id) return toDetail(filed);
+      const summary = messages.find((item) => item.id === messageId);
+      if (!summary) throw new Error("message missing");
+      return toDetail(summary);
+    });
+    renderShell();
+    await screen.findByRole("option", { name: /First message/i });
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search mail" }), {
+      target: { value: "filed" },
+    });
+    fireEvent.submit(screen.getByRole("search"));
+    fireEvent.click(await screen.findByRole("option", { name: /Filed away/i }));
+    // Highlight marks split the subject; browsers still name it "Filed away".
+    expect(
+      await screen.findByRole("heading", { name: /^Filed\s?away$/ }),
+    ).toBeVisible();
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.reader.showDetails }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: strings.reader.showInFolder("Trash"),
+      }),
+    );
+    expect(useAppStore.getState().activeMailboxId).toBe(trash.id);
+    expect(useAppStore.getState().selectedMessage?.subject).toBe("Filed away");
+    expect(screen.getByRole("searchbox", { name: "Search mail" })).toHaveValue(
+      "",
+    );
   });
 
   it("keeps cached search results when server search fails", async () => {
@@ -806,6 +4635,136 @@ describe("mail shell", () => {
       expect(useAppStore.getState().error).toMatch(
         /server search unavailable/i,
       ),
+    );
+  });
+
+  it("lists unread mail when Unread is chosen, including a fresh request", async () => {
+    const readMessage = makeMessage({ id: 2, isRead: true });
+    mockedListMessages.mockImplementation(async (...args: unknown[]) => {
+      const filter = args[4];
+      return {
+        items:
+          filter === "unread" ? [firstMessage] : [firstMessage, readMessage],
+        nextCursor: null,
+        hasMore: false,
+      };
+    });
+    renderShell();
+
+    expect(
+      await screen.findByRole("option", { name: /Second message/i }),
+    ).toBeVisible();
+    fireEvent.click(screen.getByRole("radio", { name: "Unread" }));
+
+    await waitFor(() =>
+      expect(mockedListMessages).toHaveBeenCalledWith(
+        "account-1",
+        1,
+        undefined,
+        100,
+        "unread",
+      ),
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("option", { name: /Second message/i }),
+      ).toBeNull(),
+    );
+    expect(
+      screen.getByRole("option", { name: /First message/i }),
+    ).toBeVisible();
+    expect(screen.getByRole("radio", { name: "Unread" })).toBeChecked();
+
+    fireEvent.click(screen.getByRole("button", { name: "Drafts" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("radiogroup", { name: "Show" })).toBeNull(),
+    );
+  });
+
+  it("lists pinned mail when Pinned is chosen", async () => {
+    const pinned = makeMessage({
+      id: 1,
+      subject: "Pinned note",
+      pinned: true,
+    });
+    const plain = makeMessage({ id: 2, subject: "Plain note" });
+    mockedListMessages.mockImplementation(async (...args: unknown[]) => {
+      const filter = args[4];
+      return {
+        items: filter === "pinned" ? [pinned] : [pinned, plain],
+        nextCursor: null,
+        hasMore: false,
+      };
+    });
+    renderShell();
+
+    expect(
+      await screen.findByRole("option", { name: /Plain note/i }),
+    ).toBeVisible();
+    fireEvent.click(screen.getByRole("radio", { name: "Pinned" }));
+
+    await waitFor(() =>
+      expect(mockedListMessages).toHaveBeenCalledWith(
+        "account-1",
+        1,
+        undefined,
+        100,
+        "pinned",
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("option", { name: /Plain note/i })).toBeNull(),
+    );
+    expect(screen.getByRole("option", { name: /Pinned note/i })).toBeVisible();
+    expect(screen.getByRole("radio", { name: "Pinned" })).toBeChecked();
+  });
+
+  it("says when the mailbox has no pinned mail", async () => {
+    mockedListMessages.mockImplementation(async (...args: unknown[]) => {
+      const filter = args[4];
+      return {
+        items: filter === "pinned" ? [] : [firstMessage],
+        nextCursor: null,
+        hasMore: false,
+      };
+    });
+    renderShell();
+    await screen.findByRole("option", { name: /First message/i });
+    fireEvent.click(screen.getByRole("radio", { name: "Pinned" }));
+    expect(await screen.findByText(strings.mail.noPinned)).toBeVisible();
+  });
+
+  it("sorts the mailbox from the menu and keeps that order flat", async () => {
+    renderShell();
+    await screen.findByRole("option", { name: /First message/i });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "From" }));
+
+    await waitFor(() =>
+      expect(mockedListMessages).toHaveBeenCalledWith(
+        "account-1",
+        1,
+        undefined,
+        100,
+        undefined,
+        "sender",
+      ),
+    );
+    expect(document.querySelector(".list-day")).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "More mailbox actions" }),
+    );
+    expect(screen.getByRole("menuitemradio", { name: "From" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    expect(screen.getByRole("menuitemradio", { name: "Date" })).toHaveAttribute(
+      "aria-checked",
+      "false",
     );
   });
 
@@ -1090,7 +5049,7 @@ describe("mail shell", () => {
 
     fireEvent.keyDown(trigger, { key: "ArrowDown" });
     expect(
-      await screen.findByRole("menuitem", { name: "Mark all read" }),
+      await screen.findByRole("menuitemradio", { name: "Date" }),
     ).toHaveFocus();
     fireEvent.keyDown(document, { key: "Escape" });
     expect(trigger).toHaveFocus();
@@ -1205,7 +5164,7 @@ describe("mail shell", () => {
     });
     expect(actions).toEqual(
       expect.arrayContaining([
-        "reply",
+        "reply-preferred",
         "reply-all",
         "forward",
         "archive",
@@ -1566,6 +5525,188 @@ describe("mail shell", () => {
     );
   });
 
+  it("duplicates a draft as a new unscheduled message", async () => {
+    const summary = {
+      id: "draft-1",
+      accountId: account.id,
+      recipients: "pat@example.com",
+      subject: "Family update",
+      updatedAt: "2026-08-18T11:00:00Z",
+      syncState: "synced" as const,
+    };
+    const draft = {
+      id: "draft-1",
+      accountId: account.id,
+      to: ["pat@example.com"],
+      cc: [] as string[],
+      bcc: [] as string[],
+      subject: "Family update",
+      htmlBody: "<p>Draft message</p>",
+      textBody: "Draft message",
+      attachments: [{ token: "file-1", filename: "notes.txt", inline: false }],
+      sendAt: "2026-12-01T15:00:00Z",
+    };
+    mockedListDrafts.mockResolvedValue([summary]);
+    mockedGetDraft.mockResolvedValue(draft);
+    mockedSaveDraft.mockResolvedValue({
+      id: "draft-2",
+      syncState: "localPending",
+    });
+    useAppStore.setState({ activeLocalView: "drafts", drafts: [summary] });
+    renderShell();
+    await screen.findByRole("button", { name: /Family update/i });
+
+    window.dispatchEvent(
+      new CustomEvent(CONTEXT_ACTION_EVENT, {
+        detail: {
+          id: "duplicate-draft",
+          target: { kind: "draft", draftId: "draft-1" },
+        },
+      }),
+    );
+
+    await waitFor(() => expect(mockedSaveDraft).toHaveBeenCalled());
+    expect(mockedSaveDraft.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        id: undefined,
+        sendAt: null,
+        subject: "Family update",
+        attachments: draft.attachments,
+      }),
+    );
+    await waitFor(() =>
+      expect(useAppStore.getState().composeSeed?.draft?.id).toBe("draft-2"),
+    );
+    expect(useAppStore.getState().composeSeed?.draft?.sendAt).toBeNull();
+    expect(useAppStore.getState().composerOpen).toBe(true);
+  });
+
+  it("discards a draft from the drafts list", async () => {
+    const summary = {
+      id: "draft-1",
+      accountId: account.id,
+      recipients: "pat@example.com",
+      subject: "Family update",
+      updatedAt: "2026-08-18T11:00:00Z",
+      syncState: "synced" as const,
+    };
+    mockedListDrafts.mockResolvedValue([summary]);
+    vi.mocked(api.deleteDraft).mockResolvedValue(undefined);
+    vi.mocked(api.showNativeConfirm).mockResolvedValueOnce(false);
+    useAppStore.setState({
+      activeLocalView: "drafts",
+      drafts: [summary],
+      composerOpen: true,
+      composeSeed: {
+        draft: {
+          id: "draft-1",
+          accountId: account.id,
+          to: ["pat@example.com"],
+          cc: [],
+          bcc: [],
+          subject: "Family update",
+          htmlBody: "<p>Draft message</p>",
+          textBody: "Draft message",
+          attachments: [],
+        },
+      },
+    });
+    renderShell();
+    await screen.findByRole("button", { name: /Family update/i });
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(CONTEXT_ACTION_EVENT, {
+          detail: {
+            id: "delete-draft",
+            target: { kind: "draft", draftId: "draft-1" },
+          },
+        }),
+      );
+    });
+    await waitFor(() => expect(api.showNativeConfirm).toHaveBeenCalled());
+    expect(api.deleteDraft).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("button", { name: /Family update/i }),
+    ).toBeVisible();
+
+    vi.mocked(api.showNativeConfirm).mockResolvedValueOnce(true);
+    mockedListDrafts.mockResolvedValue([]);
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(CONTEXT_ACTION_EVENT, {
+          detail: {
+            id: "delete-draft",
+            target: { kind: "draft", draftId: "draft-1" },
+          },
+        }),
+      );
+    });
+    await waitFor(() =>
+      expect(api.deleteDraft).toHaveBeenCalledWith("draft-1", "account-1"),
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: /Family update/i }),
+      ).toBeNull(),
+    );
+    expect(useAppStore.getState().composerOpen).toBe(false);
+  });
+
+  it("checks mail and marks another folder read from the folder menu", async () => {
+    const archive = makeMailbox({
+      id: 2,
+      name: "Archive",
+      displayName: "Archive",
+      role: "archive",
+      unreadCount: 2,
+      totalCount: 2,
+    });
+    resetStore({
+      accounts: [account],
+      activeAccountId: account.id,
+      mailboxes: [inbox, archive, trash],
+      activeMailboxId: inbox.id,
+    });
+    mockedListMailboxes.mockResolvedValue([inbox, archive, trash]);
+    mockedMarkMailboxRead.mockResolvedValue({
+      updated: 2,
+      queued: 0,
+      failed: 0,
+    });
+    renderShell();
+    await screen.findByRole("button", { name: /^Archive/ });
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(CONTEXT_ACTION_EVENT, {
+          detail: {
+            id: "get-mail",
+            target: { kind: "folder", mailboxId: archive.id },
+          },
+        }),
+      );
+    });
+    await waitFor(() =>
+      expect(mockedSyncAccount).toHaveBeenCalledWith("account-1"),
+    );
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(CONTEXT_ACTION_EVENT, {
+          detail: {
+            id: "mark-all-read",
+            target: { kind: "folder", mailboxId: archive.id },
+          },
+        }),
+      );
+    });
+    await waitFor(() =>
+      expect(mockedMarkMailboxRead).toHaveBeenCalledWith("account-1", 2),
+    );
+    expect(useAppStore.getState().activeMailboxId).toBe(inbox.id);
+  });
+
   it("reports every outbox recovery failure", async () => {
     const base = {
       accountId: account.id,
@@ -1869,7 +6010,171 @@ describe("mail shell", () => {
       expect(mockedListMessages.mock.calls.length).toBeGreaterThan(listCalls),
     );
     expect(mockedListMailboxes.mock.calls.length).toBeGreaterThan(mailboxCalls);
-    expect(useAppStore.getState().selectedMessage).toBeUndefined();
+    expect(
+      await screen.findByRole("heading", { name: "Second message" }),
+    ).toBeVisible();
+  });
+
+  it("returns to Inbox from another mailbox", async () => {
+    mockedListMessages.mockImplementation(async (_accountId, mailboxId) => ({
+      items: mailboxId === inbox.id ? [firstMessage] : [],
+      nextCursor: null,
+      hasMore: false,
+    }));
+    resetStore({
+      mailboxes: [inbox, trash],
+      activeMailboxId: trash.id,
+    });
+    renderShell();
+
+    expect(await screen.findByRole("heading", { name: "Trash" })).toBeVisible();
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.mail.moreMailboxActions }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: strings.mail.goToInbox }),
+    );
+    expect(await screen.findByRole("heading", { name: "Inbox" })).toBeVisible();
+    expect(
+      await screen.findByRole("option", { name: /First message/i }),
+    ).toBeVisible();
+  });
+
+  it("opens the next mailbox that has unread mail", async () => {
+    const archive = makeMailbox({
+      id: 2,
+      name: "Archive",
+      displayName: "Archive",
+      role: "archive",
+      unreadCount: 3,
+      totalCount: 3,
+    });
+    const archived = makeMessage({
+      id: 8,
+      mailboxId: archive.id,
+      subject: "Archived note",
+    });
+    mockedListMailboxes.mockResolvedValue([inbox, archive, trash]);
+    mockedListMessages.mockImplementation(async (_accountId, mailboxId) => ({
+      items: mailboxId === archive.id ? [archived] : [firstMessage],
+      nextCursor: null,
+      hasMore: false,
+    }));
+    resetStore({
+      mailboxes: [inbox, archive, trash],
+      activeMailboxId: inbox.id,
+    });
+    renderShell();
+
+    await screen.findByRole("option", { name: /First message/i });
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.mail.moreMailboxActions }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: strings.mail.nextUnreadMailbox }),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Archive" }),
+    ).toBeVisible();
+    expect(
+      await screen.findByRole("option", { name: /Archived note/i }),
+    ).toBeVisible();
+  });
+
+  it("expands and collapses every loaded conversation", async () => {
+    const newer = makeMessage({
+      id: 1,
+      threadRoot: "<thread@example.test>",
+    });
+    const older = makeMessage({
+      id: 2,
+      threadRoot: "<thread@example.test>",
+      subject: "Older note",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    mockedListMessages.mockResolvedValue({
+      items: [newer, older],
+      nextCursor: null,
+      hasMore: false,
+    });
+    renderShell();
+    await screen.findByRole("treeitem", { name: /First message/i });
+    expect(screen.getAllByRole("treeitem")).toHaveLength(1);
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.mail.moreMailboxActions }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: strings.mail.expandConversations }),
+    );
+    expect(screen.getByRole("treeitem", { name: /Older note/i })).toBeVisible();
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.mail.moreMailboxActions }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: strings.mail.collapseConversations,
+      }),
+    );
+    expect(
+      screen.queryByRole("treeitem", { name: /Older note/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("snoozes a loaded conversation and opens the next message", async () => {
+    const newer = makeMessage({
+      id: 1,
+      threadRoot: "<thread@example.test>",
+    });
+    const older = makeMessage({
+      id: 2,
+      threadRoot: "<thread@example.test>",
+      subject: "Older note",
+      receivedAt: "2026-08-17T12:00:00Z",
+    });
+    const other = makeMessage({
+      id: 3,
+      subject: "Library hours",
+      receivedAt: "2026-08-16T12:00:00Z",
+    });
+    const loaded = [newer, older, other];
+    mockedListMessages.mockResolvedValue({
+      items: loaded,
+      nextCursor: null,
+      hasMore: false,
+    });
+    mockedGetMessage.mockImplementation(async (_accountId, messageId) => {
+      const summary = loaded.find((item) => item.id === messageId);
+      if (!summary) throw new Error("message missing");
+      return toDetail(summary);
+    });
+    vi.mocked(api.snoozeMessages).mockResolvedValue(undefined);
+    renderShell();
+
+    await screen.findByRole("treeitem", { name: /First message/i });
+    window.dispatchEvent(
+      new CustomEvent(CONTEXT_ACTION_EVENT, {
+        detail: {
+          id: "snooze-conversation",
+          target: { kind: "message", messageId: 1 },
+        },
+      }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: strings.reader.snoozeTomorrow,
+      }),
+    );
+
+    await waitFor(() =>
+      expect(api.snoozeMessages).toHaveBeenCalledWith(
+        "account-1",
+        [1, 2],
+        expect.any(String),
+      ),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Library hours" }),
+    ).toBeVisible();
   });
 
   it("restores the mailbox when a submitted search input is cleared", async () => {
@@ -1923,6 +6228,45 @@ describe("mail shell", () => {
     folderChanged?.({ accountId: secondAccount.id });
     await waitFor(() =>
       expect(mockedListMailboxes.mock.calls.length).toBeGreaterThan(before),
+    );
+  });
+
+  it("creates a folder inside another folder", async () => {
+    const projects = makeMailbox({
+      id: 4,
+      name: "Projects",
+      displayName: "Projects",
+      role: "other",
+      unreadCount: 0,
+      totalCount: 0,
+      delimiter: "/",
+    });
+    resetStore({
+      accounts: [account],
+      activeAccountId: account.id,
+      mailboxes: [inbox, trash, projects],
+      activeMailboxId: inbox.id,
+    });
+    mockedListMailboxes.mockResolvedValue([inbox, trash, projects]);
+    renderShell();
+    await screen.findByRole("button", { name: "Projects" });
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(CONTEXT_ACTION_EVENT, {
+          detail: {
+            id: "new-subfolder",
+            target: { kind: "folder", mailboxId: projects.id },
+          },
+        }),
+      );
+    });
+    expect(screen.getByText("New folder inside Projects")).toBeVisible();
+    fireEvent.change(screen.getByPlaceholderText("Folder name"), {
+      target: { value: "Notes" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create folder" }));
+    await waitFor(() =>
+      expect(mockedCreateFolder).toHaveBeenCalledWith("account-1", "Notes", 4),
     );
   });
 
@@ -1989,6 +6333,23 @@ describe("mail shell", () => {
     await waitFor(() =>
       expect(useAppStore.getState().error).toMatch(/secure mail connection/i),
     );
+  });
+
+  it("opens the next message after the open message is trashed", async () => {
+    vi.mocked(api.moveMessage).mockResolvedValue(undefined);
+    renderShell();
+    fireEvent.click(
+      await screen.findByRole("option", { name: /First message/i }),
+    );
+    await screen.findByRole("heading", { name: "First message" });
+    fireEvent.click(screen.getByRole("button", { name: strings.reader.trash }));
+
+    await waitFor(() =>
+      expect(api.moveMessage).toHaveBeenCalledWith("account-1", 1, "trash"),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Second message" }),
+    ).toBeVisible();
   });
 
   it("replies and moves a message from the product context menu", async () => {

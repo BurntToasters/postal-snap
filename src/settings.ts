@@ -36,6 +36,24 @@ export function mergeSettingsPatches(
   return merged;
 }
 
+/** Stable address form for remembered image consent. Empty when it is not an address. */
+export function normalizeImageSender(value: string): string {
+  const address = value.trim().toLowerCase();
+  const length = Array.from(address).length;
+  if (length < 3 || length > 200) return "";
+  if (
+    Array.from(address).some(
+      (character) => character <= " " || character === "\u007f",
+    )
+  ) {
+    return "";
+  }
+  const at = address.indexOf("@");
+  if (at <= 0 || at !== address.lastIndexOf("@") || at === address.length - 1)
+    return "";
+  return address;
+}
+
 export function applySettingsPatch(
   base: AppSettings,
   patch: SettingsPatch,

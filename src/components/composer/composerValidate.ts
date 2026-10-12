@@ -43,6 +43,66 @@ export function mentionsAttachment(
   return attachmentWords.test(authoredText(body, format, signature));
 }
 
+/** Reply-all and wide copies are easy to send by mistake at this size. */
+export const LARGE_RECIPIENT_COUNT = 10;
+
+function mailboxAddress(value: string): string {
+  const bracketed = value.match(/<([^<>]+)>$/)?.[1];
+  return (bracketed ?? value).trim().toLowerCase();
+}
+
+const noreplyLocalPart = /^(?:no[-_.]?reply|do[-_.]?not[-_.]?reply)$/i;
+
+/** The first To, Cc, or Bcc address that looks automated. */
+export function firstNoreplyRecipient(
+  to: string,
+  cc: string,
+  bcc: string,
+): string | undefined {
+  for (const field of [to, cc, bcc]) {
+    for (const entry of splitAddresses(field)) {
+      const address = mailboxAddress(entry);
+      const local = address.split("@")[0] ?? "";
+      if (address.includes("@") && noreplyLocalPart.test(local)) return address;
+    }
+  }
+  return undefined;
+}
+
+/** An address listed more than once across To, Cc, and Bcc. */
+export function repeatedRecipient(
+  to: string,
+  cc: string,
+  bcc: string,
+): string | undefined {
+  const seen = new Set<string>();
+  for (const field of [to, cc, bcc]) {
+    for (const entry of splitAddresses(field)) {
+      const address = mailboxAddress(entry);
+      if (!address.includes("@")) continue;
+      if (seen.has(address)) return address;
+      seen.add(address);
+    }
+  }
+  return undefined;
+}
+
+/** Distinct To, Cc, and Bcc addresses. Display names and case do not add people. */
+export function uniqueRecipientCount(
+  to: string,
+  cc: string,
+  bcc: string,
+): number {
+  const seen = new Set<string>();
+  for (const field of [to, cc, bcc]) {
+    for (const entry of splitAddresses(field)) {
+      const address = mailboxAddress(entry);
+      if (address) seen.add(address);
+    }
+  }
+  return seen.size;
+}
+
 export function splitAddresses(value: string): string[] {
   const result: string[] = [];
   let current = "";

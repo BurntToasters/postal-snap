@@ -271,6 +271,116 @@ pub async fn move_remote(
     .await
 }
 
+#[derive(Default)]
+pub struct CopyOptions<'a> {
+    pub message_id: Option<&'a str>,
+    /// Set on replay so a copy that already landed is not stored twice.
+    pub dedupe_existing: bool,
+}
+
+/// Copy one message. The source stays.
+pub async fn copy_remote(
+    account: &AccountRecord,
+    password: &str,
+    source: &str,
+    destination: &str,
+    uid: u32,
+    expected_uid_validity: Option<u32>,
+    options: CopyOptions<'_>,
+) -> Result<(), MailboxOperationError> {
+    let expected_uid_validity = expected_uid_validity.ok_or_else(|| {
+        MailboxOperationError::transient(
+            "Mailbox identity is unavailable; refresh mail and try again.".to_string(),
+        )
+    })?;
+    let mut session = super::pool::checkout(account, password)
+        .await
+        .map_err(MailboxOperationError::transient)?;
+    let wire_source = session.mailbox_name(source);
+    let wire_destination = session.mailbox_name(destination);
+    if options.dedupe_existing {
+        if let Some(search) = options.message_id.and_then(header_message_id_search) {
+            tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(&wire_destination))
+                .await
+                .map_err(|_| MailboxOperationError::transient("Copy timed out.".to_string()))?
+                .map_err(|error| remote_failure(error, "Copy"))?;
+            let existing = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.uid_search(&search))
+                .await
+                .map_err(|_| MailboxOperationError::transient("Copy timed out.".to_string()))?
+                .map_err(|error| remote_failure(error, "Copy"))?;
+            if !existing.is_empty() {
+                session.release();
+                return Ok(());
+            }
+        }
+    }
+    let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(&wire_source))
+        .await
+        .map_err(|_| MailboxOperationError::transient("Copy timed out.".to_string()))?
+        .map_err(|error| remote_failure(error, "Copy"))?;
+    if selected.uid_validity != Some(expected_uid_validity) {
+        return Err(MailboxOperationError::terminal(
+            "This mailbox changed; refresh mail and try again.".to_string(),
+        ));
+    }
+    tokio::time::timeout(
+        IMAP_COMMAND_TIMEOUT,
+        session.uid_copy(uid.to_string(), &wire_destination),
+    )
+    .await
+    .map_err(|_| MailboxOperationError::transient("Copy timed out.".to_string()))?
+    .map_err(|error| remote_failure(error, "Copy"))?;
+    session.release();
+    Ok(())
+}
+
+/// Copy several messages in one IMAP command. The source messages stay.
+pub async fn copy_remote_uids(
+    account: &AccountRecord,
+    password: &str,
+    source: &str,
+    destination: &str,
+    uids: &[u32],
+    expected_uid_validity: Option<u32>,
+) -> Result<(), MailboxOperationError> {
+    if uids.is_empty() {
+        return Ok(());
+    }
+    let expected_uid_validity = expected_uid_validity.ok_or_else(|| {
+        MailboxOperationError::transient(
+            "Mailbox identity is unavailable; refresh mail and try again.".to_string(),
+        )
+    })?;
+    let mut session = super::pool::checkout(account, password)
+        .await
+        .map_err(MailboxOperationError::transient)?;
+    let wire_source = session.mailbox_name(source);
+    let wire_destination = session.mailbox_name(destination);
+    let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(&wire_source))
+        .await
+        .map_err(|_| MailboxOperationError::transient("Copy timed out.".to_string()))?
+        .map_err(|error| remote_failure(error, "Copy"))?;
+    if selected.uid_validity != Some(expected_uid_validity) {
+        return Err(MailboxOperationError::terminal(
+            "This mailbox changed; refresh mail and try again.".to_string(),
+        ));
+    }
+    let set = uids
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    tokio::time::timeout(
+        IMAP_COMMAND_TIMEOUT,
+        session.uid_copy(set, &wire_destination),
+    )
+    .await
+    .map_err(|_| MailboxOperationError::transient("Copy timed out.".to_string()))?
+    .map_err(|error| remote_failure(error, "Copy"))?;
+    session.release();
+    Ok(())
+}
+
 pub async fn move_remote_uids(
     account: &AccountRecord,
     password: &str,
@@ -293,6 +403,19 @@ pub async fn move_remote_uids(
 
 fn quote_imap_search(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// The dedupe SEARCH for a Message-ID, or None when the id is unsafe to send.
+/// None means no dedupe: the copy or move proceeds as a normal operation.
+fn header_message_id_search(raw: &str) -> Option<String> {
+    // Checked before trimming so a trailing CR or LF also disables the search.
+    if raw.trim().is_empty() || !raw.is_ascii() || raw.chars().any(|c| c.is_ascii_control()) {
+        return None;
+    }
+    Some(format!(
+        "HEADER Message-ID \"{}\"",
+        quote_imap_search(raw.trim())
+    ))
 }
 
 async fn move_remote_inner(
@@ -338,15 +461,7 @@ async fn move_remote_inner(
     // If the destination already holds this Message-ID the server applied the
     // original move, so only finish removing the source copy.
     if options.dedupe_existing {
-        if let Some(raw_message_id) = options
-            .message_id
-            .map(str::trim)
-            .filter(|id| !id.is_empty())
-        {
-            let search = format!(
-                "HEADER Message-ID \"{}\"",
-                quote_imap_search(raw_message_id)
-            );
+        if let Some(search) = options.message_id.and_then(header_message_id_search) {
             let destination_selected =
                 tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(&wire_destination))
                     .await
@@ -590,6 +705,100 @@ pub async fn empty_folder(
     Ok(())
 }
 
+/// Comma-separated UID set for one STORE / UID EXPUNGE. Empty, zero, and
+/// oversized sets are rejected so a bad caller cannot widen the command.
+pub(crate) fn uid_set(uids: &[u32]) -> Result<String, String> {
+    if uids.is_empty() || uids.len() > 200 || uids.contains(&0) {
+        return Err("Choose up to 200 messages.".into());
+    }
+    let mut ordered = uids.to_vec();
+    ordered.sort_unstable();
+    ordered.dedup();
+    Ok(ordered
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(","))
+}
+
+/// Delete specific Trash messages. UID EXPUNGE is limited to `uids`. A server
+/// without UIDPLUS is told to clear `\Deleted` on that same set; this never
+/// falls back to a mailbox-wide EXPUNGE.
+pub async fn expunge_uids(
+    account: &AccountRecord,
+    password: &str,
+    name: &str,
+    expected_uid_validity: u32,
+    uids: &[u32],
+) -> Result<(), String> {
+    let set = uid_set(uids)?;
+    let mut session = super::pool::checkout(account, password).await?;
+    let wire_name = session.mailbox_name(name);
+    let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(&wire_name))
+        .await
+        .map_err(|_| "Deleting the message timed out.".to_string())?
+        .map_err(|error| redact_error(&error, "Delete message"))?;
+    if selected.uid_validity != Some(expected_uid_validity) {
+        session.release();
+        return Err("This mailbox changed; refresh mail and try again.".into());
+    }
+    let flagged = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
+        session
+            .uid_store(set.clone(), "+FLAGS.SILENT (\\Deleted)")
+            .await
+            .map_err(|error| redact_error(&error, "Delete message"))?
+            .try_collect::<Vec<_>>()
+            .await
+            .map_err(|error| redact_error(&error, "Delete message"))
+    })
+    .await
+    .map_err(|_| "Deleting the message timed out.".to_string())?;
+    if let Err(error) = flagged {
+        session.discard();
+        return Err(error);
+    }
+    let expunged = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
+        session
+            .uid_expunge(set.clone())
+            .await
+            .map_err(|error| redact_error(&error, "Delete message"))?
+            .try_collect::<Vec<_>>()
+            .await
+            .map_err(|error| redact_error(&error, "Delete message"))
+    })
+    .await;
+    match expunged {
+        Ok(Ok(_)) => {
+            session.release();
+            Ok(())
+        }
+        // The command may still be running on the wire; the session cannot be reused.
+        Err(_) => {
+            session.discard();
+            Err("Deleting the message timed out.".into())
+        }
+        // The server refused UID EXPUNGE; restore the flags on the same session.
+        Ok(Err(_)) => {
+            let restored = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
+                session
+                    .uid_store(set, "-FLAGS.SILENT (\\Deleted)")
+                    .await
+                    .map_err(|error| redact_error(&error, "Delete message"))?
+                    .try_collect::<Vec<_>>()
+                    .await
+                    .map_err(|error| redact_error(&error, "Delete message"))
+            })
+            .await;
+            if matches!(restored, Ok(Ok(_))) {
+                session.release();
+            } else {
+                session.discard();
+            }
+            Err("This mail server cannot delete individual messages. Use Empty trash.".into())
+        }
+    }
+}
+
 /// Mark every message up to the current UIDNEXT as read on the server, not
 /// only the ones cached locally. Mail arriving after the click stays unread.
 pub async fn mark_folder_read(
@@ -628,4 +837,66 @@ pub async fn mark_folder_read(
     .map_err(|_| "Marking the folder read timed out.".to_string())??;
     session.release();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{header_message_id_search, quote_imap_search, uid_set};
+
+    // Failure modes for the dedupe SEARCH built from a Message-ID:
+    // 1. CR or LF would split the IMAP command and inject a new command.
+    // 2. NUL or tab could truncate or corrupt the quoted search string.
+    // 3. Non-ASCII needs a charset/literal the dedupe search does not send.
+    // 4. An unescaped quote or backslash would end the quoted string early.
+    // 5. Empty input must not produce a match-everything search.
+    // 6. A safe id must still produce the normal HEADER search.
+    #[test]
+    fn dedupe_search_is_skipped_for_unsafe_message_ids() {
+        for bad in [
+            "<a@b>\r\nA1 LOGOUT",
+            "<a@b>\n",
+            "<a\0@b>",
+            "<a\t@b>",
+            "<ä@b>",
+            "",
+            "   ",
+        ] {
+            assert_eq!(
+                header_message_id_search(bad),
+                None,
+                "built search for {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn dedupe_search_quotes_safe_message_ids() {
+        assert_eq!(
+            header_message_id_search("<a@b.example>").as_deref(),
+            Some("HEADER Message-ID \"<a@b.example>\"")
+        );
+        assert_eq!(
+            header_message_id_search(r#"<a"\@b>"#).as_deref(),
+            Some(r#"HEADER Message-ID "<a\"\\@b>""#)
+        );
+    }
+
+    #[test]
+    fn quoted_search_never_emits_control_characters() {
+        for byte in 0u8..=127 {
+            let raw = format!("<a{}b@c>", byte as char);
+            if let Some(search) = header_message_id_search(&raw) {
+                assert!(!search.chars().any(|c| c.is_ascii_control()), "byte {byte}");
+            }
+        }
+        assert_eq!(quote_imap_search(r#"a"\b"#), r#"a\"\\b"#);
+    }
+
+    #[test]
+    fn uid_set_sorts_and_rejects_a_wide_delete() {
+        assert_eq!(uid_set(&[4, 2, 4]).unwrap(), "2,4");
+        assert!(uid_set(&[]).is_err());
+        assert!(uid_set(&[0, 2]).is_err());
+        assert!(uid_set(&[1; 201]).is_err());
+    }
 }

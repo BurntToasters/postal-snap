@@ -18,7 +18,15 @@ export async function registerMockFolders(page: Page): Promise<void> {
         return mailboxes.map((mailbox) => ({ ...mailbox }));
       },
       create_folder(args: Record<string, unknown>) {
-        const name = String(args.name);
+        const leaf = String(args.name);
+        const parent =
+          args.parentMailboxId == null
+            ? undefined
+            : mailboxes.find(
+                (entry) => entry.id === Number(args.parentMailboxId),
+              );
+        const delimiter = parent?.delimiter || "/";
+        const name = parent ? `${parent.name}${delimiter}${leaf}` : leaf;
         const id = Math.max(...mailboxes.map((mailbox) => mailbox.id)) + 1;
         mailboxes.push({
           id,
@@ -28,17 +36,68 @@ export async function registerMockFolders(page: Page): Promise<void> {
           role: "other",
           unreadCount: 0,
           totalCount: 0,
+          delimiter: parent ? delimiter : "/",
         });
+        return undefined;
+      },
+      move_folder(args: Record<string, unknown>) {
+        const mailbox = mailboxes.find(
+          (entry) => entry.id === Number(args.mailboxId),
+        );
+        if (!mailbox) return undefined;
+        const delimiter = mailbox.delimiter || "/";
+        const splitAt = mailbox.name.lastIndexOf(delimiter);
+        const leaf =
+          delimiter && splitAt > 0
+            ? mailbox.name.slice(splitAt + delimiter.length)
+            : mailbox.name;
+        const parent =
+          args.parentMailboxId == null
+            ? undefined
+            : mailboxes.find(
+                (entry) => entry.id === Number(args.parentMailboxId),
+              );
+        const next = parent
+          ? `${parent.name}${parent.delimiter || delimiter}${leaf}`
+          : leaf;
+        const prefix = `${mailbox.name}${delimiter}`;
+        for (const child of mailboxes) {
+          if (child.id === mailbox.id || !child.name.startsWith(prefix))
+            continue;
+          const renamed = `${next}${delimiter}${child.name.slice(prefix.length)}`;
+          child.name = renamed;
+          child.displayName = renamed;
+        }
+        mailbox.name = next;
+        mailbox.displayName = next;
         return undefined;
       },
       rename_folder(args: Record<string, unknown>) {
         const mailbox = mailboxes.find(
           (entry) => entry.id === Number(args.mailboxId),
         );
-        if (mailbox) {
-          mailbox.name = String(args.name);
-          mailbox.displayName = String(args.name);
+        if (!mailbox) return undefined;
+        const leaf = String(args.name);
+        const delimiter = mailbox.delimiter ?? "";
+        const nested =
+          delimiter.length > 0 && mailbox.name.includes(delimiter)
+            ? mailbox.name.lastIndexOf(delimiter)
+            : -1;
+        const next =
+          nested > 0
+            ? `${mailbox.name.slice(0, nested)}${delimiter}${leaf}`
+            : leaf;
+        const prefix = `${mailbox.name}${delimiter}`;
+        if (delimiter && nested > 0) {
+          for (const child of mailboxes) {
+            if (!child.name.startsWith(prefix)) continue;
+            const renamed = `${next}${delimiter}${child.name.slice(prefix.length)}`;
+            child.name = renamed;
+            child.displayName = renamed;
+          }
         }
+        mailbox.name = next;
+        mailbox.displayName = next;
         return undefined;
       },
       delete_folder(args: Record<string, unknown>) {
@@ -46,6 +105,9 @@ export async function registerMockFolders(page: Page): Promise<void> {
           (entry) => entry.id === Number(args.mailboxId),
         );
         if (index >= 0) mailboxes.splice(index, 1);
+        return undefined;
+      },
+      delete_trash_messages() {
         return undefined;
       },
       empty_trash() {

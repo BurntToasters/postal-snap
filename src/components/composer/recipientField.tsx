@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 import { strings } from "../../i18n";
 import type { RecipientSuggestion } from "../../types";
-import { tokenAtCaret } from "./recipientFieldUtils";
+import { pastedRecipients, tokenAtCaret } from "./recipientFieldUtils";
 
 export function RecipientField({
   id,
@@ -101,6 +101,32 @@ export function RecipientField({
         placeholder={placeholder}
         aria-invalid={ariaInvalid}
         aria-describedby={ariaDescribedBy}
+        onPaste={(event) => {
+          const addresses = pastedRecipients(
+            event.clipboardData.getData("text/plain"),
+          );
+          if (!addresses) return;
+          event.preventDefault();
+          const start = event.currentTarget.selectionStart ?? value.length;
+          const end = event.currentTarget.selectionEnd ?? start;
+          const before = value.slice(0, start).trimEnd();
+          const after = value.slice(end).trimStart();
+          const inserted = addresses.join(", ");
+          const prefix =
+            before.length === 0
+              ? ""
+              : before.endsWith(",") || before.endsWith(";")
+                ? `${before} `
+                : `${before}, `;
+          const suffix =
+            after.length === 0
+              ? ""
+              : after.startsWith(",") || after.startsWith(";")
+                ? ` ${after}`
+                : `, ${after}`;
+          onChange(`${prefix}${inserted}${suffix}`);
+          setOpen(false);
+        }}
         onChange={(event) => {
           onChange(event.target.value);
           requestSuggestions(event.target.value, event.target.selectionStart);

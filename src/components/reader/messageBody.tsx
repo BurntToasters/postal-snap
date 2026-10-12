@@ -3,16 +3,19 @@ import { Image, ShieldAlert, ShieldCheck } from "lucide-react";
 import { strings } from "../../i18n";
 import type { SanitizedMail } from "../../security";
 import type { MessageDetail } from "../../types";
+import { HighlightedText } from "../HighlightedText";
 import { InviteCard } from "./inviteCard";
 
 export function PlainTextContent({
   text,
   onOpenLink,
   onOpenMailto,
+  searchTerms = [],
 }: {
   text: string;
   onOpenLink: (url: string) => void;
   onOpenMailto: (mailto: string) => void;
+  searchTerms?: string[];
 }) {
   const parts = useMemo(() => {
     const urlOrEmailRegex =
@@ -56,7 +59,11 @@ export function PlainTextContent({
     <div className="plain-text-body">
       {parts.map((part, idx) => {
         if (part.type === "text") {
-          return <span key={idx}>{part.content}</span>;
+          return (
+            <span key={idx}>
+              <HighlightedText text={part.content} terms={searchTerms} />
+            </span>
+          );
         }
         if (part.type === "link") {
           return (
@@ -116,6 +123,7 @@ export function MessageBody({
   message,
   sanitized,
   showHtml = Boolean(message.htmlBody),
+  plainText,
   followsTheme = false,
   currentLoadedHtml,
   frameHtml,
@@ -125,20 +133,27 @@ export function MessageBody({
   loadingImages,
   findOpen,
   findQuery,
+  findStatus,
   findInputRef,
   bodyRef,
   frameRef,
   onFindQueryChange,
   onCloseFind,
   onSubmitFind,
+  onFindPrevious,
   onLoadImages,
+  alwaysLoadLabel,
+  onAlwaysLoadImages,
   onFrameLoad,
   onOpenLink,
   onOpenMailto,
+  searchTerms,
 }: {
   message: MessageDetail;
   sanitized?: SanitizedMail;
   showHtml?: boolean;
+  /** Text to show instead of the HTML part. */
+  plainText?: string;
   /** Dark mode and no sender colors: draw the body in the app theme. */
   followsTheme?: boolean;
   currentLoadedHtml?: string;
@@ -149,16 +164,21 @@ export function MessageBody({
   loadingImages: boolean;
   findOpen: boolean;
   findQuery: string;
+  findStatus?: string;
   findInputRef: RefObject<HTMLInputElement | null>;
   bodyRef: RefObject<HTMLDivElement | null>;
   frameRef: RefObject<HTMLIFrameElement | null>;
   onFindQueryChange: (value: string) => void;
   onCloseFind: () => void;
   onSubmitFind: () => void;
+  onFindPrevious: () => void;
   onLoadImages: () => void;
+  alwaysLoadLabel?: string;
+  onAlwaysLoadImages?: () => void;
   onFrameLoad: () => void;
   onOpenLink: (url: string) => void;
   onOpenMailto: (mailto: string) => void;
+  searchTerms?: string[];
 }) {
   return (
     <>
@@ -185,6 +205,12 @@ export function MessageBody({
           <span>
             {strings.reader.blockedImages(remainingBlockedImages)}{" "}
             {strings.reader.blockedImagesDetail}
+            {sanitized?.blockedImageHosts.length ? (
+              <strong className="remote-image-hosts">
+                {" "}
+                {sanitized.blockedImageHosts.join(", ")}
+              </strong>
+            ) : null}
           </span>
           <button type="button" onClick={onLoadImages} disabled={loadingImages}>
             {loadingImages
@@ -193,6 +219,15 @@ export function MessageBody({
                 ? strings.reader.retryImages
                 : strings.reader.loadImages}
           </button>
+          {alwaysLoadLabel && onAlwaysLoadImages ? (
+            <button
+              type="button"
+              onClick={onAlwaysLoadImages}
+              disabled={loadingImages}
+            >
+              {alwaysLoadLabel}
+            </button>
+          ) : null}
         </div>
       ) : null}
       {findOpen ? (
@@ -207,10 +242,24 @@ export function MessageBody({
             ref={findInputRef}
             value={findQuery}
             onChange={(event) => onFindQueryChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && event.shiftKey) {
+                event.preventDefault();
+                onFindPrevious();
+              }
+            }}
             placeholder={strings.reader.findInMessage}
             aria-label={strings.reader.findInMessage}
           />
+          <button type="button" onClick={onFindPrevious}>
+            {strings.reader.findPrevious}
+          </button>
           <button type="submit">{strings.reader.findNext}</button>
+          {findStatus ? (
+            <span className="message-find-status" role="status">
+              {findStatus}
+            </span>
+          ) : null}
           <button type="button" onClick={onCloseFind}>
             {strings.common.close}
           </button>
@@ -222,7 +271,7 @@ export function MessageBody({
         data-context="reader"
         data-follows-theme={followsTheme ? "true" : undefined}
       >
-        {!showHtml && !message.textBody ? (
+        {!showHtml && !(plainText ?? message.textBody) ? (
           <p className="plain-text-body" role="note">
             {missingBodyNote(message)}
           </p>
@@ -243,9 +292,10 @@ export function MessageBody({
           />
         ) : (
           <PlainTextContent
-            text={message.textBody}
+            text={plainText ?? message.textBody}
             onOpenLink={onOpenLink}
             onOpenMailto={onOpenMailto}
+            searchTerms={searchTerms}
           />
         )}
       </div>

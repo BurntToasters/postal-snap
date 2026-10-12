@@ -138,9 +138,9 @@ test("uses an edge-to-edge Mail-style sidebar and trailing scoped search", async
   const search = page.getByRole("searchbox", { name: "Search" });
   await search.fill("weekend");
   await search.press("Enter");
-  await expect(
-    page.getByRole("option", { name: /Current mailbox/i }),
-  ).toBeVisible();
+  const current = page.getByRole("option", { name: /Current mailbox/i });
+  await expect(current).toBeVisible();
+  await expect(current).not.toHaveAccessibleName(/In Inbox/);
 
   await page.getByRole("button", { name: "This mailbox" }).click();
   await expect(
@@ -148,7 +148,7 @@ test("uses an edge-to-edge Mail-style sidebar and trailing scoped search", async
   ).toHaveAttribute("aria-pressed", "true");
   await expect(
     page.getByRole("option", { name: /Across account/i }),
-  ).toBeVisible();
+  ).toHaveAccessibleName(/In Inbox/);
 });
 
 test("opens the mailbox drawer across the responsive sidebar range", async ({
@@ -690,7 +690,7 @@ test("never fetches remote images before consent", async ({ page }) => {
         ).__POSTAL_SNAP_TEST__.remoteFetches,
     ),
   ).toBe(0);
-  await page.getByRole("button", { name: "Load images" }).click();
+  await page.getByRole("button", { name: "Load images", exact: true }).click();
   await expect
     .poll(() =>
       page.evaluate(
@@ -710,7 +710,7 @@ test("keeps filtered images blocked after consent without offering endless retri
 }) => {
   await page.goto("/?remote=1&filterBlocked=1");
   await page.getByRole("option", { name: /Weekend plans/i }).click();
-  await page.getByRole("button", { name: "Load images" }).click();
+  await page.getByRole("button", { name: "Load images", exact: true }).click();
   await expect(
     page.getByText("1 advertising or tracking image kept blocked for privacy."),
   ).toBeVisible();
@@ -729,7 +729,7 @@ test("keeps reported-threat images blocked after consent without a Safe label", 
 }) => {
   await page.goto("/?remote=1&threatBlocked=1");
   await page.getByRole("option", { name: /Weekend plans/i }).click();
-  await page.getByRole("button", { name: "Load images" }).click();
+  await page.getByRole("button", { name: "Load images", exact: true }).click();
   await expect(
     page.getByText(
       "1 image from a reported potentially dangerous address kept blocked.",
@@ -916,7 +916,7 @@ test("image fetch failures remain retryable and are not labeled tracker blocks",
 }) => {
   await page.goto("/?remote=1&imageFailed=1");
   await page.getByRole("option", { name: /Weekend plans/i }).click();
-  await page.getByRole("button", { name: "Load images" }).click();
+  await page.getByRole("button", { name: "Load images", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "Retry loading images" }),
   ).toBeVisible();
@@ -1289,7 +1289,7 @@ test("triages several messages at once", async ({ page }) => {
   await expect(
     page.getByRole("option", { name: /Weekend plans/i }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Select" }).click();
+  await page.getByRole("button", { name: "Select", exact: true }).click();
   await page.getByRole("checkbox", { name: /Weekend plans/i }).check();
   await expect(page.getByRole("toolbar", { name: "1 selected" })).toBeVisible();
   // Read state lives in the mailbox More menu while selecting.
@@ -1308,8 +1308,11 @@ test("completes recipients from send history", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Compose", exact: true }).click();
   await page.getByPlaceholder("name@example.com").fill("jan");
+  // Scope to the popup: mail-list rows can also name jane@example.com.
   await expect(
-    page.getByRole("option", { name: /jane@example.com/i }),
+    page
+      .getByRole("listbox", { name: "Suggested recipients" })
+      .getByRole("option", { name: /jane@example.com/i }),
   ).toBeVisible();
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Enter");

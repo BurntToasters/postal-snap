@@ -15,7 +15,6 @@ use super::{
     AppState, CommandResult,
 };
 use crate::{
-    credentials,
     db::Database,
     mail,
     models::{
@@ -205,7 +204,7 @@ pub(crate) async fn run_sync_pass(
     quick: bool,
 ) -> Result<mail::SyncOutcome, PassError> {
     let account = state.db.account(account_id).map_err(PassError::Other)?;
-    let password = match credentials::load(account_id) {
+    let password = match crate::oauth::session_secret(&account).await {
         Ok(password) => password,
         Err(error) => {
             let _ = state
@@ -243,6 +242,7 @@ pub(crate) async fn run_sync_pass(
     match result {
         Ok(outcome) => {
             apply_filter_rules(&state.db, &account, filter_watermark);
+            let _ = state.db.file_muted_inbox(account_id);
             let pending_changes =
                 replay_offline_operations(app, &state.db, &account, &password, &policy)
                     .await
@@ -312,7 +312,7 @@ pub(crate) async fn run_targeted_jobs(
         return;
     };
     if reasons & wake::DRAFTS != 0 {
-        if let Ok(password) = credentials::load(account_id) {
+        if let Ok(password) = crate::oauth::session_secret(&account).await {
             sync_drafts_locked(state, &account, &password).await;
             emit_draft_change(app, account_id, None, None);
         }
@@ -649,6 +649,10 @@ async fn import_remote_drafts_locked(
             body_format: crate::models::BodyFormat::Html,
             source_message_id: None,
             source_kind: None,
+            include_signature: true,
+            importance: String::new(),
+            request_receipt: false,
+            reply_to: None,
             id: Some(id.clone()),
             account_id: account_id.clone(),
             from: remote.from.as_deref().and_then(|address| {

@@ -14,7 +14,29 @@
 
 /* Compact rows: menus are a pointer/keyboard surface, so rows sit below the
    44px toolbar target while text scaling still grows them. */
-.app-menu [role="menuitem"] {
+.search-recent-row {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+}
+
+.search-recent-row [role="menuitem"] {
+  flex: 1;
+  min-width: 0;
+}
+
+.search-recent-forget {
+  flex: none;
+  min-width: 2.25rem;
+  min-height: 2.25rem;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text);
+}
+
+.app-menu [role="menuitem"],
+.app-menu [role="menuitemradio"] {
   display: flex;
   width: 100%;
   min-height: 2.25rem;
@@ -31,8 +53,14 @@
 }
 
 .app-menu [role="menuitem"]:hover:not(:disabled),
-.app-menu [role="menuitem"]:focus-visible {
+.app-menu [role="menuitem"]:focus-visible,
+.app-menu [role="menuitemradio"]:hover,
+.app-menu [role="menuitemradio"]:focus-visible {
   background: var(--surface-hover);
+}
+
+.app-menu [role="menuitemradio"][aria-checked="true"] {
+  font-weight: 650;
 }
 
 .app-menu [role="menuitem"]:disabled {
@@ -40,7 +68,8 @@
 }
 
 /* Icons use em so they grow with text size. */
-.app-menu [role="menuitem"] > svg {
+.app-menu [role="menuitem"] > svg,
+.app-menu [role="menuitemradio"] > svg {
   flex: none;
   width: 1.1em;
   height: 1.1em;
@@ -59,7 +88,7 @@
   z-index: 30;
   top: calc(100% + 6px);
   right: 0;
-  min-width: 200px;
+  min-width: 15rem;
 }
 
 .reader-more-menu {
@@ -67,10 +96,17 @@
   z-index: 20;
   top: calc(100% + 6px);
   right: 0;
-  min-width: 220px;
+  min-width: 16rem;
   /* Long folder lists scroll inside the menu instead of off screen. */
   max-height: min(70vh, 34rem);
   overflow-y: auto;
+}
+
+.reader-more-menu kbd {
+  margin-inline-start: auto;
+  color: var(--text-muted);
+  font: inherit;
+  white-space: nowrap;
 }
 
 .recipient-suggestions {

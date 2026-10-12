@@ -28,6 +28,7 @@ vi.mock("../api", () => ({
     onTrayQuit: vi.fn(),
     updateRelaunch: vi.fn(),
     setMailShortcutGuard: vi.fn(),
+    setUnreadBadge: vi.fn().mockResolvedValue(undefined),
   },
 }));
 vi.mock("../settings", () => ({ applySettings: vi.fn() }));
@@ -119,7 +120,7 @@ import {
   startDeferredUpdateOnQuit,
   startPeriodicUpdateCheck,
 } from "../update";
-import { makeAccount } from "./helpers/fixtures";
+import { makeAccount, makeMailbox } from "./helpers/fixtures";
 import { resetStore } from "./helpers/store";
 
 const account = makeAccount();
@@ -174,6 +175,21 @@ beforeEach(() => {
 });
 
 describe("App lifecycle", () => {
+  it("puts the active Inbox unread count in the window title", async () => {
+    render(<App />);
+    expect(await screen.findByText("Mail shell")).toBeVisible();
+    useAppStore.setState({
+      mailboxes: [makeMailbox({ unreadCount: 4 })],
+    });
+    await waitFor(() => expect(document.title).toBe("Inbox (4) — Postal Snap"));
+    await waitFor(() => expect(api.setUnreadBadge).toHaveBeenCalledWith(4));
+    useAppStore.setState({
+      mailboxes: [makeMailbox({ unreadCount: 0 })],
+    });
+    await waitFor(() => expect(document.title).toBe("Postal Snap"));
+    await waitFor(() => expect(api.setUnreadBadge).toHaveBeenCalledWith(0));
+  });
+
   it("shows browser preview without native startup", () => {
     vi.mocked(inTauri).mockReturnValue(false);
     render(<App />);

@@ -75,6 +75,42 @@ export const settingsSearchEntries: SettingsSearchEntry[] = [
   },
   {
     section: "reading",
+    title: s.bccSelf,
+    help: s.bccSelfHelp,
+    keywords: "bcc copy myself",
+  },
+  {
+    section: "reading",
+    title: s.replyToAll,
+    help: s.replyToAllHelp,
+    keywords: "reply all everyone recipients",
+  },
+  {
+    section: "reading",
+    title: s.signatureAboveQuote,
+    help: s.signatureAboveQuoteHelp,
+    keywords: "signature quote reply",
+  },
+  {
+    section: "reading",
+    title: s.markRead,
+    help: s.markReadHelp,
+    keywords: "unread read delay",
+  },
+  {
+    section: "reading",
+    title: s.showMessagePreviews,
+    help: s.showMessagePreviewsHelp,
+    keywords: "snippet preview list privacy",
+  },
+  {
+    section: "reading",
+    title: s.imageSenders,
+    help: s.imageSendersHelp,
+    keywords: "remote images pictures consent sender",
+  },
+  {
+    section: "reading",
     title: strings.mail.undoSendWindow,
     help: strings.mail.undoSendHelp,
     keywords: "sending delay",
@@ -84,6 +120,18 @@ export const settingsSearchEntries: SettingsSearchEntry[] = [
     title: s.notifyNewMail,
     help: s.notifyNewMailHelp,
     keywords: "alerts",
+  },
+  {
+    section: "notifications",
+    title: s.newMailSound,
+    help: s.newMailSoundHelp,
+    keywords: "sound audio chime alert",
+  },
+  {
+    section: "notifications",
+    title: s.quietHours,
+    help: s.quietHoursHelp,
+    keywords: "quiet hours night schedule alerts sound",
   },
   {
     section: "notifications",
@@ -105,6 +153,20 @@ export const settingsSearchEntries: SettingsSearchEntry[] = [
     help: s.folderMissing,
     keywords: "sent drafts junk trash archive automatic assignments",
     accountPage: "folders",
+  },
+  {
+    section: "accounts",
+    title: s.accountName,
+    help: s.accountNameHelp,
+    keywords: "from display identity sender",
+    accountPage: "identity",
+  },
+  {
+    section: "accounts",
+    title: s.replyToAddress,
+    help: s.replyToAddressHelp,
+    keywords: "reply-to reply address identity",
+    accountPage: "identity",
   },
   {
     section: "accounts",

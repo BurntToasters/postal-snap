@@ -7,7 +7,7 @@ impl Database {
     pub fn list_accounts(&self) -> Result<Vec<AccountSummary>, String> {
         let conn = self.conn()?;
         let mut statement = conn.prepare(
-            "SELECT id, provider, email, display_name, sync_state, error, aliases_json, auth_method, signature, color, default_body_format FROM accounts ORDER BY sort_order, created_at",
+            "SELECT id, provider, email, display_name, sync_state, error, aliases_json, auth_method, signature, color, default_body_format, reply_to FROM accounts ORDER BY sort_order, created_at",
         ).map_err(db_error)?;
         let rows = statement
             .query_map([], |row| {
@@ -25,6 +25,7 @@ impl Database {
                         .get::<_, Option<String>>(7)?
                         .unwrap_or_else(|| "password".into()),
                     signature: row.get::<_, Option<String>>(8)?.unwrap_or_default(),
+                    reply_to: row.get::<_, Option<String>>(11)?.unwrap_or_default(),
                     color: row.get(9)?,
                     default_body_format: BodyFormat::from_db(&row.get::<_, String>(10)?),
                 })
@@ -39,7 +40,7 @@ impl Database {
             "SELECT id, provider, email, display_name, sync_state, error,
                     imap_host, imap_port, imap_tls, imap_username,
                     smtp_host, smtp_port, smtp_tls, smtp_username,
-                    aliases_json, auth_method, signature, color, default_body_format, bridge_certificate
+                    aliases_json, auth_method, signature, color, default_body_format, bridge_certificate, reply_to
              FROM accounts WHERE id = ?1",
             [id],
             |row| {
@@ -58,6 +59,7 @@ impl Database {
                             .get::<_, Option<String>>(15)?
                             .unwrap_or_else(|| "password".into()),
                         signature: row.get::<_, Option<String>>(16)?.unwrap_or_default(),
+                        reply_to: row.get::<_, Option<String>>(20)?.unwrap_or_default(),
                         color: row.get(17)?,
                         default_body_format: BodyFormat::from_db(&row.get::<_, String>(18)?),
                     },
@@ -185,6 +187,24 @@ impl Database {
         }
         let record = self.account(id)?;
         Ok(record.summary)
+    }
+
+    pub fn update_account_reply_to(
+        &self,
+        id: &str,
+        reply_to: &str,
+    ) -> Result<AccountSummary, String> {
+        let updated = self
+            .conn()?
+            .execute(
+                "UPDATE accounts SET reply_to = ?1 WHERE id = ?2",
+                params![reply_to, id],
+            )
+            .map_err(db_error)?;
+        if updated != 1 {
+            return Err("Account not found.".into());
+        }
+        Ok(self.account(id)?.summary)
     }
 
     pub fn update_account_display_name(&self, id: &str, display_name: &str) -> Result<(), String> {
