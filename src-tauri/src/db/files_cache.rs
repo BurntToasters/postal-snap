@@ -138,6 +138,41 @@ impl Database {
         Ok(())
     }
 
+    /// Point grants at attachment files that moved with the mail data
+    /// folder. Only paths under `old_dir` are rewritten, matched by path
+    /// component, so `draft-attachments2` is never touched.
+    pub fn rebase_file_grant_paths(&self, old_dir: &Path, new_dir: &Path) -> Result<usize, String> {
+        let mut conn = self.conn()?;
+        let transaction = conn.transaction().map_err(db_error)?;
+        let rows = {
+            let mut statement = transaction
+                .prepare("SELECT token,path FROM file_grants")
+                .map_err(db_error)?;
+            let rows = statement
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(db_error)?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(db_error)?
+        };
+        let mut changed = 0;
+        for (token, path) in rows {
+            let Ok(relative) = Path::new(&path).strip_prefix(old_dir) else {
+                continue;
+            };
+            let rebased = new_dir.join(relative);
+            transaction
+                .execute(
+                    "UPDATE file_grants SET path=?1 WHERE token=?2",
+                    params![rebased.to_string_lossy(), token],
+                )
+                .map_err(db_error)?;
+            changed += 1;
+        }
+        transaction.commit().map_err(db_error)?;
+        Ok(changed)
+    }
+
     pub fn legacy_settings(&self) -> Result<AppSettings, String> {
         let json: Option<String> = self
             .conn()?
@@ -453,4 +488,58 @@ fn clear_bodies(
         )
         .map_err(db_error)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Failure modes covered:
+    /// 1. A grant under the old attachment folder is not rebased: broken send.
+    /// 2. A lookalike folder (`draft-attachments2`) is rewritten: wrong file.
+    /// 3. An unrelated absolute path is rewritten: data corruption.
+    /// 4. Running twice rewrites again: idempotence broken.
+    #[test]
+    fn rebases_only_grants_under_the_old_attachment_folder() {
+        let db = Database::memory();
+        db.conn()
+            .unwrap()
+            .execute_batch("PRAGMA foreign_keys=OFF;")
+            .unwrap();
+        let old = Path::new("/roaming/draft-attachments");
+        let new = Path::new("/local/draft-attachments");
+        let grants = [
+            ("inside", "/roaming/draft-attachments/a.bin"),
+            ("lookalike", "/roaming/draft-attachments2/b.bin"),
+            ("unrelated", "/elsewhere/c.bin"),
+        ];
+        for (token, path) in grants {
+            db.conn()
+                .unwrap()
+                .execute(
+                    "INSERT INTO file_grants(token,account_id,path,size,created_at) VALUES(?1,'account-1',?2,1,CURRENT_TIMESTAMP)",
+                    params![token, path],
+                )
+                .unwrap();
+        }
+
+        assert_eq!(db.rebase_file_grant_paths(old, new).unwrap(), 1);
+
+        let resolve = |token: &str| db.resolve_file(token, "account-1").unwrap();
+        assert_eq!(
+            resolve("inside"),
+            Path::new("/local/draft-attachments/a.bin")
+        );
+        assert_eq!(
+            resolve("lookalike"),
+            Path::new("/roaming/draft-attachments2/b.bin")
+        );
+        assert_eq!(resolve("unrelated"), Path::new("/elsewhere/c.bin"));
+
+        assert_eq!(db.rebase_file_grant_paths(old, new).unwrap(), 0);
+        assert_eq!(
+            resolve("inside"),
+            Path::new("/local/draft-attachments/a.bin")
+        );
+    }
 }

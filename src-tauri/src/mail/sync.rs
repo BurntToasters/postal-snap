@@ -911,6 +911,23 @@ async fn prefetch_bodies<H: SyncHooks>(
     }
 }
 
+/// Parse on the blocking pool so a hostile MIME body cannot stall a runtime
+/// worker while the account lock is held.
+async fn parse_message_off_runtime(
+    uid: u32,
+    raw: &[u8],
+    seen: bool,
+    flagged: bool,
+    fallback: Option<String>,
+) -> Result<CachedMessage, String> {
+    let raw = raw.to_vec();
+    tokio::task::spawn_blocking(move || {
+        parse_message(uid, &raw, seen, flagged, fallback.as_deref())
+    })
+    .await
+    .map_err(|_| "Message parsing was interrupted.".to_string())?
+}
+
 async fn download_body_batch(
     lease: &mut Lease,
     db: &Database,
@@ -955,7 +972,7 @@ async fn download_body_batch(
         }
         let (seen, flagged) = system_flags(&item);
         let fallback = received_at_fallback(&item, cached_by_uid.get(&uid).map(String::as_str));
-        match parse_message(uid, raw, seen, flagged, fallback.as_deref()) {
+        match parse_message_off_runtime(uid, raw, seen, flagged, fallback).await {
             Ok(mut parsed) => {
                 parsed.internal_at = internal_date(&item);
                 consumed = consumed.saturating_add(raw.len() as u64);
@@ -1484,7 +1501,7 @@ pub async fn download_message(
         }
         let (seen, flagged) = system_flags(&item);
         let fallback = received_at_fallback(&item, cached_received_at);
-        let mut parsed = parse_message(uid, raw, seen, flagged, fallback.as_deref())?;
+        let mut parsed = parse_message_off_runtime(uid, raw, seen, flagged, fallback).await?;
         parsed.internal_at = internal_date(&item);
         Ok(parsed)
     }

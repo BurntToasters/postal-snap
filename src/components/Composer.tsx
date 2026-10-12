@@ -714,6 +714,7 @@ export function Composer({ accountId }: Props) {
       const draft = buildDraftRef.current();
       if (
         !sending &&
+        !isSending.current &&
         !isDiscarding.current &&
         saveStateRef.current === "unsaved" &&
         !saveInFlight.current &&
@@ -780,7 +781,13 @@ export function Composer({ accountId }: Props) {
 
   const saveDraft = useCallback(
     async (showStatus = true) => {
-      if (sending || isDiscarding.current || saveInFlight.current) return;
+      if (
+        sending ||
+        isSending.current ||
+        isDiscarding.current ||
+        saveInFlight.current
+      )
+        return;
       const draft = buildDraft();
       if (!hasDraftContent(draft, currentBodyText())) {
         if (showStatus) close();
@@ -1060,9 +1067,13 @@ export function Composer({ accountId }: Props) {
       isSending.current = true;
       setSending(true);
       try {
+        // An autosave may still be creating the draft. Wait so the sent
+        // message carries its id and backend cleanup removes that draft.
+        await savePromiseRef.current?.catch(() => undefined);
         const draft = buildDraft();
+        const payload = { ...draft, id: draftIdRef.current ?? draft.id };
         const outcome = await api.sendMessage(
-          sendAt ? { ...draft, sendAt } : draft,
+          sendAt ? { ...payload, sendAt } : payload,
         );
         let archivedMessage:
           { messageId: number; mailboxId: number } | undefined;

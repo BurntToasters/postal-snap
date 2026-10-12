@@ -6,6 +6,7 @@ mod commands;
 mod content_blocking;
 mod credentials;
 mod db;
+mod download_mark;
 mod html_sanitize;
 mod mail;
 mod models;
@@ -93,8 +94,15 @@ fn main() {
             let relaunch = update_relaunch::take(&data_dir);
             // Windows keeps the mail database in the local (non-roaming)
             // profile; migrate any legacy roaming database first.
-            let mail_dir = storage::mail_data_dir(app.handle())?;
-            storage::migrate_legacy_mail_data(&data_dir, &mail_dir);
+            let target_dir = storage::mail_data_dir(app.handle())?;
+            let mail_dir = match storage::migrate_legacy_mail_data(&data_dir, &target_dir) {
+                Ok(_) => target_dir,
+                Err(_) => {
+                    // Keep using the legacy folder so no mail is hidden.
+                    eprintln!("Mail data migration did not complete; using the previous folder.");
+                    data_dir.clone()
+                }
+            };
             std::fs::create_dir_all(&mail_dir)?;
             #[cfg(unix)]
             {
@@ -106,6 +114,15 @@ fn main() {
             std::fs::create_dir_all(&attachment_dir)?;
             let orphan_cleanup_dir = attachment_dir.clone();
             let database = db::Database::open(&database_path).map_err(std::io::Error::other)?;
+            // Idempotent: also repairs grants left behind by an earlier
+            // migration whose rebase did not finish.
+            if mail_dir != data_dir
+                && database
+                    .rebase_file_grant_paths(&data_dir.join(storage::ATTACHMENT_DIR), &attachment_dir)
+                    .is_err()
+            {
+                eprintln!("Saved attachment locations could not be updated.");
+            }
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;

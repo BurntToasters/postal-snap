@@ -105,7 +105,7 @@ pub async fn move_folder(
         return Err("Only personal folders can be moved.".into());
     }
     if parent_mailbox_id == Some(mailbox_id) {
-        return Err("Choose a different folder.".into());
+        return Err("A folder cannot be moved inside itself.".into());
     }
     let _guard = state.lock_account(&account_id).await?;
     let (_, old_name) = state.db.mailbox(mailbox_id)?;
@@ -119,6 +119,11 @@ pub async fn move_folder(
         None
     };
     let delimiter = state.db.mailbox_delimiter(mailbox_id)?.unwrap_or_default();
+    if let Some(parent) = parent_name.as_deref() {
+        if is_self_or_descendant(&old_name, &delimiter, parent) {
+            return Err("A folder cannot be moved inside itself.".into());
+        }
+    }
     let name = moved_folder_name(&old_name, &delimiter, parent_name.as_deref())?;
     if old_name == name {
         return Ok(());
@@ -135,6 +140,13 @@ pub async fn move_folder(
     command_result(result)?;
     let _ = sync_one(&account_id, &app, &state).await;
     Ok(())
+}
+
+/// True when `destination` is the folder itself or one of its descendants.
+/// The check is on IMAP names, so "AB" is a sibling of "A", not a child.
+fn is_self_or_descendant(current: &str, delimiter: &str, destination: &str) -> bool {
+    destination == current
+        || (!delimiter.is_empty() && destination.starts_with(&format!("{current}{delimiter}")))
 }
 
 #[tauri::command]
@@ -244,4 +256,35 @@ async fn empty_role_folder(
     command_result(result)?;
     let _ = sync_one(&account_id, &app, &state).await;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_self_or_descendant;
+
+    // Failure modes for the move-into-self check:
+    // 1. Moving a folder into itself must be rejected before any server call.
+    // 2. Moving into a direct child (A into A/B) must be rejected.
+    // 3. Moving into a deep descendant (A into A/B/C) must be rejected.
+    // 4. A sibling that shares a text prefix (A into AB) must be allowed.
+    // 5. An empty delimiter has no hierarchy, so only equality is rejected.
+    // 6. A different delimiter must not match a slash-based prefix.
+    #[test]
+    fn move_into_self_or_descendant_is_rejected() {
+        assert!(is_self_or_descendant("A", "/", "A"));
+        assert!(is_self_or_descendant("A", "/", "A/B"));
+        assert!(is_self_or_descendant("A", "/", "A/B/C"));
+        assert!(is_self_or_descendant("A", ".", "A.B"));
+        assert!(is_self_or_descendant("A", "", "A"));
+    }
+
+    #[test]
+    fn move_into_siblings_and_unrelated_folders_is_allowed() {
+        assert!(!is_self_or_descendant("A", "/", "AB"));
+        assert!(!is_self_or_descendant("A", "/", "B"));
+        assert!(!is_self_or_descendant("A", "/", "B/A"));
+        assert!(!is_self_or_descendant("A", "", "A/B"));
+        assert!(!is_self_or_descendant("A", "/", "A.B"));
+        assert!(!is_self_or_descendant("A/B", "/", "A"));
+    }
 }

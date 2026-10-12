@@ -5,8 +5,8 @@
 
 | <img height="20" src="https://raw.githubusercontent.com/BurntToasters/bcls/main/media/windows.png" /> Windows                                                                                                                                                                                      | <img height="20" src="https://raw.githubusercontent.com/BurntToasters/bcls/main/media/mac.png" /> macOS                           | <img height="20" src="https://raw.githubusercontent.com/BurntToasters/bcls/main/media/linux.png" /> Linux                                                                                                                                                                       |
 | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | :-------------------------------------------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **EXE:** [x64](https://github.com/BurntToasters/postal-snap/releases/download/v0.3.2/Postal-Snap-Windows-x64.exe) / [arm64](https://github.com/BurntToasters/postal-snap/releases/download/v0.3.2/Postal-Snap-Windows-arm64.exe)                                                                   | **[Universal DMG](https://github.com/BurntToasters/postal-snap/releases/download/v0.3.2/Postal-Snap-macOS.dmg)**                  | **AppImage:** [x64](https://github.com/BurntToasters/postal-snap/releases/download/v0.3.2/Postal-Snap-Linux-x64.AppImage)                                                                                                                                                     |
-| <!-- <div align="center"><a href="https://apps.microsoft.com/detail/<MS_STORE_ID>?referrer=appbadge&mode=full"><img src="https://get.microsoft.com/images/en-us%20light.svg" width="150"/></a></div> -->                                                                                           | **[Universal ZIP](https://github.com/BurntToasters/postal-snap/releases/download/v0.3.2/Postal-Snap-macOS.zip)**                  | **Flatpak:** [x64](https://github.com/BurntToasters/postal-snap/releases/download/v0.3.2/Postal-Snap-Linux-x64.flatpak)                                                                                                                                                          |
+| **EXE:** [x64](https://github.com/BurntToasters/postal-snap/releases/download/v0.4.0/Postal-Snap-Windows-x64.exe) / [arm64](https://github.com/BurntToasters/postal-snap/releases/download/v0.4.0/Postal-Snap-Windows-arm64.exe)                                                                   | **[Universal DMG](https://github.com/BurntToasters/postal-snap/releases/download/v0.4.0/Postal-Snap-macOS.dmg)**                  | **AppImage:** [x64](https://github.com/BurntToasters/postal-snap/releases/download/v0.4.0/Postal-Snap-Linux-x64.AppImage)                                                                                                                                                     |
+| <!-- <div align="center"><a href="https://apps.microsoft.com/detail/<MS_STORE_ID>?referrer=appbadge&mode=full"><img src="https://get.microsoft.com/images/en-us%20light.svg" width="150"/></a></div> -->                                                                                           | **[Universal ZIP](https://github.com/BurntToasters/postal-snap/releases/download/v0.4.0/Postal-Snap-macOS.zip)**                  | **Flatpak:** [x64](https://github.com/BurntToasters/postal-snap/releases/download/v0.4.0/Postal-Snap-Linux-x64.flatpak)                                                                                                                                                          |
 
 > [!IMPORTANT]
 > The `.sig` files in this repo are NOT normal gpg signatures — they are for Tauri V2's
@@ -20,286 +20,40 @@
 
 Postal Snap is a calm, accessible desktop email client. Mail stays on your computer. There is no Postal Snap cloud, telemetry, or account of mine to log into.
 
-## Changes in `v0.3.2:`
+## Changes in `v0.4.0:`
 
-- **NEW - Proton Bridge (experimental):** Guided local IMAP/SMTP setup with required TLS, account-scoped public-certificate approval, and explicit certificate replacement. Bridge must remain running. Real Bridge verification across Windows, macOS, Linux, and Flatpak is still pending.
-- **NEW - Searchable Settings:** Search labels and help, jump to a control, and navigate focused sections. Appearance and Privacy & Security group their controls; narrow windows use a section selector.
-- **NEW - Account detail pages:** Connection, Folders, Identity, and Rules replace the all-account control stack. Connection edits test both servers before saving. Incoming-server identity changes require confirmation and rebuild remote cache while preserving local drafts.
-- **NEW - Folder assignments:** Choose Sent, Drafts, Archive, Junk, and Trash folders per account, or retain Automatic. Missing assigned folders require explicit repair.
-- **UI - Mailbox and reader refinement:** Clearer unread and selected messages, wrapping reader metadata and attachments, and account-specific connection repair links.
-
-## Changes in `v0.3.1:`
-- **FIX - Get Mail no longer stalls:** Get Mail could sit on "Checking mail…" for up to five minutes, because Postal Snap's background check held the account while Get Mail waited. Get Mail now finishes in a second or two.
-- **UI - Compact spacing, redone:** Compact spacing now makes everything denser, like Mail's compact layout: slimmer mailbox rows in the sidebar (before, they got taller), a shorter toolbar, list and message headers that line up, and the item count next to the mailbox name. Comfortable spacing is unchanged.
-- **FIX - Search stays usable in narrow windows:** In a narrow window with large text, Get Mail and Compose now drop their labels so the search field keeps room to type, including on Linux.
-
-## Changes in `v0.3.0:`
-- **FIX - Menu bar icon on macOS:** Left-clicking the Postal Snap icon in the menu bar now shows or hides the window, as it does in the Windows notification area. Before, it opened the Open/Quit menu. Right-click the icon for that menu.
-- **NEW - Unsubscribe:** Mailing list messages that offer an unsubscribe option now have **Unsubscribe…** in the ••• menu. Postal Snap shows the sender's website first and asks before sending anything. When the list supports one-click unsubscribe, Postal Snap sends the request itself and says "Unsubscribe request sent"; the list decides when it takes effect. Lists that unsubscribe by email open a ready-to-send message for you to check. Other lists open their web page after the usual link check.
-- **NEW - Show original:** **Show original** in the ••• menu shows a message's full headers and raw source as plain text. You can copy it, or save the message as an `.eml` file to a place you choose.
-- **NEW - Invitations:** Messages with a calendar invitation show a card above the message with the event name, time in your time zone, location, and organizer. Postal Snap does not reply to invitations or add them to a calendar; the `.ics` file stays available to save.
-- **NEW - Replied and forwarded marks:** After you reply to or forward a message, the list and the message view show that you did. The mark is saved on your mail server, so other mail apps see it too. It is only added once the server has accepted your message.
-- **NEW - Search filters:** Search now understands `from:`, `to:`, `subject:`, `has:attachment`, `is:unread`, `is:read`, `is:flagged`, `before:` and `after:` (dates as YYYY-MM-DD). Put words in quotes to search for a phrase. Select **?** in the search field for a list of filters. Matches in the subject or sender now rank above matches deep in the message.
-- **NEW - Get mail for all accounts:** With more than one account, the arrow next to Get Mail offers **Get mail for all accounts** (Shift+F5). The account switcher shows how many unread messages are waiting in your other accounts.
-- **NEW - Plain text messages:** Choose **Plain text** from the message options menu while writing, or make it the default for an account in Settings > Accounts. Plain text messages wrap cleanly in every mail app. Postal Snap asks first if switching would remove formatting.
-- **NEW - Forgotten attachment reminder:** If your message mentions an attachment but has none, Postal Snap asks before sending. Quoted text and your signature are not checked.
-- **NEW - Drag files into a message:** Drop files from your desktop or file manager onto the message window to attach them. The same size limits apply as with **Attach files**.
-- **FIX - Faster sync on supported servers:** On mail servers that support it, Postal Snap now learns which messages were deleted elsewhere in the same step that checks for changes, instead of comparing the whole folder.
-
-## Changes in `v0.2.8:`
-- **FIX - Wide emails fit the reading pane:** Newsletters and other fixed-width emails now shrink to fit the reading pane instead of scrolling sideways. Very wide emails stop shrinking at a readable size. The blocked-pictures notice is also shorter, so the message gets more room.
-- **UI - Closer to macOS-style:** The mailbox window now follows the macOS 27 design. The sidebar runs edge to edge in a quieter tone, with mailbox icons in your accent color, plain unread counts, and a soft gray highlight for the open mailbox. The top bar is one solid bar. Reply, Reply All, and Forward sit in one group and Archive, Trash, and More in another. Unread mail is marked by the blue dot and bold text, dates stay gray, conversation counts are quieter, and senders show a gray monogram like Contacts.
-- **UI - Dark mode messages:** In dark mode, messages that do not set their own colors (including all plain-text mail) now show on a dark page instead of a bright white one. Messages designed with their own colors keep their white page so they stay readable. Printing is unchanged.
-- **UI - Tidier details:** The search field's focus ring no longer shows as brackets inside the field. In Select mode, checkboxes are normal size with the same easy click area. "Add account" and "New folder" line up with the mailboxes. An empty mailbox shows its message in the middle of the list. Mail rule fields in Settings have room between them. The formatting bar, selection actions, and Outbox buttons use the same quiet buttons as the rest of the window.
-- **UI - Calmer notices:** The "pictures blocked" notice is now a quiet gray bar; only a reported-threat notice stays yellow. In the Outbox, only a message that needs attention shows the warning color, and your subject line stays in normal text.
-- **UI - Select mode fits:** With messages selected, Archive and Move to trash stay in the bar, which now fits on one line. Mark read, Mark unread, and Mark as junk are in the ••• menu next to Done.
-- **UI - Move from the message menu:** The ••• menu in the message view lists your folders under "Move to", like the right-click menu, instead of a drop-down list.
-- **UI - Quieter sidebar and reader:** Folder names that are too long now end with "…" instead of pushing the sidebar sideways. Rename and Delete appear when you point at or tab to a folder; they are also in its right-click menu. Expand arrows are plain. With no message open, the reading pane shows plain text, like Mail. A blocked picture shows a simple picture icon instead of a broken-image icon.
-- **UI - Clearer account settings:** Each account's password, signature, mail rules, and addresses now sit in their own titled sections.
-- **UI - Click the tray or menu bar icon to show or hide:** Clicking the Postal Snap icon in the notification area (Windows) or menu bar (macOS) now hides the window when it is open and brings it back when it is hidden or minimized. On macOS, a window sitting behind other apps comes to the front instead of hiding. Right-click the icon for Open Postal Snap and Quit.
-
-## Changes in `v0.2.7:`
-- **FIX - Update checks after sleep and in the tray:** Postal Snap now times "every 6/12/24 hours" update checks by the clock, so time asleep counts and a check runs soon after waking. Checks also run while the window is closed to the tray or menu bar, so a downloaded update can install there. A check that fails (for example, before Wi-Fi reconnects) tries again after 10 minutes.
-- **FIX - Faster Get Mail:** Get Mail now checks every folder for new mail and changes, shows new mail as each folder finishes, and returns. Downloading full messages and older mail continues in the background instead of making Get Mail wait.
-- **FIX - Mail after waking from sleep:** Postal Snap now notices when your computer wakes up. It reconnects right away, checks for new mail, sends any Send Later message that came due while asleep, and checks for updates. Before, new mail could take several minutes to appear, and the first action after waking could fail.
-- **UI - Roomier message window:** Replies and forwards open taller, so there is room to write. Clicking anywhere below the text now places the cursor in the message.
-- **UI - Move and resize the message window:** Drag the message window by its title to move it, and drag the corner grip (or focus it and use the arrow keys) to resize it. It always stays on screen. Before, dragging the title moved the whole app window.
-- **FIX - Replying to your own sent mail:** Reply and Reply All on a message you sent now address its recipients instead of you.
-- **FIX - Reply and forward headers:** Quoted replies show a readable date instead of a raw timestamp. Forwards now include the original sender, date, subject, and recipients.
-
-## Changes in `v0.2.6:`
-- **Updater:** This update tests fixes from `v0.2.5`
-- **Tweetfeed:** Updated tweetfeed databases.
-
-## Changes in `v0.2.5:`
-- **FIX - Toolbar fits slim windows:** With an update ready, a narrow window no longer cuts off Compose or overlaps search. Labels shorten, then become icons with tooltips, as space runs out.
-- **FIX - Restart Now or Later after checking for updates:** Check for Updates now offers Restart Now or Later on every platform after downloading an update.
-- **FIX - Updates install from the tray on Windows:** A downloaded update now installs about a minute after the window is closed to the notification area, then Postal Snap starts again in the tray.
-- **FIX - Menu bar mode on macOS:** Closing the last window with the menu bar icon on now removes Postal Snap from the Dock until you open it again. Background updates restart it in the menu bar.
-- **FIX - Unsaved messages are kept:** Opening another message window (an email link, Reply, Compose, or a saved draft) while writing no longer throws away what you typed. It is saved to Drafts first.
-- **FIX - Draft times:** The Drafts list shows the correct time. Before, times were off by your time zone, and some evening drafts showed tomorrow's date. Drafts from the server and drafts saved here now sort together by time.
-- **FIX - No "New mail" for old mail:** When the newest message leaves the Inbox from another device, or a mail rule files it away, Postal Snap no longer announces an older message as new.
-- **FIX - Moving selected messages closes the open one:** Archiving, moving, or deleting several selected messages now closes the reading pane if it showed one of them.
-- **FIX - Keyboard order with conversations:** J, K, the arrow keys, Home, and End now follow the list as you see it when messages are grouped into conversations.
-- **FIX - Folder names that change only case:** Renaming a folder from "work" to "Work" now renames it instead of doing nothing.
-- **FIX - Sent messages never stay "Sending":** If Postal Snap cannot look up the Sent folder right after a message is delivered, the message now waits to save its Sent copy instead of staying stuck as sending.
-- **UI - Clearer Send Later times:** A message scheduled for later shows when it will send (for example "Sends Sat, Sep 27, 8:00 AM") instead of counting down thousands of seconds.
-- **FIX - Notifications open Postal Snap from the menu bar:** On macOS, clicking a new-mail notification while Postal Snap waits in the menu bar now opens its window.
-- **FIX - Clearer failed sends:** When the mail server turns a message away or cannot be reached, the Outbox now says the message was not sent. Messages the server could not take right now are sent again automatically. A message whose delivery is truly uncertain still waits for you and is never sent twice.
-- **FIX - One signature after Undo Send:** Undoing a send and sending again no longer adds your signature a second time.
-- **FIX - Forwarded pictures stay in place:** Pictures inside a forwarded message stay in the forwarded text instead of becoming separate attachments.
-- **FIX - Mail rules wait for sync:** Creating or changing a mail rule now waits for the account's current sync, so the two never file the same message at once.
-
-## Changes in `v0.2.4:`
-- **Updater:** This update is purely to test the new updater behavior in `v0.2.3`.
-
-## Changes in `v0.2.3:`
-
-- **UI - Updates install while Postal Snap waits in the tray or menu bar:** When the window is closed to the notification area or menu bar, a downloaded update now installs on its own after a few minutes and Postal Snap starts again in the tray or menu bar, with no window. It waits while you are writing a message or a scheduled message is sending.
-- **FIX - Quiet Windows updates:** The Windows installer no longer shows a progress window when an update installs in the background or on quit.
-- **FIX - Quitting no longer reopens the app:** Quitting with a downloaded update installs it and stays closed. Before, Postal Snap opened again right after the update. Restart Postal Snap in Settings and the Update Ready badge still reopen the window.
-- **FIX - Quit on macOS installs updates:** Postal Snap → Quit (⌘Q) now installs a downloaded update, the same as Quit from the menu bar icon. If an install on quit fails, the next Quit closes the app instead of trying again.
-- **FIX - No repeated email link after an update:** When Postal Snap was opened from an email link, restarting to update no longer opens a new message for that link a second time.
-- **FIX - Typing a slash in search:** The search box now accepts "/" (for example "1/2"). Pressing "/" outside a text field still jumps to search.
-- **FIX - Control keys on macOS edit text:** In a text field, Control+E, Control+N, and Control+P move the cursor again instead of archiving the open message, starting a new message, or printing. Command shortcuts are unchanged.
-- **FIX - Narrow reader header:** In a narrow window, the date no longer takes the sender's place next to the picture. The sender comes first and the date sits below.
-- **UI - Icons grow with text size:** Toolbar, mailbox, reader, composer, settings, and setup icons now grow with larger text sizes instead of staying small beside large labels.
-- **UI - Large text fits better:** At larger text sizes, Settings choices stack so the full value shows, the Settings list no longer cuts off "Notifications", Get Mail stays on one line, the search box has room to type, setup step numbers stay inside their circles, and message details labels no longer run into their values.
-- **Misc:** General fixes.
-
-## Changes in `v0.2.2:`
-
-- **FIX - Messages open blank:** Message bodies showed as an empty white area on macOS 27 (and on Linux). The newer system web engine asks Postal Snap for permission before loading the message frame, and Postal Snap refused it. Postal Snap now allows only its own built-in message and print frames, so mail shows again. This also fixes blank printouts. Pictures you load with "Load images" now appear too.
-- **FIX - Links in messages work on macOS:** Clicking a link in a formatted message did nothing and could blank the message. Links now show the usual "This link goes to…" confirmation before opening in your browser.
-- **FIX - Printing on macOS:** Print did nothing on macOS. It now opens the system print dialog with just the message, across as many pages as it needs. Formatted messages also print their formatted version instead of an empty page.
-- **FIX - Inbox first:** Mailboxes in the sidebar are listed Inbox, Drafts, Sent, Archive, Junk, Trash again instead of by server folder name.
-- **FIX - Read messages no longer look unread:** The selected message no longer shows an unread dot after it is opened.
-- **FIX - Clearer reason when a message is missing its text:** If a message could not download because you are offline or your sign-in was not accepted, the reader now says so instead of "This message has no readable text."
-- **FIX - Text fallback for empty HTML mail:** When a message's formatted version has nothing to show, the reader now shows its plain-text version instead of a blank page.
-- **UI - Calmer Outbox icon:** Outbox shows an outgoing-arrow icon when it is empty and only shows the warning icon when mail is waiting.
-- **UI - Restored depth:** Buttons, the Settings window, settings rows and cards, the composer and dialog headers, and the setup screen again use the soft raised look from 0.2.0. The compact menus and fixed setup layout from 0.2.1 stay.
-
-## Changes in `v0.2.1:`
-
-- **FIX - Setup no longer reappears for existing accounts:** If saved settings were reset or setup was interrupted after an account was added, Postal Snap now opens the mailbox and repairs the setup flag instead of asking you to add the account again.
-- **FIX - Mail download choice layout:** The "Recent mail" and "Download all mail" options in account setup no longer stretch the radio button across the row and squeeze the text into one letter per line.
-- **FIX - Clearer setup errors:** When a setup choice cannot be saved, setup now says so plainly and undoes the change instead of showing "Saving…" as an error. All setup choices are saved in order, so quick changes no longer overwrite each other.
-- **FIX - No duplicate account after connecting:** Once an account is saved during first-run setup, the Back button is hidden so the account cannot be added twice. The unused "Skip for now" button is removed, and Settings can be opened from the account step.
-- **UI - Display settings during setup:** The account setup screen now includes Appearance (Auto, Light, Dark), interface spacing (Comfortable, Compact), text size, and reading pane. Changes apply right away.
-- **UI - Compact menus with icons:** Right-click menus are more compact and show an icon beside every action. Move targets are grouped under "Move to", and Archive, Junk, and Trash no longer appear twice. The mailbox, reader, send, and account menus now share the same look.
-- **FIX - Folder names in move lists:** Move menus show the full folder path, so nested folders with the same name (like Work / Receipts and Personal / Receipts) stay distinct.
-- **FIX - Large text:** Menus widen and wrap with text size instead of cutting labels off, and their icons scale too. Text size gains an "Even larger (175%)" choice, matching the keyboard text-size steps.
-- **UI - Menu keyboard support:** In right-click menus, typing a letter jumps to the matching action, Tab closes the menu and returns focus, and menus close when the window is resized or loses focus.
-- **UI - Calmer settings and setup:** Settings, setup, and dialogs drop their gradients for flat surfaces. Buttons no longer shift on hover, folder names match the sidebar everywhere, and corner radii and heading sizes are consistent.
-
-## Changes in `v0.2.0:`
-
-- **Multi-Account Support:** Add and manage multiple isolated email accounts with individual credentials, folder structures, outboxes, and signatures.
-- **Account Switcher Popover:** Rapidly switch between accounts using the sidebar popover or `Ctrl+1` through `Ctrl+9` keyboard shortcuts.
-- **Provider Discovery & Setup:** Automatic configuration lookup for major providers (Fastmail, Yahoo, AOL, Zoho, mailbox.org, GMX) with DNS MX and autoconfig resolution, and secure iCloud Mail setup.
-- **Performance & Batching:** Database write batching, synchronous optimizations, and reader lane separation for snappy responsiveness.
-- **Incremental Sync & CONDSTORE:** Fast incremental folder synchronization using IMAP CONDSTORE / HIGHESTMODSEQ and configurable per-account caching policies.
-- **Modularized UI Architecture:** Streamlined MailShell with localized folder hierarchies, collapsible nested folders, dedicated SyncStatus progress indicator, and unified keyboard shortcut registry.
-
-## Changes in `v0.1.15:`
-
-- **FIX - macOS launch crash on legacy databases:** Fixed startup migration ordering so existing unversioned mail databases gain thread columns before the related index is created. Postal Snap no longer aborts on launch when opening an older local database.
-- **UI - Update Ready restarts now:** The mailbox badge installs the downloaded update and relaunches immediately. Settings → Check for updates still confirms when a package is already ready.
-- **UI - Update check interval:** Direct-download Settings can check on startup and every 6 hours (default), every 12 or 24 hours, on startup only, or only when you ask. Store and Flatpak editions keep store-managed updates.
-- **UI - Product context menus:** Right-click on messages, folders, the reader, links, attachments, and the composer shows Postal Snap actions instead of the empty WebView menu. External links still use the existing confirm and reported-threat path.
-- **UI - Close to tray / menu bar:** On Windows and macOS, closing the window keeps Postal Snap running in the notification area or menu bar (on by default, including first-run setup). Open it from that icon, or quit from its menu. Turn the option off in Settings to quit on close. Linux still quits when the window closes. Quiet update install still runs when Postal Snap actually quits.
-
-## Changes in `v0.1.14:`
-
-- **FIX - Windows custom title bar:** The native File / Edit / Message / View menubar is no longer attached to the frameless Windows window. Clicking away and back no longer paints that bar through the HTML caption. Mail shortcuts stay in the app; macOS and Linux keep their native menus. Window glass and Snap layouts are unchanged.
-
-## Changes in `v0.1.13:`
-
-- **FIX - Settings title bar restore:** Closing Settings no longer leaves a ghost of the native Windows caption/menu over the custom title bar. The Settings overlay uses one opaque scrim through the chrome row, then restores window glass when you leave.
-
-## Changes in `v0.1.12:`
-
-- **FIX - Windows account setup:** Restored saving mailbox passwords to Windows Credential Manager after the 0.1.9 local-only vault change. iCloud and other account setup no longer fails at the final step with a generic error when IMAP and SMTP sign-in succeed.
-- **FIX - Setup error clarity:** Password vault failures now surface as a local data access error instead of “Postal Snap could not finish that action.”
-
-## Changes in `v0.1.11:`
-
-- **FIX - Window close on Windows and Linux:** Restored the custom title bar close button, which stopped working in 0.1.10. Quiet update-on-quit still installs a downloaded update when you close the app; it no longer blocks normal quit when no update is ready.
-- **UI - Licenses and credits:** Settings → About → Licenses and credits now lists bundled npm and Cargo packages with their license texts in collapsible cards, alongside MPL and EasyList/TweetFeed notices. The credits view uses a single opaque layer instead of stacking a second darkened overlay on top of Settings.
-
-## Changes in `v0.1.10:`
-
-- **FIX - Updates no longer restart while you work:** Signed updates still download in the background, but they no longer install and quit immediately. Use the Update Ready badge or Settings → Restart Postal Snap when you are ready; closing the app on Windows and Linux also installs quietly. If a quiet install fails, the window stays open so drafts are not lost.
-- **UI - Licenses and credits:** Settings → About → Licenses and credits opens an in-app window with the bundled MPL text, npm and Cargo notices, and EasyList/TweetFeed license files instead of sending you to GitHub.
-- **UI - Current app icon:** Setup, the empty reader, splash, and recovery screens use the current paper-plane logo instead of the old envelope mark.
-
-## Changes in `v0.1.9:`
-
-- **UI - macOS 27 design language depth and hierarchy:** Refined setup, Settings, toolbar, message, reader, and form surfaces with calmer layered materials, restrained highlights, clearer selected states, and stronger dark/light contrast.
-- **UI - Setup flow:** Reworked account choice and setup presentation, improved 200% text behavior, resets each step to the top, and moves keyboard focus to the new heading without scrolling it away.
-- **UI - Settings cleanup:** Removed the duplicate preference-only reset from General. The complete Reset & Restart action remains in Accounts as the single reset path.
-- **Accessibility:** Conversation headers participate in roving keyboard navigation, local Drafts/Outbox/Snoozed actions keep Space activation, and focus remains visible through setup transitions.
-- **Security:** Account secrets are zeroized earlier, external About/help links use native validation and reported-threat policy, search input work is bounded, and UID-based mail operations fail closed when mailbox identity is unavailable or changes.
-- **Reliability:** Added timeouts to Sent-copy and remote-draft IMAP commands, transactional credential rollback when a password update cannot finish, and one in-flight guard per scheduled Outbox message.
-- **Compatibility:** Legacy databases containing duplicate email rows no longer fail their schema migration; existing accounts remain available for cleanup while new duplicates stay blocked.
-- **Release tooling:** Beta validation now checks the published `latest-<target>-beta-<arch>.json` updater manifests and fails on missing required manifests, all npm/Tauri/Cargo version metadata synchronizes together, and the E2E runner owns Vite directly so Windows quality gates exit cleanly.
-
-## Changes in `v0.1.8:`
-
-- **UI - macOS 27 design language shell:** The mailbox sidebar now reaches the window edges, the main toolbar is quieter and consistently grouped, Compose and Get Mail remain explicit at normal desktop widths, and search sits in the trailing toolbar cluster with mailbox/account scoping.
-- **UI - Mailbox and reader hierarchy:** Message rows use tighter spacing and selection treatment inspired by the macOS 27 design language, sidebar symbols use the app accent, Mark All Read moves into the mailbox More menu, and reader actions are grouped into compact pill controls.
-- **UI - Liquid Glass restraint:** Glass is reserved for navigation and interactive chrome while message lists, readers, rendered email, composer, Settings, setup, and attachment previews stay opaque for legibility. macOS now requests semantic Sidebar vibrancy instead of HUD material.
-- **UI - Composer, setup, and settings polish:** Dialog chrome, grouped controls, selected settings navigation, and setup provider cards use flatter surfaces, quieter borders, and more consistent rounded geometry.
-- **FIX - Native appearance sync:** When theme follows the system, native window-effect tint now tracks live light/dark appearance changes instead of staying at the launch appearance.
-- **FIX - Responsive mailbox drawer:** The sidebar toggle now follows the same 1049px drawer breakpoint as CSS, stays usable in 761–1049px windows, and clears modal/inert state when resizing back to desktop.
-- **FIX - Search scope refresh:** Switching between This mailbox and This account reruns an active search immediately instead of leaving stale results on screen.
-- **UI - Narrow-window clarity:** Mailbox/account search scope remains visible in compact windows, and Settings keeps section labels visible while its tab strip scrolls horizontally.
-- **FIX - Test and release gates:** Search tests follow the native searchbox role, Playwright no longer fans one mocked-IPC spec across dozens of competing workers, the accessibility scan waits for the actual mail shell, and draft download links target `v0.1.8`.
-- **UI - macOS toolbar refinement:** Non-primary toolbar controls drop permanent pill bezels, Settings selection keeps neutral text with an accented symbol, message rows use a single quiet separator, and the search-scope control now keeps a full 44px target.
-- **FIX - Bottom reader resize:** Large saved bottom-pane heights are clamped to the available desktop viewport so shrinking a window cannot push the reader past its lower edge.
-- **PKG:** Application, Tauri, npm lockfile, and Cargo metadata are synchronized to `0.1.8`.
-
-## Changes in `v0.1.7:`
-
-- **FIX - Composer link safety:** Quoted and inserted web links stay inert in the editor (`href="#"` plus `data-external-href`). Live addresses are restored only when Postal Snap builds the outgoing MIME.
-- **FIX - Date-less mail:** Body downloads now request IMAP `INTERNALDATE` and keep a cached stamp instead of jumping Date-less messages to “now.”
-- **FIX - Undo send while offline:** Losing IMAP IDLE persists offline and skips the undo-send timer so a never-attempted hold is not marked Needs attention.
-- **FIX - Double Send:** Send is guarded with an in-flight lock so a double-click cannot enqueue two Outbox rows.
-- **FIX - Bulk move destination:** After Archive/Trash/Junk of many messages, the destination folder refreshes immediately instead of waiting for the next sync.
-- **FIX - Thread headers:** `References` keep RFC 5322 order; `In-Reply-To` is only a fallback when `References` is empty.
-- **NEW - Empty Junk / Not Junk:** Empty Junk matches Empty Trash. Mail in Junk can return to Inbox with Not Junk.
-- **UI - Print headers:** Print includes From, To, Subject, and Date for HTML and plain text. File > Print is wired. ⌘P / Ctrl+P prints the open message even when search is focused.
-- **UI - Follow-up compose:** Reply/forward sheets no longer trap Tab, so keyboard users can return to the visible source message.
-- **Security:** Unused `deep-link:allow-register` is removed from direct builds. Overlapping Settings saves keep every field, including nested cache policy, and still send `CONFIRM` when turning reported-threat checks off.
-- **PKG:** macOS release submits the DMG to notarytool before stapling. Windows re-minisigns updater payloads after Authenticode. `release:verify:local` cryptographically verifies `.sig` files. Beta manifest sync pulls every architecture JSON from the published beta before copying them to latest. CI compile jobs generate third-party notices before `cargo check` on Linux, macOS, and Windows. Signed collection matches the IYERIS/Zinnia Tauri v2 pipeline: Linux updater payload is the AppImage plus `.AppImage.sig` (not `.AppImage.tar.gz`); macOS `codesign --display` reads stderr and requires Developer ID, TeamIdentifier, and Hardened Runtime. Universal `lipo` uses `CFBundleExecutable` (Cargo `postal-snap`), not the spaced product name.
-
-## Changes in `v0.1.6:`
-
-- **NEW - Conversation threads:** Replies group behind one row with a message count; expanding shows the thread newest-first. Threading follows In-Reply-To/References across folders and converges no matter which message syncs first.
-- **NEW - Folder management:** Create, rename, and delete personal folders plus empty Trash, all with confirmation for destructive actions.
-- **NEW - Bulk triage:** Select mode with checkboxes, mark read/unread, archive/junk/trash many at once, and one-tap mark-all-read. One server round trip per folder; partial failures report counts.
-- **NEW - Recipient autocomplete:** To/Cc/Bcc suggest previous recipients from local send history with full keyboard support.
-- **NEW - Attachment preview:** Preview images and plain-text files without downloading; other types stay download-only.
-- **NEW - Translucent window (macOS/Windows):** Optional native blur behind the app in Settings > General; email itself always stays solid.
-- **NEW - Password recovery:** Expired app passwords surface per account with an inline update form; no more remove-and-re-add.
-- **NEW - Email signatures:** Per-account plain-text signature, edited in Settings > Accounts, appended automatically on send.
-- **NEW - Undo send:** Outgoing mail holds for a configurable window (default 10s) with countdown, Send now, and Undo in the Outbox.
-- **NEW - Snooze:** Hide any message until tomorrow morning, next week, or a chosen time. Snoozed mail waits in its own list and returns automatically.
-- **NEW - Mail rules:** Per-account rules file new mail automatically — mark read, archive, trash, junk, or move to any folder — on every successful sync. Rules apply through the offline queue, so failures stay retryable instead of half-applied.
-- **PKG:** Updated packages.
-
-## Changes in `v0.1.5:`
-
-- **FIX - Settings Accounts Overlap:** Fixed overlapping text in Settings > Accounts alias management; the alias header, help text, status, and Detect button now wrap cleanly at narrow widths and 200% text scaling.
-- **FIX - Sync Timeouts & Efficiency:** Every IMAP sync step now has a 45s timeout instead of hanging forever, and unchanged mailboxes skip the flag re-download (verified by UIDVALIDITY/UIDNEXT/counts).
-- **FIX - Offline Queue Independence:** Queued flag/move operations now retry independently; one failed item no longer parks the rest, and mailbox changes retire only the affected item.
-- **FIX - Outbox Recovery:** Messages needing attention can rebuild their payload on explicit retry instead of sticking permanently; discarding a pending Sent copy no longer deletes the draft.
-- **FIX - Drafts Visibility & Autosave:** Drafts pending server delete stay visible until confirmed; autosave runs every 6s plus on blur/hide; server draft imports preserve the From alias and stop refetch loops.
-- **FIX - Forward Keeps Inline Images:** Forwarding now includes inline images as attachments instead of silently dropping them.
-- **FIX - Search Ranking:** Cached results keep full-text rank order; server-only body matches append newest-first instead of being re-sorted away.
-- **FIX - Oversize Messages:** Messages over the 50 MiB safety limit now open their envelope with an explicit notice; move, archive, and delete stay usable instead of a dead end.
-- **FIX - iCloud Alias Discovery Hardening:** CalDAV discovery follows no redirects (no credential forwarding) and allowlists `*.icloud.com` / `*.apple.com` principal hosts.
-- **FIX - Folder Roles:** Gmail labels and German/French/Spanish folder names now map to the right roles.
-- **UI - Reader Overlay Dialog:** Hidden-pane reader is a proper modal with focus trap, Escape, title focus, and focus restore; mobile overlay focuses the message too.
-- **UI - Toolbar Keyboard Nav:** Reader and composer toolbars support Arrow/Home/End navigation; splitters expose controlled panes and larger grab areas.
-- **UI - Setup Announcements:** Sign-in failures announce as alerts; iCloud hints linked to inputs; progress steps exposed to assistive tech.
-- **UI - Layout Fixes:** To/Cc-Bcc row no longer overlaps, toolbar/composer footer wrap, search and switches meet 44px targets, forced-colors covers dialogs/toasts/alias chips, vibrant-mode CSS variables fixed.
-- **Codebase:** Stable attachment IDs (name + CID + size anchored, legacy fallback); pagination limit clamped; remote-draft UID tracking covered by tests.
-- **PKG:** Updated packages.
-
-## Changes in `v0.1.4:`
-
-- **NEW - Native Update Flow & Streamlined macOS Menu Check:** Checking for updates from the macOS menu bar or Settings now exclusively displays clean native OS dialogues (reporting up to date, asking to download, and confirming restart) without redundantly opening the Settings window over an alert.
-- **NEW - Background Auto-Download & Restart Badge:** Updates are silently checked and downloaded in the background; when ready, a prominent, accessible top-right badge ("Update Ready · Click to Restart") informs you to click and restart at your convenience.
-- **NEW - Comprehensive Email Details Breakdown:** Completely overhauled the "Show Details" view in the email reader: reveals From, Reply-To, To, Cc, full date/time with timezone, folder name, verified TLS security badge, Message-ID, and total message size, with one-click copy buttons.
-- **FIX - Message Reader Inline Images & Attachments:** Fixed an issue where emails with only inline images displayed an empty attachments section; now only true file attachments are listed with clean counts and sizes.
-- **FIX - Plain Text Email Linkification:** Safe click-to-open confirmation for web links (`http/https`) and mailto links in plain text messages.
-- **FIX - Outbox Duplicate Send Prevention:** Drafts are now immediately removed from the Drafts mailbox as soon as SMTP delivery succeeds, preventing duplicate sends to recipients if folder reconciliation needs retry.
-- **FIX - Mailbox Role Fallbacks & Dot Hierarchies:** Expanded IMAP folder role detection to support dot-separated mailbox hierarchies (e.g., `INBOX.Sent`, `INBOX.Trash`) and standard Outlook/Exchange naming conventions (`Deleted Items`, `Sent Items`, `Junk Email`, `Bin`).
-- **FIX - Search Results Merging & Empty State:** Search now seamlessly combines local cached FTS results with server search matches without overwriting, and displays an informative empty state with a "Clear search" action when no results are found.
-- **FIX - Composer Quoted Recipient Splitting:** Fixed recipient address field validation when pasting or entering quoted display names containing commas (e.g., `"Doe, Jane" <jane@example.com>`).
-- **UI - Accessibility & WCAG Contrast Uplift:** Raised button and text contrast in dark mode to >6.5:1 (exceeding WCAG AAA), improved high-contrast focus rings, enlarged touch targets and composer controls, and enlarged auxiliary text labels across the mail shell.
-- **PKG:** Updated packages.
-
-- **NEW - iCloud Aliases & Custom Domains:** Discover and manage iCloud email aliases and custom domains via CalDAV, with support for sending from any alias.
-- **NEW - Auto-download newest messages:** Automatically prefetch message bodies for recent incoming messages during sync.
-- **NEW - Full Sync / Download All:** Added "All messages (Download all)" storage option that automatically configures cache limits to unlimited.
-- **NEW - Update Ready Badge & Native Dialog:** Non-intrusive toolbar badge when a signed update is downloaded and ready, with native OS dialog confirmation to restart.
-- **NEW - Native OS Dialogs:** Native modal dialogs across macOS, Windows, and Linux for confirmations and alerts.
-- **UI:** Overhauled rich composer with docked minimize pill mode, full-screen maximize toggle, keyboard shortcut sending (`⌘↵` / `Ctrl+Enter`), and clean grouped toolbar without horizontal scrollbars.
-- **UI:** Modernized Settings dialog with card-based section layout and dedicated alias management.
-- **PKG:** Updated packages.
-
-## Changes in `v0.1.2:`
-
-- **UI:** Fixed an issue where a late mark-as-read, star, move, search, or draft save could overwrite the message or folder you just switched to.
-- **Security:** Message loads, flags, and moves now re-check mailbox UIDVALIDITY and stay scoped to the selected account.
-- **Logo:** Updated the app icons.
-- **Docs:** Removed the proprietary-notice line from the README.
-- **Codebase:** Version sync now updates `Cargo.lock` so a version bump no longer breaks `--locked` release builds.
-- **PKG:** Updated packages.
-
-## Changes in `v0.1.1:`
-
-- **NEW - Settings access:** Open Settings before adding a mailbox, including from setup and the macOS menu.
-- **NEW - Settings portability:** Export, import, or reset preferences without touching accounts, credentials, or mail.
-- **NEW - macOS menu:** Check for signed updates, use standard Window actions, and get account-aware mail commands.
-
-## Changes in `v0.1.0:`
-
-- **NEW - iCloud setup:** Guided iCloud Mail setup that uses an app-specific password.
-- **NEW - Manual mail:** Secure IMAP and SMTP setup. Only implicit TLS or required STARTTLS is accepted; plaintext and invalid certificates are rejected.
-- **NEW - Isolated accounts:** Multiple accounts stay separate. There is no unified inbox.
-- **NEW - Mailbox:** Familiar folders, a message list, a reader, search, drafts, outbox, attachments, and rich compose.
-- **Security:** Account passwords are stored only in the OS credential vault and never returned over IPC or written to logs.
-- **Security:** Received HTML is sanitized and shown in a scriptless, networkless sandboxed iframe. Remote images load only after you say yes, through a proxy that blocks private and reserved destinations.
-- **Security:** External links ask for confirmation, then open in the system browser. Attachments save only to a folder you pick.
-- **UI:** Large labels, 44px targets where practical, keyboard navigation, visible focus, system light and dark themes, and right / bottom / hidden reading-pane layouts.
-- **Windows:** Signed x64 and arm64 NSIS installers (Azure Artifact Signing). No MSI for this release.
-- **macOS:** Signed and notarized universal DMG and ZIP.
-- **Linux:** x64 AppImage and Flatpak. No DEB or RPM for this release. Arm64 Linux is not shipped yet.
-- **Updater:** Direct updates come from GitHub Releases with signed Tauri V2 manifests.
-- **PKG:** Updated packages.
+- **NEW - Conversation actions:** Archive, move, copy, star, pin, snooze, mark as junk, delete, print, forward, select, or save files from a whole conversation at once. Actions apply to every loaded message in the conversation. Expand or collapse a conversation, and it stays that way when you come back.
+- **NEW - Pin messages and mailboxes:** Pin a message to keep it at the top of the list, or pin a mailbox to keep it at the top of the folder list. Pins stay on this computer. **Pinned** lists only pinned mail.
+- **NEW - Mute conversations:** Mute a noisy conversation to file it away. Muted conversations, including later replies, are labeled in the list and the message.
+- **NEW - Block sender or domain:** Block a sender or their whole domain from the message menu. Postal Snap moves the message to Junk and saves a mail rule you can undo with **Unblock**. Shared providers (such as Gmail or iCloud) only offer **Block sender**.
+- **NEW - Mail rules:** Rules can now match the sender's domain or the To line. A full address matches only that address. Reorder rules, and see which unread Inbox messages a rule would file before you save it. Start a rule from a sender, an address, or a subject.
+- **NEW - Read receipts:** Ask for a read receipt when you send. When a message asks you for one, Postal Snap asks before sending it, and you can decline. Junk mail never asks.
+- **NEW - Importance:** Mark a message high or low importance. Received high- and low-importance mail is labeled in the list and the message.
+- **NEW - Redirect and forward as attachment:** Redirect sends a message on unchanged, marked as passed on by you. Forward as attachment includes the original as an `.eml` file.
+- **NEW - Reply options:** Reply with attachments, reply without quoting the original, and see the message you are answering while you write. Replies use the address the message was sent to, including your aliases. A note typed under the message starts a reply.
+- **NEW - Reply-To per account:** Set a Reply-To address for an account in Settings > Accounts, and leave it off any single message.
+- **NEW - Safer sending:** Postal Snap asks before sending to 10 or more people, to an automated (no-reply) address, to the same person twice, or with no subject or no text. Optionally send a Bcc copy to yourself.
+- **NEW - Writing:** Paste pictures and lists of addresses. **Paste without formatting** keeps text plain. Preview attached pictures, see each file's size and the total, remove all files at once, and remove a link while keeping its words. The message window keeps its size, and drafts keep your place.
+- **NEW - Save files and messages:** Save chosen files, all files, or every file in a conversation or selection into one folder. Save one or more messages as `.eml` files.
+- **NEW - Search:** New filters `cc:`, `body:`, `filename:`, `in:`, `on:`, `larger:`, `smaller:`, `is:pinned`, and `is:important`, plus `from:me` and `to:me`. Matching words are highlighted in the list and the open message. Recent searches can be chosen again or removed. An empty search result can search all mailboxes. Drafts and Outbox are searchable too.
+- **NEW - Find in message:** Find words in the open message, with a match count and next and previous.
+- **NEW - Print conversations and selections:** Print every loaded message in a conversation, or the checked messages, oldest first. Printed messages list their files.
+- **NEW - Mailbox views:** **Invitations**, **Pinned**, **To me**, and **Unread folders** views. Sort oldest first or by subject. Each folder keeps its own filter and scroll position, and reopens the message you left open.
+- **NEW - Folders:** Create a folder inside another, move a folder under another or to the top level, collapse nested folders, hide a mailbox from the list, and find a folder in a long list. In Trash, **Delete** permanently removes the chosen messages after you confirm.
+- **NEW - Message details:** The reader shows Cc, Bcc, a different Reply-To address, the mailing list name, message size, file kinds and sizes, and when a late message actually arrived. Copy the sender, recipients, subject, or readable text. Open the message a reply answers.
+- **NEW - Keyboard:** `e` archives, `x` checks, `!` marks as junk, `r` replies, and Delete moves to Trash, all without opening the message. `j` and `k` move between messages, Space at the end of a message opens the next one, `i` goes to Inbox, and `[` and `]` open the previous or next mailbox with unread mail.
+- **NEW - Accounts:** Give each account a color, reorder accounts, and choose how long each account keeps downloaded mail. The unread count shows in the window title and on the Dock or taskbar icon.
+- **NEW - Alerts:** Play a sound for new mail, and set quiet hours when alerts stay silent.
+- **NEW - Pictures from known senders:** Choose senders whose pictures load without a click. This never applies in Junk, or when the sender's name shows a different address.
+- **UI - Full-screen reading:** Full-screen reading now covers the mailbox. Toolbars, the list, and the message line up at every text size up to 200%.
+- **FIX - Very large messages:** A very large message no longer slows down or stalls mail checking for its account.
+- **FIX - Sending later:** A message scheduled weeks ahead no longer makes Postal Snap reload the Outbox over and over.
+- **FIX - No leftover draft after sending:** Sending right after typing no longer leaves a copy of the sent message in Drafts.
+- **FIX - Saving many messages:** Saving many messages or files now asks where to save first, and uses far less memory.
+- **FIX - Saved files are marked as downloaded:** Files saved from mail are now marked as coming from the internet, so Windows and macOS warn before opening a downloaded program.
+- **FIX - Windows mail folder move:** Moving mail data out of the roaming profile is now all-or-nothing. If it cannot finish, Postal Snap keeps using the previous folder. Files attached to unsent drafts and queued messages still work after the move.
+- **FIX - Proton Bridge:** Large messages sent through Proton Bridge no longer show as uncertain when Bridge takes a while to accept them.
+- **FIX - Folders:** Moving a folder inside itself now shows a clear message instead of a server error.
 
 ## ℹ️ Release Info
 

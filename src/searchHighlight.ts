@@ -87,12 +87,12 @@ export function highlightParts(text: string, terms: string[]): HighlightPart[] {
   const needles = [
     ...new Set(
       terms
-        .map((term) => term.trim().toLowerCase())
+        .map((term) => foldKeepLength(term.trim()))
         .filter((term) => term.length >= 2),
     ),
   ];
   if (!text || needles.length === 0) return [{ text, mark: false }];
-  const lower = text.toLowerCase();
+  const lower = foldKeepLength(text);
   const parts: HighlightPart[] = [];
   let index = 0;
   while (index < text.length) {
@@ -119,6 +119,16 @@ export function highlightParts(text: string, terms: string[]): HighlightPart[] {
   }
   if (index < text.length) parts.push({ text: text.slice(index), mark: false });
   return parts.length > 0 ? parts : [{ text, mark: false }];
+}
+
+/** Lowercase per code point, keeping the UTF-16 length so indices still map. */
+function foldKeepLength(value: string): string {
+  let folded = "";
+  for (const character of value) {
+    const lower = character.toLowerCase();
+    folded += lower.length === character.length ? lower : character;
+  }
+  return folded;
 }
 
 function searchTokens(query: string): string[] {

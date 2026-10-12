@@ -176,47 +176,67 @@ fn find_ascii_case_insensitive(haystack: &[u8], needle: &[u8]) -> Option<usize> 
         .position(|window| window.eq_ignore_ascii_case(needle))
 }
 
+/// Search from `from`; returns an absolute offset into `bytes`.
+fn find_from(bytes: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
+    find_ascii_case_insensitive(&bytes[from..], needle).map(|rel| from + rel)
+}
+
+/// Linear pass: each cached token offset is refreshed only once it falls
+/// behind the cursor, and a quote that never closes is never searched again.
 fn normalize_src_and_href(input: &str) -> String {
+    let bytes = input.as_bytes();
     let mut output = String::with_capacity(input.len() + 16);
-    let mut rest = input;
+    let mut pos = 0usize;
     let mut iterations = 0usize;
+    // `None` means no occurrence exists at or after the offset it was found from,
+    // so it stays `None` for every later cursor.
+    let mut next_src = find_ascii_case_insensitive(bytes, b"src=");
+    let mut next_href = find_ascii_case_insensitive(bytes, b"href=");
+    // Indexed by `quote == b'\''`: no closing quote exists after the cursor.
+    let mut quote_missing = [false; 2];
     loop {
         if iterations >= MAX_REWRITE_ITERATIONS {
-            output.push_str(rest);
+            output.push_str(&input[pos..]);
             break;
         }
         iterations += 1;
-        let bytes = rest.as_bytes();
-        let src = find_ascii_case_insensitive(bytes, b"src=");
-        let href = find_ascii_case_insensitive(bytes, b"href=");
-        let (rel, token_len) = match (src, href) {
-            (Some(src), Some(href)) if src <= href => (src, 4),
+        if next_src.is_some_and(|at| at < pos) {
+            next_src = find_from(bytes, pos, b"src=");
+        }
+        if next_href.is_some_and(|at| at < pos) {
+            next_href = find_from(bytes, pos, b"href=");
+        }
+        let (start, token_len) = match (next_src, next_href) {
+            (Some(src), Some(href)) if src < href => (src, 4),
+            (_, Some(href)) => (href, 5),
             (Some(src), None) => (src, 4),
-            (None, Some(href)) => (href, 5),
-            (Some(_), Some(href)) => (href, 5),
             (None, None) => {
-                output.push_str(rest);
+                output.push_str(&input[pos..]);
                 break;
             }
         };
-        output.push_str(&rest[..rel + token_len]);
-        rest = &rest[rel + token_len..];
-        let Some(quote) = rest
-            .chars()
-            .next()
-            .filter(|marker| matches!(marker, '"' | '\''))
-        else {
+        let token_end = start + token_len;
+        output.push_str(&input[pos..token_end]);
+        pos = token_end;
+        let quote = match bytes.get(pos) {
+            Some(&marker @ (b'"' | b'\'')) => marker,
+            _ => continue,
+        };
+        let slot = usize::from(quote == b'\'');
+        if quote_missing[slot] {
+            continue;
+        }
+        let body_start = pos + 1;
+        let Some(close) = bytes[body_start..].iter().position(|&byte| byte == quote) else {
+            quote_missing[slot] = true;
             continue;
         };
-        let after = &rest[1..];
-        let Some(end) = after.find(quote) else {
-            continue;
-        };
-        let rewritten = rewrite_quoted_url(&after[..end], token_len == 4);
-        output.push(quote);
+        let end = body_start + close;
+        let rewritten = rewrite_quoted_url(&input[body_start..end], token_len == 4);
+        output.push(char::from(quote));
         output.push_str(&rewritten);
-        output.push(quote);
-        rest = &after[end + 1..];
+        output.push(char::from(quote));
+        pos = end + 1;
     }
     output
 }
@@ -600,17 +620,14 @@ fn decode_html_entities(value: &str) -> String {
     while let Some(index) = rest.find('&') {
         output.push_str(&rest[..index]);
         let after = &rest[index + 1..];
-        let Some(semicolon) = after.find(';') else {
+        // Entities longer than 10 bytes are left as-is, so only look that far for ';'.
+        let window = &after.as_bytes()[..after.len().min(11)];
+        let Some(semicolon) = window.iter().position(|&byte| byte == b';') else {
             output.push('&');
             rest = after;
             continue;
         };
         let entity = &after[..semicolon];
-        if entity.len() > 10 {
-            output.push('&');
-            rest = after;
-            continue;
-        }
         match decode_entity(entity) {
             Some(decoded) => output.push(decoded),
             None => {
@@ -707,6 +724,7 @@ fn parse_attrs(inside: &str) -> Vec<(String, Option<String>)> {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+    use std::time::{Duration, Instant};
 
     proptest::proptest! {
         #[test]
@@ -872,5 +890,172 @@ mod tests {
         assert_eq!(result.html.matches("data-remote-src=").count(), 10_000);
         assert_eq!(result.html.matches("data-external-href=").count(), 10_000);
         assert!(!result.html.contains("&amp;amp;"));
+    }
+
+    // Ways the linear rewrite could fail, written before the implementation:
+    // 1. Input with only `src=` (or only `href=`) rescans the whole rest per token.
+    // 2. A cached offset behind the cursor is reused, reordering or skipping tokens.
+    // 3. A cached offset is not refreshed, so a later token is missed.
+    // 4. The missing-quote memo suppresses a later valid quoted value.
+    // 5. An unclosed quote drops or duplicates the bytes after it.
+    // 6. A token next to multi-byte text slices off a char boundary and panics.
+    // 7. The iteration cap truncates the tail of a large input.
+    // 8. Output diverges from the previous normalizer for mixed src/href input.
+    // 9. Bare `&` runs make entity decoding scan to the end for every `&`.
+    // 10. The entity window shifts the 10-byte limit and changes decoding.
+    /// Pre-fix normalizer, kept as an oracle for equivalence checks.
+    fn normalize_src_and_href_reference(input: &str) -> String {
+        let mut output = String::new();
+        let mut rest = input;
+        loop {
+            let bytes = rest.as_bytes();
+            let src = find_ascii_case_insensitive(bytes, b"src=");
+            let href = find_ascii_case_insensitive(bytes, b"href=");
+            let (rel, token_len) = match (src, href) {
+                (Some(s), Some(h)) if s <= h => (s, 4),
+                (Some(s), None) => (s, 4),
+                (None, Some(h)) => (h, 5),
+                (Some(_), Some(h)) => (h, 5),
+                (None, None) => {
+                    output.push_str(rest);
+                    break;
+                }
+            };
+            output.push_str(&rest[..rel + token_len]);
+            rest = &rest[rel + token_len..];
+            let Some(quote) = rest
+                .chars()
+                .next()
+                .filter(|marker| matches!(marker, '"' | '\''))
+            else {
+                continue;
+            };
+            let after = &rest[1..];
+            let Some(end) = after.find(quote) else {
+                continue;
+            };
+            output.push(quote);
+            output.push_str(&rewrite_quoted_url(&after[..end], token_len == 4));
+            output.push(quote);
+            rest = &after[end + 1..];
+        }
+        output
+    }
+
+    const NORMALIZE_PIECES: &[&str] = &[
+        "src=",
+        "SRC=",
+        "href=",
+        "HREF=",
+        "\"",
+        "'",
+        "//h.test/",
+        " ",
+        "a",
+        "é",
+        "cid:<x@y>",
+        "http://h.test/p",
+        "&amp;",
+        ";",
+        "<a ",
+        "<img ",
+        ">",
+        "src",
+        "href",
+    ];
+
+    proptest::proptest! {
+        #[test]
+        fn normalize_matches_reference(
+            pieces in proptest::collection::vec(proptest::sample::select(NORMALIZE_PIECES), 0..80)
+        ) {
+            let input: String = pieces.concat();
+            prop_assert_eq!(
+                normalize_src_and_href(&input),
+                normalize_src_and_href_reference(&input)
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_rewrites_mixed_src_and_href_in_document_order() {
+        let input = r#"<a HREF="//h.test/a">x</a><img src='cid:<p@q>'><a href='https://ok.test'>y</a><img SRC="//h.test/b.png">"#;
+        let expected = r#"<a HREF="https://h.test/a">x</a><img src='cid:p@q'><a href='https://ok.test'>y</a><img SRC="https://h.test/b.png">"#;
+        assert_eq!(normalize_src_and_href(input), expected);
+        assert_eq!(
+            normalize_src_and_href(input),
+            normalize_src_and_href_reference(input)
+        );
+    }
+
+    #[test]
+    fn normalize_leaves_unclosed_quote_untouched() {
+        let input = r#"<a href="https://a.test/x src=cid:q"#;
+        assert_eq!(normalize_src_and_href(input), input);
+        assert_eq!(
+            normalize_src_and_href_reference(input),
+            normalize_src_and_href(input)
+        );
+    }
+
+    #[test]
+    fn normalize_keeps_multibyte_text_around_tokens() {
+        let input = "é src=\"//h.test/é\" ü href='//h.test/ö' 日本";
+        let expected = "é src=\"https://h.test/é\" ü href='https://h.test/ö' 日本";
+        assert_eq!(normalize_src_and_href(input), expected);
+    }
+
+    #[test]
+    fn sanitizer_stays_linear_on_one_sided_token_floods() {
+        let images = "<img src=\"x\">".repeat(150_000);
+        let start = Instant::now();
+        let normalized = normalize_src_and_href(&images);
+        assert_eq!(normalized, images);
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "src-only normalize took {:?}",
+            start.elapsed()
+        );
+
+        let anchors = "<a href=\"".repeat(230_000);
+        let start = Instant::now();
+        let normalized = normalize_src_and_href(&anchors);
+        assert_eq!(normalized, anchors);
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "href-only normalize took {:?}",
+            start.elapsed()
+        );
+
+        let start = Instant::now();
+        let result = sanitize_received_html(&images);
+        assert_eq!(result.blocked_images, 0);
+        assert!(
+            start.elapsed() < Duration::from_secs(30),
+            "sanitize of src flood took {:?}",
+            start.elapsed()
+        );
+    }
+
+    #[test]
+    fn decode_entities_is_linear_on_bare_ampersands() {
+        let value = "&".repeat(2 * 1024 * 1024);
+        let start = Instant::now();
+        assert_eq!(decode_html_entities(&value), value);
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "decode took {:?}",
+            start.elapsed()
+        );
+    }
+
+    #[test]
+    fn decode_entities_keeps_ten_byte_entity_window() {
+        assert_eq!(
+            decode_html_entities("a&amp;b&#38;c&x;d&verylongentity_;e"),
+            "a&b&c&x;d&verylongentity_;e"
+        );
+        assert_eq!(decode_html_entities("&#x00000041;"), "A");
+        assert_eq!(decode_html_entities("&#x000000041;"), "&#x000000041;");
     }
 }

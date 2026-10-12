@@ -404,6 +404,9 @@ fn expiry_unix(expires_in: Option<u64>) -> Option<u64> {
 }
 
 /// Email and display name from an ID token we just received over TLS.
+///
+/// Claim order: `email` first, then `preferred_username`, then `upn`. The
+/// fallbacks only apply when a provider omits `email`.
 pub fn identity_from_id_token(id_token: &str) -> Result<(String, String), String> {
     let payload = id_token
         .split('.')
@@ -596,20 +599,26 @@ pub(crate) async fn accept_authorization_code(
                         .await;
                 }
                 CallbackQuery::Finished { code, state } => {
-                    let matches = state == expected_state && !code.is_empty() && code.len() <= 2048;
+                    // A wrong state is most likely a stray local request: keep waiting.
+                    let matches = states_match(&state, expected_state)
+                        && !code.is_empty()
+                        && code.len() <= 2048;
                     let _ = write_oauth_page(&mut socket, matches).await;
-                    if !matches {
-                        return Err("Sign-in could not be confirmed.".into());
+                    if matches {
+                        return Ok(code);
                     }
-                    return Ok(code);
                 }
-                CallbackQuery::Denied => {
+                CallbackQuery::Denied { state } => {
+                    let matches = state
+                        .as_deref()
+                        .is_some_and(|s| states_match(s, expected_state));
                     let _ = write_oauth_page(&mut socket, false).await;
-                    return Err("Sign-in was canceled.".into());
+                    if matches {
+                        return Err("Sign-in was canceled.".into());
+                    }
                 }
                 CallbackQuery::Invalid => {
                     let _ = write_oauth_page(&mut socket, false).await;
-                    return Err("Sign-in could not be confirmed.".into());
                 }
             }
         }
@@ -657,8 +666,20 @@ async fn read_http_head(socket: &mut TcpStream) -> Result<String, String> {
 enum CallbackQuery {
     Ignore,
     Finished { code: String, state: String },
-    Denied,
+    Denied { state: Option<String> },
     Invalid,
+}
+
+/// Compares states without an early exit on the first differing byte.
+fn states_match(actual: &str, expected: &str) -> bool {
+    if actual.len() != expected.len() {
+        return false;
+    }
+    actual
+        .bytes()
+        .zip(expected.bytes())
+        .fold(0u8, |diff, (a, b)| diff | (a ^ b))
+        == 0
 }
 
 fn callback_query(request: &str) -> CallbackQuery {
@@ -695,7 +716,7 @@ fn callback_query(request: &str) -> CallbackQuery {
         }
     }
     if error {
-        return CallbackQuery::Denied;
+        return CallbackQuery::Denied { state };
     }
     match (code, state) {
         (Some(code), Some(state)) if !code.is_empty() && !state.is_empty() => {
@@ -742,6 +763,16 @@ pub fn allow_xoauth2_server(host: &str, port: u16, incoming: bool) -> Result<(),
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Failure modes for the loopback callback:
+    // 1. A wrong-state callback aborts sign-in, so any local page can cancel it.
+    // 2. A wrong-state callback with a code is accepted.
+    // 3. A denied callback with a wrong state aborts sign-in.
+    // 4. A denied callback with the right state does not abort.
+    // 5. An invalid request aborts sign-in instead of waiting for the real callback.
+    // 6. The state check stops at the first differing byte or accepts a prefix.
+    // 7. Unequal-length states compare equal.
+    // 8. The email claim loses to preferred_username, or the fallbacks are skipped.
 
     #[test]
     fn refresh_lock_is_shared_per_account_only() {
@@ -848,7 +879,7 @@ mod tests {
             callback_query(
                 "GET /oauth/callback?error=access_denied&state=state-1 HTTP/1.1\r\n\r\n"
             ),
-            CallbackQuery::Denied
+            CallbackQuery::Denied { state: Some(ref s) } if s == "state-1"
         ));
         assert!(matches!(
             callback_query("GET / HTTP/1.1\r\n\r\n"),
@@ -910,17 +941,89 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn loopback_rejects_the_wrong_state() {
+    async fn loopback_ignores_a_wrong_state_then_accepts_the_right_one() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handle =
+            tokio::spawn(async move { accept_authorization_code(listener, "expected").await });
+        let mut stray = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        stray
+            .write_all(b"GET /oauth/callback?code=stray-code&state=other HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+            .await
+            .unwrap();
+        let mut page = Vec::new();
+        stray.read_to_end(&mut page).await.unwrap();
+        assert!(String::from_utf8(page).unwrap().contains("did not finish"));
+        let mut real = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        real.write_all(b"GET /oauth/callback?code=real-code&state=expected HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+            .await
+            .unwrap();
+        let mut page = Vec::new();
+        real.read_to_end(&mut page).await.unwrap();
+        assert!(String::from_utf8(page)
+            .unwrap()
+            .contains("Sign-in finished"));
+        assert_eq!(handle.await.unwrap().unwrap(), "real-code");
+    }
+
+    #[tokio::test]
+    async fn denied_with_a_wrong_state_does_not_abort() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handle =
+            tokio::spawn(async move { accept_authorization_code(listener, "expected").await });
+        let mut stray = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        stray
+            .write_all(b"GET /oauth/callback?error=access_denied&state=other HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+            .await
+            .unwrap();
+        let mut page = Vec::new();
+        stray.read_to_end(&mut page).await.unwrap();
+        let mut real = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        real.write_all(b"GET /oauth/callback?code=real-code&state=expected HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+            .await
+            .unwrap();
+        let mut page = Vec::new();
+        real.read_to_end(&mut page).await.unwrap();
+        assert_eq!(handle.await.unwrap().unwrap(), "real-code");
+    }
+
+    #[tokio::test]
+    async fn denied_with_the_right_state_aborts() {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let handle =
             tokio::spawn(async move { accept_authorization_code(listener, "expected").await });
         let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
         stream
-            .write_all(b"GET /oauth/callback?code=secret-code&state=other HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+            .write_all(b"GET /oauth/callback?error=access_denied&state=expected HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
             .await
             .unwrap();
-        let error = handle.await.unwrap().unwrap_err();
-        assert_eq!(error, "Sign-in could not be confirmed.");
+        let mut page = Vec::new();
+        stream.read_to_end(&mut page).await.unwrap();
+        assert_eq!(handle.await.unwrap().unwrap_err(), "Sign-in was canceled.");
+    }
+
+    #[test]
+    fn states_match_is_exact_and_length_aware() {
+        assert!(states_match("state-1", "state-1"));
+        assert!(!states_match("state-1", "state-2"));
+        assert!(!states_match("state", "state-1"));
+        assert!(!states_match("state-1", "state"));
+        assert!(!states_match("", "state-1"));
+    }
+
+    #[test]
+    fn email_claim_wins_over_preferred_username() {
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(r#"{"email":"sam@gmail.com","preferred_username":"other@example.com"}"#);
+        let token = format!("aaa.{payload}.sig");
+        let (email, _) = identity_from_id_token(&token).unwrap();
+        assert_eq!(email, "sam@gmail.com");
+        let fallback = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(r#"{"preferred_username":"Sam@Contoso.com"}"#);
+        let token = format!("aaa.{fallback}.sig");
+        let (email, _) = identity_from_id_token(&token).unwrap();
+        assert_eq!(email, "sam@contoso.com");
     }
 }
