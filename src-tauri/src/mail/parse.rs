@@ -678,14 +678,24 @@ pub(crate) fn legacy_attachment_id(index: usize, filename: &str) -> String {
         .collect()
 }
 
+/// Normalizes a Message-ID to `<id>`, or None when it is unsafe for IMAP.
 pub(crate) fn normalize_rfc_message_id(value: &str) -> Option<String> {
     let trimmed = value.trim();
+    if trimmed.len() > 998 {
+        return None;
+    }
     let inner = trimmed
         .strip_prefix('<')
         .and_then(|value| value.strip_suffix('>'))
         .unwrap_or(trimmed)
         .trim();
-    if inner.is_empty() {
+    if inner.is_empty()
+        || inner.chars().any(|character| {
+            character.is_control()
+                || character.is_whitespace()
+                || matches!(character, '<' | '>' | '"')
+        })
+    {
         None
     } else {
         Some(format!("<{inner}>"))
@@ -694,7 +704,54 @@ pub(crate) fn normalize_rfc_message_id(value: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{importance_from_headers, parse_message};
+    use super::{importance_from_headers, normalize_rfc_message_id, parse_message};
+
+    // Failure modes for normalize_rfc_message_id:
+    // 1. CR or LF inside the id would inject IMAP/SMTP lines.
+    // 2. Whitespace inside the id breaks the single-token header value.
+    // 3. Other control characters (NUL, tab) reach raw IMAP SEARCH.
+    // 4. Inner `<` or `>` produce a malformed msg-id.
+    // 5. A double quote would break the quoted IMAP SEARCH string.
+    // 6. Ids over 998 bytes exceed the RFC 5322 line limit.
+    // 7. Empty or bracket-only input must not yield "<>".
+    // 8. Normal ids, bracketed or bare, must keep working.
+    #[test]
+    fn normalize_rejects_unsafe_message_ids() {
+        let long = format!("<{}@example.com>", "a".repeat(999));
+        for bad in [
+            "<one@example.com>\r\nA1 LOGOUT",
+            "<one@example.com>\nX",
+            "<one\r@example.com>",
+            "<one @example.com>",
+            "one two@example.com",
+            "<one\u{0}@example.com>",
+            "<one\t@example.com>",
+            "<one<x>@example.com>",
+            "<one\"@example.com>",
+            long.as_str(),
+            "",
+            "<>",
+        ] {
+            assert_eq!(normalize_rfc_message_id(bad), None, "accepted {bad:?}");
+        }
+    }
+
+    #[test]
+    fn normalize_keeps_normal_message_ids() {
+        assert_eq!(
+            normalize_rfc_message_id("<abc.123@mail.example.com>").as_deref(),
+            Some("<abc.123@mail.example.com>")
+        );
+        assert_eq!(
+            normalize_rfc_message_id("  abc@example.com  ").as_deref(),
+            Some("<abc@example.com>")
+        );
+        let edge = format!("<{}@example.com>", "a".repeat(900));
+        assert_eq!(
+            normalize_rfc_message_id(&edge).as_deref(),
+            Some(edge.as_str())
+        );
+    }
 
     #[test]
     fn importance_reads_standard_and_priority_headers() {

@@ -4,6 +4,7 @@ use std::{
     path::Path,
     pin::Pin,
     task::{Context, Poll},
+    time::Duration,
 };
 
 use async_imap::Authenticator;
@@ -278,6 +279,32 @@ pub(crate) fn classify_send_failure(
     }
 }
 
+/// Base time allowed for a pinned Bridge send, before size is counted.
+const SEND_BASE_TIMEOUT: Duration = Duration::from_secs(60);
+/// Extra time per chunk of message bytes. Bridge encrypts before it replies.
+const SEND_CHUNK_BYTES: usize = 256 * 1024;
+const SEND_TIMEOUT_CAP: Duration = Duration::from_secs(900);
+
+/// Time allowed for DATA of `len` bytes: one second per chunk, capped.
+fn send_timeout(len: usize) -> Duration {
+    let chunks = u64::try_from(len / SEND_CHUNK_BYTES).unwrap_or(u64::MAX);
+    SEND_BASE_TIMEOUT
+        .saturating_add(Duration::from_secs(chunks))
+        .min(SEND_TIMEOUT_CAP)
+}
+
+/// A send that runs past its limit may have reached the server: Uncertain.
+async fn within_send_timeout<T>(
+    limit: Duration,
+    send: impl std::future::Future<Output = Result<T, SendError>>,
+) -> Result<T, SendError> {
+    tokio::time::timeout(limit, send)
+        .await
+        .map_err(|_| SendError {
+            kind: SendFailure::Uncertain,
+        })?
+}
+
 pub async fn send_prepared(
     account: &AccountRecord,
     password: &str,
@@ -304,19 +331,20 @@ pub async fn send_prepared(
                     SendFailure::NotSentRetry
                 },
             })?;
-        tokio::time::timeout(CONNECT_TIMEOUT, connection.send(&envelope, bytes))
-            .await
-            .map_err(|_| SendError {
-                kind: SendFailure::Uncertain,
-            })?
-            .map_err(|error| SendError {
-                kind: classify_send_failure(
-                    error.is_permanent(),
-                    error.is_transient(),
-                    error.is_tls(),
-                    false,
-                ),
-            })?;
+        within_send_timeout(send_timeout(bytes.len()), async {
+            connection
+                .send(&envelope, bytes)
+                .await
+                .map_err(|error| SendError {
+                    kind: classify_send_failure(
+                        error.is_permanent(),
+                        error.is_transient(),
+                        error.is_tls(),
+                        false,
+                    ),
+                })
+        })
+        .await?;
         return Ok(());
     }
     let transport = smtp_transport(&account.smtp, &password, xoauth2).map_err(refused)?;
@@ -1827,5 +1855,61 @@ mod plain_tests {
             smtp_auth_mechanisms(false),
             vec![Mechanism::Plain, Mechanism::Login]
         );
+    }
+}
+
+#[cfg(test)]
+mod send_timeout_tests {
+    use super::*;
+
+    // Failure modes for the send timeout:
+    // 1. A large message through a slow Bridge is cut at the 20s connect limit and marked Uncertain.
+    // 2. The limit shrinks below the base for tiny messages.
+    // 3. The limit grows by less than 1s per 256 KiB, so a 100 MiB send gets too little time.
+    // 4. The limit grows without a cap, or overflows for huge inputs.
+    // 5. A timed-out send is classified as anything other than Uncertain.
+    // 6. A send that finishes inside the limit is reported as a failure.
+
+    #[test]
+    fn timeout_starts_at_the_base_for_small_messages() {
+        assert_eq!(send_timeout(0), SEND_BASE_TIMEOUT);
+        assert_eq!(send_timeout(SEND_CHUNK_BYTES - 1), SEND_BASE_TIMEOUT);
+        assert!(SEND_BASE_TIMEOUT > CONNECT_TIMEOUT);
+    }
+
+    #[test]
+    fn timeout_grows_one_second_per_chunk() {
+        assert_eq!(
+            send_timeout(SEND_CHUNK_BYTES),
+            SEND_BASE_TIMEOUT + Duration::from_secs(1)
+        );
+        assert_eq!(
+            send_timeout(10 * SEND_CHUNK_BYTES),
+            SEND_BASE_TIMEOUT + Duration::from_secs(10)
+        );
+    }
+
+    #[test]
+    fn timeout_caps_and_never_overflows() {
+        assert_eq!(send_timeout(usize::MAX), SEND_TIMEOUT_CAP);
+        assert!(send_timeout(MAX_OUTGOING_BYTES) <= SEND_TIMEOUT_CAP);
+        assert_eq!(SEND_TIMEOUT_CAP, Duration::from_secs(900));
+    }
+
+    #[tokio::test]
+    async fn a_timed_out_send_is_uncertain() {
+        let result: Result<(), SendError> = within_send_timeout(
+            Duration::from_millis(10),
+            std::future::pending::<Result<(), SendError>>(),
+        )
+        .await;
+        assert_eq!(result.unwrap_err().kind, SendFailure::Uncertain);
+    }
+
+    #[tokio::test]
+    async fn a_finished_send_keeps_its_result() {
+        let ok: Result<u8, SendError> =
+            within_send_timeout(Duration::from_secs(5), async { Ok(7) }).await;
+        assert_eq!(ok.unwrap(), 7);
     }
 }

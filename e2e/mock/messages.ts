@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import type { MockShared, MockState } from "./context";
+import type { MockMessageSummary, MockShared, MockState } from "./context";
 
 // Message listing, fetching, flagging, moving, bulk actions, and sync.
 // The init script below is stringified into the page, so keep it
@@ -88,7 +88,7 @@ export async function registerMockMessages(page: Page): Promise<void> {
       },
       list_messages(args: Record<string, unknown>) {
         let page: {
-          items: Array<{ id: number }>;
+          items: MockMessageSummary[];
           nextCursor: unknown;
           hasMore: boolean;
         };

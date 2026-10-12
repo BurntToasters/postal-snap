@@ -299,15 +299,7 @@ pub async fn copy_remote(
     let wire_source = session.mailbox_name(source);
     let wire_destination = session.mailbox_name(destination);
     if options.dedupe_existing {
-        if let Some(raw_message_id) = options
-            .message_id
-            .map(str::trim)
-            .filter(|id| !id.is_empty())
-        {
-            let search = format!(
-                "HEADER Message-ID \"{}\"",
-                quote_imap_search(raw_message_id)
-            );
+        if let Some(search) = options.message_id.and_then(header_message_id_search) {
             tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(&wire_destination))
                 .await
                 .map_err(|_| MailboxOperationError::transient("Copy timed out.".to_string()))?
@@ -413,6 +405,19 @@ fn quote_imap_search(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+/// The dedupe SEARCH for a Message-ID, or None when the id is unsafe to send.
+/// None means no dedupe: the copy or move proceeds as a normal operation.
+fn header_message_id_search(raw: &str) -> Option<String> {
+    // Checked before trimming so a trailing CR or LF also disables the search.
+    if raw.trim().is_empty() || !raw.is_ascii() || raw.chars().any(|c| c.is_ascii_control()) {
+        return None;
+    }
+    Some(format!(
+        "HEADER Message-ID \"{}\"",
+        quote_imap_search(raw.trim())
+    ))
+}
+
 async fn move_remote_inner(
     account: &AccountRecord,
     password: &str,
@@ -456,15 +461,7 @@ async fn move_remote_inner(
     // If the destination already holds this Message-ID the server applied the
     // original move, so only finish removing the source copy.
     if options.dedupe_existing {
-        if let Some(raw_message_id) = options
-            .message_id
-            .map(str::trim)
-            .filter(|id| !id.is_empty())
-        {
-            let search = format!(
-                "HEADER Message-ID \"{}\"",
-                quote_imap_search(raw_message_id)
-            );
+        if let Some(search) = options.message_id.and_then(header_message_id_search) {
             let destination_selected =
                 tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(&wire_destination))
                     .await
@@ -844,7 +841,56 @@ pub async fn mark_folder_read(
 
 #[cfg(test)]
 mod tests {
-    use super::uid_set;
+    use super::{header_message_id_search, quote_imap_search, uid_set};
+
+    // Failure modes for the dedupe SEARCH built from a Message-ID:
+    // 1. CR or LF would split the IMAP command and inject a new command.
+    // 2. NUL or tab could truncate or corrupt the quoted search string.
+    // 3. Non-ASCII needs a charset/literal the dedupe search does not send.
+    // 4. An unescaped quote or backslash would end the quoted string early.
+    // 5. Empty input must not produce a match-everything search.
+    // 6. A safe id must still produce the normal HEADER search.
+    #[test]
+    fn dedupe_search_is_skipped_for_unsafe_message_ids() {
+        for bad in [
+            "<a@b>\r\nA1 LOGOUT",
+            "<a@b>\n",
+            "<a\0@b>",
+            "<a\t@b>",
+            "<ä@b>",
+            "",
+            "   ",
+        ] {
+            assert_eq!(
+                header_message_id_search(bad),
+                None,
+                "built search for {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn dedupe_search_quotes_safe_message_ids() {
+        assert_eq!(
+            header_message_id_search("<a@b.example>").as_deref(),
+            Some("HEADER Message-ID \"<a@b.example>\"")
+        );
+        assert_eq!(
+            header_message_id_search(r#"<a"\@b>"#).as_deref(),
+            Some(r#"HEADER Message-ID "<a\"\\@b>""#)
+        );
+    }
+
+    #[test]
+    fn quoted_search_never_emits_control_characters() {
+        for byte in 0u8..=127 {
+            let raw = format!("<a{}b@c>", byte as char);
+            if let Some(search) = header_message_id_search(&raw) {
+                assert!(!search.chars().any(|c| c.is_ascii_control()), "byte {byte}");
+            }
+        }
+        assert_eq!(quote_imap_search(r#"a"\b"#), r#"a\"\\b"#);
+    }
 
     #[test]
     fn uid_set_sorts_and_rejects_a_wide_delete() {

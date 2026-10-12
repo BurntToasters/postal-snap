@@ -46,9 +46,11 @@ pub async fn save_attachment(
     ensure_message_content(&account_id, message_id, &state).await?;
     let raw = state.db.raw_message(message_id, &account_id)?;
     let (_, bytes) = mail::extract_attachment(&raw, &attachment_id)?;
-    tokio::fs::write(destination, bytes)
+    tokio::fs::write(&destination, bytes)
         .await
-        .map_err(|_| "Could not save the attachment at that location.".into())
+        .map_err(|_| "Could not save the attachment at that location.".to_string())?;
+    crate::download_mark::mark_downloaded(&destination);
+    Ok(())
 }
 
 fn chosen_message_files(
@@ -133,15 +135,17 @@ pub async fn save_conversation_attachments(
 ) -> CommandResult<u32> {
     let ids = normalize_conversation_ids(&message_ids)?;
     state.db.account(&account_id)?;
-    let mut loaded = Vec::with_capacity(ids.len());
+    let mut known = Vec::with_capacity(ids.len());
     for id in &ids {
-        ensure_message_content(&account_id, *id, &state).await?;
-        loaded.push(state.db.message_detail(*id, &account_id)?);
+        let has_file = if state.db.message_content_cached(*id, &account_id)? {
+            let detail = state.db.message_detail(*id, &account_id)?;
+            Some(detail.attachments.iter().any(|item| !item.inline))
+        } else {
+            None
+        };
+        known.push(has_file);
     }
-    if !loaded
-        .iter()
-        .any(|detail| detail.attachments.iter().any(|item| !item.inline))
-    {
+    if conversation_lacks_files(&known) {
         return Err("This conversation has no files to save.".into());
     }
     let Some(folder) = pick_folder(&app).await? else {
@@ -149,8 +153,11 @@ pub async fn save_conversation_attachments(
     };
     let mut used = HashSet::new();
     let mut saved = 0u32;
-    for detail in &loaded {
-        let raw = state.db.raw_message(detail.summary.id, &account_id)?;
+    for id in &ids {
+        // Only one message's source is held in memory at a time.
+        ensure_message_content(&account_id, *id, &state).await?;
+        let detail = state.db.message_detail(*id, &account_id)?;
+        let raw = state.db.raw_message(*id, &account_id)?;
         saved += write_message_files(&folder, &raw, &detail.attachments, &mut used).await?;
     }
     if saved == 0 {
@@ -169,21 +176,30 @@ pub async fn save_messages_eml(
 ) -> CommandResult<u32> {
     let ids = normalize_conversation_ids(&message_ids)?;
     state.db.account(&account_id)?;
-    let mut loaded = Vec::with_capacity(ids.len());
     for id in &ids {
-        ensure_message_content(&account_id, *id, &state).await?;
-        let detail = state.db.message_detail(*id, &account_id)?;
-        let raw = state.db.raw_message(detail.summary.id, &account_id)?;
-        loaded.push((detail.summary.subject, raw));
+        // Ownership check only; the bodies are fetched after the folder is chosen.
+        state.db.message_content_cached(*id, &account_id)?;
     }
     let Some(folder) = pick_folder(&app).await? else {
         return Ok(0);
     };
     let mut used = HashSet::new();
-    for (subject, raw) in &loaded {
-        write_message_eml(&folder, subject, raw, &mut used).await?;
+    let mut saved = 0u32;
+    for id in &ids {
+        // Only one message's source is held in memory at a time.
+        ensure_message_content(&account_id, *id, &state).await?;
+        let detail = state.db.message_detail(*id, &account_id)?;
+        let raw = state.db.raw_message(*id, &account_id)?;
+        write_message_eml(&folder, &detail.summary.subject, &raw, &mut used).await?;
+        saved += 1;
     }
-    Ok(loaded.len() as u32)
+    Ok(saved)
+}
+
+/// True only when cached metadata proves no message has a regular file.
+/// `None` means the content is not cached yet, so absence is unknown.
+fn conversation_lacks_files(known: &[Option<bool>]) -> bool {
+    !known.is_empty() && known.iter().all(|item| *item == Some(false))
 }
 
 fn normalize_conversation_ids(message_ids: &[i64]) -> Result<Vec<i64>, String> {
@@ -257,6 +273,7 @@ async fn write_new_file(
                 write_all_or_remove(file, &path, bytes)
                     .await
                     .map_err(|_| failure.to_string())?;
+                crate::download_mark::mark_downloaded(&path);
                 return Ok(path);
             }
             // Something appeared after the name was chosen; the name is now in `used`.
@@ -1160,6 +1177,56 @@ mod tests {
             .map(|item| item.filename.as_str())
             .collect();
         assert_eq!(names, vec!["photo.png"]);
+    }
+
+    // Failure modes covered here:
+    // 1. A message with unknown content is treated as having no files and refused early.
+    // 2. A conversation with one file is refused before the folder picker.
+    // 3. A name collision across messages overwrites an earlier file.
+    // 4. A saved file lacks the download mark on Windows.
+    #[test]
+    fn conversation_refusal_needs_proof_that_no_message_has_files() {
+        assert!(conversation_lacks_files(&[Some(false), Some(false)]));
+        assert!(!conversation_lacks_files(&[Some(false), None]));
+        assert!(!conversation_lacks_files(&[Some(false), Some(true)]));
+        assert!(!conversation_lacks_files(&[]));
+    }
+
+    #[tokio::test]
+    async fn per_message_writes_keep_names_unique_across_messages() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut used = HashSet::new();
+        let first = b"From: Jane <jane@example.com>\r\nTo: Sam <sam@example.com>\r\nSubject: One\r\nContent-Type: multipart/mixed; boundary=postal\r\n\r\n--postal\r\nContent-Type: text/plain\r\nContent-Disposition: attachment; filename=\"plan.txt\"\r\n\r\nfirst\r\n--postal--\r\n";
+        let second = b"From: Ada <ada@example.com>\r\nTo: Sam <sam@example.com>\r\nSubject: Two\r\nContent-Type: multipart/mixed; boundary=postal\r\n\r\n--postal\r\nContent-Type: text/plain\r\nContent-Disposition: attachment; filename=\"plan.txt\"\r\n\r\nsecond\r\n--postal--\r\n";
+        for raw in [&first[..], &second[..]] {
+            let parsed = mail::parse::parse_message(1, raw, true, false, None).unwrap();
+            write_message_files(dir.path(), raw, &parsed.attachments, &mut used)
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            std::fs::read(dir.path().join("plan.txt")).unwrap(),
+            b"first"
+        );
+        assert_eq!(
+            std::fs::read(dir.path().join("plan-2.txt")).unwrap(),
+            b"second"
+        );
+    }
+
+    #[tokio::test]
+    async fn saved_files_carry_the_download_mark_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut used = HashSet::new();
+        let path = write_new_file(dir.path(), "tool.exe", b"MZ", &mut used, "failed")
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"MZ");
+        #[cfg(windows)]
+        assert_eq!(
+            std::fs::read_to_string(format!("{}:Zone.Identifier", path.display())).unwrap(),
+            crate::download_mark::zone_identifier_contents()
+        );
     }
 
     #[tokio::test]
