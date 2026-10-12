@@ -5,60 +5,9 @@ use crate::models::{ComposeDraft, DraftSummary};
 
 impl Database {
     pub fn save_draft(&self, draft: &ComposeDraft) -> Result<String, String> {
-        let id = draft
-            .id
-            .clone()
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        let mut stored = draft.clone();
-        stored.id = Some(id.clone());
         let mut conn = self.conn()?;
-        let existing: Option<(String, u32)> = conn
-            .query_row(
-                "SELECT account_id,revision FROM drafts WHERE id=?1",
-                [&id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()
-            .map_err(db_error)?;
-        if existing
-            .as_ref()
-            .map(|value| value.0.as_str())
-            .is_some_and(|account_id| account_id != draft.account_id)
-        {
-            return Err("Draft does not belong to this account.".into());
-        }
-        stored.html_body = crate::html_sanitize::sanitize_compose_html(&stored.html_body);
-        let json =
-            serde_json::to_string(&stored).map_err(|_| "Could not save draft.".to_string())?;
-        let revision = existing.map_or(1, |value| value.1.saturating_add(1));
-        let remote_message_id = format!("<draft-{id}-{revision}@run.rosie.snap>");
         let transaction = conn.transaction().map_err(db_error)?;
-        transaction.execute(
-            "INSERT INTO drafts(id,account_id,draft_json,updated_at,sync_state,remote_message_id,revision,deleted_at,
-             body_format,source_message_id,source_kind)
-             VALUES(?1,?2,?3,strftime('%Y-%m-%dT%H:%M:%SZ','now'),'localPending',?4,?5,NULL,?6,?7,?8)
-             ON CONFLICT(id) DO UPDATE SET draft_json=excluded.draft_json,updated_at=excluded.updated_at,
-             sync_state='localPending',sync_detail=NULL,remote_message_id=excluded.remote_message_id,
-             revision=excluded.revision,deleted_at=NULL,body_format=excluded.body_format,
-             source_message_id=excluded.source_message_id,source_kind=excluded.source_kind",
-            params![
-                id,
-                draft.account_id,
-                json,
-                remote_message_id,
-                revision,
-                stored.body_format.as_str(),
-                stored.source_message_id,
-                stored.source_kind.map(|kind| kind.as_str()),
-            ],
-        ).map_err(db_error)?;
-        replace_attachment_refs(
-            &transaction,
-            &draft.account_id,
-            "draft",
-            &id,
-            &stored.attachments,
-        )?;
+        let id = save_draft_in_transaction(&transaction, draft)?;
         transaction.commit().map_err(db_error)?;
         Ok(id)
     }
@@ -478,6 +427,66 @@ impl Database {
         }
         transaction.commit().map_err(db_error)
     }
+}
+
+pub(crate) fn save_draft_in_transaction(
+    transaction: &rusqlite::Transaction<'_>,
+    draft: &ComposeDraft,
+) -> Result<String, String> {
+    let id = draft
+        .id
+        .clone()
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let mut stored = draft.clone();
+    stored.id = Some(id.clone());
+    let existing: Option<(String, u32)> = transaction
+        .query_row(
+            "SELECT account_id,revision FROM drafts WHERE id=?1",
+            [&id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(db_error)?;
+    if existing
+        .as_ref()
+        .map(|value| value.0.as_str())
+        .is_some_and(|account_id| account_id != draft.account_id)
+    {
+        return Err("Draft does not belong to this account.".into());
+    }
+    stored.html_body = crate::html_sanitize::sanitize_compose_html(&stored.html_body);
+    let json = serde_json::to_string(&stored).map_err(|_| "Could not save draft.".to_string())?;
+    let revision = existing.map_or(1, |value| value.1.saturating_add(1));
+    let remote_message_id = format!("<draft-{id}-{revision}@run.rosie.snap>");
+    transaction
+        .execute(
+            "INSERT INTO drafts(id,account_id,draft_json,updated_at,sync_state,remote_message_id,revision,deleted_at,
+             body_format,source_message_id,source_kind)
+             VALUES(?1,?2,?3,strftime('%Y-%m-%dT%H:%M:%SZ','now'),'localPending',?4,?5,NULL,?6,?7,?8)
+             ON CONFLICT(id) DO UPDATE SET draft_json=excluded.draft_json,updated_at=excluded.updated_at,
+             sync_state='localPending',sync_detail=NULL,remote_message_id=excluded.remote_message_id,
+             revision=excluded.revision,deleted_at=NULL,body_format=excluded.body_format,
+             source_message_id=excluded.source_message_id,source_kind=excluded.source_kind",
+            params![
+                id,
+                draft.account_id,
+                json,
+                remote_message_id,
+                revision,
+                stored.body_format.as_str(),
+                stored.source_message_id,
+                stored.source_kind.map(|kind| kind.as_str()),
+            ],
+        )
+        .map_err(db_error)?;
+    replace_attachment_refs(
+        transaction,
+        &draft.account_id,
+        "draft",
+        &id,
+        &stored.attachments,
+    )?;
+    Ok(id)
 }
 
 const PREVIEW_CHARS: usize = 180;

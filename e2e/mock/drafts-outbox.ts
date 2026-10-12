@@ -221,6 +221,7 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
       restore_outbox() {
         state.discarded = true;
         return {
+          id: "draft-restored",
           accountId: account.id,
           from: null,
           to: ["sam@example.test"],

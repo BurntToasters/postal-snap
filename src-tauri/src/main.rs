@@ -432,6 +432,8 @@ fn main() {
             commands::settings_system::get_update_relaunch,
             commands::settings_system::set_update_ready,
             commands::settings_system::background_update_allowed,
+            commands::settings_system::begin_update_install,
+            commands::settings_system::release_update_install,
             commands::settings_system::schedule_background_update,
             commands::settings_system::mark_update_checked,
             window_fx::set_workspace_window_fx,

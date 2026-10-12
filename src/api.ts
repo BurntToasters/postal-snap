@@ -211,6 +211,8 @@ export type NativeCommand =
   | "get_update_relaunch"
   | "set_update_ready"
   | "background_update_allowed"
+  | "begin_update_install"
+  | "release_update_install"
   | "schedule_background_update"
   | "mark_update_checked"
   | "supports_workspace_window_fx"
@@ -362,7 +364,11 @@ export const api = {
       isStarred,
     }),
   moveMessage: (accountId: string, messageId: number, role: string) =>
-    call<void>("move_message", { accountId, messageId, role }),
+    call<number | null | undefined>("move_message", {
+      accountId,
+      messageId,
+      role,
+    }),
   moveMessageToMailbox: (
     accountId: string,
     messageId: number,
@@ -792,6 +798,14 @@ export const api = {
   backgroundUpdateAllowed: () => {
     if (!inTauri()) return Promise.resolve(false);
     return call<boolean>("background_update_allowed");
+  },
+  beginUpdateInstall: () => {
+    if (!inTauri()) return Promise.resolve();
+    return call<void>("begin_update_install");
+  },
+  releaseUpdateInstall: () => {
+    if (!inTauri()) return Promise.resolve();
+    return call<void>("release_update_install");
   },
 };
 

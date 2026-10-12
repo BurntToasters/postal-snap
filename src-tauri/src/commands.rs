@@ -96,6 +96,64 @@ pub struct AppState {
     startup_error: Mutex<Option<String>>,
     mail_shortcut_guard: AtomicBool,
     app_nap: Mutex<Option<crate::app_nap::AppNapGuard>>,
+    update_gate: UpdateInstallGate,
+}
+
+/// Prevent update installation from racing mail delivery.
+pub(crate) struct UpdateInstallGate {
+    active_deliveries: AtomicUsize,
+    update_requested: AtomicBool,
+    notify: Notify,
+}
+
+pub(crate) struct DeliveryGuard<'a> {
+    gate: &'a UpdateInstallGate,
+}
+
+impl Drop for DeliveryGuard<'_> {
+    fn drop(&mut self) {
+        if self.gate.active_deliveries.fetch_sub(1, Ordering::SeqCst) == 1 {
+            // Keep a permit if the updater has not registered its wait yet.
+            self.gate.notify.notify_one();
+        }
+    }
+}
+
+impl UpdateInstallGate {
+    fn new() -> Self {
+        Self {
+            active_deliveries: AtomicUsize::new(0),
+            update_requested: AtomicBool::new(false),
+            notify: Notify::new(),
+        }
+    }
+
+    /// Claim one delivery slot unless an update already owns the gate.
+    pub(crate) fn try_start_delivery(&self) -> Option<DeliveryGuard<'_>> {
+        if self.update_requested.load(Ordering::SeqCst) {
+            return None;
+        }
+        self.active_deliveries.fetch_add(1, Ordering::SeqCst);
+        if self.update_requested.load(Ordering::SeqCst) {
+            if self.active_deliveries.fetch_sub(1, Ordering::SeqCst) == 1 {
+                self.notify.notify_waiters();
+            }
+            return None;
+        }
+        Some(DeliveryGuard { gate: self })
+    }
+
+    pub(crate) async fn begin_update(&self) {
+        self.update_requested.store(true, Ordering::SeqCst);
+        while self.active_deliveries.load(Ordering::SeqCst) != 0 {
+            self.notify.notified().await;
+        }
+    }
+
+    pub(crate) fn release_update(&self) {
+        self.update_requested.store(false, Ordering::SeqCst);
+        self.notify.notify_waiters();
+    }
 }
 
 /// Why an account worker was woken. Reasons accumulate until the worker
@@ -176,6 +234,7 @@ impl AppState {
             startup_error: Mutex::new(None),
             mail_shortcut_guard: AtomicBool::new(false),
             app_nap: Mutex::new(None),
+            update_gate: UpdateInstallGate::new(),
         }
     }
 
@@ -232,6 +291,26 @@ impl AppState {
     pub(crate) fn request(&self, account_id: &str, reason: u8) -> Result<(), String> {
         self.actor(account_id)?.request(reason);
         Ok(())
+    }
+
+    pub(crate) async fn begin_update_install(&self) {
+        self.update_gate.begin_update().await;
+    }
+
+    pub(crate) fn release_update_install(&self) {
+        self.update_gate.release_update();
+        let actors = self
+            .account_actors
+            .lock()
+            .map(|actors| actors.values().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        for actor in actors {
+            actor.request(wake::OUTBOX);
+        }
+    }
+
+    pub(crate) fn try_start_delivery(&self) -> Option<DeliveryGuard<'_>> {
+        self.update_gate.try_start_delivery()
     }
 
     /// After system sleep: end a dead IDLE, send what came due, then sync.

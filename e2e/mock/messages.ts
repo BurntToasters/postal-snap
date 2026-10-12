@@ -527,7 +527,7 @@ export async function registerMockMessages(page: Page): Promise<void> {
         mailboxes[0].unreadCount = 0;
         mailboxes[1].totalCount = 1;
         mailboxes[1].unreadCount = summary.isRead ? 0 : 1;
-        return undefined;
+        return summary.id + 1000;
       },
       set_messages_flags(args: Record<string, unknown>) {
         const ids = (args.messageIds ?? []) as number[];

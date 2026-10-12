@@ -344,7 +344,7 @@ pub async fn move_message(
     role: String,
     app: AppHandle,
     state: State<'_, AppState>,
-) -> CommandResult<()> {
+) -> CommandResult<Option<i64>> {
     if !matches!(role.as_str(), "archive" | "trash" | "junk") {
         return Err("Unsupported destination.".into());
     }
@@ -358,7 +358,7 @@ pub async fn move_message(
         .mailbox_for_role(&account_id, &role)?
         .ok_or_else(|| format!("This account does not have a {role} mailbox."))?;
     if source == destination {
-        return Ok(());
+        return Ok(None);
     }
     command_result(
         move_message_inner(
@@ -408,6 +408,7 @@ pub async fn move_message_to_mailbox(
         )
         .await,
     )
+    .map(|_| ())
 }
 
 #[tauri::command]
@@ -514,7 +515,7 @@ async fn move_message_inner(
     destination: String,
     app: &AppHandle,
     state: &AppState,
-) -> Result<(), String> {
+) -> Result<Option<i64>, String> {
     let operation = MoveOperation {
         message_id,
         uid,
@@ -545,7 +546,8 @@ async fn move_message_inner(
         },
     )
     .await;
-    if remote_result.is_err() {
+    let remote_succeeded = remote_result.is_ok();
+    if !remote_succeeded {
         let dedupe_key = format!("move:{message_id}");
         state
             .db
@@ -563,7 +565,19 @@ async fn move_message_inner(
     }
     emit_message_change(app, &account_id, Some(message_id), "moved");
     emit_folder_counts(app, &account_id);
-    Ok(())
+    if !remote_succeeded || remote_message_id.is_none() {
+        return Ok(None);
+    }
+    Ok(state
+        .db
+        .find_message_by_header_id_in_mailbox(
+            &account_id,
+            destination_id,
+            remote_message_id.as_deref().unwrap_or_default(),
+        )
+        .ok()
+        .flatten()
+        .map(|summary| summary.id))
 }
 
 #[derive(Serialize)]
