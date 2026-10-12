@@ -3,9 +3,7 @@ use super::{
 };
 use rusqlite::{params, OptionalExtension};
 
-use crate::models::{
-    ComposeAttachment, ComposeDraft, FilterMatchPreview, FilterRule, OutboxSummary, SnoozedSummary,
-};
+use crate::models::{ComposeDraft, FilterMatchPreview, FilterRule, OutboxSummary, SnoozedSummary};
 
 /// Failed sends are preserved for an explicit user retry, but the outbox does
 /// not silently grow without bound: once this many messages (or bytes of
@@ -649,38 +647,55 @@ impl Database {
         Ok(())
     }
 
-    /// Keep restored drafts' managed attachments alive across the age-based
-    /// cleanup until the composer saves the draft again. Missing grants are
-    /// skipped so a stale token cannot fail the restore.
-    pub fn retain_draft_attachment_refs(
+    /// Restore queued content as a local draft before removing its outbox row.
+    /// Both writes share one transaction so a crash cannot lose the only copy.
+    pub fn restore_outbox_as_draft(
         &self,
+        id: &str,
         account_id: &str,
-        draft_id: &str,
-        attachments: &[ComposeAttachment],
-    ) -> Result<(), String> {
-        if attachments.is_empty() {
-            return Ok(());
-        }
+    ) -> Result<ComposeDraft, String> {
         let mut conn = self.conn()?;
         let transaction = conn.transaction().map_err(db_error)?;
-        for attachment in attachments {
-            let exists: bool = transaction
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM file_grants WHERE token=?1 AND account_id=?2)",
-                    params![attachment.token, account_id],
-                    |row| row.get(0),
-                )
-                .map_err(db_error)?;
-            if exists {
-                transaction
-                    .execute(
-                        "INSERT OR IGNORE INTO attachment_refs(token,owner_kind,owner_id) VALUES(?1,'draft',?2)",
-                        params![attachment.token, draft_id],
-                    )
-                    .map_err(db_error)?;
-            }
+        let (json, state): (String, String) = transaction
+            .query_row(
+                "SELECT draft_json,state FROM outbox WHERE id=?1 AND account_id=?2",
+                params![id, account_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(db_error)?
+            .ok_or_else(|| "Queued message not found.".to_string())?;
+        if state == "sending" {
+            return Err("This message is already sending and cannot be stopped.".into());
         }
-        transaction.commit().map_err(db_error)
+        if !matches!(state.as_str(), "scheduled" | "queued" | "needs_attention") {
+            return Err("This message cannot be restored.".into());
+        }
+        let mut draft: ComposeDraft = serde_json::from_str(&json)
+            .map_err(|_| "This queued message could not be read.".to_string())?;
+        if draft.account_id != account_id {
+            return Err("Queued message does not belong to this account.".into());
+        }
+        draft.html_body = crate::html_sanitize::sanitize_compose_html(&draft.html_body);
+        let draft_id = super::drafts::save_draft_in_transaction(&transaction, &draft)?;
+        transaction
+            .execute(
+                "DELETE FROM attachment_refs WHERE owner_kind='outbox' AND owner_id=?1",
+                [id],
+            )
+            .map_err(db_error)?;
+        let changed = transaction
+            .execute(
+                "DELETE FROM outbox WHERE id=?1 AND account_id=?2",
+                params![id, account_id],
+            )
+            .map_err(db_error)?;
+        if changed == 0 {
+            return Err("Queued message not found.".into());
+        }
+        transaction.commit().map_err(db_error)?;
+        draft.id = Some(draft_id);
+        Ok(draft)
     }
 }
 

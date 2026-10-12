@@ -1,8 +1,8 @@
 use tauri::{AppHandle, State};
 
 use super::{
-    command_result, emit_outbox_change, release_attachment_tokens, resolve_draft_files,
-    validate_owned_compose, AppState, CommandResult,
+    command_result, emit_draft_change, emit_outbox_change, release_attachment_tokens,
+    resolve_draft_files, validate_owned_compose, wake, AppState, CommandResult,
 };
 use crate::{
     mail,
@@ -65,25 +65,12 @@ pub async fn restore_outbox(
     state: State<'_, AppState>,
 ) -> CommandResult<ComposeDraft> {
     let _guard = state.lock_account(&account_id).await?;
-    let (draft, outbox_state) = state.db.outbox(&outbox_id, &account_id)?;
-    if outbox_state == "sending" {
-        return Err("This message is already sending and cannot be stopped.".into());
-    }
-    if !matches!(
-        outbox_state.as_str(),
-        "scheduled" | "queued" | "needs_attention"
-    ) {
-        return Err("This message cannot be restored.".into());
-    }
-    state
-        .db
-        .remove_outbox_for_account(&outbox_id, &account_id)?;
-    if let Some(draft_id) = draft.id.as_deref() {
-        state
-            .db
-            .retain_draft_attachment_refs(&account_id, draft_id, &draft.attachments)?;
-    }
+    let draft = state.db.restore_outbox_as_draft(&outbox_id, &account_id)?;
     emit_outbox_change(&app, &account_id, Some(&outbox_id), Some("removed"));
+    if let Some(draft_id) = draft.id.as_deref() {
+        emit_draft_change(&app, &account_id, Some(draft_id), Some("localPending"));
+    }
+    let _ = state.request(&account_id, wake::DRAFTS);
     Ok(draft)
 }
 
@@ -236,6 +223,13 @@ pub(crate) async fn deliver_outbox_locked(
             return outbox_preparation_failed(outbox_id, account_id, app, state, error);
         }
     };
+    let Some(_delivery_guard) = state.try_start_delivery() else {
+        return Ok(SendOutcome {
+            id: outbox_id.to_string(),
+            state: from_state.into(),
+            detail: Some("Delivery is paused while Postal Snap installs an update.".into()),
+        });
+    };
     if !state
         .db
         .claim_outbox_delivery(outbox_id, account_id, from_state)?
@@ -379,6 +373,13 @@ pub(crate) async fn retry_sent_copy_locked(
         .db
         .mailbox_for_role(account_id, "sent")?
         .ok_or_else(|| "This account has no confirmed Sent mailbox.".to_string())?;
+    let Some(_delivery_guard) = state.try_start_delivery() else {
+        return Ok(SendOutcome {
+            id: outbox_id.to_string(),
+            state: "sent_copy_pending".into(),
+            detail: Some("Sent copy is paused while Postal Snap installs an update.".into()),
+        });
+    };
     mail::ensure_sent_copy(&account, &password, &mailbox, &message_id, &mime_bytes).await?;
     state.db.remove_outbox(outbox_id, account_id)?;
     if let Some(draft_id) = draft.id.as_deref() {

@@ -258,6 +258,19 @@ pub fn background_update_allowed(app: AppHandle) -> bool {
     crate::update_relaunch::waiting_in_tray(&app)
 }
 
+/// Reserve the delivery gate before an update begins installing.
+#[tauri::command]
+pub async fn begin_update_install(state: State<'_, AppState>) -> CommandResult<()> {
+    state.begin_update_install().await;
+    Ok(())
+}
+
+/// Release the delivery gate when an install cannot complete.
+#[tauri::command]
+pub fn release_update_install(state: State<'_, AppState>) {
+    state.release_update_install();
+}
+
 /// Lets native Quit hand off to the frontend only while an update is ready,
 /// and starts the tray wait if the window is already closed.
 #[tauri::command]

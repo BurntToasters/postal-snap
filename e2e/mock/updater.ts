@@ -51,6 +51,8 @@ export async function registerMockUpdater(page: Page): Promise<void> {
         "background_update_allowed",
         () => state.backgroundUpdateAllowed,
       ),
+      begin_update_install: record("begin_update_install"),
+      release_update_install: record("release_update_install"),
     });
   });
 }

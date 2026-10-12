@@ -1083,12 +1083,22 @@ export function Composer({ accountId }: Props) {
           outcome.state !== "needs_attention"
         ) {
           try {
-            await api.moveMessage(
+            const movedMessageId = await api.moveMessage(
               accountId,
               sourceArchive.messageId,
               "archive",
             );
-            archivedMessage = sourceArchive;
+            // Rust returns the refreshed destination row. A legacy mock may
+            // still return undefined; only null means the move was not
+            // confirmed and must not be offered as undoable.
+            if (movedMessageId !== null) {
+              archivedMessage = {
+                ...sourceArchive,
+                ...(typeof movedMessageId === "number"
+                  ? { messageId: movedMessageId }
+                  : {}),
+              };
+            }
           } catch (cause) {
             setError(String(cause));
           }

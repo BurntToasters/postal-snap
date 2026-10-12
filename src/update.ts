@@ -137,8 +137,12 @@ export async function applyPendingUpdate(
 ): Promise<void> {
   if (applyInFlight) return applyInFlight;
   const task = (async (): Promise<void> => {
+    let updateGateHeld = false;
     const relaunch = mode !== "quit";
     try {
+      // Older browser harnesses do not expose the native gate command.
+      await (api.beginUpdateInstall?.() ?? Promise.resolve());
+      updateGateHeld = true;
       if (mode === "background") {
         // Without the marker the relaunch would open the window.
         await api.prepareUpdateRelaunch("background");
@@ -154,6 +158,11 @@ export async function applyPendingUpdate(
       else await api.quitApp();
     } catch {
       await api.clearUpdateRelaunch().catch(() => undefined);
+      if (updateGateHeld) {
+        await (api.releaseUpdateInstall?.() ?? Promise.resolve()).catch(
+          () => undefined,
+        );
+      }
       if (mode === "background") {
         // Stay quiet in the tray; Settings can still retry.
         backgroundApplyFailed = true;

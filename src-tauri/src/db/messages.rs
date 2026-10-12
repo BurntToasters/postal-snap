@@ -557,6 +557,30 @@ impl Database {
             .map_err(db_error)
     }
 
+    /// Find the refreshed local copy in one destination mailbox.
+    pub fn find_message_by_header_id_in_mailbox(
+        &self,
+        account_id: &str,
+        mailbox_id: i64,
+        header_id: &str,
+    ) -> Result<Option<MessageSummary>, String> {
+        if header_id.is_empty() {
+            return Ok(None);
+        }
+        self.conn()?
+            .query_row(
+                &format!(
+                    "{MESSAGE_SUMMARY_SELECT} WHERE m.account_id=?1 AND m.mailbox_id=?2 \
+                     AND m.message_id=?3 AND m.pending_move_to IS NULL \
+                     ORDER BY m.received_at DESC, m.uid DESC LIMIT 1"
+                ),
+                params![account_id, mailbox_id, header_id],
+                map_message_summary,
+            )
+            .optional()
+            .map_err(db_error)
+    }
+
     pub fn raw_message(&self, id: i64, account_id: &str) -> Result<Vec<u8>, String> {
         let raw: Vec<u8> = self
             .conn()?
