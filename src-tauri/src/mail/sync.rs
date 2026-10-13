@@ -448,6 +448,7 @@ async fn sync_folder<H: SyncHooks>(
 
     let max_uid = db.max_uid(mailbox_id)?;
     let mut new_fetched = 0u32;
+    let mut catch_up_incomplete = false;
     if max_uid == 0 {
         let start = selected
             .exists
@@ -477,7 +478,8 @@ async fn sync_folder<H: SyncHooks>(
     {
         let newest = status.uid_next.map(|next| next.saturating_sub(1));
         let mut start = max_uid.saturating_add(1);
-        for _ in 0..MAX_NEW_MAIL_CHUNKS {
+        let mut chunks = 0u32;
+        loop {
             let end = start.saturating_add(INITIAL_MESSAGE_BATCH.saturating_sub(1));
             let range = match newest {
                 Some(newest) => EnvelopeRange::Uid(start, end.min(newest)),
@@ -490,7 +492,17 @@ async fn sync_folder<H: SyncHooks>(
                 Some(newest) if end < newest => start = end.saturating_add(1),
                 _ => break,
             }
+            chunks += 1;
+            // Let user actions run; the next pass resumes from max_uid.
+            if chunks >= MAX_NEW_MAIL_CHUNKS || hooks.contended() {
+                catch_up_incomplete = true;
+                break;
+            }
         }
+    }
+    if catch_up_incomplete {
+        // Without this the next pass sees an unchanged UIDNEXT and skips the gap.
+        db.forget_uid_next(mailbox_id)?;
     }
 
     let expunge_suspected = !purged
@@ -521,11 +533,11 @@ async fn sync_folder<H: SyncHooks>(
     let changed = new_fetched > 0 || !unchanged;
     if quick {
         return Ok((
-            deferred || (new_fetched > 0 && !folder.skip_prefetch),
+            deferred || catch_up_incomplete || (new_fetched > 0 && !folder.skip_prefetch),
             changed,
         ));
     }
-    let mut more_work = false;
+    let mut more_work = catch_up_incomplete;
     if backfill_active {
         let mut state = "active";
         for _ in 0..BACKFILL_BATCHES_PER_PASS {
@@ -925,8 +937,11 @@ async fn parse_message_off_runtime(
         parse_message(uid, &raw, seen, flagged, fallback.as_deref())
     })
     .await
-    .map_err(|_| "Message parsing was interrupted.".to_string())?
+    .map_err(|_| PARSE_PANICKED.to_string())?
 }
+
+/// The parser panicked; the message stays quarantined.
+pub(crate) const PARSE_PANICKED: &str = "Message parsing was interrupted.";
 
 async fn download_body_batch(
     lease: &mut Lease,
@@ -972,7 +987,15 @@ async fn download_body_batch(
         }
         let (seen, flagged) = system_flags(&item);
         let fallback = received_at_fallback(&item, cached_by_uid.get(&uid).map(String::as_str));
-        match parse_message_off_runtime(uid, raw, seen, flagged, fallback).await {
+        db.begin_parse(mailbox_id, uid)?;
+        let parsed = parse_message_off_runtime(uid, raw, seen, flagged, fallback).await;
+        // A panic quarantines at once; other errors use normal backoff.
+        if matches!(&parsed, Err(error) if error == PARSE_PANICKED) {
+            db.quarantine_parse(mailbox_id, uid)?;
+        } else {
+            db.end_parse(mailbox_id, uid)?;
+        }
+        match parsed {
             Ok(mut parsed) => {
                 parsed.internal_at = internal_date(&item);
                 consumed = consumed.saturating_add(raw.len() as u64);
@@ -1453,6 +1476,7 @@ pub(crate) fn download_timeout(expected_size: u64) -> Duration {
         .min(Duration::from_secs(600))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn download_message(
     account: &AccountRecord,
     password: &str,
@@ -1461,6 +1485,7 @@ pub async fn download_message(
     expected_size: u64,
     expected_uid_validity: Option<u32>,
     cached_received_at: Option<&str>,
+    before_parse: impl FnOnce() -> Result<(), String>,
 ) -> Result<CachedMessage, String> {
     if expected_size > MAX_MESSAGE_BYTES as u64 {
         return Err("This message is too large to download safely.".into());
@@ -1490,9 +1515,12 @@ pub async fn download_message(
         })
         .await
         .map_err(|_| "Message download timed out.".to_string())??;
-        let item = rows
-            .pop()
+        // Unsolicited FETCH lines for other messages may share the response.
+        let index = rows
+            .iter()
+            .rposition(|row| row.uid == Some(uid) && row.body().is_some())
             .ok_or_else(|| "This message is no longer available on the server.".to_string())?;
+        let item = rows.swap_remove(index);
         let raw = item
             .body()
             .ok_or_else(|| "The mail server did not return this message.".to_string())?;
@@ -1501,6 +1529,8 @@ pub async fn download_message(
         }
         let (seen, flagged) = system_flags(&item);
         let fallback = received_at_fallback(&item, cached_received_at);
+        // Only the parse itself is counted, never the network download.
+        before_parse()?;
         let mut parsed = parse_message_off_runtime(uid, raw, seen, flagged, fallback).await?;
         parsed.internal_at = internal_date(&item);
         Ok(parsed)

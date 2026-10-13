@@ -24,6 +24,8 @@ modules:
       - install -Dm644 LICENSE /app/share/doc/run.rosie.snap/LICENSE
       - install -Dm644 LICENSE-CC-BY-SA-3.0.txt /app/share/doc/run.rosie.snap/LICENSE-CC-BY-SA-3.0.txt
       - install -Dm644 LICENSE-CC0-1.0.txt /app/share/doc/run.rosie.snap/LICENSE-CC0-1.0.txt
+      - install -Dm644 licenses.json /app/share/doc/run.rosie.snap/licenses.json
+      - install -Dm644 licenses-cargo.json /app/share/doc/run.rosie.snap/licenses-cargo.json
     sources:
       - type: file
         path: ../../src-tauri/target/release/postal-snap
@@ -43,3 +45,7 @@ modules:
         path: ../../src-tauri/filters/LICENSE-CC-BY-SA-3.0.txt
       - type: file
         path: ../../src-tauri/filters/LICENSE-CC0-1.0.txt
+      - type: file
+        path: ../../public/licenses.json
+      - type: file
+        path: ../../public/licenses-cargo.json

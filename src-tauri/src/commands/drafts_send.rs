@@ -45,7 +45,7 @@ pub async fn save_draft(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_drafts(
     account_id: String,
     state: State<'_, AppState>,
@@ -54,7 +54,7 @@ pub fn list_drafts(
     command_result(state.db.list_drafts(&account_id))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_draft(
     draft_id: String,
     account_id: String,
@@ -381,7 +381,9 @@ async fn deliver_read_receipt(
             mail::SendFailure::Uncertain => {
                 "Delivery could not be confirmed. You can try sending the receipt again.".into()
             }
-            mail::SendFailure::NotSentRefused => "The mail server refused the read receipt.".into(),
+            mail::SendFailure::NotSentRefused => {
+                "The receiving server refused the read receipt.".into()
+            }
             mail::SendFailure::NotSentRetry => {
                 "The read receipt could not be sent. You can try again.".into()
             }

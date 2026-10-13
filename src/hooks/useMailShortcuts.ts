@@ -6,7 +6,7 @@ import {
   inboxMailbox,
   nextUnreadMailbox,
   previousUnreadMailbox,
-} from "../components/mail/folderTree";
+} from "../components/mail/folderTreeModel";
 import { strings } from "../i18n";
 import { navigationOrder, unreadStep } from "../threads";
 import type { AccountSummary, MessageSummary, ReadingPane } from "../types";

@@ -49,6 +49,9 @@ export const settings = {
   discardTitle: "Discard unsaved changes?",
   discardHelp:
     "Your connection, signature, or rule changes have not been saved.",
+  outgoingChangeTitle: "Change outgoing server?",
+  outgoingChangeHelp:
+    "Postal Snap will sign in to the new outgoing server with this account's saved password. Continue only if you trust that server.",
   identityChangeTitle: "Change incoming server identity?",
   identityChangeHelp:
     "Cached server mail will be downloaded again. Local drafts will be kept for review. Resolve queued changes and unsent mail first.",

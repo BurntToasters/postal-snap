@@ -491,6 +491,12 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
               "Postal Snap could not access local mail data on your computer.",
             retryable: true,
           };
+        if (params.has("setupDuplicate"))
+          throw {
+            code: "operationFailed",
+            message: "An account with this email address is already set up.",
+            retryable: true,
+          };
         if (location.search.includes("setupFail")) {
           throw {
             code: "authenticationFailed",

@@ -276,7 +276,19 @@ async function runHostAction(
     restoreEditSelection(savedEdit);
     return false;
   }
-  if (id === "cut" || id === "copy" || id === "paste") {
+  if (id === "paste") {
+    restoreEditSelection(savedEdit);
+    // WebView2 and WebKit usually refuse execCommand("paste") from page
+    // script; fall back to the async clipboard and insert the text.
+    if (document.execCommand("paste")) return true;
+    const text = await navigator.clipboard.readText().catch(() => "");
+    if (text) {
+      restoreEditSelection(savedEdit);
+      document.execCommand("insertText", false, text);
+    }
+    return true;
+  }
+  if (id === "cut" || id === "copy") {
     restoreEditSelection(savedEdit);
     document.execCommand(id);
     return true;

@@ -37,9 +37,9 @@ import type {
   ComposeDraft,
   MessageCursor,
   MessageSummary,
-  SyncProgress,
 } from "../types";
 import { applyPendingUpdate } from "../update";
+import { ErrorBoundary } from "./ErrorBoundary";
 import { MessageReader } from "./MessageReader";
 import {
   AddAccountDialog,
@@ -60,7 +60,7 @@ import {
   nextUnreadMailbox,
   parentMailboxIds,
   previousUnreadMailbox,
-} from "./mail/folderTree";
+} from "./mail/folderTreeModel";
 import { MessageList } from "./mail/messageList";
 import { MailToolbar } from "./mail/mailToolbar";
 import { BulkBar, MessagePaneHeader } from "./mail/messagePaneChrome";
@@ -224,7 +224,6 @@ export function MailShell({ onOpenSettings }: Props) {
   const [outboxPreview, setOutboxPreview] = useState<ComposeDraft | null>(null);
   const [accountSwitcherOpen, setAccountSwitcherOpen] = useState(false);
   const [accountCounts, setAccountCounts] = useState<AccountInboxCount[]>([]);
-  const [syncProgress, setSyncProgress] = useState<SyncProgress>();
   const [syncingAllAccounts, setSyncingAllAccounts] = useState(false);
   const [syncingAccountIds, setSyncingAccountIds] = useState<Set<string>>(
     () => new Set(),
@@ -1705,7 +1704,7 @@ export function MailShell({ onOpenSettings }: Props) {
     void api
       .onSyncProgress((progress) => {
         if (progress.accountId === useAppStore.getState().activeAccountId)
-          setSyncProgress(progress);
+          useAppStore.getState().setSyncProgress(progress);
       })
       .then((fn) => {
         if (active) unsubs.push(fn);
@@ -2800,12 +2799,6 @@ export function MailShell({ onOpenSettings }: Props) {
         accountCounts={accountCounts}
         syncByAccount={syncByAccount}
         activeSync={sync}
-        syncProgress={
-          syncProgress?.accountId === activeAccountId &&
-          (sync?.phase === "syncing" || sync?.phase === "connecting")
-            ? syncProgress
-            : undefined
-        }
         accountSwitcherOpen={accountSwitcherOpen}
         syncingAllAccounts={syncingAllAccounts}
         onAccountSwitcherOpenChange={setAccountSwitcherOpen}
@@ -3397,85 +3390,95 @@ export function MailShell({ onOpenSettings }: Props) {
         />
       ) : null}
 
-      <MessageReader
-        onSnoozed={handleSnoozedMessage}
-        onConversationSnoozed={handleConversationSnoozed}
-        onPrevious={
-          relativeMessage(-1)
-            ? () => {
-                const previous = relativeMessage(-1);
-                if (previous) void chooseMessage(previous);
-              }
-            : undefined
-        }
-        onNext={
-          relativeMessage(1)
-            ? () => {
-                const next = relativeMessage(1);
-                if (next) void chooseMessage(next);
-              }
-            : undefined
-        }
-        onOlderInConversation={
-          selectedMessage && conversationNeighbor(messages, selectedMessage, 1)
-            ? () => {
-                const current = useAppStore.getState().selectedMessage;
-                const older = current
-                  ? conversationNeighbor(
-                      useAppStore.getState().messages,
-                      current,
-                      1,
-                    )
-                  : undefined;
-                if (older) void chooseMessage(older);
-              }
-            : undefined
-        }
-        searchQuery={submittedQuery}
-        onNewerInConversation={
-          selectedMessage && conversationNeighbor(messages, selectedMessage, -1)
-            ? () => {
-                const current = useAppStore.getState().selectedMessage;
-                const newer = current
-                  ? conversationNeighbor(
-                      useAppStore.getState().messages,
-                      current,
-                      -1,
-                    )
-                  : undefined;
-                if (newer) void chooseMessage(newer);
-              }
-            : undefined
-        }
-        onOpenInConversation={(item) => {
-          void chooseMessage(item);
-        }}
-        onUnreadInConversation={
-          selectedMessage && conversationUnreadTarget(messages, selectedMessage)
-            ? () => {
-                const current = useAppStore.getState().selectedMessage;
-                const unread = current
-                  ? conversationUnreadTarget(
-                      useAppStore.getState().messages,
-                      current,
-                    )
-                  : undefined;
-                if (unread) void chooseMessage(unread);
-              }
-            : undefined
-        }
-        onShowInFolder={
-          selectedMessage &&
-          (submittedQuery ||
-            activeLocalView ||
-            selectedMessage.mailboxId !== activeMailboxId)
-            ? showMessageFolder
-            : undefined
-        }
-        onContinueDraft={(id) => void continueDraft(id)}
-        onMessagesFromSender={searchFromSender}
-        onMessagesWithSubject={searchSubject}
-      />
+      <ErrorBoundary
+        className="reader-pane crash-recovery"
+        id="reader-pane"
+        help={strings.app.readerCrashHelp}
+        resetKey={selectedMessage?.id}
+      >
+        <MessageReader
+          onSnoozed={handleSnoozedMessage}
+          onConversationSnoozed={handleConversationSnoozed}
+          onPrevious={
+            relativeMessage(-1)
+              ? () => {
+                  const previous = relativeMessage(-1);
+                  if (previous) void chooseMessage(previous);
+                }
+              : undefined
+          }
+          onNext={
+            relativeMessage(1)
+              ? () => {
+                  const next = relativeMessage(1);
+                  if (next) void chooseMessage(next);
+                }
+              : undefined
+          }
+          onOlderInConversation={
+            selectedMessage &&
+            conversationNeighbor(messages, selectedMessage, 1)
+              ? () => {
+                  const current = useAppStore.getState().selectedMessage;
+                  const older = current
+                    ? conversationNeighbor(
+                        useAppStore.getState().messages,
+                        current,
+                        1,
+                      )
+                    : undefined;
+                  if (older) void chooseMessage(older);
+                }
+              : undefined
+          }
+          searchQuery={submittedQuery}
+          onNewerInConversation={
+            selectedMessage &&
+            conversationNeighbor(messages, selectedMessage, -1)
+              ? () => {
+                  const current = useAppStore.getState().selectedMessage;
+                  const newer = current
+                    ? conversationNeighbor(
+                        useAppStore.getState().messages,
+                        current,
+                        -1,
+                      )
+                    : undefined;
+                  if (newer) void chooseMessage(newer);
+                }
+              : undefined
+          }
+          onOpenInConversation={(item) => {
+            void chooseMessage(item);
+          }}
+          onUnreadInConversation={
+            selectedMessage &&
+            conversationUnreadTarget(messages, selectedMessage)
+              ? () => {
+                  const current = useAppStore.getState().selectedMessage;
+                  const unread = current
+                    ? conversationUnreadTarget(
+                        useAppStore.getState().messages,
+                        current,
+                      )
+                    : undefined;
+                  if (unread) void chooseMessage(unread);
+                }
+              : undefined
+          }
+          onShowInFolder={
+            selectedMessage &&
+            (submittedQuery ||
+              activeLocalView ||
+              selectedMessage.mailboxId !== activeMailboxId)
+              ? showMessageFolder
+              : undefined
+          }
+          onContinueDraft={(id) => void continueDraft(id)}
+          onMessagesFromSender={searchFromSender}
+          onMessagesWithSubject={searchSubject}
+        />
+      </ErrorBoundary>
       <SentNoticeToast />
       {outboxPreview ? (
         <OutboxPreviewDialog

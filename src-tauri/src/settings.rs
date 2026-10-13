@@ -76,6 +76,19 @@ impl SettingsStore {
         })
     }
 
+    /// Defaults that are never written, for a launch whose settings file or
+    /// mail database could not be opened. Saves are refused like a pending
+    /// migration so the user's real file is not replaced.
+    pub fn unavailable(path: PathBuf) -> Self {
+        Self {
+            path,
+            current: Mutex::new(AppSettings::default()),
+            startup_notice: Mutex::new(None),
+            write_lock: Mutex::new(()),
+            migration_pending: Mutex::new(true),
+        }
+    }
+
     pub fn get(&self) -> Result<AppSettings, String> {
         let settings = self
             .current
@@ -755,13 +768,14 @@ fn write_atomic(path: &Path, contents: &str) -> Result<(), String> {
     let mut file = options
         .open(&temporary)
         .map_err(|_| "Could not create temporary application settings.".to_string())?;
-    if let Err(error) = file
+    if file
         .write_all(contents.as_bytes())
         .and_then(|()| file.sync_all())
+        .is_err()
     {
         drop(file);
         let _ = fs::remove_file(&temporary);
-        return Err(format!("Could not save application settings: {error}"));
+        return Err("Could not save application settings.".into());
     }
     drop(file);
     fs::rename(&temporary, path).map_err(|_| {

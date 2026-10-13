@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import "./root.css";
 
 // Set before the first paint so native caption areas never cover controls.
@@ -12,6 +13,8 @@ document.documentElement.dataset.platform = /Mac/i.test(navigator.userAgent)
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <App />
+    <ErrorBoundary className="crash-recovery startup-recovery">
+      <App />
+    </ErrorBoundary>
   </React.StrictMode>,
 );

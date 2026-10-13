@@ -118,6 +118,24 @@ export async function registerMockMessages(page: Page): Promise<void> {
             nextCursor: null,
             hasMore: false,
           };
+        } else if (params.has("hugeList")) {
+          const count = Number(params.get("hugeList")) || 1500;
+          page = {
+            items: Array.from({ length: count }, (_, index) => ({
+              ...summary,
+              id: 5000 + index,
+              uid: 5000 + index,
+              messageId: `<huge-${index}@example.com>`,
+              subject: `Archive note ${index + 1}`,
+              receivedAt: new Date(
+                Date.parse("2026-08-01T12:00:00Z") - index * 600_000,
+              ).toISOString(),
+              isRead: true,
+              threadRoot: null,
+            })),
+            nextCursor: null,
+            hasMore: false,
+          };
         } else if (params.has("longList")) {
           const older = Array.from({ length: 24 }, (_, index) => ({
             ...summary,

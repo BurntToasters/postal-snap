@@ -1119,7 +1119,7 @@ impl From<String> for IpcError {
             None
         };
         let (code, retryable) = classify_ipc_message(&lower);
-        let message = match code {
+        let generic = match code {
             "accessDenied" => "That item is not available for this account.",
             "notFound" => "That item is no longer available. Refresh mail and try again.",
             "limitExceeded" => "That item exceeds Postal Snap's safety limit.",
@@ -1152,11 +1152,45 @@ impl From<String> for IpcError {
         };
         Self {
             code: code.into(),
-            message: message.into(),
+            // Category guidance beats detail for sign-in, network, and storage.
+            message: matches!(code, "operationFailed" | "invalidInput" | "limitExceeded")
+                .then(|| authored_detail(&message))
+                .flatten()
+                .unwrap_or_else(|| generic.into()),
             retryable,
             stage,
         }
     }
+}
+
+/// Authored prose passes through so errors stay specific. Anything that may
+/// carry data (addresses, names, paths, hosts, server text) is replaced.
+fn authored_detail(message: &str) -> Option<String> {
+    let trimmed = message.trim();
+    if trimmed.is_empty() || trimmed.len() > 300 || !trimmed.is_ascii() {
+        return None;
+    }
+    let chars = trimmed.as_bytes();
+    for (index, &byte) in chars.iter().enumerate() {
+        let unsafe_byte = byte.is_ascii_control()
+            || matches!(
+                byte,
+                b'"' | b'`' | b'@' | b'/' | b'\\' | b'<' | b'[' | b'{' | b'=' | b'%' | b'#'
+            );
+        // Only a contraction apostrophe, never a quoted name.
+        let quote = byte == b'\''
+            && !(index > 0
+                && chars[index - 1].is_ascii_alphabetic()
+                && chars.get(index + 1).is_some_and(u8::is_ascii_alphabetic));
+        if unsafe_byte || quote {
+            return None;
+        }
+    }
+    let dotted = trimmed.split_whitespace().any(|word| {
+        let core = word.trim_end_matches(['.', ',', ';', '!', '?', ')']);
+        core.contains('.') || core.contains(':')
+    });
+    (!dotted).then(|| trimmed.to_string())
 }
 
 impl From<&str> for IpcError {
@@ -1847,6 +1881,45 @@ mod tests {
             "Incoming sign-in",
         ));
         assert_eq!(redacted_plain.code, "authenticationFailed");
+    }
+
+    // Failure modes for passing authored error text through IPC:
+    // 1. A specific, actionable message collapses to "Try again".
+    // 2. An address, file name, host, or path reaches the UI.
+    // 3. Quoted server text or a template value slips through.
+    // 4. Non-ASCII or oversized text reaches the UI.
+    #[test]
+    fn ipc_errors_keep_authored_text_and_hide_data() {
+        let duplicate = IpcError::from("An account with this email address is already set up.");
+        assert_eq!(
+            duplicate.message,
+            "An account with this email address is already set up."
+        );
+        let restart = IpcError::from(
+            "Postal Snap could not safely finish updating this password. Restart Postal Snap before trying again.",
+        );
+        assert!(restart.message.contains("Restart Postal Snap"));
+        assert!(IpcError::from("This message isn't ready.")
+            .message
+            .contains("isn't"));
+        for leaky in [
+            "Could not send to jane@example.com.",
+            "Attachment 'private-name.pdf' is unavailable.",
+            "Could not open C:\\Users\\jane\\mail.eml.",
+            "Could not reach imap.example.com right now.",
+            "Server said: \"NO quota\"",
+            "Folder [Gmail] failed.",
+            "Ordner geöffnet.",
+        ] {
+            let error = IpcError::from(leaky);
+            assert!(!error.message.contains("jane"), "{leaky}");
+            assert!(!error.message.contains("private-name"), "{leaky}");
+            assert!(!error.message.contains("example.com"), "{leaky}");
+            assert!(!error.message.contains("quota"), "{leaky}");
+            assert!(!error.message.contains("Gmail"), "{leaky}");
+            assert!(!error.message.contains("Ordner"), "{leaky}");
+        }
+        assert!(!IpcError::from("x".repeat(400)).message.contains("xxxx"));
     }
 
     #[test]

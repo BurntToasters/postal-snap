@@ -250,10 +250,10 @@ mod native {
             .default_window_icon()
             .cloned()
             .ok_or_else(|| "background icon unavailable".to_string())?;
-        let open = MenuItemBuilder::with_id("tray-open", "Open Postal Snap")
+        let open = MenuItemBuilder::with_id("tray-open", crate::strings::tray::OPEN_POSTAL_SNAP)
             .build(app)
             .map_err(|_| "background icon unavailable".to_string())?;
-        let quit = MenuItemBuilder::with_id("tray-quit", "Quit Postal Snap")
+        let quit = MenuItemBuilder::with_id("tray-quit", crate::strings::tray::QUIT_POSTAL_SNAP)
             .build(app)
             .map_err(|_| "background icon unavailable".to_string())?;
         let menu = MenuBuilder::new(app)
@@ -262,7 +262,7 @@ mod native {
             .map_err(|_| "background icon unavailable".to_string())?;
         let builder = TrayIconBuilder::with_id(TRAY_ID)
             .icon(icon)
-            .tooltip("Postal Snap");
+            .tooltip(crate::strings::tray::TOOLTIP);
         // macOS: an attached menu opens on left click, so attach it only
         // around a right click. Windows keeps the menu attached.
         #[cfg(target_os = "windows")]

@@ -5,7 +5,7 @@ use crate::models::{AccountRecord, AccountSummary, BodyFormat, ServerConfig};
 
 impl Database {
     pub fn list_accounts(&self) -> Result<Vec<AccountSummary>, String> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut statement = conn.prepare(
             "SELECT id, provider, email, display_name, sync_state, error, aliases_json, auth_method, signature, color, default_body_format, reply_to FROM accounts ORDER BY sort_order, created_at",
         ).map_err(db_error)?;
@@ -35,7 +35,7 @@ impl Database {
     }
 
     pub fn account(&self, id: &str) -> Result<AccountRecord, String> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         conn.query_row(
             "SELECT id, provider, email, display_name, sync_state, error,
                     imap_host, imap_port, imap_tls, imap_username,
@@ -226,8 +226,9 @@ impl Database {
         id: &str,
         signature: &str,
     ) -> Result<AccountSummary, String> {
-        let trimmed = signature.trim();
-        if trimmed.len() > 2000
+        let normalized = signature.replace("\r\n", "\n").replace('\r', "\n");
+        let trimmed = normalized.trim();
+        if trimmed.chars().count() > 2000
             || trimmed
                 .chars()
                 .any(|c| c.is_control() && c != '\n' && c != '\t')

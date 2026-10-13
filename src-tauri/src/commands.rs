@@ -95,6 +95,9 @@ pub struct AppState {
     watchers: Mutex<HashSet<String>>,
     startup_error: Mutex<Option<String>>,
     mail_shortcut_guard: AtomicBool,
+    /// The mail database or settings file did not open; the stand-ins must
+    /// never receive accounts.
+    storage_unavailable: AtomicBool,
     app_nap: Mutex<Option<crate::app_nap::AppNapGuard>>,
     update_gate: UpdateInstallGate,
 }
@@ -233,6 +236,7 @@ impl AppState {
             watchers: Mutex::new(HashSet::new()),
             startup_error: Mutex::new(None),
             mail_shortcut_guard: AtomicBool::new(false),
+            storage_unavailable: AtomicBool::new(false),
             app_nap: Mutex::new(None),
             update_gate: UpdateInstallGate::new(),
         }
@@ -251,7 +255,26 @@ impl AppState {
             .startup_error
             .lock()
             .map_err(|_| "Application startup status is unavailable.".to_string())?;
+        // A storage failure lasts the whole launch, including window reloads.
+        if self.storage_unavailable.load(Ordering::SeqCst) {
+            return Ok(error.clone());
+        }
         Ok(error.take())
+    }
+
+    pub fn set_storage_unavailable(&self) {
+        self.storage_unavailable.store(true, Ordering::SeqCst);
+    }
+
+    /// Refuse work that would save accounts into a stand-in database.
+    pub fn require_storage(&self) -> Result<(), String> {
+        if self.storage_unavailable.load(Ordering::SeqCst) {
+            return Err(
+                "Postal Snap cannot change accounts until its mail data opens. Restart Postal Snap and try again."
+                    .into(),
+            );
+        }
+        Ok(())
     }
 
     pub fn set_mail_shortcut_guard(&self, guarded: bool) {
@@ -1238,10 +1261,10 @@ fn notify_new_mail(
     let (title, body) = if private {
         (
             account_label.as_deref().map_or_else(
-                || "New mail".to_string(),
-                |name| format!("New mail for {name}"),
+                || crate::strings::notify::NEW_MAIL.to_string(),
+                crate::strings::notify::new_mail_for,
             ),
-            "Open Postal Snap to read it.".to_string(),
+            crate::strings::notify::OPEN_TO_READ.to_string(),
         )
     } else {
         let sender = if message.sender_name.is_empty() {

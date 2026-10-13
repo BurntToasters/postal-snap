@@ -17,7 +17,7 @@ use crate::{
     oauth,
 };
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_accounts(state: State<'_, AppState>) -> CommandResult<Vec<AccountSummary>> {
     command_result(state.db.list_accounts())
 }
@@ -128,6 +128,7 @@ pub async fn add_account(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<AccountSummary> {
+    state.require_storage()?;
     let (mut imap, mut smtp, password) = take_validated_setup(&mut request)?;
     crate::bridge::apply_setup_trust(&request, &mut imap, &mut smtp)?;
     if request
@@ -212,6 +213,7 @@ async fn save_oauth_account(
     app: &AppHandle,
     state: &AppState,
 ) -> Result<AccountSummary, String> {
+    state.require_storage()?;
     let provider = oauth::parse_oauth_provider(provider_name)?;
     let pending = oauth::begin_sign_in(provider).await?;
     let authorization_url = pending.authorization_url.clone();
@@ -313,7 +315,16 @@ pub async fn remove_account(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<AccountRemovalOutcome> {
-    command_result(remove_single_account(&app, &state, &account_id).await)
+    let outcome = remove_single_account(&app, &state, &account_id).await?;
+    compact_after_removal(&state).await;
+    Ok(outcome)
+}
+
+/// Best effort: the removal already committed, so a failed compaction only
+/// delays returning disk space.
+async fn compact_after_removal(state: &AppState) {
+    let db = state.db.clone();
+    let _ = tauri::async_runtime::spawn_blocking(move || db.compact()).await;
 }
 
 /// Remove every account, vault secret, and cached attachment, then restore
@@ -322,6 +333,7 @@ pub async fn remove_account(
 /// account cannot block the erase; the first error is reported afterwards.
 #[tauri::command]
 pub async fn erase_all_data(app: AppHandle, state: State<'_, AppState>) -> CommandResult<u32> {
+    state.require_storage()?;
     let ids: Vec<String> = state
         .db
         .list_accounts()?
@@ -341,6 +353,7 @@ pub async fn erase_all_data(app: AppHandle, state: State<'_, AppState>) -> Comma
         }
     }
     state.settings.save(AppSettings::default())?;
+    compact_after_removal(&state).await;
     refresh_mail_menu(&app, &state);
     if let Some(error) = first_error {
         return command_result(Err(error));
@@ -474,7 +487,7 @@ pub async fn discover_account_aliases(
     Ok(updated)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn update_account_aliases(
     account_id: String,
     aliases: Vec<String>,
@@ -516,7 +529,7 @@ pub(crate) fn normalize_reply_to(value: &str) -> Result<String, String> {
     Ok(trimmed.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn update_account_reply_to(
     account_id: String,
     reply_to: String,
@@ -526,7 +539,7 @@ pub fn update_account_reply_to(
     command_result(state.db.update_account_reply_to(&account_id, &reply_to))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn update_account_display_name(
     account_id: String,
     display_name: String,
@@ -540,7 +553,7 @@ pub fn update_account_display_name(
     Ok(state.db.account(&account_id)?.summary)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn update_account_signature(
     account_id: String,
     signature: String,
@@ -550,7 +563,7 @@ pub fn update_account_signature(
 }
 
 /// Unknown formats fail IPC deserialization before reaching the database.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn update_account_default_body_format(
     account_id: String,
     format: crate::models::BodyFormat,
@@ -563,14 +576,14 @@ pub fn update_account_default_body_format(
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_account_inbox_counts(
     state: State<'_, AppState>,
 ) -> CommandResult<Vec<AccountInboxCount>> {
     command_result(state.db.list_account_inbox_counts())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn update_account_color(
     account_id: String,
     color: Option<String>,
@@ -588,7 +601,7 @@ pub fn update_account_color(
     Ok(state.db.account(&account_id)?.summary)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn reorder_accounts(
     account_ids: Vec<String>,
     state: State<'_, AppState>,
@@ -599,7 +612,7 @@ pub fn reorder_accounts(
 
 /// Counts of local-only work that removing the account would discard, shown
 /// in the removal confirmation.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_account_removal_impact(
     account_id: String,
     state: State<'_, AppState>,
