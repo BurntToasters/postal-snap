@@ -44,7 +44,6 @@ tauri-plugin-notification = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-process = { version = "2", optional = true }
 tauri-plugin-updater = { version = "2", optional = true }
-thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "fs", "io-util"] }
 tokio-native-tls = "0.3"
 url = "2"
@@ -89,11 +88,14 @@ tempfile = "3"
 proptest = "1"
 
 [lints.rust]
-# Win32 Snap Layout integration contains one reviewed, Windows-only adapter.
+# Reviewed exceptions: Win32 Snap overlay (window_snap.rs), macOS App Nap
+# activity (app_nap.rs), and macOS activation observer (tray.rs).
 unsafe_code = "deny"
 
 [profile.release]
-panic = "abort"
+# Unwind so a panic fails one task (a sync pass, one message parse) instead of
+# killing the app; spawned tasks surface it as a JoinError.
+panic = "unwind"
 codegen-units = 16
 lto = "thin"
 strip = true

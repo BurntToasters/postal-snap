@@ -23,13 +23,21 @@ const codes = new Set<IpcErrorCode>([
   "operationFailed",
 ]);
 
+const DETAIL_CODES = new Set<IpcErrorCode>([
+  "operationFailed",
+  "invalidInput",
+  "limitExceeded",
+]);
+
 export class PostalError extends Error {
   readonly code: IpcErrorCode;
   readonly retryable: boolean;
   readonly stage?: "imap" | "smtp";
 
   constructor(payload: IpcErrorPayload) {
-    super(strings.errors[payload.code]);
+    // Rust vets authored detail for these codes; others use the catalog.
+    const detail = DETAIL_CODES.has(payload.code) ? payload.message.trim() : "";
+    super(detail || strings.errors[payload.code]);
     this.name = "PostalError";
     this.code = payload.code;
     this.retryable = payload.retryable;

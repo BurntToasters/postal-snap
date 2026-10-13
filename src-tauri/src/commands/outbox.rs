@@ -6,6 +6,8 @@ use super::{
     CommandResult,
 };
 
+/// Automatic tries after "try later" replies before the user decides.
+const MAX_AUTOMATIC_RETRIES: u32 = 8;
 const SENT_COPY_PENDING_DETAIL: &str =
     "Message sent. Its Sent-folder copy is waiting for a safe retry.";
 const ARCHIVE_PENDING_DETAIL: &str =
@@ -210,7 +212,7 @@ use crate::{
     models::{validate_compose_draft, ComposeDraft, OutboxSummary, SendOutcome},
 };
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_outbox(
     account_id: String,
     state: State<'_, AppState>,
@@ -219,7 +221,7 @@ pub fn list_outbox(
     command_result(state.db.list_outbox(&account_id))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_outbox(
     outbox_id: String,
     account_id: String,
@@ -575,9 +577,22 @@ pub(crate) async fn deliver_outbox_locked(
             // Only a definite "not accepted" may go back in the queue; an
             // uncertain send waits for the user so it is never sent twice.
             let (next_state, detail) = match error.kind {
+                // A failed retry-count write must not skip the state update
+                // below, or the row would stay in `sending`.
+                mail::SendFailure::NotSentRetry
+                    if state
+                        .db
+                        .defer_outbox_retry(outbox_id, account_id, MAX_AUTOMATIC_RETRIES)
+                        .unwrap_or(true) =>
+                {
+                    (
+                        "queued",
+                        "Not sent yet. The mail server could not take it right now. Postal Snap will try again automatically.",
+                    )
+                }
                 mail::SendFailure::NotSentRetry => (
-                    "queued",
-                    "Not sent yet. The mail server could not take it right now. Postal Snap will try again automatically.",
+                    "needs_attention",
+                    "Not sent. The mail server kept asking to try later. Check the message and account, then try again.",
                 ),
                 mail::SendFailure::NotSentRefused => (
                     "needs_attention",

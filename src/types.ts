@@ -180,7 +180,8 @@ export interface MessageDetail extends MessageSummary {
   attachments: Attachment[];
   references?: string[];
   /** Why the body is missing when it could not be downloaded. */
-  bodyStatus?: "available" | "offline" | "signInNeeded" | "tooLarge";
+  bodyStatus?:
+    "available" | "offline" | "signInNeeded" | "tooLarge" | "unreadable";
   /** Raw bounded header values; parsed later. */
   listUnsubscribe?: string | null;
   listUnsubscribePost?: string | null;

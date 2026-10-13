@@ -20,7 +20,7 @@ import {
   mailboxesForUnreadView,
   nextUnreadMailbox,
   previousUnreadMailbox,
-} from "../components/mail/folderTree";
+} from "../components/mail/folderTreeModel";
 import { FolderButton } from "../components/mail/folderButton";
 import { MessageList } from "../components/mail/messageList";
 import { toggleListedRead } from "../markRead";

@@ -43,6 +43,10 @@ pub async fn list_messages(
     command_result(result)
 }
 
+/// A previous parse of this body never returned (the app stopped mid-parse).
+pub(crate) const QUARANTINED: &str =
+    "Postal Snap could not read this message safely, so it will not open it again. Read it in another mail app or delete it.";
+
 pub(crate) async fn ensure_message_content(
     account_id: &str,
     message_id: i64,
@@ -63,11 +67,15 @@ pub(crate) async fn ensure_message_content(
     if state.db.message_content_cached(message_id, account_id)? {
         return Ok(());
     }
+    if state.db.parse_quarantined(message_id, account_id)? {
+        return Err(QUARANTINED.into());
+    }
     let uid_validity = state.db.mailbox_uid_validity(account_id, &mailbox)?;
     let account = state.db.account(account_id)?;
     let password = crate::oauth::session_secret(&account).await?;
     let cached_received_at = state.db.message_received_at(message_id).ok().flatten();
-    let message = mail::download_message(
+    let parsing = std::sync::atomic::AtomicBool::new(false);
+    let downloaded = mail::download_message(
         &account,
         &password,
         &mailbox,
@@ -75,8 +83,20 @@ pub(crate) async fn ensure_message_content(
         size,
         uid_validity,
         cached_received_at.as_deref(),
+        || {
+            parsing.store(true, std::sync::atomic::Ordering::SeqCst);
+            state.db.begin_parse(mailbox_id, uid)
+        },
     )
-    .await?;
+    .await;
+    if parsing.load(std::sync::atomic::Ordering::SeqCst) {
+        if matches!(&downloaded, Err(error) if error == crate::mail::sync::PARSE_PANICKED) {
+            state.db.quarantine_parse(mailbox_id, uid)?;
+            return Err(QUARANTINED.into());
+        }
+        state.db.end_parse(mailbox_id, uid)?;
+    }
+    let message = downloaded?;
     let uid_validity = uid_validity.ok_or_else(|| {
         "Mailbox identity is unavailable; refresh mail and try again.".to_string()
     })?;
@@ -105,6 +125,7 @@ pub async fn get_message(
     // instead of failing the whole message.
     let body_status = match ensure_message_content(&account_id, message_id, &state).await {
         Ok(()) => "available",
+        Err(error) if error == QUARANTINED => "unreadable",
         Err(error) => match IpcError::from(error.as_str()).code.as_str() {
             "connectionFailed" | "localStorageFailed" => "offline",
             "authenticationFailed" => "signInNeeded",
@@ -195,11 +216,12 @@ pub async fn save_message_eml(
     let destination = destination
         .into_path()
         .map_err(|_| "Choose a valid save location.".to_string())?;
-    tokio::fs::write(destination, raw).await.map_err(|_| {
-        "Could not save the message at that location."
-            .to_string()
-            .into()
-    })
+    tokio::fs::write(&destination, raw)
+        .await
+        .map_err(|_| "Could not save the message at that location.".to_string())?;
+    // A saved message can carry attachments; mark it like saved files.
+    crate::download_mark::mark_downloaded(&destination);
+    Ok(())
 }
 
 /// RFC 8058 one-click unsubscribe. The URL comes from the stored header, never

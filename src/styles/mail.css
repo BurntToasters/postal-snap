@@ -1067,6 +1067,11 @@
 .message-row-wrap {
   display: flex;
   align-items: stretch;
+  /* Off-screen rows skip layout and paint but stay in the DOM, so keyboard
+     focus, screen readers, and find keep working. "auto" remembers each
+     row's real height once it has been shown. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto var(--message-row-height);
 }
 
 /* With star and read columns, text starts after both hit targets:

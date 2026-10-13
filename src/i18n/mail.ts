@@ -162,6 +162,8 @@ export const mail = {
   messageTooLarge:
     "This message is too large to download safely. You can still move, archive, or delete it from the list.",
   emptyBody: "This message has no readable text.",
+  bodyUnreadable:
+    "Postal Snap could not read this message safely, so it will not open it again. Read it in another mail app or delete it.",
   bodyOffline:
     "This message has not downloaded yet. Check your internet connection, then open it again.",
   bodySignInNeeded:

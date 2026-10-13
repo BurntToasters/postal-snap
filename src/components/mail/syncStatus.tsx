@@ -16,9 +16,15 @@ interface SyncStatusProps {
 export function SyncStatus({
   account,
   sync,
-  progress,
+  progress: progressProp,
   onOpenSettings,
 }: SyncStatusProps) {
+  const storedProgress = useAppStore((state) => state.syncProgress);
+  const progress =
+    progressProp ??
+    (storedProgress && storedProgress.accountId === account?.id
+      ? storedProgress
+      : undefined);
   const quietStart = useAppStore((state) => state.settings.quietHoursStart);
   const quietEnd = useAppStore((state) => state.settings.quietHoursEnd);
   const [now, setNow] = useState(() => new Date());

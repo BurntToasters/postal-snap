@@ -191,7 +191,7 @@ impl Database {
     }
 
     pub fn list_outbox(&self, account_id: &str) -> Result<Vec<OutboxSummary>, String> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut statement = conn
             .prepare(
                 "SELECT id,draft_json,state,detail,created_at,send_at FROM outbox WHERE account_id=?1 ORDER BY created_at DESC",
@@ -291,6 +291,51 @@ impl Database {
             .query_map(values.as_slice(), |row| row.get(0))
             .map_err(db_error)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+    }
+
+    /// Queued rows whose retry wait has passed, oldest first.
+    pub fn due_queued_outbox_ids(&self, account_id: &str) -> Result<Vec<String>, String> {
+        let conn = self.conn()?;
+        let mut statement = conn
+            .prepare(
+                "SELECT id FROM outbox WHERE account_id=?1 AND state='queued'
+                 AND (retry_after IS NULL OR retry_after<=strftime('%Y-%m-%dT%H:%M:%S+00:00','now'))
+                 ORDER BY created_at",
+            )
+            .map_err(db_error)?;
+        let rows = statement
+            .query_map([account_id], |row| row.get(0))
+            .map_err(db_error)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+    }
+
+    /// Record a definite "try later" reply and wait 1, 2, 4… up to 60 minutes
+    /// before the next automatic try. False once `max_attempts` is spent.
+    pub fn defer_outbox_retry(
+        &self,
+        id: &str,
+        account_id: &str,
+        max_attempts: u32,
+    ) -> Result<bool, String> {
+        let conn = self.conn()?;
+        conn.execute(
+            "UPDATE outbox SET retry_attempts=retry_attempts+1,
+             retry_after=strftime('%Y-%m-%dT%H:%M:%S+00:00','now',
+               '+' || MIN(60, 1 << MIN(retry_attempts, 6)) || ' minutes')
+             WHERE id=?1 AND account_id=?2",
+            params![id, account_id],
+        )
+        .map_err(db_error)?;
+        let attempts: u32 = conn
+            .query_row(
+                "SELECT retry_attempts FROM outbox WHERE id=?1 AND account_id=?2",
+                params![id, account_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?
+            .unwrap_or(u32::MAX);
+        Ok(attempts < max_attempts)
     }
 
     pub fn scheduled_due_outbox_ids(
@@ -411,7 +456,7 @@ impl Database {
     }
 
     pub fn list_filter_rules(&self, account_id: &str) -> Result<Vec<FilterRule>, String> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut statement = conn
             .prepare(
                 "SELECT id,account_id,name,field,contains,action,target_mailbox,enabled FROM filter_rules WHERE account_id=?1 ORDER BY position,id",
@@ -563,7 +608,7 @@ impl Database {
         let Some((column, like, domain_like)) = rule_match_pattern(rule) else {
             return Ok(Vec::new());
         };
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut statement = conn
             .prepare(&format!(
                 "SELECT m.id,m.uid,f.name,f.id FROM messages m JOIN mailboxes f ON f.id=m.mailbox_id
@@ -629,7 +674,7 @@ impl Database {
 
     pub fn list_snoozed(&self, account_id: &str, now: &str) -> Result<Vec<SnoozedSummary>, String> {
         self.prune_expired_snoozes(account_id, now)?;
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut statement = conn
             .prepare(&format!(
                 "{} JOIN snoozed_messages s ON s.message_id=m.id AND s.account_id=m.account_id WHERE m.account_id=?1 ORDER BY s.snoozed_until ASC",
@@ -684,7 +729,9 @@ impl Database {
         conn.pragma_update(None, "synchronous", "FULL")
             .map_err(db_error)?;
         let changed = conn.execute(
-            "UPDATE outbox SET state='sending',attempt_started_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP
+            "UPDATE outbox SET state='sending',attempt_started_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP,
+                 retry_after=NULL,
+                 retry_attempts=CASE WHEN ?3='needs_attention' THEN 0 ELSE retry_attempts END
                  WHERE id=?1 AND account_id=?2 AND state=?3",
             params![id, account_id, from_state],
         );

@@ -13,10 +13,11 @@ Postal Snap is an open-source, MPL-2.0-licensed desktop email client with a calm
 
 Large readable defaults (comfortable density, adjustable text up to 200%) are an accessibility feature for low vision and eye strain, not an age-branded product tier. Never use "senior" in UI copy, docs, or fixtures.
 
-The v0.2 scope is deliberately focused:
+The current (0.4.x) scope is deliberately focused:
 
 - Guided iCloud Mail setup using an app-specific password.
-- Secure manual IMAP/SMTP setup.
+- Secure manual IMAP/SMTP setup, with provider presets and HTTPS autoconfig discovery.
+- Proton Bridge accounts over loopback with a pinned, user-approved certificate (experimental until the release checklist smoke passes).
 - Multiple isolated accounts; no unified inbox.
 - Familiar folders, message list, reader, search, drafts, outbox, attachments, and rich compose.
 - Shipped extras already in the tree: per-account signatures, filter rules, optional thread grouping, undo-send / scheduled outbox, snooze, iCloud aliases, recipient suggestions, optional window glass, and close-to-tray on Windows/macOS.
@@ -56,6 +57,10 @@ Important files:
 - `src-tauri/src/threat_blocking.rs`: local TweetFeed domain/URL reported-threat checks.
 - `src-tauri/src/settings.rs`: validated atomic `settings.json` storage, including the direct-edition `updateCheckInterval` cadence and `closeToTray`.
 - `src-tauri/src/tray.rs`: Windows notification-area / macOS menu bar extra for close-to-tray.
+- `src-tauri/src/bridge.rs`: Proton Bridge certificate staging, approval, and fingerprint pinning.
+- `src-tauri/src/providers.rs`: provider presets, MX matching, and HTTPS autoconfig discovery.
+- `src-tauri/src/strings.rs`: user-facing text shown by native code (menus, tray, notifications, dialogs).
+- `src/components/ErrorBoundary.tsx`: contains render failures to one view instead of blanking the window.
 - `docs/ARCHITECTURE.md`: architecture overview.
 - `docs/CONTENT_BLOCKING.md`: official EasyList/EasyPrivacy verification and snapshot updates.
 - `docs/THREAT_BLOCKING.md`: official TweetFeed snapshot verification and reported-threat policy.
@@ -95,6 +100,9 @@ These are release blockers. Do not weaken them for convenience.
 - Store builds must not initialize or expose the Tauri updater.
 - Do not automatically retry an uncertain SMTP send. Keep it in `needs_attention` for an explicit user retry.
 - Preserve message/MIME/recipient/attachment/remote-image size and nesting limits.
+- Keep the parse quarantine: `messages.parse_pending` counts parses that started but never returned. It is committed just before the parse (never during the download) and reset after. Two unfinished parses in a row, or one caught parser panic, quarantine the message; one is forgiven because the app may simply have quit. Release builds unwind on panic; keep it that way so one bad message fails one task, not the app.
+- Route only pure reads through `Database::read_conn` (read-only WAL connection). Anything that writes uses `conn`; skippable housekeeping writes on read paths use `try_conn`.
+- Keep `secure_delete` on and compact the database after clearing downloads or removing accounts, so removed mail is not recoverable from the file.
 
 ## Mail and storage behavior
 
@@ -161,7 +169,7 @@ The `b` and `r` package scripts intentionally perform destructive branch cleanup
 - Preserve user changes and unrelated dirty-worktree content.
 - Prefer small typed IPC commands over plugin permissions or frontend-native access.
 - Validate ownership at account/mailbox/message/draft/outbox boundaries.
-- Keep errors actionable but redacted.
+- Keep errors actionable but redacted. `IpcError` passes authored text through only for `operationFailed`, `invalidInput`, and `limitExceeded`, and only when it carries no quotes, addresses, paths, or dotted names; other codes use the frontend catalog.
 - Add regression coverage for every security, sync, draft/outbox, and release-tooling fix.
 - Run focused tests while editing, then `npm run test:all` before handoff when possible.
 - Never use real mailbox credentials in fixtures, logs, commits, screenshots, or issue text.
@@ -169,7 +177,7 @@ The `b` and `r` package scripts intentionally perform destructive branch cleanup
 
 ## Release status and manual gates
 
-Automated frontend, Playwright, Rust, lint, clippy, type, config, and production-build gates are established. They do not make a release ready. Final GitHub 0.2.x approval still requires external systems and real credentials:
+Automated frontend, Playwright, Rust, lint, clippy, type, config, and production-build gates are established. They do not make a release ready. Final GitHub release approval still requires external systems and real credentials:
 
 - Online npm and RustSec audits.
 - Pinned GreenMail 2.1.11 TLS integration run (requires Docker and OpenSSL).

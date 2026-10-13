@@ -111,6 +111,7 @@ export function PlainTextContent({
 }
 
 function missingBodyNote(message: MessageDetail): string {
+  if (message.bodyStatus === "unreadable") return strings.mail.bodyUnreadable;
   if (message.bodyStatus === "offline") return strings.mail.bodyOffline;
   if (message.bodyStatus === "signInNeeded")
     return strings.mail.bodySignInNeeded;

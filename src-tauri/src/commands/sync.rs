@@ -733,7 +733,7 @@ pub(crate) async fn replay_outbox_locked(account_id: &str, app: &AppHandle, stat
             let _ = retry_sent_copy_locked(&id, account_id, app, state).await;
         }
     }
-    if let Ok(ids) = state.db.outbox_ids_in_state(account_id, &["queued"]) {
+    if let Ok(ids) = state.db.due_queued_outbox_ids(account_id) {
         for id in ids {
             let _ = deliver_outbox_locked(&id, account_id, "queued", app, state).await;
         }

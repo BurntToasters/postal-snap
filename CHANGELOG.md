@@ -54,6 +54,18 @@ Postal Snap is a calm, accessible desktop email client. Mail stays on your compu
 - **FIX - Windows mail folder move:** Moving mail data out of the roaming profile is now all-or-nothing. If it cannot finish, Postal Snap keeps using the previous folder. Files attached to unsent drafts and queued messages still work after the move.
 - **FIX - Proton Bridge:** Large messages sent through Proton Bridge no longer show as uncertain when Bridge takes a while to accept them.
 - **FIX - Folders:** Moving a folder inside itself now shows a clear message instead of a server error.
+- **NEW - Risky file warning:** Saving a file that can run programs or imitate a web page (such as `.exe`, `.js`, `.html`, or `.iso`) asks first, for single files, all files, chosen files, and whole conversations.
+- **NEW - Outgoing server check:** Changing an account's outgoing server asks first, because Postal Snap signs in to it with the saved password.
+- **FIX - Clearer errors:** Errors now say what happened, such as an account that is already set up, instead of a general "Try again".
+- **FIX - Problem messages:** A message that Postal Snap cannot read safely is shown as unreadable instead of closing the app, and one part of the window that fails no longer blanks the whole window.
+- **FIX - Startup problems:** If the mail data cannot open, or was saved by a newer version, Postal Snap now explains what happened instead of closing. Your mail data is not changed.
+- **FIX - Removed mail stays removed:** Clearing downloaded mail, removing an account, or erasing all data now also frees the disk space and leaves no readable copy behind.
+- **FIX - Faster lists and reading:** Long message lists scroll and resize faster, and opening a message no longer waits for mail checking to finish.
+- **FIX - Catching up:** Downloading a large amount of new mail no longer holds up what you are doing, and picks up where it left off.
+- **FIX - Sending later after a busy server:** When a mail server keeps asking to try later, Postal Snap waits longer between tries and asks you after several attempts.
+- **FIX - Email links:** Links that open a new message keep `+` in addresses (such as `name+family@example.com`) and read Subject and Cc in any letter case.
+- **FIX - Linux default mail app:** Postal Snap sets itself as the default mail app only on first launch, and keeps your choice if you pick another app later.
+- **FIX - Flatpak:** Settings now shows license credits in the Flatpak build.
 
 ## ℹ️ Release Info
 

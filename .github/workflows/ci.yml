@@ -116,6 +116,14 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run licenses
       - run: cargo check --locked --manifest-path src-tauri/Cargo.toml --all-targets
+      # test-linux covers Linux; platform-only Rust tests (credential vault,
+      # Zone.Identifier, window chrome) only run on their own OS.
+      - if: matrix.name != 'linux'
+        run: npm run build
+      - if: matrix.name != 'linux'
+        run: npm run test:rust
+      - if: matrix.name != 'linux'
+        run: npx vitest run
       - name: Unsigned Linux AppImage bundle smoke
         if: matrix.name == 'linux'
         env:

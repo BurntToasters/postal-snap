@@ -105,9 +105,17 @@ pub fn get_cache_usage(state: State<'_, AppState>) -> CommandResult<CacheUsage> 
     )
 }
 
-#[tauri::command(async)]
-pub fn clear_downloaded_mail(state: State<'_, AppState>) -> CommandResult<()> {
-    command_result(state.db.clear_downloaded_mail())
+#[tauri::command]
+pub async fn clear_downloaded_mail(state: State<'_, AppState>) -> CommandResult<()> {
+    let db = state.db.clone();
+    // VACUUM rewrites the whole file; keep it off the async runtime.
+    let result = tokio::task::spawn_blocking(move || {
+        db.clear_downloaded_mail()?;
+        db.compact()
+    })
+    .await
+    .map_err(|_| "Postal Snap could not clear downloaded mail.".to_string())?;
+    command_result(result)
 }
 
 #[tauri::command]
@@ -138,7 +146,8 @@ pub fn get_distribution_channel() -> DistributionChannel {
 }
 
 fn check_native_dialog_text(title: &str, message: &str) -> Result<(), String> {
-    if title.len() > 120 || message.len() > 2000 {
+    // Bytes, not characters: a long link plus non-Latin text must still fit.
+    if title.len() > 120 || message.len() > 6000 {
         return Err("Dialog text is too long.".into());
     }
     Ok(())
@@ -376,12 +385,17 @@ pub(crate) fn read_license_credits_from(dir: &Path) -> Result<LicenseCredits, St
     Ok(LicenseCredits { notices, packages })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_license_credits(app: AppHandle) -> CommandResult<LicenseCredits> {
-    let dir = app
-        .path()
-        .resource_dir()
-        .map_err(|_| "Could not read license credits.".to_string())?;
+    // Flatpak installs notices under /app/share/doc; Tauri's resource
+    // directory does not exist there.
+    let dir = if cfg!(feature = "flatpak") || std::env::var_os("FLATPAK_ID").is_some() {
+        std::path::PathBuf::from("/app/share/doc/run.rosie.snap")
+    } else {
+        app.path()
+            .resource_dir()
+            .map_err(|_| "Could not read license credits.".to_string())?
+    };
     command_result(read_license_credits_from(&dir))
 }
 

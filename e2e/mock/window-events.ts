@@ -41,7 +41,7 @@ export async function registerMockWindowEvents(
             if (action === "is_fullscreen") return state.fullscreen;
             const permission =
               action === "internal_toggle_maximize"
-                ? "core:default"
+                ? "core:window:default"
                 : `core:window:allow-${action.replaceAll("_", "-")}`;
             if (!permissions.includes(permission))
               throw new Error(`Window permission missing: ${permission}`);
@@ -87,10 +87,17 @@ export async function registerMockWindowEvents(
             }
             case "plugin:process|restart":
               return undefined;
-            case "plugin:deep-link|get_current":
-              return new URLSearchParams(location.search).has("startupMailto")
-                ? ["mailto:startup@example.test?subject=Startup"]
-                : [];
+            case "plugin:deep-link|get_current": {
+              const startup = new URLSearchParams(location.search).get(
+                "startupMailto",
+              );
+              if (startup === null) return [];
+              return [
+                startup === "1"
+                  ? "mailto:startup@example.test?subject=Startup"
+                  : startup,
+              ];
+            }
             case "plugin:notification|is_permission_granted":
               return true;
             default: {

@@ -34,4 +34,10 @@ export const app = {
   startupRecoveryTitle: "Postal Snap could not open your mail data",
   startupRecoveryHelp:
     "Your saved mail was not deleted. Restart Postal Snap and try again.",
+  crashTitle: "Something went wrong in this window",
+  crashHelp:
+    "Your mail and saved drafts are safe. Reload the window to continue.",
+  crashReload: "Reload window",
+  readerCrashHelp:
+    "This message could not be shown. Choose another message, or reload the window.",
 } as const;

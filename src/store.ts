@@ -12,6 +12,7 @@ import type {
   MessageSummary,
   OutboxSummary,
   SnoozedSummary,
+  SyncProgress,
   SyncState,
 } from "./types";
 
@@ -127,6 +128,9 @@ interface AppState {
   lastSent?: SentNotice;
   updateReady: string | null;
   setUpdateReady: (version: string | null) => void;
+  /** Kept here so progress events re-render only the status line. */
+  syncProgress: SyncProgress | undefined;
+  setSyncProgress: (progress: SyncProgress | undefined) => void;
   setAccounts: (accounts: AccountSummary[]) => void;
   selectAccount: (id: string) => void;
   setMailboxes: (mailboxes: MailboxSummary[]) => void;
@@ -200,6 +204,8 @@ export const useAppStore = create<AppState>((set) => ({
   busy: false,
   updateReady: null,
   setUpdateReady: (updateReady) => set({ updateReady }),
+  syncProgress: undefined,
+  setSyncProgress: (syncProgress) => set({ syncProgress }),
   setAccounts: (accounts) =>
     set((state) => {
       const accountIds = new Set(accounts.map((account) => account.id));

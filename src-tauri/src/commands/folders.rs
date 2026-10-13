@@ -10,7 +10,7 @@ use crate::{
     },
 };
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn suggest_recipients(
     account_id: String,
     prefix: String,

@@ -22,13 +22,19 @@ use crate::models::{
 };
 use crate::models::{Attachment, ComposeDraft, MailboxRole, MessageSummary, ProviderKind, TlsMode};
 
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 32;
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 33;
+
+pub(crate) const NEWER_DATABASE: &str =
+    "This mail database was created by a newer Postal Snap version.";
 
 pub type MailboxSyncState = (Option<u32>, Option<u32>, u32, Option<u32>);
 
 #[derive(Clone)]
 pub struct Database {
     connection: Arc<Mutex<Connection>>,
+    /// Read-only WAL reader so list and detail queries do not wait behind
+    /// sync writes. `None` for in-memory databases, which use the writer.
+    reader: Option<Arc<Mutex<Connection>>>,
 }
 
 #[derive(Debug)]
@@ -85,6 +91,13 @@ pub struct DraftSyncRecord {
 impl Database {
     pub fn open(path: &Path) -> Result<Self, String> {
         let mut connection = Connection::open(path).map_err(db_error)?;
+        // Check before any pragma writes so a newer file stays untouched.
+        let version: u32 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .map_err(db_error)?;
+        if version > CURRENT_SCHEMA_VERSION {
+            return Err(NEWER_DATABASE.into());
+        }
         connection
             .pragma_update(None, "journal_mode", "WAL")
             .map_err(db_error)?;
@@ -100,22 +113,53 @@ impl Database {
         connection
             .busy_timeout(Duration::from_secs(5))
             .map_err(db_error)?;
+        // Zero freed pages so removed mail is not recoverable from the file.
+        connection
+            .pragma_update(None, "secure_delete", "ON")
+            .map_err(db_error)?;
         migrate_schema(&mut connection)?;
         // A database that still held duplicate emails when v14 or v15 ran keeps
         // working; retrying here restores the unique index once the user has
         // removed the duplicate rows. Best effort: the index build fails while
         // duplicates remain.
         let _ = ensure_account_email_unique_index(&connection);
-        recover_fts_index(&connection)?;
         connection
             .execute(
                 "UPDATE outbox SET state='needs_attention', detail='Postal Snap closed before delivery could be confirmed. It will not resend automatically.' WHERE state='sending'",
                 [],
             )
             .map_err(db_error)?;
+        let reader = Connection::open_with_flags(
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+                | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX
+                | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+        )
+        .map_err(db_error)?;
+        reader
+            .busy_timeout(Duration::from_secs(5))
+            .map_err(db_error)?;
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
+            reader: Some(Arc::new(Mutex::new(reader))),
         })
+    }
+
+    /// Empty stand-in used when the mail database cannot open, so the window
+    /// can explain the problem instead of the app exiting silently.
+    pub fn unavailable() -> Result<Self, String> {
+        let mut connection = Connection::open_in_memory().map_err(db_error)?;
+        migrate_schema(&mut connection)?;
+        Ok(Self {
+            connection: Arc::new(Mutex::new(connection)),
+            reader: None,
+        })
+    }
+
+    /// Repair or verify the search index. Runs after the window opens; a full
+    /// rebuild on a large cache can take a while.
+    pub fn maintain_search_index(&self) -> Result<(), String> {
+        recover_fts_index(&*self.conn()?)
     }
 
     #[cfg(test)]
@@ -127,13 +171,35 @@ impl Database {
         migrate_schema(&mut connection).unwrap();
         Self {
             connection: Arc::new(Mutex::new(connection)),
+            reader: None,
         }
     }
 
-    pub(crate) fn conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>, String> {
-        self.connection
+    /// The writer only if it is free right now, for housekeeping that can wait
+    /// for a later call instead of blocking a read.
+    pub(crate) fn try_conn(&self) -> Option<std::sync::MutexGuard<'_, Connection>> {
+        match self.connection.try_lock() {
+            Ok(guard) => Some(guard),
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
+            Err(std::sync::TryLockError::WouldBlock) => None,
+        }
+    }
+
+    /// Connection for queries that never write. Falls back to the writer.
+    pub(crate) fn read_conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>, String> {
+        let shared = self.reader.as_ref().unwrap_or(&self.connection);
+        Ok(shared
             .lock()
-            .map_err(|_| "Local mail database is unavailable.".into())
+            .unwrap_or_else(std::sync::PoisonError::into_inner))
+    }
+
+    pub(crate) fn conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>, String> {
+        // A panic while locked rolled back its transaction on unwind, so the
+        // connection is consistent; keep using it instead of failing forever.
+        Ok(self
+            .connection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner))
     }
 }
 
@@ -296,7 +362,7 @@ fn migrate_schema(connection: &mut Connection) -> Result<(), String> {
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .map_err(db_error)?;
     if version > CURRENT_SCHEMA_VERSION {
-        return Err("This mail database was created by a newer Postal Snap version.".into());
+        return Err(NEWER_DATABASE.into());
     }
     if version < 1 {
         transaction.execute_batch(SCHEMA_V1).map_err(db_error)?;
@@ -960,6 +1026,35 @@ fn migrate_schema(connection: &mut Connection) -> Result<(), String> {
             "pending_destination_generation",
             "ALTER TABLE messages ADD COLUMN pending_destination_generation INTEGER",
         )?;
+    }
+    if version < 33 {
+        // Set while a body is parsed; a crash leaves it set so the message is
+        // never parsed automatically again.
+        ensure_column(
+            &transaction,
+            "messages",
+            "parse_pending",
+            "ALTER TABLE messages ADD COLUMN parse_pending INTEGER NOT NULL DEFAULT 0",
+        )?;
+        ensure_column(
+            &transaction,
+            "outbox",
+            "retry_attempts",
+            "ALTER TABLE outbox ADD COLUMN retry_attempts INTEGER NOT NULL DEFAULT 0",
+        )?;
+        ensure_column(
+            &transaction,
+            "outbox",
+            "retry_after",
+            "ALTER TABLE outbox ADD COLUMN retry_after TEXT",
+        )?;
+        // Pinned rows sort first; this index keeps paging off a temp B-tree.
+        transaction
+            .execute(
+                "CREATE INDEX IF NOT EXISTS messages_mailbox_pinned_date_uid ON messages(mailbox_id,pinned DESC,received_at DESC,uid DESC)",
+                [],
+            )
+            .map_err(db_error)?;
     }
     // Also initialize this sequence for earlier development snapshots of v22.
     transaction.execute_batch("CREATE TABLE IF NOT EXISTS mailbox_id_sequence (
@@ -6769,5 +6864,324 @@ mod tests {
         db.clear_pending_move(id).unwrap();
 
         assert_eq!(mailbox_counts(&db, account_id, archive), (3, 1));
+    }
+
+    // Failure modes for erasing local mail:
+    // 1. Cleared bodies stay readable in free pages of the database file.
+    // 2. Cleared bodies stay readable in the WAL file.
+    // 3. Removing an account leaves its mail recoverable on disk.
+    // 4. Compacting loses envelopes that should survive a body clear.
+    #[test]
+    fn cleared_and_removed_mail_is_not_left_on_disk() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("postal-snap.sqlite3");
+        let marker = "zq-private-body-marker";
+        let on_disk = |needle: &str| {
+            ["postal-snap.sqlite3", "postal-snap.sqlite3-wal"]
+                .iter()
+                .filter_map(|name| std::fs::read(directory.path().join(name)).ok())
+                .any(|bytes| {
+                    bytes
+                        .windows(needle.len())
+                        .any(|window| window == needle.as_bytes())
+                })
+        };
+        let db = Database::open(&path).unwrap();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, &account.summary.id, "INBOX", &MailboxRole::Inbox);
+        let mut cached = message(1, "2026-08-18T12:00:00Z");
+        cached.text_body = marker.repeat(400);
+        cached.raw_message = marker.repeat(400).into_bytes();
+        db.upsert_message(&account.summary.id, inbox, &cached)
+            .unwrap();
+        assert!(on_disk(marker));
+
+        db.clear_downloaded_mail().unwrap();
+        db.compact().unwrap();
+        assert!(!on_disk(marker));
+        assert_eq!(db.list_messages(inbox, None, 10).unwrap().items.len(), 1);
+
+        db.remove_account(&account.summary.id).unwrap();
+        db.compact().unwrap();
+        assert!(!on_disk("Family picnic"));
+    }
+
+    // Failure modes for the parse quarantine:
+    // 1. One quit or update restart mid-parse quarantines a good message.
+    // 2. A parser that crashes the app every time is parsed on every launch.
+    // 3. A caught parser panic is retried like an ordinary failure.
+    // 4. A finished parse leaves an unfinished count behind.
+    // 5. Opening a quarantined message parses it again.
+    #[test]
+    fn interrupted_parse_quarantines_only_repeat_crashes() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, &account.summary.id, "INBOX", &MailboxRole::Inbox);
+        for uid in [1, 2, 3] {
+            let mut envelope = message(uid, "2026-08-18T12:00:00Z");
+            envelope.raw_message.clear();
+            envelope.text_body.clear();
+            db.upsert_message(&account.summary.id, inbox, &envelope)
+                .unwrap();
+        }
+        let policy = CachePolicy::default();
+        let candidates = |db: &Database| {
+            let mut uids = db
+                .prefetch_candidates(inbox, &policy, 10, u64::MAX, u64::MAX)
+                .unwrap()
+                .into_iter()
+                .map(|(uid, _)| uid)
+                .collect::<Vec<_>>();
+            uids.sort_unstable();
+            uids
+        };
+        let quarantined = |uid: u32| {
+            let item = db
+                .list_messages(inbox, None, 10)
+                .unwrap()
+                .items
+                .into_iter()
+                .find(|item| item.uid == uid)
+                .unwrap();
+            db.parse_quarantined(item.id, &account.summary.id).unwrap()
+        };
+        // Message 1: one unfinished parse (a quit) is forgiven.
+        db.begin_parse(inbox, 1).unwrap();
+        assert!(!quarantined(1));
+        assert_eq!(candidates(&db), vec![1, 2, 3]);
+        // A second unfinished parse in a row looks like a crash.
+        db.begin_parse(inbox, 1).unwrap();
+        assert!(quarantined(1));
+        // Message 2: a finished parse resets the count.
+        db.begin_parse(inbox, 2).unwrap();
+        db.end_parse(inbox, 2).unwrap();
+        db.begin_parse(inbox, 2).unwrap();
+        assert!(!quarantined(2));
+        // Message 3: a caught panic quarantines at once.
+        db.quarantine_parse(inbox, 3).unwrap();
+        assert!(quarantined(3));
+        assert_eq!(candidates(&db), vec![2]);
+    }
+
+    // Failure modes for a database the app cannot open:
+    // 1. A newer schema is reported as generic damage, not as a newer version.
+    // 2. Opening it rewrites or migrates the newer file.
+    // 3. The stand-in cannot list accounts, so the window cannot load.
+    #[test]
+    fn newer_database_is_reported_and_left_untouched() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("postal-snap.sqlite3");
+        Connection::open(&path)
+            .unwrap()
+            .pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION + 1)
+            .unwrap();
+        let before = std::fs::read(&path).unwrap();
+        assert_eq!(Database::open(&path).err().as_deref(), Some(NEWER_DATABASE));
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert!(Database::unavailable()
+            .unwrap()
+            .list_accounts()
+            .unwrap()
+            .is_empty());
+    }
+
+    // Failure modes for an interrupted new-mail catch-up:
+    // 1. The next pass sees the stored UIDNEXT, calls the folder unchanged,
+    //    and never fetches the rest of the gap.
+    // 2. Forgetting UIDNEXT also loses validity or counts.
+    #[test]
+    fn interrupted_catch_up_is_not_seen_as_unchanged() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let inbox = db
+            .upsert_mailbox(
+                &account.summary.id,
+                "INBOX",
+                &MailboxRole::Inbox,
+                Some(11),
+                Some(100),
+                Some(3),
+                7,
+            )
+            .unwrap();
+        db.forget_uid_next(inbox).unwrap();
+        assert_eq!(
+            db.mailbox_sync_state(&account.summary.id, "INBOX").unwrap(),
+            Some((Some(11), None, 7, Some(3)))
+        );
+    }
+
+    // Failure modes for "try later" retries:
+    // 1. A deferred row is retried on the very next sync pass.
+    // 2. Retries never stop for a server that always says "try later".
+    // 3. A user retry from needs_attention starts with a spent budget.
+    // 4. Another account's rows are touched.
+    #[test]
+    fn try_later_replies_back_off_and_stop() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let account_id = &account.summary.id;
+        let id = db
+            .queue_outbox(&draft(account_id), "queued", None, "", b"", None)
+            .unwrap();
+        assert_eq!(
+            db.due_queued_outbox_ids(account_id).unwrap(),
+            vec![id.clone()]
+        );
+        assert!(db.defer_outbox_retry(&id, account_id, 3).unwrap());
+        assert!(db.due_queued_outbox_ids(account_id).unwrap().is_empty());
+        assert!(db
+            .due_queued_outbox_ids("other-account")
+            .unwrap()
+            .is_empty());
+        assert!(db.defer_outbox_retry(&id, account_id, 3).unwrap());
+        assert!(!db.defer_outbox_retry(&id, account_id, 3).unwrap());
+        db.set_outbox_state(&id, account_id, "needs_attention", None)
+            .unwrap();
+        assert!(db
+            .claim_outbox_delivery(&id, account_id, "needs_attention")
+            .unwrap());
+        db.set_outbox_state(&id, account_id, "queued", None)
+            .unwrap();
+        assert_eq!(
+            db.due_queued_outbox_ids(account_id).unwrap(),
+            vec![id.clone()]
+        );
+        assert!(db.defer_outbox_retry(&id, account_id, 3).unwrap());
+    }
+
+    // Failure modes for the read-only connection:
+    // 1. A list or detail read waits behind a held writer lock.
+    // 2. A read does not see a write that already committed.
+    // 3. The reader can write, bypassing the writer's rules.
+    // 4. A panic while the writer is locked breaks the database for good.
+    #[test]
+    fn reads_do_not_wait_for_the_writer_and_see_commits() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Database::open(&directory.path().join("postal-snap.sqlite3")).unwrap();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, &account.summary.id, "INBOX", &MailboxRole::Inbox);
+        db.upsert_message(
+            &account.summary.id,
+            inbox,
+            &message(1, "2026-08-18T12:00:00Z"),
+        )
+        .unwrap();
+
+        let writer = db.conn().unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let reader = db.clone();
+        std::thread::spawn(move || {
+            let accounts = reader.list_accounts().unwrap().len();
+            let messages = reader
+                .list_messages_filtered(
+                    inbox,
+                    None,
+                    10,
+                    crate::models::MessageListFilter::All,
+                    crate::models::MessageListSort::Date,
+                )
+                .map(|page| page.items.len());
+            sender.send((accounts, messages.is_ok())).unwrap();
+        });
+        // The account list must arrive while the writer is still held.
+        let first = receiver.recv_timeout(Duration::from_secs(2));
+        drop(writer);
+        assert!(first.is_ok(), "reader waited for the writer");
+        assert_eq!(first.unwrap().0, 1);
+
+        assert!(db
+            .read_conn()
+            .unwrap()
+            .execute("DELETE FROM accounts", [])
+            .is_err());
+
+        let panicking = db.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = panicking.conn().unwrap();
+            panic!("simulated panic while locked");
+        })
+        .join();
+        assert_eq!(db.list_accounts().unwrap().len(), 1);
+        db.set_account_state(&account.summary.id, "idle", None)
+            .unwrap();
+    }
+
+    // Failure modes for compacting while the reader is busy:
+    // 1. A read in progress keeps the WAL from truncating, leaving old
+    //    pages (and removed mail) in the WAL file.
+    // 2. Compacting deadlocks with a read that is waiting on the writer.
+    #[test]
+    fn compact_waits_for_reads_and_empties_the_wal() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("postal-snap.sqlite3");
+        let db = Database::open(&path).unwrap();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let held = db.read_conn().unwrap();
+        let compacting = db.clone();
+        let done = std::thread::spawn(move || compacting.compact());
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(!done.is_finished(), "compact ran under an open read");
+        drop(held);
+        done.join().unwrap().unwrap();
+        let wal = std::fs::metadata(directory.path().join("postal-snap.sqlite3-wal"))
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
+        assert_eq!(wal, 0);
+        assert_eq!(db.list_accounts().unwrap().len(), 1);
+    }
+
+    // Failure modes for recording when a message was opened:
+    // 1. Opening a message while sync holds the writer waits behind it.
+    // 2. That open is never recorded, so eviction drops the body early.
+    #[test]
+    fn opening_during_a_sync_write_still_records_recency() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Database::open(&directory.path().join("postal-snap.sqlite3")).unwrap();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, &account.summary.id, "INBOX", &MailboxRole::Inbox);
+        db.upsert_message(
+            &account.summary.id,
+            inbox,
+            &message(1, "2026-08-18T12:00:00Z"),
+        )
+        .unwrap();
+        let id = db.list_messages(inbox, None, 10).unwrap().items[0].id;
+        db.conn()
+            .unwrap()
+            .execute("UPDATE messages SET accessed_at='2000-01-01 00:00:00'", [])
+            .unwrap();
+        let writer = db.conn().unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let reader = db.clone();
+        let account_id = account.summary.id.clone();
+        std::thread::spawn(move || {
+            sender
+                .send(reader.message_detail(id, &account_id).is_ok())
+                .unwrap();
+        });
+        assert_eq!(receiver.recv_timeout(Duration::from_secs(2)), Ok(true));
+        drop(writer);
+        let recorded = (0..50).any(|_| {
+            std::thread::sleep(Duration::from_millis(20));
+            let at: String = db
+                .read_conn()
+                .unwrap()
+                .query_row(
+                    "SELECT accessed_at FROM messages WHERE id=?1",
+                    [id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            at.as_str() > "2000-01-01 00:00:00"
+        });
+        assert!(recorded, "the open was never recorded");
     }
 }

@@ -14,7 +14,7 @@ import {
 import { strings } from "../../i18n";
 import { folderLabel, folderPathLabel } from "../../i18n/mail";
 import { mailboxIsPinned } from "../../pinnedMailboxes";
-import { parentMailboxIds } from "./folderTree";
+import { parentMailboxIds } from "./folderTreeModel";
 import type {
   AccountInboxCount,
   AccountSummary,
@@ -26,7 +26,8 @@ import type {
 } from "../../types";
 import { AccountSwitcher } from "./accountSwitcher";
 import { FolderButton } from "./folderButton";
-import { FolderTree, mailboxesForUnreadView } from "./folderTree";
+import { FolderTree } from "./folderTree";
+import { mailboxesForUnreadView } from "./folderTreeModel";
 import { SyncStatus } from "./syncStatus";
 
 export type LocalFolderView = "drafts" | "outbox" | "snoozed";

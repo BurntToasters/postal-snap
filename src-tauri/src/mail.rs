@@ -1491,7 +1491,7 @@ mod tests {
             .unwrap_err()
             .contains("identity is unavailable"));
         assert!(
-            download_message(&account, "secret", "INBOX", 1, 10, None, None)
+            download_message(&account, "secret", "INBOX", 1, 10, None, None, || Ok(()))
                 .await
                 .unwrap_err()
                 .contains("identity is unavailable")
@@ -2081,6 +2081,7 @@ mod tests {
             db.mailbox_uid_validity(&account.summary.id, "INBOX")
                 .unwrap(),
             Some(summary.received_at.as_str()),
+            || Ok(()),
         )
         .await
         .unwrap();

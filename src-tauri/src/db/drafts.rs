@@ -13,7 +13,7 @@ impl Database {
     }
 
     pub fn list_drafts(&self, account_id: &str) -> Result<Vec<DraftSummary>, String> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut statement = conn
             .prepare(
                 // Older rows hold SQLite's "YYYY-MM-DD HH:MM:SS" (UTC, no zone)
