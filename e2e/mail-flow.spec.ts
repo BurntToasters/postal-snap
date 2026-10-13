@@ -1427,6 +1427,30 @@ test("undoes a held message before it sends", async ({ page }) => {
   await expect(page.getByText("Held for review")).toBeHidden();
 });
 
+test("send and archive keeps source until held send commits", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/?localMail=1");
+  await page.getByRole("option", { name: /Weekend plans/i }).click();
+  await page.getByRole("button", { name: "Reply", exact: true }).click();
+  await page.getByLabel("Message body").pressSequentially("I can join.");
+  await page.getByRole("button", { name: "Send options" }).click();
+  await page.getByRole("menuitem", { name: "Send and archive" }).click();
+  await expect(page.locator(".sent-toast")).toContainText("Held for review");
+  const calls = await page.evaluate(
+    () => window.__POSTAL_SNAP_TEST__?.ipcCalls ?? [],
+  );
+  expect(calls.some((call) => call.command === "move_message")).toBe(false);
+  await page
+    .locator(".sent-toast")
+    .getByRole("button", { name: "Undo" })
+    .click();
+  await expect(page.locator(".composer-window")).toBeVisible();
+  const path = "test-results/send-archive-held-undo.png";
+  await page.screenshot({ path });
+  await testInfo.attach("screenshot", { path, contentType: "image/png" });
+});
+
 test("snoozes a message until tomorrow morning", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("option", { name: /Weekend plans/i }).click();

@@ -219,8 +219,10 @@ export const mail = {
   waitingSend: "Waiting to send",
   sending: "Sending",
   sentCopyPending: "Sent — copy pending",
+  archivePending: "Sent — archive incomplete",
   needsAttention: "Needs attention",
   retrySending: "Retry sending",
+  retryArchive: "Retry archive",
   editQueued: "Edit",
   editUncertainTitle: "Edit this message?",
   editUncertainDetail:
@@ -258,6 +260,8 @@ export const mail = {
   dismissSentCopy:
     "Stop trying to save a Sent copy? The message was already sent.",
   dismissWarning: "Dismiss warning",
+  dismissArchiveWarning:
+    "The message was sent. Dismiss this warning and stop retrying to file the original?",
   today: "Today",
   yesterday: "Yesterday",
   justNow: "just now",

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import test from "node:test";
 import { join } from "node:path";
 import { artifactArch, artifactPlatform } from "./lib/artifacts.js";
@@ -11,10 +12,103 @@ import {
   updaterManifestName,
 } from "./validate-updater-live.js";
 import {
+  assertReleaseWorktreeClean,
   remoteTagCommit,
   verifyDraftReleaseCommit,
   verifyRemoteReleaseCommit,
 } from "./release-identity.js";
+
+test("release continuation rejects modified source after preparation", async () => {
+  await assert.rejects(
+    assertReleaseWorktreeClean(async () => " M src/components/Composer.tsx"),
+    /clean worktree/i,
+  );
+  await assert.doesNotReject(assertReleaseWorktreeClean(async () => ""));
+});
+
+test("release preparation retires the dirty worktree override", async () => {
+  const originalOverride = process.env.ALLOW_DIRTY_RELEASE;
+  process.env.ALLOW_DIRTY_RELEASE = "1";
+  try {
+    await assert.rejects(
+      assertReleaseWorktreeClean(async () => " M src/components/Composer.tsx"),
+      /clean worktree/i,
+    );
+  } finally {
+    if (originalOverride === undefined) delete process.env.ALLOW_DIRTY_RELEASE;
+    else process.env.ALLOW_DIRTY_RELEASE = originalOverride;
+  }
+
+  const prepare = await readFile(
+    join(root, "scripts/prerelease-prepare.js"),
+    "utf8",
+  );
+  assert.match(prepare, /assertReleaseWorktreeClean\(\)/);
+  assert.doesNotMatch(prepare, /ALLOW_DIRTY_RELEASE/);
+
+  const template = await readFile(join(root, ".env.example"), "utf8");
+  assert.doesNotMatch(template, /ALLOW_DIRTY_RELEASE/);
+});
+
+test("release session digest binds every generated direct-bundle resource", async () => {
+  const { RELEASE_SESSION_BUNDLE_INPUTS, releaseBundleResourcesSha256 } =
+    await import("./release-identity.js");
+  const config = JSON.parse(
+    await readFile(join(root, "src-tauri/tauri.conf.json"), "utf8"),
+  );
+  const configuredInputs = Object.keys(config.bundle.resources)
+    .filter(
+      (path) =>
+        path.startsWith("../public/licenses") ||
+        path.startsWith("../THIRD_PARTY_NOTICES."),
+    )
+    .map((path) => path.slice(3))
+    .sort();
+  assert.deepEqual([...RELEASE_SESSION_BUNDLE_INPUTS].sort(), configuredInputs);
+
+  const directory = await mkdtemp(
+    join(tmpdir(), "postal-snap-release-inputs-"),
+  );
+  try {
+    const contents = new Map([
+      ["public/licenses.json", "npm licenses v1"],
+      ["public/licenses-cargo.json", "cargo licenses v1"],
+      ["THIRD_PARTY_NOTICES.npm.txt", "npm notices v1"],
+      ["THIRD_PARTY_NOTICES.cargo.txt", "cargo notices v1"],
+    ]);
+    for (const [path, value] of contents) {
+      const absolute = join(directory, path);
+      await mkdir(join(absolute, ".."), { recursive: true });
+      await writeFile(absolute, value);
+    }
+
+    const initial = await releaseBundleResourcesSha256(directory);
+    await writeFile(join(directory, "public/licenses.json"), "npm licenses v2");
+    const changed = await releaseBundleResourcesSha256(directory);
+    assert.match(initial, /^[a-f0-9]{64}$/);
+    assert.notEqual(changed, initial);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("release session digest reports a missing generated bundle input", async () => {
+  const { releaseBundleResourcesSha256 } =
+    await import("./release-identity.js");
+  const directory = await mkdtemp(
+    join(tmpdir(), "postal-snap-release-inputs-"),
+  );
+  try {
+    await mkdir(join(directory, "public"), { recursive: true });
+    await writeFile(join(directory, "public/licenses.json"), "npm licenses");
+    await assert.rejects(
+      releaseBundleResourcesSha256(directory),
+      /public\/licenses-cargo\.json.*npm run licenses/i,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("artifact platform and architecture mapping", () => {
   assert.equal(artifactPlatform("Postal-Snap-Windows-x64.nsis.zip"), "windows");
@@ -99,7 +193,7 @@ const releaseSession = {
   commit: sessionCommit,
 };
 
-test("draft finalize requires a draft without resolving git tag refs", async () => {
+test("draft finalize resolves the tag and checks it against the session", async () => {
   const tagCalls = [];
   const execute = async (args) => {
     tagCalls.push(args.at(-1));
@@ -120,6 +214,44 @@ test("draft finalize requires a draft without resolving git tag refs", async () 
         target_commitish: sessionCommit,
       },
     ],
+    resolveTag: async (_repository, tag) => {
+      tagCalls.push(tag);
+      const error = new Error("gh: Not Found (HTTP 404)");
+      error.statusCode = 404;
+      throw error;
+    },
+  });
+  assert.equal(tagCalls.at(-1), "v0.1.0");
+  assert.equal(tagCalls.length, 2);
+});
+
+test("draft finalize rejects a tag that points at another commit", async () => {
+  await assert.rejects(
+    () =>
+      verifyDraftReleaseCommit("owner/repo", releaseSession, {
+        listReleases: async () => [
+          {
+            tag_name: "v0.1.0",
+            draft: true,
+            target_commitish: sessionCommit,
+          },
+        ],
+        resolveTag: async () => "d".repeat(40),
+      }),
+    /not release session commit/,
+  );
+});
+
+test("draft target_commitish is ignored when the tag already exists", async () => {
+  await verifyDraftReleaseCommit("owner/repo", releaseSession, {
+    listReleases: async () => [
+      {
+        tag_name: "v0.1.0",
+        draft: true,
+        target_commitish: "main",
+      },
+    ],
+    resolveTag: async () => sessionCommit,
   });
 });
 
@@ -159,12 +291,19 @@ test("draft finalize restores an untagged leftover draft tag", async () => {
         tag_name: "untagged-ff961747ae9f0e6a3461",
         draft: true,
         name: "0.1.0",
+        target_commitish: sessionCommit,
       },
     ],
     request: async (method, endpoint, body) => {
       patches.push({ method, endpoint, body });
-      return { id: 99, tag_name: body.tag_name, draft: true };
+      return {
+        id: 99,
+        tag_name: body.tag_name,
+        draft: true,
+        target_commitish: sessionCommit,
+      };
     },
+    resolveTag: async () => sessionCommit,
   });
   assert.deepEqual(patches, [
     {
@@ -175,17 +314,52 @@ test("draft finalize restores an untagged leftover draft tag", async () => {
   ]);
 });
 
-test("draft finalize accepts a leftover draft with a different target_commitish", async () => {
+test("draft finalize refuses a missing tag when its target commit differs", async () => {
   const otherCommit = "d".repeat(40);
-  await verifyDraftReleaseCommit("owner/repo", releaseSession, {
-    listReleases: async () => [
-      {
-        tag_name: "v0.1.0",
-        draft: true,
-        target_commitish: otherCommit,
-      },
-    ],
-  });
+  const patches = [];
+  await assert.rejects(
+    () =>
+      verifyDraftReleaseCommit("owner/repo", releaseSession, {
+        listReleases: async () => [
+          {
+            id: 99,
+            tag_name: "untagged-ff961747ae9f0e6a3461",
+            draft: true,
+            name: "0.1.0",
+            target_commitish: otherCommit,
+          },
+        ],
+        request: async (...args) => patches.push(args),
+        resolveTag: async () => {
+          const error = new Error("gh: Not Found (HTTP 404)");
+          error.statusCode = 404;
+          throw error;
+        },
+      }),
+    /draft target_commitish.*not release session commit/i,
+  );
+  assert.deepEqual(patches, []);
+});
+
+test("draft finalize does not treat non-404 tag lookup failures as absence", async () => {
+  const error = new Error("gh: HTTP 403");
+  error.statusCode = 403;
+  await assert.rejects(
+    () =>
+      verifyDraftReleaseCommit("owner/repo", releaseSession, {
+        listReleases: async () => [
+          {
+            tag_name: "v0.1.0",
+            draft: true,
+            target_commitish: sessionCommit,
+          },
+        ],
+        resolveTag: async () => {
+          throw error;
+        },
+      }),
+    (failure) => failure === error,
+  );
 });
 
 test("hard finalize still requires the published git tag to match the session commit", async () => {
@@ -206,7 +380,7 @@ test("hard finalize still requires the published git tag to match the session co
   );
 });
 
-test("finalize-release verifies drafts before upload and beta-syncs before publish", async () => {
+test("finalize-release uses draft identity before upload and strict identity after publish", async () => {
   const finalize = await readFile(
     join(root, "scripts/finalize-release.js"),
     "utf8",
@@ -219,12 +393,16 @@ test("finalize-release verifies drafts before upload and beta-syncs before publi
   const publishIndex = finalize.indexOf('"--draft=false"');
   assert.ok(draftIndex >= 0);
   assert.ok(uploadIndex > draftIndex);
-  assert.ok(hardIndex > uploadIndex);
-  assert.ok(publishIndex > hardIndex);
   assert.doesNotMatch(
     finalize.slice(draftIndex, uploadIndex),
     /verifyRemoteReleaseCommit/,
   );
+  assert.match(
+    finalize.slice(draftIndex, uploadIndex),
+    /verifyDraftReleaseCommit/,
+  );
+  assert.ok(hardIndex > uploadIndex);
+  assert.ok(publishIndex > hardIndex);
   assert.match(
     finalize,
     /syncBetaManifests: \(\) => syncLocalBetaManifests\(directory\)/,
@@ -238,15 +416,17 @@ test("finalize-release verifies drafts before upload and beta-syncs before publi
     finalize.indexOf("export async function runHardFinalize"),
   );
   const verifyStep = hardFinalize.indexOf("await verifyDraft()");
+  const draftIdentityStep = hardFinalize.indexOf("await verifyDraftIdentity()");
   const syncStep = hardFinalize.indexOf("await syncBetaManifests()");
   const publishStep = hardFinalize.indexOf("await publish()");
-  const remoteStep = hardFinalize.indexOf("await verifyRemote()");
+  const strictStep = hardFinalize.indexOf("await verifyPublished()");
   const reconcileStep = hardFinalize.indexOf("await reconcileBetaManifests()");
   assert.ok(verifyStep >= 0);
-  assert.ok(syncStep > verifyStep);
+  assert.ok(draftIdentityStep > verifyStep);
+  assert.ok(syncStep > draftIdentityStep);
   assert.ok(publishStep > syncStep);
-  assert.ok(remoteStep > publishStep);
-  assert.ok(reconcileStep > remoteStep);
+  assert.ok(strictStep > publishStep);
+  assert.ok(reconcileStep > strictStep);
 });
 
 test("direct and Store builds keep separate capabilities", async () => {
@@ -465,11 +645,11 @@ test("release environment template covers every supported credential path", asyn
     "SSH_USER_PWD",
     "POSTAL_SNAP_TEST_ICLOUD_EMAIL",
     "POSTAL_SNAP_TEST_ICLOUD_PASSWORD",
-    "ALLOW_DIRTY_RELEASE",
   ]) {
     assert.ok(names.has(name), `${name} is missing from .env.example`);
   }
   assert.ok(!names.has("GH_TOKEN"));
+  assert.ok(!names.has("ALLOW_DIRTY_RELEASE"));
   assert.ok(template.includes("gh auth login"));
   assert.match(
     template,

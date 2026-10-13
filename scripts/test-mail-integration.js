@@ -35,7 +35,7 @@ const report = {
     }).trim().length > 0,
   mode: bridgeOnly ? "bridge-only" : "full",
   startedAt: new Date().toISOString(),
-  fixtureVersions: { greenmail: "2.1.11", compatibility: "6" },
+  fixtureVersions: { greenmail: "2.1.11", compatibility: "7" },
   commands: [],
   results: [],
   status: "running",
@@ -225,6 +225,9 @@ try {
     environment[`POSTAL_SNAP_BRIDGE_IMAP_${name}`] = String(ports.imap);
     environment[`POSTAL_SNAP_BRIDGE_SMTP_${name}`] = String(ports.smtp);
   }
+  const replayFixtureMessage = (messageId, body, flags = []) => [
+    { uid: 1, messageId, subject: "Replay fixture", body, flags },
+  ];
   stage = "bridge-recovery-fixture-start";
   const recoveryFixture = await createCompatibilityFixture({
     certificatePath: certificate,
@@ -240,6 +243,18 @@ try {
       "Projects",
       "Projects/日本語",
       "&ZeVnLIqe-",
+      "ReplayCopySource",
+      "ReplayCopyDestination",
+      "ReplayDistinctSource",
+      "ReplayDistinctDestination",
+      "ReplayFailureSource",
+      "ReplayFailureDestination",
+      "ReplaySizeSource",
+      "ReplaySizeDestination",
+      "ReplayUidSource",
+      "ReplayUidDestination",
+      "ReplayGenerationSource",
+      "ReplayGenerationDestination",
     ],
     messages: {
       INBOX: [
@@ -257,6 +272,7 @@ try {
           messageId: "<nested-project@example.test>",
           subject: "Project fixture",
           body: "Nested Unicode fixture",
+          flags: ["\\Answered", "$Forwarded", "$Label1"],
         },
       ],
       "&ZeVnLIqe-": [
@@ -267,10 +283,63 @@ try {
           body: "The modified UTF-7 escape must remain a literal folder name.",
         },
       ],
+      ReplayCopySource: replayFixtureMessage(
+        "<replay-copy-collision@example.test>",
+        "COPY-SOURCE-CONTENT",
+      ),
+      ReplayCopyDestination: replayFixtureMessage(
+        "<replay-copy-collision@example.test>",
+        "COPY-EXISTING-CONTENT",
+      ),
+      ReplayDistinctSource: replayFixtureMessage(
+        "<replay-move-collision@example.test>",
+        "MOVE-SOURCE-CONTENT",
+      ),
+      ReplayDistinctDestination: replayFixtureMessage(
+        "<replay-move-collision@example.test>",
+        "MOVE-EXISTING-CONTENT",
+      ),
+      ReplayFailureSource: replayFixtureMessage(
+        "<replay-flag-failure@example.test>",
+        "IDENTICAL-FLAG-FAILURE-CONTENT",
+      ),
+      ReplayFailureDestination: replayFixtureMessage(
+        "<replay-flag-failure@example.test>",
+        "IDENTICAL-FLAG-FAILURE-CONTENT",
+        ["\\Seen", "\\Flagged"],
+      ),
+      ReplaySizeSource: replayFixtureMessage(
+        "<replay-size-mismatch@example.test>",
+        "IDENTICAL-SIZE-MISMATCH-CONTENT",
+      ),
+      ReplaySizeDestination: replayFixtureMessage(
+        "<replay-size-mismatch@example.test>",
+        "IDENTICAL-SIZE-MISMATCH-CONTENT",
+      ),
+      ReplayUidSource: replayFixtureMessage(
+        "<replay-uid-mismatch@example.test>",
+        "IDENTICAL-UID-MISMATCH-CONTENT",
+      ),
+      ReplayUidDestination: replayFixtureMessage(
+        "<replay-uid-mismatch@example.test>",
+        "IDENTICAL-UID-MISMATCH-CONTENT",
+      ),
+      ReplayGenerationSource: replayFixtureMessage(
+        "<replay-generation-change@example.test>",
+        "IDENTICAL-GENERATION-CONTENT",
+      ),
+      ReplayGenerationDestination: replayFixtureMessage(
+        "<replay-generation-change@example.test>",
+        "IDENTICAL-GENERATION-CONTENT",
+      ),
     },
     uidValidityOnRestart: 2,
     interruptMoveAfterCopy: true,
     interruptAppendAfterCommit: true,
+    fetchSizeMismatchMailboxes: ["ReplaySizeSource"],
+    fetchUidMismatchMailboxes: ["ReplayUidSource"],
+    uidValidityChangesAfterFetch: ["ReplayGenerationDestination"],
+    rejectFlagStoreMailboxes: ["ReplayFailureDestination"],
   });
   fixtures.push({ name: "RECOVERY", fixture: recoveryFixture });
   const recoveryPorts = await recoveryFixture.start();
@@ -353,8 +422,27 @@ try {
       );
       assert.equal(
         counters.copiedMessages,
+        4,
+        "content-collision scenarios were not exercised or move replay copied a duplicate.",
+      );
+      const replayFlagStores = counters.flagStoreTargets.filter(
+        (target) => target.mailbox === "Archive/受信",
+      );
+      assert.deepEqual(
+        replayFlagStores.map(({ uidSet, uidValidity }) => ({
+          uidSet,
+          uidValidity,
+        })),
+        [
+          { uidSet: "1", uidValidity: 2 },
+          { uidSet: "1", uidValidity: 2 },
+        ],
+        "replayed flags must target the verified destination UID generation.",
+      );
+      assert.equal(
+        counters.rejectedFlagStores,
         2,
-        "move replay copied a duplicate.",
+        "destination flag failure scenario was not exercised.",
       );
       assert.equal(
         counters.appendedMessages,
@@ -485,6 +573,18 @@ try {
     });
     report.results.push({
       name: "greenmail-protocol-integration-history",
+      status: "passed",
+    });
+    stage = "greenmail-replay-incomplete-body-evidence";
+    await protocolTest(
+      "greenmail_replay_rejects_incomplete_full_body_evidence",
+      {
+        ...environment,
+        POSTAL_SNAP_MAIL_INTEGRATION: "1",
+      },
+    );
+    report.results.push({
+      name: "greenmail-replay-incomplete-body-evidence",
       status: "passed",
     });
   }

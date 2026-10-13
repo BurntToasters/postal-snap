@@ -22,7 +22,7 @@ use crate::models::{
 };
 use crate::models::{Attachment, ComposeDraft, MailboxRole, MessageSummary, ProviderKind, TlsMode};
 
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 30;
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 32;
 
 pub type MailboxSyncState = (Option<u32>, Option<u32>, u32, Option<u32>);
 
@@ -927,6 +927,40 @@ fn migrate_schema(connection: &mut Connection) -> Result<(), String> {
             "ALTER TABLE messages ADD COLUMN bcc_json TEXT NOT NULL DEFAULT '[]'",
         )?;
     }
+    if version < 31 {
+        ensure_column(
+            &transaction,
+            "outbox",
+            "archive_message_id",
+            "ALTER TABLE outbox ADD COLUMN archive_message_id INTEGER",
+        )?;
+        ensure_column(
+            &transaction,
+            "outbox",
+            "archive_source_mailbox_id",
+            "ALTER TABLE outbox ADD COLUMN archive_source_mailbox_id INTEGER",
+        )?;
+    }
+    if version < 32 {
+        ensure_column(
+            &transaction,
+            "mailboxes",
+            "counts_generation",
+            "ALTER TABLE mailboxes ADD COLUMN counts_generation INTEGER NOT NULL DEFAULT 0",
+        )?;
+        ensure_column(
+            &transaction,
+            "messages",
+            "pending_source_generation",
+            "ALTER TABLE messages ADD COLUMN pending_source_generation INTEGER",
+        )?;
+        ensure_column(
+            &transaction,
+            "messages",
+            "pending_destination_generation",
+            "ALTER TABLE messages ADD COLUMN pending_destination_generation INTEGER",
+        )?;
+    }
     // Also initialize this sequence for earlier development snapshots of v22.
     transaction.execute_batch("CREATE TABLE IF NOT EXISTS mailbox_id_sequence (
         singleton INTEGER PRIMARY KEY CHECK(singleton=1),
@@ -1121,6 +1155,111 @@ fn migrate_v23_mailbox_names(transaction: &rusqlite::Transaction) -> Result<(), 
     }
 
     Ok(())
+}
+
+pub(crate) fn clear_pending_move_in_transaction(
+    transaction: &rusqlite::Transaction<'_>,
+    message_id: i64,
+) -> Result<(), String> {
+    type PendingMoveCounts = (i64, bool, Option<i64>, Option<i64>, Option<i64>);
+    let row: Option<PendingMoveCounts> = transaction
+        .query_row(
+            "SELECT mailbox_id,is_read != 0,pending_move_to,pending_source_generation,pending_destination_generation FROM messages WHERE id=?1",
+            [message_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        )
+        .optional()
+        .map_err(db_error)?;
+    if let Some((source_id, is_read, Some(destination_id), source_overlay, destination_overlay)) =
+        row
+    {
+        let source_generation: Option<i64> = transaction
+            .query_row(
+                "SELECT counts_generation FROM mailboxes WHERE id=?1",
+                [source_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?;
+        let destination_generation: Option<i64> = transaction
+            .query_row(
+                "SELECT counts_generation FROM mailboxes WHERE id=?1",
+                [destination_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?;
+        if source_overlay.is_some() && source_overlay == source_generation {
+            adjust_mailbox_counts(transaction, source_id, 1, (!is_read).then_some(1))?;
+        }
+        if destination_overlay.is_some() && destination_overlay == destination_generation {
+            adjust_mailbox_counts(transaction, destination_id, -1, (!is_read).then_some(-1))?;
+        }
+    }
+    transaction.execute(
+        "UPDATE messages SET pending_move_to=NULL,pending_source_generation=NULL,pending_destination_generation=NULL WHERE id=?1",
+        [message_id],
+    ).map_err(db_error)?;
+    Ok(())
+}
+
+/// Cancel only a queued archive of the source while restoring a legacy held send.
+pub(crate) fn cancel_pending_move_in_transaction(
+    transaction: &rusqlite::Transaction<'_>,
+    account_id: &str,
+    message_id: i64,
+    source_mailbox_id: i64,
+) -> Result<bool, String> {
+    let row: Option<(String, i64, u32, Option<i64>, String)> = transaction
+        .query_row(
+            "SELECT m.account_id,m.mailbox_id,m.uid,m.pending_move_to,f.name FROM messages m JOIN mailboxes f ON f.id=m.mailbox_id WHERE m.id=?1",
+            [message_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        )
+        .optional()
+        .map_err(db_error)?;
+    let Some((owner, mailbox_id, uid, Some(destination_id), source_name)) = row else {
+        return Ok(false);
+    };
+    if owner != account_id {
+        return Err("Message does not belong to this account.".into());
+    }
+    if mailbox_id != source_mailbox_id {
+        return Ok(false);
+    }
+    let destination: Option<(String, bool)> = transaction.query_row(
+        "SELECT m.name, (m.role='archive' OR EXISTS(SELECT 1 FROM folder_assignments a WHERE a.account_id=?2 AND a.mailbox_id=m.id AND a.role='archive')) FROM mailboxes m WHERE m.id=?1 AND m.account_id=?2",
+        params![destination_id, account_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    ).optional().map_err(db_error)?;
+    let Some((destination_name, true)) = destination else {
+        return Ok(false);
+    };
+    let queued: Option<(i64, String)> = transaction.query_row(
+        "SELECT id,payload FROM offline_ops WHERE account_id=?1 AND kind='move' AND dedupe_key=?2",
+        params![account_id, format!("move:{message_id}")],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    ).optional().map_err(db_error)?;
+    let Some((operation_id, payload)) = queued else {
+        return Ok(false);
+    };
+    let operation: serde_json::Value = serde_json::from_str(&payload)
+        .map_err(|_| "Queued archive could not be read.".to_string())?;
+    if operation["messageId"] != message_id
+        || operation["uid"] != uid
+        || operation["source"] != source_name
+        || operation["destination"] != destination_name
+    {
+        return Ok(false);
+    }
+    clear_pending_move_in_transaction(transaction, message_id)?;
+    transaction
+        .execute(
+            "DELETE FROM offline_ops WHERE id=?1 AND account_id=?2",
+            params![operation_id, account_id],
+        )
+        .map_err(db_error)?;
+    Ok(true)
 }
 
 /// Schema v18: per-account download policy, account presentation, resumable
@@ -1530,6 +1669,419 @@ CREATE TRIGGER IF NOT EXISTS messages_after_delete AFTER DELETE ON messages BEGI
 mod tests {
     use super::*;
 
+    // Undo must not remove a separate move made after the send became uncertain.
+    #[test]
+    fn restoring_uncertain_send_preserves_later_move() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, &account.summary.id, "INBOX", &MailboxRole::Inbox);
+        let trash = mailbox(&db, &account.summary.id, "Trash", &MailboxRole::Trash);
+        db.upsert_message(
+            &account.summary.id,
+            inbox,
+            &message(1, "2026-08-18T12:00:00Z"),
+        )
+        .unwrap();
+        let message_id = db.list_messages(inbox, None, 10).unwrap().items[0].id;
+        let outbox_id = db
+            .queue_outbox_with_archive(
+                &draft(&account.summary.id),
+                "needs_attention",
+                None,
+                "<send@example.test>",
+                b"mime",
+                None,
+                Some((message_id, inbox)),
+            )
+            .unwrap();
+        let move_payload = serde_json::json!({"messageId":message_id,"uid":1,"source":"INBOX","destination":"Trash","uidValidity":1});
+        db.queue_operation(
+            &account.summary.id,
+            "move",
+            &move_payload,
+            Some(&format!("move:{message_id}")),
+        )
+        .unwrap();
+        db.mark_pending_move(message_id, trash).unwrap();
+        db.restore_outbox_as_draft(&outbox_id, &account.summary.id)
+            .unwrap();
+        assert_eq!(db.queued_operations(&account.summary.id).unwrap().len(), 1);
+        assert!(db.list_messages(inbox, None, 10).unwrap().items.is_empty());
+    }
+
+    #[test]
+    fn clearing_pending_move_after_status_does_not_inflate_counts() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let inbox = db
+            .upsert_mailbox(
+                &account.summary.id,
+                "INBOX",
+                &MailboxRole::Inbox,
+                Some(1),
+                Some(2),
+                Some(1),
+                1,
+            )
+            .unwrap();
+        let archive = db
+            .upsert_mailbox(
+                &account.summary.id,
+                "Archive",
+                &MailboxRole::Archive,
+                Some(1),
+                Some(2),
+                Some(0),
+                0,
+            )
+            .unwrap();
+        db.upsert_message(
+            &account.summary.id,
+            inbox,
+            &message(1, "2026-08-18T12:00:00Z"),
+        )
+        .unwrap();
+        let message_id = db.list_messages(inbox, None, 10).unwrap().items[0].id;
+        db.mark_pending_move(message_id, archive).unwrap();
+        db.upsert_mailbox(
+            &account.summary.id,
+            "INBOX",
+            &MailboxRole::Inbox,
+            Some(1),
+            Some(2),
+            Some(1),
+            1,
+        )
+        .unwrap();
+        db.upsert_mailbox(
+            &account.summary.id,
+            "Archive",
+            &MailboxRole::Archive,
+            Some(1),
+            Some(2),
+            Some(0),
+            0,
+        )
+        .unwrap();
+        db.clear_pending_move(message_id).unwrap();
+        let boxes = db.list_mailboxes(&account.summary.id).unwrap();
+        let inbox_counts = boxes.iter().find(|item| item.id == inbox).unwrap();
+        assert_eq!(
+            (inbox_counts.total_count, inbox_counts.unread_count),
+            (1, 1)
+        );
+    }
+
+    #[test]
+    fn record_flag_change_during_pending_move_updates_destination_counts() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let inbox = db
+            .upsert_mailbox(
+                &account.summary.id,
+                "INBOX",
+                &MailboxRole::Inbox,
+                Some(1),
+                Some(2),
+                Some(5),
+                10,
+            )
+            .unwrap();
+        let archive = db
+            .upsert_mailbox(
+                &account.summary.id,
+                "Archive",
+                &MailboxRole::Archive,
+                Some(1),
+                Some(2),
+                Some(1),
+                3,
+            )
+            .unwrap();
+        db.upsert_message(
+            &account.summary.id,
+            inbox,
+            &message(1, "2026-08-18T12:00:00Z"),
+        )
+        .unwrap();
+        let message_id = db.list_messages(inbox, None, 10).unwrap().items[0].id;
+
+        db.mark_pending_move(message_id, archive).unwrap();
+        db.record_flag_change(&account.summary.id, message_id, Some(true), None, None)
+            .unwrap();
+
+        assert_eq!(mailbox_counts(&db, &account.summary.id, inbox), (9, 4));
+        assert_eq!(mailbox_counts(&db, &account.summary.id, archive), (4, 1));
+
+        db.clear_pending_move(message_id).unwrap();
+
+        assert_eq!(mailbox_counts(&db, &account.summary.id, inbox), (10, 4));
+        assert_eq!(mailbox_counts(&db, &account.summary.id, archive), (3, 1));
+    }
+
+    #[test]
+    fn set_flags_during_pending_move_survives_destination_replacement() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let inbox = db
+            .upsert_mailbox(
+                &account.summary.id,
+                "INBOX",
+                &MailboxRole::Inbox,
+                Some(1),
+                Some(2),
+                Some(5),
+                10,
+            )
+            .unwrap();
+        let archive = db
+            .upsert_mailbox(
+                &account.summary.id,
+                "Archive",
+                &MailboxRole::Archive,
+                Some(1),
+                Some(2),
+                Some(1),
+                3,
+            )
+            .unwrap();
+        let trash = db
+            .upsert_mailbox(
+                &account.summary.id,
+                "Trash",
+                &MailboxRole::Trash,
+                Some(1),
+                Some(2),
+                Some(2),
+                7,
+            )
+            .unwrap();
+        db.upsert_message(
+            &account.summary.id,
+            inbox,
+            &message(1, "2026-08-18T12:00:00Z"),
+        )
+        .unwrap();
+        let message_id = db.list_messages(inbox, None, 10).unwrap().items[0].id;
+
+        db.mark_pending_move(message_id, archive).unwrap();
+        db.set_flags(message_id, Some(true), None).unwrap();
+        db.mark_pending_move(message_id, trash).unwrap();
+
+        assert_eq!(mailbox_counts(&db, &account.summary.id, inbox), (9, 4));
+        assert_eq!(mailbox_counts(&db, &account.summary.id, archive), (3, 1));
+        assert_eq!(mailbox_counts(&db, &account.summary.id, trash), (8, 2));
+
+        db.clear_pending_move(message_id).unwrap();
+
+        assert_eq!(mailbox_counts(&db, &account.summary.id, inbox), (10, 4));
+        assert_eq!(mailbox_counts(&db, &account.summary.id, archive), (3, 1));
+        assert_eq!(mailbox_counts(&db, &account.summary.id, trash), (7, 2));
+    }
+
+    #[test]
+    fn status_refresh_invalidates_pending_move_count_overlays() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let inbox = db
+            .upsert_mailbox(
+                &account.summary.id,
+                "INBOX",
+                &MailboxRole::Inbox,
+                Some(1),
+                Some(2),
+                Some(5),
+                10,
+            )
+            .unwrap();
+        let archive = db
+            .upsert_mailbox(
+                &account.summary.id,
+                "Archive",
+                &MailboxRole::Archive,
+                Some(1),
+                Some(2),
+                Some(1),
+                3,
+            )
+            .unwrap();
+        db.upsert_message(
+            &account.summary.id,
+            inbox,
+            &message(1, "2026-08-18T12:00:00Z"),
+        )
+        .unwrap();
+        let message_id = db.list_messages(inbox, None, 10).unwrap().items[0].id;
+        db.mark_pending_move(message_id, archive).unwrap();
+
+        db.update_mailbox_status(inbox, Some(1), Some(2), Some(4), 9)
+            .unwrap();
+        db.update_mailbox_status(archive, Some(1), Some(2), Some(2), 3)
+            .unwrap();
+        db.clear_pending_move(message_id).unwrap();
+
+        assert_eq!(mailbox_counts(&db, &account.summary.id, inbox), (9, 4));
+        assert_eq!(mailbox_counts(&db, &account.summary.id, archive), (3, 2));
+    }
+
+    #[test]
+    fn destination_status_reset_routes_flag_deltas_only_to_stale_source() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let inbox = db
+            .upsert_mailbox(
+                &account.summary.id,
+                "INBOX",
+                &MailboxRole::Inbox,
+                Some(1),
+                Some(2),
+                Some(5),
+                5,
+            )
+            .unwrap();
+        let archive = db
+            .upsert_mailbox(
+                &account.summary.id,
+                "Archive",
+                &MailboxRole::Archive,
+                Some(1),
+                Some(2),
+                Some(1),
+                3,
+            )
+            .unwrap();
+        db.upsert_message(
+            &account.summary.id,
+            inbox,
+            &message(1, "2026-08-18T12:00:00Z"),
+        )
+        .unwrap();
+        let message_id = db.list_messages(inbox, None, 10).unwrap().items[0].id;
+        db.mark_pending_move(message_id, archive).unwrap();
+
+        db.update_mailbox_status(archive, Some(1), Some(2), Some(1), 3)
+            .unwrap();
+        assert_eq!(mailbox_counts(&db, &account.summary.id, inbox), (4, 4));
+        assert_eq!(mailbox_counts(&db, &account.summary.id, archive), (3, 1));
+
+        db.record_flag_change(&account.summary.id, message_id, Some(true), None, None)
+            .unwrap();
+        assert_eq!(mailbox_counts(&db, &account.summary.id, inbox), (4, 4));
+        assert_eq!(mailbox_counts(&db, &account.summary.id, archive), (3, 1));
+        db.record_flag_change(&account.summary.id, message_id, Some(false), None, None)
+            .unwrap();
+        assert_eq!(mailbox_counts(&db, &account.summary.id, inbox), (4, 4));
+        assert_eq!(mailbox_counts(&db, &account.summary.id, archive), (3, 1));
+        db.set_flags(message_id, Some(true), None).unwrap();
+        assert_eq!(mailbox_counts(&db, &account.summary.id, inbox), (4, 4));
+        assert_eq!(mailbox_counts(&db, &account.summary.id, archive), (3, 1));
+        db.set_flags(message_id, Some(false), None).unwrap();
+        assert_eq!(mailbox_counts(&db, &account.summary.id, inbox), (4, 4));
+        assert_eq!(mailbox_counts(&db, &account.summary.id, archive), (3, 1));
+
+        db.clear_pending_move(message_id).unwrap();
+        assert_eq!(mailbox_counts(&db, &account.summary.id, inbox), (5, 5));
+        assert_eq!(mailbox_counts(&db, &account.summary.id, archive), (3, 1));
+    }
+
+    #[test]
+    fn source_status_reset_updates_source_and_active_destination() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let inbox = db
+            .upsert_mailbox(
+                &account.summary.id,
+                "INBOX",
+                &MailboxRole::Inbox,
+                Some(1),
+                Some(2),
+                Some(5),
+                5,
+            )
+            .unwrap();
+        let archive = db
+            .upsert_mailbox(
+                &account.summary.id,
+                "Archive",
+                &MailboxRole::Archive,
+                Some(1),
+                Some(2),
+                Some(1),
+                3,
+            )
+            .unwrap();
+        db.upsert_message(
+            &account.summary.id,
+            inbox,
+            &message(1, "2026-08-18T12:00:00Z"),
+        )
+        .unwrap();
+        let message_id = db.list_messages(inbox, None, 10).unwrap().items[0].id;
+        db.mark_pending_move(message_id, archive).unwrap();
+
+        db.update_mailbox_status(inbox, Some(1), Some(2), Some(5), 5)
+            .unwrap();
+        assert_eq!(mailbox_counts(&db, &account.summary.id, inbox), (5, 5));
+        assert_eq!(mailbox_counts(&db, &account.summary.id, archive), (4, 2));
+
+        db.record_flag_change(&account.summary.id, message_id, Some(true), None, None)
+            .unwrap();
+        assert_eq!(mailbox_counts(&db, &account.summary.id, inbox), (5, 4));
+        assert_eq!(mailbox_counts(&db, &account.summary.id, archive), (4, 1));
+        db.record_flag_change(&account.summary.id, message_id, Some(false), None, None)
+            .unwrap();
+        assert_eq!(mailbox_counts(&db, &account.summary.id, inbox), (5, 5));
+        assert_eq!(mailbox_counts(&db, &account.summary.id, archive), (4, 2));
+        db.set_flags(message_id, Some(true), None).unwrap();
+        assert_eq!(mailbox_counts(&db, &account.summary.id, inbox), (5, 4));
+        assert_eq!(mailbox_counts(&db, &account.summary.id, archive), (4, 1));
+        db.set_flags(message_id, Some(false), None).unwrap();
+        assert_eq!(mailbox_counts(&db, &account.summary.id, inbox), (5, 5));
+        assert_eq!(mailbox_counts(&db, &account.summary.id, archive), (4, 2));
+
+        db.clear_pending_move(message_id).unwrap();
+        assert_eq!(mailbox_counts(&db, &account.summary.id, inbox), (5, 5));
+        assert_eq!(mailbox_counts(&db, &account.summary.id, archive), (3, 1));
+    }
+
+    #[test]
+    fn successful_read_change_preserves_only_unrelated_queued_star() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, &account.summary.id, "INBOX", &MailboxRole::Inbox);
+        db.upsert_message(
+            &account.summary.id,
+            inbox,
+            &message(1, "2026-08-18T12:00:00Z"),
+        )
+        .unwrap();
+        let message_id = db.list_messages(inbox, None, 10).unwrap().items[0].id;
+        let combined = serde_json::json!({"messageId":message_id,"uid":1,"mailbox":"INBOX","uidValidity":1,"isRead":true,"isStarred":true});
+        db.queue_operation(
+            &account.summary.id,
+            "flags",
+            &combined,
+            Some(&format!("flags:{message_id}:true:true")),
+        )
+        .unwrap();
+        db.record_flag_change(&account.summary.id, message_id, Some(false), None, None)
+            .unwrap();
+        let operations = db.queued_operations(&account.summary.id).unwrap();
+        assert_eq!(operations.len(), 1);
+        let queued: serde_json::Value = serde_json::from_str(&operations[0].2).unwrap();
+        assert!(queued["isRead"].is_null());
+        assert_eq!(queued["isStarred"], true);
+        assert!(!db.list_messages(inbox, None, 10).unwrap().items[0].is_read);
+    }
+
     fn account() -> AccountRecord {
         AccountRecord {
             summary: AccountSummary {
@@ -1636,6 +2188,12 @@ mod tests {
     fn mailbox(db: &Database, account_id: &str, name: &str, role: &MailboxRole) -> i64 {
         db.upsert_mailbox(account_id, name, role, Some(1), Some(2), Some(0), 0)
             .unwrap()
+    }
+
+    fn mailbox_counts(db: &Database, account_id: &str, mailbox_id: i64) -> (u32, u32) {
+        let mailboxes = db.list_mailboxes(account_id).unwrap();
+        let mailbox = mailboxes.iter().find(|item| item.id == mailbox_id).unwrap();
+        (mailbox.total_count, mailbox.unread_count)
     }
 
     fn accounts_email_unique_index_exists(db: &Database) -> bool {
@@ -6168,5 +6726,48 @@ mod tests {
         db.insert_account(&account).unwrap();
         let new = mailbox(&db, &account.summary.id, "NewPersonal", &MailboxRole::Other);
         assert!(new > 900);
+    }
+
+    #[test]
+    fn remote_flags_reconcile_active_pending_destination_overlay() {
+        let db = Database::memory();
+        let account = account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = db
+            .upsert_mailbox(
+                account_id,
+                "INBOX",
+                &MailboxRole::Inbox,
+                Some(1),
+                Some(2),
+                Some(5),
+                10,
+            )
+            .unwrap();
+        let archive = db
+            .upsert_mailbox(
+                account_id,
+                "Archive",
+                &MailboxRole::Archive,
+                Some(1),
+                Some(2),
+                Some(1),
+                3,
+            )
+            .unwrap();
+        db.upsert_message(account_id, inbox, &message(1, "2026-08-18T12:00:00Z"))
+            .unwrap();
+        let id = db.list_messages(inbox, None, 10).unwrap().items[0].id;
+        db.mark_pending_move(id, archive).unwrap();
+
+        // Source STATUS succeeds while destination STATUS does not.
+        db.update_mailbox_status(inbox, Some(1), Some(2), Some(4), 10)
+            .unwrap();
+        db.reconcile_flags(inbox, &[(1, true, false)], &[1])
+            .unwrap();
+        db.clear_pending_move(id).unwrap();
+
+        assert_eq!(mailbox_counts(&db, account_id, archive), (3, 1));
     }
 }

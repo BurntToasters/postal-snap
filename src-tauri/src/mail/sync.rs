@@ -1448,7 +1448,7 @@ async fn search_mailboxes(
 /// Time allowed to receive one on-demand message body: the normal command
 /// timeout plus one second per 100 KB declared, at most ten minutes, so a
 /// large message on a slow link can still open.
-fn download_timeout(expected_size: u64) -> Duration {
+pub(crate) fn download_timeout(expected_size: u64) -> Duration {
     (IMAP_COMMAND_TIMEOUT + Duration::from_secs(expected_size / 100_000))
         .min(Duration::from_secs(600))
 }

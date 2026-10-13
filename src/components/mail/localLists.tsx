@@ -199,6 +199,7 @@ export function OutboxList({
   onRetry,
   onRetryAll,
   onRetryCopy,
+  onRetryArchive,
   onSendNow,
   onEdit,
   onDiscard,
@@ -210,6 +211,7 @@ export function OutboxList({
   onRetry: (id: string) => Promise<void>;
   onRetryAll?: () => Promise<void>;
   onRetryCopy: (id: string) => Promise<void>;
+  onRetryArchive?: (id: string) => Promise<void>;
   onSendNow: (id: string) => Promise<void>;
   onEdit?: (
     id: string,
@@ -263,7 +265,8 @@ export function OutboxList({
             data-outbox-id={item.id}
             data-busy={sending ? "true" : undefined}
           >
-            {item.state === "needs_attention" ? (
+            {item.state === "needs_attention" ||
+            item.state === "archive_pending" ? (
               <TriangleAlert aria-hidden="true" />
             ) : (
               <Send aria-hidden="true" />
@@ -301,9 +304,11 @@ export function OutboxList({
                     ? strings.mail.sending
                     : item.state === "sent_copy_pending"
                       ? strings.mail.sentCopyPending
-                      : item.state === "scheduled"
-                        ? strings.mail.scheduledWaiting
-                        : strings.mail.needsAttention}
+                      : item.state === "archive_pending"
+                        ? strings.mail.archivePending
+                        : item.state === "scheduled"
+                          ? strings.mail.scheduledWaiting
+                          : strings.mail.needsAttention}
               </small>
             </span>
             <div>
@@ -330,6 +335,14 @@ export function OutboxList({
                 <button type="button" onClick={() => void onRetryCopy(item.id)}>
                   {strings.mail.saveSentCopy}
                 </button>
+              ) : item.state === "archive_pending" && onRetryArchive ? (
+                <button
+                  type="button"
+                  onClick={() => void onRetryArchive(item.id)}
+                  disabled={sending}
+                >
+                  {strings.mail.retryArchive}
+                </button>
               ) : item.state === "scheduled" ? (
                 <button
                   type="button"
@@ -352,7 +365,8 @@ export function OutboxList({
                 onClick={() => void onDiscard(item.id, item.state)}
                 disabled={sending}
               >
-                {item.state === "sent_copy_pending"
+                {item.state === "sent_copy_pending" ||
+                item.state === "archive_pending"
                   ? strings.mail.dismissWarning
                   : item.state === "scheduled"
                     ? strings.mail.undoSend

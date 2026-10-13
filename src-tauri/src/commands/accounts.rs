@@ -404,16 +404,34 @@ async fn remove_single_account(
         state.retire_actor(account_id);
         return Err(error);
     }
-    // Keep a zeroized copy so a database failure can restore the vault entry;
-    // account deletion is treated as one user-visible transaction.
-    let password = credentials::load_for_removal(account_id)?;
-    credentials::remove(account_id)?;
-    let _ = crate::oauth::remove_tokens(account_id);
+    let account = state.db.account(account_id)?;
+    // Keep the matching vault entry so a database failure can restore it;
+    // account deletion is one user-visible transaction for either auth mode.
+    enum StoredSecret {
+        Password(Option<Zeroizing<String>>),
+        OAuth(Option<oauth::StoredOAuthTokens>),
+    }
+    let secret = if account.summary.auth_method == "oauth" {
+        StoredSecret::OAuth(oauth::load_tokens_for_removal(account_id)?)
+    } else {
+        StoredSecret::Password(credentials::load_for_removal(account_id)?)
+    };
+    match &secret {
+        StoredSecret::Password(_) => credentials::remove(account_id)?,
+        StoredSecret::OAuth(_) => oauth::remove_tokens(account_id)?,
+    }
     if let Err(error) = state.db.remove_account(account_id) {
-        if password
-            .as_deref()
-            .is_some_and(|password| credentials::store(account_id, password).is_err())
-        {
+        let restored = match &secret {
+            StoredSecret::Password(password) => password
+                .as_deref()
+                .map(|password| credentials::store(account_id, password).is_ok())
+                .unwrap_or(true),
+            StoredSecret::OAuth(tokens) => tokens
+                .as_ref()
+                .map(|tokens| oauth::store_tokens(account_id, tokens).is_ok())
+                .unwrap_or(true),
+        };
+        if !restored {
             return Err(
                 "Postal Snap could not finish removing this account. Contact support before trying again."
                     .into(),

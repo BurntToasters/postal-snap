@@ -1,8 +1,9 @@
 import { join } from "node:path";
 import { assertTopChangelogVersion } from "./lib/changelog.js";
 import { json } from "./lib/json.js";
-import { process, readFile, root } from "./lib/paths.js";
+import { readFile, root } from "./lib/paths.js";
 import { output, run } from "./lib/spawn.js";
+import { assertReleaseWorktreeClean } from "./release-identity.js";
 import { resolveUpdaterPublicKey } from "./updater-pubkey.js";
 import { validateRepositoryMacosEntitlements } from "./validate-macos-entitlements.js";
 
@@ -23,19 +24,9 @@ function expectedReleaseBranch(version) {
   );
 }
 
-function assertClean(status) {
-  if (status && process.env.ALLOW_DIRTY_RELEASE !== "1") {
-    throw new Error(
-      "Release requires a clean worktree. Set ALLOW_DIRTY_RELEASE=1 only for recovery.",
-    );
-  }
-}
-
 const pkg = await json(join(root, "package.json"));
 const expectedBranch = expectedReleaseBranch(String(pkg.version ?? ""));
-assertClean(
-  await output("git", ["status", "--porcelain=v1", "--untracked-files=all"]),
-);
+await assertReleaseWorktreeClean();
 await validateRepositoryMacosEntitlements();
 
 const branch = await output("git", ["branch", "--show-current"]);
@@ -74,9 +65,7 @@ assertTopChangelogVersion(
 );
 
 await run("npm", ["run", "sync-version"]);
-assertClean(
-  await output("git", ["status", "--porcelain=v1", "--untracked-files=all"]),
-);
+await assertReleaseWorktreeClean();
 
 const committed = await json(join(root, "src-tauri/tauri.conf.json"));
 resolveUpdaterPublicKey({

@@ -327,6 +327,19 @@ pub fn load_tokens(account_id: &str) -> Result<StoredOAuthTokens, String> {
     serde_json::from_str(&raw).map_err(|_| "The account sign-in is damaged.".to_string())
 }
 
+/// Load tokens for an account-removal transaction without treating an absent
+/// vault entry as a damaged sign-in.
+pub fn load_tokens_for_removal(account_id: &str) -> Result<Option<StoredOAuthTokens>, String> {
+    let raw = match oauth_entry(account_id)?.get_password() {
+        Ok(raw) => Zeroizing::new(raw),
+        Err(keyring::Error::NoEntry) => return Ok(None),
+        Err(_) => return Err("The account sign-in store is unavailable.".to_string()),
+    };
+    serde_json::from_str(&raw)
+        .map(Some)
+        .map_err(|_| "The account sign-in is damaged.".to_string())
+}
+
 pub fn remove_tokens(account_id: &str) -> Result<(), String> {
     match oauth_entry(account_id)?.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),

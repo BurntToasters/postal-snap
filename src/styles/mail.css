@@ -1623,7 +1623,9 @@ button.list-day:focus-visible {
 }
 
 .attention-row[data-state="needs_attention"] > svg,
-.attention-row[data-state="needs_attention"] .status-label {
+.attention-row[data-state="needs_attention"] .status-label,
+.attention-row[data-state="archive_pending"] > svg,
+.attention-row[data-state="archive_pending"] .status-label {
   color: var(--warning-ink);
 }
 

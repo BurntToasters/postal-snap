@@ -20,6 +20,23 @@ impl Database {
         let mut conn = self.conn()?;
         let transaction = conn.transaction().map_err(db_error)?;
         for (uid, is_read, is_starred) in seen {
+            let overlay: Option<(bool, Option<i64>, bool)> = transaction
+                .query_row(
+                    "SELECT m.is_read != 0,m.pending_move_to,
+                            COALESCE(m.pending_move_to IS NOT NULL AND m.pending_destination_generation=d.counts_generation,0)
+                     FROM messages m LEFT JOIN mailboxes d ON d.id=m.pending_move_to
+                     WHERE m.mailbox_id=?1 AND m.uid=?2",
+                    params![mailbox_id, uid],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .optional()
+                .map_err(db_error)?;
+            if let Some((was_read, Some(destination_id), true)) = overlay {
+                if was_read != *is_read {
+                    let delta = if *is_read { -1 } else { 1 };
+                    adjust_mailbox_counts(&transaction, destination_id, 0, Some(delta))?;
+                }
+            }
             transaction
                 .execute(
                     "UPDATE messages SET is_read=?3,is_starred=?4 WHERE mailbox_id=?1 AND uid=?2",
@@ -619,11 +636,30 @@ impl Database {
     ) -> Result<(), String> {
         let mut conn = self.conn()?;
         let transaction = conn.transaction().map_err(db_error)?;
-        let (mailbox_id, was_read): (i64, bool) = transaction
+        let (
+            source_mailbox_id,
+            pending_destination_id,
+            was_read,
+            source_overlay_active,
+            destination_overlay_active,
+        ): (i64, Option<i64>, bool, bool, bool) = transaction
             .query_row(
-                "SELECT mailbox_id,is_read != 0 FROM messages WHERE id=?1",
+                "SELECT m.mailbox_id,m.pending_move_to,m.is_read != 0,
+                         COALESCE(m.pending_move_to IS NOT NULL AND m.pending_source_generation=s.counts_generation,0),
+                         COALESCE(m.pending_move_to IS NOT NULL AND m.pending_destination_generation=d.counts_generation,0)
+                 FROM messages m JOIN mailboxes s ON s.id=m.mailbox_id
+                 LEFT JOIN mailboxes d ON d.id=m.pending_move_to
+                 WHERE m.id=?1",
                 [id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
             )
             .optional()
             .map_err(db_error)?
@@ -634,12 +670,14 @@ impl Database {
         ).map_err(db_error)?;
         if let Some(is_read) = is_read.filter(|is_read| *is_read != was_read) {
             let delta = if is_read { -1 } else { 1 };
-            transaction
-                .execute(
-                    "UPDATE mailboxes SET local_unread_delta=local_unread_delta + ?2 WHERE id=?1",
-                    params![mailbox_id, delta],
-                )
-                .map_err(db_error)?;
+            if pending_destination_id.is_none() || !source_overlay_active {
+                adjust_mailbox_counts(&transaction, source_mailbox_id, 0, Some(delta))?;
+            }
+            if let Some(destination_id) =
+                pending_destination_id.filter(|_| destination_overlay_active)
+            {
+                adjust_mailbox_counts(&transaction, destination_id, 0, Some(delta))?;
+            }
         }
         transaction.commit().map_err(db_error)?;
         Ok(())
@@ -669,6 +707,7 @@ impl Database {
         Ok(updated)
     }
 
+    #[cfg(test)]
     pub fn set_flags_bulk(
         &self,
         ids: &[i64],
@@ -854,11 +893,12 @@ impl Database {
     pub fn mark_pending_move(&self, id: i64, mailbox_id: i64) -> Result<(), String> {
         let mut conn = self.conn()?;
         let transaction = conn.transaction().map_err(db_error)?;
-        let (source_id, is_read, current_pending): (i64, bool, Option<i64>) = transaction
+        let (source_id, is_read, current_pending, source_overlay, destination_overlay):
+            (i64, bool, Option<i64>, Option<i64>, Option<i64>) = transaction
             .query_row(
-                "SELECT mailbox_id,is_read != 0,pending_move_to FROM messages WHERE id=?1",
+                "SELECT mailbox_id,is_read != 0,pending_move_to,pending_source_generation,pending_destination_generation FROM messages WHERE id=?1",
                 [id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
             )
             .map_err(db_error)?;
         let source_account: String = transaction
@@ -878,10 +918,18 @@ impl Database {
         if source_account != dest_account {
             return Err("Messages cannot be moved between different accounts.".into());
         }
-        transaction
-            .execute(
-                "UPDATE messages SET pending_move_to=?2 WHERE id=?1",
-                params![id, mailbox_id],
+        let source_generation: i64 = transaction
+            .query_row(
+                "SELECT counts_generation FROM mailboxes WHERE id=?1",
+                [source_id],
+                |row| row.get(0),
+            )
+            .map_err(db_error)?;
+        let destination_generation: i64 = transaction
+            .query_row(
+                "SELECT counts_generation FROM mailboxes WHERE id=?1",
+                [mailbox_id],
+                |row| row.get(0),
             )
             .map_err(db_error)?;
         match current_pending {
@@ -890,11 +938,34 @@ impl Database {
                 adjust_mailbox_counts(&transaction, mailbox_id, 1, (!is_read).then_some(1))?;
             }
             Some(previous_id) if previous_id != mailbox_id => {
-                adjust_mailbox_counts(&transaction, previous_id, -1, (!is_read).then_some(-1))?;
+                let previous_generation: i64 = transaction
+                    .query_row(
+                        "SELECT counts_generation FROM mailboxes WHERE id=?1",
+                        [previous_id],
+                        |row| row.get(0),
+                    )
+                    .map_err(db_error)?;
+                if destination_overlay == Some(previous_generation) {
+                    adjust_mailbox_counts(&transaction, previous_id, -1, (!is_read).then_some(-1))?;
+                }
                 adjust_mailbox_counts(&transaction, mailbox_id, 1, (!is_read).then_some(1))?;
             }
             Some(_) => {}
         }
+        let next_source_overlay = if current_pending.is_none() {
+            Some(source_generation)
+        } else {
+            source_overlay
+        };
+        let next_destination_overlay = if current_pending == Some(mailbox_id) {
+            destination_overlay
+        } else {
+            Some(destination_generation)
+        };
+        transaction.execute(
+            "UPDATE messages SET pending_move_to=?2,pending_source_generation=?3,pending_destination_generation=?4 WHERE id=?1",
+            params![id, mailbox_id, next_source_overlay, next_destination_overlay],
+        ).map_err(db_error)?;
         transaction.commit().map_err(db_error)?;
         Ok(())
     }
@@ -902,21 +973,7 @@ impl Database {
     pub fn clear_pending_move(&self, id: i64) -> Result<(), String> {
         let mut conn = self.conn()?;
         let transaction = conn.transaction().map_err(db_error)?;
-        let row: Option<(i64, bool, Option<i64>)> = transaction
-            .query_row(
-                "SELECT mailbox_id,is_read != 0,pending_move_to FROM messages WHERE id=?1",
-                [id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .optional()
-            .map_err(db_error)?;
-        transaction
-            .execute("UPDATE messages SET pending_move_to=NULL WHERE id=?1", [id])
-            .map_err(db_error)?;
-        if let Some((source_id, is_read, Some(destination_id))) = row {
-            adjust_mailbox_counts(&transaction, source_id, 1, (!is_read).then_some(1))?;
-            adjust_mailbox_counts(&transaction, destination_id, -1, (!is_read).then_some(-1))?;
-        }
+        super::clear_pending_move_in_transaction(&transaction, id)?;
         transaction.commit().map_err(db_error)?;
         Ok(())
     }
@@ -1019,7 +1076,8 @@ impl Database {
         self.conn()?
             .execute(
                 "UPDATE mailboxes SET uid_validity=?2, uid_next=?3, server_unread=?4, server_total=?5,
-                 counts_updated_at=CURRENT_TIMESTAMP, local_total_delta=0, local_unread_delta=0
+                 counts_updated_at=CURRENT_TIMESTAMP, local_total_delta=0, local_unread_delta=0,
+                 counts_generation=counts_generation+1
                  WHERE id=?1",
                 params![mailbox_id, uid_validity, uid_next, server_unread, server_total],
             )

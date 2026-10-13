@@ -38,16 +38,19 @@ test("runHardFinalize syncs beta manifests before publishing", async () => {
   await runHardFinalize({
     prerelease: true,
     verifyDraft: async () => calls.push("verifyDraft"),
+    verifyDraftIdentity: async () => calls.push("verifyDraftIdentity"),
     syncBetaManifests: async () => calls.push("syncBeta"),
     publish: async () => calls.push("publish"),
-    verifyRemote: async () => calls.push("verifyRemote"),
+    verifyPublished: async () => calls.push("verifyPublished"),
     reconcileBetaManifests: async () => calls.push("reconcile"),
   });
   assert.deepEqual(calls, [
     "verifyDraft",
+    "verifyDraftIdentity",
     "syncBeta",
+    "verifyDraftIdentity",
     "publish",
-    "verifyRemote",
+    "verifyPublished",
     "reconcile",
   ]);
 });
@@ -59,17 +62,60 @@ test("a failed pre-publish beta sync can never leave a published release", async
       runHardFinalize({
         prerelease: true,
         verifyDraft: async () => calls.push("verifyDraft"),
+        verifyDraftIdentity: async () => calls.push("verifyDraftIdentity"),
         syncBetaManifests: async () => {
           calls.push("syncBeta");
           throw new Error("sync failed");
         },
         publish: async () => calls.push("publish"),
-        verifyRemote: async () => calls.push("verifyRemote"),
+        verifyPublished: async () => calls.push("verifyPublished"),
         reconcileBetaManifests: async () => calls.push("reconcile"),
       }),
     /sync failed/,
   );
-  assert.deepEqual(calls, ["verifyDraft", "syncBeta"]);
+  assert.deepEqual(calls, ["verifyDraft", "verifyDraftIdentity", "syncBeta"]);
+});
+
+test("a pre-publish tag mismatch prevents release publication", async () => {
+  const calls = [];
+  await assert.rejects(
+    () =>
+      runHardFinalize({
+        prerelease: false,
+        verifyDraft: async () => calls.push("verifyDraft"),
+        verifyDraftIdentity: async () => {
+          calls.push("verifyDraftIdentity");
+          throw new Error("tag commit mismatch");
+        },
+        syncBetaManifests: async () => calls.push("syncBeta"),
+        publish: async () => calls.push("publish"),
+        verifyPublished: async () => calls.push("verifyPublished"),
+        reconcileBetaManifests: async () => calls.push("reconcile"),
+      }),
+    /tag commit mismatch/,
+  );
+  assert.deepEqual(calls, ["verifyDraft", "verifyDraftIdentity"]);
+});
+
+test("a draft identity mismatch prevents beta-manifest mutation", async () => {
+  const calls = [];
+  await assert.rejects(
+    () =>
+      runHardFinalize({
+        prerelease: true,
+        verifyDraft: async () => calls.push("verifyDraft"),
+        verifyDraftIdentity: async () => {
+          calls.push("verifyDraftIdentity");
+          throw new Error("draft identity mismatch");
+        },
+        syncBetaManifests: async () => calls.push("syncBeta"),
+        publish: async () => calls.push("publish"),
+        verifyPublished: async () => calls.push("verifyPublished"),
+        reconcileBetaManifests: async () => calls.push("reconcile"),
+      }),
+    /draft identity mismatch/,
+  );
+  assert.deepEqual(calls, ["verifyDraft", "verifyDraftIdentity"]);
 });
 
 test("stable finalize never touches beta manifests", async () => {
@@ -77,10 +123,16 @@ test("stable finalize never touches beta manifests", async () => {
   await runHardFinalize({
     prerelease: false,
     verifyDraft: async () => calls.push("verifyDraft"),
+    verifyDraftIdentity: async () => calls.push("verifyDraftIdentity"),
     syncBetaManifests: async () => calls.push("syncBeta"),
     publish: async () => calls.push("publish"),
-    verifyRemote: async () => calls.push("verifyRemote"),
+    verifyPublished: async () => calls.push("verifyPublished"),
     reconcileBetaManifests: async () => calls.push("reconcile"),
   });
-  assert.deepEqual(calls, ["verifyDraft", "publish", "verifyRemote"]);
+  assert.deepEqual(calls, [
+    "verifyDraft",
+    "verifyDraftIdentity",
+    "publish",
+    "verifyPublished",
+  ]);
 });

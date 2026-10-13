@@ -56,7 +56,10 @@ pub async fn update_account_connection(
         bridge::validate_loopback(&imap.host)?;
         bridge::validate_loopback(&smtp.host)?;
     }
-    let changed = account.imap.host != imap.host || account.imap.username != imap.username;
+    let changed = account.imap.host != imap.host
+        || account.imap.port != imap.port
+        || account.imap.tls_mode != imap.tls_mode
+        || account.imap.username != imap.username;
     if changed {
         if !confirm_identity_change {
             return Err("Confirm the incoming server identity change before saving.".into());

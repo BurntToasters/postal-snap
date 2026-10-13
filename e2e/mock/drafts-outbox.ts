@@ -16,6 +16,26 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
     let lastSendDetail: string | null = null;
     let lastSendAccountId: string | undefined;
     let recentSearches: string[] = [];
+    const archiveWarningKey = "postal-snap-e2e-archive-warning";
+    const readArchiveWarning = () => {
+      const value = localStorage.getItem(archiveWarningKey);
+      return value
+        ? (JSON.parse(value) as {
+            state: string;
+            sendCount: number;
+            archiveRetryCount: number;
+            sentCopyRetryCount: number;
+            detail: string;
+          })
+        : undefined;
+    };
+    const saveArchiveWarning = (value: {
+      state: string;
+      sendCount: number;
+      archiveRetryCount: number;
+      sentCopyRetryCount: number;
+      detail: string;
+    }) => localStorage.setItem(archiveWarningKey, JSON.stringify(value));
     Object.assign(mock.handlers, {
       list_drafts() {
         if (!location.search.includes("localMail") || discardedDraft) return [];
@@ -126,6 +146,45 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
             },
           ];
         }
+        if (
+          location.search.includes("archiveWarning=1") ||
+          location.search.includes("sentCopyArchiveWarning=1")
+        ) {
+          const persisted = readArchiveWarning();
+          if (persisted?.state === "sent" || persisted?.state === "dismissed")
+            return [];
+          const initialState = location.search.includes(
+            "sentCopyArchiveWarning=1",
+          )
+            ? "sent_copy_pending"
+            : "scheduled";
+          const rowState = persisted?.state ?? initialState;
+          const detail =
+            persisted?.detail ??
+            (rowState === "sent_copy_pending"
+              ? "Message sent. Its Sent-folder copy is waiting for a safe retry."
+              : "Held for review. Undo anytime before it sends.");
+          return [
+            {
+              id: "outbox-1",
+              accountId: String(args.accountId ?? account.id),
+              recipients: "lee@example.com",
+              subject: "Quarterly notes",
+              state: rowState,
+              detail,
+              createdAt: "2026-08-18T11:00:00Z",
+              sendAt:
+                rowState === "scheduled"
+                  ? new Date(
+                      Date.now() -
+                        (location.search.includes("scheduledPast")
+                          ? 60_000
+                          : -60_000),
+                    ).toISOString()
+                  : null,
+            },
+          ];
+        }
         if (!location.search.includes("localMail") || state.discarded) {
           return [];
         }
@@ -166,9 +225,11 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
               outcome === "scheduled"
                 ? new Date(
                     Date.now() +
-                      (location.search.includes("scheduledLater")
-                        ? 5 * 60 * 60_000
-                        : 60_000),
+                      (location.search.includes("scheduledPast")
+                        ? -60_000
+                        : location.search.includes("scheduledLater")
+                          ? 5 * 60 * 60_000
+                          : 60_000),
                   ).toISOString()
                 : null,
           },
@@ -212,7 +273,72 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
         return { id: "outbox-1", state: "sent", detail: null };
       },
       retry_sent_copy() {
+        if (location.search.includes("sentCopyArchiveWarning=1")) {
+          const previous = readArchiveWarning();
+          saveArchiveWarning({
+            state: "archive_pending",
+            sendCount: previous?.sendCount ?? 0,
+            archiveRetryCount: previous?.archiveRetryCount ?? 0,
+            sentCopyRetryCount: (previous?.sentCopyRetryCount ?? 0) + 1,
+            detail:
+              "Message sent. The archive status needs attention. Retry archive or dismiss this warning.",
+          });
+          return {
+            id: "outbox-1",
+            state: "archive_pending",
+            detail:
+              "Message sent. The archive status needs attention. Retry archive or dismiss this warning.",
+          };
+        }
         return { id: "outbox-1", state: "sent", detail: null };
+      },
+      send_scheduled_outbox(args: Record<string, unknown>) {
+        if (location.search.includes("archiveWarning=1")) {
+          const previous = readArchiveWarning();
+          if (String(args.accountId ?? "") !== account.id)
+            throw new Error(
+              "Scheduled message does not belong to this account.",
+            );
+          const value = {
+            state: "archive_pending",
+            sendCount: (previous?.sendCount ?? 0) + 1,
+            archiveRetryCount: previous?.archiveRetryCount ?? 0,
+            sentCopyRetryCount: previous?.sentCopyRetryCount ?? 0,
+            detail:
+              "Message sent. The archive status needs attention. Retry archive or dismiss this warning.",
+          };
+          saveArchiveWarning(value);
+          return { id: "outbox-1", state: value.state, detail: value.detail };
+        }
+        return { id: "outbox-1", state: "sent", detail: null };
+      },
+      retry_archive_after_send(args: Record<string, unknown>) {
+        const previous = readArchiveWarning();
+        if (
+          !previous ||
+          previous.state !== "archive_pending" ||
+          String(args.accountId ?? "") !== account.id
+        ) {
+          throw new Error("No archive retry belongs to this account.");
+        }
+        saveArchiveWarning({
+          ...previous,
+          state: "sent",
+          archiveRetryCount: previous.archiveRetryCount + 1,
+        });
+        return { id: "outbox-1", state: "sent", detail: null };
+      },
+      dismiss_archive_warning(args: Record<string, unknown>) {
+        const previous = readArchiveWarning();
+        if (
+          !previous ||
+          previous.state !== "archive_pending" ||
+          String(args.accountId ?? "") !== account.id
+        ) {
+          throw new Error("No archive warning belongs to this account.");
+        }
+        saveArchiveWarning({ ...previous, state: "dismissed" });
+        return undefined;
       },
       delete_outbox() {
         state.discarded = true;

@@ -14,6 +14,7 @@ import type {
   AccountRemovalImpact,
   AccountSetupRequest,
   AccountSummary,
+  ArchiveSource,
   BodyFormat,
   ComposeDragEvent,
   MailSettingsDiscovery,
@@ -150,6 +151,8 @@ export type NativeCommand =
   | "restore_outbox"
   | "retry_outbox"
   | "retry_sent_copy"
+  | "retry_archive_after_send"
+  | "dismiss_archive_warning"
   | "send_scheduled_outbox"
   | "snooze_message"
   | "unsnooze_message"
@@ -486,8 +489,8 @@ export const api = {
     call<ComposeDraft>("get_draft", { draftId, accountId }),
   deleteDraft: (draftId: string, accountId: string) =>
     call<void>("delete_draft", { draftId, accountId }),
-  sendMessage: (draft: ComposeDraft) =>
-    call<SendOutcome>("send_message", { draft }),
+  sendMessage: (draft: ComposeDraft, archiveSource?: ArchiveSource) =>
+    call<SendOutcome>("send_message", { draft, archiveSource }),
   sendReadReceipt: (accountId: string, messageId: number) =>
     call<string>("send_read_receipt", { accountId, messageId }),
   declineReadReceipt: (accountId: string, messageId: number) =>
@@ -502,6 +505,10 @@ export const api = {
     call<SendOutcome>("retry_outbox", { outboxId, accountId }),
   retrySentCopy: (outboxId: string, accountId: string) =>
     call<SendOutcome>("retry_sent_copy", { outboxId, accountId }),
+  retryArchiveAfterSend: (outboxId: string, accountId: string) =>
+    call<SendOutcome>("retry_archive_after_send", { outboxId, accountId }),
+  dismissArchiveWarning: (outboxId: string, accountId: string) =>
+    call<void>("dismiss_archive_warning", { outboxId, accountId }),
   sendScheduledOutbox: (outboxId: string, accountId: string) =>
     call<SendOutcome>("send_scheduled_outbox", { outboxId, accountId }),
   snoozeMessage: (accountId: string, messageId: number, untilIso: string) =>

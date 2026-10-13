@@ -50,15 +50,20 @@ export function betaManifestUploadArgs(stableTag, files) {
 export async function runHardFinalize({
   prerelease,
   verifyDraft,
+  verifyDraftIdentity,
   syncBetaManifests,
   publish,
-  verifyRemote,
+  verifyPublished,
   reconcileBetaManifests,
 } = {}) {
   await verifyDraft();
-  if (prerelease) await syncBetaManifests();
+  await verifyDraftIdentity();
+  if (prerelease) {
+    await syncBetaManifests();
+    await verifyDraftIdentity();
+  }
   await publish();
-  await verifyRemote();
+  await verifyPublished();
   if (prerelease) await reconcileBetaManifests();
 }
 
@@ -228,6 +233,7 @@ async function main() {
     await runHardFinalize({
       prerelease,
       verifyDraft: () => run("node", ["scripts/verify-release-draft.js"]),
+      verifyDraftIdentity: () => verifyDraftReleaseCommit(repository, session),
       syncBetaManifests: () => syncLocalBetaManifests(directory),
       publish: () =>
         runGitHub([
@@ -239,7 +245,7 @@ async function main() {
           "--draft=false",
           ...(prerelease ? ["--prerelease"] : ["--latest"]),
         ]),
-      verifyRemote: () => verifyRemoteReleaseCommit(repository, session),
+      verifyPublished: () => verifyRemoteReleaseCommit(repository, session),
       reconcileBetaManifests: () =>
         run("node", ["scripts/finalize-release.js", "--sync-beta-manifests"]),
     });

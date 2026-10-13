@@ -1,3 +1,4 @@
+use serde::Deserialize;
 use tauri::{AppHandle, State};
 
 use super::outbox::deliver_outbox_locked;
@@ -14,6 +15,13 @@ use crate::{
     },
     oauth,
 };
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchiveSource {
+    pub message_id: i64,
+    pub mailbox_id: i64,
+}
 
 #[tauri::command]
 pub async fn save_draft(
@@ -114,6 +122,7 @@ pub(crate) fn resolve_requested_send_at(send_at: Option<&str>) -> Result<Option<
 #[tauri::command]
 pub async fn send_message(
     draft: ComposeDraft,
+    archive_source: Option<ArchiveSource>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<SendOutcome> {
@@ -127,6 +136,19 @@ pub async fn send_message(
         &account.summary.signature,
         settings.signature_above_quote,
     );
+    let archive_source = archive_source
+        .filter(|source| {
+            let Ok((owner, source_name, _)) = state.db.message_location(source.message_id) else {
+                return false;
+            };
+            let Ok((mailbox_owner, archive_name)) = state.db.mailbox(source.mailbox_id) else {
+                return false;
+            };
+            owner == draft.account_id
+                && mailbox_owner == draft.account_id
+                && source_name == archive_name
+        })
+        .map(|source| (source.message_id, source.mailbox_id));
     let prepared = if draft.source_kind == Some(DraftSourceKind::Redirect) {
         let source_id = draft
             .source_message_id
@@ -147,13 +169,14 @@ pub async fn send_message(
         } else {
             "Scheduled to send."
         };
-        let outbox_id = state.db.queue_outbox(
+        let outbox_id = state.db.queue_outbox_with_archive(
             &draft,
             "scheduled",
             Some(detail),
             &prepared.message_id,
             &prepared.bytes,
             Some(&send_at),
+            archive_source,
         )?;
         state.request(&draft.account_id, wake::OUTBOX)?;
         emit_outbox_change(&app, &draft.account_id, Some(&outbox_id), Some("scheduled"));
@@ -171,13 +194,14 @@ pub async fn send_message(
         } else {
             "Held for review. Undo anytime before it sends."
         };
-        let outbox_id = state.db.queue_outbox(
+        let outbox_id = state.db.queue_outbox_with_archive(
             &draft,
             "scheduled",
             Some(detail),
             &prepared.message_id,
             &prepared.bytes,
             Some(&send_at),
+            archive_source,
         )?;
         state.request(&draft.account_id, wake::OUTBOX)?;
         emit_outbox_change(&app, &draft.account_id, Some(&outbox_id), Some("scheduled"));
@@ -188,13 +212,14 @@ pub async fn send_message(
         });
     }
     if offline {
-        let outbox_id = state.db.queue_outbox(
+        let outbox_id = state.db.queue_outbox_with_archive(
             &draft,
             "queued",
             initial_detail,
             &prepared.message_id,
             &prepared.bytes,
             None,
+            archive_source,
         )?;
         state.request(&draft.account_id, wake::OUTBOX)?;
         emit_outbox_change(&app, &draft.account_id, Some(&outbox_id), Some("queued"));
@@ -205,13 +230,14 @@ pub async fn send_message(
         });
     }
     let _guard = state.lock_account(&draft.account_id).await?;
-    let outbox_id = state.db.queue_outbox(
+    let outbox_id = state.db.queue_outbox_with_archive(
         &draft,
         "queued",
         initial_detail,
         &prepared.message_id,
         &prepared.bytes,
         None,
+        archive_source,
     )?;
     command_result(
         deliver_outbox_locked(&outbox_id, &draft.account_id, "queued", &app, &state).await,
@@ -313,6 +339,9 @@ pub async fn send_read_receipt(
     state: State<'_, AppState>,
 ) -> CommandResult<String> {
     let _guard = state.lock_account(&account_id).await?;
+    let Some(_delivery_guard) = state.try_start_delivery() else {
+        return Err("Delivery is paused while Postal Snap installs an update.".into());
+    };
     command_result(deliver_read_receipt(&account_id, message_id, &state).await)
 }
 

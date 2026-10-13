@@ -68,6 +68,8 @@ export function ConnectionPanel({
     try {
       const changed =
         draft.imap.host !== saved.imap.host ||
+        draft.imap.port !== saved.imap.port ||
+        draft.imap.tlsMode !== saved.imap.tlsMode ||
         draft.imap.username !== saved.imap.username;
       if (
         changed &&

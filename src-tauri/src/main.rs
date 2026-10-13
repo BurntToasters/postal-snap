@@ -358,6 +358,8 @@ fn main() {
             commands::outbox::get_outbox,
             commands::outbox::retry_outbox,
             commands::outbox::retry_sent_copy,
+            commands::outbox::retry_archive_after_send,
+            commands::outbox::dismiss_archive_warning,
             commands::drafts_send::send_scheduled_outbox,
             commands::snooze_filters::snooze_message,
             commands::snooze_filters::snooze_messages,
