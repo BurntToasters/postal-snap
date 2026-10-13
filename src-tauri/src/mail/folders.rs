@@ -1,7 +1,11 @@
 use futures_util::TryStreamExt;
 
-use super::IMAP_COMMAND_TIMEOUT;
+use super::{ImapSession, IMAP_COMMAND_TIMEOUT, MAX_MESSAGE_BYTES};
 use crate::{models::AccountRecord, security::redact_error};
+
+const MAX_REPLAY_MATCH_CANDIDATES: usize = 64;
+const MAX_REPLAY_COMPARE_BYTES: usize = MAX_MESSAGE_BYTES * 2;
+const MAX_REPLAY_VERIFY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
 
 /// A failed mailbox operation that keeps the terminal/transient distinction
 /// the redacted error string cannot carry. Terminal failures must not be
@@ -197,6 +201,21 @@ pub async fn set_remote_uid_flags(
             "This mailbox changed; refresh mail and try again.".to_string(),
         ));
     }
+    store_uid_flags_selected(&mut session, uids, is_read, is_starred, "Message update").await?;
+    session.release();
+    Ok(())
+}
+
+async fn store_uid_flags_selected(
+    session: &mut ImapSession,
+    uids: &[u32],
+    is_read: Option<bool>,
+    is_starred: Option<bool>,
+    action: &str,
+) -> Result<(), MailboxOperationError> {
+    if uids.is_empty() {
+        return Ok(());
+    }
     let set = uids
         .iter()
         .map(ToString::to_string)
@@ -212,13 +231,13 @@ pub async fn set_remote_uid_flags(
             session
                 .uid_store(set.clone(), operation)
                 .await
-                .map_err(|error| remote_failure(error, "Message update"))?
+                .map_err(|error| remote_failure(error, action))?
                 .try_collect::<Vec<_>>()
                 .await
-                .map_err(|error| remote_failure(error, "Message update"))
+                .map_err(|error| remote_failure(error, action))
         })
         .await
-        .map_err(|_| MailboxOperationError::transient("Message update timed out.".to_string()))??;
+        .map_err(|_| MailboxOperationError::transient(format!("{action} timed out.")))??;
     }
     if let Some(value) = is_starred {
         let operation = if value {
@@ -230,24 +249,32 @@ pub async fn set_remote_uid_flags(
             session
                 .uid_store(set, operation)
                 .await
-                .map_err(|error| remote_failure(error, "Message update"))?
+                .map_err(|error| remote_failure(error, action))?
                 .try_collect::<Vec<_>>()
                 .await
-                .map_err(|error| remote_failure(error, "Message update"))
+                .map_err(|error| remote_failure(error, action))
         })
         .await
-        .map_err(|_| MailboxOperationError::transient("Message update timed out.".to_string()))??;
+        .map_err(|_| MailboxOperationError::transient(format!("{action} timed out.")))??;
     }
-    session.release();
     Ok(())
 }
 
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
+pub struct MoveReplayFlags {
+    pub is_read: Option<bool>,
+    pub is_starred: Option<bool>,
+}
+
+#[derive(Clone, Copy, Default)]
 pub struct MoveOptions<'a> {
     pub message_id: Option<&'a str>,
     /// Set when replaying an offline move so an already-applied server move is
     /// recognized instead of copied twice.
     pub dedupe_existing: bool,
+    /// Latest queued source flags, copied to an existing destination before
+    /// the replay removes its source.
+    pub replay_flags: Option<MoveReplayFlags>,
 }
 
 pub async fn move_remote(
@@ -298,22 +325,6 @@ pub async fn copy_remote(
         .map_err(MailboxOperationError::transient)?;
     let wire_source = session.mailbox_name(source);
     let wire_destination = session.mailbox_name(destination);
-    if options.dedupe_existing {
-        if let Some(search) = options.message_id.and_then(header_message_id_search) {
-            tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(&wire_destination))
-                .await
-                .map_err(|_| MailboxOperationError::transient("Copy timed out.".to_string()))?
-                .map_err(|error| remote_failure(error, "Copy"))?;
-            let existing = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.uid_search(&search))
-                .await
-                .map_err(|_| MailboxOperationError::transient("Copy timed out.".to_string()))?
-                .map_err(|error| remote_failure(error, "Copy"))?;
-            if !existing.is_empty() {
-                session.release();
-                return Ok(());
-            }
-        }
-    }
     let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(&wire_source))
         .await
         .map_err(|_| MailboxOperationError::transient("Copy timed out.".to_string()))?
@@ -322,6 +333,32 @@ pub async fn copy_remote(
         return Err(MailboxOperationError::terminal(
             "This mailbox changed; refresh mail and try again.".to_string(),
         ));
+    }
+    if options.dedupe_existing {
+        if let Some(search) = options.message_id.and_then(header_message_id_search) {
+            match matching_destination_content(
+                &mut session,
+                &wire_source,
+                &wire_destination,
+                uid,
+                expected_uid_validity,
+                &search,
+                "Copy",
+            )
+            .await?
+            {
+                ReplayContentMatch::ExistingCopy { .. } => {
+                    session.release();
+                    return Ok(());
+                }
+                ReplayContentMatch::SourceMissing => {
+                    return Err(MailboxOperationError::terminal(
+                        "This message is no longer available on the server.".to_string(),
+                    ));
+                }
+                ReplayContentMatch::NoMatch => {}
+            }
+        }
     }
     tokio::time::timeout(
         IMAP_COMMAND_TIMEOUT,
@@ -418,6 +455,271 @@ fn header_message_id_search(raw: &str) -> Option<String> {
     ))
 }
 
+async fn fetch_replay_body(
+    session: &mut ImapSession,
+    uid: u32,
+    action: &str,
+) -> Result<Option<Vec<u8>>, MailboxOperationError> {
+    let query = super::sync::body_fetch_query("UID RFC822.SIZE");
+    let timeout = super::sync::download_timeout(MAX_MESSAGE_BYTES as u64);
+    let mut rows = tokio::time::timeout(timeout, async {
+        session
+            .uid_fetch(uid.to_string(), query)
+            .await
+            .map_err(|error| remote_failure(error, action))?
+            .try_collect::<Vec<_>>()
+            .await
+            .map_err(|error| remote_failure(error, action))
+    })
+    .await
+    .map_err(|_| MailboxOperationError::transient(format!("{action} timed out.")))??;
+    if rows.len() > 1 {
+        return Err(MailboxOperationError::transient(format!(
+            "Could not safely verify whether the {action} already completed."
+        )));
+    }
+    let Some(item) = rows.pop() else {
+        return Ok(None);
+    };
+    if item.uid != Some(uid) {
+        return Err(MailboxOperationError::transient(format!(
+            "The mail server returned a different message while verifying {action}."
+        )));
+    }
+    let Some(body) = item.body() else {
+        return Err(MailboxOperationError::transient(format!(
+            "The mail server did not return the message needed to verify {action}."
+        )));
+    };
+    let Some(size) = item.size else {
+        return Err(MailboxOperationError::transient(format!(
+            "The mail server did not return the message size needed to verify {action}."
+        )));
+    };
+    if size as usize > MAX_MESSAGE_BYTES || body.len() > MAX_MESSAGE_BYTES {
+        return Err(MailboxOperationError::transient(format!(
+            "The message could not be bounded for safe {action} replay."
+        )));
+    }
+    if body.len() != size as usize {
+        return Err(MailboxOperationError::transient(format!(
+            "The mail server returned incomplete content while verifying {action}."
+        )));
+    }
+    Ok(Some(body.to_vec()))
+}
+
+async fn replay_uid_exists(
+    session: &mut ImapSession,
+    uid: u32,
+    action: &str,
+) -> Result<bool, MailboxOperationError> {
+    let rows = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
+        session
+            .uid_fetch(uid.to_string(), "(UID)")
+            .await
+            .map_err(|error| remote_failure(error, action))?
+            .try_collect::<Vec<_>>()
+            .await
+            .map_err(|error| remote_failure(error, action))
+    })
+    .await
+    .map_err(|_| MailboxOperationError::transient(format!("{action} timed out.")))??;
+    Ok(rows.iter().any(|item| item.uid == Some(uid)))
+}
+
+async fn verify_replayed_flags(
+    session: &mut ImapSession,
+    uid: u32,
+    is_read: Option<bool>,
+    is_starred: Option<bool>,
+    action: &str,
+) -> Result<(), MailboxOperationError> {
+    let mut rows = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
+        session
+            .uid_fetch(uid.to_string(), "(UID FLAGS)")
+            .await
+            .map_err(|error| remote_failure(error, action))?
+            .try_collect::<Vec<_>>()
+            .await
+            .map_err(|error| remote_failure(error, action))
+    })
+    .await
+    .map_err(|_| MailboxOperationError::transient(format!("{action} timed out.")))??;
+    if rows.len() != 1 {
+        return Err(MailboxOperationError::transient(format!(
+            "The copied message changed while verifying {action}; the source was kept."
+        )));
+    }
+    let item = rows.pop().expect("one fetched row was checked");
+    if item.uid != Some(uid) {
+        return Err(MailboxOperationError::transient(format!(
+            "The mail server returned a different message while verifying {action}."
+        )));
+    }
+    let (seen, flagged) = item
+        .flags()
+        .fold((false, false), |(seen, flagged), flag| match flag {
+            async_imap::types::Flag::Seen => (true, flagged),
+            async_imap::types::Flag::Flagged => (seen, true),
+            _ => (seen, flagged),
+        });
+    if is_read.is_some_and(|expected| expected != seen)
+        || is_starred.is_some_and(|expected| expected != flagged)
+    {
+        return Err(MailboxOperationError::transient(format!(
+            "The mail server did not save the copied message flags for {action}; the source was kept."
+        )));
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReplayContentMatch {
+    SourceMissing,
+    NoMatch,
+    ExistingCopy { uid: u32, uid_validity: u32 },
+}
+
+/// Match full RFC822 content after a Message-ID search; the header alone is
+/// not reliable identity. The selected mailbox is the source on return.
+async fn matching_destination_content(
+    session: &mut ImapSession,
+    source: &str,
+    destination: &str,
+    source_uid: u32,
+    expected_uid_validity: u32,
+    search: &str,
+    action: &str,
+) -> Result<ReplayContentMatch, MailboxOperationError> {
+    tokio::time::timeout(
+        MAX_REPLAY_VERIFY_TIMEOUT,
+        matching_destination_content_inner(
+            session,
+            source,
+            destination,
+            source_uid,
+            expected_uid_validity,
+            search,
+            action,
+        ),
+    )
+    .await
+    .map_err(|_| {
+        MailboxOperationError::transient(format!(
+            "Could not safely verify whether the {action} already completed; the operation was kept."
+        ))
+    })?
+}
+
+async fn matching_destination_content_inner(
+    session: &mut ImapSession,
+    source: &str,
+    destination: &str,
+    source_uid: u32,
+    expected_uid_validity: u32,
+    search: &str,
+    action: &str,
+) -> Result<ReplayContentMatch, MailboxOperationError> {
+    select_replay_source(session, source, expected_uid_validity, action).await?;
+    if !replay_uid_exists(session, source_uid, action).await? {
+        return Ok(ReplayContentMatch::SourceMissing);
+    }
+
+    let destination_selected =
+        tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(destination))
+            .await
+            .map_err(|_| MailboxOperationError::transient(format!("{action} timed out.")))?
+            .map_err(|error| remote_failure(error, action))?;
+    let Some(destination_validity) = destination_selected.uid_validity else {
+        return Err(MailboxOperationError::transient(format!(
+            "The destination mailbox identity is unavailable; the {action} was kept for safety."
+        )));
+    };
+    let existing = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.uid_search(search))
+        .await
+        .map_err(|_| MailboxOperationError::transient(format!("{action} timed out.")))?
+        .map_err(|error| remote_failure(error, action))?;
+    if existing.is_empty() {
+        select_replay_destination(session, destination, destination_validity, action).await?;
+        select_replay_source(session, source, expected_uid_validity, action).await?;
+        return Ok(ReplayContentMatch::NoMatch);
+    }
+    if existing.len() > MAX_REPLAY_MATCH_CANDIDATES {
+        return Err(MailboxOperationError::transient(format!(
+            "Too many matching messages to verify {action} safely; the operation was kept."
+        )));
+    }
+    select_replay_source(session, source, expected_uid_validity, action).await?;
+    let Some(source_body) = fetch_replay_body(session, source_uid, action).await? else {
+        return Ok(ReplayContentMatch::SourceMissing);
+    };
+    let source_size = source_body.len();
+    select_replay_destination(session, destination, destination_validity, action).await?;
+    let mut compared_bytes = source_size;
+    let mut identical = None;
+    for uid in existing {
+        if let Some(body) = fetch_replay_body(session, uid, action).await? {
+            compared_bytes = compared_bytes.saturating_add(body.len());
+            if compared_bytes > MAX_REPLAY_COMPARE_BYTES {
+                return Err(MailboxOperationError::transient(format!(
+                    "Too many matching messages to verify {action} safely; the operation was kept."
+                )));
+            }
+            if body == source_body && identical.replace(uid).is_some() {
+                return Err(MailboxOperationError::transient(format!(
+                    "Matching copies are ambiguous; the {action} was kept for safety."
+                )));
+            }
+        }
+    }
+    select_replay_destination(session, destination, destination_validity, action).await?;
+    select_replay_source(session, source, expected_uid_validity, action).await?;
+    Ok(match identical {
+        Some(uid) => ReplayContentMatch::ExistingCopy {
+            uid,
+            uid_validity: destination_validity,
+        },
+        None => ReplayContentMatch::NoMatch,
+    })
+}
+
+async fn select_replay_destination(
+    session: &mut ImapSession,
+    destination: &str,
+    expected_uid_validity: u32,
+    action: &str,
+) -> Result<(), MailboxOperationError> {
+    let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(destination))
+        .await
+        .map_err(|_| MailboxOperationError::transient(format!("{action} timed out.")))?
+        .map_err(|error| remote_failure(error, action))?;
+    if selected.uid_validity != Some(expected_uid_validity) {
+        return Err(MailboxOperationError::transient(format!(
+            "The destination mailbox changed while verifying {action}; the operation was kept."
+        )));
+    }
+    Ok(())
+}
+
+async fn select_replay_source(
+    session: &mut ImapSession,
+    source: &str,
+    expected_uid_validity: u32,
+    action: &str,
+) -> Result<(), MailboxOperationError> {
+    let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(source))
+        .await
+        .map_err(|_| MailboxOperationError::transient(format!("{action} timed out.")))?
+        .map_err(|error| remote_failure(error, action))?;
+    if selected.uid_validity != Some(expected_uid_validity) {
+        return Err(MailboxOperationError::terminal(
+            "This mailbox changed; refresh mail and try again.".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 async fn move_remote_inner(
     account: &AccountRecord,
     password: &str,
@@ -457,60 +759,109 @@ async fn move_remote_inner(
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(",");
-    // A reconnect after an ambiguous COPY/MOVE replays the same source UID.
-    // If the destination already holds this Message-ID the server applied the
-    // original move, so only finish removing the source copy.
-    if options.dedupe_existing {
+    if options.dedupe_existing && uids.len() == 1 {
         if let Some(search) = options.message_id.and_then(header_message_id_search) {
-            let destination_selected =
-                tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(&wire_destination))
-                    .await
-                    .map_err(|_| MailboxOperationError::transient("Move timed out.".to_string()))?
-                    .map_err(|error| remote_failure(error, "Move"))?;
-            let _ = destination_selected;
-            let existing = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.uid_search(&search))
-                .await
-                .map_err(|_| MailboxOperationError::transient("Move timed out.".to_string()))?
-                .map_err(|error| remote_failure(error, "Move"))?;
-            if !existing.is_empty() {
-                if !has_uidplus {
+            let replay_match = matching_destination_content(
+                &mut session,
+                &wire_source,
+                &wire_destination,
+                uids[0],
+                expected_uid_validity,
+                &search,
+                "Move",
+            )
+            .await?;
+            match replay_match {
+                ReplayContentMatch::SourceMissing => {
                     return Err(MailboxOperationError::terminal(
-                        "This mail server cannot safely move messages.".to_string(),
+                        "This message is no longer available on the server.".to_string(),
                     ));
                 }
-                tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(&wire_source))
+                ReplayContentMatch::NoMatch => {}
+                ReplayContentMatch::ExistingCopy { uid, uid_validity } => {
+                    if !has_uidplus {
+                        return Err(MailboxOperationError::terminal(
+                            "This mail server cannot safely move messages.".to_string(),
+                        ));
+                    }
+                    if let Some(flags) = options
+                        .replay_flags
+                        .filter(|flags| flags.is_read.is_some() || flags.is_starred.is_some())
+                    {
+                        select_replay_destination(
+                            &mut session,
+                            &wire_destination,
+                            uid_validity,
+                            "Move",
+                        )
+                        .await?;
+                        if !replay_uid_exists(&mut session, uid, "Move").await? {
+                            return Err(MailboxOperationError::transient(
+                                "The copied message changed while replaying its flags; the source was kept."
+                                    .to_string(),
+                            ));
+                        }
+                        store_uid_flags_selected(
+                            &mut session,
+                            &[uid],
+                            flags.is_read,
+                            flags.is_starred,
+                            "Move",
+                        )
+                        .await?;
+                        select_replay_destination(
+                            &mut session,
+                            &wire_destination,
+                            uid_validity,
+                            "Move",
+                        )
+                        .await?;
+                        verify_replayed_flags(
+                            &mut session,
+                            uid,
+                            flags.is_read,
+                            flags.is_starred,
+                            "Move",
+                        )
+                        .await?;
+                    }
+                    select_replay_source(&mut session, &wire_source, expected_uid_validity, "Move")
+                        .await?;
+                    if !replay_uid_exists(&mut session, uids[0], "Move").await? {
+                        return Err(MailboxOperationError::terminal(
+                            "This message is no longer available on the server.".to_string(),
+                        ));
+                    }
+                    tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
+                        session
+                            .uid_store(set.clone(), "+FLAGS.SILENT (\\Deleted)")
+                            .await
+                            .map_err(|error| remote_failure(error, "Move"))?
+                            .try_collect::<Vec<_>>()
+                            .await
+                            .map_err(|error| remote_failure(error, "Move"))
+                    })
                     .await
-                    .map_err(|_| MailboxOperationError::transient("Move timed out.".to_string()))?
-                    .map_err(|error| remote_failure(error, "Move"))?;
-                tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
-                    session
-                        .uid_store(set.clone(), "+FLAGS.SILENT (\\Deleted)")
-                        .await
-                        .map_err(|error| remote_failure(error, "Move"))?
-                        .try_collect::<Vec<_>>()
-                        .await
-                        .map_err(|error| remote_failure(error, "Move"))
-                })
-                .await
-                .map_err(|_| MailboxOperationError::transient("Move timed out.".to_string()))??;
-                tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
-                    session
-                        .uid_expunge(set)
-                        .await
-                        .map_err(|error| remote_failure(error, "Move"))?
-                        .try_collect::<Vec<_>>()
-                        .await
-                        .map_err(|error| remote_failure(error, "Move"))
-                })
-                .await
-                .map_err(|_| MailboxOperationError::transient("Move timed out.".to_string()))??;
-                session.release();
-                return Ok(());
+                    .map_err(|_| {
+                        MailboxOperationError::transient("Move timed out.".to_string())
+                    })??;
+                    tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
+                        session
+                            .uid_expunge(set)
+                            .await
+                            .map_err(|error| remote_failure(error, "Move"))?
+                            .try_collect::<Vec<_>>()
+                            .await
+                            .map_err(|error| remote_failure(error, "Move"))
+                    })
+                    .await
+                    .map_err(|_| {
+                        MailboxOperationError::transient("Move timed out.".to_string())
+                    })??;
+                    session.release();
+                    return Ok(());
+                }
             }
-            tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(&wire_source))
-                .await
-                .map_err(|_| MailboxOperationError::transient("Move timed out.".to_string()))?
-                .map_err(|error| remote_failure(error, "Move"))?;
         }
     }
     if can_move {

@@ -11,7 +11,52 @@ use crate::models::{ComposeDraft, FilterMatchPreview, FilterRule, OutboxSummary,
 const MAX_NEEDS_ATTENTION_OUTBOX_MESSAGES: i64 = 25;
 const MAX_NEEDS_ATTENTION_OUTBOX_BYTES: i64 = 256 * 1024 * 1024;
 
+#[derive(Clone, Copy, Debug)]
+pub struct OutboxArchiveSource {
+    pub message_id: i64,
+    pub source_mailbox_id: i64,
+    pub current_mailbox_id: Option<i64>,
+    pub pending_move_to: Option<i64>,
+}
+
 impl Database {
+    pub fn outbox_archive_source(
+        &self,
+        id: &str,
+        account_id: &str,
+    ) -> Result<Option<OutboxArchiveSource>, String> {
+        self.conn()?
+            .query_row(
+                "SELECT o.archive_message_id,o.archive_source_mailbox_id,m.mailbox_id,m.pending_move_to
+                 FROM outbox o LEFT JOIN messages m ON m.id=o.archive_message_id AND m.account_id=o.account_id
+                 WHERE o.id=?1 AND o.account_id=?2",
+                params![id, account_id],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<i64>>(0)?,
+                        row.get::<_, Option<i64>>(1)?,
+                        row.get::<_, Option<i64>>(2)?,
+                        row.get::<_, Option<i64>>(3)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(db_error)
+            .and_then(|row| match row {
+                Some((Some(message_id), Some(source_mailbox_id), current_mailbox_id, pending_move_to)) => {
+                    Ok(Some(OutboxArchiveSource {
+                        message_id,
+                        source_mailbox_id,
+                        current_mailbox_id,
+                        pending_move_to,
+                    }))
+                }
+                Some((None, None, _, _)) => Ok(None),
+                Some(_) => Err("The queued archive source could not be read.".into()),
+                None => Err("Queued message not found.".into()),
+            })
+    }
+    #[allow(dead_code)]
     pub fn queue_outbox(
         &self,
         draft: &ComposeDraft,
@@ -20,6 +65,20 @@ impl Database {
         message_id: &str,
         mime_bytes: &[u8],
         send_at: Option<&str>,
+    ) -> Result<String, String> {
+        self.queue_outbox_with_archive(draft, state, detail, message_id, mime_bytes, send_at, None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn queue_outbox_with_archive(
+        &self,
+        draft: &ComposeDraft,
+        state: &str,
+        detail: Option<&str>,
+        message_id: &str,
+        mime_bytes: &[u8],
+        send_at: Option<&str>,
+        archive_source: Option<(i64, i64)>,
     ) -> Result<String, String> {
         let id = uuid::Uuid::new_v4().to_string();
         let json =
@@ -44,9 +103,20 @@ impl Database {
         }
         transaction
             .execute(
-                "INSERT INTO outbox(id,account_id,draft_json,state,detail,message_id,mime_bytes,send_at,updated_at)
-                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,CURRENT_TIMESTAMP)",
-                params![id, draft.account_id, json, state, detail, message_id, mime_bytes, send_at],
+                "INSERT INTO outbox(id,account_id,draft_json,state,detail,message_id,mime_bytes,send_at,updated_at,archive_message_id,archive_source_mailbox_id)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,CURRENT_TIMESTAMP,?9,?10)",
+                params![
+                    id,
+                    draft.account_id,
+                    json,
+                    state,
+                    detail,
+                    message_id,
+                    mime_bytes,
+                    send_at,
+                    archive_source.map(|source| source.0),
+                    archive_source.map(|source| source.1),
+                ],
             )
             .map_err(db_error)?;
         replace_attachment_refs(
@@ -74,6 +144,27 @@ impl Database {
                 params![id, account_id, state, detail],
             )
             .map_err(db_error)?;
+        Ok(changed == 1)
+    }
+
+    /// Persist a confirmed-send follow-up state before more network work.
+    pub fn set_outbox_state_durable(
+        &self,
+        id: &str,
+        account_id: &str,
+        state: &str,
+        detail: Option<&str>,
+    ) -> Result<bool, String> {
+        let conn = self.conn()?;
+        conn.pragma_update(None, "synchronous", "FULL")
+            .map_err(db_error)?;
+        let changed = conn.execute(
+            "UPDATE outbox SET state=?3,detail=?4,updated_at=CURRENT_TIMESTAMP WHERE id=?1 AND account_id=?2",
+            params![id, account_id, state, detail],
+        );
+        let restored = conn.pragma_update(None, "synchronous", "NORMAL");
+        let changed = changed.map_err(db_error)?;
+        restored.map_err(db_error)?;
         Ok(changed == 1)
     }
 
@@ -647,6 +738,28 @@ impl Database {
         Ok(())
     }
 
+    pub fn dismiss_archive_warning(&self, id: &str, account_id: &str) -> Result<(), String> {
+        let mut conn = self.conn()?;
+        let transaction = conn.transaction().map_err(db_error)?;
+        let changed = transaction
+            .execute(
+                "DELETE FROM outbox WHERE id=?1 AND account_id=?2 AND state='archive_pending'",
+                params![id, account_id],
+            )
+            .map_err(db_error)?;
+        if changed == 0 {
+            return Err("Post-send archive warning not found.".into());
+        }
+        transaction
+            .execute(
+                "DELETE FROM attachment_refs WHERE owner_kind='outbox' AND owner_id=?1",
+                [id],
+            )
+            .map_err(db_error)?;
+        transaction.commit().map_err(db_error)?;
+        Ok(())
+    }
+
     /// Restore queued content as a local draft before removing its outbox row.
     /// Both writes share one transaction so a crash cannot lose the only copy.
     pub fn restore_outbox_as_draft(
@@ -656,11 +769,12 @@ impl Database {
     ) -> Result<ComposeDraft, String> {
         let mut conn = self.conn()?;
         let transaction = conn.transaction().map_err(db_error)?;
-        let (json, state): (String, String) = transaction
+        let (json, state, archive_message_id, archive_source_mailbox_id):
+            (String, String, Option<i64>, Option<i64>) = transaction
             .query_row(
-                "SELECT draft_json,state FROM outbox WHERE id=?1 AND account_id=?2",
+                "SELECT draft_json,state,archive_message_id,archive_source_mailbox_id FROM outbox WHERE id=?1 AND account_id=?2",
                 params![id, account_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .optional()
             .map_err(db_error)?
@@ -677,6 +791,16 @@ impl Database {
             return Err("Queued message does not belong to this account.".into());
         }
         draft.html_body = crate::html_sanitize::sanitize_compose_html(&draft.html_body);
+        if let (Some(message_id), Some(source_mailbox_id)) =
+            (archive_message_id, archive_source_mailbox_id)
+        {
+            super::cancel_pending_move_in_transaction(
+                &transaction,
+                account_id,
+                message_id,
+                source_mailbox_id,
+            )?;
+        }
         let draft_id = super::drafts::save_draft_in_transaction(&transaction, &draft)?;
         transaction
             .execute(

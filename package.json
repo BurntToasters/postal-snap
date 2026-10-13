@@ -218,7 +218,10 @@
     "vitest": "^4.0.16"
   },
   "overrides": {
-    "prosemirror-view": ">=1.42.3"
+    "prosemirror-view": ">=1.42.3",
+    "vite-plugin-istanbul": {
+      "js-yaml": "^4.1.0"
+    }
   },
   "allowScripts": {
     "esbuild@0.28.2": true

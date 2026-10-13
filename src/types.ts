@@ -242,6 +242,11 @@ export interface ComposeAttachment {
   size?: number;
 }
 
+export interface ArchiveSource {
+  messageId: number;
+  mailboxId: number;
+}
+
 export interface ComposeDraft {
   id?: string;
   accountId: string;
@@ -301,6 +306,7 @@ export interface OutboxSummary {
     | "queued"
     | "sending"
     | "sent_copy_pending"
+    | "archive_pending"
     | "needs_attention"
     | "scheduled";
   detail?: string | null;
@@ -341,6 +347,7 @@ export interface SendOutcome {
     | "queued"
     | "sent"
     | "sent_copy_pending"
+    | "archive_pending"
     | "needs_attention"
     | "scheduled"
     | "sending"

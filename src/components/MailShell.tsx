@@ -1944,6 +1944,17 @@ export function MailShell({ onOpenSettings }: Props) {
     }
   }
 
+  async function retryArchiveAfterSend(id: string) {
+    if (!activeAccountId) return;
+    try {
+      await api.retryArchiveAfterSend(id, activeAccountId);
+      await loadAccountData();
+    } catch (cause) {
+      setError(String(cause));
+      await loadAccountData();
+    }
+  }
+
   async function unsnoozeById(id: number) {
     if (!activeAccountId) return;
     try {
@@ -2128,20 +2139,25 @@ export function MailShell({ onOpenSettings }: Props) {
   ) {
     if (!activeAccountId) return;
     const question =
-      state === "sent_copy_pending"
-        ? strings.mail.dismissSentCopy
-        : state === "scheduled"
-          ? strings.mail.undoSendQuestion
-          : strings.mail.discardQueued;
-    const confirmed = await api.showNativeConfirm(
-      strings.composer.discard,
-      question,
-    );
+      state === "archive_pending"
+        ? strings.mail.dismissArchiveWarning
+        : state === "sent_copy_pending"
+          ? strings.mail.dismissSentCopy
+          : state === "scheduled"
+            ? strings.mail.undoSendQuestion
+            : strings.mail.discardQueued;
+    const title =
+      state === "archive_pending"
+        ? strings.mail.dismissWarning
+        : strings.composer.discard;
+    const confirmed = await api.showNativeConfirm(title, question);
     if (!confirmed) return;
     try {
       if (state === "scheduled") {
         const draft = await api.restoreOutbox(id, activeAccountId);
         openComposer({ draft });
+      } else if (state === "archive_pending") {
+        await api.dismissArchiveWarning(id, activeAccountId);
       } else {
         await api.deleteOutbox(id, activeAccountId);
       }
@@ -2545,6 +2561,7 @@ export function MailShell({ onOpenSettings }: Props) {
         if (id === "edit") void editQueued(row.id, row.state);
         if (id === "retry") void retryQueued(row.id);
         if (id === "retry-copy") void retrySentCopy(row.id);
+        if (id === "retry-archive") void retryArchiveAfterSend(row.id);
         if (id === "send-now") void sendScheduledNow(row.id);
         if (id === "discard") {
           if (row.state === "sending") return;
@@ -3262,6 +3279,7 @@ export function MailShell({ onOpenSettings }: Props) {
             onRetry={retryQueued}
             onRetryAll={retryAllQueued}
             onRetryCopy={retrySentCopy}
+            onRetryArchive={retryArchiveAfterSend}
             onSendNow={sendScheduledNow}
             onEdit={editQueued}
             onDiscard={discardQueued}

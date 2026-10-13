@@ -1,9 +1,210 @@
 use tauri::{AppHandle, State};
 
 use super::{
-    command_result, emit_draft_change, emit_outbox_change, release_attachment_tokens,
-    resolve_draft_files, validate_owned_compose, wake, AppState, CommandResult,
+    command_result, emit_draft_change, emit_folder_counts, emit_message_change, emit_outbox_change,
+    release_attachment_tokens, resolve_draft_files, validate_owned_compose, wake, AppState,
+    CommandResult,
 };
+
+const SENT_COPY_PENDING_DETAIL: &str =
+    "Message sent. Its Sent-folder copy is waiting for a safe retry.";
+const ARCHIVE_PENDING_DETAIL: &str =
+    "Message sent. The archive status needs attention. Retry archive or dismiss this warning.";
+const ARCHIVE_SOURCE_UNAVAILABLE_DETAIL: &str =
+    "Message sent. The original is moving or no longer in its recorded folder. Check its location, then dismiss this warning.";
+const CONFIRMED_SEND_STATUS_ERROR: &str =
+    "Message sent. Postal Snap could not save its follow-up status. It will not resend automatically; check Sent and Outbox before retrying.";
+
+fn persist_confirmed_send_state(
+    state: &AppState,
+    outbox_id: &str,
+    account_id: &str,
+    next_state: &str,
+    detail: &str,
+) -> bool {
+    if matches!(
+        state
+            .db
+            .set_outbox_state_durable(outbox_id, account_id, next_state, Some(detail)),
+        Ok(true)
+    ) {
+        return true;
+    }
+    state
+        .db
+        .set_outbox_state(outbox_id, account_id, next_state, Some(detail))
+        .unwrap_or(false)
+}
+
+async fn archive_source_after_delivery(
+    source: Result<Option<crate::db::outbox::OutboxArchiveSource>, String>,
+    account_id: &str,
+    account: &crate::models::AccountRecord,
+    password: &str,
+    app: &AppHandle,
+    state: &AppState,
+    dedupe_existing: bool,
+) -> Option<String> {
+    let source = match source {
+        Ok(Some(source)) => source,
+        Ok(None) => return None,
+        Err(_) => return Some("Message sent, but the original could not be archived.".into()),
+    };
+    let message_id = source.message_id;
+    let source_id = source.source_mailbox_id;
+    let result = async {
+        let (destination_id, destination) = state
+            .db
+            .mailbox_for_role(account_id, "archive")?
+            .ok_or_else(|| "Archive folder is unavailable.".to_string())?;
+        if source.current_mailbox_id == Some(destination_id) && source.pending_move_to.is_none() {
+            return Ok(());
+        }
+        if source.current_mailbox_id != Some(source_id) || source.pending_move_to.is_some() {
+            return Err(ARCHIVE_SOURCE_UNAVAILABLE_DETAIL.to_string());
+        }
+        let (owner_id, source, uid) = state.db.message_location(message_id)?;
+        if owner_id != account_id {
+            return Err("Message does not belong to this account.".to_string());
+        }
+        let (source_owner_id, recorded_source) = state.db.mailbox(source_id)?;
+        if source_owner_id != account_id || source != recorded_source {
+            return Err("The original message moved from its recorded folder.".to_string());
+        }
+        if source_id == destination_id {
+            return Ok(());
+        }
+        let validity = state
+            .db
+            .mailbox_uid_validity(account_id, &source)?
+            .ok_or_else(|| "Mailbox identity is unavailable.".to_string())?;
+        let remote_id = state.db.message_rfc_id(message_id).ok().flatten();
+        match mail::move_remote(
+            account,
+            password,
+            &source,
+            &destination,
+            uid,
+            Some(validity),
+            mail::MoveOptions {
+                message_id: remote_id.as_deref(),
+                dedupe_existing,
+                replay_flags: None,
+            },
+        )
+        .await
+        {
+            Ok(()) => {
+                let _ = state.db.remove_message(message_id);
+                let policy = super::sync::account_policy(state, account_id).unwrap_or_default();
+                let _ = mail::refresh_mailbox_envelopes(
+                    account,
+                    password,
+                    &destination,
+                    &state.db,
+                    &policy,
+                )
+                .await;
+            }
+            Err(error) => return Err(error.message),
+        }
+        emit_message_change(app, account_id, Some(message_id), "moved");
+        emit_folder_counts(app, account_id);
+        Ok::<(), String>(())
+    }
+    .await;
+    match result {
+        Ok(()) => None,
+        Err(error) if error == ARCHIVE_SOURCE_UNAVAILABLE_DETAIL => {
+            Some(ARCHIVE_SOURCE_UNAVAILABLE_DETAIL.into())
+        }
+        Err(_) => Some(ARCHIVE_PENDING_DETAIL.into()),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn finalize_sent_outbox(
+    outbox_id: &str,
+    account_id: &str,
+    draft: &crate::models::ComposeDraft,
+    account: &crate::models::AccountRecord,
+    password: &str,
+    archive_source: Result<Option<crate::db::outbox::OutboxArchiveSource>, String>,
+    dedupe_existing: bool,
+    app: &AppHandle,
+    state: &AppState,
+) -> Result<SendOutcome, String> {
+    if let Some(draft_id) = draft.id.as_deref() {
+        let _ = state.db.remove_draft(draft_id, account_id);
+    }
+
+    let archive_requested = !matches!(&archive_source, Ok(None));
+    if archive_requested {
+        // This durable state records confirmed SMTP success before any archive
+        // network call can be interrupted by a restart.
+        if !persist_confirmed_send_state(
+            state,
+            outbox_id,
+            account_id,
+            "archive_pending",
+            ARCHIVE_PENDING_DETAIL,
+        ) {
+            emit_outbox_change(app, account_id, Some(outbox_id), Some("sent_copy_pending"));
+            return Ok(SendOutcome {
+                id: outbox_id.to_string(),
+                state: "sent_copy_pending".into(),
+                detail: Some(CONFIRMED_SEND_STATUS_ERROR.into()),
+            });
+        }
+        emit_outbox_change(app, account_id, Some(outbox_id), Some("archive_pending"));
+
+        if let Some(detail) = archive_source_after_delivery(
+            archive_source,
+            account_id,
+            account,
+            password,
+            app,
+            state,
+            dedupe_existing,
+        )
+        .await
+        {
+            let _ = persist_confirmed_send_state(
+                state,
+                outbox_id,
+                account_id,
+                "archive_pending",
+                &detail,
+            );
+            emit_outbox_change(app, account_id, Some(outbox_id), Some("archive_pending"));
+            release_attachment_tokens(
+                state,
+                account_id,
+                draft.attachments.iter().map(|item| item.token.as_str()),
+            )
+            .await;
+            return Ok(SendOutcome {
+                id: outbox_id.to_string(),
+                state: "archive_pending".into(),
+                detail: Some(detail),
+            });
+        }
+    }
+
+    state.db.remove_outbox(outbox_id, account_id)?;
+    release_attachment_tokens(
+        state,
+        account_id,
+        draft.attachments.iter().map(|item| item.token.as_str()),
+    )
+    .await;
+    emit_outbox_change(app, account_id, Some(outbox_id), Some("sent"));
+    Ok(SendOutcome {
+        id: outbox_id.to_string(),
+        state: "sent".into(),
+        detail: None,
+    })
+}
 use crate::{
     mail,
     models::{validate_compose_draft, ComposeDraft, OutboxSummary, SendOutcome},
@@ -43,6 +244,9 @@ pub async fn delete_outbox(
     let (draft, outbox_state) = state.db.outbox(&outbox_id, &account_id)?;
     if outbox_state == "sending" {
         return Err("This message is already sending and cannot be stopped.".into());
+    }
+    if outbox_state == "archive_pending" {
+        return Err("This message was sent. Retry or dismiss its archive warning.".into());
     }
     state
         .db
@@ -116,6 +320,44 @@ pub async fn retry_sent_copy(
     }
     let _guard = state.lock_account(&account_id).await?;
     command_result(retry_sent_copy_locked(&outbox_id, &account_id, &app, &state).await)
+}
+
+#[tauri::command]
+pub async fn retry_archive_after_send(
+    outbox_id: String,
+    account_id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<SendOutcome> {
+    let _guard = state.lock_account(&account_id).await?;
+    let (_, outbox_state) = state.db.outbox(&outbox_id, &account_id)?;
+    if outbox_state != "archive_pending" {
+        return Err("Only a pending post-send archive can be retried.".into());
+    }
+    command_result(retry_archive_after_send_locked(&outbox_id, &account_id, &app, &state).await)
+}
+
+#[tauri::command]
+pub async fn dismiss_archive_warning(
+    outbox_id: String,
+    account_id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<()> {
+    let _guard = state.lock_account(&account_id).await?;
+    let (draft, outbox_state) = state.db.outbox(&outbox_id, &account_id)?;
+    if outbox_state != "archive_pending" {
+        return Err("Only a post-send archive warning can be dismissed.".into());
+    }
+    state.db.dismiss_archive_warning(&outbox_id, &account_id)?;
+    release_attachment_tokens(
+        &state,
+        &account_id,
+        draft.attachments.iter().map(|item| item.token.as_str()),
+    )
+    .await;
+    emit_outbox_change(&app, &account_id, Some(&outbox_id), Some("removed"));
+    Ok(())
 }
 
 /// Deliver one outbox row. The caller holds the account lock and checked,
@@ -255,9 +497,24 @@ pub(crate) async fn deliver_outbox_locked(
                 })
                 .collect();
             let _ = state.db.record_recipients(account_id, &history);
-            // SMTP accepted the message: never return early here, or the row
-            // stays in `sending` until restart. A lookup error takes the
-            // Sent-copy retry path instead.
+            let archive_source = state.db.outbox_archive_source(outbox_id, account_id);
+            // SMTP accepted the message. Persist a non-sendable state before
+            // Sent-copy or archive work can be interrupted by a restart.
+            if !persist_confirmed_send_state(
+                state,
+                outbox_id,
+                account_id,
+                "sent_copy_pending",
+                SENT_COPY_PENDING_DETAIL,
+            ) {
+                emit_outbox_change(app, account_id, Some(outbox_id), Some("sending"));
+                return Ok(SendOutcome {
+                    id: outbox_id.to_string(),
+                    state: "sent_copy_pending".into(),
+                    detail: Some(CONFIRMED_SEND_STATUS_ERROR.into()),
+                });
+            }
+            emit_outbox_change(app, account_id, Some(outbox_id), Some("sent_copy_pending"));
             let sent_mailbox = state.db.mailbox_for_role(account_id, "sent").ok().flatten();
             let copy_result = match sent_mailbox {
                 Some((_, mailbox)) => {
@@ -267,14 +524,6 @@ pub(crate) async fn deliver_outbox_locked(
                 None => Err("This account has no confirmed Sent mailbox.".into()),
             };
             if copy_result.is_err() {
-                const DETAIL: &str =
-                    "Message sent. Its Sent-folder copy is waiting for a safe retry.";
-                state.db.set_outbox_state(
-                    outbox_id,
-                    account_id,
-                    "sent_copy_pending",
-                    Some(DETAIL),
-                )?;
                 if let Some(draft_id) = draft.id.as_deref() {
                     let _ = state.db.set_one_draft_sync_warning(
                         draft_id,
@@ -297,19 +546,9 @@ pub(crate) async fn deliver_outbox_locked(
                 return Ok(SendOutcome {
                     id: outbox_id.to_string(),
                     state: "sent_copy_pending".into(),
-                    detail: Some(DETAIL.into()),
+                    detail: Some(SENT_COPY_PENDING_DETAIL.into()),
                 });
             }
-            state.db.remove_outbox(outbox_id, account_id)?;
-            if let Some(draft_id) = draft.id.as_deref() {
-                let _ = state.db.remove_draft(draft_id, account_id);
-            }
-            release_attachment_tokens(
-                state,
-                account_id,
-                draft.attachments.iter().map(|item| item.token.as_str()),
-            )
-            .await;
             super::replied::mark_source_after_send(
                 app,
                 state,
@@ -319,12 +558,18 @@ pub(crate) async fn deliver_outbox_locked(
                 &confirmation,
             )
             .await;
-            emit_outbox_change(app, account_id, Some(outbox_id), Some("sent"));
-            Ok(SendOutcome {
-                id: outbox_id.to_string(),
-                state: "sent".into(),
-                detail: None,
-            })
+            finalize_sent_outbox(
+                outbox_id,
+                account_id,
+                &draft,
+                &account,
+                &password,
+                archive_source,
+                false,
+                app,
+                state,
+            )
+            .await
         }
         Err(error) => {
             // Only a definite "not accepted" may go back in the queue; an
@@ -381,10 +626,70 @@ pub(crate) async fn retry_sent_copy_locked(
         });
     };
     mail::ensure_sent_copy(&account, &password, &mailbox, &message_id, &mime_bytes).await?;
-    state.db.remove_outbox(outbox_id, account_id)?;
-    if let Some(draft_id) = draft.id.as_deref() {
-        let _ = state.db.remove_draft(draft_id, account_id);
+    let archive_source = state.db.outbox_archive_source(outbox_id, account_id);
+    finalize_sent_outbox(
+        outbox_id,
+        account_id,
+        &draft,
+        &account,
+        &password,
+        archive_source,
+        true,
+        app,
+        state,
+    )
+    .await
+}
+
+pub(crate) async fn retry_archive_after_send_locked(
+    outbox_id: &str,
+    account_id: &str,
+    app: &AppHandle,
+    state: &AppState,
+) -> Result<SendOutcome, String> {
+    let (draft, state_name, _, _) = state.db.outbox_delivery(outbox_id, account_id)?;
+    if state_name != "archive_pending" {
+        return Err("Only a pending post-send archive can be retried.".into());
     }
+    let account = state.db.account(account_id)?;
+    let password = crate::oauth::session_secret(&account).await?;
+    let Some(_delivery_guard) = state.try_start_delivery() else {
+        return Ok(SendOutcome {
+            id: outbox_id.into(),
+            state: "archive_pending".into(),
+            detail: Some(ARCHIVE_PENDING_DETAIL.into()),
+        });
+    };
+
+    let source = state.db.outbox_archive_source(outbox_id, account_id);
+    let warning = match source {
+        Ok(Some(source)) => {
+            archive_source_after_delivery(
+                Ok(Some(source)),
+                account_id,
+                &account,
+                &password,
+                app,
+                state,
+                true,
+            )
+            .await
+        }
+        Ok(None) => Some(ARCHIVE_SOURCE_UNAVAILABLE_DETAIL.into()),
+        Err(_) => Some(ARCHIVE_PENDING_DETAIL.into()),
+    };
+    if let Some(detail) = warning {
+        let _ =
+            persist_confirmed_send_state(state, outbox_id, account_id, "archive_pending", &detail);
+        emit_outbox_change(app, account_id, Some(outbox_id), Some("archive_pending"));
+        return Ok(SendOutcome {
+            id: outbox_id.into(),
+            state: "archive_pending".into(),
+            detail: Some(detail),
+        });
+    }
+
+    state.db.remove_outbox(outbox_id, account_id)?;
     release_attachment_tokens(
         state,
         account_id,

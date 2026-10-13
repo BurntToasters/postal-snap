@@ -41,6 +41,7 @@ test("failed connection testing retains saved connection", async ({ page }) => {
     .getByRole("group", { name: "Incoming IMAP" })
     .getByLabel("Port");
   await port.fill("1993");
+  page.once("dialog", (dialog) => void dialog.accept());
   await page
     .getByRole("button", { name: "Test and save", exact: true })
     .click();
@@ -101,6 +102,9 @@ for (const endpoint of ["Incoming IMAP", "Outgoing SMTP"] as const) {
     await group
       .getByLabel("Port")
       .fill(endpoint === "Incoming IMAP" ? "1993" : "1587");
+    if (endpoint === "Incoming IMAP") {
+      page.once("dialog", (dialog) => void dialog.accept());
+    }
     await page
       .getByRole("button", { name: "Test and save", exact: true })
       .click();
@@ -471,6 +475,34 @@ test("connection identity repair explains pending work", async ({ page }) => {
   await expect(
     page.getByText("Unsent for account-2", { exact: true }),
   ).toBeVisible();
+});
+
+test("incoming port change requires identity approval and honors pending blockers", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/?multiAccount=1&pendingConnectionWork=1");
+  await openAccount(page, "Work");
+  await page
+    .getByRole("group", { name: "Incoming IMAP" })
+    .getByLabel("Port")
+    .fill("1993");
+  let prompts = 0;
+  page.on("dialog", async (dialog) => {
+    prompts += 1;
+    await dialog.accept();
+  });
+  await page
+    .getByRole("button", { name: "Test and save", exact: true })
+    .click();
+  await expect(
+    page
+      .getByRole("status")
+      .filter({ hasText: /queued changes.*unsent message/ }),
+  ).toBeVisible();
+  expect(prompts).toBe(1);
+  const path = "test-results/incoming-port-identity.png";
+  await page.screenshot({ path });
+  await testInfo.attach("screenshot", { path, contentType: "image/png" });
 });
 
 test("invalid certificate import explains required public certificate", async ({

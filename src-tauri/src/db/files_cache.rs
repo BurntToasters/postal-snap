@@ -1,10 +1,138 @@
-use super::{db_error, Database};
+use super::{adjust_mailbox_counts, db_error, Database};
 use rusqlite::{params, OptionalExtension};
 use std::path::Path;
 
 use crate::models::{AppSettings, CachePolicy, CacheUsage};
 
 impl Database {
+    pub fn record_flag_change(
+        &self,
+        account_id: &str,
+        message_id: i64,
+        is_read: Option<bool>,
+        is_starred: Option<bool>,
+        queued: Option<&serde_json::Value>,
+    ) -> Result<(), String> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction().map_err(db_error)?;
+        let (
+            source_mailbox_id,
+            pending_destination_id,
+            was_read,
+            source_overlay_active,
+            destination_overlay_active,
+        ): (i64, Option<i64>, bool, bool, bool) = tx
+            .query_row(
+                "SELECT m.mailbox_id,m.pending_move_to,m.is_read != 0,
+                         COALESCE(m.pending_move_to IS NOT NULL AND m.pending_source_generation=s.counts_generation,0),
+                         COALESCE(m.pending_move_to IS NOT NULL AND m.pending_destination_generation=d.counts_generation,0)
+                 FROM messages m JOIN mailboxes s ON s.id=m.mailbox_id
+                 LEFT JOIN mailboxes d ON d.id=m.pending_move_to
+                 WHERE m.id=?1 AND m.account_id=?2",
+                params![message_id, account_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(db_error)?
+            .ok_or_else(|| "Message not found.".to_string())?;
+        let operations: Vec<(i64, String)> = {
+            let mut statement = tx.prepare(
+                "SELECT id,payload FROM offline_ops WHERE account_id=?1 AND kind='flags' AND json_valid(payload) AND json_extract(payload,'$.messageId')=?2 ORDER BY id"
+            ).map_err(db_error)?;
+            let rows = statement
+                .query_map(params![account_id, message_id], |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })
+                .map_err(db_error)?
+                .collect::<Result<_, _>>()
+                .map_err(db_error)?;
+            rows
+        };
+        for (id, payload) in operations {
+            let mut operation: serde_json::Value = serde_json::from_str(&payload)
+                .map_err(|_| "Queued flag change could not be read.".to_string())?;
+            if is_read.is_some() {
+                operation["isRead"] = serde_json::Value::Null;
+            }
+            if is_starred.is_some() {
+                operation["isStarred"] = serde_json::Value::Null;
+            }
+            let has_read = !operation["isRead"].is_null();
+            let has_star = !operation["isStarred"].is_null();
+            if !has_read && !has_star {
+                tx.execute("DELETE FROM offline_ops WHERE id=?1", [id])
+                    .map_err(db_error)?;
+                continue;
+            }
+            let dedupe = format!("flags:{message_id}:{has_read}:{has_star}");
+            let collision: Option<i64> = tx
+                .query_row(
+                    "SELECT id FROM offline_ops WHERE account_id=?1 AND dedupe_key=?2 AND id<>?3",
+                    params![account_id, dedupe, id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(db_error)?;
+            if let Some(other_id) = collision {
+                let older = id.min(other_id);
+                tx.execute("DELETE FROM offline_ops WHERE id=?1", [older])
+                    .map_err(db_error)?;
+                if older == id {
+                    continue;
+                }
+            }
+            tx.execute(
+                "UPDATE offline_ops SET payload=?2,dedupe_key=?3 WHERE id=?1",
+                params![id, operation.to_string(), dedupe],
+            )
+            .map_err(db_error)?;
+        }
+        if let Some(operation) = queued {
+            for (read, star) in [(is_read, None), (None, is_starred)] {
+                if read.is_none() && star.is_none() {
+                    continue;
+                }
+                let mut field = operation.clone();
+                field["isRead"] = read
+                    .map(serde_json::Value::Bool)
+                    .unwrap_or(serde_json::Value::Null);
+                field["isStarred"] = star
+                    .map(serde_json::Value::Bool)
+                    .unwrap_or(serde_json::Value::Null);
+                let dedupe = format!("flags:{message_id}:{}:{}", read.is_some(), star.is_some());
+                tx.execute(
+                    "INSERT INTO offline_ops(account_id,kind,payload,dedupe_key) VALUES(?1,'flags',?2,?3)
+                     ON CONFLICT(account_id,dedupe_key) DO UPDATE SET payload=excluded.payload,created_at=CURRENT_TIMESTAMP",
+                    params![account_id, field.to_string(), dedupe],
+                ).map_err(db_error)?;
+            }
+        }
+        tx.execute(
+            "UPDATE messages SET is_read=COALESCE(?2,is_read),is_starred=COALESCE(?3,is_starred) WHERE id=?1",
+            params![message_id, is_read.map(i32::from), is_starred.map(i32::from)],
+        ).map_err(db_error)?;
+        if let Some(is_read) = is_read.filter(|value| *value != was_read) {
+            let delta = if is_read { -1 } else { 1 };
+            if pending_destination_id.is_none() || !source_overlay_active {
+                adjust_mailbox_counts(&tx, source_mailbox_id, 0, Some(delta))?;
+            }
+            if let Some(destination_id) =
+                pending_destination_id.filter(|_| destination_overlay_active)
+            {
+                adjust_mailbox_counts(&tx, destination_id, 0, Some(delta))?;
+            }
+        }
+        tx.commit().map_err(db_error)
+    }
+
     pub fn queue_operation<T: serde::Serialize>(
         &self,
         account_id: &str,
@@ -45,6 +173,20 @@ impl Database {
             .execute(
                 "DELETE FROM offline_ops WHERE id=?1 AND account_id=?2",
                 params![id, account_id],
+            )
+            .map_err(db_error)?;
+        Ok(())
+    }
+
+    pub fn remove_operation_by_dedupe(
+        &self,
+        account_id: &str,
+        dedupe_key: &str,
+    ) -> Result<(), String> {
+        self.conn()?
+            .execute(
+                "DELETE FROM offline_ops WHERE account_id=?1 AND dedupe_key=?2",
+                params![account_id, dedupe_key],
             )
             .map_err(db_error)?;
         Ok(())

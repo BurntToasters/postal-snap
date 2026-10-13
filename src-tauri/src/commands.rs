@@ -136,7 +136,7 @@ impl UpdateInstallGate {
         self.active_deliveries.fetch_add(1, Ordering::SeqCst);
         if self.update_requested.load(Ordering::SeqCst) {
             if self.active_deliveries.fetch_sub(1, Ordering::SeqCst) == 1 {
-                self.notify.notify_waiters();
+                self.notify.notify_one();
             }
             return None;
         }
@@ -715,6 +715,46 @@ enum ValidatedReplay {
     Copy(MoveOperation),
 }
 
+#[derive(Default)]
+struct MoveReplayFlagDependencies {
+    operation_ids: Vec<i64>,
+    is_read: Option<bool>,
+    is_starred: Option<bool>,
+}
+
+fn move_replay_flag_dependencies(
+    operations: &[(i64, String, String)],
+    movement: &MoveOperation,
+) -> MoveReplayFlagDependencies {
+    let mut dependencies = MoveReplayFlagDependencies::default();
+    let Some(uid_validity) = movement.uid_validity else {
+        return dependencies;
+    };
+    for (id, kind, payload) in operations {
+        if kind != "flags" {
+            continue;
+        }
+        let Ok(flag) = serde_json::from_str::<messages::FlagOperation>(payload) else {
+            continue;
+        };
+        if flag.message_id != movement.message_id
+            || flag.mailbox != movement.source
+            || flag.uid != movement.uid
+            || flag.uid_validity != Some(uid_validity)
+        {
+            continue;
+        }
+        dependencies.operation_ids.push(*id);
+        if flag.is_read.is_some() {
+            dependencies.is_read = flag.is_read;
+        }
+        if flag.is_starred.is_some() {
+            dependencies.is_starred = flag.is_starred;
+        }
+    }
+    dependencies
+}
+
 /// Validate a queued operation against current local ownership and mailbox
 /// identity before any network call. Stale operations are removed; the
 /// decisions are DB-level and covered by tests without a mail server.
@@ -823,7 +863,14 @@ async fn replay_offline_operations(
 ) -> Result<bool, String> {
     let account_id = &account.summary.id;
     let mut dropped = 0u32;
-    for (id, kind, payload) in db.queued_operations(account_id)? {
+    let operations = db.queued_operations(account_id)?;
+    let mut handled_flags = std::collections::HashSet::new();
+    let mut failed_flag_messages = std::collections::HashSet::new();
+    let mut terminal_flag_messages = std::collections::HashSet::new();
+    for (id, kind, payload) in operations {
+        if kind == "flags" && handled_flags.contains(&id) {
+            continue;
+        }
         match validate_queued_operation(db, account_id, &kind, &payload)? {
             ValidatedReplay::Drop => {
                 db.remove_operation(account_id, id)?;
@@ -847,21 +894,27 @@ async fn replay_offline_operations(
                     operation.is_starred,
                 )
                 .await;
-                // Initial sync restored server flags and reset local count
-                // overlays. Reapply user's queued intent whether remote
-                // replay succeeds now or remains queued.
+                if let Err(error) = &result {
+                    if error.terminal {
+                        db.remove_operation(account_id, id)?;
+                        dropped = dropped.saturating_add(1);
+                        failed_flag_messages.insert(operation.message_id);
+                        terminal_flag_messages.insert(operation.message_id);
+                        continue;
+                    }
+                    failed_flag_messages.insert(operation.message_id);
+                }
+                // Initial sync restored server flags. Keep queued intent only
+                // while replay can still succeed.
                 db.set_flags(
                     operation.message_id,
                     operation.is_read,
                     operation.is_starred,
                 )?;
-                if let Err(error) = &result {
-                    if error.terminal {
-                        db.remove_operation(account_id, id)?;
-                        dropped = dropped.saturating_add(1);
-                    }
+                if result.is_err() {
                     continue;
                 }
+                failed_flag_messages.remove(&operation.message_id);
             }
             ValidatedReplay::Keyword(operation) => {
                 let result = mail::set_remote_keyword(
@@ -882,6 +935,65 @@ async fn replay_offline_operations(
                 }
             }
             ValidatedReplay::Move(operation) => {
+                if terminal_flag_messages.contains(&operation.message_id) {
+                    let _ = db.clear_pending_move(operation.message_id);
+                    db.remove_operation(account_id, id)?;
+                    dropped = dropped.saturating_add(1);
+                    continue;
+                }
+                let dependencies =
+                    move_replay_flag_dependencies(&db.queued_operations(account_id)?, &operation);
+                let replay_flags =
+                    (!dependencies.operation_ids.is_empty()).then_some(mail::MoveReplayFlags {
+                        is_read: dependencies.is_read,
+                        is_starred: dependencies.is_starred,
+                    });
+                if !dependencies.operation_ids.is_empty() {
+                    let flag_result = mail::set_remote_flags(
+                        account,
+                        password,
+                        &operation.source,
+                        operation.uid,
+                        operation.uid_validity,
+                        dependencies.is_read,
+                        dependencies.is_starred,
+                    )
+                    .await;
+                    match flag_result {
+                        Ok(()) => {
+                            db.set_flags(
+                                operation.message_id,
+                                dependencies.is_read,
+                                dependencies.is_starred,
+                            )?;
+                            for flag_id in &dependencies.operation_ids {
+                                handled_flags.insert(*flag_id);
+                            }
+                            failed_flag_messages.remove(&operation.message_id);
+                        }
+                        Err(error) if error.terminal => {
+                            for flag_id in dependencies.operation_ids {
+                                db.remove_operation(account_id, flag_id)?;
+                                handled_flags.insert(flag_id);
+                                dropped = dropped.saturating_add(1);
+                            }
+                            let _ = db.clear_pending_move(operation.message_id);
+                            db.remove_operation(account_id, id)?;
+                            dropped = dropped.saturating_add(1);
+                            continue;
+                        }
+                        Err(_) => {
+                            failed_flag_messages.insert(operation.message_id);
+                            for flag_id in &dependencies.operation_ids {
+                                handled_flags.insert(*flag_id);
+                            }
+                            continue;
+                        }
+                    }
+                }
+                if failed_flag_messages.contains(&operation.message_id) {
+                    continue;
+                }
                 let remote_message_id = db.message_rfc_id(operation.message_id).ok().flatten();
                 let result = mail::move_remote(
                     account,
@@ -893,11 +1005,16 @@ async fn replay_offline_operations(
                     mail::MoveOptions {
                         message_id: remote_message_id.as_deref(),
                         dedupe_existing: true,
+                        replay_flags,
                     },
                 )
                 .await;
                 match result {
                     Ok(()) => {
+                        for flag_id in dependencies.operation_ids {
+                            db.remove_operation(account_id, flag_id)?;
+                            handled_flags.insert(flag_id);
+                        }
                         db.remove_message(operation.message_id)?;
                         let _ = mail::refresh_mailbox_envelopes(
                             account,
@@ -910,9 +1027,17 @@ async fn replay_offline_operations(
                     }
                     Err(error) => {
                         if error.terminal {
+                            for flag_id in dependencies.operation_ids {
+                                db.remove_operation(account_id, flag_id)?;
+                                handled_flags.insert(flag_id);
+                            }
                             let _ = db.clear_pending_move(operation.message_id);
                             db.remove_operation(account_id, id)?;
                             dropped = dropped.saturating_add(1);
+                        } else {
+                            for flag_id in &dependencies.operation_ids {
+                                handled_flags.insert(*flag_id);
+                            }
                         }
                         // Transient failure: keep the queued op and the
                         // pending-move hiding so a later sync retries it.
@@ -1828,5 +1953,73 @@ mod tests {
         db.mark_replied(id, account_id, false, false).unwrap();
         let summary = db.list_messages(inbox, None, 10).unwrap().items.remove(0);
         assert!(summary.is_answered && summary.is_forwarded);
+    }
+
+    #[test]
+    fn move_replay_collects_later_flags_for_the_same_source_identity() {
+        use super::move_replay_flag_dependencies;
+
+        let db = Database::memory();
+        let account = rule_account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = rule_mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        let archive = rule_mailbox(&db, account_id, "Archive", &MailboxRole::Archive);
+        let id = bill(&db, account_id, inbox, 1);
+        let movement = super::messages::MoveOperation {
+            message_id: id,
+            uid: 1,
+            source: "INBOX".into(),
+            destination: "Archive".into(),
+            uid_validity: Some(1),
+        };
+        db.queue_operation(account_id, "move", &movement, Some(&format!("move:{id}")))
+            .unwrap();
+        db.mark_pending_move(id, archive).unwrap();
+
+        let flag = |is_read: Option<bool>, is_starred: Option<bool>, uid, validity| {
+            serde_json::json!({
+                "messageId": id,
+                "uid": uid,
+                "mailbox": "INBOX",
+                "uidValidity": validity,
+                "isRead": is_read.map(serde_json::Value::Bool).unwrap_or(serde_json::Value::Null),
+                "isStarred": is_starred.map(serde_json::Value::Bool).unwrap_or(serde_json::Value::Null),
+            })
+        };
+        db.queue_operation(
+            account_id,
+            "flags",
+            &flag(Some(true), None, 1, 1),
+            Some(&format!("flags:{id}:true:false")),
+        )
+        .unwrap();
+        db.queue_operation(
+            account_id,
+            "flags",
+            &flag(None, Some(true), 1, 1),
+            Some(&format!("flags:{id}:false:true")),
+        )
+        .unwrap();
+        db.queue_operation(
+            account_id,
+            "flags",
+            &flag(Some(false), None, 1, 1),
+            Some(&format!("flags:{id}:true:false")),
+        )
+        .unwrap();
+        db.queue_operation(
+            account_id,
+            "flags",
+            &flag(None, Some(false), 99, 1),
+            Some("flags:stale-uid"),
+        )
+        .unwrap();
+
+        let dependencies =
+            move_replay_flag_dependencies(&db.queued_operations(account_id).unwrap(), &movement);
+        assert_eq!(dependencies.operation_ids.len(), 2);
+        assert_eq!(dependencies.is_read, Some(false));
+        assert_eq!(dependencies.is_starred, Some(true));
     }
 }

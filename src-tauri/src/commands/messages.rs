@@ -288,7 +288,6 @@ pub async fn set_message_flags(
         .ok_or_else(|| {
             "Mailbox identity is unavailable; refresh mail and try again.".to_string()
         })?;
-    state.db.set_flags(message_id, is_read, is_starred)?;
     let operation = FlagOperation {
         message_id,
         uid,
@@ -311,15 +310,24 @@ pub async fn set_message_flags(
         )
         .await
     };
-    if remote_result.is_err() {
-        let dedupe_key = format!(
-            "flags:{message_id}:{}:{}",
-            is_read.is_some(),
-            is_starred.is_some()
-        );
-        state
-            .db
-            .queue_operation(&account_id, "flags", &operation, Some(&dedupe_key))?;
+    match remote_result {
+        Ok(()) => {
+            state
+                .db
+                .record_flag_change(&account_id, message_id, is_read, is_starred, None)?
+        }
+        Err(error) if error.terminal => return Err(error.message.into()),
+        Err(_) => {
+            let queued = serde_json::to_value(&operation)
+                .map_err(|_| "Could not queue the flag change.".to_string())?;
+            state.db.record_flag_change(
+                &account_id,
+                message_id,
+                is_read,
+                is_starred,
+                Some(&queued),
+            )?;
+        }
     }
     emit_message_change(&app, &account_id, Some(message_id), "flags");
     emit_folder_counts(&app, &account_id);
@@ -543,16 +551,25 @@ async fn move_message_inner(
         mail::MoveOptions {
             message_id: remote_message_id.as_deref(),
             dedupe_existing: false,
+            replay_flags: None,
         },
     )
     .await;
     let remote_succeeded = remote_result.is_ok();
-    if !remote_succeeded {
+    if let Err(error) = remote_result {
+        if error.terminal {
+            return Err(error.message);
+        }
         let dedupe_key = format!("move:{message_id}");
         state
             .db
             .queue_operation(&account_id, "move", &operation, Some(&dedupe_key))?;
-        state.db.mark_pending_move(message_id, destination_id)?;
+        if let Err(error) = state.db.mark_pending_move(message_id, destination_id) {
+            let _ = state
+                .db
+                .remove_operation_by_dedupe(&account_id, &dedupe_key);
+            return Err(error);
+        }
     } else {
         // The remote move committed; local bookkeeping is best effort so a
         // database hiccup cannot report a completed move as failed.
@@ -616,17 +633,6 @@ async fn bulk_apply_flags(
             failed += ids.len();
             continue;
         };
-        let db = state.db.clone();
-        let ids_for_update = ids.clone();
-        let local_update = tauri::async_runtime::spawn_blocking(move || {
-            db.set_flags_bulk(&ids_for_update, is_read, is_starred)
-        })
-        .await
-        .map_err(|_| "Postal Snap could not update messages.".to_string())?;
-        if local_update.is_err() {
-            failed += ids.len();
-            continue;
-        }
         let remote = mail::set_remote_uid_flags(
             &account,
             &password,
@@ -637,26 +643,44 @@ async fn bulk_apply_flags(
             is_starred,
         )
         .await;
-        if remote.is_err() {
-            for (id, uid) in &entries {
-                let operation = FlagOperation {
-                    message_id: *id,
-                    uid: *uid,
-                    mailbox: mailbox.clone(),
-                    uid_validity: Some(validity),
-                    is_read,
-                    is_starred,
-                };
-                let dedupe_key =
-                    format!("flags:{id}:{}:{}", is_read.is_some(), is_starred.is_some());
-                let _ =
-                    state
+        match remote {
+            Ok(()) => {
+                for (id, _) in &entries {
+                    if state
                         .db
-                        .queue_operation(account_id, "flags", &operation, Some(&dedupe_key));
+                        .record_flag_change(account_id, *id, is_read, is_starred, None)
+                        .is_ok()
+                    {
+                        updated += 1;
+                    } else {
+                        failed += 1;
+                    }
+                }
             }
-            queued += ids.len();
-        } else {
-            updated += ids.len();
+            Err(error) if error.terminal => failed += ids.len(),
+            Err(_) => {
+                for (id, uid) in &entries {
+                    let operation = FlagOperation {
+                        message_id: *id,
+                        uid: *uid,
+                        mailbox: mailbox.clone(),
+                        uid_validity: Some(validity),
+                        is_read,
+                        is_starred,
+                    };
+                    let payload = serde_json::to_value(&operation)
+                        .map_err(|_| "Could not queue the flag change.".to_string())?;
+                    if state
+                        .db
+                        .record_flag_change(account_id, *id, is_read, is_starred, Some(&payload))
+                        .is_ok()
+                    {
+                        queued += 1;
+                    } else {
+                        failed += 1;
+                    }
+                }
+            }
         }
     }
     Ok(BulkOutcome {
@@ -771,6 +795,8 @@ pub async fn move_messages_to_mailbox(
                 let _ = state.db.remove_message(*id);
             }
             updated += entries.len();
+        } else if remote.as_ref().is_err_and(|error| error.terminal) {
+            failed += entries.len();
         } else {
             for (id, uid) in &entries {
                 let operation = MoveOperation {
@@ -781,13 +807,26 @@ pub async fn move_messages_to_mailbox(
                     uid_validity: Some(validity),
                 };
                 let dedupe_key = format!("move:{id}");
-                let _ =
-                    state
+                let queued_ok = state
+                    .db
+                    .queue_operation(&account_id, "move", &operation, Some(&dedupe_key))
+                    .is_ok();
+                let marked_ok = queued_ok
+                    && state
                         .db
-                        .queue_operation(&account_id, "move", &operation, Some(&dedupe_key));
-                let _ = state.db.mark_pending_move(*id, destination_mailbox_id);
+                        .mark_pending_move(*id, destination_mailbox_id)
+                        .is_ok();
+                if marked_ok {
+                    queued += 1;
+                } else {
+                    if queued_ok {
+                        let _ = state
+                            .db
+                            .remove_operation_by_dedupe(&account_id, &dedupe_key);
+                    }
+                    failed += 1;
+                }
             }
-            queued += entries.len();
         }
     }
     if updated > 0 {
@@ -871,12 +910,16 @@ pub async fn copy_messages_to_mailbox(
                     uid_validity: Some(validity),
                 };
                 let dedupe_key = format!("copy:{id}:{destination}");
-                let _ =
-                    state
-                        .db
-                        .queue_operation(&account_id, "copy", &operation, Some(&dedupe_key));
+                if state
+                    .db
+                    .queue_operation(&account_id, "copy", &operation, Some(&dedupe_key))
+                    .is_ok()
+                {
+                    queued += 1;
+                } else {
+                    failed += 1;
+                }
             }
-            queued += entries.len();
         }
     }
     if updated > 0 {

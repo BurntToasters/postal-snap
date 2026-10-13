@@ -723,6 +723,8 @@ fn parse_postal_draft_message_id(value: &str) -> Option<(String, u32)> {
 }
 
 pub(crate) async fn replay_outbox_locked(account_id: &str, app: &AppHandle, state: &AppState) {
+    // `archive_pending` records a confirmed SMTP send. It is deliberately
+    // excluded here so background replay cannot send it again.
     if let Ok(ids) = state
         .db
         .outbox_ids_in_state(account_id, &["sent_copy_pending"])

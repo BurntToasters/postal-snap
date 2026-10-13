@@ -783,7 +783,7 @@ describe("composer draft persistence", () => {
     );
   });
 
-  it("archives the message a reply answers, and skips that when sending is uncertain", async () => {
+  it("holds send and archive until confirmed delivery, and skips uncertain sends", async () => {
     const send = vi.mocked(api.sendMessage);
     const move = vi.mocked(api.moveMessage);
     send.mockResolvedValue({
@@ -834,13 +834,14 @@ describe("composer draft persistence", () => {
         textBody: expect.stringContaining("> Bring sandwiches"),
       }),
     );
-    expect(move).toHaveBeenCalledWith(account.id, 7, "archive");
+    expect(send.mock.calls[0]?.[1]).toEqual({ messageId: 7, mailboxId: 4 });
+    expect(move).not.toHaveBeenCalled();
     expect(useAppStore.getState().lastSent).toEqual(
       expect.objectContaining({
         outboxId: "outbox-9",
-        archivedMessage: { messageId: 7, mailboxId: 4 },
       }),
     );
+    expect(useAppStore.getState().lastSent?.archivedMessage).toBeUndefined();
 
     send.mockClear();
     move.mockClear();

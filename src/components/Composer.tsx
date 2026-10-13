@@ -1072,37 +1072,11 @@ export function Composer({ accountId }: Props) {
         await savePromiseRef.current?.catch(() => undefined);
         const draft = buildDraft();
         const payload = { ...draft, id: draftIdRef.current ?? draft.id };
-        const outcome = await api.sendMessage(
-          sendAt ? { ...payload, sendAt } : payload,
-        );
-        let archivedMessage:
-          { messageId: number; mailboxId: number } | undefined;
-        if (
-          archiveAfterSend &&
-          sourceArchive &&
-          outcome.state !== "needs_attention"
-        ) {
-          try {
-            const movedMessageId = await api.moveMessage(
-              accountId,
-              sourceArchive.messageId,
-              "archive",
-            );
-            // Rust returns the refreshed destination row. A legacy mock may
-            // still return undefined; only null means the move was not
-            // confirmed and must not be offered as undoable.
-            if (movedMessageId !== null) {
-              archivedMessage = {
-                ...sourceArchive,
-                ...(typeof movedMessageId === "number"
-                  ? { messageId: movedMessageId }
-                  : {}),
-              };
-            }
-          } catch (cause) {
-            setError(String(cause));
-          }
-        }
+        const sendPayload = sendAt ? { ...payload, sendAt } : payload;
+        const outcome =
+          archiveAfterSend && sourceArchive
+            ? await api.sendMessage(sendPayload, sourceArchive)
+            : await api.sendMessage(sendPayload);
         announceLocalMailChanged(accountId);
         // Uncertain, or queued after a real attempt: never let it look sent.
         // An offline account queues on purpose and needs no warning.
@@ -1112,7 +1086,10 @@ export function Composer({ accountId }: Props) {
             "offline" || current.sync[accountId]?.phase === "offline";
         if (
           (outcome.state === "needs_attention" ||
-            (outcome.state === "queued" && !offline)) &&
+            (outcome.state === "queued" && !offline) ||
+            outcome.state === "sent" ||
+            outcome.state === "sent_copy_pending" ||
+            outcome.state === "archive_pending") &&
           outcome.detail
         ) {
           setError(outcome.detail);
@@ -1128,7 +1105,6 @@ export function Composer({ accountId }: Props) {
                   useAppStore.getState().settings.undoSendSeconds ?? 10,
                   30,
                 ),
-            ...(archivedMessage ? { archivedMessage } : {}),
           });
         }
         close();

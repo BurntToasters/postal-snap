@@ -846,6 +846,10 @@ function outboxItems(row: OutboxSummary): ContextMenuItem[] {
     items.push(
       item("retry-copy", strings.mail.saveSentCopy, { icon: "retry" }),
     );
+  } else if (row.state === "archive_pending") {
+    items.push(
+      item("retry-archive", strings.mail.retryArchive, { icon: "retry" }),
+    );
   } else if (row.state === "scheduled") {
     items.push(
       item("send-now", strings.mail.sendNow, { icon: "send", disabled: busy }),
@@ -854,14 +858,15 @@ function outboxItems(row: OutboxSummary): ContextMenuItem[] {
   items.push(
     item(
       "discard",
-      row.state === "sent_copy_pending"
+      row.state === "sent_copy_pending" || row.state === "archive_pending"
         ? strings.mail.dismissWarning
         : row.state === "scheduled"
           ? strings.mail.undoSend
           : strings.common.discard,
       {
         icon: row.state === "scheduled" ? "undo" : "discard",
-        danger: row.state !== "sent_copy_pending",
+        danger:
+          row.state !== "sent_copy_pending" && row.state !== "archive_pending",
         disabled: busy,
       },
     ),

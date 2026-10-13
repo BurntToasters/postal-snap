@@ -95,7 +95,8 @@ pub struct RemoteDraftSnapshot {
 pub use folders::{
     copy_remote, copy_remote_uids, create_folder, delete_folder, empty_folder, expunge_uids,
     mark_folder_read, move_remote, move_remote_uids, rename_folder, set_remote_flags,
-    set_remote_keyword, set_remote_uid_flags, CopyOptions, MoveOptions, SourceKeyword,
+    set_remote_keyword, set_remote_uid_flags, CopyOptions, MoveOptions, MoveReplayFlags,
+    SourceKeyword,
 };
 pub use icloud::discover_icloud_aliases;
 pub use remote_drafts::{
@@ -141,6 +142,8 @@ mod tests {
     // - a reconnect reuses stale UIDs after the server changes UIDVALIDITY
     // - a non-ASCII move commits its COPY but drops the tagged response
     // - a draft APPEND commits but drops its tagged response, so retry uploads another copy
+    // - an interrupted COPY leaves newer source flags that must reach the destination before expunge
+    // - stale destination identity, failed STORE, or untrusted full-body FETCH must keep the source
     #[tokio::test]
     #[ignore = "requires npm run test:mail-integration"]
     async fn bridge_recovery_protocol_integration() {
@@ -760,6 +763,17 @@ mod tests {
             .unwrap()
             .unwrap();
         let renamed_message = db.list_messages(renamed, None, 10).unwrap().items[0].clone();
+        super::set_remote_flags(
+            &account,
+            password,
+            "Plan & Roadmap/日本語",
+            renamed_message.uid,
+            Some(2),
+            Some(true),
+            Some(true),
+        )
+        .await
+        .expect("fixture source flags should be set before the interrupted copy");
         let moved = super::move_remote(
             &account,
             password,
@@ -770,6 +784,7 @@ mod tests {
             super::MoveOptions {
                 message_id: renamed_message.message_id.as_deref(),
                 dedupe_existing: false,
+                replay_flags: None,
             },
         )
         .await
@@ -778,6 +793,17 @@ mod tests {
             !moved.terminal,
             "an ambiguous disconnect must remain retryable"
         );
+        super::set_remote_flags(
+            &account,
+            password,
+            "Plan & Roadmap/日本語",
+            renamed_message.uid,
+            Some(2),
+            Some(false),
+            Some(false),
+        )
+        .await
+        .expect("newer source flags should be applied after the interrupted copy");
         super::move_remote(
             &account,
             password,
@@ -788,10 +814,115 @@ mod tests {
             super::MoveOptions {
                 message_id: renamed_message.message_id.as_deref(),
                 dedupe_existing: true,
+                replay_flags: Some(super::MoveReplayFlags {
+                    is_read: Some(false),
+                    is_starred: Some(false),
+                }),
             },
         )
         .await
         .expect("replay should recognize the already-copied message");
+
+        let mut replay_session = connect_imap(&account.imap, password).await.unwrap();
+        replay_session
+            .run_command_and_check_ok("XFIXTUREARMREPLAY")
+            .await
+            .unwrap();
+        replay_session.logout().await.unwrap();
+
+        super::copy_remote(
+            &account,
+            password,
+            "ReplayCopySource",
+            "ReplayCopyDestination",
+            1,
+            Some(2),
+            super::CopyOptions {
+                message_id: Some("<replay-copy-collision@example.test>"),
+                dedupe_existing: true,
+            },
+        )
+        .await
+        .expect("a reused Message-ID with different content must still be copied");
+        super::move_remote(
+            &account,
+            password,
+            "ReplayDistinctSource",
+            "ReplayDistinctDestination",
+            1,
+            Some(2),
+            super::MoveOptions {
+                message_id: Some("<replay-move-collision@example.test>"),
+                dedupe_existing: true,
+                replay_flags: None,
+            },
+        )
+        .await
+        .expect("a reused Message-ID with different content must still be moved");
+        assert!(
+            super::move_remote(
+                &account,
+                password,
+                "ReplayFailureSource",
+                "ReplayFailureDestination",
+                1,
+                Some(2),
+                super::MoveOptions {
+                    message_id: Some("<replay-flag-failure@example.test>"),
+                    dedupe_existing: true,
+                    replay_flags: Some(super::MoveReplayFlags {
+                        is_read: Some(false),
+                        is_starred: Some(false),
+                    }),
+                },
+            )
+            .await
+            .is_err(),
+            "a failed destination flag update must prevent source expunge"
+        );
+        for (source, destination, message_id, flags) in [
+            (
+                "ReplaySizeSource",
+                "ReplaySizeDestination",
+                "<replay-size-mismatch@example.test>",
+                None,
+            ),
+            (
+                "ReplayUidSource",
+                "ReplayUidDestination",
+                "<replay-uid-mismatch@example.test>",
+                None,
+            ),
+            (
+                "ReplayGenerationSource",
+                "ReplayGenerationDestination",
+                "<replay-generation-change@example.test>",
+                Some(super::MoveReplayFlags {
+                    is_read: Some(true),
+                    is_starred: Some(true),
+                }),
+            ),
+        ] {
+            let error = super::move_remote(
+                &account,
+                password,
+                source,
+                destination,
+                1,
+                Some(2),
+                super::MoveOptions {
+                    message_id: Some(message_id),
+                    dedupe_existing: true,
+                    replay_flags: flags,
+                },
+            )
+            .await
+            .expect_err("untrusted content or changed destination identity must keep the source");
+            assert!(
+                !error.terminal,
+                "uncertain destination evidence must remain retryable"
+            );
+        }
 
         super::move_remote(
             &account,
@@ -803,6 +934,7 @@ mod tests {
             super::MoveOptions {
                 message_id: refreshed[0].message_id.as_deref(),
                 dedupe_existing: false,
+                replay_flags: None,
             },
         )
         .await
@@ -837,6 +969,51 @@ mod tests {
                 .exists,
             1
         );
+        for (mailbox, expected) in [
+            ("ReplayCopySource", 1),
+            ("ReplayCopyDestination", 2),
+            ("ReplayDistinctSource", 0),
+            ("ReplayDistinctDestination", 2),
+            ("ReplayFailureSource", 1),
+            ("ReplayFailureDestination", 1),
+            ("ReplaySizeSource", 1),
+            ("ReplaySizeDestination", 1),
+            ("ReplayUidSource", 1),
+            ("ReplayUidDestination", 1),
+            ("ReplayGenerationSource", 1),
+            ("ReplayGenerationDestination", 1),
+        ] {
+            assert_eq!(
+                session.status(mailbox, "(MESSAGES)").await.unwrap().exists,
+                expected,
+                "unexpected conservative replay result for {mailbox}"
+            );
+        }
+        let destination_selected = session.select("Archive/受信").await.unwrap();
+        assert_eq!(destination_selected.uid_validity, Some(2));
+        let moved_flags = session
+            .uid_fetch("1:*", "(UID FLAGS)")
+            .await
+            .unwrap()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        assert_eq!(moved_flags.len(), 1);
+        assert_eq!(moved_flags[0].uid, Some(1));
+        let (seen, flagged) = super::parse::system_flags(&moved_flags[0]);
+        let (answered, forwarded) = super::parse::reply_flags(&moved_flags[0]);
+        assert!(
+            !seen && !flagged,
+            "destination must receive newer read/star values"
+        );
+        assert!(
+            answered && forwarded,
+            "replayed flags must preserve unrelated flags"
+        );
+        assert!(moved_flags[0].flags().any(|flag| matches!(
+            flag,
+            async_imap::types::Flag::Custom(name) if name.eq_ignore_ascii_case("$Label1")
+        )));
         session.logout().await.unwrap();
 
         let draft_message_id = "<draft-recovery@example.test>";
@@ -2567,5 +2744,169 @@ mod tests {
         assert!(icloud_follow_up_url("http://caldav.icloud.com/principal/").is_none());
         assert!(icloud_follow_up_url("https://www.icloud.com/principal/").is_none());
         assert!(icloud_follow_up_url("https://user:pass@caldav.icloud.com/").is_none());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires npm run test:mail-integration"]
+    async fn greenmail_replay_rejects_incomplete_full_body_evidence() {
+        let password = "mail-test-password";
+        let account = AccountRecord {
+            summary: AccountSummary {
+                default_body_format: crate::models::BodyFormat::Html,
+                id: "77777777-7777-4777-8777-777777777777".into(),
+                provider: ProviderKind::Manual,
+                email: "user@example.test".into(),
+                display_name: "Postal Snap Test".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+                reply_to: String::new(),
+                color: None,
+            },
+            imap: ServerConfig {
+                trusted_certificate: None,
+                host: "localhost".into(),
+                port: 3993,
+                tls_mode: TlsMode::Tls,
+                username: "user@example.test".into(),
+            },
+            smtp: ServerConfig {
+                trusted_certificate: None,
+                host: "localhost".into(),
+                port: 3465,
+                tls_mode: TlsMode::Tls,
+                username: "user@example.test".into(),
+            },
+        };
+        let mut session = connect_imap(&account.imap, password).await.unwrap();
+        for folder in [
+            "AuditCopySource",
+            "AuditCopyDestination",
+            "AuditMoveSource",
+            "AuditMoveDestination",
+        ] {
+            let _ = session.create(folder).await;
+        }
+        let copy_id = "<audit-copy-collision@example.test>";
+        session
+            .append(
+                "AuditCopySource",
+                None,
+                None,
+                format!("Message-ID: {copy_id}\r\n\r\nCOPY-SOURCE-CONTENT\r\n"),
+            )
+            .await
+            .unwrap();
+        session
+            .append(
+                "AuditCopyDestination",
+                None,
+                None,
+                format!("Message-ID: {copy_id}\r\n\r\nCOPY-EXISTING-CONTENT\r\n"),
+            )
+            .await
+            .unwrap();
+        let selected = session.select("AuditCopySource").await.unwrap();
+        let copy_uid = *session
+            .uid_search("ALL")
+            .await
+            .unwrap()
+            .iter()
+            .next()
+            .unwrap();
+        let copy_validity = selected.uid_validity;
+
+        let move_id = "<audit-move-collision@example.test>";
+        session
+            .append(
+                "AuditMoveSource",
+                None,
+                None,
+                format!("Message-ID: {move_id}\r\n\r\nMOVE-SOURCE-CONTENT\r\n"),
+            )
+            .await
+            .unwrap();
+        session
+            .append(
+                "AuditMoveDestination",
+                None,
+                None,
+                format!("Message-ID: {move_id}\r\n\r\nMOVE-EXISTING-CONTENT\r\n"),
+            )
+            .await
+            .unwrap();
+        let selected = session.select("AuditMoveSource").await.unwrap();
+        let move_uid = *session
+            .uid_search("ALL")
+            .await
+            .unwrap()
+            .iter()
+            .next()
+            .unwrap();
+        let move_validity = selected.uid_validity;
+        session.logout().await.unwrap();
+
+        super::copy_remote(
+            &account,
+            password,
+            "AuditCopySource",
+            "AuditCopyDestination",
+            copy_uid,
+            copy_validity,
+            super::CopyOptions {
+                message_id: Some(copy_id),
+                dedupe_existing: true,
+            },
+        )
+        .await
+        .expect_err("a partial RFC822.SIZE response must not confirm copy identity");
+        super::move_remote(
+            &account,
+            password,
+            "AuditMoveSource",
+            "AuditMoveDestination",
+            move_uid,
+            move_validity,
+            super::MoveOptions {
+                message_id: Some(move_id),
+                dedupe_existing: true,
+                replay_flags: None,
+            },
+        )
+        .await
+        .expect_err("a partial RFC822.SIZE response must not confirm move identity");
+        pool::forget(&account.summary.id);
+
+        let mut verify = connect_imap(&account.imap, password).await.unwrap();
+        assert_eq!(
+            verify
+                .status("AuditCopyDestination", "(MESSAGES)")
+                .await
+                .unwrap()
+                .exists,
+            1,
+            "incomplete content evidence must not copy or suppress a message"
+        );
+        assert_eq!(
+            verify
+                .status("AuditMoveSource", "(MESSAGES)")
+                .await
+                .unwrap()
+                .exists,
+            1,
+            "incomplete content evidence must keep the move source"
+        );
+        assert_eq!(
+            verify
+                .status("AuditMoveDestination", "(MESSAGES)")
+                .await
+                .unwrap()
+                .exists,
+            1,
+            "incomplete content evidence must not move or deduplicate"
+        );
+        verify.logout().await.unwrap();
     }
 }

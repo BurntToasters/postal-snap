@@ -78,7 +78,8 @@ impl Database {
              VALUES (?9, ?1, ?2, ?2, ?3, ?4, ?5, ?6, ?7, ?8, CURRENT_TIMESTAMP)
              ON CONFLICT(account_id, name) DO UPDATE SET role=excluded.role, role_source=excluded.role_source, uid_validity=excluded.uid_validity,
              uid_next=excluded.uid_next, server_unread=excluded.server_unread, server_total=excluded.server_total,
-             counts_updated_at=CURRENT_TIMESTAMP, local_total_delta=0, local_unread_delta=0, server_available=1",
+             counts_updated_at=CURRENT_TIMESTAMP, local_total_delta=0, local_unread_delta=0,
+             counts_generation=mailboxes.counts_generation+1, server_available=1",
             params![account_id, name, role.as_str(), role_source, uid_validity, uid_next, server_unread, server_total, stable_id],
         ).map_err(db_error)?;
         let id: i64 = transaction
