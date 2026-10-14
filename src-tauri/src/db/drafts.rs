@@ -3,6 +3,7 @@ use rusqlite::{params, OptionalExtension};
 
 use crate::models::{ComposeDraft, DraftSummary};
 
+database_operations! {
 impl Database {
     pub fn save_draft(&self, draft: &ComposeDraft) -> Result<String, String> {
         let mut conn = self.conn()?;
@@ -427,6 +428,7 @@ impl Database {
         }
         transaction.commit().map_err(db_error)
     }
+}
 }
 
 pub(crate) fn save_draft_in_transaction(

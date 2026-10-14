@@ -144,6 +144,8 @@ pub struct AccountSummary {
 #[serde(rename_all = "camelCase")]
 pub struct AccountRemovalOutcome {
     pub cleanup_pending: bool,
+    /// Compaction failed; removed mail may stay on disk until the next launch.
+    pub disk_space_pending: bool,
 }
 
 /// Local-only work that removing an account would discard. Mail on the server
@@ -555,6 +557,7 @@ pub struct OutboxSummary {
     pub subject: String,
     pub state: String,
     pub detail: Option<String>,
+    pub reason_code: Option<String>,
     pub created_at: String,
     #[serde(default)]
     pub send_at: Option<String>,

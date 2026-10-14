@@ -1,3 +1,4 @@
+use crate::outbox_reason::OutboxReason;
 use serde::Deserialize;
 use tauri::{AppHandle, State};
 
@@ -162,14 +163,14 @@ pub async fn send_message(
     };
     let delay = settings.undo_send_seconds.min(30);
     let offline = account.summary.sync_state == "offline";
-    let initial_detail = offline.then_some("Waiting for a secure mail connection.");
+    let initial_detail = offline.then_some(OutboxReason::WaitingConnection);
     if let Some(send_at) = resolve_requested_send_at(draft.send_at.as_deref())? {
         let detail = if offline {
-            "Waiting for a secure mail connection."
+            OutboxReason::WaitingConnection
         } else {
-            "Scheduled to send."
+            OutboxReason::Scheduled
         };
-        let outbox_id = state.db.queue_outbox_with_archive(
+        let outbox_id = state.db.queue_outbox_with_reason(
             &draft,
             "scheduled",
             Some(detail),
@@ -190,11 +191,11 @@ pub async fn send_message(
         let send_at =
             (chrono::Utc::now() + chrono::Duration::seconds(i64::from(delay))).to_rfc3339();
         let detail = if offline {
-            "Waiting for a secure mail connection."
+            OutboxReason::WaitingConnection
         } else {
-            "Held for review. Undo anytime before it sends."
+            OutboxReason::HeldForReview
         };
-        let outbox_id = state.db.queue_outbox_with_archive(
+        let outbox_id = state.db.queue_outbox_with_reason(
             &draft,
             "scheduled",
             Some(detail),
@@ -212,7 +213,7 @@ pub async fn send_message(
         });
     }
     if offline {
-        let outbox_id = state.db.queue_outbox_with_archive(
+        let outbox_id = state.db.queue_outbox_with_reason(
             &draft,
             "queued",
             initial_detail,
@@ -230,7 +231,7 @@ pub async fn send_message(
         });
     }
     let _guard = state.lock_account(&draft.account_id).await?;
-    let outbox_id = state.db.queue_outbox_with_archive(
+    let outbox_id = state.db.queue_outbox_with_reason(
         &draft,
         "queued",
         initial_detail,
@@ -277,7 +278,7 @@ pub async fn send_scheduled_outbox(
         return Ok(SendOutcome {
             id: outbox_id,
             state: "scheduled".into(),
-            detail: Some("Waiting for a secure mail connection.".into()),
+            detail: Some(OutboxReason::WaitingConnection.into()),
         });
     }
     command_result(deliver_outbox_locked(&outbox_id, &account_id, "scheduled", &app, &state).await)

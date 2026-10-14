@@ -644,6 +644,8 @@ export function SettingsDialog({
       setAccounts(remaining);
       if (result?.cleanupPending) {
         setError(strings.settings.accountCleanupWarning);
+      } else if (result?.diskSpacePending) {
+        setError(strings.settings.accountDiskSpacePending);
       }
       if (remaining.length === 0) {
         onLastAccountRemoved?.();

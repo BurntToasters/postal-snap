@@ -1,7 +1,11 @@
 import { useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { strings } from "../../i18n";
-import { validateRecipientFields, validateSubject } from "./composerValidate";
+import {
+  splitAddresses,
+  validateRecipientFields,
+  validateSubject,
+} from "./composerValidate";
 import { RecipientField } from "./recipientField";
 
 export interface AddressFieldsProps {
@@ -66,6 +70,9 @@ export function AddressFields({
   markUnsaved,
   focusTo = true,
 }: AddressFieldsProps) {
+  // Recipients are never hidden: a field that holds addresses stays open.
+  const ccOpen = showCc || Boolean(cc.trim());
+  const bccOpen = showBcc || Boolean(bcc.trim());
   // Reply-To stays tucked away like Cc and Bcc unless it already has a value.
   const [showReplyTo, setShowReplyTo] = useState(() =>
     Boolean(replyTo?.trim()),
@@ -149,26 +156,26 @@ export function AddressFields({
         <button
           type="button"
           className="cc-toggle"
-          aria-expanded={showCc}
-          aria-pressed={showCc}
+          aria-expanded={ccOpen}
+          aria-pressed={ccOpen}
           onClick={(event) => {
             event.preventDefault();
-            setShowCc((value) => !value);
+            toggleCopyField(cc, ccOpen, setShowCc, "composer-cc");
           }}
         >
-          {strings.composer.cc}
+          {withCount(strings.composer.cc, cc)}
         </button>
         <button
           type="button"
           className="cc-toggle"
-          aria-expanded={showBcc}
-          aria-pressed={showBcc}
+          aria-expanded={bccOpen}
+          aria-pressed={bccOpen}
           onClick={(event) => {
             event.preventDefault();
-            setShowBcc((value) => !value);
+            toggleCopyField(bcc, bccOpen, setShowBcc, "composer-bcc");
           }}
         >
-          {strings.composer.bcc}
+          {withCount(strings.composer.bcc, bcc)}
         </button>
         {setReplyTo ? (
           <button
@@ -185,7 +192,7 @@ export function AddressFields({
           </button>
         ) : null}
       </div>
-      {showCc ? (
+      {ccOpen ? (
         <label>
           <span>{strings.composer.cc}</span>
           <RecipientField
@@ -208,7 +215,7 @@ export function AddressFields({
           />
         </label>
       ) : null}
-      {showBcc ? (
+      {bccOpen ? (
         <label>
           <span>{strings.composer.bcc}</span>
           <RecipientField
@@ -260,4 +267,23 @@ export function AddressFields({
       ) : null}
     </div>
   );
+}
+
+function withCount(label: string, value: string): string {
+  const count = splitAddresses(value).length;
+  return count > 0 ? `${label} (${count})` : label;
+}
+
+/** Hide only an empty field; a field with recipients gets focus instead. */
+function toggleCopyField(
+  value: string,
+  shown: boolean,
+  setShown: Dispatch<SetStateAction<boolean>>,
+  inputId: string,
+) {
+  if (shown && value.trim()) {
+    document.getElementById(inputId)?.focus();
+    return;
+  }
+  setShown(!shown);
 }

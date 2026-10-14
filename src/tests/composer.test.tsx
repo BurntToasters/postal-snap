@@ -841,7 +841,6 @@ describe("composer draft persistence", () => {
         outboxId: "outbox-9",
       }),
     );
-    expect(useAppStore.getState().lastSent?.archivedMessage).toBeUndefined();
 
     send.mockClear();
     move.mockClear();

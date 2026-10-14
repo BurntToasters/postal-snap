@@ -1,6 +1,5 @@
 import { strings } from "../../i18n";
 import type { AppSettings } from "../../types";
-import { normalizeImageSender } from "../../settings";
 import { useAppStore } from "../../store";
 import { SettingRow, SettingsPanel } from "./primitives";
 import type { SettingsSaveUpdate } from "./useSettingsSave";
@@ -11,9 +10,6 @@ interface ReadingTabProps {
 
 export function ReadingTab({ update }: ReadingTabProps) {
   const settings = useAppStore((state) => state.settings);
-  const imageSenders = (settings.imageSenders ?? [])
-    .map((address) => normalizeImageSender(address))
-    .filter((address) => address.length > 0);
 
   return (
     <SettingsPanel id="reading" title={strings.settings.reading}>
@@ -80,35 +76,11 @@ export function ReadingTab({ update }: ReadingTabProps) {
           }
         />
       </label>
-      <div className="settings-row image-sender-panel">
+      <div className="settings-row">
         <span>
           <strong>{strings.settings.imageSenders}</strong>
           <small>{strings.settings.imageSendersHelp}</small>
         </span>
-        {imageSenders.length === 0 ? (
-          <p className="settings-note">{strings.settings.imageSendersEmpty}</p>
-        ) : (
-          <ul className="image-sender-list">
-            {imageSenders.map((address) => (
-              <li key={address}>
-                <span>{address}</span>
-                <button
-                  type="button"
-                  aria-label={strings.settings.stopImageSenderLabel(address)}
-                  onClick={() =>
-                    void update({
-                      imageSenders: imageSenders.filter(
-                        (item) => item !== address,
-                      ),
-                    })
-                  }
-                >
-                  {strings.settings.stopImageSender}
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
       </div>
       <SettingRow
         title={strings.settings.markRead}

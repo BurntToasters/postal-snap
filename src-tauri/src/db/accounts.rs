@@ -3,6 +3,7 @@ use rusqlite::{params, OptionalExtension};
 
 use crate::models::{AccountRecord, AccountSummary, BodyFormat, ServerConfig};
 
+database_operations! {
 impl Database {
     pub fn list_accounts(&self) -> Result<Vec<AccountSummary>, String> {
         let conn = self.read_conn()?;
@@ -178,12 +179,17 @@ impl Database {
         let aliases_json = serde_json::to_string(aliases)
             .map_err(|_| "Failed to serialize aliases.".to_string())?;
         {
-            let conn = self.conn()?;
-            conn.execute(
-                "UPDATE accounts SET aliases_json = ?2 WHERE id = ?1",
-                params![id, aliases_json],
-            )
-            .map_err(db_error)?;
+            let mut conn = self.conn()?;
+            let transaction = conn.transaction().map_err(db_error)?;
+            transaction
+                .execute(
+                    "UPDATE accounts SET aliases_json = ?2 WHERE id = ?1",
+                    params![id, aliases_json],
+                )
+                .map_err(db_error)?;
+            // "To me" depends on the aliases.
+            super::refresh_list_columns(&transaction, "account_id=?1", [id])?;
+            transaction.commit().map_err(db_error)?;
         }
         let record = self.account(id)?;
         Ok(record.summary)
@@ -292,6 +298,40 @@ impl Database {
         tx.commit().map_err(db_error)
     }
 
+    /// Rule mark left by a failed sync pass, if any.
+    pub fn rules_pending_from(&self, account_id: &str) -> Result<Option<i64>, String> {
+        self.read_conn()?
+            .query_row(
+                "SELECT rules_pending_from FROM accounts WHERE id=?1",
+                [account_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)
+            .map(Option::flatten)
+    }
+
+    /// Keep the oldest mark so every failed pass's mail stays covered.
+    pub fn keep_rules_pending_from(&self, account_id: &str, mark: i64) -> Result<(), String> {
+        self.conn()?
+            .execute(
+                "UPDATE accounts SET rules_pending_from=COALESCE(rules_pending_from, ?2) WHERE id=?1",
+                params![account_id, mark],
+            )
+            .map_err(db_error)?;
+        Ok(())
+    }
+
+    pub fn clear_rules_pending_from(&self, account_id: &str) -> Result<(), String> {
+        self.conn()?
+            .execute(
+                "UPDATE accounts SET rules_pending_from=NULL WHERE id=?1",
+                [account_id],
+            )
+            .map_err(db_error)?;
+        Ok(())
+    }
+
     pub fn account_count(&self) -> Result<usize, String> {
         let count: i64 = self
             .conn()?
@@ -381,6 +421,7 @@ impl Database {
             )
             .map_err(db_error)
     }
+}
 }
 
 /// SQLite reports the `accounts_email_unique` index as a generic constraint

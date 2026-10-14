@@ -1,6 +1,8 @@
 // English source catalog namespace: update section.
 // Split from src/i18n.ts with zero text changes.
 export const update = {
+  draftSaveFailed:
+    "Your draft could not be saved. Try quitting again after saving the message.",
   readyTitle: "Update Ready",
   readyPrompt: (version: string) =>
     `Postal Snap ${version ? `version ${version}` : "update"} is downloaded. Restart now to finish the update? If you choose Later, it installs quietly when you quit, or while Postal Snap is hidden in the tray or menu bar.`,

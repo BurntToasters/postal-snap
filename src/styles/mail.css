@@ -910,6 +910,7 @@
 
 .pane-heading {
   display: flex;
+  flex-wrap: wrap;
   min-height: var(--pane-heading-height);
   align-items: center;
   justify-content: space-between;
@@ -931,6 +932,8 @@
 
 .pane-heading > span {
   display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
   gap: 2px;
 }
 
@@ -942,6 +945,7 @@
 
 .pane-heading h1 {
   margin: 0;
+  overflow-wrap: anywhere;
   font-size: 1.12rem;
   letter-spacing: -0.015em;
   font-weight: 700;
@@ -953,6 +957,7 @@
 
 .pane-heading-actions {
   display: flex;
+  flex: 0 0 auto;
   flex-wrap: nowrap;
   align-items: center;
   gap: 4px;

@@ -96,6 +96,7 @@ export function MessageList({
   onChoose,
   hasMore,
   onLoadMore,
+  loadMoreLabel,
   searchQuery,
   showFolders = false,
   onClearSearch,
@@ -126,6 +127,8 @@ export function MessageList({
   onChoose: (message: MessageSummary) => Promise<void>;
   hasMore: boolean;
   onLoadMore: () => Promise<void>;
+  /** Overrides the button text, e.g. when older mail comes from the server. */
+  loadMoreLabel?: string;
   searchQuery?: string;
   /** Account-wide search mixes folders, so each row names its mailbox. */
   showFolders?: boolean;
@@ -1235,7 +1238,9 @@ export function MessageList({
           onClick={() => void onLoadMore()}
           disabled={loading}
         >
-          {loading ? strings.mail.loadingOlder : strings.mail.loadOlder}
+          {loading
+            ? strings.mail.loadingOlder
+            : (loadMoreLabel ?? strings.mail.loadOlder)}
         </button>
       ) : null}
     </div>

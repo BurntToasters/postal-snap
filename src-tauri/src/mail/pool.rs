@@ -14,6 +14,7 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
+use super::failure::MailError;
 use super::{
     send::{connect_imap, connect_imap_auth},
     ImapSession, IMAP_COMMAND_TIMEOUT,
@@ -163,7 +164,7 @@ fn server_key(account: &AccountRecord) -> String {
 
 /// Borrow the account's session, reconnecting when none is parked, the
 /// parked one belongs to different server settings, or it fails a NOOP.
-pub async fn checkout(account: &AccountRecord, password: &str) -> Result<Lease, String> {
+pub async fn checkout(account: &AccountRecord, password: &str) -> Result<Lease, MailError> {
     let account_id = account.summary.id.clone();
     let server = server_key(account);
     let (parked, generation) = match POOL.lock() {
@@ -202,8 +203,8 @@ pub async fn checkout(account: &AccountRecord, password: &str) -> Result<Lease, 
     };
     let capabilities = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.capabilities())
         .await
-        .map_err(|_| "IMAP capability check timed out.".to_string())?
-        .map_err(|error| redact_error(&error, "IMAP capability check"))?;
+        .map_err(|_| MailError::connection("IMAP capability check timed out."))?
+        .map_err(|error| MailError::connection(redact_error(&error, "IMAP capability check")))?;
     let advertises_qresync = capabilities.has_str("QRESYNC");
     let mut capabilities = Capabilities {
         condstore: capabilities.has_str("CONDSTORE") || advertises_qresync,
@@ -222,8 +223,13 @@ pub async fn checkout(account: &AccountRecord, password: &str) -> Result<Lease, 
         {
             Ok(Ok(())) => capabilities.qresync = true,
             Ok(Err(async_imap::error::Error::No(_) | async_imap::error::Error::Bad(_))) => {}
-            Ok(Err(error)) => return Err(redact_error(&error, "IMAP capability check")),
-            Err(_) => return Err("IMAP capability check timed out.".into()),
+            Ok(Err(error)) => {
+                return Err(MailError::connection(redact_error(
+                    &error,
+                    "IMAP capability check",
+                )))
+            }
+            Err(_) => return Err(MailError::connection("IMAP capability check timed out.")),
         }
     }
     Ok(Lease {

@@ -85,6 +85,12 @@ export async function registerMockSettingsSystem(page: Page): Promise<void> {
       cachePolicy: { ...currentSettings.cachePolicy },
     });
     Object.assign(mock.handlers, {
+      clear_downloaded_mail() {
+        return undefined;
+      },
+      accessibility_reduce_transparency() {
+        return params.has("nativeReducedTransparency");
+      },
       get_settings() {
         return copySettings();
       },

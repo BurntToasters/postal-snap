@@ -111,6 +111,11 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
       return assignments[item.id];
     }
     Object.assign(mock.handlers, {
+      test_saved_account(args: Record<string, unknown>) {
+        if (!mock.accounts.some((item) => item.id === args.accountId))
+          throw new Error("Account not found.");
+        return undefined;
+      },
       get_account_connection(args: Record<string, unknown>) {
         if (
           params.has("connectionLoadFailure") &&
@@ -547,7 +552,10 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
       },
       remove_account() {
         state.accountRemoved = true;
-        return { cleanupPending: false };
+        return {
+          cleanupPending: false,
+          diskSpacePending: params.has("diskSpacePending"),
+        };
       },
       discover_account_aliases() {
         (account as { aliases?: string[] }).aliases = [

@@ -27,9 +27,6 @@ pub async fn save_attachment(
     state: State<'_, AppState>,
 ) -> CommandResult<()> {
     let suggested = security::safe_filename(&suggested_filename);
-    if !confirm_risky_files(&app, risky_file_names([suggested.as_str()])).await? {
-        return Ok(());
-    }
     let picker = app.clone();
     let destination = tokio::task::spawn_blocking(move || {
         picker
@@ -47,6 +44,24 @@ pub async fn save_attachment(
         .into_path()
         .map_err(|_| "Choose a valid save location.".to_string())?;
     ensure_message_content(&account_id, message_id, &state).await?;
+    let detail = state.db.message_detail(message_id, &account_id)?;
+    let stored = detail
+        .attachments
+        .iter()
+        .find(|item| item.id == attachment_id)
+        .map(|item| item.filename.clone())
+        .ok_or_else(|| "Attachment not found.".to_string())?;
+    // Judge the name the message gives and the name the user typed; the
+    // frontend's suggestion is never trusted for this.
+    let chosen = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    let mut risky = risky_file_names([stored.as_str(), chosen]);
+    risky.dedup();
+    if !confirm_risky_files(&app, risky).await? {
+        return Ok(());
+    }
     let raw = state.db.raw_message(message_id, &account_id)?;
     let (_, bytes) = mail::extract_attachment(&raw, &attachment_id)?;
     tokio::fs::write(&destination, bytes)
@@ -58,31 +73,48 @@ pub async fn save_attachment(
 
 /// Opening these can run code, install software, or imitate a sign-in page.
 const RISKY_EXTENSIONS: &[&str] = &[
+    "apk",
     "app",
     "appimage",
+    "application",
+    "appref-ms",
     "appx",
     "appxbundle",
-    "apk",
     "bat",
+    "cab",
     "chm",
     "cmd",
     "com",
     "command",
     "cpl",
     "deb",
+    "desktop",
     "dmg",
     "docm",
+    "dotm",
     "exe",
+    "gadget",
+    "hlp",
     "hta",
     "htm",
     "html",
     "img",
+    "inetloc",
     "inf",
+    "ins",
+    "iqy",
     "iso",
+    "isp",
     "jar",
+    "jnlp",
     "js",
     "jse",
+    "library-ms",
     "lnk",
+    "mht",
+    "mhtml",
+    "mpkg",
+    "msc",
     "msi",
     "msix",
     "msp",
@@ -90,26 +122,46 @@ const RISKY_EXTENSIONS: &[&str] = &[
     "pif",
     "pkg",
     "potm",
+    "ppam",
+    "ppsm",
     "pptm",
     "ps1",
+    "ps1xml",
+    "psc1",
+    "psd1",
     "psm1",
     "reg",
     "rpm",
     "scf",
+    "scpt",
     "scr",
+    "sct",
+    "search-ms",
+    "settingcontent-ms",
     "sh",
     "shtml",
+    "sldm",
+    "slk",
     "svg",
+    "svgz",
+    "terminal",
     "url",
     "vbe",
     "vbs",
     "vhd",
     "vhdx",
+    "webloc",
+    "website",
+    "workflow",
+    "wsc",
     "wsf",
     "wsh",
+    "xht",
+    "xhtml",
     "xlam",
     "xll",
     "xlsm",
+    "xltm",
 ];
 
 /// Saved names (after cleaning) whose extension can run code when opened.
@@ -1015,6 +1067,52 @@ mod tests {
                 "Login.html"
             ]
         );
+    }
+
+    // 5. Web-archive, desktop-launcher, shortcut, and macro-template types
+    //    used in mail attacks are not flagged.
+    #[test]
+    fn risky_file_names_cover_launchers_archives_and_macro_templates() {
+        let names = [
+            "page.mht",
+            "page.MHTML",
+            "a.xhtml",
+            "a.xht",
+            "a.svgz",
+            "run.desktop",
+            "console.msc",
+            "app.application",
+            "app.appref-ms",
+            "x.settingcontent-ms",
+            "x.library-ms",
+            "x.search-ms",
+            "start.jnlp",
+            "x.wsc",
+            "x.sct",
+            "x.ps1xml",
+            "x.psd1",
+            "x.psc1",
+            "x.mpkg",
+            "x.terminal",
+            "x.webloc",
+            "x.inetloc",
+            "x.workflow",
+            "x.scpt",
+            "x.dotm",
+            "x.xltm",
+            "x.ppam",
+            "x.ppsm",
+            "x.sldm",
+            "x.iqy",
+            "x.slk",
+            "x.cab",
+            "x.website",
+            "x.gadget",
+            "x.hlp",
+            "x.ins",
+            "x.isp",
+        ];
+        assert_eq!(risky_file_names(names).len(), names.len());
     }
 
     struct FailingWriter;

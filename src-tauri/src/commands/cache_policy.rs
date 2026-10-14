@@ -56,9 +56,10 @@ pub async fn clear_account_downloads(
 ) -> CommandResult<()> {
     state.db.account(&account_id)?;
     let db = state.db.clone();
+    let marker = state.compact_marker();
     let result = tauri::async_runtime::spawn_blocking(move || {
         db.clear_account_downloads(&account_id)?;
-        db.compact()
+        super::accounts::compact_or_mark(&db, &marker)
     })
     .await
     .map_err(|_| "Postal Snap could not clear downloaded mail.".to_string())?;

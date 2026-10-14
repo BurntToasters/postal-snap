@@ -740,6 +740,28 @@ mod tests {
     }
 
     #[test]
+    fn tag_text_inside_attributes_is_never_rewritten() {
+        // The image and link rewrites scan serialized HTML. They are safe only
+        // while the serializer escapes `<` inside attribute values.
+        for input in [
+            r#"<span title="<img src='https://tracker.test/p.gif'>">x</span>"#,
+            r#"<p class="<a href='https://evil.test'>">x</p>"#,
+            r#"<img alt="<img src=https://tracker.test/q.gif>" src="cid:a@b">"#,
+        ] {
+            let html = sanitize_received_html(input).html;
+            assert!(!html.contains("tracker.test/p.gif\""), "{html}");
+            assert!(
+                !html.contains("data-remote-src=\"https://tracker.test/q.gif"),
+                "{html}"
+            );
+            assert!(!html.contains("data-external-href"), "{html}");
+            assert!(!html.contains("<img src=\"https"), "{html}");
+            // Only a real image tag may appear unescaped.
+            assert!(html.matches("<img").count() <= 1, "{html}");
+        }
+    }
+
+    #[test]
     fn strips_active_content_and_rewrites_images() {
         let result = sanitize_received_html(
             r#"<p>Hello</p><script>alert(1)</script><form action="https://bad.test"><input></form>

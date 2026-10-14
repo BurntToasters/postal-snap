@@ -28,6 +28,7 @@ vi.mock("../api", () => ({
     onTrayQuit: vi.fn(),
     updateRelaunch: vi.fn(),
     setMailShortcutGuard: vi.fn(),
+    setComposerOpen: vi.fn(),
     setUnreadBadge: vi.fn().mockResolvedValue(undefined),
   },
 }));
@@ -161,6 +162,7 @@ beforeEach(() => {
   vi.mocked(api.onTrayQuit).mockResolvedValue(() => undefined);
   vi.mocked(api.updateRelaunch).mockResolvedValue(null);
   vi.mocked(api.setMailShortcutGuard).mockResolvedValue(undefined);
+  vi.mocked(api.setComposerOpen).mockResolvedValue(undefined);
   vi.mocked(getCurrent).mockResolvedValue(null);
   vi.mocked(onOpenUrl).mockImplementation(async (handler) => {
     urlHandler = handler;

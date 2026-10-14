@@ -365,6 +365,9 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
       set_mail_shortcut_guard() {
         return undefined;
       },
+      set_composer_open() {
+        return undefined;
+      },
       snooze_message(args: Record<string, unknown>) {
         state.snoozed = true;
         if (typeof args.messageId === "number")
@@ -734,6 +737,17 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
             size: 128,
           },
         ];
+      },
+      prepare_forwarded_message(args: Record<string, unknown>) {
+        if (args.accountId !== account.id || Number(args.messageId) !== 10)
+          throw new Error("Message does not belong to this account.");
+        return {
+          token: "forwarded-message-token",
+          filename: "Weekend plans.eml",
+          contentType: "message/rfc822",
+          inline: false,
+          size: 128,
+        };
       },
       prepare_forward_attachments() {
         return location.search.includes("forwardAttachment")

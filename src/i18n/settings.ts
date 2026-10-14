@@ -147,15 +147,9 @@ export const settings = {
   paneRight: "On right",
   paneBottom: "Below messages",
   paneHidden: "Open over list",
-  imageSenders: "Images from these senders",
+  imageSenders: "Remote images",
   imageSendersHelp:
-    "When you open a message from one of these senders, its pictures load. Advertising, tracking, and reported-threat checks still apply.",
-  imageSendersEmpty:
-    "None yet. On a message, choose Always load images from that sender.",
-  imageSendersFull: "Save up to 100 sender addresses.",
-  stopImageSender: "Stop",
-  stopImageSenderLabel: (address: string) =>
-    `Stop loading images from ${address}`,
+    "Remote images load only when you choose Load images in a message.",
   showMessagePreviews: "Show message previews",
   showMessagePreviewsHelp: "List rows include the first line of each message.",
   groupThreads: "Group conversations",
@@ -365,6 +359,8 @@ export const settings = {
     `Remove ${name} from Postal Snap? Mail stays on server. This computer will lose ${unsent} unsent message${unsent === 1 ? "" : "s"}, ${drafts} unsynced draft${drafts === 1 ? "" : "s"}, and ${changes} queued change${changes === 1 ? "" : "s"}.`,
   accountCleanupWarning:
     "Account removed. Some downloaded draft files could not be cleaned up; you can remove them from Postal Snap’s data folder.",
+  accountDiskSpacePending:
+    "Account removed. Postal Snap could not free its disk space yet and will finish the next time it opens.",
   checkUpdates: "Check for updates",
   checking: "Checking…",
   installing: (version: string) => `Downloading ${version}…`,

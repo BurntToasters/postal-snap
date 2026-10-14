@@ -108,6 +108,7 @@ export type NativeCommand =
   | "get_account_inbox_counts"
   | "list_mailboxes"
   | "list_all_mailboxes"
+  | "load_older_messages"
   | "sync_account"
   | "sync_all_accounts"
   | "list_messages"
@@ -192,6 +193,7 @@ export type NativeCommand =
   | "get_settings"
   | "save_settings"
   | "set_mail_shortcut_guard"
+  | "set_composer_open"
   | "export_settings"
   | "import_settings"
   | "get_startup_notice"
@@ -328,6 +330,11 @@ export const api = {
   listAllMailboxes: () => call<MailboxSummary[]>("list_all_mailboxes"),
   syncAccount: (accountId: string) => call<void>("sync_account", { accountId }),
   syncAllAccounts: () => call<string[]>("sync_all_accounts"),
+  loadOlderMessages: (accountId: string, mailboxId: number) =>
+    call<{ added: number; hasMore: boolean }>("load_older_messages", {
+      accountId,
+      mailboxId,
+    }),
   listMessages: (
     accountId: string,
     mailboxId: number,
@@ -798,6 +805,8 @@ export const api = {
     if (!inTauri()) return Promise.resolve(null);
     return call<"window" | "background" | null>("get_update_relaunch");
   },
+  setComposerOpen: (open: boolean) =>
+    inTauri() ? call<void>("set_composer_open", { open }) : Promise.resolve(),
   setUpdateReady: (ready: boolean) => {
     if (!inTauri()) return Promise.resolve();
     return call<void>("set_update_ready", { ready });
