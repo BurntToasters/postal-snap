@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
@@ -6,8 +6,8 @@ use zeroize::Zeroizing;
 
 use super::sync::sync_one;
 use super::{
-    command_result, managed_account_dir, refresh_mail_menu, take_normalized_account_password,
-    AppState, CommandResult,
+    cleanup_orphaned_account_dirs, command_result, managed_account_dir, record_orphan_marker,
+    refresh_mail_menu, take_normalized_account_password, AppState, CommandResult,
 };
 use crate::{
     credentials, mail,
@@ -365,9 +365,13 @@ pub async fn erase_all_data(app: AppHandle, state: State<'_, AppState>) -> Comma
         .collect();
     let mut removed = 0u32;
     let mut first_error: Option<String> = None;
+    let mut cleanup_pending = false;
     for account_id in &ids {
         match remove_single_account(&app, &state, account_id).await {
-            Ok(_) => removed += 1,
+            Ok(outcome) => {
+                removed += 1;
+                cleanup_pending |= outcome.cleanup_pending;
+            }
             Err(error) => {
                 if first_error.is_none() {
                     first_error = Some(error);
@@ -375,17 +379,43 @@ pub async fn erase_all_data(app: AppHandle, state: State<'_, AppState>) -> Comma
             }
         }
     }
+    // Folders left by failed removals have no owner now; a retry must see them.
+    let orphans = sweep_unowned_attachments(&state.db, state.attachment_dir.clone()).await;
+    record_orphan_marker(&state.orphan_marker(), orphans);
+    cleanup_pending |= orphans > 0;
     state.settings.save(AppSettings::default())?;
-    if !compact_after_removal(&state).await && first_error.is_none() {
-        first_error = Some(
-            "Accounts were removed, but local storage cleanup is still pending. Restart Postal Snap to retry.".into(),
-        );
-    }
+    let compacted = compact_after_removal(&state).await;
     refresh_mail_menu(&app, &state);
-    if let Some(error) = first_error {
+    if let Some(error) = erase_outcome(first_error, cleanup_pending, compacted) {
         return command_result(Err(error));
     }
     Ok(removed)
+}
+
+/// Sweeps attachment folders that no remaining account owns. Accounts whose
+/// removal failed still own theirs, so they are kept. Returns how many folders
+/// remain; an unreadable account list counts as one, since owners are unknown.
+pub(crate) async fn sweep_unowned_attachments(db: &crate::db::Database, root: PathBuf) -> usize {
+    match db.list_accounts() {
+        Ok(accounts) => {
+            let active = accounts.into_iter().map(|account| account.id).collect();
+            cleanup_orphaned_account_dirs(root, active).await
+        }
+        Err(_) => 1,
+    }
+}
+
+const ERASE_PENDING_DETAIL: &str =
+    "Accounts were removed, but local storage cleanup is still pending. Restart Postal Snap to retry.";
+
+/// The first account error wins. Leftover attachment files or a pending
+/// compaction also make the erase incomplete, so it is reported, not relaunched.
+fn erase_outcome(
+    first_error: Option<String>,
+    cleanup_pending: bool,
+    compacted: bool,
+) -> Option<String> {
+    first_error.or_else(|| (cleanup_pending || !compacted).then(|| ERASE_PENDING_DETAIL.into()))
 }
 
 /// Drop per-account UI entries. Best effort: a save failure never fails removal.
@@ -730,6 +760,77 @@ mod reply_to_tests {
         assert!(normalize_reply_to("not an address").is_err());
         assert!(normalize_reply_to("a@example.com, b@example.com").is_err());
         assert!(normalize_reply_to("a@example.com\r\nBcc: x").is_err());
+    }
+}
+
+#[cfg(test)]
+mod erase_outcome_tests {
+    use super::{erase_outcome, sweep_unowned_attachments};
+
+    // Failure modes for erase-all. Each one must end as an incomplete erase,
+    // never as success that relaunches over files still on disk:
+    // 1. One account fails to remove, while the others succeed.
+    // 2. An account removes its rows but leaves attachment files behind.
+    // 3. Attachment files remain and compaction also fails.
+    // 4. Compaction fails alone, so disk space is not yet freed.
+    // 5. A clean erase, with nothing pending, is reported as success.
+    #[test]
+    fn a_failed_account_removal_makes_erase_incomplete() {
+        assert!(erase_outcome(Some("Account removal failed.".into()), false, true).is_some());
+    }
+
+    #[test]
+    fn leftover_attachment_files_make_erase_incomplete() {
+        assert!(erase_outcome(None, true, true).is_some());
+    }
+
+    #[test]
+    fn leftover_files_and_failed_compaction_stay_incomplete() {
+        assert!(erase_outcome(None, true, false).is_some());
+    }
+
+    #[test]
+    fn failed_compaction_alone_stays_incomplete() {
+        assert!(erase_outcome(None, false, false).is_some());
+    }
+
+    #[test]
+    fn clean_erase_is_success() {
+        assert_eq!(erase_outcome(None, false, true), None);
+    }
+
+    // Failure modes for the erase-all retry after folders were left behind:
+    // 1. A retry with an unremovable leftover folder reports success.
+    // 2. A leftover folder that a retry can remove still reports incomplete.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn retry_stays_incomplete_while_a_leftover_folder_cannot_be_removed() {
+        let root = tempfile::tempdir().unwrap();
+        let leftover = root
+            .path()
+            .join(uuid::Uuid::new_v4().hyphenated().to_string());
+        std::fs::create_dir(&leftover).unwrap();
+        let db = crate::db::Database::memory();
+        let Some(_lock) = crate::commands::make_unwritable(root.path()) else {
+            return;
+        };
+        let remaining = sweep_unowned_attachments(&db, root.path().to_path_buf()).await;
+        assert_eq!(remaining, 1);
+        assert!(erase_outcome(None, remaining > 0, true).is_some());
+    }
+
+    #[tokio::test]
+    async fn retry_succeeds_once_the_leftover_folder_is_removed() {
+        let root = tempfile::tempdir().unwrap();
+        let leftover = root
+            .path()
+            .join(uuid::Uuid::new_v4().hyphenated().to_string());
+        std::fs::create_dir(&leftover).unwrap();
+        let db = crate::db::Database::memory();
+        let remaining = sweep_unowned_attachments(&db, root.path().to_path_buf()).await;
+        assert_eq!(remaining, 0);
+        assert!(!leftover.exists());
+        assert_eq!(erase_outcome(None, remaining > 0, true), None);
     }
 }
 

@@ -348,6 +348,9 @@ export const settings = {
     "Clear downloaded message bodies and attachments? Message lists, account settings, drafts, and unsent mail stay.",
   clearMailHelp:
     "Keeps message lists, accounts, drafts, and unsent mail. Bodies download again when opened.",
+  attachmentLeftovers:
+    "Some removed account files could not be deleted. Restart Postal Snap to try again.",
+  attachmentLeftoversRetry: "Try again",
   removeAccount: (name: string) =>
     `Remove ${name} from Postal Snap? Mail stays on server.`,
   removeAccountWithImpact: (

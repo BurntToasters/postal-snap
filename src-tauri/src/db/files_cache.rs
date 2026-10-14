@@ -365,6 +365,7 @@ impl Database {
             bytes: bytes.max(0) as u64 + outbox_bytes.max(0) as u64,
             max_bytes,
             message_count: message_count.max(0) as u64,
+            attachment_leftovers: false,
         })
     }
 
@@ -526,6 +527,7 @@ impl Database {
             bytes: bytes.max(0) as u64,
             max_bytes,
             message_count: message_count.max(0) as u64,
+            attachment_leftovers: false,
         })
     }
 

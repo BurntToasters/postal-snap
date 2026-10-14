@@ -25,6 +25,10 @@ export const composer = {
   saveCloseQuestion: "Save this draft and close?",
   discardQuestion: "Discard this draft and its attachments?",
   draftSaved: "Draft saved",
+  replaceSaveFailed:
+    "Could not save the open message, so the new message was not opened. Your edits are still here.",
+  replaceWhileSending:
+    "A message is still sending, so the new message was not opened.",
   draftSavedAt: (when: string) => `Draft saved at ${when}`,
   recoveredTitle: "Recovered draft copy",
   recoveredDetail: "Both versions were kept. Review this copy before sending.",

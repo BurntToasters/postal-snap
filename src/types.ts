@@ -586,6 +586,7 @@ export interface CacheUsage {
   bytes: number;
   maxBytes: number;
   messageCount: number;
+  attachmentLeftovers?: boolean;
 }
 export type RemoteImageResult =
   | { status: "loaded"; dataUrl: string }

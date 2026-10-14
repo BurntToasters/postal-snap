@@ -1,10 +1,10 @@
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
-use super::{emit_message_change, AppState};
+use super::{emit_message_change, validate_queued_operation, AppState, ValidatedReplay};
 use crate::{
     db::Database,
-    mail::{self, SendFailure},
+    mail::{self, MailboxOperationError, SendFailure},
     models::{AccountRecord, ComposeDraft, DraftSourceKind},
 };
 
@@ -63,6 +63,50 @@ pub(crate) fn resolve_source(
     }))
 }
 
+/// Finishes queued keyword writes for one message before archiving moves it.
+/// The move gives the message a new UID and removes the local row, so a queued
+/// write could no longer replay. A transient failure returns `Err` and keeps
+/// the write queued so the archive waits. Stale or terminal writes are dropped.
+pub(crate) async fn finish_source_keywords<Set, Fut>(
+    db: &Database,
+    account_id: &str,
+    message_id: i64,
+    mut set: Set,
+) -> Result<(), MailboxOperationError>
+where
+    Set: FnMut(KeywordOperation) -> Fut,
+    Fut: std::future::Future<Output = Result<(), MailboxOperationError>>,
+{
+    let queued = db
+        .queued_operations(account_id)
+        .map_err(MailboxOperationError::transient)?;
+    for (id, kind, payload) in queued {
+        if kind != "keyword" {
+            continue;
+        }
+        let Ok(operation) = serde_json::from_str::<KeywordOperation>(&payload) else {
+            continue;
+        };
+        if operation.message_id != message_id {
+            continue;
+        }
+        let validated = validate_queued_operation(db, account_id, &kind, &payload)
+            .map_err(MailboxOperationError::transient)?;
+        let ValidatedReplay::Keyword(operation) = validated else {
+            db.remove_operation(account_id, id)
+                .map_err(MailboxOperationError::transient)?;
+            continue;
+        };
+        match set(operation).await {
+            Err(error) if !error.terminal => return Err(error),
+            _ => db
+                .remove_operation(account_id, id)
+                .map_err(MailboxOperationError::transient)?,
+        }
+    }
+    Ok(())
+}
+
 /// Best effort after SMTP accepted the message; never fails the send.
 pub(crate) async fn mark_source_after_send(
     app: &AppHandle,
@@ -88,29 +132,44 @@ pub(crate) async fn mark_source_after_send(
         keyword == SourceKeyword::Answered,
         keyword == SourceKeyword::Forwarded,
     );
-    let result = mail::set_remote_keyword(
-        account,
-        password,
-        &target.mailbox,
-        target.uid,
-        target.uid_validity,
+    let operation = KeywordOperation {
+        message_id,
+        uid: target.uid,
+        mailbox: target.mailbox,
+        uid_validity: target.uid_validity,
         keyword,
-    )
+    };
+    apply_keyword_intent(&state.db, account_id, operation, |operation| async move {
+        mail::set_remote_keyword(
+            account,
+            password,
+            &operation.mailbox,
+            operation.uid,
+            operation.uid_validity,
+            operation.keyword,
+        )
+        .await
+    })
     .await;
-    if let Err(error) = result {
-        if !error.terminal {
-            let operation = KeywordOperation {
-                message_id,
-                uid: target.uid,
-                mailbox: target.mailbox,
-                uid_validity: target.uid_validity,
-                keyword,
-            };
-            let key = format!("keyword:{message_id}:{keyword:?}");
-            let _ = state
-                .db
-                .queue_operation(account_id, "keyword", &operation, Some(&key));
-        }
-    }
     emit_message_change(app, account_id, Some(message_id), "flags");
+}
+
+/// Queues the keyword before its STORE, so a crash after SMTP still replays
+/// it. Success or a terminal failure removes it; a transient failure keeps it.
+/// A queue failure never blocks the STORE.
+pub(crate) async fn apply_keyword_intent<Store, Fut>(
+    db: &Database,
+    account_id: &str,
+    operation: KeywordOperation,
+    store: Store,
+) where
+    Store: FnOnce(KeywordOperation) -> Fut,
+    Fut: std::future::Future<Output = Result<(), MailboxOperationError>>,
+{
+    let key = format!("keyword:{}:{:?}", operation.message_id, operation.keyword);
+    let _ = db.queue_operation(account_id, "keyword", &operation, Some(&key));
+    let result = store(operation).await;
+    if !matches!(&result, Err(error) if !error.terminal) {
+        let _ = db.remove_operation_by_dedupe(account_id, &key);
+    }
 }

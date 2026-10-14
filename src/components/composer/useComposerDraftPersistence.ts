@@ -38,6 +38,7 @@ interface Options {
   saveInFlightRef: RefObject<boolean>;
   pendingCloseRef: RefObject<boolean>;
   closedByComposerRef: RefObject<boolean>;
+  session: number;
 }
 
 export function useComposerDraftPersistence({
@@ -62,6 +63,7 @@ export function useComposerDraftPersistence({
   saveInFlightRef,
   pendingCloseRef,
   closedByComposerRef,
+  session,
 }: Options) {
   const saveDraftRef = useRef<(showStatus?: boolean) => Promise<void>>(() =>
     Promise.resolve(),
@@ -283,42 +285,52 @@ export function useComposerDraftPersistence({
     ],
   );
 
-  // Quit saves unsaved edits without closing or asking. The quit path bounds
-  // the wait and keeps the message open if saving fails.
+  // Quit and replacement save unsaved edits without closing or asking. A
+  // sending or discarding composer is busy: it must not be replaced, and no
+  // save may run after it, or the draft would be written back.
   useEffect(
     () =>
-      registerDraftFlush(async () => {
-        if (isSendingRef.current || isDiscardingRef.current) return;
-        while (saveInFlightRef.current) {
-          await savePromiseRef.current?.catch(() => undefined);
-        }
-        if (isSendingRef.current || isDiscardingRef.current) return;
-        saveInFlightRef.current = true;
-        try {
-          for (;;) {
-            const draft = buildDraftRef.current();
-            if (!hasDraftContent(draft, currentBodyText())) return;
-            const revision = draftRevisionRef.current;
-            const save = api.saveDraft({
-              ...draft,
-              id: draftIdRef.current ?? draft.id,
-            });
-            savePromiseRef.current = save;
-            const outcome = await save;
-            draftIdRef.current = outcome.id;
-            setDraftId(outcome.id);
-            if (draftRevisionRef.current !== revision) continue;
-            setSaveState("saved");
-            setSavedAt(new Date().toISOString());
-            setDraftSyncState(outcome.syncState);
-            setDraftSyncDetail(undefined);
-            return;
+      registerDraftFlush(
+        async () => {
+          if (isSendingRef.current || isDiscardingRef.current) return;
+          while (saveInFlightRef.current) {
+            await savePromiseRef.current?.catch(() => undefined);
           }
-        } finally {
-          saveInFlightRef.current = false;
-        }
-      }),
+          if (isSendingRef.current || isDiscardingRef.current) return;
+          saveInFlightRef.current = true;
+          try {
+            for (;;) {
+              if (isSendingRef.current || isDiscardingRef.current) return;
+              const draft = buildDraftRef.current();
+              if (!hasDraftContent(draft, currentBodyText())) return;
+              const revision = draftRevisionRef.current;
+              const save = api.saveDraft({
+                ...draft,
+                id: draftIdRef.current ?? draft.id,
+              });
+              savePromiseRef.current = save;
+              const outcome = await save;
+              draftIdRef.current = outcome.id;
+              setDraftId(outcome.id);
+              if (draftRevisionRef.current !== revision) continue;
+              // Set now, not after render: a replacement unmounts this editor
+              // before React reports "saved", and its unmount save must skip.
+              saveStateRef.current = "saved";
+              setSaveState("saved");
+              setSavedAt(new Date().toISOString());
+              setDraftSyncState(outcome.syncState);
+              setDraftSyncDetail(undefined);
+              return;
+            }
+          } finally {
+            saveInFlightRef.current = false;
+          }
+        },
+        session,
+        () => isSendingRef.current || isDiscardingRef.current,
+      ),
     [
+      session,
       currentBodyText,
       closedByComposerRef,
       draftIdRef,

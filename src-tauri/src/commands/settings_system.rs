@@ -98,11 +98,34 @@ pub fn get_startup_error(state: State<'_, AppState>) -> CommandResult<Option<Str
 
 #[tauri::command(async)]
 pub fn get_cache_usage(state: State<'_, AppState>) -> CommandResult<CacheUsage> {
-    command_result(
-        state
-            .db
-            .cache_usage(state.settings.get()?.cache_policy.max_bytes),
+    let mut usage = state
+        .db
+        .cache_usage(state.settings.get()?.cache_policy.max_bytes)?;
+    // Read at Settings open; the startup sweep may still be running.
+    usage.attachment_leftovers = state.orphan_marker().exists();
+    Ok(usage)
+}
+
+/// Reruns the orphan sweep and records what remains. True while leftovers stay.
+pub(crate) async fn retry_attachment_sweep(
+    db: &crate::db::Database,
+    root: std::path::PathBuf,
+    marker: &Path,
+) -> bool {
+    let remaining = super::accounts::sweep_unowned_attachments(db, root).await;
+    super::record_orphan_marker(marker, remaining);
+    remaining > 0
+}
+
+#[tauri::command]
+pub async fn retry_attachment_cleanup(state: State<'_, AppState>) -> CommandResult<bool> {
+    state.require_storage()?;
+    Ok(retry_attachment_sweep(
+        &state.db,
+        state.attachment_dir.clone(),
+        &state.orphan_marker(),
     )
+    .await)
 }
 
 #[tauri::command]
@@ -485,5 +508,49 @@ mod tests {
         .unwrap();
         let error = read_license_credits_from(directory.path()).unwrap_err();
         assert_eq!(error, "Could not read license credits.");
+    }
+}
+
+#[cfg(test)]
+mod attachment_cleanup_tests {
+    use super::retry_attachment_sweep;
+    use crate::db::Database;
+
+    // Failure modes for "Try again" on leftover attachment folders:
+    // 1. A folder that still cannot be removed keeps the marker and reports leftovers.
+    // 2. Once the folder can be removed, the retry clears the marker.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn retry_keeps_the_marker_while_a_leftover_folder_is_stuck() {
+        use crate::commands::make_unwritable;
+
+        let base = tempfile::tempdir().unwrap();
+        let root = base.path().join("attachments");
+        let leftover = root.join(uuid::Uuid::new_v4().hyphenated().to_string());
+        std::fs::create_dir_all(&leftover).unwrap();
+        let marker = base.path().join("orphan-attachments-pending");
+        std::fs::write(&marker, b"").unwrap();
+        let db = Database::memory();
+        let Some(_lock) = make_unwritable(&root) else {
+            return;
+        };
+
+        assert!(retry_attachment_sweep(&db, root.clone(), &marker).await);
+        assert!(marker.exists());
+    }
+
+    #[tokio::test]
+    async fn retry_clears_the_marker_once_leftovers_are_removed() {
+        let base = tempfile::tempdir().unwrap();
+        let root = base.path().join("attachments");
+        let leftover = root.join(uuid::Uuid::new_v4().hyphenated().to_string());
+        std::fs::create_dir_all(&leftover).unwrap();
+        let marker = base.path().join("orphan-attachments-pending");
+        std::fs::write(&marker, b"").unwrap();
+        let db = Database::memory();
+
+        assert!(!retry_attachment_sweep(&db, root.clone(), &marker).await);
+        assert!(!marker.exists());
+        assert!(!leftover.exists());
     }
 }
