@@ -19,6 +19,7 @@ const MARKER_MAX_AGE: Duration = Duration::from_secs(10 * 60);
 
 static LAUNCH: OnceLock<Option<RelaunchMode>> = OnceLock::new();
 static UPDATE_READY: AtomicBool = AtomicBool::new(false);
+static COMPOSER_OPEN: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RelaunchMode {
@@ -93,6 +94,15 @@ pub fn set_update_ready(ready: bool) {
 
 pub fn update_ready() -> bool {
     UPDATE_READY.load(Ordering::Relaxed)
+}
+
+pub fn set_composer_open(open: bool) {
+    COMPOSER_OPEN.store(open, Ordering::Relaxed);
+}
+
+/// Quit must go through the window first so it can save the open message.
+pub fn quit_needs_window() -> bool {
+    update_ready() || COMPOSER_OPEN.load(Ordering::Relaxed)
 }
 
 /// True while the window is closed into an active tray or menu bar icon.

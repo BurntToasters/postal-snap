@@ -14,6 +14,7 @@ use rusqlite::{params, OptionalExtension};
 
 use crate::models::{AccountInboxCount, MailboxRole, MailboxSummary, ROLE_SOURCE_NAME};
 
+database_operations! {
 impl Database {
     /// Mark UIDNEXT unknown so the next pass does not treat the folder as
     /// unchanged while new mail is still being fetched.
@@ -710,4 +711,5 @@ impl Database {
             backfilling: backfilling > 0,
         })
     }
+}
 }

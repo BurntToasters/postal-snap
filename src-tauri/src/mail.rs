@@ -1,3 +1,4 @@
+pub mod failure;
 pub mod flowed;
 pub mod folders;
 pub mod icloud;
@@ -686,6 +687,7 @@ mod tests {
                 all_folders: false,
                 limit: 10,
             },
+            &mut Uncontended,
         )
         .await
         .unwrap();
@@ -1306,30 +1308,49 @@ mod tests {
 
     #[test]
     fn smtp_failures_split_into_not_sent_and_uncertain() {
-        use super::send::{classify_send_failure, SendFailure};
+        use super::send::{classify_send_failure, SendFailure, SmtpErrorTraits};
+        let traits = SmtpErrorTraits::default();
         // A 4xx reply or a connection that never opened: nothing was accepted.
         assert_eq!(
-            classify_send_failure(false, true, false, false),
+            classify_send_failure(SmtpErrorTraits {
+                transient: true,
+                ..traits
+            }),
             SendFailure::NotSentRetry
         );
         assert_eq!(
-            classify_send_failure(false, false, false, true),
+            classify_send_failure(SmtpErrorTraits {
+                connect_failed: true,
+                ..traits
+            }),
             SendFailure::NotSentRetry
         );
         // A 5xx reply or failed TLS: not sent, and a retry will not help.
         assert_eq!(
-            classify_send_failure(true, false, false, false),
+            classify_send_failure(SmtpErrorTraits {
+                permanent: true,
+                ..traits
+            }),
             SendFailure::NotSentRefused
         );
         assert_eq!(
-            classify_send_failure(false, false, true, false),
+            classify_send_failure(SmtpErrorTraits {
+                tls: true,
+                ..traits
+            }),
+            SendFailure::NotSentRefused
+        );
+        // A client-side check (no STARTTLS, no usable sign-in method, no
+        // SMTPUTF8/8BITMIME) fails before MAIL FROM, so nothing was sent.
+        assert_eq!(
+            classify_send_failure(SmtpErrorTraits {
+                client: true,
+                ..traits
+            }),
             SendFailure::NotSentRefused
         );
         // Anything else may have dropped after the body: never resend.
-        assert_eq!(
-            classify_send_failure(false, false, false, false),
-            SendFailure::Uncertain
-        );
+        assert_eq!(classify_send_failure(traits), SendFailure::Uncertain);
     }
 
     #[tokio::test]
@@ -1494,6 +1515,7 @@ mod tests {
             download_message(&account, "secret", "INBOX", 1, 10, None, None, || Ok(()))
                 .await
                 .unwrap_err()
+                .message
                 .contains("identity is unavailable")
         );
         assert!(delete_remote_draft(&account, "secret", "Drafts", 1, None)
@@ -2129,6 +2151,7 @@ mod tests {
                 all_folders: false,
                 limit: 25,
             },
+            &mut Uncontended,
         )
         .await
         .unwrap();
@@ -2350,8 +2373,10 @@ mod tests {
         )
         .await
         .unwrap_err();
+        // The worker parks on the kind, not on the wording.
+        assert_eq!(rejected.kind, super::failure::FailureKind::SignInRejected);
         assert_eq!(
-            crate::models::IpcError::from(rejected.as_str()).code,
+            crate::models::IpcError::from(rejected.message.as_str()).code,
             "authenticationFailed"
         );
 

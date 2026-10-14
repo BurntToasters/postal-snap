@@ -1,3 +1,4 @@
+use super::failure::{login_failure_kind, FailureKind, MailError};
 use std::{
     io,
     net::SocketAddr,
@@ -262,17 +263,36 @@ pub struct SendError {
     pub kind: SendFailure,
 }
 
+/// What a lettre error says about how far the session got.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct SmtpErrorTraits {
+    pub permanent: bool,
+    pub transient: bool,
+    pub tls: bool,
+    pub connect_failed: bool,
+    /// lettre refused locally before MAIL FROM (no STARTTLS, no usable
+    /// sign-in method, no SMTPUTF8/8BITMIME support).
+    pub client: bool,
+}
+
+impl SmtpErrorTraits {
+    fn of(error: &lettre::transport::smtp::Error, connect_failed: bool) -> Self {
+        Self {
+            permanent: error.is_permanent(),
+            transient: error.is_transient(),
+            tls: error.is_tls(),
+            connect_failed,
+            client: error.is_client(),
+        }
+    }
+}
+
 /// SMTP replies are final: a 4xx or 5xx means the server did not take the
 /// message, at any stage. Only a lost connection mid-session is uncertain.
-pub(crate) fn classify_send_failure(
-    permanent: bool,
-    transient: bool,
-    tls: bool,
-    connect_failed: bool,
-) -> SendFailure {
-    if permanent || tls {
+pub(crate) fn classify_send_failure(traits: SmtpErrorTraits) -> SendFailure {
+    if traits.permanent || traits.tls || traits.client {
         SendFailure::NotSentRefused
-    } else if transient || connect_failed {
+    } else if traits.transient || traits.connect_failed {
         SendFailure::NotSentRetry
     } else {
         SendFailure::Uncertain
@@ -336,12 +356,7 @@ pub async fn send_prepared(
                 .send(&envelope, bytes)
                 .await
                 .map_err(|error| SendError {
-                    kind: classify_send_failure(
-                        error.is_permanent(),
-                        error.is_transient(),
-                        error.is_tls(),
-                        false,
-                    ),
+                    kind: classify_send_failure(SmtpErrorTraits::of(&error, false)),
                 })
         })
         .await?;
@@ -354,12 +369,10 @@ pub async fn send_prepared(
         .map_err(|error| SendError {
             // lettre keeps its connect-failure kind private; its Debug output
             // names it. `refused_smtp_connection_is_not_sent` pins this.
-            kind: classify_send_failure(
-                error.is_permanent(),
-                error.is_transient(),
-                error.is_tls(),
+            kind: classify_send_failure(SmtpErrorTraits::of(
+                &error,
                 format!("{error:?}").contains("kind: Connection"),
-            ),
+            )),
         })?;
     Ok(())
 }
@@ -405,7 +418,7 @@ pub async fn ensure_sent_copy(
 pub(crate) async fn connect_imap(
     server: &ServerConfig,
     password: &str,
-) -> Result<ImapSession, String> {
+) -> Result<ImapSession, MailError> {
     connect_imap_auth(server, password, false).await
 }
 
@@ -413,65 +426,78 @@ pub(crate) async fn connect_imap_auth(
     server: &ServerConfig,
     password: &str,
     xoauth2: bool,
-) -> Result<ImapSession, String> {
+) -> Result<ImapSession, MailError> {
     if xoauth2 {
         guard_xoauth2_server(server, true)?;
     }
     let address = (server.host.as_str(), server.port);
     let tcp = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(address))
         .await
-        .map_err(|_| "Incoming server timed out.".to_string())?
-        .map_err(|error| redact_error(&error, "Incoming connection"))?;
+        .map_err(|_| MailError::connection("Incoming server timed out."))?
+        .map_err(|error| MailError::connection(redact_error(&error, "Incoming connection")))?;
     let mut native_connector = tokio_native_tls::native_tls::TlsConnector::builder();
     if let Some(pem) = &server.trusted_certificate {
         crate::bridge::validate_loopback(&server.host)?;
         crate::bridge::certificate_metadata(pem)?;
         let certificate = tokio_native_tls::native_tls::Certificate::from_pem(pem.as_bytes())
-            .map_err(|_| "The saved Bridge certificate is invalid.".to_string())?;
+            .map_err(|_| MailError::connection("The saved Bridge certificate is invalid."))?;
         native_connector.add_root_certificate(certificate);
     }
     #[cfg(test)]
     let native_connector = add_test_imap_root(native_connector)?;
     let native_connector = native_connector
         .build()
-        .map_err(|error| redact_error(&error, "Incoming TLS setup"))?;
+        .map_err(|error| MailError::connection(redact_error(&error, "Incoming TLS setup")))?;
     let connector = tokio_native_tls::TlsConnector::from(native_connector);
     let client = match server.tls_mode {
         TlsMode::Tls => {
             let tls = tokio::time::timeout(CONNECT_TIMEOUT, connector.connect(&server.host, tcp))
                 .await
-                .map_err(|_| "Incoming TLS negotiation timed out.".to_string())?
-                .map_err(|error| crate::bridge::tls_error(&error, "Incoming TLS negotiation"))?;
+                .map_err(|_| MailError::connection("Incoming TLS negotiation timed out."))?
+                .map_err(|error| {
+                    MailError::connection(crate::bridge::tls_error(
+                        &error,
+                        "Incoming TLS negotiation",
+                    ))
+                })?;
             verify_pinned_stream(server, &tls)?;
             let mut client = async_imap::Client::new(tls);
             tokio::time::timeout(CONNECT_TIMEOUT, client.read_response())
                 .await
-                .map_err(|_| "Incoming greeting timed out.".to_string())?
-                .map_err(|error| redact_error(&error, "Incoming greeting"))?
-                .ok_or_else(|| "The incoming server closed the secure connection.".to_string())?;
+                .map_err(|_| MailError::connection("Incoming greeting timed out."))?
+                .map_err(|error| MailError::connection(redact_error(&error, "Incoming greeting")))?
+                .ok_or_else(|| {
+                    MailError::connection("The incoming server closed the secure connection.")
+                })?;
             client
         }
         TlsMode::StartTls => {
             let mut plain = async_imap::Client::new(tcp);
             tokio::time::timeout(CONNECT_TIMEOUT, plain.read_response())
                 .await
-                .map_err(|_| "Incoming greeting timed out.".to_string())?
-                .map_err(|error| redact_error(&error, "Incoming greeting"))?
-                .ok_or_else(|| "The incoming server closed the connection.".to_string())?;
+                .map_err(|_| MailError::connection("Incoming greeting timed out."))?
+                .map_err(|error| MailError::connection(redact_error(&error, "Incoming greeting")))?
+                .ok_or_else(|| {
+                    MailError::connection("The incoming server closed the connection.")
+                })?;
             tokio::time::timeout(
                 CONNECT_TIMEOUT,
                 plain.run_command_and_check_ok("STARTTLS", None),
             )
             .await
-            .map_err(|_| "Incoming STARTTLS timed out.".to_string())?
-            .map_err(|error| redact_error(&error, "Required incoming STARTTLS"))?;
+            .map_err(|_| MailError::connection("Incoming STARTTLS timed out."))?
+            .map_err(|error| {
+                MailError::connection(redact_error(&error, "Required incoming STARTTLS"))
+            })?;
             let tls = tokio::time::timeout(
                 CONNECT_TIMEOUT,
                 connector.connect(&server.host, plain.into_inner()),
             )
             .await
-            .map_err(|_| "Incoming STARTTLS timed out.".to_string())?
-            .map_err(|error| crate::bridge::tls_error(&error, "Incoming STARTTLS"))?;
+            .map_err(|_| MailError::connection("Incoming STARTTLS timed out."))?
+            .map_err(|error| {
+                MailError::connection(crate::bridge::tls_error(&error, "Incoming STARTTLS"))
+            })?;
             verify_pinned_stream(server, &tls)?;
             async_imap::Client::new(tls)
         }
@@ -486,12 +512,13 @@ pub(crate) async fn connect_imap_auth(
         tokio::time::timeout(CONNECT_TIMEOUT, client.login(&server.username, password)).await
     };
     authenticated
-        .map_err(|_| "Incoming server timed out.".to_string())?
-        .map_err(|(error, _)| match error {
-            async_imap::error::Error::No(_) | async_imap::error::Error::Bad(_) => {
-                redact_error(&error, "Incoming sign-in")
-            }
-            _ => redact_error(&error, "Incoming connection"),
+        .map_err(|_| MailError::connection("Incoming server timed out."))?
+        .map_err(|(error, _)| match login_failure_kind(&error) {
+            FailureKind::SignInRejected => MailError::new(
+                FailureKind::SignInRejected,
+                redact_error(&error, "Incoming sign-in"),
+            ),
+            kind => MailError::new(kind, redact_error(&error, "Incoming connection")),
         })
 }
 

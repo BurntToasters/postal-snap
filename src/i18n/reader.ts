@@ -146,7 +146,6 @@ export const reader = {
   showDetails: "Details",
   hideDetails: "Hide details",
   loadImages: "Load images",
-  alwaysLoadImages: (address: string) => `Always load images from ${address}`,
   filteredImage: "Advertising or tracking image blocked",
   filteredImages: (count: number) =>
     `${count} advertising or tracking image${count === 1 ? "" : "s"} kept blocked for privacy.`,

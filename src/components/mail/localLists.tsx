@@ -1,3 +1,4 @@
+import { outboxDetail } from "../../outboxDetail";
 import { useEffect, useState } from "react";
 import { Clock, FileText, Send, TriangleAlert, X } from "lucide-react";
 import {
@@ -291,7 +292,7 @@ export function OutboxList({
                   {strings.mail.queuedAt(formatMessageDate(item.createdAt))}
                 </time>
               ) : null}
-              <small>{item.detail}</small>
+              <small>{outboxDetail(item)}</small>
               {item.state === "scheduled" && item.sendAt ? (
                 <small className="status-label">
                   {scheduledLabel(item.sendAt, now)}

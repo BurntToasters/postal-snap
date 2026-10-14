@@ -108,10 +108,11 @@ pub fn get_cache_usage(state: State<'_, AppState>) -> CommandResult<CacheUsage> 
 #[tauri::command]
 pub async fn clear_downloaded_mail(state: State<'_, AppState>) -> CommandResult<()> {
     let db = state.db.clone();
+    let marker = state.compact_marker();
     // VACUUM rewrites the whole file; keep it off the async runtime.
     let result = tokio::task::spawn_blocking(move || {
         db.clear_downloaded_mail()?;
-        db.compact()
+        super::accounts::compact_or_mark(&db, &marker)
     })
     .await
     .map_err(|_| "Postal Snap could not clear downloaded mail.".to_string())?;
@@ -286,6 +287,12 @@ pub fn release_update_install(state: State<'_, AppState>) {
 pub fn set_update_ready(app: AppHandle, ready: bool) {
     crate::update_relaunch::set_update_ready(ready);
     crate::update_relaunch::arm_background_update(&app);
+}
+
+/// Lets native Quit hand off to the window while a message is open.
+#[tauri::command]
+pub fn set_composer_open(open: bool) {
+    crate::update_relaunch::set_composer_open(open);
 }
 
 /// Waits again, e.g. while a message is being written.

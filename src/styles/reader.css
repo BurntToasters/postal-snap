@@ -102,6 +102,10 @@
   -webkit-backdrop-filter: blur(18px) saturate(160%);
 }
 
+.mail-shell.pane-right .reader-actions {
+  min-height: max(var(--pane-heading-height), var(--reader-bar-height, 0px));
+}
+
 html[data-reduce-transparency="true"] .reader-actions {
   background: var(--surface);
   backdrop-filter: none;

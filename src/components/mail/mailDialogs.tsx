@@ -50,19 +50,8 @@ export function SentNoticeToast() {
 
   async function undoLastSent() {
     try {
+      // Restoring also cancels a queued Send and archive in Rust.
       const draft = await api.restoreOutbox(notice.outboxId, notice.accountId);
-      const archived = notice.archivedMessage;
-      if (archived) {
-        try {
-          await api.moveMessageToMailbox(
-            notice.accountId,
-            archived.messageId,
-            archived.mailboxId,
-          );
-        } catch (cause) {
-          setError(String(cause));
-        }
-      }
       setLastSent(undefined);
       openComposer({ draft });
     } catch (cause) {

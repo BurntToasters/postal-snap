@@ -66,6 +66,8 @@ export interface AccountSummary {
 
 export interface AccountRemovalOutcome {
   cleanupPending: boolean;
+  /** Removed mail stays on disk until Postal Snap next opens. */
+  diskSpacePending?: boolean;
 }
 
 export interface AccountRemovalImpact {
@@ -311,6 +313,7 @@ export interface OutboxSummary {
     | "needs_attention"
     | "scheduled";
   detail?: string | null;
+  reasonCode?: string | null;
   createdAt: string;
   sendAt?: string | null;
   /** First line of the queued message. Empty when the message has no text yet. */
@@ -460,6 +463,7 @@ export interface AppSettings {
   blockAdvertisingAndTracking: boolean;
   blockReportedThreats: boolean;
   /** Senders whose pictures load when a message opens. Checks still apply. */
+  /** Legacy allow-list retained for settings compatibility; the reader ignores it. */
   imageSenders: string[];
   groupThreads: boolean;
   /** Put this account's address on Bcc for a new message. */

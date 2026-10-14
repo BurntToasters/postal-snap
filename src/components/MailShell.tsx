@@ -1,3 +1,4 @@
+import { outboxDetail } from "../outboxDetail";
 import {
   useCallback,
   useEffect,
@@ -8,6 +9,7 @@ import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
+import { useMailboxMessages } from "../hooks/useMailboxMessages";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useMailShortcuts } from "../hooks/useMailShortcuts";
 import { useScheduledOutbox } from "../hooks/useScheduledOutbox";
@@ -32,12 +34,7 @@ import { readMessageDrag } from "../messageDrag";
 import { preferredReplyMode } from "./composer/composerSeed";
 import { folderLabel, folderParentLabel, folderPathLabel } from "../i18n/mail";
 import { useAppStore } from "../store";
-import type {
-  AccountInboxCount,
-  ComposeDraft,
-  MessageCursor,
-  MessageSummary,
-} from "../types";
+import type { AccountInboxCount, ComposeDraft, MessageSummary } from "../types";
 import { applyPendingUpdate } from "../update";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { MessageReader } from "./MessageReader";
@@ -49,11 +46,7 @@ import {
 } from "./mail/mailDialogs";
 import { Sidebar } from "./mail/sidebar";
 import { DraftList, OutboxList, SnoozedList } from "./mail/localLists";
-import {
-  isOversizeError,
-  matchesLocalQuery,
-  mergeSearchResults,
-} from "./mail/mailSearch";
+import { isOversizeError, matchesLocalQuery } from "./mail/mailSearch";
 import { folderIcons } from "./mail/folderIcons";
 import {
   mailboxByRole,
@@ -155,10 +148,8 @@ export function MailShell({ onOpenSettings }: Props) {
   const selectMailbox = useAppStore((state) => state.selectMailbox);
   const selectLocalView = useAppStore((state) => state.selectLocalView);
   const messages = useAppStore((state) => state.messages);
-  const messageCursor = useAppStore((state) => state.messageCursor);
   const hasMoreMessages = useAppStore((state) => state.hasMoreMessages);
   const setMessages = useAppStore((state) => state.setMessages);
-  const appendMessages = useAppStore((state) => state.appendMessages);
   const drafts = useAppStore((state) => state.drafts);
   const setDrafts = useAppStore((state) => state.setDrafts);
   const outbox = useAppStore((state) => state.outbox);
@@ -240,7 +231,6 @@ export function MailShell({ onOpenSettings }: Props) {
   );
   const sidebarToggleRef = useRef<HTMLButtonElement>(null);
   const folderPaneRef = useRef<HTMLElement>(null);
-  const [loadingMessages, setLoadingMessages] = useState(false);
   const [loadingMessageId, setLoadingMessageId] = useState<number>();
   const [folderDialog, setFolderDialog] = useState<
     | null
@@ -526,193 +516,25 @@ export function MailShell({ onOpenSettings }: Props) {
     setError,
   );
 
-  const listMailboxPage = useCallback(
-    (accountId: string, mailboxId: number, cursor?: MessageCursor) => {
-      if (listFilter === "all" && listSort === "date") {
-        return cursor
-          ? api.listMessages(accountId, mailboxId, cursor)
-          : api.listMessages(accountId, mailboxId);
-      }
-      if (listSort === "date") {
-        return api.listMessages(accountId, mailboxId, cursor, 100, listFilter);
-      }
-      return api.listMessages(
-        accountId,
-        mailboxId,
-        cursor,
-        100,
-        listFilter === "all" ? undefined : listFilter,
-        listSort,
-      );
-    },
-    [listFilter, listSort],
-  );
-
-  const loadMessages = useCallback(async () => {
-    if (
-      !activeAccountId ||
-      !activeMailboxId ||
-      activeLocalView ||
-      submittedQueryRef.current
-    ) {
-      messageRequest.current += 1;
-      setLoadingMessages(false);
-      return;
-    }
-    const accountId = activeAccountId;
-    const mailboxId = activeMailboxId;
-    const request = ++messageRequest.current;
-    pagingRequest.current += 1;
-    searchRequest.current += 1;
-    setLoadingMessages(true);
-    try {
-      const loaded = await listMailboxPage(accountId, mailboxId);
-      const current = useAppStore.getState();
-      if (
-        request !== messageRequest.current ||
-        current.activeAccountId !== accountId ||
-        current.activeMailboxId !== mailboxId ||
-        current.activeLocalView
-      )
-        return;
-      setMessages(loaded.items, loaded.nextCursor ?? undefined, loaded.hasMore);
-    } catch (cause) {
-      if (request === messageRequest.current) setError(String(cause));
-    } finally {
-      if (request === messageRequest.current) setLoadingMessages(false);
-    }
-  }, [
-    activeAccountId,
-    activeLocalView,
-    activeMailboxId,
-    listMailboxPage,
-    setError,
-    setMessages,
-  ]);
-
-  async function loadMoreMessages() {
-    if (
-      !activeAccountId ||
-      !activeMailboxId ||
-      activeLocalView ||
-      !messageCursor ||
-      loadingMessages
-    )
-      return;
-    const accountId = activeAccountId;
-    const mailboxId = activeMailboxId;
-    const request = ++pagingRequest.current;
-    setLoadingMessages(true);
-    try {
-      const page = await listMailboxPage(accountId, mailboxId, messageCursor);
-      const current = useAppStore.getState();
-      if (
-        request === pagingRequest.current &&
-        current.activeAccountId === accountId &&
-        current.activeMailboxId === mailboxId &&
-        !current.activeLocalView &&
-        !submittedQueryRef.current
-      )
-        appendMessages(page.items, page.nextCursor ?? undefined, page.hasMore);
-    } catch (cause) {
-      if (request === pagingRequest.current) setError(String(cause));
-    } finally {
-      if (request === pagingRequest.current) setLoadingMessages(false);
-    }
-  }
-
-  function searchStillCurrent(
-    request: number,
-    accountId: string,
-    mailboxId?: number,
-    text?: string,
-    searchAllFolders?: boolean,
-  ) {
-    const current = useAppStore.getState();
-    return (
-      request === searchRequest.current &&
-      current.activeAccountId === accountId &&
-      current.activeMailboxId === mailboxId &&
-      !current.activeLocalView &&
-      (text === undefined || queryRef.current.trim() === text) &&
-      (searchAllFolders === undefined ||
-        allFoldersRef.current === searchAllFolders)
-    );
-  }
-
-  const runSearch = useCallback(async () => {
-    const viewing = useAppStore.getState();
-    if (!viewing.activeAccountId || viewing.activeLocalView) return;
-    const text = queryRef.current.trim();
-    const searchAllFolders = allFoldersRef.current;
-    const request = ++searchRequest.current;
-    messageRequest.current += 1;
-    pagingRequest.current += 1;
-    if (!text) {
-      submittedQueryRef.current = "";
-      setSubmittedQuery("");
-      await loadMessages();
-      return;
-    }
-    submittedQueryRef.current = text;
-    setSubmittedQuery(text);
-    const accountId = viewing.activeAccountId;
-    void api.rememberSearch(accountId, text).then(
-      (queries) => {
-        setRecentByAccount((current) => ({
-          ...current,
-          [accountId]: queries,
-        }));
-      },
-      () => undefined,
-    );
-    const mailboxId = viewing.activeMailboxId;
-    const search = {
-      accountId,
-      mailboxId,
-      text,
-      allFolders: searchAllFolders,
-      limit: 250,
-    };
-    setLoadingMessages(true);
-    try {
-      const cached = await api.searchCached(search);
-      if (
-        searchStillCurrent(
-          request,
-          accountId,
-          mailboxId,
-          search.text,
-          search.allFolders,
-        )
-      )
-        setMessages(cached, undefined, false);
-      const server = await api.searchServer(search);
-      if (
-        searchStillCurrent(
-          request,
-          accountId,
-          mailboxId,
-          search.text,
-          search.allFolders,
-        )
-      )
-        setMessages(mergeSearchResults(cached, server), undefined, false);
-    } catch (cause) {
-      if (
-        searchStillCurrent(
-          request,
-          accountId,
-          mailboxId,
-          search.text,
-          search.allFolders,
-        )
-      )
-        setError(strings.mail.partialSearch(String(cause)));
-    } finally {
-      if (request === searchRequest.current) setLoadingMessages(false);
-    }
-  }, [loadMessages, setError, setMessages]);
+  const {
+    loadMessages,
+    loadMoreMessages,
+    runSearch,
+    canDownloadOlder,
+    loadingMessages,
+  } = useMailboxMessages({
+    listFilter,
+    listSort,
+    submittedQuery,
+    setSubmittedQuery,
+    setRecentByAccount,
+    messageRequestRef: messageRequest,
+    pagingRequestRef: pagingRequest,
+    searchRequestRef: searchRequest,
+    queryRef,
+    submittedQueryRef,
+    allFoldersRef,
+  });
 
   function searchAccount(text: string | undefined) {
     const viewing = useAppStore.getState();
@@ -3258,7 +3080,7 @@ export function MailShell({ onOpenSettings }: Props) {
           <OutboxList
             items={outbox.filter((item) =>
               matchesLocalQuery(
-                `${item.subject} ${item.recipients} ${item.preview ?? ""} ${item.detail ?? ""}`,
+                `${item.subject} ${item.recipients} ${item.preview ?? ""} ${outboxDetail(item) ?? ""}`,
                 query,
               ),
             )}
@@ -3305,8 +3127,11 @@ export function MailShell({ onOpenSettings }: Props) {
             onChoose={async (summary) => {
               await chooseMessage(summary);
             }}
-            hasMore={hasMoreMessages}
+            hasMore={hasMoreMessages || canDownloadOlder}
             onLoadMore={loadMoreMessages}
+            loadMoreLabel={
+              hasMoreMessages ? undefined : strings.mail.loadOlderFromServer
+            }
             searchQuery={submittedQuery}
             showFolders={Boolean(submittedQuery) && allFolders}
             selecting={selecting}

@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
 use zeroize::Zeroizing;
@@ -213,6 +215,10 @@ async fn save_oauth_account(
     app: &AppHandle,
     state: &AppState,
 ) -> Result<AccountSummary, String> {
+    // Release builds do not open the parked sign-in flow at all.
+    if !cfg!(feature = "oauth") {
+        return Err("This sign-in is not available in this version.".into());
+    }
     state.require_storage()?;
     let provider = oauth::parse_oauth_provider(provider_name)?;
     let pending = oauth::begin_sign_in(provider).await?;
@@ -315,16 +321,33 @@ pub async fn remove_account(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<AccountRemovalOutcome> {
-    let outcome = remove_single_account(&app, &state, &account_id).await?;
-    compact_after_removal(&state).await;
+    let mut outcome = remove_single_account(&app, &state, &account_id).await?;
+    outcome.disk_space_pending = !compact_after_removal(&state).await;
     Ok(outcome)
 }
 
-/// Best effort: the removal already committed, so a failed compaction only
-/// delays returning disk space.
-async fn compact_after_removal(state: &AppState) {
+/// Compact now. A failure leaves a marker so the next launch retries, and
+/// the caller reports that disk space is not freed yet.
+pub(crate) fn compact_or_mark(db: &crate::db::Database, marker: &Path) -> Result<(), String> {
+    match db.compact() {
+        Ok(()) => {
+            let _ = std::fs::remove_file(marker);
+            Ok(())
+        }
+        Err(error) => {
+            let _ = std::fs::write(marker, b"");
+            Err(error)
+        }
+    }
+}
+
+/// The removal already committed; false means disk space is freed later.
+async fn compact_after_removal(state: &AppState) -> bool {
     let db = state.db.clone();
-    let _ = tauri::async_runtime::spawn_blocking(move || db.compact()).await;
+    let marker = state.compact_marker();
+    tauri::async_runtime::spawn_blocking(move || compact_or_mark(&db, &marker).is_ok())
+        .await
+        .unwrap_or(false)
 }
 
 /// Remove every account, vault secret, and cached attachment, then restore
@@ -353,7 +376,11 @@ pub async fn erase_all_data(app: AppHandle, state: State<'_, AppState>) -> Comma
         }
     }
     state.settings.save(AppSettings::default())?;
-    compact_after_removal(&state).await;
+    if !compact_after_removal(&state).await && first_error.is_none() {
+        first_error = Some(
+            "Accounts were removed, but local storage cleanup is still pending. Restart Postal Snap to retry.".into(),
+        );
+    }
     refresh_mail_menu(&app, &state);
     if let Some(error) = first_error {
         return command_result(Err(error));
@@ -461,7 +488,10 @@ async fn remove_single_account(
         attachment_dir.exists() && tokio::fs::remove_dir_all(attachment_dir).await.is_err();
     drop(guard);
     state.retire_actor(account_id);
-    Ok(AccountRemovalOutcome { cleanup_pending })
+    Ok(AccountRemovalOutcome {
+        cleanup_pending,
+        disk_space_pending: false,
+    })
 }
 
 #[tauri::command]
@@ -700,5 +730,33 @@ mod reply_to_tests {
         assert!(normalize_reply_to("not an address").is_err());
         assert!(normalize_reply_to("a@example.com, b@example.com").is_err());
         assert!(normalize_reply_to("a@example.com\r\nBcc: x").is_err());
+    }
+}
+
+#[cfg(test)]
+mod compaction_tests {
+    use super::compact_or_mark;
+    use crate::db::Database;
+
+    // Failure modes for freeing disk space after removal:
+    // 1. A failed compaction is reported as freed and never retried.
+    // 2. A successful compaction leaves a stale retry marker behind.
+    #[test]
+    fn failed_compaction_leaves_a_retry_marker_until_one_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mail.sqlite3");
+        let marker = dir.path().join("compact-pending");
+        let db = Database::open(&path).unwrap();
+
+        let reader = rusqlite::Connection::open(&path).unwrap();
+        reader
+            .execute_batch("BEGIN; SELECT COUNT(*) FROM messages;")
+            .unwrap();
+        assert!(compact_or_mark(&db, &marker).is_err());
+        assert!(marker.exists());
+
+        reader.execute_batch("COMMIT;").unwrap();
+        assert!(compact_or_mark(&db, &marker).is_ok());
+        assert!(!marker.exists());
     }
 }

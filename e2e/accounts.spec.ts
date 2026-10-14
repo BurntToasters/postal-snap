@@ -190,3 +190,23 @@ test("warns about local work before removing an account", async ({ page }) => {
   await expect(dialogMessage).resolves.toContain("1 unsynced draft");
   await expect(dialogMessage).resolves.toContain("3 queued changes");
 });
+
+// Failure mode: compaction fails after removal and the app reports the
+// removed mail as gone from disk.
+test("says when removed mail could not be cleared from disk yet", async ({
+  page,
+}) => {
+  await page.goto("/?multiAccount=1&diskSpacePending=1");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("tab", { name: "Accounts" }).click();
+  await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
+  page.once("dialog", (dialog) => void dialog.accept());
+  await page
+    .locator(".account-settings-card")
+    .first()
+    .getByRole("button", { name: "Remove" })
+    .click();
+  await expect(page.getByRole("alert")).toContainText(
+    "could not free its disk space yet",
+  );
+});

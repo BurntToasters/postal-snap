@@ -23,8 +23,6 @@ export interface SentNotice {
   scheduled: boolean;
   /** Undo-send hold length in seconds; undefined for explicit Send Later. */
   undoSeconds?: number;
-  /** Original moved to Archive with this send. Undo puts it back. */
-  archivedMessage?: { messageId: number; mailboxId: number };
 }
 
 export interface ComposerSeed {

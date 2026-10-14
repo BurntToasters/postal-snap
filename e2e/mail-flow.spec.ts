@@ -963,13 +963,18 @@ test("loads older mail with cursor pagination", async ({ page }) => {
   await expect(
     page.getByRole("option", { name: /Weekend plans/i }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Load older mail" }).click();
+  await page
+    .getByRole("button", { name: "Load older mail", exact: true })
+    .click();
   await expect(
     page.getByRole("option", { name: /Older family note/i }),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Load older mail" }),
+    page.getByRole("button", { name: "Load older mail", exact: true }),
   ).toBeHidden();
+  await expect(
+    page.getByRole("button", { name: "Download older mail", exact: true }),
+  ).toBeVisible();
 });
 
 test("validates recipients before sending", async ({ page }) => {

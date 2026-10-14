@@ -14,6 +14,7 @@ use crate::models::{
 /// forgiven: the app may simply have quit mid-parse.
 pub(crate) const PARSE_QUARANTINE_AT: u32 = 2;
 
+database_operations! {
 impl Database {
     pub fn reconcile_flags(
         &self,
@@ -348,7 +349,7 @@ impl Database {
             MessageListFilter::Starred => " AND m.is_starred=1",
             MessageListFilter::Attachments => " AND m.has_attachments=1",
             MessageListFilter::Pinned => " AND m.pinned=1",
-            MessageListFilter::ToMe => " AND EXISTS (SELECT 1 FROM accounts a WHERE a.id=m.account_id AND EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(m.to_json) THEN m.to_json ELSE '[]' END) AS addr WHERE lower(addr.value)=lower(a.email) OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(a.aliases_json) THEN a.aliases_json ELSE '[]' END) AS alias WHERE lower(alias.value)=lower(addr.value))))",
+            MessageListFilter::ToMe => " AND m.to_me=1",
             MessageListFilter::Invitations => " AND m.has_calendar=1",
         };
         // A cursor from another order would skip the wrong rows.
@@ -475,11 +476,28 @@ impl Database {
             .map_err(db_error)
     }
 
-    pub fn latest_inbox_message(&self, account_id: &str) -> Result<Option<MessageSummary>, String> {
-        let conn = self.conn()?;
+    /// Highest Inbox row id. Ids rise in arrival order; the Date header does not.
+    pub fn inbox_high_water(&self, account_id: &str) -> Result<Option<i64>, String> {
+        self.read_conn()?
+            .query_row(
+                "SELECT MAX(m.id) FROM messages m JOIN mailboxes box ON box.id=m.mailbox_id
+                 WHERE m.account_id=?1 AND box.role='inbox'",
+                [account_id],
+                |row| row.get(0),
+            )
+            .map_err(db_error)
+    }
+
+    /// Newest unread Inbox arrival cached after `after`, by arrival order.
+    pub fn newest_unread_inbox_after(
+        &self,
+        account_id: &str,
+        after: Option<i64>,
+    ) -> Result<Option<MessageSummary>, String> {
+        let conn = self.read_conn()?;
         conn.query_row(
-            &format!("{} JOIN mailboxes box ON box.id=m.mailbox_id WHERE m.account_id=?1 AND box.role='inbox' AND m.pending_move_to IS NULL ORDER BY m.received_at DESC,m.uid DESC LIMIT 1", MESSAGE_SUMMARY_SELECT),
-            [account_id], map_message_summary,
+            &format!("{} JOIN mailboxes box ON box.id=m.mailbox_id WHERE m.account_id=?1 AND box.role='inbox' AND m.pending_move_to IS NULL AND m.is_read=0 AND (?2 IS NULL OR m.id>?2) ORDER BY m.id DESC LIMIT 1", MESSAGE_SUMMARY_SELECT),
+            params![account_id, after], map_message_summary,
         ).optional().map_err(db_error)
     }
 
@@ -1614,6 +1632,7 @@ impl Database {
         Ok(filed)
     }
 }
+}
 
 struct TrashRow {
     account_id: String,
@@ -1757,6 +1776,7 @@ fn write_full_message(
          FROM messages WHERE id=?1",
         [id],
     ).map_err(db_error)?;
+    super::refresh_list_columns(transaction, "id=?1", [id])?;
     Ok(id)
 }
 
@@ -1840,6 +1860,7 @@ fn write_envelope(
          FROM messages WHERE id=?1",
         [id],
     ).map_err(db_error)?;
+    super::refresh_list_columns(transaction, "id=?1", [id])?;
     Ok(id)
 }
 

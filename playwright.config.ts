@@ -5,7 +5,17 @@ export default defineConfig({
   fullyParallel: false,
   workers: process.env.CI ? 1 : undefined,
   retries: process.env.CI ? 2 : 0,
-  reporter: process.env.CI ? "github" : "list",
+  failOnFlakyTests: Boolean(process.env.CI),
+  reporter: [[process.env.CI ? "github" : "list"], ["html", { open: "never" }]],
+  projects: [
+    { name: "chromium", use: { browserName: "chromium" } },
+    {
+      name: "webkit",
+      use: { browserName: "webkit" },
+      testMatch:
+        /(?:reader-body|print-files|shortcuts-typing|quit-saves-draft|compose-hidden-recipients|download-older-mail|remembered-image-sender|outbox-reason|native-command-flows|mail-header-layout)\.spec\.ts/,
+    },
+  ],
   use: {
     baseURL: "http://127.0.0.1:4173",
     trace: "retain-on-failure",

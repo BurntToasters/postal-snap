@@ -4,14 +4,14 @@ Quick tracker for things wired into the app but not 100% yet. Full scope rules l
 
 ## Background groundwork (no UI yet)
 
-- **Gmail/Outlook OAuth** (`src-tauri/src/oauth.rs`, `connect_oauth_account`): loopback PKCE, token exchange and refresh, keychain, and XOAUTH2 on IMAP and SMTP. Hidden from setup UI. Not a 0.4.0 ship item; user-facing sign-in can wait until 0.5.0. Before that UI ships, register the app and put client IDs in the build (`docs/OAUTH.md`). Do not register `run.rosie.snap://oauth/callback`.
+- **Gmail/Outlook OAuth** (`src-tauri/src/oauth.rs`, `connect_oauth_account`): loopback PKCE, token exchange and refresh, keychain, and XOAUTH2 on IMAP and SMTP. Hidden from setup UI. New sign-in is refused unless the `oauth` Cargo feature is enabled; token refresh remains available for existing accounts. Not a 0.4.0 ship item; user-facing sign-in can wait until 0.5.0. Before that UI ships, register the app and put client IDs in the build (`docs/OAUTH.md`). Do not register `run.rosie.snap://oauth/callback`.
 - **`auth_method` account column** (schema v5): `password` or `oauth`. Password changes stay refused for OAuth accounts. `remove_account` deletes OAuth tokens.
 
 ## Registered but unused IPC
 
 Kept on purpose; each has a planned consumer. Remove if still unused after that work lands.
 
-- `list_all_mailboxes`: planned unified-inbox search (scope decision pending).
+- `list_all_mailboxes` is used by Settings for folder assignments.
 - `search_all_cached_messages`: command registration removed from Rust because no mailbox UI used it. The backing `Database::search_all_accounts` API stays parked for the pending unified-inbox decision, and the frontend API entry is removed separately.
 
 ## Dead storage (removed in schema v6)
@@ -20,11 +20,12 @@ Kept on purpose; each has a planned consumer. Remove if still unused after that 
 
 ## Thin coverage (works, could go further)
 
+- **Automatic remote images**: parked until trustworthy sender authentication exists. Images require an explicit per-message click; old remembered-sender settings are retained but ignored.
 - **Send size**: 25 MiB shows a warning but sending stays enabled; providers differ, backend caps at 100 MiB. Deliberate.
 - **Setup inputs during testing**: editable while the connection test runs; the backend tests a request snapshot, so edits cannot corrupt the in-flight check.
 - **IDLE**: watches INBOX only; other folders refresh on the 5-minute sync loop.
 - **Flag sync**: CONDSTORE `CHANGEDSINCE` when advertised; QRESYNC `VANISHED` replaces the expunge `UID SEARCH` when the server accepts `ENABLE QRESYNC`. Other servers scan every cached UID. GreenMail does not advertise QRESYNC, so it is covered by Rust tests and the iCloud smoke test only.
-- **Mail rules**: applied only after successful syncs. Settings can reorder rules and preview unread Inbox matches. A message can start a sender rule in that form. Server-side filter upload is not implemented.
+- **Mail rules**: applied after successful syncs, including rows retained from a failed pass. Settings can reorder rules and preview unread Inbox matches. A message can start a sender rule in that form. Server-side filter upload is not implemented.
 - **Attachment IDs**: deterministic hash (name + CID + size + index) with legacy fallback. No per-message salt; distinct contents with identical metadata collide.
 - **Search ranking**: subject, then sender, then recipients, outweigh the body. Matches are still an AND of prefixes, CJK recall is limited, and server body matches append by date.
 - **Backfill cutoff**: INTERNALDATE-based, stops after 3 consecutive old messages.

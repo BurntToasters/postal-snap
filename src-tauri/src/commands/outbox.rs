@@ -1,3 +1,4 @@
+use crate::outbox_reason::OutboxReason;
 use tauri::{AppHandle, State};
 
 use super::{
@@ -8,12 +9,9 @@ use super::{
 
 /// Automatic tries after "try later" replies before the user decides.
 const MAX_AUTOMATIC_RETRIES: u32 = 8;
-const SENT_COPY_PENDING_DETAIL: &str =
-    "Message sent. Its Sent-folder copy is waiting for a safe retry.";
-const ARCHIVE_PENDING_DETAIL: &str =
-    "Message sent. The archive status needs attention. Retry archive or dismiss this warning.";
-const ARCHIVE_SOURCE_UNAVAILABLE_DETAIL: &str =
-    "Message sent. The original is moving or no longer in its recorded folder. Check its location, then dismiss this warning.";
+const SENT_COPY_PENDING_DETAIL: OutboxReason = OutboxReason::SentCopyPending;
+const ARCHIVE_PENDING_DETAIL: OutboxReason = OutboxReason::ArchivePending;
+const ARCHIVE_SOURCE_UNAVAILABLE_DETAIL: OutboxReason = OutboxReason::ArchiveSourceUnavailable;
 const CONFIRMED_SEND_STATUS_ERROR: &str =
     "Message sent. Postal Snap could not save its follow-up status. It will not resend automatically; check Sent and Outbox before retrying.";
 
@@ -22,19 +20,19 @@ fn persist_confirmed_send_state(
     outbox_id: &str,
     account_id: &str,
     next_state: &str,
-    detail: &str,
+    detail: OutboxReason,
 ) -> bool {
     if matches!(
         state
             .db
-            .set_outbox_state_durable(outbox_id, account_id, next_state, Some(detail)),
+            .set_outbox_reason_durable(outbox_id, account_id, next_state, Some(detail)),
         Ok(true)
     ) {
         return true;
     }
     state
         .db
-        .set_outbox_state(outbox_id, account_id, next_state, Some(detail))
+        .set_outbox_reason(outbox_id, account_id, next_state, Some(detail))
         .unwrap_or(false)
 }
 
@@ -46,40 +44,53 @@ async fn archive_source_after_delivery(
     app: &AppHandle,
     state: &AppState,
     dedupe_existing: bool,
-) -> Option<String> {
+) -> Option<OutboxReason> {
     let source = match source {
         Ok(Some(source)) => source,
         Ok(None) => return None,
-        Err(_) => return Some("Message sent, but the original could not be archived.".into()),
+        Err(_) => return Some(OutboxReason::ArchiveFailed),
     };
     let message_id = source.message_id;
     let source_id = source.source_mailbox_id;
+    // Which warning to keep is a value, never a comparison of wording.
+    enum ArchiveFailure {
+        SourceMoved,
+        Failed,
+    }
     let result = async {
         let (destination_id, destination) = state
             .db
-            .mailbox_for_role(account_id, "archive")?
-            .ok_or_else(|| "Archive folder is unavailable.".to_string())?;
+            .mailbox_for_role(account_id, "archive")
+            .map_err(|_| ArchiveFailure::Failed)?
+            .ok_or(ArchiveFailure::Failed)?;
         if source.current_mailbox_id == Some(destination_id) && source.pending_move_to.is_none() {
             return Ok(());
         }
         if source.current_mailbox_id != Some(source_id) || source.pending_move_to.is_some() {
-            return Err(ARCHIVE_SOURCE_UNAVAILABLE_DETAIL.to_string());
+            return Err(ArchiveFailure::SourceMoved);
         }
-        let (owner_id, source, uid) = state.db.message_location(message_id)?;
+        let (owner_id, source, uid) = state
+            .db
+            .message_location(message_id)
+            .map_err(|_| ArchiveFailure::Failed)?;
         if owner_id != account_id {
-            return Err("Message does not belong to this account.".to_string());
+            return Err(ArchiveFailure::Failed);
         }
-        let (source_owner_id, recorded_source) = state.db.mailbox(source_id)?;
+        let (source_owner_id, recorded_source) = state
+            .db
+            .mailbox(source_id)
+            .map_err(|_| ArchiveFailure::Failed)?;
         if source_owner_id != account_id || source != recorded_source {
-            return Err("The original message moved from its recorded folder.".to_string());
+            return Err(ArchiveFailure::Failed);
         }
         if source_id == destination_id {
             return Ok(());
         }
         let validity = state
             .db
-            .mailbox_uid_validity(account_id, &source)?
-            .ok_or_else(|| "Mailbox identity is unavailable.".to_string())?;
+            .mailbox_uid_validity(account_id, &source)
+            .map_err(|_| ArchiveFailure::Failed)?
+            .ok_or(ArchiveFailure::Failed)?;
         let remote_id = state.db.message_rfc_id(message_id).ok().flatten();
         match mail::move_remote(
             account,
@@ -108,19 +119,17 @@ async fn archive_source_after_delivery(
                 )
                 .await;
             }
-            Err(error) => return Err(error.message),
+            Err(_) => return Err(ArchiveFailure::Failed),
         }
         emit_message_change(app, account_id, Some(message_id), "moved");
         emit_folder_counts(app, account_id);
-        Ok::<(), String>(())
+        Ok::<(), ArchiveFailure>(())
     }
     .await;
     match result {
         Ok(()) => None,
-        Err(error) if error == ARCHIVE_SOURCE_UNAVAILABLE_DETAIL => {
-            Some(ARCHIVE_SOURCE_UNAVAILABLE_DETAIL.into())
-        }
-        Err(_) => Some(ARCHIVE_PENDING_DETAIL.into()),
+        Err(ArchiveFailure::SourceMoved) => Some(ARCHIVE_SOURCE_UNAVAILABLE_DETAIL),
+        Err(ArchiveFailure::Failed) => Some(ARCHIVE_PENDING_DETAIL),
     }
 }
 
@@ -176,7 +185,7 @@ async fn finalize_sent_outbox(
                 outbox_id,
                 account_id,
                 "archive_pending",
-                &detail,
+                detail,
             );
             emit_outbox_change(app, account_id, Some(outbox_id), Some("archive_pending"));
             release_attachment_tokens(
@@ -188,7 +197,7 @@ async fn finalize_sent_outbox(
             return Ok(SendOutcome {
                 id: outbox_id.to_string(),
                 state: "archive_pending".into(),
-                detail: Some(detail),
+                detail: Some(detail.into()),
             });
         }
     }
@@ -585,27 +594,19 @@ pub(crate) async fn deliver_outbox_locked(
                         .defer_outbox_retry(outbox_id, account_id, MAX_AUTOMATIC_RETRIES)
                         .unwrap_or(true) =>
                 {
-                    (
-                        "queued",
-                        "Not sent yet. The mail server could not take it right now. Postal Snap will try again automatically.",
-                    )
+                    ("queued", OutboxReason::RetryPending)
                 }
-                mail::SendFailure::NotSentRetry => (
-                    "needs_attention",
-                    "Not sent. The mail server kept asking to try later. Check the message and account, then try again.",
-                ),
-                mail::SendFailure::NotSentRefused => (
-                    "needs_attention",
-                    "Not sent. The mail server refused this message. Check the recipients and the account, then try again.",
-                ),
-                mail::SendFailure::Uncertain => (
-                    "needs_attention",
-                    "Delivery could not be confirmed. Postal Snap will not resend automatically.",
-                ),
+                mail::SendFailure::NotSentRetry => {
+                    ("needs_attention", OutboxReason::RetryExhausted)
+                }
+                mail::SendFailure::NotSentRefused => ("needs_attention", OutboxReason::SendRefused),
+                mail::SendFailure::Uncertain => {
+                    ("needs_attention", OutboxReason::DeliveryUncertain)
+                }
             };
             state
                 .db
-                .set_outbox_state(outbox_id, account_id, next_state, Some(detail))?;
+                .set_outbox_reason(outbox_id, account_id, next_state, Some(detail))?;
             emit_outbox_change(app, account_id, Some(outbox_id), Some(next_state));
             Ok(SendOutcome {
                 id: outbox_id.to_string(),
@@ -690,17 +691,17 @@ pub(crate) async fn retry_archive_after_send_locked(
             )
             .await
         }
-        Ok(None) => Some(ARCHIVE_SOURCE_UNAVAILABLE_DETAIL.into()),
-        Err(_) => Some(ARCHIVE_PENDING_DETAIL.into()),
+        Ok(None) => Some(ARCHIVE_SOURCE_UNAVAILABLE_DETAIL),
+        Err(_) => Some(ARCHIVE_PENDING_DETAIL),
     };
     if let Some(detail) = warning {
         let _ =
-            persist_confirmed_send_state(state, outbox_id, account_id, "archive_pending", &detail);
+            persist_confirmed_send_state(state, outbox_id, account_id, "archive_pending", detail);
         emit_outbox_change(app, account_id, Some(outbox_id), Some("archive_pending"));
         return Ok(SendOutcome {
             id: outbox_id.into(),
             state: "archive_pending".into(),
-            detail: Some(detail),
+            detail: Some(detail.into()),
         });
     }
 
@@ -726,12 +727,11 @@ fn outbox_preparation_failed(
     state: &AppState,
     error: String,
 ) -> Result<SendOutcome, String> {
-    const DETAIL: &str =
-        "The message was not sent. Check its attachments and account, then try again.";
+    const DETAIL: OutboxReason = OutboxReason::PreparationFailed;
     let changed =
         state
             .db
-            .set_outbox_state(outbox_id, account_id, "needs_attention", Some(DETAIL))?;
+            .set_outbox_reason(outbox_id, account_id, "needs_attention", Some(DETAIL))?;
     if changed {
         emit_outbox_change(app, account_id, Some(outbox_id), Some("needs_attention"));
     }

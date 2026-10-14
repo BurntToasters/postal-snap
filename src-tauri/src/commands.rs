@@ -98,7 +98,7 @@ pub struct AppState {
     /// The mail database or settings file did not open; the stand-ins must
     /// never receive accounts.
     storage_unavailable: AtomicBool,
-    app_nap: Mutex<Option<crate::app_nap::AppNapGuard>>,
+    app_nap: crate::app_nap::ActivityHolds,
     update_gate: UpdateInstallGate,
 }
 
@@ -237,7 +237,7 @@ impl AppState {
             startup_error: Mutex::new(None),
             mail_shortcut_guard: AtomicBool::new(false),
             storage_unavailable: AtomicBool::new(false),
-            app_nap: Mutex::new(None),
+            app_nap: crate::app_nap::ActivityHolds::new("Postal Snap is keeping mail in sync"),
             update_gate: UpdateInstallGate::new(),
         }
     }
@@ -264,6 +264,11 @@ impl AppState {
 
     pub fn set_storage_unavailable(&self) {
         self.storage_unavailable.store(true, Ordering::SeqCst);
+    }
+
+    /// Marker that asks the next launch to finish freeing disk space.
+    pub(crate) fn compact_marker(&self) -> PathBuf {
+        compact_marker_for(&self.attachment_dir)
     }
 
     /// Refuse work that would save accounts into a stand-in database.
@@ -359,39 +364,20 @@ impl AppState {
         if !watchers.insert(account_id.clone()) {
             return Ok(());
         }
-        let first_watcher = watchers.len() == 1;
         drop(watchers);
-        if first_watcher {
-            self.begin_background_activity();
-        }
         tauri::async_runtime::spawn(async move {
             run_account_worker(&account_id, &app).await;
             let state = app.state::<AppState>();
             if let Ok(mut watchers) = state.watchers.lock() {
                 watchers.remove(&account_id);
-                if watchers.is_empty() {
-                    drop(watchers);
-                    state.end_background_activity();
-                }
             };
         });
         Ok(())
     }
 
-    fn begin_background_activity(&self) {
-        if let Ok(mut guard) = self.app_nap.lock() {
-            if guard.is_none() {
-                *guard = Some(crate::app_nap::AppNapGuard::begin(
-                    "Postal Snap is keeping mail in sync",
-                ));
-            }
-        }
-    }
-
-    fn end_background_activity(&self) {
-        if let Ok(mut guard) = self.app_nap.lock() {
-            guard.take();
-        }
+    /// Keep macOS from napping the app while mail work runs.
+    pub(crate) fn hold_activity(&self) -> crate::app_nap::ActivityHold<'_> {
+        self.app_nap.hold()
     }
 
     fn retire_actor(&self, account_id: &str) {
@@ -406,6 +392,14 @@ impl AppState {
             actor.request(wake::SYNC);
         }
     }
+}
+
+/// The marker sits beside the mail database, one level above attachments.
+pub(crate) fn compact_marker_for(attachment_dir: &Path) -> PathBuf {
+    attachment_dir
+        .parent()
+        .unwrap_or(attachment_dir)
+        .join("compact-pending")
 }
 
 fn reconnect_delay(account_id: &str, seconds: u64, attempt: u32) -> Duration {
@@ -462,18 +456,14 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
             pending_full = true;
         }
         let guard = actor.acquire_for_worker().await;
+        let work = state.hold_activity();
         if reasons & wake::OUTBOX != 0 && (pending_full || more_work) {
             // Send Later items that came due (for example during sleep) go
             // out before a long pass.
             sync::run_targeted_jobs(account_id, app, &state, wake::OUTBOX).await;
         }
         if pending_full || more_work {
-            let previous_message_id = state
-                .db
-                .latest_inbox_message(account_id)
-                .ok()
-                .flatten()
-                .map(|message| message.id);
+            let previous_message_id = state.db.inbox_high_water(account_id).ok().flatten();
             match sync::run_sync_pass(account_id, app, &state, &actor, guard, false).await {
                 Ok(outcome) => {
                     backoff = 2;
@@ -565,6 +555,11 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
             due.max(Duration::from_millis(200)).min(IDLE_REFRESH)
         });
         let job_due_first = next_job.is_some_and(|due| due < IDLE_REFRESH);
+        // Waiting on IDLE alone may nap; a due send or draft push keeps its
+        // timer on time.
+        if next_job.is_none() {
+            drop(work);
+        }
         if actor.contended() {
             // A user action or a yielded pass is queued: IDLE would hold the
             // account from it until the next wake-up.
@@ -1217,25 +1212,17 @@ async fn release_attachment_tokens<'a>(
     }
 }
 
-/// Sync stores rows with rising ids, so only a row newer than the previous
-/// newest counts. An older row surfacing after the newest was removed
-/// elsewhere is not new mail.
-fn is_new_mail(previous_message_id: Option<i64>, message_id: i64, is_read: bool) -> bool {
-    !is_read && previous_message_id.is_none_or(|previous| message_id > previous)
-}
-
 fn notify_new_mail(
     app: &AppHandle,
     db: &Database,
     account_id: &str,
     previous_message_id: Option<i64>,
 ) {
-    let Ok(Some(message)) = db.latest_inbox_message(account_id) else {
+    // Sync stores rows with rising ids, so arrival order never depends on
+    // the sender's Date header.
+    let Ok(Some(message)) = db.newest_unread_inbox_after(account_id, previous_message_id) else {
         return;
     };
-    if !is_new_mail(previous_message_id, message.id, message.is_read) {
-        return;
-    }
     let settings = app.state::<AppState>().settings.get().ok();
     if settings.as_ref().is_some_and(|settings| {
         !settings.notify_new_mail
@@ -1366,8 +1353,8 @@ mod tests {
     }
 
     use super::{
-        attachments::preview_text, drafts_send::resolve_requested_send_at, is_new_mail,
-        mail_alert_sound, new_mail_sound_name, sync::apply_filter_rules,
+        attachments::preview_text, drafts_send::resolve_requested_send_at, mail_alert_sound,
+        new_mail_sound_name, sync::apply_filter_rules,
     };
     use super::{cleanup_orphaned_account_dirs, take_normalized_account_password};
 
@@ -1448,14 +1435,7 @@ mod tests {
     }
 
     #[test]
-    fn only_newer_unread_inbox_mail_is_new() {
-        // Rows get higher ids as sync stores them; an older row surfacing
-        // after the newest was removed elsewhere is not new mail.
-        assert!(is_new_mail(None, 7, false));
-        assert!(is_new_mail(Some(6), 7, false));
-        assert!(!is_new_mail(Some(7), 7, false));
-        assert!(!is_new_mail(Some(9), 7, false));
-        assert!(!is_new_mail(Some(6), 7, true));
+    fn mail_alert_sound_follows_setting() {
         assert_eq!(mail_alert_sound(false), None);
         assert_eq!(mail_alert_sound(true), Some(new_mail_sound_name()));
         assert!(!new_mail_sound_name().is_empty());
@@ -1552,6 +1532,88 @@ mod tests {
             target_mailbox: None,
             enabled: true,
         }
+    }
+
+    // Rule window failure modes:
+    // - mail cached by a pass that later fails is never filed
+    // - a second failure moves the mark past the first failure's mail
+    // - a success leaves the mark set, so mail a user moves into the Inbox
+    //   between passes is filed again
+    #[test]
+    fn rules_file_mail_cached_by_a_failed_pass_on_the_next_success() {
+        use super::sync::{begin_rule_window, finish_rule_window};
+        let db = Database::memory();
+        let account = rule_account();
+        let account_id = account.summary.id.clone();
+        db.insert_account(&account).unwrap();
+        let inbox = rule_mailbox(&db, &account_id, "INBOX", &MailboxRole::Inbox);
+        rule_mailbox(&db, &account_id, "Archive", &MailboxRole::Archive);
+        db.create_filter_rule(&enabled_rule(&account_id, "move_archive"))
+            .unwrap();
+        let pending = |db: &Database| db.pending_move_uids(inbox).unwrap();
+
+        let first = begin_rule_window(&db, &account_id);
+        bill(&db, &account_id, inbox, 1);
+        finish_rule_window(&db, &account, first, false);
+        assert!(pending(&db).is_empty());
+
+        let second = begin_rule_window(&db, &account_id);
+        bill(&db, &account_id, inbox, 2);
+        finish_rule_window(&db, &account, second, false);
+        assert!(pending(&db).is_empty());
+
+        let third = begin_rule_window(&db, &account_id);
+        finish_rule_window(&db, &account, third, true);
+        assert_eq!(pending(&db), vec![2, 1]);
+
+        bill(&db, &account_id, inbox, 3);
+        let fourth = begin_rule_window(&db, &account_id);
+        finish_rule_window(&db, &account, fourth, true);
+        assert_eq!(pending(&db), vec![2, 1]);
+    }
+
+    // A crash before finish must not skip cached mail on restart.
+    #[test]
+    fn rule_window_is_durable_before_mail_is_cached() {
+        use super::sync::{begin_rule_window, finish_rule_window};
+        let db = Database::memory();
+        let account = rule_account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = rule_mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        rule_mailbox(&db, account_id, "Archive", &MailboxRole::Archive);
+        db.create_filter_rule(&enabled_rule(account_id, "move_archive"))
+            .unwrap();
+        let first = begin_rule_window(&db, account_id);
+        assert_eq!(db.rules_pending_from(account_id).unwrap(), first);
+        bill(&db, account_id, inbox, 1);
+        let restarted = begin_rule_window(&db, account_id);
+        assert_eq!(restarted, first);
+        finish_rule_window(&db, &account, restarted, true);
+        assert_eq!(db.pending_move_uids(inbox).unwrap(), vec![1]);
+    }
+
+    // A bounded rule batch must retain its watermark for the remaining rows.
+    #[test]
+    fn rule_window_survives_more_than_one_batch() {
+        use super::sync::{begin_rule_window, finish_rule_window};
+        let db = Database::memory();
+        let account = rule_account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = rule_mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        rule_mailbox(&db, account_id, "Archive", &MailboxRole::Archive);
+        db.create_filter_rule(&enabled_rule(account_id, "move_archive"))
+            .unwrap();
+        let first = begin_rule_window(&db, account_id);
+        for uid in 1..=101 {
+            bill(&db, account_id, inbox, uid);
+        }
+        finish_rule_window(&db, &account, first, true);
+        let second = begin_rule_window(&db, account_id);
+        finish_rule_window(&db, &account, second, true);
+        assert_eq!(db.pending_move_uids(inbox).unwrap().len(), 101);
+        assert_eq!(db.rules_pending_from(account_id).unwrap(), None);
     }
 
     #[test]

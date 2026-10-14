@@ -4,6 +4,7 @@ use std::path::Path;
 
 use crate::models::{AppSettings, CachePolicy, CacheUsage};
 
+database_operations! {
 impl Database {
     pub fn record_flag_change(
         &self,
@@ -627,6 +628,7 @@ impl Database {
         }
         Ok(selected)
     }
+}
 }
 
 /// Clear body columns and FTS body text for the rows matched by `filter`

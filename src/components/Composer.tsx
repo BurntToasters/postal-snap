@@ -26,6 +26,7 @@ import {
 } from "@tiptap/extension-table";
 import { Maximize2, Paperclip, TriangleAlert, X } from "lucide-react";
 import { api } from "../api";
+import { useComposerDraftPersistence } from "./composer/useComposerDraftPersistence";
 import { formatBytes, formatMessageDate } from "../format";
 import {
   CONTEXT_ACTION_EVENT,
@@ -431,9 +432,6 @@ export function Composer({ accountId }: Props) {
     seed?.draft?.id ?? seed?.draftSummary?.id,
   );
   const savePromiseRef = useRef<Promise<unknown> | null>(null);
-  const saveDraftRef = useRef<(showStatus?: boolean) => Promise<void>>(() =>
-    Promise.resolve(),
-  );
   const markUnsaved = useCallback(() => {
     draftRevision.current += 1;
     setSaveState("unsaved");
@@ -700,170 +698,29 @@ export function Composer({ accountId }: Props) {
     to,
   ]);
 
-  const buildDraftRef = useRef(buildDraft);
-  const saveStateRef = useRef(saveState);
-
-  useEffect(() => {
-    buildDraftRef.current = buildDraft;
-    saveStateRef.current = saveState;
-  }, [buildDraft, saveState]);
-
-  useEffect(() => {
-    if (!editor) return;
-    const tryAutosave = () => {
-      const draft = buildDraftRef.current();
-      if (
-        !sending &&
-        !isSending.current &&
-        !isDiscarding.current &&
-        saveStateRef.current === "unsaved" &&
-        !saveInFlight.current &&
-        hasDraftContent(draft, currentBodyText())
-      ) {
-        const revision = draftRevision.current;
-        saveInFlight.current = true;
-        setSaveState("saving");
-        savePromiseRef.current = api
-          .saveDraft(draft)
-          .then((outcome) => {
-            draftIdRef.current = outcome.id;
-            if (isDiscarding.current) return;
-            setDraftId(outcome.id);
-            if (draftRevision.current === revision) {
-              setSaveState("saved");
-              setSavedAt(new Date().toISOString());
-              setDraftSyncState(outcome.syncState);
-              setDraftSyncDetail(undefined);
-            } else {
-              setSaveState("unsaved");
-            }
-            announceLocalMailChanged(accountId);
-          })
-          .catch((cause) => {
-            if (isDiscarding.current) return;
-            setSaveState("unsaved");
-            setError(String(cause));
-          })
-          .finally(() => {
-            saveInFlight.current = false;
-            if (pendingClose.current) {
-              pendingClose.current = false;
-              void saveDraftRef.current(true);
-            } else if (
-              !isDiscarding.current &&
-              draftRevision.current !== revision
-            ) {
-              void saveDraftRef.current(false);
-            }
-          });
-      }
-    };
-    const saveTimer = window.setInterval(tryAutosave, 6_000);
-    const onBlur = () => tryAutosave();
-    const onVisibility = () => {
-      if (document.visibilityState === "hidden") tryAutosave();
-    };
-    const flushDraft = () => {
-      void saveDraftRef.current(false);
-    };
-    window.addEventListener("blur", onBlur);
-    window.addEventListener("pagehide", flushDraft);
-    window.addEventListener("beforeunload", flushDraft);
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      window.clearInterval(saveTimer);
-      window.removeEventListener("blur", onBlur);
-      window.removeEventListener("pagehide", flushDraft);
-      window.removeEventListener("beforeunload", flushDraft);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  }, [accountId, currentBodyText, editor, sending, setError]);
-
-  const saveDraft = useCallback(
-    async (showStatus = true) => {
-      if (
-        sending ||
-        isSending.current ||
-        isDiscarding.current ||
-        saveInFlight.current
-      )
-        return;
-      const draft = buildDraft();
-      if (!hasDraftContent(draft, currentBodyText())) {
-        if (showStatus) close();
-        return;
-      }
-      const revision = draftRevision.current;
-      saveInFlight.current = true;
-      setSaveState("saving");
-      try {
-        const savePromise = api.saveDraft(draft).then((outcome) => {
-          draftIdRef.current = outcome.id;
-          return outcome;
-        });
-        savePromiseRef.current = savePromise;
-        const outcome = await savePromise;
-        if (isDiscarding.current) return;
-        setDraftId(outcome.id);
-        if (draftRevision.current === revision) {
-          setSaveState("saved");
-          setSavedAt(new Date().toISOString());
-          setDraftSyncState(outcome.syncState);
-          setDraftSyncDetail(undefined);
-        } else {
-          setSaveState("unsaved");
-        }
-        announceLocalMailChanged(accountId);
-        if (showStatus && draftRevision.current === revision) close();
-      } catch (cause) {
-        if (isDiscarding.current) return;
-        setSaveState("unsaved");
-        setError(String(cause));
-      } finally {
-        saveInFlight.current = false;
-        if (pendingClose.current) {
-          pendingClose.current = false;
-          void saveDraftRef.current(true);
-        } else if (
-          !isDiscarding.current &&
-          draftRevision.current !== revision
-        ) {
-          void saveDraftRef.current(false);
-        }
-      }
-    },
-    [accountId, buildDraft, close, currentBodyText, sending, setError],
-  );
-
-  useEffect(() => {
-    saveDraftRef.current = saveDraft;
-  }, [saveDraft]);
-
-  // Replaced by another composer (mailto:, Reply, an opened draft): save the
-  // user's edits as a draft instead of dropping them. Tiptap destroys the
-  // editor after unmount, so it is still readable here.
-  useEffect(
-    () => () => {
-      if (
-        closedByComposer.current ||
-        isDiscarding.current ||
-        isSending.current ||
-        draftRevision.current === 0 ||
-        saveStateRef.current !== "unsaved"
-      )
-        return;
-      const draft = buildDraftRef.current();
-      if (!hasDraftContent(draft, currentBodyText())) return;
-      void (savePromiseRef.current ?? Promise.resolve())
-        .catch(() => undefined)
-        .then(() =>
-          api.saveDraft({ ...draft, id: draftIdRef.current ?? draft.id }),
-        )
-        .then(() => announceLocalMailChanged(draft.accountId))
-        .catch(() => undefined);
-    },
-    [currentBodyText],
-  );
+  const { saveDraft } = useComposerDraftPersistence({
+    accountId,
+    editor,
+    sending,
+    buildDraft,
+    currentBodyText,
+    close,
+    saveState,
+    setSaveState,
+    setDraftId,
+    setSavedAt,
+    setDraftSyncState,
+    setDraftSyncDetail,
+    setError,
+    draftIdRef,
+    savePromiseRef,
+    isSendingRef: isSending,
+    isDiscardingRef: isDiscarding,
+    draftRevisionRef: draftRevision,
+    saveInFlightRef: saveInFlight,
+    pendingCloseRef: pendingClose,
+    closedByComposerRef: closedByComposer,
+  });
 
   useEffect(() => {
     let active = true;

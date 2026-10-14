@@ -7,6 +7,7 @@ import {
   useState,
 } from "react";
 import { api } from "../api";
+import { useRemoteImages } from "./reader/useRemoteImages";
 import {
   CONTEXT_ACTION_EVENT,
   IFRAME_CONTEXT_EVENT,
@@ -60,9 +61,6 @@ import {
   withFrameLinks,
 } from "../security";
 import { markHtmlText, textHighlightTerms } from "../searchHighlight";
-import { normalizeImageSender } from "../settings";
-import { conflictingNameAddress } from "../senderName";
-import { useSettingsSave } from "./settings/useSettingsSave";
 import { ShieldCheck } from "lucide-react";
 import { useIsDark } from "../hooks/useColorScheme";
 import { formatFullMessageDate, formatMessageDate } from "../format";
@@ -188,7 +186,6 @@ export function MessageReader({
   const drafts = useAppStore((state) => state.drafts);
   const isDark = useIsDark();
   const setError = useAppStore((state) => state.setError);
-  const { update: updateSettings } = useSettingsSave();
   const accounts = useAppStore((state) => state.accounts);
   const frame = useRef<HTMLIFrameElement>(null);
   const contentOperation = useRef(0);
@@ -200,7 +197,6 @@ export function MessageReader({
     messageId: number;
     html: string;
   }>();
-  const [loadingImagesFor, setLoadingImagesFor] = useState<number>();
   const [preparingForward, setPreparingForward] = useState(false);
   const [downloadingAttachmentId, setDownloadingAttachmentId] =
     useState<string>();
@@ -1130,7 +1126,15 @@ export function MessageReader({
   );
   const messageId = message?.id;
   const messageAccountId = message?.accountId;
-  const loadingImages = loadingImagesFor === messageId;
+  const { loadImages, loadingImages } = useRemoteImages({
+    message,
+    sanitized,
+    currentLoadedHtml,
+    inlineAttachments,
+    contentOperationRef: contentOperation,
+    setLoadedHtml,
+    setError,
+  });
   const frameSource = currentLoadedHtml ?? sanitized?.html ?? "";
   const frameHtml = useMemo(
     () =>
@@ -1360,95 +1364,6 @@ export function MessageReader({
       frameLinkCleanup.current = undefined;
     };
   }, [message?.id]);
-
-  async function loadImages() {
-    if (!sanitized || loadingImages || !messageId) return;
-    setLoadingImagesFor(messageId);
-    const targetId = messageId;
-    const operation = ++contentOperation.current;
-    try {
-      const doc = new DOMParser().parseFromString(
-        currentLoadedHtml ?? sanitized.html,
-        "text/html",
-      );
-      const images = [
-        ...doc.querySelectorAll<HTMLImageElement>("img[data-remote-src]"),
-      ].slice(0, 60);
-      const batchSize = 4;
-      for (let i = 0; i < images.length; i += batchSize) {
-        if (contentOperation.current !== operation) break;
-        const batch = images.slice(i, i + batchSize);
-        await Promise.all(
-          batch.map(async (image) => {
-            const url = image.dataset.remoteSrc;
-            if (!url) return;
-            try {
-              const result = await api.fetchRemoteImage(url);
-              if (result.status === "blocked") {
-                image.dataset.contentBlocked = "true";
-                image.alt = strings.reader.filteredImage;
-              } else if (result.status === "reportedThreat") {
-                image.dataset.threatBlocked = "true";
-                image.alt = strings.reader.threatImage;
-              } else {
-                image.src = result.dataUrl;
-                image.classList.remove("remote-image-blocked");
-              }
-              image.removeAttribute("data-remote-src");
-            } catch {
-              // Keep placeholder on individual image error without blocking other images
-            }
-          }),
-        );
-      }
-      if (message && contentOperation.current === operation)
-        await hydrateInlineImages(
-          doc,
-          message.accountId,
-          message.id,
-          inlineAttachments,
-        );
-      if (message && contentOperation.current === operation)
-        setLoadedHtml({ messageId: message.id, html: doc.body.innerHTML });
-    } catch (cause) {
-      if (contentOperation.current === operation) setError(String(cause));
-    } finally {
-      setLoadingImagesFor((current) =>
-        current === targetId ? undefined : current,
-      );
-    }
-  }
-
-  const imageSender = normalizeImageSender(message?.senderAddress ?? "");
-  const senderImagesAllowed =
-    imageSender.length > 0 &&
-    (settings.imageSenders ?? []).includes(imageSender);
-  // Auto-load skips Junk and spoofable sender names; manual Load images still works.
-  const senderNameSpoofed =
-    message != null &&
-    conflictingNameAddress(message.senderName, message.senderAddress) != null;
-  const shouldAutoLoad =
-    showHtml &&
-    senderImagesAllowed &&
-    remainingBlockedImages > 0 &&
-    !isJunkMailbox &&
-    !senderNameSpoofed;
-  const loadImagesRef = useRef(loadImages);
-  loadImagesRef.current = loadImages;
-  useEffect(() => {
-    if (!shouldAutoLoad) return;
-    void loadImagesRef.current();
-  }, [messageId, shouldAutoLoad]);
-
-  async function allowSenderImages() {
-    if (!imageSender || senderImagesAllowed) return;
-    const current = settings.imageSenders ?? [];
-    if (current.length >= 100) {
-      setError(strings.settings.imageSendersFull);
-      return;
-    }
-    await updateSettings({ imageSenders: [...current, imageSender] });
-  }
 
   async function setStarred() {
     const current = useAppStore.getState();
@@ -2958,12 +2873,6 @@ export function MessageReader({
         onSubmitFind={() => findInMessage(1)}
         onFindPrevious={() => findInMessage(-1)}
         onLoadImages={() => void loadImages()}
-        alwaysLoadLabel={
-          imageSender && remainingBlockedImages > 0 && !senderImagesAllowed
-            ? strings.reader.alwaysLoadImages(imageSender)
-            : undefined
-        }
-        onAlwaysLoadImages={() => void allowSenderImages()}
         onFrameLoad={() => {
           wireFrameLinks();
           fitFrameContent();

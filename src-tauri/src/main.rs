@@ -13,6 +13,7 @@ mod models;
 // Background OAuth groundwork (no UI yet): consumed by a future setup flow.
 #[allow(dead_code)]
 mod oauth;
+mod outbox_reason;
 mod providers;
 mod resume_watch;
 mod search_query;
@@ -53,8 +54,9 @@ fn main() {
                 return;
             }
             if action == "app-quit" {
-                // A ready update installs from the frontend on quit.
-                if update_relaunch::update_ready() {
+                // The window saves an open message and installs a ready
+                // update before it quits.
+                if update_relaunch::quit_needs_window() {
                     let _ = app.emit("tray-quit", ());
                 } else {
                     app.exit(0);
@@ -119,6 +121,7 @@ fn main() {
                 std::fs::set_permissions(&attachment_dir, std::fs::Permissions::from_mode(0o700))?;
             }
             let orphan_cleanup_dir = attachment_dir.clone();
+            let compact_marker = commands::compact_marker_for(&attachment_dir);
             // A database that cannot open must not exit silently: open an
             // empty stand-in and explain in the window. Nothing is written.
             let (database, database_error) = match db::Database::open(&database_path) {
@@ -195,6 +198,10 @@ fn main() {
                 let db = app.state::<AppState>().db.clone();
                 tauri::async_runtime::spawn_blocking(move || {
                     let _ = db.maintain_search_index();
+                    // An earlier removal could not free disk space; retry.
+                    if compact_marker.exists() {
+                        let _ = commands::accounts::compact_or_mark(&db, &compact_marker);
+                    }
                 });
             }
             app.state::<AppState>().set_startup_error(startup_error)?;
@@ -481,6 +488,7 @@ fn main() {
             commands::settings_system::clear_update_relaunch,
             commands::settings_system::get_update_relaunch,
             commands::settings_system::set_update_ready,
+            commands::settings_system::set_composer_open,
             commands::settings_system::background_update_allowed,
             commands::settings_system::begin_update_install,
             commands::settings_system::release_update_install,

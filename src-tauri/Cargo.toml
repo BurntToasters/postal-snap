@@ -12,6 +12,8 @@ direct-updater = ["dep:tauri-plugin-process", "dep:tauri-plugin-updater"]
 flatpak = []
 mas = []
 msstore = []
+# Gmail/Outlook sign-in. Off until it has setup UI and review (0.5.0).
+oauth = []
 
 [build-dependencies]
 serde_json = "1"

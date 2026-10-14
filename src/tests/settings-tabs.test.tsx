@@ -360,21 +360,19 @@ describe("small settings tabs", () => {
     ]);
   });
 
-  it("removes a sender whose images load automatically", () => {
+  it("explains manual image loading without a sender allow-list", () => {
     resetStore({
-      settings: {
-        ...defaultSettings,
-        imageSenders: ["jane@example.test"],
-      },
+      settings: { ...defaultSettings, imageSenders: ["jane@example.test"] },
     });
     const update = vi.fn().mockResolvedValue(undefined);
     render(<ReadingTab update={update} />);
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: strings.settings.stopImageSenderLabel("jane@example.test"),
-      }),
-    );
-    expect(update).toHaveBeenCalledWith({ imageSenders: [] });
+    expect(
+      screen.getByText(
+        "Remote images load only when you choose Load images in a message.",
+      ),
+    ).toBeVisible();
+    expect(screen.queryByText("jane@example.test")).toBeNull();
+    expect(update).not.toHaveBeenCalled();
   });
 
   it("renders platform-aware shortcut reference", () => {
