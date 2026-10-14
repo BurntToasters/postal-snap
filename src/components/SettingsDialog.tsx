@@ -527,6 +527,17 @@ export function SettingsDialog({
     }
   }
 
+  async function retryAttachmentCleanup() {
+    try {
+      const leftovers = await api.retryAttachmentCleanup();
+      setUsage((current) =>
+        current ? { ...current, attachmentLeftovers: leftovers } : current,
+      );
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }
+
   async function exportSettings() {
     if (dataBusy) return;
     setDataBusy(true);
@@ -1205,6 +1216,7 @@ export function SettingsDialog({
                     usage={usage}
                     update={update}
                     clearCache={clearCache}
+                    retryAttachmentCleanup={retryAttachmentCleanup}
                   />
                 ) : null}
                 {tab === "accounts" ? (

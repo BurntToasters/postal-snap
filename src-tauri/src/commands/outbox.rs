@@ -91,6 +91,29 @@ async fn archive_source_after_delivery(
             .mailbox_uid_validity(account_id, &source)
             .map_err(|_| ArchiveFailure::Failed)?
             .ok_or(ArchiveFailure::Failed)?;
+        // Keyword writes land on the source first; the move carries them to
+        // the archive copy. A transient failure keeps the message in place.
+        if super::replied::finish_source_keywords(
+            &state.db,
+            account_id,
+            message_id,
+            |operation| async move {
+                mail::set_remote_keyword(
+                    account,
+                    password,
+                    &operation.mailbox,
+                    operation.uid,
+                    operation.uid_validity,
+                    operation.keyword,
+                )
+                .await
+            },
+        )
+        .await
+        .is_err()
+        {
+            return Err(ArchiveFailure::Failed);
+        }
         let remote_id = state.db.message_rfc_id(message_id).ok().flatten();
         match mail::move_remote(
             account,

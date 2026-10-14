@@ -122,6 +122,7 @@ fn main() {
             }
             let orphan_cleanup_dir = attachment_dir.clone();
             let compact_marker = commands::compact_marker_for(&attachment_dir);
+            let orphan_marker = commands::orphan_marker_for(&attachment_dir);
             // A database that cannot open must not exit silently: open an
             // empty stand-in and explain in the window. Nothing is written.
             let (database, database_error) = match db::Database::open(&database_path) {
@@ -302,9 +303,10 @@ fn main() {
                     .iter()
                     .map(|account| account.id.clone())
                     .collect();
-                tauri::async_runtime::spawn(commands::cleanup_orphaned_account_dirs(
+                tauri::async_runtime::spawn(commands::sweep_orphans_at_startup(
                     orphan_cleanup_dir,
                     account_ids,
+                    orphan_marker,
                 ));
             }
             {
@@ -458,6 +460,7 @@ fn main() {
             commands::settings_system::get_startup_error,
             commands::settings_system::get_cache_usage,
             commands::settings_system::clear_downloaded_mail,
+            commands::settings_system::retry_attachment_cleanup,
             commands::settings_system::get_distribution_channel,
             commands::settings_system::get_license_credits,
             commands::accounts::discover_account_aliases,

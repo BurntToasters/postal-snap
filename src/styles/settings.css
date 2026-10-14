@@ -113,6 +113,14 @@
   line-height: 1.45;
 }
 
+.storage-leftovers p {
+  margin: 0 0 var(--space-3);
+}
+
+.storage-leftovers .secondary-button {
+  color: var(--text);
+}
+
 .settings-panel h2 {
   margin: 0 0 4px;
   font-size: 1.15rem;

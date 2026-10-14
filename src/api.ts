@@ -200,6 +200,7 @@ export type NativeCommand =
   | "get_startup_error"
   | "get_cache_usage"
   | "clear_downloaded_mail"
+  | "retry_attachment_cleanup"
   | "get_distribution_channel"
   | "get_license_credits"
   | "get_sync_progress"
@@ -651,6 +652,7 @@ export const api = {
   getStartupError: () => call<string | null>("get_startup_error"),
   cacheUsage: () => call<CacheUsage>("get_cache_usage"),
   clearCache: () => call<void>("clear_downloaded_mail"),
+  retryAttachmentCleanup: () => call<boolean>("retry_attachment_cleanup"),
   distribution: () => call<DistributionChannel>("get_distribution_channel"),
   getLicenseCredits: () => call<LicenseCredits>("get_license_credits"),
   getSyncProgress: (accountId: string) =>

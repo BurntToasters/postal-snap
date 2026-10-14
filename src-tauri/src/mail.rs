@@ -96,8 +96,8 @@ pub struct RemoteDraftSnapshot {
 pub use folders::{
     copy_remote, copy_remote_uids, create_folder, delete_folder, empty_folder, expunge_uids,
     mark_folder_read, move_remote, move_remote_uids, rename_folder, set_remote_flags,
-    set_remote_keyword, set_remote_uid_flags, CopyOptions, MoveOptions, MoveReplayFlags,
-    SourceKeyword,
+    set_remote_keyword, set_remote_uid_flags, CopyOptions, MailboxOperationError, MoveOptions,
+    MoveReplayFlags, SourceKeyword,
 };
 pub use icloud::discover_icloud_aliases;
 pub use remote_drafts::{
@@ -2933,6 +2933,109 @@ mod tests {
             1,
             "incomplete content evidence must not move or deduplicate"
         );
+        verify.logout().await.unwrap();
+    }
+
+    // Archive writes the queued \Answered first, then moves. The archive copy
+    // must keep it, or the reply mark is lost on the server.
+    #[tokio::test]
+    #[ignore = "requires npm run test:mail-integration"]
+    async fn greenmail_archive_keeps_answered_set_before_move() {
+        let password = "mail-test-password";
+        let account = AccountRecord {
+            summary: AccountSummary {
+                default_body_format: crate::models::BodyFormat::Html,
+                id: "88888888-8888-4888-8888-888888888888".into(),
+                provider: ProviderKind::Manual,
+                email: "user@example.test".into(),
+                display_name: "Postal Snap Test".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+                reply_to: String::new(),
+                color: None,
+            },
+            imap: ServerConfig {
+                trusted_certificate: None,
+                host: "localhost".into(),
+                port: 3993,
+                tls_mode: TlsMode::Tls,
+                username: "user@example.test".into(),
+            },
+            smtp: ServerConfig {
+                trusted_certificate: None,
+                host: "localhost".into(),
+                port: 3465,
+                tls_mode: TlsMode::Tls,
+                username: "user@example.test".into(),
+            },
+        };
+        let mut session = connect_imap(&account.imap, password).await.unwrap();
+        for folder in ["AuditKeywordSource", "AuditKeywordArchive"] {
+            let _ = session.create(folder).await;
+        }
+        let message_id = "<audit-keyword-archive@example.test>";
+        session
+            .append(
+                "AuditKeywordSource",
+                None,
+                None,
+                format!("Message-ID: {message_id}\r\n\r\nKEYWORD-CONTENT\r\n"),
+            )
+            .await
+            .unwrap();
+        let selected = session.select("AuditKeywordSource").await.unwrap();
+        let uid = *session
+            .uid_search("ALL")
+            .await
+            .unwrap()
+            .iter()
+            .next()
+            .unwrap();
+        let validity = selected.uid_validity;
+        session.logout().await.unwrap();
+
+        super::set_remote_keyword(
+            &account,
+            password,
+            "AuditKeywordSource",
+            uid,
+            validity,
+            super::SourceKeyword::Answered,
+        )
+        .await
+        .unwrap();
+        super::move_remote(
+            &account,
+            password,
+            "AuditKeywordSource",
+            "AuditKeywordArchive",
+            uid,
+            validity,
+            super::MoveOptions {
+                message_id: Some(message_id),
+                dedupe_existing: false,
+                replay_flags: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let mut verify = connect_imap(&account.imap, password).await.unwrap();
+        let destination = verify.select("AuditKeywordArchive").await.unwrap();
+        assert_eq!(destination.exists, 1);
+        let archived = verify
+            .uid_fetch("1:*", "(UID FLAGS)")
+            .await
+            .unwrap()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        let (answered, forwarded) = super::parse::reply_flags(&archived[0]);
+        assert!(answered, "archive copy lost the queued \\Answered");
+        assert!(!forwarded);
         verify.logout().await.unwrap();
     }
 }

@@ -952,6 +952,8 @@ pub struct CacheUsage {
     pub bytes: u64,
     pub max_bytes: u64,
     pub message_count: u64,
+    /// Removed account folders that a sweep could not delete.
+    pub attachment_leftovers: bool,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]

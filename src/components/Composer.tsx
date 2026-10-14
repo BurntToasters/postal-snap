@@ -298,10 +298,13 @@ export function Composer({ accountId }: Props) {
   // Set when this composer closes itself (send, save, discard). Any other
   // unmount means a new composer replaced it and unsaved work must be kept.
   const closedByComposer = useRef(false);
+  // Keyed by composeNonce in App, so a stale close must not end a newer one.
+  const [composeSession] = useState(() => useAppStore.getState().composeNonce);
   const close = useCallback(() => {
+    if (useAppStore.getState().composeNonce !== composeSession) return;
     closedByComposer.current = true;
     closeComposer();
-  }, [closeComposer]);
+  }, [closeComposer, composeSession]);
   const setError = useAppStore((state) => state.setError);
   const seededTo = seedRecipients(seed, "to", accountEmail, account?.aliases);
   const seededCc = seedRecipients(seed, "cc", accountEmail, account?.aliases);
@@ -720,6 +723,7 @@ export function Composer({ accountId }: Props) {
     saveInFlightRef: saveInFlight,
     pendingCloseRef: pendingClose,
     closedByComposerRef: closedByComposer,
+    session: composeSession,
   });
 
   useEffect(() => {
