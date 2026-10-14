@@ -28,6 +28,7 @@ vi.mock("../api", () => ({
     onTrayQuit: vi.fn(),
     updateRelaunch: vi.fn(),
     setMailShortcutGuard: vi.fn(),
+    setComposerOpen: vi.fn(),
     setUnreadBadge: vi.fn().mockResolvedValue(undefined),
   },
 }));
@@ -96,11 +97,22 @@ vi.mock("../components/SettingsDialog", () => ({
     </section>
   ),
 }));
-vi.mock("../components/Composer", () => ({
-  Composer: ({ accountId }: { accountId: string }) => (
-    <div>Composer {accountId}</div>
-  ),
-}));
+vi.mock("../components/Composer", async () => {
+  const { useEffect, useState } = await import("react");
+  const { registerDraftFlush } = await import("../draftFlush");
+  const { useAppStore } = await import("../store");
+  // Registers a no-op save like the real composer, so replacements can run.
+  return {
+    Composer: ({ accountId }: { accountId: string }) => {
+      const [session] = useState(() => useAppStore.getState().composeNonce);
+      useEffect(
+        () => registerDraftFlush(async () => undefined, session),
+        [session],
+      );
+      return <div>Composer {accountId}</div>;
+    },
+  };
+});
 
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import {
@@ -161,6 +173,7 @@ beforeEach(() => {
   vi.mocked(api.onTrayQuit).mockResolvedValue(() => undefined);
   vi.mocked(api.updateRelaunch).mockResolvedValue(null);
   vi.mocked(api.setMailShortcutGuard).mockResolvedValue(undefined);
+  vi.mocked(api.setComposerOpen).mockResolvedValue(undefined);
   vi.mocked(getCurrent).mockResolvedValue(null);
   vi.mocked(onOpenUrl).mockImplementation(async (handler) => {
     urlHandler = handler;
@@ -235,9 +248,12 @@ describe("App lifecycle", () => {
     expect(useAppStore.getState().error).toBe("Native warning");
     expect(checkUpdateInteractive).toHaveBeenCalled();
     expect(dispatched).toContain("compose");
-    expect(useAppStore.getState().composeSeed?.prefill?.to).toEqual([
-      "second@example.test",
-    ]);
+    // Replacing an open composer saves it first, so the swap is asynchronous.
+    await waitFor(() =>
+      expect(useAppStore.getState().composeSeed?.prefill?.to).toEqual([
+        "second@example.test",
+      ]),
+    );
 
     fireEvent.keyDown(window, { key: "=", ctrlKey: true });
     fireEvent.keyDown(window, { key: "-", metaKey: true });

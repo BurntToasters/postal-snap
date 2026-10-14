@@ -50,6 +50,30 @@ export function folderParentLabel(mailbox: MailboxSummary): string | undefined {
 // English source catalog namespace: mail section.
 // Split from src/i18n.ts with zero text changes.
 export const mail = {
+  outboxReasons: {
+    waitingConnection: "Waiting for a secure mail connection.",
+    scheduled: "Scheduled to send.",
+    heldForReview: "Held for review. Undo anytime before it sends.",
+    sentCopyPending:
+      "Message sent. Its Sent-folder copy is waiting for a safe retry.",
+    archivePending:
+      "Message sent. The archive status needs attention. Retry archive or dismiss this warning.",
+    archiveSourceUnavailable:
+      "Message sent. The original is moving or no longer in its recorded folder. Check its location, then dismiss this warning.",
+    archiveFailed: "Message sent, but the original could not be archived.",
+    preparationFailed:
+      "The message was not sent. Check its attachments and account, then try again.",
+    retryPending:
+      "Not sent yet. The mail server could not take it right now. Postal Snap will try again automatically.",
+    retryExhausted:
+      "Not sent. The mail server kept asking to try later. Check the message and account, then try again.",
+    sendRefused:
+      "Not sent. The mail server refused this message. Check the recipients and the account, then try again.",
+    deliveryUncertain:
+      "Delivery of this message could not be confirmed. Postal Snap will not resend automatically.",
+    interruptedSend:
+      "Delivery of this message could not be confirmed. Postal Snap closed during sending and will not resend automatically.",
+  },
   compose: "Compose",
   getMail: "Get Mail",
   search: "Search mail",
@@ -162,11 +186,14 @@ export const mail = {
   messageTooLarge:
     "This message is too large to download safely. You can still move, archive, or delete it from the list.",
   emptyBody: "This message has no readable text.",
+  bodyUnreadable:
+    "Postal Snap could not read this message safely, so it will not open it again. Read it in another mail app or delete it.",
   bodyOffline:
     "This message has not downloaded yet. Check your internet connection, then open it again.",
   bodySignInNeeded:
     "This message could not download because the mail server did not accept your sign-in. Update the password in Settings, then open it again.",
   loadOlder: "Load older mail",
+  loadOlderFromServer: "Download older mail",
   loadingOlder: "Loading older mail…",
   read: "Read",
   unread: "Unread",

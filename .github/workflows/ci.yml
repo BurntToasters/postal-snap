@@ -53,11 +53,12 @@ jobs:
       - run: npm run lint
       - run: npm run lint:rust
       - run: npm run check:native-process-policy
+      - run: npm run check:ipc-contract
       - run: npm run check:cargo-update-policy
       - run: npm run test:cargo-safe-update
       - run: npm run typecheck
       - run: npm run typecheck:test
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install --with-deps chromium webkit
       - run: npm run test:cov
       - run: npm run test:release-assets
       - run: npm run test:rust
@@ -116,6 +117,14 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run licenses
       - run: cargo check --locked --manifest-path src-tauri/Cargo.toml --all-targets
+      # test-linux covers Linux; platform-only Rust tests (credential vault,
+      # Zone.Identifier, window chrome) only run on their own OS.
+      - if: matrix.name != 'linux'
+        run: npm run build
+      - if: matrix.name != 'linux'
+        run: npm run test:rust
+      - if: matrix.name != 'linux'
+        run: npx vitest run
       - name: Unsigned Linux AppImage bundle smoke
         if: matrix.name == 'linux'
         env:

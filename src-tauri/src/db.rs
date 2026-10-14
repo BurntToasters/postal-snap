@@ -1,9 +1,31 @@
+// Keep whole database operations off Tokio's cooperative workers.
+macro_rules! database_operations {
+    (impl Database {
+        $(
+            $(#[$attribute:meta])*
+            $visibility:vis fn $name:ident $(<$generic:ident: $bound:path>)?
+            ($($parameters:tt)*) $(-> $result:ty)? {$($body:tt)*}
+        )*
+    }) => {
+        impl Database {
+            $(
+                $(#[$attribute])*
+                $visibility fn $name $(<$generic: $bound>)?
+                ($($parameters)*) $(-> $result)? {
+                    crate::db::blocking_work(|| {$($body)*})
+                }
+            )*
+        }
+    };
+}
+
 pub mod accounts;
 pub mod compatibility;
 pub mod drafts;
 pub mod files_cache;
 pub mod mailboxes;
 pub mod messages;
+mod migrations;
 pub mod outbox;
 pub mod recent_searches;
 
@@ -14,6 +36,7 @@ use std::{
 };
 
 use chrono::{DateTime, SecondsFormat, Utc};
+use migrations::migrate_schema;
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
 #[cfg(test)]
@@ -22,13 +45,19 @@ use crate::models::{
 };
 use crate::models::{Attachment, ComposeDraft, MailboxRole, MessageSummary, ProviderKind, TlsMode};
 
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 32;
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 35;
+
+pub(crate) const NEWER_DATABASE: &str =
+    "This mail database was created by a newer Postal Snap version.";
 
 pub type MailboxSyncState = (Option<u32>, Option<u32>, u32, Option<u32>);
 
 #[derive(Clone)]
 pub struct Database {
     connection: Arc<Mutex<Connection>>,
+    /// Read-only WAL reader so list and detail queries do not wait behind
+    /// sync writes. `None` for in-memory databases, which use the writer.
+    reader: Option<Arc<Mutex<Connection>>>,
 }
 
 #[derive(Debug)]
@@ -82,9 +111,17 @@ pub struct DraftSyncRecord {
     pub deleted: bool,
 }
 
+database_operations! {
 impl Database {
     pub fn open(path: &Path) -> Result<Self, String> {
         let mut connection = Connection::open(path).map_err(db_error)?;
+        // Check before any pragma writes so a newer file stays untouched.
+        let version: u32 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .map_err(db_error)?;
+        if version > CURRENT_SCHEMA_VERSION {
+            return Err(NEWER_DATABASE.into());
+        }
         connection
             .pragma_update(None, "journal_mode", "WAL")
             .map_err(db_error)?;
@@ -100,22 +137,53 @@ impl Database {
         connection
             .busy_timeout(Duration::from_secs(5))
             .map_err(db_error)?;
+        // Zero freed pages so removed mail is not recoverable from the file.
+        connection
+            .pragma_update(None, "secure_delete", "ON")
+            .map_err(db_error)?;
         migrate_schema(&mut connection)?;
         // A database that still held duplicate emails when v14 or v15 ran keeps
         // working; retrying here restores the unique index once the user has
         // removed the duplicate rows. Best effort: the index build fails while
         // duplicates remain.
         let _ = ensure_account_email_unique_index(&connection);
-        recover_fts_index(&connection)?;
         connection
             .execute(
-                "UPDATE outbox SET state='needs_attention', detail='Postal Snap closed before delivery could be confirmed. It will not resend automatically.' WHERE state='sending'",
+                "UPDATE outbox SET state='needs_attention', detail=NULL, reason_code='interruptedSend' WHERE state='sending'",
                 [],
             )
             .map_err(db_error)?;
+        let reader = Connection::open_with_flags(
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+                | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX
+                | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+        )
+        .map_err(db_error)?;
+        reader
+            .busy_timeout(Duration::from_secs(5))
+            .map_err(db_error)?;
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
+            reader: Some(Arc::new(Mutex::new(reader))),
         })
+    }
+
+    /// Empty stand-in used when the mail database cannot open, so the window
+    /// can explain the problem instead of the app exiting silently.
+    pub fn unavailable() -> Result<Self, String> {
+        let mut connection = Connection::open_in_memory().map_err(db_error)?;
+        migrate_schema(&mut connection)?;
+        Ok(Self {
+            connection: Arc::new(Mutex::new(connection)),
+            reader: None,
+        })
+    }
+
+    /// Repair or verify the search index. Runs after the window opens; a full
+    /// rebuild on a large cache can take a while.
+    pub fn maintain_search_index(&self) -> Result<(), String> {
+        recover_fts_index(&*self.conn()?)
     }
 
     #[cfg(test)]
@@ -127,18 +195,87 @@ impl Database {
         migrate_schema(&mut connection).unwrap();
         Self {
             connection: Arc::new(Mutex::new(connection)),
+            reader: None,
         }
     }
 
+    #[cfg(test)]
+    fn slow_query_for_test(&self, started: &tokio::sync::Notify) -> Result<std::time::Instant, String> {
+        let conn = self.conn()?;
+        started.notify_one();
+        conn.query_row(
+            "WITH RECURSIVE count(x) AS (VALUES(0) UNION ALL SELECT x+1 FROM count WHERE x<2000000) SELECT SUM(x) FROM count",
+            [], |row| row.get::<_, i64>(0),
+        ).map_err(db_error)?;
+        Ok(std::time::Instant::now())
+    }
+
+    /// The writer only if it is free right now, for housekeeping that can wait
+    /// for a later call instead of blocking a read.
+    pub(crate) fn try_conn(&self) -> Option<std::sync::MutexGuard<'_, Connection>> {
+        match self.connection.try_lock() {
+            Ok(guard) => Some(guard),
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
+            Err(std::sync::TryLockError::WouldBlock) => None,
+        }
+    }
+
+    /// Connection for queries that never write. Falls back to the writer.
+    pub(crate) fn read_conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>, String> {
+        Ok(lock_connection(
+            self.reader.as_ref().unwrap_or(&self.connection),
+        ))
+    }
+
     pub(crate) fn conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>, String> {
-        self.connection
-            .lock()
-            .map_err(|_| "Local mail database is unavailable.".into())
+        Ok(lock_connection(&self.connection))
+    }
+}
+}
+
+/// Mark synchronous work as blocking for Tauri's multithread runtime.
+/// Plain threads and synchronous current-thread callers run inline.
+fn blocking_work<T>(work: impl FnOnce() -> T) -> T {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(work)
+        }
+        _ => work(),
     }
 }
 
-pub(crate) const MESSAGE_SUMMARY_SELECT: &str = "SELECT m.id,m.account_id,m.mailbox_id,m.uid,m.message_id,m.subject,m.sender_name,m.sender_address,m.recipients,m.received_at,m.preview,m.is_read,m.is_starred,m.has_attachments,m.size,m.thread_root,m.has_calendar,m.is_answered,m.is_forwarded,m.importance,m.pinned,EXISTS(SELECT 1 FROM muted_ids mu WHERE mu.account_id=m.account_id AND (mu.message_id=m.message_id OR mu.message_id=m.thread_parent)) AS conversation_muted,EXISTS (SELECT 1 FROM accounts a WHERE a.id=m.account_id AND EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(m.to_json) THEN m.to_json ELSE '[]' END) AS addr WHERE lower(addr.value)=lower(a.email) OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(a.aliases_json) THEN a.aliases_json ELSE '[]' END) AS alias WHERE lower(alias.value)=lower(addr.value)))) AS to_me,m.internal_at AS arrived_at,(SELECT COUNT(*) FROM json_each(CASE WHEN json_valid(m.attachments_json) THEN m.attachments_json ELSE '[]' END) AS file WHERE COALESCE(json_extract(file.value, '$.inline'), 0) NOT IN (1, 'true')) AS attachment_count FROM messages m";
-pub(crate) const MESSAGE_DETAIL_SELECT: &str = "SELECT m.id,m.account_id,m.mailbox_id,m.uid,m.message_id,m.subject,m.sender_name,m.sender_address,m.recipients,m.received_at,m.preview,m.is_read,m.is_starred,m.has_attachments,m.size,m.to_json,m.cc_json,m.reply_to,m.text_body,m.html_body,m.attachments_json,m.list_unsubscribe,m.list_unsubscribe_post,m.has_calendar,m.is_answered,m.is_forwarded,m.calendar_json,m.thread_root,m.importance,m.disposition_to,m.receipt_choice,m.pinned,m.bcc_json,EXISTS(SELECT 1 FROM muted_ids mu WHERE mu.account_id=m.account_id AND (mu.message_id=m.message_id OR mu.message_id=m.thread_parent)) AS conversation_muted,EXISTS (SELECT 1 FROM accounts a WHERE a.id=m.account_id AND EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(m.to_json) THEN m.to_json ELSE '[]' END) AS addr WHERE lower(addr.value)=lower(a.email) OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(a.aliases_json) THEN a.aliases_json ELSE '[]' END) AS alias WHERE lower(alias.value)=lower(addr.value)))) AS to_me,m.internal_at AS arrived_at,(SELECT COUNT(*) FROM json_each(CASE WHEN json_valid(m.attachments_json) THEN m.attachments_json ELSE '[]' END) AS file WHERE COALESCE(json_extract(file.value, '$.inline'), 0) NOT IN (1, 'true')) AS attachment_count FROM messages m";
+/// A poisoned connection remains usable after transaction rollback on unwind.
+fn lock_connection(shared: &Mutex<Connection>) -> std::sync::MutexGuard<'_, Connection> {
+    blocking_work(|| {
+        shared
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    })
+}
+
+pub(crate) const MESSAGE_SUMMARY_SELECT: &str = "SELECT m.id,m.account_id,m.mailbox_id,m.uid,m.message_id,m.subject,m.sender_name,m.sender_address,m.recipients,m.received_at,m.preview,m.is_read,m.is_starred,m.has_attachments,m.size,m.thread_root,m.has_calendar,m.is_answered,m.is_forwarded,m.importance,m.pinned,EXISTS(SELECT 1 FROM muted_ids mu WHERE mu.account_id=m.account_id AND (mu.message_id=m.message_id OR mu.message_id=m.thread_parent)) AS conversation_muted,m.to_me,m.internal_at AS arrived_at,m.attachment_count FROM messages m";
+pub(crate) const MESSAGE_DETAIL_SELECT: &str = "SELECT m.id,m.account_id,m.mailbox_id,m.uid,m.message_id,m.subject,m.sender_name,m.sender_address,m.recipients,m.received_at,m.preview,m.is_read,m.is_starred,m.has_attachments,m.size,m.to_json,m.cc_json,m.reply_to,m.text_body,m.html_body,m.attachments_json,m.list_unsubscribe,m.list_unsubscribe_post,m.has_calendar,m.is_answered,m.is_forwarded,m.calendar_json,m.thread_root,m.importance,m.disposition_to,m.receipt_choice,m.pinned,m.bcc_json,EXISTS(SELECT 1 FROM muted_ids mu WHERE mu.account_id=m.account_id AND (mu.message_id=m.message_id OR mu.message_id=m.thread_parent)) AS conversation_muted,m.to_me,m.internal_at AS arrived_at,m.attachment_count FROM messages m";
+
+/// Stored per row so lists and the "To me" filter never parse JSON per row.
+const TO_ME_EXPR: &str = "EXISTS (SELECT 1 FROM accounts a WHERE a.id=messages.account_id AND EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(messages.to_json) THEN messages.to_json ELSE '[]' END) AS addr WHERE lower(addr.value)=lower(a.email) OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(a.aliases_json) THEN a.aliases_json ELSE '[]' END) AS alias WHERE lower(alias.value)=lower(addr.value))))";
+const FILE_COUNT_EXPR: &str = "(SELECT COUNT(*) FROM json_each(CASE WHEN json_valid(messages.attachments_json) THEN messages.attachments_json ELSE '[]' END) AS file WHERE COALESCE(json_extract(file.value, '$.inline'), 0) NOT IN (1, 'true'))";
+
+/// Recompute `to_me` and `attachment_count` for the rows `filter` selects.
+pub(crate) fn refresh_list_columns(
+    connection: &Connection,
+    filter: &str,
+    values: impl rusqlite::Params,
+) -> Result<(), String> {
+    connection
+        .execute(
+            &format!(
+                "UPDATE messages SET to_me={TO_ME_EXPR}, attachment_count={FILE_COUNT_EXPR} WHERE {filter}"
+            ),
+            values,
+        )
+        .map_err(db_error)?;
+    Ok(())
+}
 
 pub(crate) fn map_message_summary(row: &Row<'_>) -> rusqlite::Result<MessageSummary> {
     Ok(MessageSummary {
@@ -288,689 +425,6 @@ fn header_message_ids(headers: &str, field: &str) -> Vec<String> {
         }
     }
     references
-}
-
-fn migrate_schema(connection: &mut Connection) -> Result<(), String> {
-    let transaction = connection.transaction().map_err(db_error)?;
-    let mut version: u32 = transaction
-        .pragma_query_value(None, "user_version", |row| row.get(0))
-        .map_err(db_error)?;
-    if version > CURRENT_SCHEMA_VERSION {
-        return Err("This mail database was created by a newer Postal Snap version.".into());
-    }
-    if version < 1 {
-        transaction.execute_batch(SCHEMA_V1).map_err(db_error)?;
-        ensure_column(
-            &transaction,
-            "mailboxes",
-            "backfill_uid",
-            "ALTER TABLE mailboxes ADD COLUMN backfill_uid INTEGER",
-        )?;
-        ensure_column(
-            &transaction,
-            "messages",
-            "pending_move_to",
-            "ALTER TABLE messages ADD COLUMN pending_move_to INTEGER",
-        )?;
-        transaction
-            .pragma_update(None, "user_version", 1)
-            .map_err(db_error)?;
-        version = 1;
-    }
-    if version < 2 {
-        for (table, column, sql) in [
-            (
-                "mailboxes",
-                "server_unread",
-                "ALTER TABLE mailboxes ADD COLUMN server_unread INTEGER",
-            ),
-            (
-                "mailboxes",
-                "server_total",
-                "ALTER TABLE mailboxes ADD COLUMN server_total INTEGER",
-            ),
-            (
-                "mailboxes",
-                "counts_updated_at",
-                "ALTER TABLE mailboxes ADD COLUMN counts_updated_at TEXT",
-            ),
-            (
-                "drafts",
-                "sync_state",
-                "ALTER TABLE drafts ADD COLUMN sync_state TEXT NOT NULL DEFAULT 'localPending'",
-            ),
-            (
-                "drafts",
-                "sync_detail",
-                "ALTER TABLE drafts ADD COLUMN sync_detail TEXT",
-            ),
-            (
-                "drafts",
-                "remote_mailbox",
-                "ALTER TABLE drafts ADD COLUMN remote_mailbox TEXT",
-            ),
-            (
-                "drafts",
-                "remote_uid",
-                "ALTER TABLE drafts ADD COLUMN remote_uid INTEGER",
-            ),
-            (
-                "drafts",
-                "remote_uid_validity",
-                "ALTER TABLE drafts ADD COLUMN remote_uid_validity INTEGER",
-            ),
-            (
-                "drafts",
-                "remote_message_id",
-                "ALTER TABLE drafts ADD COLUMN remote_message_id TEXT",
-            ),
-            (
-                "drafts",
-                "revision",
-                "ALTER TABLE drafts ADD COLUMN revision INTEGER NOT NULL DEFAULT 1",
-            ),
-            (
-                "drafts",
-                "deleted_at",
-                "ALTER TABLE drafts ADD COLUMN deleted_at TEXT",
-            ),
-            (
-                "outbox",
-                "message_id",
-                "ALTER TABLE outbox ADD COLUMN message_id TEXT",
-            ),
-            (
-                "outbox",
-                "mime_bytes",
-                "ALTER TABLE outbox ADD COLUMN mime_bytes BLOB",
-            ),
-            (
-                "outbox",
-                "attempt_started_at",
-                "ALTER TABLE outbox ADD COLUMN attempt_started_at TEXT",
-            ),
-            (
-                "outbox",
-                "updated_at",
-                "ALTER TABLE outbox ADD COLUMN updated_at TEXT",
-            ),
-        ] {
-            ensure_column(&transaction, table, column, sql)?;
-        }
-        transaction
-            .execute(
-                "UPDATE outbox SET updated_at=COALESCE(updated_at,created_at,CURRENT_TIMESTAMP)",
-                [],
-            )
-            .map_err(db_error)?;
-        transaction
-            .execute_batch(
-                r#"
-                CREATE TABLE offline_ops_v2 (
-                  id INTEGER PRIMARY KEY,
-                  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-                  kind TEXT NOT NULL,
-                  payload TEXT NOT NULL,
-                  dedupe_key TEXT,
-                  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                  UNIQUE(account_id, dedupe_key)
-                );
-                INSERT INTO offline_ops_v2(id,account_id,kind,payload,created_at)
-                  SELECT o.id,o.account_id,o.kind,o.payload,o.created_at
-                  FROM offline_ops o JOIN accounts a ON a.id=o.account_id;
-                DROP TABLE offline_ops;
-                ALTER TABLE offline_ops_v2 RENAME TO offline_ops;
-
-                CREATE TABLE file_grants_v2 (
-                  token TEXT PRIMARY KEY,
-                  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-                  path TEXT NOT NULL,
-                  size INTEGER NOT NULL,
-                  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-                );
-                INSERT OR IGNORE INTO file_grants_v2(token,account_id,path,size,created_at)
-                  SELECT fg.token,d.account_id,fg.path,0,fg.created_at
-                  FROM file_grants fg
-                  JOIN drafts d
-                  JOIN json_each(
-                    CASE WHEN json_valid(d.draft_json) THEN d.draft_json ELSE '{"attachments":[]}' END,
-                    '$.attachments'
-                  ) attachment
-                  WHERE json_extract(attachment.value,'$.token')=fg.token;
-                INSERT OR IGNORE INTO file_grants_v2(token,account_id,path,size,created_at)
-                  SELECT fg.token,o.account_id,fg.path,0,fg.created_at
-                  FROM file_grants fg
-                  JOIN outbox o
-                  JOIN json_each(
-                    CASE WHEN json_valid(o.draft_json) THEN o.draft_json ELSE '{"attachments":[]}' END,
-                    '$.attachments'
-                  ) attachment
-                  WHERE json_extract(attachment.value,'$.token')=fg.token;
-                DROP TABLE file_grants;
-                ALTER TABLE file_grants_v2 RENAME TO file_grants;
-                CREATE TABLE IF NOT EXISTS attachment_refs (
-                  token TEXT NOT NULL REFERENCES file_grants(token) ON DELETE CASCADE,
-                  owner_kind TEXT NOT NULL,
-                  owner_id TEXT NOT NULL,
-                  PRIMARY KEY(token,owner_kind,owner_id)
-                );
-                INSERT OR IGNORE INTO attachment_refs(token,owner_kind,owner_id)
-                  SELECT fg.token,'draft',d.id
-                  FROM file_grants fg
-                  JOIN drafts d ON d.account_id=fg.account_id
-                  JOIN json_each(
-                    CASE WHEN json_valid(d.draft_json) THEN d.draft_json ELSE '{"attachments":[]}' END,
-                    '$.attachments'
-                  ) attachment
-                  WHERE json_extract(attachment.value,'$.token')=fg.token;
-                INSERT OR IGNORE INTO attachment_refs(token,owner_kind,owner_id)
-                  SELECT fg.token,'outbox',o.id
-                  FROM file_grants fg
-                  JOIN outbox o ON o.account_id=fg.account_id
-                  JOIN json_each(
-                    CASE WHEN json_valid(o.draft_json) THEN o.draft_json ELSE '{"attachments":[]}' END,
-                    '$.attachments'
-                  ) attachment
-                  WHERE json_extract(attachment.value,'$.token')=fg.token;
-                CREATE INDEX IF NOT EXISTS offline_ops_account ON offline_ops(account_id,id);
-                CREATE INDEX IF NOT EXISTS drafts_remote ON drafts(account_id,remote_mailbox,remote_uid_validity,remote_uid);
-                CREATE INDEX IF NOT EXISTS attachment_refs_owner ON attachment_refs(owner_kind,owner_id);
-                "#,
-            )
-            .map_err(db_error)?;
-        transaction
-            .pragma_update(None, "user_version", 2)
-            .map_err(db_error)?;
-        version = 2;
-    }
-    if version < 3 {
-        ensure_column(
-            &transaction,
-            "mailboxes",
-            "local_total_delta",
-            "ALTER TABLE mailboxes ADD COLUMN local_total_delta INTEGER NOT NULL DEFAULT 0",
-        )?;
-        ensure_column(
-            &transaction,
-            "mailboxes",
-            "local_unread_delta",
-            "ALTER TABLE mailboxes ADD COLUMN local_unread_delta INTEGER NOT NULL DEFAULT 0",
-        )?;
-        transaction
-            .pragma_update(None, "user_version", 3)
-            .map_err(db_error)?;
-        version = 3;
-    }
-    if version < 4 {
-        ensure_column(
-            &transaction,
-            "accounts",
-            "aliases_json",
-            "ALTER TABLE accounts ADD COLUMN aliases_json TEXT NOT NULL DEFAULT '[]'",
-        )?;
-        ensure_column(
-            &transaction,
-            "drafts",
-            "sender_email",
-            "ALTER TABLE drafts ADD COLUMN sender_email TEXT",
-        )?;
-        transaction
-            .pragma_update(None, "user_version", 4)
-            .map_err(db_error)?;
-        version = 4;
-    }
-    if version < 5 {
-        ensure_column(
-            &transaction,
-            "accounts",
-            "auth_method",
-            "ALTER TABLE accounts ADD COLUMN auth_method TEXT NOT NULL DEFAULT 'password'",
-        )?;
-        transaction
-            .pragma_update(None, "user_version", 5)
-            .map_err(db_error)?;
-        version = 5;
-    }
-    if version < 6 {
-        // Drop storage that was created but never used: the inline-image blob
-        // cache, the untouched protected-messages list, and the draft sender
-        // column whose value always came from draft JSON instead.
-        transaction
-            .execute("DROP TABLE IF EXISTS attachment_blobs", [])
-            .map_err(db_error)?;
-        transaction
-            .execute("DROP TABLE IF EXISTS protected_messages", [])
-            .map_err(db_error)?;
-        if column_exists(&transaction, "drafts", "sender_email")? {
-            transaction
-                .execute("ALTER TABLE drafts DROP COLUMN sender_email", [])
-                .map_err(db_error)?;
-        }
-        transaction
-            .execute(
-                "UPDATE offline_ops SET dedupe_key='legacy:' || id WHERE dedupe_key IS NULL",
-                [],
-            )
-            .map_err(db_error)?;
-        transaction
-            .execute(
-                "CREATE INDEX IF NOT EXISTS messages_mailbox_date_uid ON messages(mailbox_id,received_at DESC,uid DESC)",
-                [],
-            )
-            .map_err(db_error)?;
-        transaction
-            .pragma_update(None, "user_version", 6)
-            .map_err(db_error)?;
-        version = 6;
-    }
-    if version < 7 {
-        transaction
-            .execute_batch(
-                "CREATE TABLE IF NOT EXISTS recipient_history (
-                   account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-                   address TEXT NOT NULL,
-                   name TEXT NOT NULL DEFAULT '',
-                   use_count INTEGER NOT NULL DEFAULT 0,
-                   last_used TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                   PRIMARY KEY(account_id, address)
-                 );
-                  CREATE INDEX IF NOT EXISTS recipient_history_lookup ON recipient_history(account_id,address,name);",
-            )
-            .map_err(db_error)?;
-        version = 7;
-    }
-    if version < 8 {
-        for (table, column, sql) in [
-            (
-                "messages",
-                "thread_parent",
-                "ALTER TABLE messages ADD COLUMN thread_parent TEXT",
-            ),
-            (
-                "messages",
-                "thread_root",
-                "ALTER TABLE messages ADD COLUMN thread_root TEXT",
-            ),
-        ] {
-            ensure_column(&transaction, table, column, sql)?;
-        }
-        transaction
-            .execute(
-                "CREATE INDEX IF NOT EXISTS messages_thread ON messages(account_id,thread_root)",
-                [],
-            )
-            .map_err(db_error)?;
-        transaction
-            .pragma_update(None, "user_version", 8)
-            .map_err(db_error)?;
-        version = 8;
-    }
-    if version < 9 {
-        ensure_column(
-            &transaction,
-            "accounts",
-            "signature",
-            "ALTER TABLE accounts ADD COLUMN signature TEXT NOT NULL DEFAULT ''",
-        )?;
-        transaction
-            .pragma_update(None, "user_version", 9)
-            .map_err(db_error)?;
-        version = 9;
-    }
-    if version < 10 {
-        ensure_column(
-            &transaction,
-            "outbox",
-            "send_at",
-            "ALTER TABLE outbox ADD COLUMN send_at TEXT",
-        )?;
-        transaction
-            .pragma_update(None, "user_version", 10)
-            .map_err(db_error)?;
-        version = 10;
-    }
-    if version < 11 {
-        transaction
-            .execute_batch(
-                "CREATE TABLE IF NOT EXISTS snoozed_messages (
-                   account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-                   message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-                   snoozed_until TEXT NOT NULL,
-                   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                   PRIMARY KEY(account_id, message_id)
-                 );
-                 CREATE INDEX IF NOT EXISTS snoozed_messages_due ON snoozed_messages(account_id,snoozed_until);",
-            )
-            .map_err(db_error)?;
-        transaction
-            .pragma_update(None, "user_version", 11)
-            .map_err(db_error)?;
-        version = 11;
-    }
-    if version < 12 {
-        transaction
-            .execute_batch(
-                "CREATE TABLE IF NOT EXISTS filter_rules (
-                   id TEXT PRIMARY KEY,
-                   account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-                   name TEXT NOT NULL DEFAULT '',
-                   field TEXT NOT NULL DEFAULT 'from',
-                   contains TEXT NOT NULL DEFAULT '',
-                   action TEXT NOT NULL DEFAULT 'mark_read',
-                   target_mailbox TEXT,
-                   enabled INTEGER NOT NULL DEFAULT 1,
-                   position INTEGER NOT NULL DEFAULT 0,
-                   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-                 );
-                 CREATE INDEX IF NOT EXISTS filter_rules_account ON filter_rules(account_id,position);",
-            )
-            .map_err(db_error)?;
-        transaction
-            .pragma_update(None, "user_version", 12)
-            .map_err(db_error)?;
-        version = 12;
-    }
-    if version < 13 {
-        ensure_column(
-            &transaction,
-            "mailboxes",
-            "role_source",
-            "ALTER TABLE mailboxes ADD COLUMN role_source TEXT NOT NULL DEFAULT 'name'",
-        )?;
-        transaction
-            .pragma_update(None, "user_version", 13)
-            .map_err(db_error)?;
-        version = 13;
-    }
-    if version < 14 {
-        let duplicate_emails: u32 = transaction
-            .query_row(
-                "SELECT COUNT(*) FROM (SELECT email FROM accounts GROUP BY email HAVING COUNT(*) > 1)",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(db_error)?;
-        // Older builds could contain duplicate account rows. Preserve both so
-        // the user can launch and remove the unwanted one; command-level
-        // validation still prevents adding another duplicate.
-        if duplicate_emails == 0 {
-            transaction
-                .execute_batch(
-                    "CREATE UNIQUE INDEX IF NOT EXISTS accounts_email_unique ON accounts(email);",
-                )
-                .map_err(db_error)?;
-        }
-        transaction
-            .pragma_update(None, "user_version", 14)
-            .map_err(db_error)?;
-    }
-    if version < 15 {
-        // v14 advanced the schema without creating the unique index when
-        // duplicate emails existed. Retry transactionally on every open below
-        // v15 so the database-level guarantee returns once the duplicates are
-        // resolved.
-        let duplicate_emails: u32 = transaction
-            .query_row(
-                "SELECT COUNT(*) FROM (SELECT email FROM accounts GROUP BY email HAVING COUNT(*) > 1)",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(db_error)?;
-        if duplicate_emails == 0 {
-            ensure_account_email_unique_index(&transaction)?;
-        }
-        transaction
-            .pragma_update(None, "user_version", 15)
-            .map_err(db_error)?;
-        version = 15;
-    }
-    if version < 16 {
-        // Re-key message_fts by messages.id. FTS5 has no index on UNINDEXED
-        // columns, so every envelope upsert previously scanned the whole FTS
-        // table; the rowid is indexed. Repeated opens (including rewound test
-        // databases) can revisit this step, so detect the migrated shape.
-        let has_message_id: i64 = transaction
-            .query_row(
-                "SELECT COUNT(*) FROM pragma_table_info('message_fts') WHERE name = 'message_id'",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(db_error)?;
-        if has_message_id > 0 {
-            transaction
-                .execute_batch(
-                    "DROP TRIGGER IF EXISTS messages_after_delete;
-                     CREATE VIRTUAL TABLE message_fts_v16 USING fts5(subject, sender, recipients, body, tokenize='unicode61');
-                     INSERT INTO message_fts_v16(rowid, subject, sender, recipients, body)
-                       SELECT CAST(fts.message_id AS INTEGER), fts.subject, fts.sender, fts.recipients, fts.body
-                       FROM message_fts fts
-                       JOIN messages m ON m.id = CAST(fts.message_id AS INTEGER);
-                     DROP TABLE message_fts;
-                     ALTER TABLE message_fts_v16 RENAME TO message_fts;",
-                )
-                .map_err(db_error)?;
-        }
-        transaction
-            .execute_batch(
-                "DROP TRIGGER IF EXISTS messages_after_delete;
-                 CREATE TRIGGER messages_after_delete AFTER DELETE ON messages
-                   BEGIN DELETE FROM message_fts WHERE rowid=OLD.id; END;
-                 CREATE INDEX IF NOT EXISTS messages_account_unread_pending ON messages(account_id,is_read,pending_move_to);",
-            )
-            .map_err(db_error)?;
-        transaction
-            .pragma_update(None, "user_version", 16)
-            .map_err(db_error)?;
-        version = 16;
-    }
-    if version < 17 {
-        // Cursor pagination compares received_at as text, so fractional-second
-        // fallbacks sorted inconsistently with whole-second mail from servers.
-        let rows = {
-            let mut statement = transaction
-                .prepare(
-                    "SELECT id, received_at FROM messages
-                     WHERE received_at LIKE '%.%' OR received_at LIKE '%Z'",
-                )
-                .map_err(db_error)?;
-            let rows = statement
-                .query_map([], |row| {
-                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-                })
-                .map_err(db_error)?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(db_error)?;
-            rows
-        };
-        for (id, value) in rows {
-            let normalized = normalize_received_at(&value);
-            if normalized != value {
-                transaction
-                    .execute(
-                        "UPDATE messages SET received_at=?2 WHERE id=?1",
-                        params![id, normalized],
-                    )
-                    .map_err(db_error)?;
-            }
-        }
-        transaction
-            .pragma_update(None, "user_version", 17)
-            .map_err(db_error)?;
-    }
-    if version < 18 {
-        migrate_v18(&transaction)?;
-        transaction
-            .pragma_update(None, "user_version", 18)
-            .map_err(db_error)?;
-        version = 18;
-    }
-    if version < 19 {
-        migrate_v19(&transaction)?;
-        transaction
-            .pragma_update(None, "user_version", 19)
-            .map_err(db_error)?;
-        version = 19;
-    }
-    if version < 20 {
-        migrate_v20(&transaction)?;
-        transaction
-            .pragma_update(None, "user_version", 20)
-            .map_err(db_error)?;
-    }
-    if version < 21 {
-        ensure_column(
-            &transaction,
-            "accounts",
-            "bridge_certificate",
-            "ALTER TABLE accounts ADD COLUMN bridge_certificate TEXT",
-        )?;
-        transaction.execute_batch("CREATE TABLE IF NOT EXISTS folder_assignments (account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-                role TEXT NOT NULL, mailbox_id INTEGER NOT NULL, PRIMARY KEY(account_id,role), UNIQUE(account_id,mailbox_id));").map_err(db_error)?;
-    }
-    if version < 22 {
-        ensure_column(
-            &transaction,
-            "mailboxes",
-            "server_available",
-            "ALTER TABLE mailboxes ADD COLUMN server_available INTEGER NOT NULL DEFAULT 1",
-        )?;
-        transaction
-            .execute_batch(
-                "CREATE TABLE IF NOT EXISTS message_id_sequence (
-            singleton INTEGER PRIMARY KEY CHECK(singleton=1),
-            last_id INTEGER NOT NULL CHECK(typeof(last_id)='integer' AND last_id>=0));
-            INSERT OR IGNORE INTO message_id_sequence(singleton,last_id)
-                VALUES(1,(SELECT COALESCE(MAX(id),0) FROM messages));",
-            )
-            .map_err(db_error)?;
-        version = 22;
-    }
-    if version < 23 {
-        migrate_v23_mailbox_names(&transaction)?;
-        transaction
-            .pragma_update(None, "user_version", 23)
-            .map_err(db_error)?;
-    }
-    if version < 24 {
-        transaction
-            .execute_batch(
-                "CREATE TABLE IF NOT EXISTS muted_ids (
-            account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-            message_id TEXT NOT NULL,
-            group_id TEXT NOT NULL,
-            PRIMARY KEY(account_id, message_id));",
-            )
-            .map_err(db_error)?;
-        transaction
-            .pragma_update(None, "user_version", 24)
-            .map_err(db_error)?;
-    }
-    if version < 25 {
-        // Existing rows stay normal. A later body or envelope write fills this.
-        ensure_column(
-            &transaction,
-            "messages",
-            "importance",
-            "ALTER TABLE messages ADD COLUMN importance TEXT NOT NULL DEFAULT ''",
-        )?;
-    }
-    if version < 26 {
-        // Existing mail did not ask for a receipt, and no choice is stored yet.
-        ensure_column(
-            &transaction,
-            "messages",
-            "disposition_to",
-            "ALTER TABLE messages ADD COLUMN disposition_to TEXT NOT NULL DEFAULT ''",
-        )?;
-        ensure_column(
-            &transaction,
-            "messages",
-            "receipt_choice",
-            "ALTER TABLE messages ADD COLUMN receipt_choice TEXT NOT NULL DEFAULT ''",
-        )?;
-    }
-    if version < 27 {
-        // Pins stay on this computer. Existing rows start unpinned.
-        ensure_column(
-            &transaction,
-            "messages",
-            "pinned",
-            "ALTER TABLE messages ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0",
-        )?;
-    }
-    if version < 28 {
-        transaction
-            .execute_batch(
-                "CREATE TABLE IF NOT EXISTS recent_searches (
-            account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-            query TEXT NOT NULL,
-            used_at TEXT NOT NULL,
-            PRIMARY KEY(account_id, query));",
-            )
-            .map_err(db_error)?;
-    }
-    if version < 29 {
-        // Existing accounts keep using From until a Reply-To address is saved.
-        ensure_column(
-            &transaction,
-            "accounts",
-            "reply_to",
-            "ALTER TABLE accounts ADD COLUMN reply_to TEXT NOT NULL DEFAULT ''",
-        )?;
-    }
-    if version < 30 {
-        // Bcc is absent on most received mail. Sent copies often still have it.
-        ensure_column(
-            &transaction,
-            "messages",
-            "bcc_json",
-            "ALTER TABLE messages ADD COLUMN bcc_json TEXT NOT NULL DEFAULT '[]'",
-        )?;
-    }
-    if version < 31 {
-        ensure_column(
-            &transaction,
-            "outbox",
-            "archive_message_id",
-            "ALTER TABLE outbox ADD COLUMN archive_message_id INTEGER",
-        )?;
-        ensure_column(
-            &transaction,
-            "outbox",
-            "archive_source_mailbox_id",
-            "ALTER TABLE outbox ADD COLUMN archive_source_mailbox_id INTEGER",
-        )?;
-    }
-    if version < 32 {
-        ensure_column(
-            &transaction,
-            "mailboxes",
-            "counts_generation",
-            "ALTER TABLE mailboxes ADD COLUMN counts_generation INTEGER NOT NULL DEFAULT 0",
-        )?;
-        ensure_column(
-            &transaction,
-            "messages",
-            "pending_source_generation",
-            "ALTER TABLE messages ADD COLUMN pending_source_generation INTEGER",
-        )?;
-        ensure_column(
-            &transaction,
-            "messages",
-            "pending_destination_generation",
-            "ALTER TABLE messages ADD COLUMN pending_destination_generation INTEGER",
-        )?;
-    }
-    // Also initialize this sequence for earlier development snapshots of v22.
-    transaction.execute_batch("CREATE TABLE IF NOT EXISTS mailbox_id_sequence (
-        singleton INTEGER PRIMARY KEY CHECK(singleton=1),
-        last_id INTEGER NOT NULL CHECK(typeof(last_id)='integer' AND last_id>=0));
-        INSERT OR IGNORE INTO mailbox_id_sequence(singleton,last_id)
-            VALUES(1,(SELECT COALESCE(MAX(id),0) FROM (SELECT id FROM mailboxes UNION ALL SELECT mailbox_id AS id FROM folder_assignments)));").map_err(db_error)?;
-    transaction
-        .pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)
-        .map_err(db_error)?;
-    transaction.commit().map_err(db_error)
 }
 
 /// Schema v23: convert cached IMAP4rev1 mailbox names from modified UTF-7.
@@ -2506,42 +1960,320 @@ mod tests {
         assert_eq!(order, vec![local, imported]);
     }
 
+    // Stored list-column failure modes:
+    // 1. Adding or removing an alias leaves "To me" stale on cached mail.
+    // 2. A body download changes the files but not the file count.
+    // 3. Inline pictures are counted as files.
+    // 4. Rows from before the upgrade keep zero values.
     #[test]
-    fn latest_inbox_message_skips_mail_leaving_the_inbox() {
+    fn to_me_and_file_count_are_stored_and_kept_current() {
+        use crate::models::{MessageListFilter, MessageListSort};
         let db = Database::memory();
         let account = account();
+        let id = account.summary.id.clone();
         db.insert_account(&account).unwrap();
-        let inbox = mailbox(&db, &account.summary.id, "INBOX", &MailboxRole::Inbox);
-        let archive = mailbox(&db, &account.summary.id, "Archive", &MailboxRole::Archive);
-        db.upsert_message(
-            &account.summary.id,
-            inbox,
-            &message(1, "2026-08-18T12:00:00Z"),
-        )
-        .unwrap();
-        db.upsert_message(
-            &account.summary.id,
-            inbox,
-            &message(2, "2026-08-19T12:00:00Z"),
-        )
-        .unwrap();
-        let id_for = |uid: u32| -> i64 {
+        let inbox = mailbox(&db, &id, "INBOX", &MailboxRole::Inbox);
+        let file = |name: &str, inline: bool| Attachment {
+            id: name.into(),
+            filename: name.into(),
+            content_type: "application/pdf".into(),
+            size: 10,
+            content_id: None,
+            inline,
+        };
+        let mut to_alias = message(1, "2026-08-18T12:00:00Z");
+        to_alias.to = vec!["Sam@Alias.example".into()];
+        db.upsert_envelope(&id, inbox, &to_alias).unwrap();
+        let mut with_files = message(2, "2026-08-19T12:00:00Z");
+        with_files.attachments = vec![
+            file("a.pdf", false),
+            file("b.pdf", false),
+            file("c.png", true),
+        ];
+        db.upsert_message(&id, inbox, &with_files).unwrap();
+        let row = |db: &Database, uid: u32| db.message_summary_by_uid(inbox, uid).unwrap().unwrap();
+        assert!(!row(&db, 1).to_me);
+        assert!(row(&db, 2).to_me);
+        assert_eq!(row(&db, 2).attachment_count, 2);
+
+        db.update_account_aliases(&id, &["sam@alias.example".into()])
+            .unwrap();
+        assert!(row(&db, 1).to_me);
+        let filtered = db
+            .list_messages_filtered(
+                inbox,
+                None,
+                10,
+                MessageListFilter::ToMe,
+                MessageListSort::Date,
+            )
+            .unwrap();
+        assert_eq!(filtered.items.len(), 2);
+        db.update_account_aliases(&id, &[]).unwrap();
+        assert!(!row(&db, 1).to_me);
+
+        with_files.attachments = vec![file("a.pdf", false)];
+        db.upsert_message(&id, inbox, &with_files).unwrap();
+        assert_eq!(row(&db, 2).attachment_count, 1);
+
+        {
+            let mut conn = db.conn().unwrap();
+            conn.execute_batch(
+                "UPDATE messages SET to_me=0, attachment_count=0; PRAGMA user_version=33;",
+            )
+            .unwrap();
+            migrate_schema(&mut conn).unwrap();
+        }
+        assert!(row(&db, 2).to_me);
+        assert_eq!(row(&db, 2).attachment_count, 1);
+    }
+
+    // A failed list-column refresh must roll back the alias change too.
+    #[test]
+    fn alias_refresh_failure_rolls_back_aliases() {
+        let db = Database::memory();
+        let account = account();
+        let id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, id, "INBOX", &MailboxRole::Inbox);
+        db.upsert_message(id, inbox, &message(1, "2026-08-18T12:00:00Z"))
+            .unwrap();
+        db.conn().unwrap().execute_batch(
+            "CREATE TRIGGER fail_list_refresh BEFORE UPDATE OF to_me ON messages BEGIN SELECT RAISE(ABORT, 'injected'); END;"
+        ).unwrap();
+        assert!(db
+            .update_account_aliases(id, &["alias@example.test".into()])
+            .is_err());
+        assert_eq!(
+            db.account(id).unwrap().summary.aliases,
+            account.summary.aliases
+        );
+    }
+
+    // Outbox reason migration failure modes:
+    // 1. Known guidance is stored as prose instead of a stable reason code.
+    // 2. Migration loses unknown legacy detail or changes delivery state/MIME.
+    // 3. Startup recovery queues an uncertain send automatically.
+    #[test]
+    fn outbox_reason_codes_preserve_legacy_data_and_send_safety() {
+        let db = Database::memory();
+        let account = account();
+        let owner = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let id = db
+            .queue_outbox(
+                &draft(owner),
+                "needs_attention",
+                Some("Delivery could not be confirmed. Postal Snap will not resend automatically."),
+                "<reason@example.test>",
+                b"original MIME",
+                None,
+            )
+            .unwrap();
+        let stored = || {
             db.conn()
                 .unwrap()
                 .query_row(
-                    "SELECT id FROM messages WHERE mailbox_id=?1 AND uid=?2",
-                    rusqlite::params![inbox, uid],
-                    |row| row.get(0),
+                    "SELECT reason_code,detail,state,mime_bytes FROM outbox WHERE id=?1",
+                    [&id],
+                    |row| {
+                        Ok((
+                            row.get::<_, Option<String>>(0)?,
+                            row.get::<_, Option<String>>(1)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, Vec<u8>>(3)?,
+                        ))
+                    },
                 )
                 .unwrap()
         };
-        let (older, newer) = (id_for(1), id_for(2));
-        db.mark_pending_move(newer, archive).unwrap();
-        let latest = db
-            .latest_inbox_message(&account.summary.id)
-            .unwrap()
+        assert_eq!(stored().0.as_deref(), Some("deliveryUncertain"));
+        assert_eq!(stored().1, None);
+        {
+            let mut conn = db.conn().unwrap();
+            conn.execute(
+                "UPDATE outbox SET reason_code=NULL, detail='Unknown legacy guidance' WHERE id=?1",
+                [&id],
+            )
             .unwrap();
-        assert_eq!(latest.id, older);
+            conn.pragma_update(None, "user_version", 34).unwrap();
+            migrate_schema(&mut conn).unwrap();
+        }
+        assert_eq!(
+            stored(),
+            (
+                None,
+                Some("Unknown legacy guidance".into()),
+                "needs_attention".into(),
+                b"original MIME".to_vec()
+            )
+        );
+        db.set_outbox_state(
+            &id,
+            owner,
+            "needs_attention",
+            Some("Delivery could not be confirmed. Postal Snap will not resend automatically."),
+        )
+        .unwrap();
+        assert_eq!(stored().0.as_deref(), Some("deliveryUncertain"));
+        assert_eq!(stored().2, "needs_attention");
+    }
+
+    // Query-execution failure modes:
+    // 1. An uncontended long query stalls other tasks on a one-worker runtime.
+    // 2. Nested database calls panic or lose transaction ordering.
+    // 3. Plain threads and current-thread test runtimes stop working.
+    #[test]
+    fn running_a_long_query_does_not_stall_other_tasks() {
+        let db = Database::memory();
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_time()
+            .build()
+            .unwrap();
+        let started = std::sync::Arc::new(tokio::sync::Notify::new());
+        let query_started = started.clone();
+        let (other_finished, query_finished) = runtime.block_on(async move {
+            let query =
+                tokio::spawn(async move { db.slow_query_for_test(&query_started).unwrap() });
+            started.notified().await;
+            let other_finished = tokio::spawn(async { std::time::Instant::now() })
+                .await
+                .unwrap();
+            (other_finished, query.await.unwrap())
+        });
+        assert!(
+            other_finished < query_finished,
+            "query execution stalled the runtime"
+        );
+    }
+
+    // Blocking-lock failure modes:
+    // 1. A task waiting for a busy connection holds its runtime worker, so
+    //    other tasks (IDLE, timers, IPC) stall until the holder finishes.
+    // 2. Waiting from a current-thread runtime or a plain thread panics.
+    #[test]
+    fn waiting_for_a_busy_connection_does_not_stall_other_tasks() {
+        let db = Database::memory();
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_time()
+            .build()
+            .unwrap();
+        let holder = db.clone();
+        let (held_tx, held_rx) = std::sync::mpsc::channel();
+        let release = std::thread::spawn(move || {
+            let _guard = holder.conn().unwrap();
+            held_tx.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(600));
+            std::time::Instant::now()
+        });
+        held_rx.recv().unwrap();
+        let waiter = db.clone();
+        let other_done = runtime.block_on(async move {
+            let blocked = tokio::spawn(async move {
+                drop(waiter.conn().unwrap());
+            });
+            tokio::task::yield_now().await;
+            let other = tokio::spawn(async {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                std::time::Instant::now()
+            });
+            let finished = other.await.unwrap();
+            blocked.await.unwrap();
+            finished
+        });
+        let released = release.join().unwrap();
+        assert!(
+            other_done < released,
+            "a blocked lock wait stalled the runtime"
+        );
+
+        // Plain threads and current-thread runtimes still just wait.
+        drop(db.conn().unwrap());
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(async { drop(db.read_conn().unwrap()) });
+    }
+
+    // New-mail alert failure modes:
+    // - an older row with a future Date header hides a later arrival
+    // - an arrival with an earlier Date than the newest row is skipped
+    // - a read arrival, or one filed out of the Inbox, still alerts
+    // - mail cached before the pass alerts again
+    fn arrival_alert(existing: CachedMessage, arrival: CachedMessage) -> Option<u32> {
+        let db = Database::memory();
+        let account = account();
+        let id = account.summary.id.clone();
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, &id, "INBOX", &MailboxRole::Inbox);
+        db.upsert_message(&id, inbox, &existing).unwrap();
+        let before = db.inbox_high_water(&id).unwrap();
+        db.upsert_message(&id, inbox, &arrival).unwrap();
+        db.newest_unread_inbox_after(&id, before)
+            .unwrap()
+            .map(|item| item.uid)
+    }
+
+    #[test]
+    fn new_mail_alert_follows_arrival_not_date_header() {
+        let read = |uid, date| CachedMessage {
+            is_read: true,
+            ..message(uid, date)
+        };
+        assert_eq!(
+            arrival_alert(
+                read(1, "2026-10-13T09:00:00Z"),
+                message(2, "2026-10-13T10:00:00Z")
+            ),
+            Some(2)
+        );
+        assert_eq!(
+            arrival_alert(
+                read(1, "2099-01-01T00:00:00Z"),
+                message(2, "2026-10-13T10:00:00Z")
+            ),
+            Some(2)
+        );
+        assert_eq!(
+            arrival_alert(
+                read(1, "2026-10-13T10:00:00Z"),
+                message(2, "2026-10-13T09:50:00Z")
+            ),
+            Some(2)
+        );
+        assert_eq!(
+            arrival_alert(
+                message(1, "2026-10-13T09:00:00Z"),
+                read(2, "2026-10-13T10:00:00Z")
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn new_mail_alert_skips_mail_leaving_the_inbox() {
+        let db = Database::memory();
+        let account = account();
+        let id = account.summary.id.clone();
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, &id, "INBOX", &MailboxRole::Inbox);
+        let archive = mailbox(&db, &id, "Archive", &MailboxRole::Archive);
+        db.upsert_message(&id, inbox, &message(1, "2026-08-18T12:00:00Z"))
+            .unwrap();
+        let before = db.inbox_high_water(&id).unwrap();
+        db.upsert_message(&id, inbox, &message(2, "2026-08-19T12:00:00Z"))
+            .unwrap();
+        db.upsert_message(&id, inbox, &message(3, "2026-08-20T12:00:00Z"))
+            .unwrap();
+        let newest = db.newest_unread_inbox_after(&id, before).unwrap().unwrap();
+        assert_eq!(newest.uid, 3);
+        db.mark_pending_move(newest.id, archive).unwrap();
+        let next = db.newest_unread_inbox_after(&id, before).unwrap().unwrap();
+        assert_eq!(next.uid, 2);
+        let after = db.inbox_high_water(&id).unwrap();
+        assert!(db.newest_unread_inbox_after(&id, after).unwrap().is_none());
     }
 
     #[test]
@@ -6769,5 +6501,324 @@ mod tests {
         db.clear_pending_move(id).unwrap();
 
         assert_eq!(mailbox_counts(&db, account_id, archive), (3, 1));
+    }
+
+    // Failure modes for erasing local mail:
+    // 1. Cleared bodies stay readable in free pages of the database file.
+    // 2. Cleared bodies stay readable in the WAL file.
+    // 3. Removing an account leaves its mail recoverable on disk.
+    // 4. Compacting loses envelopes that should survive a body clear.
+    #[test]
+    fn cleared_and_removed_mail_is_not_left_on_disk() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("postal-snap.sqlite3");
+        let marker = "zq-private-body-marker";
+        let on_disk = |needle: &str| {
+            ["postal-snap.sqlite3", "postal-snap.sqlite3-wal"]
+                .iter()
+                .filter_map(|name| std::fs::read(directory.path().join(name)).ok())
+                .any(|bytes| {
+                    bytes
+                        .windows(needle.len())
+                        .any(|window| window == needle.as_bytes())
+                })
+        };
+        let db = Database::open(&path).unwrap();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, &account.summary.id, "INBOX", &MailboxRole::Inbox);
+        let mut cached = message(1, "2026-08-18T12:00:00Z");
+        cached.text_body = marker.repeat(400);
+        cached.raw_message = marker.repeat(400).into_bytes();
+        db.upsert_message(&account.summary.id, inbox, &cached)
+            .unwrap();
+        assert!(on_disk(marker));
+
+        db.clear_downloaded_mail().unwrap();
+        db.compact().unwrap();
+        assert!(!on_disk(marker));
+        assert_eq!(db.list_messages(inbox, None, 10).unwrap().items.len(), 1);
+
+        db.remove_account(&account.summary.id).unwrap();
+        db.compact().unwrap();
+        assert!(!on_disk("Family picnic"));
+    }
+
+    // Failure modes for the parse quarantine:
+    // 1. One quit or update restart mid-parse quarantines a good message.
+    // 2. A parser that crashes the app every time is parsed on every launch.
+    // 3. A caught parser panic is retried like an ordinary failure.
+    // 4. A finished parse leaves an unfinished count behind.
+    // 5. Opening a quarantined message parses it again.
+    #[test]
+    fn interrupted_parse_quarantines_only_repeat_crashes() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, &account.summary.id, "INBOX", &MailboxRole::Inbox);
+        for uid in [1, 2, 3] {
+            let mut envelope = message(uid, "2026-08-18T12:00:00Z");
+            envelope.raw_message.clear();
+            envelope.text_body.clear();
+            db.upsert_message(&account.summary.id, inbox, &envelope)
+                .unwrap();
+        }
+        let policy = CachePolicy::default();
+        let candidates = |db: &Database| {
+            let mut uids = db
+                .prefetch_candidates(inbox, &policy, 10, u64::MAX, u64::MAX)
+                .unwrap()
+                .into_iter()
+                .map(|(uid, _)| uid)
+                .collect::<Vec<_>>();
+            uids.sort_unstable();
+            uids
+        };
+        let quarantined = |uid: u32| {
+            let item = db
+                .list_messages(inbox, None, 10)
+                .unwrap()
+                .items
+                .into_iter()
+                .find(|item| item.uid == uid)
+                .unwrap();
+            db.parse_quarantined(item.id, &account.summary.id).unwrap()
+        };
+        // Message 1: one unfinished parse (a quit) is forgiven.
+        db.begin_parse(inbox, 1).unwrap();
+        assert!(!quarantined(1));
+        assert_eq!(candidates(&db), vec![1, 2, 3]);
+        // A second unfinished parse in a row looks like a crash.
+        db.begin_parse(inbox, 1).unwrap();
+        assert!(quarantined(1));
+        // Message 2: a finished parse resets the count.
+        db.begin_parse(inbox, 2).unwrap();
+        db.end_parse(inbox, 2).unwrap();
+        db.begin_parse(inbox, 2).unwrap();
+        assert!(!quarantined(2));
+        // Message 3: a caught panic quarantines at once.
+        db.quarantine_parse(inbox, 3).unwrap();
+        assert!(quarantined(3));
+        assert_eq!(candidates(&db), vec![2]);
+    }
+
+    // Failure modes for a database the app cannot open:
+    // 1. A newer schema is reported as generic damage, not as a newer version.
+    // 2. Opening it rewrites or migrates the newer file.
+    // 3. The stand-in cannot list accounts, so the window cannot load.
+    #[test]
+    fn newer_database_is_reported_and_left_untouched() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("postal-snap.sqlite3");
+        Connection::open(&path)
+            .unwrap()
+            .pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION + 1)
+            .unwrap();
+        let before = std::fs::read(&path).unwrap();
+        assert_eq!(Database::open(&path).err().as_deref(), Some(NEWER_DATABASE));
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert!(Database::unavailable()
+            .unwrap()
+            .list_accounts()
+            .unwrap()
+            .is_empty());
+    }
+
+    // Failure modes for an interrupted new-mail catch-up:
+    // 1. The next pass sees the stored UIDNEXT, calls the folder unchanged,
+    //    and never fetches the rest of the gap.
+    // 2. Forgetting UIDNEXT also loses validity or counts.
+    #[test]
+    fn interrupted_catch_up_is_not_seen_as_unchanged() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let inbox = db
+            .upsert_mailbox(
+                &account.summary.id,
+                "INBOX",
+                &MailboxRole::Inbox,
+                Some(11),
+                Some(100),
+                Some(3),
+                7,
+            )
+            .unwrap();
+        db.forget_uid_next(inbox).unwrap();
+        assert_eq!(
+            db.mailbox_sync_state(&account.summary.id, "INBOX").unwrap(),
+            Some((Some(11), None, 7, Some(3)))
+        );
+    }
+
+    // Failure modes for "try later" retries:
+    // 1. A deferred row is retried on the very next sync pass.
+    // 2. Retries never stop for a server that always says "try later".
+    // 3. A user retry from needs_attention starts with a spent budget.
+    // 4. Another account's rows are touched.
+    #[test]
+    fn try_later_replies_back_off_and_stop() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let account_id = &account.summary.id;
+        let id = db
+            .queue_outbox(&draft(account_id), "queued", None, "", b"", None)
+            .unwrap();
+        assert_eq!(
+            db.due_queued_outbox_ids(account_id).unwrap(),
+            vec![id.clone()]
+        );
+        assert!(db.defer_outbox_retry(&id, account_id, 3).unwrap());
+        assert!(db.due_queued_outbox_ids(account_id).unwrap().is_empty());
+        assert!(db
+            .due_queued_outbox_ids("other-account")
+            .unwrap()
+            .is_empty());
+        assert!(db.defer_outbox_retry(&id, account_id, 3).unwrap());
+        assert!(!db.defer_outbox_retry(&id, account_id, 3).unwrap());
+        db.set_outbox_state(&id, account_id, "needs_attention", None)
+            .unwrap();
+        assert!(db
+            .claim_outbox_delivery(&id, account_id, "needs_attention")
+            .unwrap());
+        db.set_outbox_state(&id, account_id, "queued", None)
+            .unwrap();
+        assert_eq!(
+            db.due_queued_outbox_ids(account_id).unwrap(),
+            vec![id.clone()]
+        );
+        assert!(db.defer_outbox_retry(&id, account_id, 3).unwrap());
+    }
+
+    // Failure modes for the read-only connection:
+    // 1. A list or detail read waits behind a held writer lock.
+    // 2. A read does not see a write that already committed.
+    // 3. The reader can write, bypassing the writer's rules.
+    // 4. A panic while the writer is locked breaks the database for good.
+    #[test]
+    fn reads_do_not_wait_for_the_writer_and_see_commits() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Database::open(&directory.path().join("postal-snap.sqlite3")).unwrap();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, &account.summary.id, "INBOX", &MailboxRole::Inbox);
+        db.upsert_message(
+            &account.summary.id,
+            inbox,
+            &message(1, "2026-08-18T12:00:00Z"),
+        )
+        .unwrap();
+
+        let writer = db.conn().unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let reader = db.clone();
+        std::thread::spawn(move || {
+            let accounts = reader.list_accounts().unwrap().len();
+            let messages = reader
+                .list_messages_filtered(
+                    inbox,
+                    None,
+                    10,
+                    crate::models::MessageListFilter::All,
+                    crate::models::MessageListSort::Date,
+                )
+                .map(|page| page.items.len());
+            sender.send((accounts, messages.is_ok())).unwrap();
+        });
+        // The account list must arrive while the writer is still held.
+        let first = receiver.recv_timeout(Duration::from_secs(2));
+        drop(writer);
+        assert!(first.is_ok(), "reader waited for the writer");
+        assert_eq!(first.unwrap().0, 1);
+
+        assert!(db
+            .read_conn()
+            .unwrap()
+            .execute("DELETE FROM accounts", [])
+            .is_err());
+
+        let panicking = db.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = panicking.conn().unwrap();
+            panic!("simulated panic while locked");
+        })
+        .join();
+        assert_eq!(db.list_accounts().unwrap().len(), 1);
+        db.set_account_state(&account.summary.id, "idle", None)
+            .unwrap();
+    }
+
+    // Failure modes for compacting while the reader is busy:
+    // 1. A read in progress keeps the WAL from truncating, leaving old
+    //    pages (and removed mail) in the WAL file.
+    // 2. Compacting deadlocks with a read that is waiting on the writer.
+    #[test]
+    fn compact_waits_for_reads_and_empties_the_wal() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("postal-snap.sqlite3");
+        let db = Database::open(&path).unwrap();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let held = db.read_conn().unwrap();
+        let compacting = db.clone();
+        let done = std::thread::spawn(move || compacting.compact());
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(!done.is_finished(), "compact ran under an open read");
+        drop(held);
+        done.join().unwrap().unwrap();
+        let wal = std::fs::metadata(directory.path().join("postal-snap.sqlite3-wal"))
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
+        assert_eq!(wal, 0);
+        assert_eq!(db.list_accounts().unwrap().len(), 1);
+    }
+
+    // Failure modes for recording when a message was opened:
+    // 1. Opening a message while sync holds the writer waits behind it.
+    // 2. That open is never recorded, so eviction drops the body early.
+    #[test]
+    fn opening_during_a_sync_write_still_records_recency() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Database::open(&directory.path().join("postal-snap.sqlite3")).unwrap();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, &account.summary.id, "INBOX", &MailboxRole::Inbox);
+        db.upsert_message(
+            &account.summary.id,
+            inbox,
+            &message(1, "2026-08-18T12:00:00Z"),
+        )
+        .unwrap();
+        let id = db.list_messages(inbox, None, 10).unwrap().items[0].id;
+        db.conn()
+            .unwrap()
+            .execute("UPDATE messages SET accessed_at='2000-01-01 00:00:00'", [])
+            .unwrap();
+        let writer = db.conn().unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let reader = db.clone();
+        let account_id = account.summary.id.clone();
+        std::thread::spawn(move || {
+            sender
+                .send(reader.message_detail(id, &account_id).is_ok())
+                .unwrap();
+        });
+        assert_eq!(receiver.recv_timeout(Duration::from_secs(2)), Ok(true));
+        drop(writer);
+        let recorded = (0..50).any(|_| {
+            std::thread::sleep(Duration::from_millis(20));
+            let at: String = db
+                .read_conn()
+                .unwrap()
+                .query_row(
+                    "SELECT accessed_at FROM messages WHERE id=?1",
+                    [id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            at.as_str() > "2000-01-01 00:00:00"
+        });
+        assert!(recorded, "the open was never recorded");
     }
 }

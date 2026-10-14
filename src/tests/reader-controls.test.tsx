@@ -4,7 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AttachmentList } from "../components/reader/attachmentList";
 import { MessageHeader } from "../components/reader/messageHeader";
 import { ReaderToolbar } from "../components/reader/readerToolbar";
-import { laterTodayIso, SnoozePanel } from "../components/reader/snoozePanel";
+import { SnoozePanel } from "../components/reader/snoozePanel";
+import { laterTodayIso } from "../components/reader/snoozeTimes";
 import { strings } from "../i18n";
 import {
   makeAccount,

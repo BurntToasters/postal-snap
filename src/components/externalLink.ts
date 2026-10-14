@@ -14,7 +14,10 @@ export async function inspectAndOpenExternalLink(
     const check = await api.inspectExternalUrl(url);
     const shownUrl =
       check.url.length > 1400 ? `${check.url.slice(0, 1400)}…` : check.url;
-    const different = differentLinkAddress(linkText ?? "", check.url);
+    const found = differentLinkAddress(linkText ?? "", check.url);
+    // Keep the native dialog within its size limit for any script.
+    const different =
+      found && found.length > 200 ? `${found.slice(0, 200)}…` : found;
     if (check.reportedThreat) {
       const proceed = await api.showNativeConfirm(
         strings.reader.reportedThreatTitle,

@@ -527,6 +527,17 @@ export function SettingsDialog({
     }
   }
 
+  async function retryAttachmentCleanup() {
+    try {
+      const leftovers = await api.retryAttachmentCleanup();
+      setUsage((current) =>
+        current ? { ...current, attachmentLeftovers: leftovers } : current,
+      );
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }
+
   async function exportSettings() {
     if (dataBusy) return;
     setDataBusy(true);
@@ -644,6 +655,8 @@ export function SettingsDialog({
       setAccounts(remaining);
       if (result?.cleanupPending) {
         setError(strings.settings.accountCleanupWarning);
+      } else if (result?.diskSpacePending) {
+        setError(strings.settings.accountDiskSpacePending);
       }
       if (remaining.length === 0) {
         onLastAccountRemoved?.();
@@ -1203,6 +1216,7 @@ export function SettingsDialog({
                     usage={usage}
                     update={update}
                     clearCache={clearCache}
+                    retryAttachmentCleanup={retryAttachmentCleanup}
                   />
                 ) : null}
                 {tab === "accounts" ? (

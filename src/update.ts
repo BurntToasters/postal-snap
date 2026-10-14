@@ -1,4 +1,5 @@
 import { api } from "./api";
+import { flushOpenDraft } from "./draftFlush";
 import { strings } from "./i18n";
 import { closesToTrayOnClose } from "./settings";
 import { useAppStore } from "./store";
@@ -340,11 +341,15 @@ export function startDeferredUpdateOnQuit(): () => void {
   }
   let unlisten: (() => void) | undefined;
   let cancelled = false;
+  // Attached while an update is ready or a message is open, so closing the
+  // last window installs the update or saves the message first.
+  const needed = () =>
+    Boolean(pendingPackage) || useAppStore.getState().composerOpen;
   const attach = () => {
-    if (cancelled || unlisten || !pendingPackage) return;
+    if (cancelled || unlisten || !needed()) return;
     void import("@tauri-apps/api/window")
       .then(async ({ getCurrentWindow }) => {
-        if (cancelled || unlisten || !pendingPackage) return;
+        if (cancelled || unlisten || !needed()) return;
         // Always preventDefault: Tauri's listener otherwise destroy()s the
         // window, and Postal Snap does not grant allow-destroy.
         unlisten = await getCurrentWindow().onCloseRequested(async (event) => {
@@ -362,10 +367,14 @@ export function startDeferredUpdateOnQuit(): () => void {
       .catch(() => undefined);
   };
   updateReadyListeners.add(attach);
+  const stopComposerWatch = useAppStore.subscribe((state) => {
+    if (state.composerOpen) attach();
+  });
   attach();
   return () => {
     cancelled = true;
     updateReadyListeners.delete(attach);
+    stopComposerWatch();
     unlisten?.();
   };
 }
@@ -424,7 +433,26 @@ export function startBackgroundUpdateWhileHidden(): () => void {
   };
 }
 
+let quitInFlight: Promise<void> | undefined;
+
 export async function quitOrApplyPendingUpdate(): Promise<void> {
+  if (quitInFlight) return quitInFlight;
+  const task = quitAfterDraftSave();
+  quitInFlight = task;
+  try {
+    await task;
+  } finally {
+    if (quitInFlight === task) quitInFlight = undefined;
+  }
+}
+
+async function quitAfterDraftSave(): Promise<void> {
+  try {
+    await flushOpenDraft();
+  } catch {
+    useAppStore.getState().setError(strings.update.draftSaveFailed);
+    return;
+  }
   if (getUpdateReadyVersion() && !quitApplyFailed) {
     await applyPendingUpdate("quit");
     return;

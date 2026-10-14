@@ -28,6 +28,7 @@ fn normalize_recent_query(query: &str) -> Result<String, String> {
     Ok(clipped)
 }
 
+database_operations! {
 impl Database {
     pub fn list_recent_searches(&self, account_id: &str) -> Result<Vec<String>, String> {
         self.account(account_id)?;
@@ -135,6 +136,7 @@ impl Database {
             .map_err(db_error)?;
         Ok(())
     }
+}
 }
 
 #[cfg(test)]

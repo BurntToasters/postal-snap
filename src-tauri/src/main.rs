@@ -13,12 +13,14 @@ mod models;
 // Background OAuth groundwork (no UI yet): consumed by a future setup flow.
 #[allow(dead_code)]
 mod oauth;
+mod outbox_reason;
 mod providers;
 mod resume_watch;
 mod search_query;
 mod security;
 mod settings;
 mod storage;
+mod strings;
 mod threat_blocking;
 mod tray;
 mod unsubscribe;
@@ -52,8 +54,9 @@ fn main() {
                 return;
             }
             if action == "app-quit" {
-                // A ready update installs from the frontend on quit.
-                if update_relaunch::update_ready() {
+                // The window saves an open message and installs a ready
+                // update before it quits.
+                if update_relaunch::quit_needs_window() {
                     let _ = app.emit("tray-quit", ());
                 } else {
                     app.exit(0);
@@ -112,24 +115,56 @@ fn main() {
             let database_path = mail_dir.join("postal-snap.sqlite3");
             let attachment_dir = mail_dir.join("draft-attachments");
             std::fs::create_dir_all(&attachment_dir)?;
-            let orphan_cleanup_dir = attachment_dir.clone();
-            let database = db::Database::open(&database_path).map_err(std::io::Error::other)?;
-            // Idempotent: also repairs grants left behind by an earlier
-            // migration whose rebase did not finish.
-            if mail_dir != data_dir
-                && database
-                    .rebase_file_grant_paths(&data_dir.join(storage::ATTACHMENT_DIR), &attachment_dir)
-                    .is_err()
-            {
-                eprintln!("Saved attachment locations could not be updated.");
-            }
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&database_path, std::fs::Permissions::from_mode(0o600))?;
+                std::fs::set_permissions(&attachment_dir, std::fs::Permissions::from_mode(0o700))?;
             }
-            let settings = settings::SettingsStore::load(data_dir.join("settings.json"), &database)
-                .map_err(std::io::Error::other)?;
+            let orphan_cleanup_dir = attachment_dir.clone();
+            let compact_marker = commands::compact_marker_for(&attachment_dir);
+            let orphan_marker = commands::orphan_marker_for(&attachment_dir);
+            // A database that cannot open must not exit silently: open an
+            // empty stand-in and explain in the window. Nothing is written.
+            let (database, database_error) = match db::Database::open(&database_path) {
+                Ok(database) => (database, None),
+                Err(error) => (
+                    db::Database::unavailable().map_err(std::io::Error::other)?,
+                    Some(if error == db::NEWER_DATABASE {
+                        "This mail was saved by a newer version of Postal Snap. Install the latest Postal Snap to open it. Your mail data was not changed."
+                    } else {
+                        "Postal Snap could not open its mail database. Your mail data was not deleted. Restart your computer, then open Postal Snap again."
+                    }),
+                ),
+            };
+            if database_error.is_none() {
+                // Idempotent: also repairs grants left behind by an earlier
+                // migration whose rebase did not finish.
+                if mail_dir != data_dir
+                    && database
+                        .rebase_file_grant_paths(&data_dir.join(storage::ATTACHMENT_DIR), &attachment_dir)
+                        .is_err()
+                {
+                    eprintln!("Saved attachment locations could not be updated.");
+                }
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&database_path, std::fs::Permissions::from_mode(0o600))?;
+                }
+            }
+            let settings_path = data_dir.join("settings.json");
+            let (settings, settings_error) = if database_error.is_some() {
+                (settings::SettingsStore::unavailable(settings_path), None)
+            } else {
+                match settings::SettingsStore::load(settings_path.clone(), &database) {
+                    Ok(settings) => (settings, None),
+                    Err(_) => (
+                        settings::SettingsStore::unavailable(settings_path),
+                        Some("Postal Snap could not open its settings file. Check free disk space and folder permissions, then restart Postal Snap."),
+                    ),
+                }
+            };
+            let storage_error = database_error.or(settings_error);
             app.manage(AppState::new(database, settings, attachment_dir));
             if std::env::args().any(|argument| argument == "--cleanup-credentials") {
                 if let Ok(accounts) = app.state::<AppState>().db.list_accounts() {
@@ -144,13 +179,13 @@ fn main() {
             tauri::async_runtime::spawn(threat_blocking::warmup());
 
             let handle = app.handle().clone();
-            let (accounts, startup_error) = match app
-                .state::<AppState>()
-                .db
-                .list_accounts()
-            {
-                Ok(accounts) => (accounts, None),
-                Err(_) => (
+            let (accounts, startup_error) = match (
+                storage_error,
+                app.state::<AppState>().db.list_accounts(),
+            ) {
+                (Some(error), _) => (Vec::new(), Some(error.to_string())),
+                (None, Ok(accounts)) => (accounts, None),
+                (None, Err(_)) => (
                     Vec::new(),
                     Some(
                         "Postal Snap could not open saved accounts. Your mail data was not deleted. Restart Postal Snap to try again.".to_string(),
@@ -158,6 +193,18 @@ fn main() {
                 ),
             };
             let has_startup_error = startup_error.is_some();
+            if storage_error.is_some() {
+                app.state::<AppState>().set_storage_unavailable();
+            } else {
+                let db = app.state::<AppState>().db.clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    let _ = db.maintain_search_index();
+                    // An earlier removal could not free disk space; retry.
+                    if compact_marker.exists() {
+                        let _ = commands::accounts::compact_or_mark(&db, &compact_marker);
+                    }
+                });
+            }
             app.state::<AppState>().set_startup_error(startup_error)?;
             let window_config = app
                 .config()
@@ -240,16 +287,26 @@ fn main() {
             ))]
             {
                 use tauri_plugin_deep_link::DeepLinkExt;
-                let _ = app.deep_link().register_all();
+                // Claim mailto on first launch only. Later launches refresh
+                // the entry (an AppImage may move) only while Postal Snap is
+                // still the default, so a user's later choice is kept.
+                let marker = data_dir.join("mailto-claimed");
+                let deep_link = app.deep_link();
+                let claim =
+                    !marker.exists() || deep_link.is_registered("mailto").unwrap_or(false);
+                if claim && deep_link.register_all().is_ok() {
+                    let _ = std::fs::write(&marker, b"");
+                }
             }
             if !has_startup_error {
                 let account_ids = accounts
                     .iter()
                     .map(|account| account.id.clone())
                     .collect();
-                tauri::async_runtime::spawn(commands::cleanup_orphaned_account_dirs(
+                tauri::async_runtime::spawn(commands::sweep_orphans_at_startup(
                     orphan_cleanup_dir,
                     account_ids,
+                    orphan_marker,
                 ));
             }
             {
@@ -403,6 +460,7 @@ fn main() {
             commands::settings_system::get_startup_error,
             commands::settings_system::get_cache_usage,
             commands::settings_system::clear_downloaded_mail,
+            commands::settings_system::retry_attachment_cleanup,
             commands::settings_system::get_distribution_channel,
             commands::settings_system::get_license_credits,
             commands::accounts::discover_account_aliases,
@@ -433,6 +491,7 @@ fn main() {
             commands::settings_system::clear_update_relaunch,
             commands::settings_system::get_update_relaunch,
             commands::settings_system::set_update_ready,
+            commands::settings_system::set_composer_open,
             commands::settings_system::background_update_allowed,
             commands::settings_system::begin_update_install,
             commands::settings_system::release_update_install,
@@ -489,83 +548,88 @@ fn build_application_menu<R: Runtime>(
     has_accounts: bool,
 ) -> tauri::Result<Menu<R>> {
     let handle = app.handle();
-    let settings = MenuItemBuilder::with_id("settings", "Settings…")
+    let settings = MenuItemBuilder::with_id("settings", strings::menu::SETTINGS)
         .accelerator("CmdOrCtrl+Comma")
         .build(handle)?;
-    let compose = MenuItemBuilder::with_id("compose", "New Message")
+    let compose = MenuItemBuilder::with_id("compose", strings::menu::NEW_MESSAGE)
         .enabled(has_accounts)
         .accelerator("CmdOrCtrl+N")
         .build(handle)?;
-    let get_mail = MenuItemBuilder::with_id("get-mail", "Get Mail")
+    let get_mail = MenuItemBuilder::with_id("get-mail", strings::menu::GET_MAIL)
         .enabled(has_accounts)
         .accelerator("CmdOrCtrl+Shift+N")
         .build(handle)?;
-    let reply = MenuItemBuilder::with_id("reply", "Reply")
+    let reply = MenuItemBuilder::with_id("reply", strings::menu::REPLY)
         .enabled(has_accounts)
         .accelerator("CmdOrCtrl+R")
         .build(handle)?;
-    let reply_all = MenuItemBuilder::with_id("reply-all", "Reply All")
+    let reply_all = MenuItemBuilder::with_id("reply-all", strings::menu::REPLY_ALL)
         .enabled(has_accounts)
         .accelerator("CmdOrCtrl+Shift+R")
         .build(handle)?;
-    let forward = MenuItemBuilder::with_id("forward", "Forward")
+    let forward = MenuItemBuilder::with_id("forward", strings::menu::FORWARD)
         .enabled(has_accounts)
         .accelerator("CmdOrCtrl+Shift+F")
         .build(handle)?;
-    let redirect = MenuItemBuilder::with_id("redirect", "Redirect")
+    let redirect = MenuItemBuilder::with_id("redirect", strings::menu::REDIRECT)
         .enabled(has_accounts)
         .build(handle)?;
-    let archive = MenuItemBuilder::with_id("archive", "Archive")
+    let archive = MenuItemBuilder::with_id("archive", strings::menu::ARCHIVE)
         .enabled(has_accounts)
         .accelerator("CmdOrCtrl+E")
         .build(handle)?;
-    let trash = MenuItemBuilder::with_id("trash", "Move to Trash")
+    let trash = MenuItemBuilder::with_id("trash", strings::menu::MOVE_TO_TRASH)
         .enabled(has_accounts)
         .accelerator("CmdOrCtrl+Backspace")
         .build(handle)?;
-    let flag = MenuItemBuilder::with_id("toggle-star", "Flag")
+    let flag = MenuItemBuilder::with_id("toggle-star", strings::menu::FLAG)
         .enabled(has_accounts)
         .accelerator("CmdOrCtrl+Shift+L")
         .build(handle)?;
-    let junk = MenuItemBuilder::with_id("junk", "Move to Junk")
+    let junk = MenuItemBuilder::with_id("junk", strings::menu::MOVE_TO_JUNK)
         .enabled(has_accounts)
         .accelerator("CmdOrCtrl+Shift+J")
         .build(handle)?;
-    let toggle_read = MenuItemBuilder::with_id("toggle-read", "Mark as Read")
+    let toggle_read = MenuItemBuilder::with_id("toggle-read", strings::menu::MARK_AS_READ)
         .enabled(has_accounts)
         .accelerator("CmdOrCtrl+Shift+U")
         .build(handle)?;
-    let print = MenuItemBuilder::with_id("print", "Print…")
+    let print = MenuItemBuilder::with_id("print", strings::menu::PRINT)
         .enabled(has_accounts)
         .accelerator("CmdOrCtrl+P")
         .build(handle)?;
-    let file_print = MenuItemBuilder::with_id("file-print", "Print…")
+    let file_print = MenuItemBuilder::with_id("file-print", strings::menu::PRINT)
         .enabled(has_accounts)
         .build(handle)?;
-    let find_in_message = MenuItemBuilder::with_id("find-in-message", "Find in Message")
-        .enabled(has_accounts)
-        .accelerator("Alt+CmdOrCtrl+F")
-        .build(handle)?;
-    let pane_right = MenuItemBuilder::with_id("reading-pane-right", "Reading Pane on Right")
-        .accelerator("CmdOrCtrl+Alt+Right")
-        .build(handle)?;
-    let pane_bottom = MenuItemBuilder::with_id("reading-pane-bottom", "Reading Pane Below")
-        .accelerator("CmdOrCtrl+Alt+Down")
-        .build(handle)?;
-    let pane_hidden = MenuItemBuilder::with_id("reading-pane-hidden", "Hide Reading Pane")
-        .accelerator("CmdOrCtrl+Alt+Up")
-        .build(handle)?;
-    let text_larger = MenuItemBuilder::with_id("text-larger", "Make Text Larger")
+    let find_in_message =
+        MenuItemBuilder::with_id("find-in-message", strings::menu::FIND_IN_MESSAGE)
+            .enabled(has_accounts)
+            .accelerator("Alt+CmdOrCtrl+F")
+            .build(handle)?;
+    let pane_right =
+        MenuItemBuilder::with_id("reading-pane-right", strings::menu::READING_PANE_ON_RIGHT)
+            .accelerator("CmdOrCtrl+Alt+Right")
+            .build(handle)?;
+    let pane_bottom =
+        MenuItemBuilder::with_id("reading-pane-bottom", strings::menu::READING_PANE_BELOW)
+            .accelerator("CmdOrCtrl+Alt+Down")
+            .build(handle)?;
+    let pane_hidden =
+        MenuItemBuilder::with_id("reading-pane-hidden", strings::menu::HIDE_READING_PANE)
+            .accelerator("CmdOrCtrl+Alt+Up")
+            .build(handle)?;
+    let text_larger = MenuItemBuilder::with_id("text-larger", strings::menu::MAKE_TEXT_LARGER)
         .accelerator("CmdOrCtrl+Plus")
         .build(handle)?;
-    let text_smaller = MenuItemBuilder::with_id("text-smaller", "Make Text Smaller")
+    let text_smaller = MenuItemBuilder::with_id("text-smaller", strings::menu::MAKE_TEXT_SMALLER)
         .accelerator("CmdOrCtrl+-")
         .build(handle)?;
 
     let check_updates =
-        MenuItemBuilder::with_id("check-for-updates", "Check for Updates…").build(handle)?;
+        MenuItemBuilder::with_id("check-for-updates", strings::menu::CHECK_FOR_UPDATES)
+            .build(handle)?;
 
-    let mut app_menu_builder = SubmenuBuilder::with_id(handle, "app", "Postal Snap")
+    let mut app_menu_builder = SubmenuBuilder::with_id(handle, "app", strings::menu::POSTAL_SNAP)
         .about(None)
         .separator();
     if compiled_updater_menu_visible() {
@@ -581,11 +645,11 @@ fn build_application_menu<R: Runtime>(
     #[cfg(target_os = "macos")]
     let app_menu_builder = app_menu_builder.show_all();
     // Custom Quit so a downloaded update can install before exit.
-    let quit = MenuItemBuilder::with_id("app-quit", "Quit Postal Snap")
+    let quit = MenuItemBuilder::with_id("app-quit", strings::menu::QUIT_POSTAL_SNAP)
         .accelerator("CmdOrCtrl+Q")
         .build(handle)?;
     let app_menu = app_menu_builder.separator().item(&quit).build()?;
-    let file_menu = SubmenuBuilder::with_id(handle, "file", "File")
+    let file_menu = SubmenuBuilder::with_id(handle, "file", strings::menu::FILE)
         .item(&compose)
         .item(&get_mail)
         .separator()
@@ -593,7 +657,7 @@ fn build_application_menu<R: Runtime>(
         .separator()
         .close_window()
         .build()?;
-    let edit_menu = SubmenuBuilder::with_id(handle, "edit", "Edit")
+    let edit_menu = SubmenuBuilder::with_id(handle, "edit", strings::menu::EDIT)
         .undo()
         .redo()
         .separator()
@@ -604,7 +668,7 @@ fn build_application_menu<R: Runtime>(
         .separator()
         .item(&find_in_message)
         .build()?;
-    let message_menu = SubmenuBuilder::with_id(handle, "message", "Message")
+    let message_menu = SubmenuBuilder::with_id(handle, "message", strings::menu::MESSAGE)
         .item(&reply)
         .item(&reply_all)
         .item(&forward)
@@ -619,7 +683,7 @@ fn build_application_menu<R: Runtime>(
         .separator()
         .item(&print)
         .build()?;
-    let view_menu = SubmenuBuilder::with_id(handle, "view", "View")
+    let view_menu = SubmenuBuilder::with_id(handle, "view", strings::menu::VIEW)
         .item(&text_larger)
         .item(&text_smaller)
         .separator()
@@ -630,7 +694,7 @@ fn build_application_menu<R: Runtime>(
         .fullscreen()
         .build()?;
     #[cfg(target_os = "macos")]
-    let window_menu = SubmenuBuilder::with_id(handle, "window", "Window")
+    let window_menu = SubmenuBuilder::with_id(handle, "window", strings::menu::WINDOW)
         .minimize()
         .maximize()
         .separator()
@@ -743,10 +807,12 @@ fn allowed_webview_navigation(url: &url::Url) -> bool {
         // Reader and print frames load sanitized mail via srcdoc. WebKit on
         // macOS 27 and WebKitGTK ask this policy for subframe loads too.
         "about" => matches!(url.path(), "srcdoc" | "blank"),
-        "http" | "https" => matches!(
-            url.host_str(),
-            Some("localhost" | "127.0.0.1" | "tauri.localhost" | "ipc.localhost")
-        ),
+        "http" | "https" => match url.host_str() {
+            Some("tauri.localhost" | "ipc.localhost") => true,
+            // Only the Vite dev server; release builds never load it.
+            Some("localhost" | "127.0.0.1") => cfg!(debug_assertions),
+            _ => false,
+        },
         _ => false,
     }
 }

@@ -390,6 +390,7 @@ describe("settings IPC serialization", () => {
       ["get_startup_error", () => api.getStartupError()],
       ["get_cache_usage", () => api.cacheUsage()],
       ["clear_downloaded_mail", () => api.clearCache()],
+      ["retry_attachment_cleanup", () => api.retryAttachmentCleanup()],
       ["get_distribution_channel", () => api.distribution()],
       ["get_license_credits", () => api.getLicenseCredits()],
       ["discover_account_aliases", () => api.discoverAccountAliases("acc")],

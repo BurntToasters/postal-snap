@@ -20,7 +20,7 @@ import {
   mailboxesForUnreadView,
   nextUnreadMailbox,
   previousUnreadMailbox,
-} from "../components/mail/folderTree";
+} from "../components/mail/folderTreeModel";
 import { FolderButton } from "../components/mail/folderButton";
 import { MessageList } from "../components/mail/messageList";
 import { toggleListedRead } from "../markRead";
@@ -304,7 +304,7 @@ describe("sent notice", () => {
     expect(useAppStore.getState().lastSent).toBeUndefined();
   });
 
-  it("puts the archived message back when that send is undone", async () => {
+  it("undo reopens the message without moving mail; Rust cancels the archive", async () => {
     vi.spyOn(api, "restoreOutbox").mockResolvedValue({
       id: "draft-1",
       accountId: "account-1",
@@ -325,7 +325,6 @@ describe("sent notice", () => {
         accountId: "account-1",
         scheduled: false,
         undoSeconds: 10,
-        archivedMessage: { messageId: 7, mailboxId: 4 },
       },
     });
     render(<SentNoticeToast />);
@@ -333,9 +332,9 @@ describe("sent notice", () => {
       screen.getByRole("button", { name: strings.mail.undoSend }),
     );
     await vi.waitFor(() =>
-      expect(moveBack).toHaveBeenCalledWith("account-1", 7, 4),
+      expect(useAppStore.getState().composerOpen).toBe(true),
     );
-    expect(useAppStore.getState().composerOpen).toBe(true);
+    expect(moveBack).not.toHaveBeenCalled();
   });
 });
 

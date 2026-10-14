@@ -12,6 +12,7 @@ pub struct FolderAssignment {
     pub missing: bool,
 }
 
+database_operations! {
 impl Database {
     pub fn server_folder_role(
         &self,
@@ -151,4 +152,5 @@ impl Database {
         }
         tx.commit().map_err(db_error)
     }
+}
 }

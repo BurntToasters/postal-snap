@@ -66,6 +66,8 @@ export interface AccountSummary {
 
 export interface AccountRemovalOutcome {
   cleanupPending: boolean;
+  /** Removed mail stays on disk until Postal Snap next opens. */
+  diskSpacePending?: boolean;
 }
 
 export interface AccountRemovalImpact {
@@ -180,7 +182,8 @@ export interface MessageDetail extends MessageSummary {
   attachments: Attachment[];
   references?: string[];
   /** Why the body is missing when it could not be downloaded. */
-  bodyStatus?: "available" | "offline" | "signInNeeded" | "tooLarge";
+  bodyStatus?:
+    "available" | "offline" | "signInNeeded" | "tooLarge" | "unreadable";
   /** Raw bounded header values; parsed later. */
   listUnsubscribe?: string | null;
   listUnsubscribePost?: string | null;
@@ -310,6 +313,7 @@ export interface OutboxSummary {
     | "needs_attention"
     | "scheduled";
   detail?: string | null;
+  reasonCode?: string | null;
   createdAt: string;
   sendAt?: string | null;
   /** First line of the queued message. Empty when the message has no text yet. */
@@ -459,6 +463,7 @@ export interface AppSettings {
   blockAdvertisingAndTracking: boolean;
   blockReportedThreats: boolean;
   /** Senders whose pictures load when a message opens. Checks still apply. */
+  /** Legacy allow-list retained for settings compatibility; the reader ignores it. */
   imageSenders: string[];
   groupThreads: boolean;
   /** Put this account's address on Bcc for a new message. */
@@ -581,6 +586,7 @@ export interface CacheUsage {
   bytes: number;
   maxBytes: number;
   messageCount: number;
+  attachmentLeftovers?: boolean;
 }
 export type RemoteImageResult =
   | { status: "loaded"; dataUrl: string }

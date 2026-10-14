@@ -17,6 +17,7 @@
 /* Title and count share one line, like Mail's compact list header. */
 :root[data-density="compact"] .pane-heading > span {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   gap: 8px;
   min-width: 0;

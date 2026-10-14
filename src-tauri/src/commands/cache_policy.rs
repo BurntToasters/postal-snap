@@ -4,7 +4,7 @@ use super::sync::{account_policy, emit_progress};
 use super::{command_result, wake, AppState, CommandResult};
 use crate::models::{CachePolicy, CacheUsage, SyncProgress};
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_account_cache_policy(
     account_id: String,
     state: State<'_, AppState>,
@@ -40,7 +40,7 @@ pub async fn set_account_cache_policy(
     Ok(policy)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_account_cache_usage(
     account_id: String,
     state: State<'_, AppState>,
@@ -56,14 +56,17 @@ pub async fn clear_account_downloads(
 ) -> CommandResult<()> {
     state.db.account(&account_id)?;
     let db = state.db.clone();
-    let result =
-        tauri::async_runtime::spawn_blocking(move || db.clear_account_downloads(&account_id))
-            .await
-            .map_err(|_| "Postal Snap could not clear downloaded mail.".to_string())?;
+    let marker = state.compact_marker();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        db.clear_account_downloads(&account_id)?;
+        super::accounts::compact_or_mark(&db, &marker)
+    })
+    .await
+    .map_err(|_| "Postal Snap could not clear downloaded mail.".to_string())?;
     command_result(result)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_sync_progress(
     account_id: String,
     state: State<'_, AppState>,

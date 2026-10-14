@@ -79,11 +79,24 @@ export function ConnectionPanel({
         ))
       )
         return;
+      // The saved password is sent to the new outgoing server too.
+      const outgoingChanged =
+        draft.smtp.host.trim().toLowerCase() !==
+          saved.smtp.host.trim().toLowerCase() ||
+        draft.smtp.username.trim() !== saved.smtp.username.trim();
+      if (
+        outgoingChanged &&
+        !(await api.showNativeConfirm(
+          strings.settings.outgoingChangeTitle,
+          strings.settings.outgoingChangeHelp,
+        ))
+      )
+        return;
       const value = await api.updateAccountConnection(
         account.id,
         draft.imap,
         draft.smtp,
-        changed,
+        changed || outgoingChanged,
       );
       setSaved(value);
       setDraft(value);

@@ -44,6 +44,24 @@ pub async fn save_attachment(
         .into_path()
         .map_err(|_| "Choose a valid save location.".to_string())?;
     ensure_message_content(&account_id, message_id, &state).await?;
+    let detail = state.db.message_detail(message_id, &account_id)?;
+    let stored = detail
+        .attachments
+        .iter()
+        .find(|item| item.id == attachment_id)
+        .map(|item| item.filename.clone())
+        .ok_or_else(|| "Attachment not found.".to_string())?;
+    // Judge the name the message gives and the name the user typed; the
+    // frontend's suggestion is never trusted for this.
+    let chosen = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    let mut risky = risky_file_names([stored.as_str(), chosen]);
+    risky.dedup();
+    if !confirm_risky_files(&app, risky).await? {
+        return Ok(());
+    }
     let raw = state.db.raw_message(message_id, &account_id)?;
     let (_, bytes) = mail::extract_attachment(&raw, &attachment_id)?;
     tokio::fs::write(&destination, bytes)
@@ -51,6 +69,148 @@ pub async fn save_attachment(
         .map_err(|_| "Could not save the attachment at that location.".to_string())?;
     crate::download_mark::mark_downloaded(&destination);
     Ok(())
+}
+
+/// Opening these can run code, install software, or imitate a sign-in page.
+const RISKY_EXTENSIONS: &[&str] = &[
+    "apk",
+    "app",
+    "appimage",
+    "application",
+    "appref-ms",
+    "appx",
+    "appxbundle",
+    "bat",
+    "cab",
+    "chm",
+    "cmd",
+    "com",
+    "command",
+    "cpl",
+    "deb",
+    "desktop",
+    "dmg",
+    "docm",
+    "dotm",
+    "exe",
+    "gadget",
+    "hlp",
+    "hta",
+    "htm",
+    "html",
+    "img",
+    "inetloc",
+    "inf",
+    "ins",
+    "iqy",
+    "iso",
+    "isp",
+    "jar",
+    "jnlp",
+    "js",
+    "jse",
+    "library-ms",
+    "lnk",
+    "mht",
+    "mhtml",
+    "mpkg",
+    "msc",
+    "msi",
+    "msix",
+    "msp",
+    "one",
+    "pif",
+    "pkg",
+    "potm",
+    "ppam",
+    "ppsm",
+    "pptm",
+    "ps1",
+    "ps1xml",
+    "psc1",
+    "psd1",
+    "psm1",
+    "reg",
+    "rpm",
+    "scf",
+    "scpt",
+    "scr",
+    "sct",
+    "search-ms",
+    "settingcontent-ms",
+    "sh",
+    "shtml",
+    "sldm",
+    "slk",
+    "svg",
+    "svgz",
+    "terminal",
+    "url",
+    "vbe",
+    "vbs",
+    "vhd",
+    "vhdx",
+    "webloc",
+    "website",
+    "workflow",
+    "wsc",
+    "wsf",
+    "wsh",
+    "xht",
+    "xhtml",
+    "xlam",
+    "xll",
+    "xlsm",
+    "xltm",
+];
+
+/// Saved names (after cleaning) whose extension can run code when opened.
+pub(crate) fn risky_file_names<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    names
+        .into_iter()
+        .map(security::safe_filename)
+        .filter(|name| {
+            name.rsplit_once('.').is_some_and(|(_, extension)| {
+                RISKY_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str())
+            })
+        })
+        .collect()
+}
+
+/// Ask once before saving files that can run code. True means continue.
+async fn confirm_risky_files(app: &AppHandle, names: Vec<String>) -> Result<bool, String> {
+    if names.is_empty() {
+        return Ok(true);
+    }
+    use crate::strings::files;
+    let shown: Vec<String> = names
+        .iter()
+        .take(8)
+        .map(|name| name.chars().take(120).collect())
+        .collect();
+    let message = files::risky_message(&shown, names.len());
+    let dialog = app.clone();
+    tokio::task::spawn_blocking(move || {
+        dialog
+            .dialog()
+            .message(message)
+            .title(files::RISKY_TITLE)
+            .kind(tauri_plugin_dialog::MessageDialogKind::Warning)
+            .buttons(tauri_plugin_dialog::MessageDialogButtons::OkCancelCustom(
+                files::RISKY_SAVE.into(),
+                files::CANCEL.into(),
+            ))
+            .blocking_show()
+    })
+    .await
+    .map_err(|_| "Could not open the confirmation dialog.".to_string())
+}
+
+fn regular_file_names(attachments: &[Attachment]) -> impl Iterator<Item = &str> {
+    attachments
+        .iter()
+        .filter(|item| !item.inline)
+        .map(|item| item.filename.as_str())
 }
 
 fn chosen_message_files(
@@ -89,7 +249,10 @@ pub async fn save_chosen_attachments(
     state.db.account(&account_id)?;
     ensure_message_content(&account_id, message_id, &state).await?;
     let detail = state.db.message_detail(message_id, &account_id)?;
-    chosen_message_files(&detail.attachments, &attachment_ids)?;
+    let chosen = chosen_message_files(&detail.attachments, &attachment_ids)?;
+    if !confirm_risky_files(&app, risky_file_names(regular_file_names(&chosen))).await? {
+        return Ok(0);
+    }
     let Some(folder) = pick_folder(&app).await? else {
         return Ok(0);
     };
@@ -113,6 +276,14 @@ pub async fn save_all_attachments(
     let preview = state.db.message_detail(message_id, &account_id)?;
     if !preview.attachments.iter().any(|item| !item.inline) {
         return Err("This message has no files to save.".into());
+    }
+    if !confirm_risky_files(
+        &app,
+        risky_file_names(regular_file_names(&preview.attachments)),
+    )
+    .await?
+    {
+        return Ok(0);
     }
     let Some(folder) = pick_folder(&app).await? else {
         return Ok(0);
@@ -151,11 +322,19 @@ pub async fn save_conversation_attachments(
     let Some(folder) = pick_folder(&app).await? else {
         return Ok(0);
     };
+    let mut risky = Vec::new();
+    for id in &ids {
+        ensure_message_content(&account_id, *id, &state).await?;
+        let detail = state.db.message_detail(*id, &account_id)?;
+        risky.extend(risky_file_names(regular_file_names(&detail.attachments)));
+    }
+    if !confirm_risky_files(&app, risky).await? {
+        return Ok(0);
+    }
     let mut used = HashSet::new();
     let mut saved = 0u32;
     for id in &ids {
         // Only one message's source is held in memory at a time.
-        ensure_message_content(&account_id, *id, &state).await?;
         let detail = state.db.message_detail(*id, &account_id)?;
         let raw = state.db.raw_message(*id, &account_id)?;
         saved += write_message_files(&folder, &raw, &detail.attachments, &mut used).await?;
@@ -704,7 +883,21 @@ pub(crate) async fn read_attachment_source(path: &Path, max_bytes: u64) -> Resul
     if metadata.len() > max_bytes {
         return Err("That attachment is too large.".into());
     }
-    tokio::fs::read(path).await.map_err(|_| unavailable())
+    // The file can grow after the size check; never read past the limit.
+    let file = tokio::fs::File::open(path)
+        .await
+        .map_err(|_| unavailable())?;
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    tokio::io::AsyncReadExt::read_to_end(
+        &mut tokio::io::AsyncReadExt::take(file, max_bytes.saturating_add(1)),
+        &mut bytes,
+    )
+    .await
+    .map_err(|_| unavailable())?;
+    if bytes.len() as u64 > max_bytes {
+        return Err("That attachment is too large.".into());
+    }
+    Ok(bytes)
 }
 
 /// Copy chosen or dropped files into private storage and return opaque
@@ -845,6 +1038,82 @@ pub async fn release_compose_attachments(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Failure modes for the risky-file warning:
+    // 1. A double extension (invoice.pdf.exe) is judged by its first part.
+    // 2. Trailing dots, spaces, or bidi controls hide the real extension.
+    // 3. Upper-case extensions slip through.
+    // 4. Ordinary documents and pictures trigger the warning.
+    #[test]
+    fn risky_file_names_judge_the_saved_extension() {
+        let risky = risky_file_names([
+            "invoice.pdf.exe",
+            "setup.EXE",
+            "notes.js. ",
+            "photo\u{202e}gnp.scr",
+            "Login.html",
+            "report.pdf",
+            "picture.jpeg",
+            "budget.xlsx",
+            "README",
+        ]);
+        assert_eq!(
+            risky,
+            vec![
+                "invoice.pdf.exe",
+                "setup.EXE",
+                "notes.js",
+                "photognp.scr",
+                "Login.html"
+            ]
+        );
+    }
+
+    // 5. Web-archive, desktop-launcher, shortcut, and macro-template types
+    //    used in mail attacks are not flagged.
+    #[test]
+    fn risky_file_names_cover_launchers_archives_and_macro_templates() {
+        let names = [
+            "page.mht",
+            "page.MHTML",
+            "a.xhtml",
+            "a.xht",
+            "a.svgz",
+            "run.desktop",
+            "console.msc",
+            "app.application",
+            "app.appref-ms",
+            "x.settingcontent-ms",
+            "x.library-ms",
+            "x.search-ms",
+            "start.jnlp",
+            "x.wsc",
+            "x.sct",
+            "x.ps1xml",
+            "x.psd1",
+            "x.psc1",
+            "x.mpkg",
+            "x.terminal",
+            "x.webloc",
+            "x.inetloc",
+            "x.workflow",
+            "x.scpt",
+            "x.dotm",
+            "x.xltm",
+            "x.ppam",
+            "x.ppsm",
+            "x.sldm",
+            "x.iqy",
+            "x.slk",
+            "x.cab",
+            "x.website",
+            "x.gadget",
+            "x.hlp",
+            "x.ins",
+            "x.isp",
+        ];
+        assert_eq!(risky_file_names(names).len(), names.len());
+    }
 
     struct FailingWriter;
 

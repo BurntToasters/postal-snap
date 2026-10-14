@@ -16,10 +16,10 @@ use super::{
 };
 use crate::{
     db::Database,
-    mail,
+    mail::{self, failure::FailureKind},
     models::{
         validate_filter_rule, AccountRecord, CachePolicy, ComposeAttachment, ComposeDraft,
-        IpcError, MailboxSummary,
+        MailboxSummary,
     },
 };
 
@@ -224,7 +224,7 @@ pub(crate) async fn run_sync_pass(
     );
     let _ = state.db.set_account_state(account_id, "syncing", None);
     emit_sync(app, account_id, "syncing", Some("Checking mail…"), None);
-    let filter_watermark = state.db.latest_message_rowid().ok();
+    let filter_watermark = begin_rule_window(&state.db, account_id);
     let mut hooks = WorkerHooks {
         actor: actor.clone(),
         guard: Some(guard),
@@ -239,9 +239,9 @@ pub(crate) async fn run_sync_pass(
     // Everything below needs the account; the hooks hold it again after any
     // yield.
     let _guard = hooks.guard.take();
+    finish_rule_window(&state.db, &account, filter_watermark, result.is_ok());
     match result {
         Ok(outcome) => {
-            apply_filter_rules(&state.db, &account, filter_watermark);
             let _ = state.db.file_muted_inbox(account_id);
             let pending_changes =
                 replay_offline_operations(app, &state.db, &account, &password, &policy)
@@ -272,15 +272,14 @@ pub(crate) async fn run_sync_pass(
             // Sign-in failures (expired app password, revoked access) need a
             // different message than a dead connection: the fix is a new
             // password, not waiting for retry.
-            let auth_failed = IpcError::from(error.as_str()).code == "authenticationFailed";
-            if auth_failed {
+            if error.kind == FailureKind::SignInRejected {
                 mail::pool::forget(account_id);
                 let detail = "Sign-in failed. Update the account password in Settings > Accounts.";
                 let _ = state
                     .db
                     .set_account_state(account_id, "authFailed", Some(detail));
                 emit_sync(app, account_id, "authFailed", Some("Sign-in failed"), None);
-                Err(PassError::AuthenticationFailed(error))
+                Err(PassError::AuthenticationFailed(error.into()))
             } else {
                 let _ = state.db.set_account_state(
                     account_id,
@@ -294,7 +293,7 @@ pub(crate) async fn run_sync_pass(
                     Some("Will try again automatically"),
                     None,
                 );
-                Err(PassError::Other(error))
+                Err(PassError::Other(error.into()))
             }
         }
     }
@@ -323,6 +322,32 @@ pub(crate) async fn run_targeted_jobs(
     }
 }
 
+/// Rows newer than this mark are filed after the pass. A failed pass leaves
+/// its mark stored, so the next successful pass still files what it cached.
+pub(crate) fn begin_rule_window(db: &Database, account_id: &str) -> Option<i64> {
+    let mark = db
+        .rules_pending_from(account_id)
+        .ok()
+        .flatten()
+        .or_else(|| db.latest_message_rowid().ok())?;
+    db.keep_rules_pending_from(account_id, mark).ok()?;
+    Some(mark)
+}
+
+pub(crate) fn finish_rule_window(
+    db: &Database,
+    account: &AccountRecord,
+    watermark: Option<i64>,
+    succeeded: bool,
+) {
+    let account_id = &account.summary.id;
+    if succeeded && apply_filter_rules(db, account, watermark) {
+        let _ = db.clear_rules_pending_from(account_id);
+    } else if let Some(mark) = watermark {
+        let _ = db.keep_rules_pending_from(account_id, mark);
+    }
+}
+
 /// File newly synced inbox mail through enabled filter rules. Actions
 /// reuse the offline queue (local apply + queued op), so the replay later
 /// in this sync delivers them and failures stay queued, never half-applied.
@@ -332,12 +357,13 @@ pub(crate) fn apply_filter_rules(
     db: &Database,
     account: &AccountRecord,
     newer_than_id: Option<i64>,
-) {
+) -> bool {
     let account_id = &account.summary.id;
     let Ok(rules) = db.list_filter_rules(account_id) else {
-        return;
+        return false;
     };
     let mut planned = Vec::new();
+    let mut complete = true;
     for rule in rules.iter().filter(|rule| rule.enabled) {
         if validate_filter_rule(rule, account_id).is_err() {
             continue;
@@ -360,20 +386,21 @@ pub(crate) fn apply_filter_rules(
                 }),
         };
         if rule.action != "mark_read" && destination.is_none() {
+            complete = false;
             continue;
         }
         let Ok(matches) = db.find_rule_matches(account_id, rule, newer_than_id) else {
+            complete = false;
             continue;
         };
+        complete &= matches.len() < 100;
         planned.push((rule, destination, matches));
     }
     for (rule, destination, matches) in planned {
         if rule.action == "mark_read" {
             for (id, uid, mailbox, _) in &matches {
                 let Ok(Some(validity)) = db.mailbox_uid_validity(account_id, mailbox) else {
-                    continue;
-                };
-                if db.set_flags(*id, Some(true), None).is_err() {
+                    complete = false;
                     continue;
                 };
                 let operation = FlagOperation {
@@ -385,7 +412,14 @@ pub(crate) fn apply_filter_rules(
                     is_starred: None,
                 };
                 let dedupe_key = format!("flags:{id}:true:false");
-                let _ = db.queue_operation(account_id, "flags", &operation, Some(&dedupe_key));
+                if db
+                    .queue_operation(account_id, "flags", &operation, Some(&dedupe_key))
+                    .is_err()
+                {
+                    complete = false;
+                    continue;
+                }
+                complete &= db.set_flags(*id, Some(true), None).is_ok();
             }
             continue;
         }
@@ -397,6 +431,7 @@ pub(crate) fn apply_filter_rules(
                 continue;
             }
             let Ok(Some(validity)) = db.mailbox_uid_validity(account_id, source) else {
+                complete = false;
                 continue;
             };
             let operation = MoveOperation {
@@ -411,11 +446,13 @@ pub(crate) fn apply_filter_rules(
                 .queue_operation(account_id, "move", &operation, Some(&dedupe_key))
                 .is_err()
             {
+                complete = false;
                 continue;
             }
-            let _ = db.mark_pending_move(*id, destination_id);
+            complete &= db.mark_pending_move(*id, destination_id).is_ok();
         }
     }
+    complete
 }
 
 async fn sync_drafts_locked(state: &AppState, account: &AccountRecord, password: &str) {
@@ -733,7 +770,7 @@ pub(crate) async fn replay_outbox_locked(account_id: &str, app: &AppHandle, stat
             let _ = retry_sent_copy_locked(&id, account_id, app, state).await;
         }
     }
-    if let Ok(ids) = state.db.outbox_ids_in_state(account_id, &["queued"]) {
+    if let Ok(ids) = state.db.due_queued_outbox_ids(account_id) {
         for id in ids {
             let _ = deliver_outbox_locked(&id, account_id, "queued", app, state).await;
         }

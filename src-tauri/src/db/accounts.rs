@@ -3,9 +3,10 @@ use rusqlite::{params, OptionalExtension};
 
 use crate::models::{AccountRecord, AccountSummary, BodyFormat, ServerConfig};
 
+database_operations! {
 impl Database {
     pub fn list_accounts(&self) -> Result<Vec<AccountSummary>, String> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut statement = conn.prepare(
             "SELECT id, provider, email, display_name, sync_state, error, aliases_json, auth_method, signature, color, default_body_format, reply_to FROM accounts ORDER BY sort_order, created_at",
         ).map_err(db_error)?;
@@ -35,7 +36,7 @@ impl Database {
     }
 
     pub fn account(&self, id: &str) -> Result<AccountRecord, String> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         conn.query_row(
             "SELECT id, provider, email, display_name, sync_state, error,
                     imap_host, imap_port, imap_tls, imap_username,
@@ -178,12 +179,17 @@ impl Database {
         let aliases_json = serde_json::to_string(aliases)
             .map_err(|_| "Failed to serialize aliases.".to_string())?;
         {
-            let conn = self.conn()?;
-            conn.execute(
-                "UPDATE accounts SET aliases_json = ?2 WHERE id = ?1",
-                params![id, aliases_json],
-            )
-            .map_err(db_error)?;
+            let mut conn = self.conn()?;
+            let transaction = conn.transaction().map_err(db_error)?;
+            transaction
+                .execute(
+                    "UPDATE accounts SET aliases_json = ?2 WHERE id = ?1",
+                    params![id, aliases_json],
+                )
+                .map_err(db_error)?;
+            // "To me" depends on the aliases.
+            super::refresh_list_columns(&transaction, "account_id=?1", [id])?;
+            transaction.commit().map_err(db_error)?;
         }
         let record = self.account(id)?;
         Ok(record.summary)
@@ -226,8 +232,9 @@ impl Database {
         id: &str,
         signature: &str,
     ) -> Result<AccountSummary, String> {
-        let trimmed = signature.trim();
-        if trimmed.len() > 2000
+        let normalized = signature.replace("\r\n", "\n").replace('\r', "\n");
+        let trimmed = normalized.trim();
+        if trimmed.chars().count() > 2000
             || trimmed
                 .chars()
                 .any(|c| c.is_control() && c != '\n' && c != '\t')
@@ -289,6 +296,40 @@ impl Database {
         // the next startup or account removal.
         let _ = super::ensure_account_email_unique_index(&tx);
         tx.commit().map_err(db_error)
+    }
+
+    /// Rule mark left by a failed sync pass, if any.
+    pub fn rules_pending_from(&self, account_id: &str) -> Result<Option<i64>, String> {
+        self.read_conn()?
+            .query_row(
+                "SELECT rules_pending_from FROM accounts WHERE id=?1",
+                [account_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)
+            .map(Option::flatten)
+    }
+
+    /// Keep the oldest mark so every failed pass's mail stays covered.
+    pub fn keep_rules_pending_from(&self, account_id: &str, mark: i64) -> Result<(), String> {
+        self.conn()?
+            .execute(
+                "UPDATE accounts SET rules_pending_from=COALESCE(rules_pending_from, ?2) WHERE id=?1",
+                params![account_id, mark],
+            )
+            .map_err(db_error)?;
+        Ok(())
+    }
+
+    pub fn clear_rules_pending_from(&self, account_id: &str) -> Result<(), String> {
+        self.conn()?
+            .execute(
+                "UPDATE accounts SET rules_pending_from=NULL WHERE id=?1",
+                [account_id],
+            )
+            .map_err(db_error)?;
+        Ok(())
     }
 
     pub fn account_count(&self) -> Result<usize, String> {
@@ -380,6 +421,7 @@ impl Database {
             )
             .map_err(db_error)
     }
+}
 }
 
 /// SQLite reports the `accounts_email_unique` index as a generic constraint

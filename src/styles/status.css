@@ -1,6 +1,7 @@
 /* App state and alerts */
 .preview-notice,
 .startup-recovery,
+.crash-recovery,
 .splash {
   display: grid;
   height: 100%;

@@ -119,7 +119,7 @@ pub async fn set_remote_keyword(
     })?;
     let mut session = super::pool::checkout(account, password)
         .await
-        .map_err(MailboxOperationError::transient)?;
+        .map_err(|error| MailboxOperationError::transient(error.into()))?;
     let wire_mailbox = session.mailbox_name(mailbox);
     let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(&wire_mailbox))
         .await
@@ -190,7 +190,7 @@ pub async fn set_remote_uid_flags(
     })?;
     let mut session = super::pool::checkout(account, password)
         .await
-        .map_err(MailboxOperationError::transient)?;
+        .map_err(|error| MailboxOperationError::transient(error.into()))?;
     let wire_mailbox = session.mailbox_name(mailbox);
     let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(&wire_mailbox))
         .await
@@ -322,7 +322,7 @@ pub async fn copy_remote(
     })?;
     let mut session = super::pool::checkout(account, password)
         .await
-        .map_err(MailboxOperationError::transient)?;
+        .map_err(|error| MailboxOperationError::transient(error.into()))?;
     let wire_source = session.mailbox_name(source);
     let wire_destination = session.mailbox_name(destination);
     let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(&wire_source))
@@ -390,7 +390,7 @@ pub async fn copy_remote_uids(
     })?;
     let mut session = super::pool::checkout(account, password)
         .await
-        .map_err(MailboxOperationError::transient)?;
+        .map_err(|error| MailboxOperationError::transient(error.into()))?;
     let wire_source = session.mailbox_name(source);
     let wire_destination = session.mailbox_name(destination);
     let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(&wire_source))
@@ -739,7 +739,7 @@ async fn move_remote_inner(
     })?;
     let mut session = super::pool::checkout(account, password)
         .await
-        .map_err(MailboxOperationError::transient)?;
+        .map_err(|error| MailboxOperationError::transient(error.into()))?;
     let wire_source = session.mailbox_name(source);
     let wire_destination = session.mailbox_name(destination);
     let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.select(&wire_source))

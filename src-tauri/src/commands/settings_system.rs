@@ -98,16 +98,48 @@ pub fn get_startup_error(state: State<'_, AppState>) -> CommandResult<Option<Str
 
 #[tauri::command(async)]
 pub fn get_cache_usage(state: State<'_, AppState>) -> CommandResult<CacheUsage> {
-    command_result(
-        state
-            .db
-            .cache_usage(state.settings.get()?.cache_policy.max_bytes),
-    )
+    let mut usage = state
+        .db
+        .cache_usage(state.settings.get()?.cache_policy.max_bytes)?;
+    // Read at Settings open; the startup sweep may still be running.
+    usage.attachment_leftovers = state.orphan_marker().exists();
+    Ok(usage)
 }
 
-#[tauri::command(async)]
-pub fn clear_downloaded_mail(state: State<'_, AppState>) -> CommandResult<()> {
-    command_result(state.db.clear_downloaded_mail())
+/// Reruns the orphan sweep and records what remains. True while leftovers stay.
+pub(crate) async fn retry_attachment_sweep(
+    db: &crate::db::Database,
+    root: std::path::PathBuf,
+    marker: &Path,
+) -> bool {
+    let remaining = super::accounts::sweep_unowned_attachments(db, root).await;
+    super::record_orphan_marker(marker, remaining);
+    remaining > 0
+}
+
+#[tauri::command]
+pub async fn retry_attachment_cleanup(state: State<'_, AppState>) -> CommandResult<bool> {
+    state.require_storage()?;
+    Ok(retry_attachment_sweep(
+        &state.db,
+        state.attachment_dir.clone(),
+        &state.orphan_marker(),
+    )
+    .await)
+}
+
+#[tauri::command]
+pub async fn clear_downloaded_mail(state: State<'_, AppState>) -> CommandResult<()> {
+    let db = state.db.clone();
+    let marker = state.compact_marker();
+    // VACUUM rewrites the whole file; keep it off the async runtime.
+    let result = tokio::task::spawn_blocking(move || {
+        db.clear_downloaded_mail()?;
+        super::accounts::compact_or_mark(&db, &marker)
+    })
+    .await
+    .map_err(|_| "Postal Snap could not clear downloaded mail.".to_string())?;
+    command_result(result)
 }
 
 #[tauri::command]
@@ -138,7 +170,8 @@ pub fn get_distribution_channel() -> DistributionChannel {
 }
 
 fn check_native_dialog_text(title: &str, message: &str) -> Result<(), String> {
-    if title.len() > 120 || message.len() > 2000 {
+    // Bytes, not characters: a long link plus non-Latin text must still fit.
+    if title.len() > 120 || message.len() > 6000 {
         return Err("Dialog text is too long.".into());
     }
     Ok(())
@@ -279,6 +312,12 @@ pub fn set_update_ready(app: AppHandle, ready: bool) {
     crate::update_relaunch::arm_background_update(&app);
 }
 
+/// Lets native Quit hand off to the window while a message is open.
+#[tauri::command]
+pub fn set_composer_open(open: bool) {
+    crate::update_relaunch::set_composer_open(open);
+}
+
 /// Waits again, e.g. while a message is being written.
 #[tauri::command]
 pub fn schedule_background_update(app: AppHandle) {
@@ -376,12 +415,17 @@ pub(crate) fn read_license_credits_from(dir: &Path) -> Result<LicenseCredits, St
     Ok(LicenseCredits { notices, packages })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_license_credits(app: AppHandle) -> CommandResult<LicenseCredits> {
-    let dir = app
-        .path()
-        .resource_dir()
-        .map_err(|_| "Could not read license credits.".to_string())?;
+    // Flatpak installs notices under /app/share/doc; Tauri's resource
+    // directory does not exist there.
+    let dir = if cfg!(feature = "flatpak") || std::env::var_os("FLATPAK_ID").is_some() {
+        std::path::PathBuf::from("/app/share/doc/run.rosie.snap")
+    } else {
+        app.path()
+            .resource_dir()
+            .map_err(|_| "Could not read license credits.".to_string())?
+    };
     command_result(read_license_credits_from(&dir))
 }
 
@@ -464,5 +508,49 @@ mod tests {
         .unwrap();
         let error = read_license_credits_from(directory.path()).unwrap_err();
         assert_eq!(error, "Could not read license credits.");
+    }
+}
+
+#[cfg(test)]
+mod attachment_cleanup_tests {
+    use super::retry_attachment_sweep;
+    use crate::db::Database;
+
+    // Failure modes for "Try again" on leftover attachment folders:
+    // 1. A folder that still cannot be removed keeps the marker and reports leftovers.
+    // 2. Once the folder can be removed, the retry clears the marker.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn retry_keeps_the_marker_while_a_leftover_folder_is_stuck() {
+        use crate::commands::make_unwritable;
+
+        let base = tempfile::tempdir().unwrap();
+        let root = base.path().join("attachments");
+        let leftover = root.join(uuid::Uuid::new_v4().hyphenated().to_string());
+        std::fs::create_dir_all(&leftover).unwrap();
+        let marker = base.path().join("orphan-attachments-pending");
+        std::fs::write(&marker, b"").unwrap();
+        let db = Database::memory();
+        let Some(_lock) = make_unwritable(&root) else {
+            return;
+        };
+
+        assert!(retry_attachment_sweep(&db, root.clone(), &marker).await);
+        assert!(marker.exists());
+    }
+
+    #[tokio::test]
+    async fn retry_clears_the_marker_once_leftovers_are_removed() {
+        let base = tempfile::tempdir().unwrap();
+        let root = base.path().join("attachments");
+        let leftover = root.join(uuid::Uuid::new_v4().hyphenated().to_string());
+        std::fs::create_dir_all(&leftover).unwrap();
+        let marker = base.path().join("orphan-attachments-pending");
+        std::fs::write(&marker, b"").unwrap();
+        let db = Database::memory();
+
+        assert!(!retry_attachment_sweep(&db, root.clone(), &marker).await);
+        assert!(!marker.exists());
+        assert!(!leftover.exists());
     }
 }

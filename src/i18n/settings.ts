@@ -49,6 +49,9 @@ export const settings = {
   discardTitle: "Discard unsaved changes?",
   discardHelp:
     "Your connection, signature, or rule changes have not been saved.",
+  outgoingChangeTitle: "Change outgoing server?",
+  outgoingChangeHelp:
+    "Postal Snap will sign in to the new outgoing server with this account's saved password. Continue only if you trust that server.",
   identityChangeTitle: "Change incoming server identity?",
   identityChangeHelp:
     "Cached server mail will be downloaded again. Local drafts will be kept for review. Resolve queued changes and unsent mail first.",
@@ -144,15 +147,9 @@ export const settings = {
   paneRight: "On right",
   paneBottom: "Below messages",
   paneHidden: "Open over list",
-  imageSenders: "Images from these senders",
+  imageSenders: "Remote images",
   imageSendersHelp:
-    "When you open a message from one of these senders, its pictures load. Advertising, tracking, and reported-threat checks still apply.",
-  imageSendersEmpty:
-    "None yet. On a message, choose Always load images from that sender.",
-  imageSendersFull: "Save up to 100 sender addresses.",
-  stopImageSender: "Stop",
-  stopImageSenderLabel: (address: string) =>
-    `Stop loading images from ${address}`,
+    "Remote images load only when you choose Load images in a message.",
   showMessagePreviews: "Show message previews",
   showMessagePreviewsHelp: "List rows include the first line of each message.",
   groupThreads: "Group conversations",
@@ -351,6 +348,9 @@ export const settings = {
     "Clear downloaded message bodies and attachments? Message lists, account settings, drafts, and unsent mail stay.",
   clearMailHelp:
     "Keeps message lists, accounts, drafts, and unsent mail. Bodies download again when opened.",
+  attachmentLeftovers:
+    "Some removed account files could not be deleted. Restart Postal Snap to try again.",
+  attachmentLeftoversRetry: "Try again",
   removeAccount: (name: string) =>
     `Remove ${name} from Postal Snap? Mail stays on server.`,
   removeAccountWithImpact: (
@@ -362,6 +362,8 @@ export const settings = {
     `Remove ${name} from Postal Snap? Mail stays on server. This computer will lose ${unsent} unsent message${unsent === 1 ? "" : "s"}, ${drafts} unsynced draft${drafts === 1 ? "" : "s"}, and ${changes} queued change${changes === 1 ? "" : "s"}.`,
   accountCleanupWarning:
     "Account removed. Some downloaded draft files could not be cleaned up; you can remove them from Postal Snap’s data folder.",
+  accountDiskSpacePending:
+    "Account removed. Postal Snap could not free its disk space yet and will finish the next time it opens.",
   checkUpdates: "Check for updates",
   checking: "Checking…",
   installing: (version: string) => `Downloading ${version}…`,

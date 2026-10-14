@@ -30,7 +30,7 @@ pub async fn snooze_message(
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn snooze_messages(
     account_id: String,
     message_ids: Vec<i64>,
@@ -56,7 +56,7 @@ pub fn snooze_messages(
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn unsnooze_message(
     account_id: String,
     message_id: i64,
@@ -65,7 +65,7 @@ pub fn unsnooze_message(
     command_result(state.db.unsnooze_message(&account_id, message_id))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_filter_rules(
     account_id: String,
     state: State<'_, AppState>,
@@ -139,7 +139,7 @@ pub async fn update_filter_rule(
     Ok(updated)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn delete_filter_rule(
     account_id: String,
     rule_id: String,
@@ -149,7 +149,7 @@ pub fn delete_filter_rule(
     command_result(state.db.delete_filter_rule(&account_id, &rule_id))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn reorder_filter_rules(
     account_id: String,
     ordered_ids: Vec<String>,
@@ -159,7 +159,7 @@ pub fn reorder_filter_rules(
     command_result(state.db.reorder_filter_rules(&account_id, &ordered_ids))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn preview_filter_rule(
     mut rule: FilterRule,
     state: State<'_, AppState>,
@@ -206,7 +206,7 @@ pub async fn mute_conversation(
     Ok(filed)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn unmute_conversation(
     account_id: String,
     message_id: i64,
@@ -216,7 +216,7 @@ pub fn unmute_conversation(
     command_result(state.db.forget_muted_conversation(&account_id, message_id))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_snoozed(
     account_id: String,
     state: State<'_, AppState>,

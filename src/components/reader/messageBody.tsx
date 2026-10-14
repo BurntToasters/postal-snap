@@ -111,6 +111,7 @@ export function PlainTextContent({
 }
 
 function missingBodyNote(message: MessageDetail): string {
+  if (message.bodyStatus === "unreadable") return strings.mail.bodyUnreadable;
   if (message.bodyStatus === "offline") return strings.mail.bodyOffline;
   if (message.bodyStatus === "signInNeeded")
     return strings.mail.bodySignInNeeded;
@@ -142,8 +143,6 @@ export function MessageBody({
   onSubmitFind,
   onFindPrevious,
   onLoadImages,
-  alwaysLoadLabel,
-  onAlwaysLoadImages,
   onFrameLoad,
   onOpenLink,
   onOpenMailto,
@@ -173,8 +172,6 @@ export function MessageBody({
   onSubmitFind: () => void;
   onFindPrevious: () => void;
   onLoadImages: () => void;
-  alwaysLoadLabel?: string;
-  onAlwaysLoadImages?: () => void;
   onFrameLoad: () => void;
   onOpenLink: (url: string) => void;
   onOpenMailto: (mailto: string) => void;
@@ -219,15 +216,6 @@ export function MessageBody({
                 ? strings.reader.retryImages
                 : strings.reader.loadImages}
           </button>
-          {alwaysLoadLabel && onAlwaysLoadImages ? (
-            <button
-              type="button"
-              onClick={onAlwaysLoadImages}
-              disabled={loadingImages}
-            >
-              {alwaysLoadLabel}
-            </button>
-          ) : null}
         </div>
       ) : null}
       {findOpen ? (

@@ -83,8 +83,54 @@ export async function registerMockMessages(page: Page): Promise<void> {
       },
     ];
     Object.assign(mock.handlers, {
+      save_attachment(args: Record<string, unknown>) {
+        const message = mock.handlers.get_message(args) as {
+          accountId: string;
+          attachments: { id: string }[];
+        };
+        if (
+          message.accountId !== args.accountId ||
+          !message.attachments.some((file) => file.id === args.attachmentId)
+        ) {
+          throw new Error("Attachment does not belong to this message.");
+        }
+        return undefined;
+      },
+      save_all_attachments(args: Record<string, unknown>) {
+        const message = mock.handlers.get_message(args) as {
+          accountId: string;
+          attachments: { inline?: boolean }[];
+        };
+        if (message.accountId !== args.accountId)
+          throw new Error("Message does not belong to this account.");
+        return message.attachments.filter((file) => !file.inline).length;
+      },
+      copy_message_to_mailbox(args: Record<string, unknown>) {
+        const message = mock.handlers.get_message(args) as {
+          accountId: string;
+        };
+        const target = mailboxes.find(
+          (box) => box.id === Number(args.destinationMailboxId),
+        );
+        if (
+          message.accountId !== args.accountId ||
+          !target ||
+          target.accountId !== args.accountId
+        ) {
+          throw new Error(
+            "Message and destination must belong to this account.",
+          );
+        }
+        return undefined;
+      },
       save_chosen_attachments() {
         return 1;
+      },
+      load_older_messages() {
+        return {
+          added: 0,
+          hasMore: params.has("olderOnServer"),
+        };
       },
       list_messages(args: Record<string, unknown>) {
         let page: {
@@ -115,6 +161,24 @@ export async function registerMockMessages(page: Page): Promise<void> {
         } else if (params.has("trashThread") && Number(args.mailboxId) === 3) {
           page = {
             items: trashThreadItems(),
+            nextCursor: null,
+            hasMore: false,
+          };
+        } else if (params.has("hugeList")) {
+          const count = Number(params.get("hugeList")) || 1500;
+          page = {
+            items: Array.from({ length: count }, (_, index) => ({
+              ...summary,
+              id: 5000 + index,
+              uid: 5000 + index,
+              messageId: `<huge-${index}@example.com>`,
+              subject: `Archive note ${index + 1}`,
+              receivedAt: new Date(
+                Date.parse("2026-08-01T12:00:00Z") - index * 600_000,
+              ).toISOString(),
+              isRead: true,
+              threadRoot: null,
+            })),
             nextCursor: null,
             hasMore: false,
           };

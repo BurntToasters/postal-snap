@@ -587,6 +587,15 @@ try {
       name: "greenmail-replay-incomplete-body-evidence",
       status: "passed",
     });
+    stage = "greenmail-archive-keeps-answered";
+    await protocolTest("greenmail_archive_keeps_answered_set_before_move", {
+      ...environment,
+      POSTAL_SNAP_MAIL_INTEGRATION: "1",
+    });
+    report.results.push({
+      name: "greenmail-archive-keeps-answered",
+      status: "passed",
+    });
   }
   report.status = "passed";
 } catch (error) {

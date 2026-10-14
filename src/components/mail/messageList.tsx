@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useId,
   useLayoutEffect,
@@ -95,6 +96,7 @@ export function MessageList({
   onChoose,
   hasMore,
   onLoadMore,
+  loadMoreLabel,
   searchQuery,
   showFolders = false,
   onClearSearch,
@@ -125,6 +127,8 @@ export function MessageList({
   onChoose: (message: MessageSummary) => Promise<void>;
   hasMore: boolean;
   onLoadMore: () => Promise<void>;
+  /** Overrides the button text, e.g. when older mail comes from the server. */
+  loadMoreLabel?: string;
   searchQuery?: string;
   /** Account-wide search mixes folders, so each row names its mailbox. */
   showFolders?: boolean;
@@ -252,13 +256,16 @@ export function MessageList({
   const [expandedThreads, setExpandedThreads] = useState<string[]>(() =>
     scrollKey ? rememberedExpandedThreads(scrollKey) : [],
   );
-  function updateExpanded(next: string[] | ((current: string[]) => string[])) {
-    setExpandedThreads((current) => {
-      const value = typeof next === "function" ? next(current) : next;
-      if (scrollKey) rememberExpandedThreads(scrollKey, value);
-      return value;
-    });
-  }
+  const updateExpanded = useCallback(
+    (next: string[] | ((current: string[]) => string[])) => {
+      setExpandedThreads((current) => {
+        const value = typeof next === "function" ? next(current) : next;
+        if (scrollKey) rememberExpandedThreads(scrollKey, value);
+        return value;
+      });
+    },
+    [scrollKey],
+  );
   const [focusedOptionKey, setFocusedOptionKey] = useState<string>();
   const [newAtTop, setNewAtTop] = useState(false);
   const seenRef = useRef<{ ids: Set<number>; newest: number } | null>(null);
@@ -313,7 +320,7 @@ export function MessageList({
       window.removeEventListener("postal:expand-conversations", expand);
       window.removeEventListener("postal:collapse-conversations", collapse);
     };
-  }, [groupConversations, messages, selecting]);
+  }, [groupConversations, messages, selecting, updateExpanded]);
 
   // A row picked with the pointer is already in view; scrolling it would
   // close a context menu that the same click opened.
@@ -1231,7 +1238,9 @@ export function MessageList({
           onClick={() => void onLoadMore()}
           disabled={loading}
         >
-          {loading ? strings.mail.loadingOlder : strings.mail.loadOlder}
+          {loading
+            ? strings.mail.loadingOlder
+            : (loadMoreLabel ?? strings.mail.loadOlder)}
         </button>
       ) : null}
     </div>

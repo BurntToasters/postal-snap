@@ -14,7 +14,20 @@ use rusqlite::{params, OptionalExtension};
 
 use crate::models::{AccountInboxCount, MailboxRole, MailboxSummary, ROLE_SOURCE_NAME};
 
+database_operations! {
 impl Database {
+    /// Mark UIDNEXT unknown so the next pass does not treat the folder as
+    /// unchanged while new mail is still being fetched.
+    pub fn forget_uid_next(&self, mailbox_id: i64) -> Result<(), String> {
+        self.conn()?
+            .execute(
+                "UPDATE mailboxes SET uid_next=NULL WHERE id=?1",
+                [mailbox_id],
+            )
+            .map_err(db_error)?;
+        Ok(())
+    }
+
     #[allow(dead_code, clippy::too_many_arguments)]
     pub fn upsert_mailbox(
         &self,
@@ -114,7 +127,7 @@ impl Database {
     }
 
     pub fn list_mailboxes(&self, account_id: &str) -> Result<Vec<MailboxSummary>, String> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut statement = conn.prepare(
             "SELECT f.id, f.account_id, f.name, f.display_name,
                     COALESCE((SELECT a.role FROM folder_assignments a WHERE a.account_id=f.account_id AND a.mailbox_id=f.id), CASE WHEN EXISTS(SELECT 1 FROM folder_assignments a WHERE a.account_id=f.account_id AND a.role=f.role) THEN 'other' ELSE f.role END),
@@ -172,7 +185,7 @@ impl Database {
     }
 
     pub fn list_account_inbox_counts(&self) -> Result<Vec<AccountInboxCount>, String> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut statement = conn.prepare(
             "SELECT f.account_id,
                     MAX(0, COALESCE(f.server_unread, SUM(CASE WHEN m.is_read = 0 AND m.pending_move_to IS NULL THEN 1 ELSE 0 END)) + f.local_unread_delta),
@@ -698,4 +711,5 @@ impl Database {
             backfilling: backfilling > 0,
         })
     }
+}
 }

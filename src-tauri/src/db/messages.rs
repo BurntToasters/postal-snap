@@ -10,6 +10,11 @@ use crate::models::{
     RecipientSuggestion, SearchQuery,
 };
 
+/// Unfinished parses in a row before a message is quarantined. One is
+/// forgiven: the app may simply have quit mid-parse.
+pub(crate) const PARSE_QUARANTINE_AT: u32 = 2;
+
+database_operations! {
 impl Database {
     pub fn reconcile_flags(
         &self,
@@ -155,6 +160,53 @@ impl Database {
         Ok(())
     }
 
+    /// Count one parse that has started. Committed before parsing, so an
+    /// attempt that never returns stays counted.
+    pub fn begin_parse(&self, mailbox_id: i64, uid: u32) -> Result<(), String> {
+        self.conn()?
+            .execute(
+                "UPDATE messages SET parse_pending=MIN(parse_pending+1, ?3) WHERE mailbox_id=?1 AND uid=?2",
+                params![mailbox_id, uid, PARSE_QUARANTINE_AT],
+            )
+            .map_err(db_error)?;
+        Ok(())
+    }
+
+    /// The parse returned (success or a handled error); clear the count.
+    pub fn end_parse(&self, mailbox_id: i64, uid: u32) -> Result<(), String> {
+        self.conn()?
+            .execute(
+                "UPDATE messages SET parse_pending=0 WHERE mailbox_id=?1 AND uid=?2",
+                params![mailbox_id, uid],
+            )
+            .map_err(db_error)?;
+        Ok(())
+    }
+
+    /// The parser panicked; never parse this message automatically again.
+    pub fn quarantine_parse(&self, mailbox_id: i64, uid: u32) -> Result<(), String> {
+        self.conn()?
+            .execute(
+                "UPDATE messages SET parse_pending=?3 WHERE mailbox_id=?1 AND uid=?2",
+                params![mailbox_id, uid, PARSE_QUARANTINE_AT],
+            )
+            .map_err(db_error)?;
+        Ok(())
+    }
+
+    /// Parses that never returned twice in a row: a repeat crash, not a quit.
+    pub fn parse_quarantined(&self, id: i64, account_id: &str) -> Result<bool, String> {
+        self.read_conn()?
+            .query_row(
+                "SELECT parse_pending>=?3 FROM messages WHERE id=?1 AND account_id=?2",
+                params![id, account_id, PARSE_QUARANTINE_AT],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?
+            .ok_or_else(|| "Message not found.".into())
+    }
+
     #[cfg(test)]
     pub fn upsert_envelope(
         &self,
@@ -280,23 +332,24 @@ impl Database {
         filter: MessageListFilter,
         sort: MessageListSort,
     ) -> Result<MessagePage, String> {
-        let conn = self.conn()?;
         let page_size = limit.clamp(1, 200);
-        // Snoozed mail hides from browsing until due; expired rows are
-        // pruned lazily here so both lists stay consistent. Times compare
+        // Snoozed mail hides from browsing until due. The query ignores
+        // expired rows, so pruning them is cleanup that may wait. Times compare
         // as text: until values are canonical RFC3339 (+00:00) at write.
-        conn.execute(
-            "DELETE FROM snoozed_messages WHERE message_id IN (SELECT id FROM messages WHERE mailbox_id=?1) AND snoozed_until<=strftime('%Y-%m-%dT%H:%M:%S+00:00','now')",
-            [mailbox_id],
-        )
-        .map_err(db_error)?;
+        if let Some(conn) = self.try_conn() {
+            let _ = conn.execute(
+                "DELETE FROM snoozed_messages WHERE message_id IN (SELECT id FROM messages WHERE mailbox_id=?1) AND snoozed_until<=strftime('%Y-%m-%dT%H:%M:%S+00:00','now')",
+                [mailbox_id],
+            );
+        }
+        let conn = self.read_conn()?;
         let filter_sql = match filter {
             MessageListFilter::All => "",
             MessageListFilter::Unread => " AND m.is_read=0",
             MessageListFilter::Starred => " AND m.is_starred=1",
             MessageListFilter::Attachments => " AND m.has_attachments=1",
             MessageListFilter::Pinned => " AND m.pinned=1",
-            MessageListFilter::ToMe => " AND EXISTS (SELECT 1 FROM accounts a WHERE a.id=m.account_id AND EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(m.to_json) THEN m.to_json ELSE '[]' END) AS addr WHERE lower(addr.value)=lower(a.email) OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(a.aliases_json) THEN a.aliases_json ELSE '[]' END) AS alias WHERE lower(alias.value)=lower(addr.value))))",
+            MessageListFilter::ToMe => " AND m.to_me=1",
             MessageListFilter::Invitations => " AND m.has_calendar=1",
         };
         // A cursor from another order would skip the wrong rows.
@@ -345,7 +398,8 @@ impl Database {
         let mut statement = conn
             .prepare(&format!(
                 "{} WHERE mailbox_id = ?1 AND pending_move_to IS NULL
-                 AND NOT EXISTS (SELECT 1 FROM snoozed_messages s WHERE s.message_id=m.id)
+                 AND NOT EXISTS (SELECT 1 FROM snoozed_messages s WHERE s.account_id=m.account_id AND s.message_id=m.id
+                   AND s.snoozed_until>strftime('%Y-%m-%dT%H:%M:%S+00:00','now'))
                  {filter_sql}
                  {cursor_sql}
                  {order_sql} LIMIT ?4",
@@ -422,21 +476,49 @@ impl Database {
             .map_err(db_error)
     }
 
-    pub fn latest_inbox_message(&self, account_id: &str) -> Result<Option<MessageSummary>, String> {
-        let conn = self.conn()?;
+    /// Highest Inbox row id. Ids rise in arrival order; the Date header does not.
+    pub fn inbox_high_water(&self, account_id: &str) -> Result<Option<i64>, String> {
+        self.read_conn()?
+            .query_row(
+                "SELECT MAX(m.id) FROM messages m JOIN mailboxes box ON box.id=m.mailbox_id
+                 WHERE m.account_id=?1 AND box.role='inbox'",
+                [account_id],
+                |row| row.get(0),
+            )
+            .map_err(db_error)
+    }
+
+    /// Newest unread Inbox arrival cached after `after`, by arrival order.
+    pub fn newest_unread_inbox_after(
+        &self,
+        account_id: &str,
+        after: Option<i64>,
+    ) -> Result<Option<MessageSummary>, String> {
+        let conn = self.read_conn()?;
         conn.query_row(
-            &format!("{} JOIN mailboxes box ON box.id=m.mailbox_id WHERE m.account_id=?1 AND box.role='inbox' AND m.pending_move_to IS NULL ORDER BY m.received_at DESC,m.uid DESC LIMIT 1", MESSAGE_SUMMARY_SELECT),
-            [account_id], map_message_summary,
+            &format!("{} JOIN mailboxes box ON box.id=m.mailbox_id WHERE m.account_id=?1 AND box.role='inbox' AND m.pending_move_to IS NULL AND m.is_read=0 AND (?2 IS NULL OR m.id>?2) ORDER BY m.id DESC LIMIT 1", MESSAGE_SUMMARY_SELECT),
+            params![account_id, after], map_message_summary,
         ).optional().map_err(db_error)
     }
 
     pub fn message_detail(&self, id: i64, account_id: &str) -> Result<MessageDetail, String> {
-        let conn = self.conn()?;
-        conn.execute(
-            "UPDATE messages SET accessed_at = CURRENT_TIMESTAMP WHERE id = ?1 AND account_id = ?2",
-            params![id, account_id],
-        )
-        .map_err(db_error)?;
+        // Eviction recency. When sync holds the writer, record it on a
+        // background thread so the read does not wait.
+        const TOUCH: &str =
+            "UPDATE messages SET accessed_at = CURRENT_TIMESTAMP WHERE id = ?1 AND account_id = ?2";
+        if let Some(conn) = self.try_conn() {
+            let _ = conn.execute(TOUCH, params![id, account_id]);
+        } else {
+            let db = self.clone();
+            let account_id = account_id.to_string();
+            std::thread::spawn(move || {
+                if let Ok(conn) = db.conn() {
+                    let _ = conn.execute(TOUCH, params![id, account_id]);
+                }
+            });
+        }
+        // Sanitizing a large body runs here, so keep it off the writer.
+        let conn = self.read_conn()?;
         let mut detail = conn
             .query_row(
                 &format!(
@@ -532,7 +614,7 @@ impl Database {
 
     pub fn message_references(&self, id: i64, account_id: &str) -> Result<Vec<String>, String> {
         let (thread_parent, raw): (Option<String>, Vec<u8>) = self
-            .conn()?
+            .read_conn()?
             .query_row(
                 "SELECT thread_parent, raw_message FROM messages WHERE id=?1 AND account_id=?2",
                 params![id, account_id],
@@ -559,7 +641,7 @@ impl Database {
         if header_id.is_empty() {
             return Ok(None);
         }
-        self.conn()?
+        self.read_conn()?
             .query_row(
                 &format!(
                     "{MESSAGE_SUMMARY_SELECT} JOIN mailboxes box ON box.id=m.mailbox_id \
@@ -600,7 +682,7 @@ impl Database {
 
     pub fn raw_message(&self, id: i64, account_id: &str) -> Result<Vec<u8>, String> {
         let raw: Vec<u8> = self
-            .conn()?
+            .read_conn()?
             .query_row(
                 "SELECT raw_message FROM messages WHERE id=?1 AND account_id=?2",
                 params![id, account_id],
@@ -865,7 +947,7 @@ impl Database {
             return Ok(Vec::new());
         }
         let like = format!("%{escaped}%");
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut statement = conn
             .prepare(
                 "SELECT address,name,use_count FROM recipient_history
@@ -1139,7 +1221,7 @@ impl Database {
         } else {
             Vec::new()
         };
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let expression = parsed.fts_match();
         let mut values = vec![Value::from(query.account_id.clone())];
         let mut sql = MESSAGE_SUMMARY_SELECT.to_string();
@@ -1550,6 +1632,7 @@ impl Database {
         Ok(filed)
     }
 }
+}
 
 struct TrashRow {
     account_id: String,
@@ -1693,6 +1776,7 @@ fn write_full_message(
          FROM messages WHERE id=?1",
         [id],
     ).map_err(db_error)?;
+    super::refresh_list_columns(transaction, "id=?1", [id])?;
     Ok(id)
 }
 
@@ -1776,6 +1860,7 @@ fn write_envelope(
          FROM messages WHERE id=?1",
         [id],
     ).map_err(db_error)?;
+    super::refresh_list_columns(transaction, "id=?1", [id])?;
     Ok(id)
 }
 

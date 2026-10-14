@@ -1,3 +1,4 @@
+pub mod failure;
 pub mod flowed;
 pub mod folders;
 pub mod icloud;
@@ -95,8 +96,8 @@ pub struct RemoteDraftSnapshot {
 pub use folders::{
     copy_remote, copy_remote_uids, create_folder, delete_folder, empty_folder, expunge_uids,
     mark_folder_read, move_remote, move_remote_uids, rename_folder, set_remote_flags,
-    set_remote_keyword, set_remote_uid_flags, CopyOptions, MoveOptions, MoveReplayFlags,
-    SourceKeyword,
+    set_remote_keyword, set_remote_uid_flags, CopyOptions, MailboxOperationError, MoveOptions,
+    MoveReplayFlags, SourceKeyword,
 };
 pub use icloud::discover_icloud_aliases;
 pub use remote_drafts::{
@@ -686,6 +687,7 @@ mod tests {
                 all_folders: false,
                 limit: 10,
             },
+            &mut Uncontended,
         )
         .await
         .unwrap();
@@ -1306,30 +1308,49 @@ mod tests {
 
     #[test]
     fn smtp_failures_split_into_not_sent_and_uncertain() {
-        use super::send::{classify_send_failure, SendFailure};
+        use super::send::{classify_send_failure, SendFailure, SmtpErrorTraits};
+        let traits = SmtpErrorTraits::default();
         // A 4xx reply or a connection that never opened: nothing was accepted.
         assert_eq!(
-            classify_send_failure(false, true, false, false),
+            classify_send_failure(SmtpErrorTraits {
+                transient: true,
+                ..traits
+            }),
             SendFailure::NotSentRetry
         );
         assert_eq!(
-            classify_send_failure(false, false, false, true),
+            classify_send_failure(SmtpErrorTraits {
+                connect_failed: true,
+                ..traits
+            }),
             SendFailure::NotSentRetry
         );
         // A 5xx reply or failed TLS: not sent, and a retry will not help.
         assert_eq!(
-            classify_send_failure(true, false, false, false),
+            classify_send_failure(SmtpErrorTraits {
+                permanent: true,
+                ..traits
+            }),
             SendFailure::NotSentRefused
         );
         assert_eq!(
-            classify_send_failure(false, false, true, false),
+            classify_send_failure(SmtpErrorTraits {
+                tls: true,
+                ..traits
+            }),
+            SendFailure::NotSentRefused
+        );
+        // A client-side check (no STARTTLS, no usable sign-in method, no
+        // SMTPUTF8/8BITMIME) fails before MAIL FROM, so nothing was sent.
+        assert_eq!(
+            classify_send_failure(SmtpErrorTraits {
+                client: true,
+                ..traits
+            }),
             SendFailure::NotSentRefused
         );
         // Anything else may have dropped after the body: never resend.
-        assert_eq!(
-            classify_send_failure(false, false, false, false),
-            SendFailure::Uncertain
-        );
+        assert_eq!(classify_send_failure(traits), SendFailure::Uncertain);
     }
 
     #[tokio::test]
@@ -1491,9 +1512,10 @@ mod tests {
             .unwrap_err()
             .contains("identity is unavailable"));
         assert!(
-            download_message(&account, "secret", "INBOX", 1, 10, None, None)
+            download_message(&account, "secret", "INBOX", 1, 10, None, None, || Ok(()))
                 .await
                 .unwrap_err()
+                .message
                 .contains("identity is unavailable")
         );
         assert!(delete_remote_draft(&account, "secret", "Drafts", 1, None)
@@ -2081,6 +2103,7 @@ mod tests {
             db.mailbox_uid_validity(&account.summary.id, "INBOX")
                 .unwrap(),
             Some(summary.received_at.as_str()),
+            || Ok(()),
         )
         .await
         .unwrap();
@@ -2128,6 +2151,7 @@ mod tests {
                 all_folders: false,
                 limit: 25,
             },
+            &mut Uncontended,
         )
         .await
         .unwrap();
@@ -2349,8 +2373,10 @@ mod tests {
         )
         .await
         .unwrap_err();
+        // The worker parks on the kind, not on the wording.
+        assert_eq!(rejected.kind, super::failure::FailureKind::SignInRejected);
         assert_eq!(
-            crate::models::IpcError::from(rejected.as_str()).code,
+            crate::models::IpcError::from(rejected.message.as_str()).code,
             "authenticationFailed"
         );
 
@@ -2907,6 +2933,109 @@ mod tests {
             1,
             "incomplete content evidence must not move or deduplicate"
         );
+        verify.logout().await.unwrap();
+    }
+
+    // Archive writes the queued \Answered first, then moves. The archive copy
+    // must keep it, or the reply mark is lost on the server.
+    #[tokio::test]
+    #[ignore = "requires npm run test:mail-integration"]
+    async fn greenmail_archive_keeps_answered_set_before_move() {
+        let password = "mail-test-password";
+        let account = AccountRecord {
+            summary: AccountSummary {
+                default_body_format: crate::models::BodyFormat::Html,
+                id: "88888888-8888-4888-8888-888888888888".into(),
+                provider: ProviderKind::Manual,
+                email: "user@example.test".into(),
+                display_name: "Postal Snap Test".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+                reply_to: String::new(),
+                color: None,
+            },
+            imap: ServerConfig {
+                trusted_certificate: None,
+                host: "localhost".into(),
+                port: 3993,
+                tls_mode: TlsMode::Tls,
+                username: "user@example.test".into(),
+            },
+            smtp: ServerConfig {
+                trusted_certificate: None,
+                host: "localhost".into(),
+                port: 3465,
+                tls_mode: TlsMode::Tls,
+                username: "user@example.test".into(),
+            },
+        };
+        let mut session = connect_imap(&account.imap, password).await.unwrap();
+        for folder in ["AuditKeywordSource", "AuditKeywordArchive"] {
+            let _ = session.create(folder).await;
+        }
+        let message_id = "<audit-keyword-archive@example.test>";
+        session
+            .append(
+                "AuditKeywordSource",
+                None,
+                None,
+                format!("Message-ID: {message_id}\r\n\r\nKEYWORD-CONTENT\r\n"),
+            )
+            .await
+            .unwrap();
+        let selected = session.select("AuditKeywordSource").await.unwrap();
+        let uid = *session
+            .uid_search("ALL")
+            .await
+            .unwrap()
+            .iter()
+            .next()
+            .unwrap();
+        let validity = selected.uid_validity;
+        session.logout().await.unwrap();
+
+        super::set_remote_keyword(
+            &account,
+            password,
+            "AuditKeywordSource",
+            uid,
+            validity,
+            super::SourceKeyword::Answered,
+        )
+        .await
+        .unwrap();
+        super::move_remote(
+            &account,
+            password,
+            "AuditKeywordSource",
+            "AuditKeywordArchive",
+            uid,
+            validity,
+            super::MoveOptions {
+                message_id: Some(message_id),
+                dedupe_existing: false,
+                replay_flags: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let mut verify = connect_imap(&account.imap, password).await.unwrap();
+        let destination = verify.select("AuditKeywordArchive").await.unwrap();
+        assert_eq!(destination.exists, 1);
+        let archived = verify
+            .uid_fetch("1:*", "(UID FLAGS)")
+            .await
+            .unwrap()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        let (answered, forwarded) = super::parse::reply_flags(&archived[0]);
+        assert!(answered, "archive copy lost the queued \\Answered");
+        assert!(!forwarded);
         verify.logout().await.unwrap();
     }
 }

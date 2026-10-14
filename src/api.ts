@@ -108,6 +108,7 @@ export type NativeCommand =
   | "get_account_inbox_counts"
   | "list_mailboxes"
   | "list_all_mailboxes"
+  | "load_older_messages"
   | "sync_account"
   | "sync_all_accounts"
   | "list_messages"
@@ -192,12 +193,14 @@ export type NativeCommand =
   | "get_settings"
   | "save_settings"
   | "set_mail_shortcut_guard"
+  | "set_composer_open"
   | "export_settings"
   | "import_settings"
   | "get_startup_notice"
   | "get_startup_error"
   | "get_cache_usage"
   | "clear_downloaded_mail"
+  | "retry_attachment_cleanup"
   | "get_distribution_channel"
   | "get_license_credits"
   | "get_sync_progress"
@@ -328,6 +331,11 @@ export const api = {
   listAllMailboxes: () => call<MailboxSummary[]>("list_all_mailboxes"),
   syncAccount: (accountId: string) => call<void>("sync_account", { accountId }),
   syncAllAccounts: () => call<string[]>("sync_all_accounts"),
+  loadOlderMessages: (accountId: string, mailboxId: number) =>
+    call<{ added: number; hasMore: boolean }>("load_older_messages", {
+      accountId,
+      mailboxId,
+    }),
   listMessages: (
     accountId: string,
     mailboxId: number,
@@ -644,6 +652,7 @@ export const api = {
   getStartupError: () => call<string | null>("get_startup_error"),
   cacheUsage: () => call<CacheUsage>("get_cache_usage"),
   clearCache: () => call<void>("clear_downloaded_mail"),
+  retryAttachmentCleanup: () => call<boolean>("retry_attachment_cleanup"),
   distribution: () => call<DistributionChannel>("get_distribution_channel"),
   getLicenseCredits: () => call<LicenseCredits>("get_license_credits"),
   getSyncProgress: (accountId: string) =>
@@ -798,6 +807,8 @@ export const api = {
     if (!inTauri()) return Promise.resolve(null);
     return call<"window" | "background" | null>("get_update_relaunch");
   },
+  setComposerOpen: (open: boolean) =>
+    inTauri() ? call<void>("set_composer_open", { open }) : Promise.resolve(),
   setUpdateReady: (ready: boolean) => {
     if (!inTauri()) return Promise.resolve();
     return call<void>("set_update_ready", { ready });

@@ -235,14 +235,27 @@ export function ReaderToolbar({
   onDismissMore: () => void;
   windowDrag?: boolean;
 }) {
-  // The list heading matches this bar's height when it wraps at large text.
+  // Share natural heights without measuring a previously stretched bar.
   const barRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const bar = barRef.current;
     const shell = bar?.closest<HTMLElement>(".mail-shell");
     if (!bar || !shell) return;
+    const heading =
+      readingPane === "right"
+        ? shell.querySelector<HTMLElement>(".message-pane .pane-heading")
+        : null;
+    const nodes = heading ? [bar, heading] : [bar];
     const update = () => {
-      const height = Math.ceil(bar.getBoundingClientRect().height);
+      const previous = nodes.map((node) => node.style.minHeight);
+      for (const node of nodes)
+        node.style.minHeight = "var(--pane-heading-height)";
+      const height = Math.ceil(
+        Math.max(...nodes.map((node) => node.getBoundingClientRect().height)),
+      );
+      nodes.forEach((node, index) => {
+        node.style.minHeight = previous[index];
+      });
       if (height > 0)
         shell.style.setProperty("--reader-bar-height", `${height}px`);
     };
@@ -250,13 +263,24 @@ export function ReaderToolbar({
     if (typeof ResizeObserver === "undefined") {
       return () => shell.style.removeProperty("--reader-bar-height");
     }
-    const observer = new ResizeObserver(update);
-    observer.observe(bar);
+    let pendingFrame: number | undefined;
+    const observer = new ResizeObserver(() => {
+      if (pendingFrame !== undefined) return;
+      pendingFrame = window.requestAnimationFrame(() => {
+        pendingFrame = undefined;
+        update();
+      });
+    });
+    for (const node of nodes) {
+      observer.observe(node);
+      for (const child of node.children) observer.observe(child);
+    }
     return () => {
       observer.disconnect();
+      if (pendingFrame !== undefined) window.cancelAnimationFrame(pendingFrame);
       shell.style.removeProperty("--reader-bar-height");
     };
-  }, []);
+  }, [readingPane]);
   const moveDestinations = withRecentMoveMailbox(
     mailboxes.filter(
       (mailbox) =>

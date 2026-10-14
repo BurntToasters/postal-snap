@@ -5,6 +5,7 @@ use chrono::{DateTime, Utc};
 use futures_util::TryStreamExt;
 use tokio::sync::Notify;
 
+use super::failure::{FailureKind, MailError};
 use super::parse::{
     internal_date, parse_envelope, parse_message, received_at_fallback, reply_flags, system_flags,
 };
@@ -151,10 +152,10 @@ async fn test_imap_with_icloud_fallback(
                     let _ = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.logout()).await;
                     Ok(fallback)
                 }
-                Err(_) => Err(first_error),
+                Err(_) => Err(first_error.into()),
             }
         }
-        Err(error) => Err(error),
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -255,7 +256,7 @@ async fn yield_point<H: SyncHooks>(
     hooks: &mut H,
     account: &AccountRecord,
     _password: &str,
-) -> Result<Lease, String> {
+) -> Result<Lease, MailError> {
     if !hooks.contended() {
         return Ok(lease);
     }
@@ -300,14 +301,14 @@ pub async fn sync_account<H: SyncHooks>(
     password: &str,
     policy: &CachePolicy,
     hooks: &mut H,
-) -> Result<SyncOutcome, String> {
+) -> Result<SyncOutcome, MailError> {
     let account_id = &account.summary.id;
     let mut lease = pool::checkout(account, password).await?;
     let folders = match list_folders(&mut lease, &account.summary.provider).await {
         Ok(folders) => folders,
         Err(error) => {
             lease.discard();
-            return Err(error);
+            return Err(MailError::connection(error));
         }
     };
     let usage = db.account_cache_usage(account_id, policy.max_bytes)?;
@@ -448,6 +449,7 @@ async fn sync_folder<H: SyncHooks>(
 
     let max_uid = db.max_uid(mailbox_id)?;
     let mut new_fetched = 0u32;
+    let mut catch_up_incomplete = false;
     if max_uid == 0 {
         let start = selected
             .exists
@@ -475,22 +477,44 @@ async fn sync_folder<H: SyncHooks>(
         .uid_next
         .is_none_or(|next| next > max_uid.saturating_add(1))
     {
-        let newest = status.uid_next.map(|next| next.saturating_sub(1));
-        let mut start = max_uid.saturating_add(1);
-        for _ in 0..MAX_NEW_MAIL_CHUNKS {
-            let end = start.saturating_add(INITIAL_MESSAGE_BATCH.saturating_sub(1));
-            let range = match newest {
-                Some(newest) => EnvelopeRange::Uid(start, end.min(newest)),
-                None => EnvelopeRange::UidOpen(start),
-            };
-            let fetched =
-                cache_envelopes(lease, db, account_id, mailbox_id, range, cutoff.as_ref()).await?;
-            new_fetched = new_fetched.saturating_add(fetched.count);
-            match newest {
-                Some(newest) if end < newest => start = end.saturating_add(1),
-                _ => break,
+        // List the UIDs that exist, so a wide gap costs nothing.
+        let found = tokio::time::timeout(
+            IMAP_COMMAND_TIMEOUT,
+            lease.uid_search(format!("UID {}:*", max_uid.saturating_add(1))),
+        )
+        .await
+        .map_err(|_| "Message list download timed out.".to_string())?
+        .map_err(|error| redact_error(&error, "Message list download"))?
+        .into_iter()
+        .collect::<Vec<_>>();
+        let (chunks, capped) = plan_new_uid_chunks(
+            &found,
+            max_uid,
+            INITIAL_MESSAGE_BATCH as usize,
+            MAX_NEW_MAIL_CHUNKS as usize,
+        );
+        catch_up_incomplete = capped;
+        for (index, chunk) in chunks.iter().enumerate() {
+            // Let user actions run; the next pass resumes from max_uid.
+            if index > 0 && hooks.contended() {
+                catch_up_incomplete = true;
+                break;
             }
+            let fetched = cache_envelopes(
+                lease,
+                db,
+                account_id,
+                mailbox_id,
+                EnvelopeRange::UidSet(super::folders::uid_set(chunk)?),
+                cutoff.as_ref(),
+            )
+            .await?;
+            new_fetched = new_fetched.saturating_add(fetched.count);
         }
+    }
+    if catch_up_incomplete {
+        // Without this the next pass sees an unchanged UIDNEXT and skips the gap.
+        db.forget_uid_next(mailbox_id)?;
     }
 
     let expunge_suspected = !purged
@@ -521,11 +545,11 @@ async fn sync_folder<H: SyncHooks>(
     let changed = new_fetched > 0 || !unchanged;
     if quick {
         return Ok((
-            deferred || (new_fetched > 0 && !folder.skip_prefetch),
+            deferred || catch_up_incomplete || (new_fetched > 0 && !folder.skip_prefetch),
             changed,
         ));
     }
-    let mut more_work = false;
+    let mut more_work = catch_up_incomplete;
     if backfill_active {
         let mut state = "active";
         for _ in 0..BACKFILL_BATCHES_PER_PASS {
@@ -556,7 +580,29 @@ async fn sync_folder<H: SyncHooks>(
 enum EnvelopeRange {
     Uid(u32, u32),
     UidOpen(u32),
+    UidSet(String),
     Sequence(u32, u32),
+}
+
+/// New UIDs above `max_uid`, oldest first, in fetch chunks. True when the
+/// per-pass chunk cap left some for the next pass.
+pub(crate) fn plan_new_uid_chunks(
+    found: &[u32],
+    max_uid: u32,
+    batch: usize,
+    max_chunks: usize,
+) -> (Vec<Vec<u32>>, bool) {
+    let mut uids: Vec<u32> = found.iter().copied().filter(|uid| *uid > max_uid).collect();
+    uids.sort_unstable();
+    uids.dedup();
+    let batch = batch.max(1);
+    let chunks: Vec<Vec<u32>> = uids
+        .chunks(batch)
+        .take(max_chunks)
+        .map(<[u32]>::to_vec)
+        .collect();
+    let capped = uids.len() > batch.saturating_mul(max_chunks);
+    (chunks, capped)
 }
 
 struct EnvelopeBatch {
@@ -593,6 +639,11 @@ async fn cache_envelopes(
         )
         .await
         .map(|result| result.map(futures_util::future::Either::Left)),
+        EnvelopeRange::UidSet(set) => {
+            tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.uid_fetch(set, &query))
+                .await
+                .map(|result| result.map(futures_util::future::Either::Left))
+        }
         EnvelopeRange::Sequence(start, end) => tokio::time::timeout(
             IMAP_COMMAND_TIMEOUT,
             lease.fetch(format!("{start}:{end}"), &query),
@@ -919,13 +970,15 @@ async fn parse_message_off_runtime(
     seen: bool,
     flagged: bool,
     fallback: Option<String>,
-) -> Result<CachedMessage, String> {
+) -> Result<CachedMessage, MailError> {
     let raw = raw.to_vec();
+    // A panic in the parser is Unreadable: the message stays quarantined.
     tokio::task::spawn_blocking(move || {
         parse_message(uid, &raw, seen, flagged, fallback.as_deref())
     })
     .await
-    .map_err(|_| "Message parsing was interrupted.".to_string())?
+    .map_err(|_| MailError::new(FailureKind::Unreadable, "Message parsing was interrupted."))?
+    .map_err(MailError::from)
 }
 
 async fn download_body_batch(
@@ -972,7 +1025,15 @@ async fn download_body_batch(
         }
         let (seen, flagged) = system_flags(&item);
         let fallback = received_at_fallback(&item, cached_by_uid.get(&uid).map(String::as_str));
-        match parse_message_off_runtime(uid, raw, seen, flagged, fallback).await {
+        db.begin_parse(mailbox_id, uid)?;
+        let parsed = parse_message_off_runtime(uid, raw, seen, flagged, fallback).await;
+        // A panic quarantines at once; other errors use normal backoff.
+        if matches!(&parsed, Err(error) if error.kind == FailureKind::Unreadable) {
+            db.quarantine_parse(mailbox_id, uid)?;
+        } else {
+            db.end_parse(mailbox_id, uid)?;
+        }
+        match parsed {
             Ok(mut parsed) => {
                 parsed.internal_at = internal_date(&item);
                 consumed = consumed.saturating_add(raw.len() as u64);
@@ -1232,11 +1293,14 @@ pub async fn idle_inbox(
     })
 }
 
-pub async fn server_search(
+/// Search the server. Between mailboxes the account goes to any waiting user
+/// action, so a slow search never blocks opening or flagging mail.
+pub async fn server_search<H: SyncHooks>(
     db: &Database,
     account: &AccountRecord,
     password: &str,
     query: &SearchQuery,
+    hooks: &mut H,
 ) -> Result<Vec<MessageSummary>, String> {
     let parsed = crate::search_query::parse(&query.text);
     let mut mailboxes = if query.all_folders {
@@ -1285,20 +1349,38 @@ pub async fn server_search(
         larger_than: parsed.larger_than,
         smaller_than: parsed.smaller_than,
     };
-    match search_mailboxes(
-        &mut lease, db, account, query, &criteria, &filter, mailboxes,
-    )
-    .await
-    {
-        Ok(results) => {
-            lease.release();
-            Ok(results)
+    let mut results = Vec::new();
+    // Bound all-folders searches; a later search resumes from fresh results.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    for (index, (mailbox_id, name)) in mailboxes.into_iter().enumerate() {
+        if tokio::time::Instant::now() >= deadline {
+            break;
         }
-        Err(error) => {
-            lease.discard();
-            Err(error)
+        if index > 0 {
+            lease = yield_point(lease, hooks, account, password).await?;
+        }
+        match search_mailbox(
+            &mut lease, db, account, query, &criteria, &filter, mailbox_id, &name,
+        )
+        .await
+        {
+            Ok(mut hits) => results.append(&mut hits),
+            Err(error) => {
+                lease.discard();
+                return Err(error);
+            }
         }
     }
+    lease.release();
+    results.sort_by(|left, right| {
+        right
+            .received_at
+            .cmp(&left.received_at)
+            .then_with(|| right.uid.cmp(&left.uid))
+    });
+    results.dedup_by_key(|message| (message.mailbox_id, message.uid));
+    results.truncate(query.limit.min(500) as usize);
+    Ok(results)
 }
 
 struct ServerHitFilter {
@@ -1337,111 +1419,97 @@ impl ServerHitFilter {
     }
 }
 
-async fn search_mailboxes(
+#[allow(clippy::too_many_arguments)]
+async fn search_mailbox(
     lease: &mut Lease,
     db: &Database,
     account: &AccountRecord,
     query: &SearchQuery,
     criteria: &str,
     filter: &ServerHitFilter,
-    mailboxes: Vec<(i64, String)>,
+    mailbox_id: i64,
+    name: &str,
 ) -> Result<Vec<MessageSummary>, String> {
     let mut results = Vec::new();
-    // Bound all-folders searches so the account actor is not monopolized; a
-    // later search resumes from fresh results.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    for (mailbox_id, name) in mailboxes {
-        if tokio::time::Instant::now() >= deadline {
-            break;
-        }
-        let wire_name = lease.mailbox_name(&name);
-        let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.examine(&wire_name))
-            .await
-            .map_err(|_| "Server search timed out.".to_string())?
-            .map_err(|error| redact_error(&error, "Server search"))?;
-        if let Some(expected_uid_validity) = db.mailbox_uid_validity(&account.summary.id, &name)? {
-            if selected.uid_validity != Some(expected_uid_validity) {
-                // The cached generation is stale; caching new-generation UIDs
-                // against it would corrupt the mailbox. Purge and let the
-                // next sync repopulate instead.
-                let _ = db.purge_stale_mailbox(&account.summary.id, &name, mailbox_id);
-                continue;
-            }
-        }
-        let mut uids = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.uid_search(criteria))
-            .await
-            .map_err(|_| "Server search timed out.".to_string())?
-            .map_err(|error| redact_error(&error, "Server search"))?
-            .into_iter()
-            .collect::<Vec<_>>();
-        uids.sort_unstable_by(|left, right| right.cmp(left));
-        uids.truncate(query.limit.min(500) as usize);
-        if uids.is_empty() {
-            continue;
-        }
-        let set = uids
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join(",");
-        let header_query = format!(
-            "(UID FLAGS RFC822.SIZE INTERNALDATE ENVELOPE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID IN-REPLY-TO REFERENCES CONTENT-TYPE)]<0.{}>)",
-            MAX_MESSAGE_BYTES + 1
-        );
-        let fetched = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
-            lease
-                .uid_fetch(set, header_query)
-                .await?
-                .try_collect::<Vec<_>>()
-                .await
-        })
+    let wire_name = lease.mailbox_name(name);
+    let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.examine(&wire_name))
         .await
         .map_err(|_| "Server search timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Server search"))?;
-        let parsed = fetched
-            .iter()
-            .filter_map(|item| {
-                let (seen, flagged) = system_flags(item);
-                parse_envelope(item, seen, flagged).ok().map(|mut parsed| {
-                    (parsed.is_answered, parsed.is_forwarded) = reply_flags(item);
-                    parsed
-                })
+    if let Some(expected_uid_validity) = db.mailbox_uid_validity(&account.summary.id, name)? {
+        if selected.uid_validity != Some(expected_uid_validity) {
+            // The cached generation is stale; caching new-generation UIDs
+            // against it would corrupt the mailbox. Purge and let the
+            // next sync repopulate instead.
+            let _ = db.purge_stale_mailbox(&account.summary.id, name, mailbox_id);
+            return Ok(results);
+        }
+    }
+    let mut uids = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.uid_search(criteria))
+        .await
+        .map_err(|_| "Server search timed out.".to_string())?
+        .map_err(|error| redact_error(&error, "Server search"))?
+        .into_iter()
+        .collect::<Vec<_>>();
+    uids.sort_unstable_by(|left, right| right.cmp(left));
+    uids.truncate(query.limit.min(500) as usize);
+    if uids.is_empty() {
+        return Ok(results);
+    }
+    let set = uids
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let header_query = format!(
+        "(UID FLAGS RFC822.SIZE INTERNALDATE ENVELOPE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID IN-REPLY-TO REFERENCES CONTENT-TYPE)]<0.{}>)",
+        MAX_MESSAGE_BYTES + 1
+    );
+    let fetched = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
+        lease
+            .uid_fetch(set, header_query)
+            .await?
+            .try_collect::<Vec<_>>()
+            .await
+    })
+    .await
+    .map_err(|_| "Server search timed out.".to_string())?
+    .map_err(|error| redact_error(&error, "Server search"))?;
+    let parsed = fetched
+        .iter()
+        .filter_map(|item| {
+            let (seen, flagged) = system_flags(item);
+            parse_envelope(item, seen, flagged).ok().map(|mut parsed| {
+                (parsed.is_answered, parsed.is_forwarded) = reply_flags(item);
+                parsed
             })
-            .collect::<Vec<_>>();
-        db.upsert_envelopes(&account.summary.id, mailbox_id, &parsed)?;
-        for message in &parsed {
-            if let Some(summary) = db.message_summary_by_uid(mailbox_id, message.uid)? {
-                // Attachment names are not an IMAP key. Size and the
-                // envelope attachment hint are checked on the cached row.
-                let names = if filter.filenames.is_empty() {
-                    Vec::new()
-                } else {
-                    db.attachment_filenames(mailbox_id, message.uid)?
-                };
-                if filter.matches(&summary, &names) {
-                    results.push(summary);
-                }
+        })
+        .collect::<Vec<_>>();
+    db.upsert_envelopes(&account.summary.id, mailbox_id, &parsed)?;
+    for message in &parsed {
+        if let Some(summary) = db.message_summary_by_uid(mailbox_id, message.uid)? {
+            // Attachment names are not an IMAP key. Size and the
+            // envelope attachment hint are checked on the cached row.
+            let names = if filter.filenames.is_empty() {
+                Vec::new()
+            } else {
+                db.attachment_filenames(mailbox_id, message.uid)?
+            };
+            if filter.matches(&summary, &names) {
+                results.push(summary);
             }
         }
-        let threaded: Vec<String> = parsed
-            .iter()
-            .map(|message| {
-                message
-                    .message_id
-                    .clone()
-                    .unwrap_or_else(|| crate::db::synthetic_thread_id(mailbox_id, message.uid))
-            })
-            .collect();
-        let _ = db.repair_thread_roots(&account.summary.id, &threaded);
     }
-    results.sort_by(|left, right| {
-        right
-            .received_at
-            .cmp(&left.received_at)
-            .then_with(|| right.uid.cmp(&left.uid))
-    });
-    results.dedup_by_key(|message| (message.mailbox_id, message.uid));
-    results.truncate(query.limit.min(500) as usize);
+    let threaded: Vec<String> = parsed
+        .iter()
+        .map(|message| {
+            message
+                .message_id
+                .clone()
+                .unwrap_or_else(|| crate::db::synthetic_thread_id(mailbox_id, message.uid))
+        })
+        .collect();
+    let _ = db.repair_thread_roots(&account.summary.id, &threaded);
     Ok(results)
 }
 
@@ -1453,6 +1521,7 @@ pub(crate) fn download_timeout(expected_size: u64) -> Duration {
         .min(Duration::from_secs(600))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn download_message(
     account: &AccountRecord,
     password: &str,
@@ -1461,22 +1530,28 @@ pub async fn download_message(
     expected_size: u64,
     expected_uid_validity: Option<u32>,
     cached_received_at: Option<&str>,
-) -> Result<CachedMessage, String> {
+    before_parse: impl FnOnce() -> Result<(), String>,
+) -> Result<CachedMessage, MailError> {
     if expected_size > MAX_MESSAGE_BYTES as u64 {
-        return Err("This message is too large to download safely.".into());
+        return Err(MailError::new(
+            FailureKind::TooLarge,
+            "This message is too large to download safely.",
+        ));
     }
     let expected_uid_validity = expected_uid_validity.ok_or_else(|| {
-        "Mailbox identity is unavailable; refresh mail and try again.".to_string()
+        MailError::from("Mailbox identity is unavailable; refresh mail and try again.".to_string())
     })?;
     let mut lease = pool::checkout(account, password).await?;
     let result = async {
         let wire_mailbox = lease.mailbox_name(mailbox);
         let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.examine(&wire_mailbox))
             .await
-            .map_err(|_| "Message download timed out.".to_string())?
-            .map_err(|error| redact_error(&error, "Message download"))?;
+            .map_err(|_| MailError::connection("Message download timed out."))?
+            .map_err(|error| MailError::from(redact_error(&error, "Message download")))?;
         if selected.uid_validity != Some(expected_uid_validity) {
-            return Err("This mailbox changed; refresh mail and try again.".to_string());
+            return Err(MailError::from(
+                "This mailbox changed; refresh mail and try again.".to_string(),
+            ));
         }
         let body_query = body_fetch_query("UID FLAGS RFC822.SIZE INTERNALDATE");
         let mut rows = tokio::time::timeout(download_timeout(expected_size), async {
@@ -1489,18 +1564,29 @@ pub async fn download_message(
                 .map_err(|error| redact_error(&error, "Message download"))
         })
         .await
-        .map_err(|_| "Message download timed out.".to_string())??;
-        let item = rows
-            .pop()
-            .ok_or_else(|| "This message is no longer available on the server.".to_string())?;
-        let raw = item
-            .body()
-            .ok_or_else(|| "The mail server did not return this message.".to_string())?;
+        .map_err(|_| MailError::connection("Message download timed out."))?
+        .map_err(MailError::from)?;
+        // Unsolicited FETCH lines for other messages may share the response.
+        let index = rows
+            .iter()
+            .rposition(|row| row.uid == Some(uid) && row.body().is_some())
+            .ok_or_else(|| {
+                MailError::from("This message is no longer available on the server.".to_string())
+            })?;
+        let item = rows.swap_remove(index);
+        let raw = item.body().ok_or_else(|| {
+            MailError::from("The mail server did not return this message.".to_string())
+        })?;
         if raw.len() > MAX_MESSAGE_BYTES {
-            return Err("This message is too large to download safely.".into());
+            return Err(MailError::new(
+                FailureKind::TooLarge,
+                "This message is too large to download safely.",
+            ));
         }
         let (seen, flagged) = system_flags(&item);
         let fallback = received_at_fallback(&item, cached_received_at);
+        // Only the parse itself is counted, never the network download.
+        before_parse().map_err(MailError::local_storage)?;
         let mut parsed = parse_message_off_runtime(uid, raw, seen, flagged, fallback).await?;
         parsed.internal_at = internal_date(&item);
         Ok(parsed)
@@ -1529,8 +1615,32 @@ pub(crate) fn body_fetch_query(prefix: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        refresh_window_start, should_purge_stale_generation, ServerHitFilter, INITIAL_MESSAGE_BATCH,
+        plan_new_uid_chunks, refresh_window_start, should_purge_stale_generation, ServerHitFilter,
+        INITIAL_MESSAGE_BATCH,
     };
+
+    // New-mail catch-up failure modes:
+    // 1. A wide UID gap costs one round trip per empty range.
+    // 2. `UID n:*` answers with the newest UID even when it is not above n,
+    //    so an already cached message is fetched again.
+    // 3. Unsorted or repeated search results fetch a UID twice or out of order.
+    // 4. Hitting the per-pass cap is not reported, so the rest is skipped.
+    #[test]
+    fn new_mail_chunks_skip_uid_gaps() {
+        let found = [4_000_000, 10, 4_000_001, 12, 4_000_000, 9];
+        let (chunks, incomplete) = plan_new_uid_chunks(&found, 10, 2, 10);
+        assert_eq!(chunks, vec![vec![12, 4_000_000], vec![4_000_001]]);
+        assert!(!incomplete);
+
+        let many: Vec<u32> = (100..110).collect();
+        let (chunks, incomplete) = plan_new_uid_chunks(&many, 99, 3, 2);
+        assert_eq!(chunks, vec![vec![100, 101, 102], vec![103, 104, 105]]);
+        assert!(incomplete);
+
+        let (chunks, incomplete) = plan_new_uid_chunks(&[7], 7, 3, 2);
+        assert!(chunks.is_empty());
+        assert!(!incomplete);
+    }
 
     fn summary(has_attachments: bool) -> crate::models::MessageSummary {
         crate::models::MessageSummary {

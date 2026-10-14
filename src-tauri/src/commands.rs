@@ -95,7 +95,10 @@ pub struct AppState {
     watchers: Mutex<HashSet<String>>,
     startup_error: Mutex<Option<String>>,
     mail_shortcut_guard: AtomicBool,
-    app_nap: Mutex<Option<crate::app_nap::AppNapGuard>>,
+    /// The mail database or settings file did not open; the stand-ins must
+    /// never receive accounts.
+    storage_unavailable: AtomicBool,
+    app_nap: crate::app_nap::ActivityHolds,
     update_gate: UpdateInstallGate,
 }
 
@@ -233,7 +236,8 @@ impl AppState {
             watchers: Mutex::new(HashSet::new()),
             startup_error: Mutex::new(None),
             mail_shortcut_guard: AtomicBool::new(false),
-            app_nap: Mutex::new(None),
+            storage_unavailable: AtomicBool::new(false),
+            app_nap: crate::app_nap::ActivityHolds::new("Postal Snap is keeping mail in sync"),
             update_gate: UpdateInstallGate::new(),
         }
     }
@@ -251,7 +255,36 @@ impl AppState {
             .startup_error
             .lock()
             .map_err(|_| "Application startup status is unavailable.".to_string())?;
+        // A storage failure lasts the whole launch, including window reloads.
+        if self.storage_unavailable.load(Ordering::SeqCst) {
+            return Ok(error.clone());
+        }
         Ok(error.take())
+    }
+
+    pub fn set_storage_unavailable(&self) {
+        self.storage_unavailable.store(true, Ordering::SeqCst);
+    }
+
+    /// Marker that asks the next launch to finish freeing disk space.
+    pub(crate) fn compact_marker(&self) -> PathBuf {
+        compact_marker_for(&self.attachment_dir)
+    }
+
+    /// Marker that records folders the last orphan sweep could not remove.
+    pub(crate) fn orphan_marker(&self) -> PathBuf {
+        orphan_marker_for(&self.attachment_dir)
+    }
+
+    /// Refuse work that would save accounts into a stand-in database.
+    pub fn require_storage(&self) -> Result<(), String> {
+        if self.storage_unavailable.load(Ordering::SeqCst) {
+            return Err(
+                "Postal Snap cannot change accounts until its mail data opens. Restart Postal Snap and try again."
+                    .into(),
+            );
+        }
+        Ok(())
     }
 
     pub fn set_mail_shortcut_guard(&self, guarded: bool) {
@@ -336,39 +369,20 @@ impl AppState {
         if !watchers.insert(account_id.clone()) {
             return Ok(());
         }
-        let first_watcher = watchers.len() == 1;
         drop(watchers);
-        if first_watcher {
-            self.begin_background_activity();
-        }
         tauri::async_runtime::spawn(async move {
             run_account_worker(&account_id, &app).await;
             let state = app.state::<AppState>();
             if let Ok(mut watchers) = state.watchers.lock() {
                 watchers.remove(&account_id);
-                if watchers.is_empty() {
-                    drop(watchers);
-                    state.end_background_activity();
-                }
             };
         });
         Ok(())
     }
 
-    fn begin_background_activity(&self) {
-        if let Ok(mut guard) = self.app_nap.lock() {
-            if guard.is_none() {
-                *guard = Some(crate::app_nap::AppNapGuard::begin(
-                    "Postal Snap is keeping mail in sync",
-                ));
-            }
-        }
-    }
-
-    fn end_background_activity(&self) {
-        if let Ok(mut guard) = self.app_nap.lock() {
-            guard.take();
-        }
+    /// Keep macOS from napping the app while mail work runs.
+    pub(crate) fn hold_activity(&self) -> crate::app_nap::ActivityHold<'_> {
+        self.app_nap.hold()
     }
 
     fn retire_actor(&self, account_id: &str) {
@@ -383,6 +397,22 @@ impl AppState {
             actor.request(wake::SYNC);
         }
     }
+}
+
+/// The marker sits beside the mail database, one level above attachments.
+pub(crate) fn compact_marker_for(attachment_dir: &Path) -> PathBuf {
+    attachment_dir
+        .parent()
+        .unwrap_or(attachment_dir)
+        .join("compact-pending")
+}
+
+/// Sits beside the compaction marker, one level above attachments.
+pub(crate) fn orphan_marker_for(attachment_dir: &Path) -> PathBuf {
+    attachment_dir
+        .parent()
+        .unwrap_or(attachment_dir)
+        .join("orphan-attachments-pending")
 }
 
 fn reconnect_delay(account_id: &str, seconds: u64, attempt: u32) -> Duration {
@@ -439,18 +469,14 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
             pending_full = true;
         }
         let guard = actor.acquire_for_worker().await;
+        let work = state.hold_activity();
         if reasons & wake::OUTBOX != 0 && (pending_full || more_work) {
             // Send Later items that came due (for example during sleep) go
             // out before a long pass.
             sync::run_targeted_jobs(account_id, app, &state, wake::OUTBOX).await;
         }
         if pending_full || more_work {
-            let previous_message_id = state
-                .db
-                .latest_inbox_message(account_id)
-                .ok()
-                .flatten()
-                .map(|message| message.id);
+            let previous_message_id = state.db.inbox_high_water(account_id).ok().flatten();
             match sync::run_sync_pass(account_id, app, &state, &actor, guard, false).await {
                 Ok(outcome) => {
                     backoff = 2;
@@ -542,6 +568,11 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
             due.max(Duration::from_millis(200)).min(IDLE_REFRESH)
         });
         let job_due_first = next_job.is_some_and(|due| due < IDLE_REFRESH);
+        // Waiting on IDLE alone may nap; a due send or draft push keeps its
+        // timer on time.
+        if next_job.is_none() {
+            drop(work);
+        }
         if actor.contended() {
             // A user action or a yielded pass is queued: IDLE would hold the
             // account from it until the next wake-up.
@@ -1106,12 +1137,39 @@ fn managed_account_dir(root: &Path, account_id: &str) -> Result<PathBuf, String>
     Ok(root.join(id.hyphenated().to_string()))
 }
 
-pub(crate) async fn cleanup_orphaned_account_dirs(root: PathBuf, active_account_ids: Vec<String>) {
+/// Removes account folders that no active account owns. Returns how many
+/// orphaned folders are still present, so callers can report leftovers.
+pub(crate) async fn cleanup_orphaned_account_dirs(
+    root: PathBuf,
+    active_account_ids: Vec<String>,
+) -> usize {
+    sweep_orphaned_account_dirs(root, active_account_ids, tokio::fs::remove_dir_all).await
+}
+
+/// `cleanup_orphaned_account_dirs` with the removal operation injected for tests.
+async fn sweep_orphaned_account_dirs<F, Fut>(
+    root: PathBuf,
+    active_account_ids: Vec<String>,
+    remove: F,
+) -> usize
+where
+    F: Fn(PathBuf) -> Fut,
+    Fut: std::future::Future<Output = std::io::Result<()>>,
+{
     let active_account_ids = active_account_ids.into_iter().collect::<HashSet<_>>();
-    let Ok(mut entries) = tokio::fs::read_dir(root).await else {
-        return;
+    let mut entries = match tokio::fs::read_dir(root).await {
+        Ok(entries) => entries,
+        // A root that was never created holds nothing to remove.
+        Err(error) => return usize::from(error.kind() != std::io::ErrorKind::NotFound),
     };
-    while let Ok(Some(entry)) = entries.next_entry().await {
+    let mut remaining = 0;
+    loop {
+        let entry = match entries.next_entry().await {
+            Ok(Some(entry)) => entry,
+            Ok(None) => break,
+            // Unlisted entries may still hold orphans.
+            Err(_) => return remaining + 1,
+        };
         let name = entry.file_name();
         let Some(name) = name.to_str() else {
             continue;
@@ -1123,11 +1181,61 @@ pub(crate) async fn cleanup_orphaned_account_dirs(root: PathBuf, active_account_
             continue;
         }
         let Ok(file_type) = entry.file_type().await else {
+            remaining += 1;
             continue;
         };
-        if file_type.is_dir() && !file_type.is_symlink() {
-            let _ = tokio::fs::remove_dir_all(entry.path()).await;
+        let removable = file_type.is_dir() && !file_type.is_symlink();
+        if removable && remove(entry.path()).await.is_err() {
+            remaining += 1;
         }
+    }
+    remaining
+}
+
+/// Startup sweep: best effort and non-blocking, with its result kept in a marker.
+pub(crate) async fn sweep_orphans_at_startup(
+    root: PathBuf,
+    active_account_ids: Vec<String>,
+    marker: PathBuf,
+) {
+    let remaining = cleanup_orphaned_account_dirs(root, active_account_ids).await;
+    record_orphan_marker(&marker, remaining);
+}
+
+/// Keeps the marker in step with the last sweep. It survives restarts, so a
+/// failed removal is never silently forgotten.
+pub(crate) fn record_orphan_marker(marker: &Path, remaining: usize) {
+    if remaining == 0 {
+        let _ = std::fs::remove_file(marker);
+    } else {
+        let _ = std::fs::write(marker, b"");
+    }
+}
+
+/// Makes `dir` unwritable so entries cannot be unlinked. `None` when the
+/// permission change is not enforced, such as when running as root.
+#[cfg(all(test, unix))]
+pub(crate) fn make_unwritable(dir: &Path) -> Option<UnwritableDir> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o500)).ok()?;
+    let probe = dir.join("probe");
+    if std::fs::File::create(&probe).is_ok() {
+        let _ = std::fs::remove_file(&probe);
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+        return None;
+    }
+    Some(UnwritableDir(dir.to_path_buf()))
+}
+
+/// Restores a directory's write permission when dropped.
+#[cfg(all(test, unix))]
+pub(crate) struct UnwritableDir(PathBuf);
+
+#[cfg(all(test, unix))]
+impl Drop for UnwritableDir {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o700));
     }
 }
 
@@ -1194,25 +1302,17 @@ async fn release_attachment_tokens<'a>(
     }
 }
 
-/// Sync stores rows with rising ids, so only a row newer than the previous
-/// newest counts. An older row surfacing after the newest was removed
-/// elsewhere is not new mail.
-fn is_new_mail(previous_message_id: Option<i64>, message_id: i64, is_read: bool) -> bool {
-    !is_read && previous_message_id.is_none_or(|previous| message_id > previous)
-}
-
 fn notify_new_mail(
     app: &AppHandle,
     db: &Database,
     account_id: &str,
     previous_message_id: Option<i64>,
 ) {
-    let Ok(Some(message)) = db.latest_inbox_message(account_id) else {
+    // Sync stores rows with rising ids, so arrival order never depends on
+    // the sender's Date header.
+    let Ok(Some(message)) = db.newest_unread_inbox_after(account_id, previous_message_id) else {
         return;
     };
-    if !is_new_mail(previous_message_id, message.id, message.is_read) {
-        return;
-    }
     let settings = app.state::<AppState>().settings.get().ok();
     if settings.as_ref().is_some_and(|settings| {
         !settings.notify_new_mail
@@ -1238,10 +1338,10 @@ fn notify_new_mail(
     let (title, body) = if private {
         (
             account_label.as_deref().map_or_else(
-                || "New mail".to_string(),
-                |name| format!("New mail for {name}"),
+                || crate::strings::notify::NEW_MAIL.to_string(),
+                crate::strings::notify::new_mail_for,
             ),
-            "Open Postal Snap to read it.".to_string(),
+            crate::strings::notify::OPEN_TO_READ.to_string(),
         )
     } else {
         let sender = if message.sender_name.is_empty() {
@@ -1342,11 +1442,16 @@ mod tests {
         assert!(leaves_auth_pause(wake::RESUME));
     }
 
+    #[cfg(unix)]
+    use super::make_unwritable;
     use super::{
-        attachments::preview_text, drafts_send::resolve_requested_send_at, is_new_mail,
-        mail_alert_sound, new_mail_sound_name, sync::apply_filter_rules,
+        attachments::preview_text, drafts_send::resolve_requested_send_at, mail_alert_sound,
+        new_mail_sound_name, sync::apply_filter_rules,
     };
-    use super::{cleanup_orphaned_account_dirs, take_normalized_account_password};
+    use super::{
+        cleanup_orphaned_account_dirs, record_orphan_marker, sweep_orphaned_account_dirs,
+        take_normalized_account_password,
+    };
 
     #[test]
     fn outbox_keeps_the_unsigned_draft_for_undo() {
@@ -1425,19 +1530,14 @@ mod tests {
     }
 
     #[test]
-    fn only_newer_unread_inbox_mail_is_new() {
-        // Rows get higher ids as sync stores them; an older row surfacing
-        // after the newest was removed elsewhere is not new mail.
-        assert!(is_new_mail(None, 7, false));
-        assert!(is_new_mail(Some(6), 7, false));
-        assert!(!is_new_mail(Some(7), 7, false));
-        assert!(!is_new_mail(Some(9), 7, false));
-        assert!(!is_new_mail(Some(6), 7, true));
+    fn mail_alert_sound_follows_setting() {
         assert_eq!(mail_alert_sound(false), None);
         assert_eq!(mail_alert_sound(true), Some(new_mail_sound_name()));
         assert!(!new_mail_sound_name().is_empty());
     }
+    use super::replied;
     use crate::db::{CachedMessage, Database};
+    use crate::mail;
     use crate::models::{
         AccountRecord, AccountSummary, FilterRule, MailboxRole, ProviderKind, ServerConfig, TlsMode,
     };
@@ -1529,6 +1629,88 @@ mod tests {
             target_mailbox: None,
             enabled: true,
         }
+    }
+
+    // Rule window failure modes:
+    // - mail cached by a pass that later fails is never filed
+    // - a second failure moves the mark past the first failure's mail
+    // - a success leaves the mark set, so mail a user moves into the Inbox
+    //   between passes is filed again
+    #[test]
+    fn rules_file_mail_cached_by_a_failed_pass_on_the_next_success() {
+        use super::sync::{begin_rule_window, finish_rule_window};
+        let db = Database::memory();
+        let account = rule_account();
+        let account_id = account.summary.id.clone();
+        db.insert_account(&account).unwrap();
+        let inbox = rule_mailbox(&db, &account_id, "INBOX", &MailboxRole::Inbox);
+        rule_mailbox(&db, &account_id, "Archive", &MailboxRole::Archive);
+        db.create_filter_rule(&enabled_rule(&account_id, "move_archive"))
+            .unwrap();
+        let pending = |db: &Database| db.pending_move_uids(inbox).unwrap();
+
+        let first = begin_rule_window(&db, &account_id);
+        bill(&db, &account_id, inbox, 1);
+        finish_rule_window(&db, &account, first, false);
+        assert!(pending(&db).is_empty());
+
+        let second = begin_rule_window(&db, &account_id);
+        bill(&db, &account_id, inbox, 2);
+        finish_rule_window(&db, &account, second, false);
+        assert!(pending(&db).is_empty());
+
+        let third = begin_rule_window(&db, &account_id);
+        finish_rule_window(&db, &account, third, true);
+        assert_eq!(pending(&db), vec![2, 1]);
+
+        bill(&db, &account_id, inbox, 3);
+        let fourth = begin_rule_window(&db, &account_id);
+        finish_rule_window(&db, &account, fourth, true);
+        assert_eq!(pending(&db), vec![2, 1]);
+    }
+
+    // A crash before finish must not skip cached mail on restart.
+    #[test]
+    fn rule_window_is_durable_before_mail_is_cached() {
+        use super::sync::{begin_rule_window, finish_rule_window};
+        let db = Database::memory();
+        let account = rule_account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = rule_mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        rule_mailbox(&db, account_id, "Archive", &MailboxRole::Archive);
+        db.create_filter_rule(&enabled_rule(account_id, "move_archive"))
+            .unwrap();
+        let first = begin_rule_window(&db, account_id);
+        assert_eq!(db.rules_pending_from(account_id).unwrap(), first);
+        bill(&db, account_id, inbox, 1);
+        let restarted = begin_rule_window(&db, account_id);
+        assert_eq!(restarted, first);
+        finish_rule_window(&db, &account, restarted, true);
+        assert_eq!(db.pending_move_uids(inbox).unwrap(), vec![1]);
+    }
+
+    // A bounded rule batch must retain its watermark for the remaining rows.
+    #[test]
+    fn rule_window_survives_more_than_one_batch() {
+        use super::sync::{begin_rule_window, finish_rule_window};
+        let db = Database::memory();
+        let account = rule_account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = rule_mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        rule_mailbox(&db, account_id, "Archive", &MailboxRole::Archive);
+        db.create_filter_rule(&enabled_rule(account_id, "move_archive"))
+            .unwrap();
+        let first = begin_rule_window(&db, account_id);
+        for uid in 1..=101 {
+            bill(&db, account_id, inbox, uid);
+        }
+        finish_rule_window(&db, &account, first, true);
+        let second = begin_rule_window(&db, account_id);
+        finish_rule_window(&db, &account, second, true);
+        assert_eq!(db.pending_move_uids(inbox).unwrap().len(), 101);
+        assert_eq!(db.rules_pending_from(account_id).unwrap(), None);
     }
 
     #[test]
@@ -1630,11 +1812,151 @@ mod tests {
         std::fs::create_dir(root.path().join(&orphaned)).unwrap();
         std::fs::create_dir(root.path().join(unrelated)).unwrap();
 
-        cleanup_orphaned_account_dirs(root.path().to_path_buf(), vec![active.clone()]).await;
+        let remaining =
+            cleanup_orphaned_account_dirs(root.path().to_path_buf(), vec![active.clone()]).await;
 
+        assert_eq!(remaining, 0);
         assert!(root.path().join(active).is_dir());
         assert!(!root.path().join(orphaned).exists());
         assert!(root.path().join(unrelated).is_dir());
+    }
+
+    // Failure modes for orphaned attachment folders:
+    // 1. A folder that cannot be removed is not reported as still present.
+    // 2. A clean or never-created root reports a false alarm.
+    // 3. A symlink named like an account id is followed and its target removed.
+    // 4. An uppercase, braced, or non-UUID name is removed as if it were ours.
+    // 5. An active account's folder is removed.
+    // 6. A stale marker survives a sweep that now finds nothing.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn orphan_sweep_reports_a_folder_it_cannot_remove() {
+        let root = tempfile::tempdir().unwrap();
+        let orphan = root
+            .path()
+            .join(uuid::Uuid::new_v4().hyphenated().to_string());
+        std::fs::create_dir(&orphan).unwrap();
+        std::fs::write(orphan.join("draft.bin"), b"attachment").unwrap();
+        let Some(lock) = make_unwritable(root.path()) else {
+            // Running as root bypasses directory permissions; nothing to prove.
+            return;
+        };
+        let remaining = cleanup_orphaned_account_dirs(root.path().to_path_buf(), vec![]).await;
+        drop(lock);
+        assert_eq!(remaining, 1);
+        assert!(orphan.is_dir());
+    }
+
+    #[tokio::test]
+    async fn orphan_sweep_reports_nothing_for_a_clean_or_missing_root() {
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(
+            cleanup_orphaned_account_dirs(root.path().to_path_buf(), vec![]).await,
+            0
+        );
+        let missing = root.path().join("never-created");
+        assert_eq!(cleanup_orphaned_account_dirs(missing, vec![]).await, 0);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn orphan_sweep_never_follows_or_removes_symlinks() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("keep.txt"), b"keep").unwrap();
+        let link = root
+            .path()
+            .join(uuid::Uuid::new_v4().hyphenated().to_string());
+        std::os::unix::fs::symlink(outside.path(), &link).unwrap();
+
+        let remaining = cleanup_orphaned_account_dirs(root.path().to_path_buf(), vec![]).await;
+
+        assert_eq!(remaining, 0);
+        assert!(outside.path().join("keep.txt").is_file());
+        assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+    }
+
+    #[tokio::test]
+    async fn orphan_sweep_keeps_uppercase_braced_and_plain_uuid_names() {
+        let root = tempfile::tempdir().unwrap();
+        let id = uuid::Uuid::new_v4();
+        let names = [
+            id.hyphenated().to_string().to_uppercase(),
+            id.braced().to_string(),
+            id.simple().to_string(),
+        ];
+        for name in &names {
+            std::fs::create_dir(root.path().join(name)).unwrap();
+        }
+
+        let remaining = cleanup_orphaned_account_dirs(root.path().to_path_buf(), vec![]).await;
+
+        assert_eq!(remaining, 0);
+        for name in &names {
+            assert!(root.path().join(name).is_dir(), "{name} was removed");
+        }
+    }
+
+    // Failure modes for the injected-remover sweep (platform-neutral):
+    // 1. A failed removal is not counted, so leftovers go unreported.
+    // 2. A successful removal is counted as a leftover.
+    // 3. An active, symlinked, or non-canonical entry reaches the remover.
+    #[tokio::test]
+    async fn orphan_sweep_counts_only_failed_removals_it_attempts() {
+        let root = tempfile::tempdir().unwrap();
+        let active = uuid::Uuid::new_v4().hyphenated().to_string();
+        let failing = uuid::Uuid::new_v4().hyphenated().to_string();
+        let succeeding = uuid::Uuid::new_v4().hyphenated().to_string();
+        let uppercase = uuid::Uuid::new_v4().hyphenated().to_string().to_uppercase();
+        let braced = uuid::Uuid::new_v4().braced().to_string();
+        for name in [&active, &failing, &succeeding, &uppercase, &braced] {
+            std::fs::create_dir(root.path().join(name)).unwrap();
+        }
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(
+            root.path().join("missing-target"),
+            root.path()
+                .join(uuid::Uuid::new_v4().hyphenated().to_string()),
+        )
+        .unwrap();
+
+        let attempted = std::sync::Mutex::new(Vec::<String>::new());
+        let remaining = sweep_orphaned_account_dirs(
+            root.path().to_path_buf(),
+            vec![active.clone()],
+            |path: std::path::PathBuf| {
+                let name = path.file_name().unwrap().to_string_lossy().to_string();
+                let fails = name == failing;
+                attempted.lock().unwrap().push(name);
+                async move {
+                    if fails {
+                        Err(std::io::Error::other("injected removal failure"))
+                    } else {
+                        Ok(())
+                    }
+                }
+            },
+        )
+        .await;
+
+        assert_eq!(remaining, 1);
+        let mut attempted = attempted.into_inner().unwrap();
+        attempted.sort();
+        let mut expected = vec![failing, succeeding];
+        expected.sort();
+        assert_eq!(attempted, expected);
+    }
+
+    #[test]
+    fn orphan_marker_follows_the_last_sweep() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("orphan-attachments-pending");
+        record_orphan_marker(&marker, 2);
+        assert!(marker.exists());
+        record_orphan_marker(&marker, 0);
+        assert!(!marker.exists());
+        record_orphan_marker(&marker, 0);
+        assert!(!marker.exists());
     }
 
     #[test]
@@ -1907,6 +2229,311 @@ mod tests {
         assert_eq!(target.uid_validity, Some(1));
         assert!(resolve_source(&db, "account-2", id).unwrap().is_none());
         assert!(resolve_source(&db, account_id, id + 999).unwrap().is_none());
+    }
+
+    fn queue_keyword(db: &Database, account_id: &str, operation: &replied::KeywordOperation) {
+        let key = format!("keyword:{}:{:?}", operation.message_id, operation.keyword);
+        db.queue_operation(account_id, "keyword", operation, Some(&key))
+            .unwrap();
+    }
+
+    fn keyword_operation(
+        message_id: i64,
+        uid: u32,
+        keyword: replied::SourceKeyword,
+    ) -> replied::KeywordOperation {
+        replied::KeywordOperation {
+            message_id,
+            uid,
+            mailbox: "INBOX".into(),
+            uid_validity: Some(1),
+            keyword,
+        }
+    }
+
+    fn keyword_ops_for(db: &Database, account_id: &str, message_id: i64) -> usize {
+        db.queued_operations(account_id)
+            .unwrap()
+            .iter()
+            .filter(|(_, kind, payload)| {
+                kind == "keyword"
+                    && serde_json::from_str::<replied::KeywordOperation>(payload)
+                        .is_ok_and(|operation| operation.message_id == message_id)
+            })
+            .count()
+    }
+
+    #[tokio::test]
+    async fn queued_source_keywords_finish_before_archive_moves_the_source() {
+        use replied::SourceKeyword::{Answered, Forwarded};
+        type Outcome = Result<(), mail::MailboxOperationError>;
+        let db = Database::memory();
+        let account = rule_account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = rule_mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        let id = bill(&db, account_id, inbox, 1);
+        let other = bill(&db, account_id, inbox, 2);
+        let mut second = rule_account();
+        second.summary.id = "account-2".into();
+        second.summary.email = "other@example.com".into();
+        db.insert_account(&second).unwrap();
+        let second_inbox = rule_mailbox(&db, "account-2", "INBOX", &MailboxRole::Inbox);
+        let foreign = bill(&db, "account-2", second_inbox, 1);
+        let ok = || std::future::ready(Ok::<(), mail::MailboxOperationError>(()));
+        let transient = || -> std::future::Ready<Outcome> {
+            std::future::ready(Err(mail::MailboxOperationError::transient(
+                "offline".into(),
+            )))
+        };
+        let terminal = || -> std::future::Ready<Outcome> {
+            std::future::ready(Err(mail::MailboxOperationError::terminal(
+                "mailbox changed".into(),
+            )))
+        };
+
+        // Nothing queued: nothing sent, archive may proceed.
+        let calls = std::cell::RefCell::new(Vec::new());
+        super::replied::finish_source_keywords(&db, account_id, id, |operation| {
+            calls.borrow_mut().push(operation.keyword);
+            ok()
+        })
+        .await
+        .unwrap();
+        assert!(calls.borrow().is_empty());
+
+        // Only this message's keyword ops run. Other messages, other accounts,
+        // and other kinds stay queued.
+        queue_keyword(&db, account_id, &keyword_operation(id, 1, Answered));
+        queue_keyword(&db, account_id, &keyword_operation(other, 2, Answered));
+        queue_keyword(&db, "account-2", &keyword_operation(foreign, 1, Forwarded));
+        db.queue_operation(
+            account_id,
+            "flags",
+            &serde_json::json!({ "messageId": id, "mailbox": "INBOX", "uid": 1, "uidValidity": 1, "isRead": true }),
+            Some("flags-1"),
+        )
+        .unwrap();
+        let calls = std::cell::RefCell::new(Vec::new());
+        super::replied::finish_source_keywords(&db, account_id, id, |operation| {
+            calls
+                .borrow_mut()
+                .push((operation.message_id, operation.keyword));
+            ok()
+        })
+        .await
+        .unwrap();
+        assert_eq!(*calls.borrow(), vec![(id, Answered)]);
+        assert_eq!(keyword_ops_for(&db, account_id, id), 0);
+        assert_eq!(keyword_ops_for(&db, account_id, other), 1);
+        assert_eq!(keyword_ops_for(&db, "account-2", foreign), 1);
+        assert_eq!(db.queued_operations(account_id).unwrap().len(), 2);
+
+        // A transient failure stops the archive and keeps the op queued.
+        let result =
+            super::replied::finish_source_keywords(&db, account_id, other, |_| transient()).await;
+        assert!(result.is_err());
+        assert_eq!(keyword_ops_for(&db, account_id, other), 1);
+
+        // A terminal failure drops the stale op so archive can continue.
+        let result =
+            super::replied::finish_source_keywords(&db, account_id, other, |_| terminal()).await;
+        assert!(result.is_ok());
+        assert_eq!(keyword_ops_for(&db, account_id, other), 0);
+
+        // Partial success: the first op lands, the second stays queued.
+        queue_keyword(&db, account_id, &keyword_operation(id, 1, Answered));
+        queue_keyword(&db, account_id, &keyword_operation(id, 1, Forwarded));
+        let attempts = std::cell::Cell::new(0);
+        let result = super::replied::finish_source_keywords(&db, account_id, id, |_| {
+            attempts.set(attempts.get() + 1);
+            if attempts.get() == 1 {
+                ok()
+            } else {
+                transient()
+            }
+        })
+        .await;
+        assert!(result.is_err());
+        assert_eq!(keyword_ops_for(&db, account_id, id), 1);
+
+        // A stale op (source uid no longer matches) never reaches the server.
+        let stale = bill(&db, account_id, inbox, 9);
+        queue_keyword(&db, account_id, &keyword_operation(stale, 4, Answered));
+        let called = std::cell::Cell::new(false);
+        super::replied::finish_source_keywords(&db, account_id, stale, |_| {
+            called.set(true);
+            ok()
+        })
+        .await
+        .unwrap();
+        assert!(!called.get());
+        assert_eq!(keyword_ops_for(&db, account_id, stale), 0);
+    }
+
+    fn store_ok() -> std::future::Ready<Result<(), mail::MailboxOperationError>> {
+        std::future::ready(Ok(()))
+    }
+
+    fn store_transient() -> std::future::Ready<Result<(), mail::MailboxOperationError>> {
+        std::future::ready(Err(mail::MailboxOperationError::transient(
+            "offline".into(),
+        )))
+    }
+
+    fn store_terminal() -> std::future::Ready<Result<(), mail::MailboxOperationError>> {
+        std::future::ready(Err(mail::MailboxOperationError::terminal(
+            "mailbox changed".into(),
+        )))
+    }
+
+    // Failure modes for the send-time keyword intent (Answered/Forwarded):
+    // 1. The STORE runs before the intent is queued, so a crash loses it.
+    // 2. A successful STORE leaves the queued intent behind for a second STORE.
+    // 3. A transient STORE failure drops the intent, so it is never retried.
+    // 4. A terminal STORE failure keeps the intent, so it replays forever.
+    // 5. A queue failure skips the STORE or fails the send.
+    // 6. A crash after queueing but before the STORE leaves no replayable intent.
+    // 7. Archive moves a message while its transient keyword is still queued.
+    #[tokio::test]
+    async fn keyword_intent_is_queued_before_the_store_runs() {
+        use replied::SourceKeyword::Answered;
+        let db = Database::memory();
+        let account = rule_account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = rule_mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        let id = bill(&db, account_id, inbox, 1);
+        let queued_during_store = std::cell::Cell::new(None);
+        replied::apply_keyword_intent(&db, account_id, keyword_operation(id, 1, Answered), |_| {
+            queued_during_store.set(Some(keyword_ops_for(&db, account_id, id)));
+            store_ok()
+        })
+        .await;
+        assert_eq!(queued_during_store.get(), Some(1));
+    }
+
+    #[tokio::test]
+    async fn keyword_intent_is_removed_after_store_success() {
+        use replied::SourceKeyword::Answered;
+        let db = Database::memory();
+        let account = rule_account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = rule_mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        let id = bill(&db, account_id, inbox, 1);
+        replied::apply_keyword_intent(&db, account_id, keyword_operation(id, 1, Answered), |_| {
+            store_ok()
+        })
+        .await;
+        assert_eq!(keyword_ops_for(&db, account_id, id), 0);
+    }
+
+    #[tokio::test]
+    async fn keyword_intent_survives_a_transient_store_failure_once() {
+        use replied::SourceKeyword::Answered;
+        let db = Database::memory();
+        let account = rule_account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = rule_mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        let id = bill(&db, account_id, inbox, 1);
+        for _ in 0..2 {
+            replied::apply_keyword_intent(
+                &db,
+                account_id,
+                keyword_operation(id, 1, Answered),
+                |_| store_transient(),
+            )
+            .await;
+        }
+        // Same message and keyword share one dedupe key.
+        assert_eq!(keyword_ops_for(&db, account_id, id), 1);
+    }
+
+    #[tokio::test]
+    async fn keyword_intent_is_removed_after_a_terminal_store_failure() {
+        use replied::SourceKeyword::Answered;
+        let db = Database::memory();
+        let account = rule_account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = rule_mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        let id = bill(&db, account_id, inbox, 1);
+        replied::apply_keyword_intent(&db, account_id, keyword_operation(id, 1, Answered), |_| {
+            store_terminal()
+        })
+        .await;
+        assert_eq!(keyword_ops_for(&db, account_id, id), 0);
+    }
+
+    #[tokio::test]
+    async fn keyword_intent_queue_failure_does_not_block_the_store() {
+        use replied::SourceKeyword::Answered;
+        let db = Database::memory();
+        // No such account: the foreign key rejects the queued row.
+        let store_calls = std::cell::Cell::new(0);
+        replied::apply_keyword_intent(&db, "ghost", keyword_operation(1, 1, Answered), |_| {
+            store_calls.set(store_calls.get() + 1);
+            store_ok()
+        })
+        .await;
+        assert_eq!(store_calls.get(), 1);
+        assert!(db.queued_operations("ghost").unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn keyword_intent_left_by_a_crash_replays_before_archive() {
+        use super::{validate_queued_operation, ValidatedReplay};
+        use replied::SourceKeyword::Answered;
+        let db = Database::memory();
+        let account = rule_account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = rule_mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        let id = bill(&db, account_id, inbox, 1);
+        // Crash simulation: the intent was queued, then the process stopped
+        // before any STORE ran.
+        queue_keyword(&db, account_id, &keyword_operation(id, 1, Answered));
+        let (_, kind, payload) = db.queued_operations(account_id).unwrap().remove(0);
+        assert!(matches!(
+            validate_queued_operation(&db, account_id, &kind, &payload),
+            Ok(ValidatedReplay::Keyword(_))
+        ));
+        let applied = std::cell::RefCell::new(Vec::new());
+        replied::finish_source_keywords(&db, account_id, id, |operation| {
+            applied.borrow_mut().push(operation.keyword);
+            store_ok()
+        })
+        .await
+        .unwrap();
+        assert_eq!(*applied.borrow(), vec![Answered]);
+        assert_eq!(keyword_ops_for(&db, account_id, id), 0);
+    }
+
+    #[tokio::test]
+    async fn keyword_intent_blocks_archive_until_its_store_succeeds() {
+        use replied::SourceKeyword::Answered;
+        let db = Database::memory();
+        let account = rule_account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = rule_mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        let id = bill(&db, account_id, inbox, 1);
+        replied::apply_keyword_intent(&db, account_id, keyword_operation(id, 1, Answered), |_| {
+            store_transient()
+        })
+        .await;
+        assert!(
+            replied::finish_source_keywords(&db, account_id, id, |_| store_transient())
+                .await
+                .is_err()
+        );
+        assert_eq!(keyword_ops_for(&db, account_id, id), 1);
+        replied::finish_source_keywords(&db, account_id, id, |_| store_ok())
+            .await
+            .unwrap();
+        assert_eq!(keyword_ops_for(&db, account_id, id), 0);
     }
 
     #[test]

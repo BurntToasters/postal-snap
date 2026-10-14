@@ -1,6 +1,7 @@
 use super::{
     db_error, map_message_summary, replace_attachment_refs, Database, MESSAGE_SUMMARY_SELECT,
 };
+use crate::outbox_reason::OutboxReason;
 use rusqlite::{params, OptionalExtension};
 
 use crate::models::{ComposeDraft, FilterMatchPreview, FilterRule, OutboxSummary, SnoozedSummary};
@@ -19,6 +20,25 @@ pub struct OutboxArchiveSource {
     pub pending_move_to: Option<i64>,
 }
 
+enum StoredDetail<'a> {
+    Legacy(Option<&'a str>),
+    Reason(Option<OutboxReason>),
+}
+
+impl<'a> StoredDetail<'a> {
+    fn parts(self) -> (Option<&'static str>, Option<&'a str>) {
+        let (reason, legacy) = match self {
+            Self::Legacy(detail) => (detail.and_then(OutboxReason::from_legacy), detail),
+            Self::Reason(reason) => (reason, None),
+        };
+        (
+            reason.map(OutboxReason::code),
+            if reason.is_some() { None } else { legacy },
+        )
+    }
+}
+
+database_operations! {
 impl Database {
     pub fn outbox_archive_source(
         &self,
@@ -70,6 +90,14 @@ impl Database {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub fn queue_outbox_with_reason(
+        &self, draft: &ComposeDraft, state: &str, reason: Option<OutboxReason>,
+        message_id: &str, mime_bytes: &[u8], send_at: Option<&str>, archive_source: Option<(i64, i64)>,
+    ) -> Result<String, String> {
+        self.queue_outbox_with_archive(draft, state, reason.map(OutboxReason::message), message_id, mime_bytes, send_at, archive_source)
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn queue_outbox_with_archive(
         &self,
         draft: &ComposeDraft,
@@ -80,6 +108,7 @@ impl Database {
         send_at: Option<&str>,
         archive_source: Option<(i64, i64)>,
     ) -> Result<String, String> {
+        let (reason, detail) = StoredDetail::Legacy(detail).parts();
         let id = uuid::Uuid::new_v4().to_string();
         let json =
             serde_json::to_string(draft).map_err(|_| "Could not queue message.".to_string())?;
@@ -103,8 +132,8 @@ impl Database {
         }
         transaction
             .execute(
-                "INSERT INTO outbox(id,account_id,draft_json,state,detail,message_id,mime_bytes,send_at,updated_at,archive_message_id,archive_source_mailbox_id)
-                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,CURRENT_TIMESTAMP,?9,?10)",
+                "INSERT INTO outbox(id,account_id,draft_json,state,detail,message_id,mime_bytes,send_at,updated_at,archive_message_id,archive_source_mailbox_id,reason_code)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,CURRENT_TIMESTAMP,?9,?10,?11)",
                 params![
                     id,
                     draft.account_id,
@@ -116,6 +145,7 @@ impl Database {
                     send_at,
                     archive_source.map(|source| source.0),
                     archive_source.map(|source| source.1),
+                    reason,
                 ],
             )
             .map_err(db_error)?;
@@ -130,39 +160,29 @@ impl Database {
         Ok(id)
     }
 
-    pub fn set_outbox_state(
-        &self,
-        id: &str,
-        account_id: &str,
-        state: &str,
-        detail: Option<&str>,
-    ) -> Result<bool, String> {
-        let changed = self
-            .conn()?
-            .execute(
-                "UPDATE outbox SET state=?3,detail=?4,updated_at=CURRENT_TIMESTAMP WHERE id=?1 AND account_id=?2",
-                params![id, account_id, state, detail],
-            )
-            .map_err(db_error)?;
-        Ok(changed == 1)
+    #[allow(dead_code)]
+    pub fn set_outbox_state(&self, id: &str, account_id: &str, state: &str, detail: Option<&str>) -> Result<bool, String> {
+        self.write_outbox_state(id, account_id, state, StoredDetail::Legacy(detail), false)
     }
 
-    /// Persist a confirmed-send follow-up state before more network work.
-    pub fn set_outbox_state_durable(
-        &self,
-        id: &str,
-        account_id: &str,
-        state: &str,
-        detail: Option<&str>,
-    ) -> Result<bool, String> {
+    pub fn set_outbox_reason(&self, id: &str, account_id: &str, state: &str, reason: Option<OutboxReason>) -> Result<bool, String> {
+        self.write_outbox_state(id, account_id, state, StoredDetail::Reason(reason), false)
+    }
+
+    /// Commit confirmed delivery before any follow-up network operation.
+    pub fn set_outbox_reason_durable(&self, id: &str, account_id: &str, state: &str, reason: Option<OutboxReason>) -> Result<bool, String> {
+        self.write_outbox_state(id, account_id, state, StoredDetail::Reason(reason), true)
+    }
+
+    fn write_outbox_state(&self, id: &str, account_id: &str, state: &str, detail: StoredDetail<'_>, durable: bool) -> Result<bool, String> {
+        let (reason, legacy) = detail.parts();
         let conn = self.conn()?;
-        conn.pragma_update(None, "synchronous", "FULL")
-            .map_err(db_error)?;
+        if durable { conn.pragma_update(None, "synchronous", "FULL").map_err(db_error)?; }
         let changed = conn.execute(
-            "UPDATE outbox SET state=?3,detail=?4,updated_at=CURRENT_TIMESTAMP WHERE id=?1 AND account_id=?2",
-            params![id, account_id, state, detail],
+            "UPDATE outbox SET state=?3,detail=?4,reason_code=?5,updated_at=CURRENT_TIMESTAMP WHERE id=?1 AND account_id=?2",
+            params![id, account_id, state, legacy, reason],
         );
-        let restored = conn.pragma_update(None, "synchronous", "NORMAL");
+        let restored = if durable { conn.pragma_update(None, "synchronous", "NORMAL") } else { Ok(()) };
         let changed = changed.map_err(db_error)?;
         restored.map_err(db_error)?;
         Ok(changed == 1)
@@ -191,10 +211,10 @@ impl Database {
     }
 
     pub fn list_outbox(&self, account_id: &str) -> Result<Vec<OutboxSummary>, String> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut statement = conn
             .prepare(
-                "SELECT id,draft_json,state,detail,created_at,send_at FROM outbox WHERE account_id=?1 ORDER BY created_at DESC",
+                "SELECT id,draft_json,state,detail,created_at,send_at,reason_code FROM outbox WHERE account_id=?1 ORDER BY created_at DESC",
             )
             .map_err(db_error)?;
         let rows = statement
@@ -206,13 +226,15 @@ impl Database {
                     row.get::<_, Option<String>>(3)?,
                     row.get::<_, String>(4)?,
                     row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
                 ))
             })
             .map_err(db_error)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(db_error)?;
         rows.into_iter()
-            .map(|(id, json, state, detail, created_at, send_at)| {
+            .map(|(id, json, state, detail, created_at, send_at, reason_code)| {
+                let detail = reason_code.as_deref().and_then(OutboxReason::from_code).map(|reason| reason.message().to_string()).or(detail);
                 let draft: ComposeDraft = serde_json::from_str(&json)
                     .map_err(|_| "A queued message could not be read.".to_string())?;
                 Ok(OutboxSummary {
@@ -222,6 +244,7 @@ impl Database {
                     subject: draft.subject,
                     state,
                     detail,
+                    reason_code,
                     created_at,
                     send_at,
                     preview: super::drafts::draft_preview(&draft.text_body, &draft.html_body),
@@ -291,6 +314,51 @@ impl Database {
             .query_map(values.as_slice(), |row| row.get(0))
             .map_err(db_error)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+    }
+
+    /// Queued rows whose retry wait has passed, oldest first.
+    pub fn due_queued_outbox_ids(&self, account_id: &str) -> Result<Vec<String>, String> {
+        let conn = self.conn()?;
+        let mut statement = conn
+            .prepare(
+                "SELECT id FROM outbox WHERE account_id=?1 AND state='queued'
+                 AND (retry_after IS NULL OR retry_after<=strftime('%Y-%m-%dT%H:%M:%S+00:00','now'))
+                 ORDER BY created_at",
+            )
+            .map_err(db_error)?;
+        let rows = statement
+            .query_map([account_id], |row| row.get(0))
+            .map_err(db_error)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+    }
+
+    /// Record a definite "try later" reply and wait 1, 2, 4… up to 60 minutes
+    /// before the next automatic try. False once `max_attempts` is spent.
+    pub fn defer_outbox_retry(
+        &self,
+        id: &str,
+        account_id: &str,
+        max_attempts: u32,
+    ) -> Result<bool, String> {
+        let conn = self.conn()?;
+        conn.execute(
+            "UPDATE outbox SET retry_attempts=retry_attempts+1,
+             retry_after=strftime('%Y-%m-%dT%H:%M:%S+00:00','now',
+               '+' || MIN(60, 1 << MIN(retry_attempts, 6)) || ' minutes')
+             WHERE id=?1 AND account_id=?2",
+            params![id, account_id],
+        )
+        .map_err(db_error)?;
+        let attempts: u32 = conn
+            .query_row(
+                "SELECT retry_attempts FROM outbox WHERE id=?1 AND account_id=?2",
+                params![id, account_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?
+            .unwrap_or(u32::MAX);
+        Ok(attempts < max_attempts)
     }
 
     pub fn scheduled_due_outbox_ids(
@@ -411,7 +479,7 @@ impl Database {
     }
 
     pub fn list_filter_rules(&self, account_id: &str) -> Result<Vec<FilterRule>, String> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut statement = conn
             .prepare(
                 "SELECT id,account_id,name,field,contains,action,target_mailbox,enabled FROM filter_rules WHERE account_id=?1 ORDER BY position,id",
@@ -563,7 +631,7 @@ impl Database {
         let Some((column, like, domain_like)) = rule_match_pattern(rule) else {
             return Ok(Vec::new());
         };
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut statement = conn
             .prepare(&format!(
                 "SELECT m.id,m.uid,f.name,f.id FROM messages m JOIN mailboxes f ON f.id=m.mailbox_id
@@ -629,7 +697,7 @@ impl Database {
 
     pub fn list_snoozed(&self, account_id: &str, now: &str) -> Result<Vec<SnoozedSummary>, String> {
         self.prune_expired_snoozes(account_id, now)?;
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut statement = conn
             .prepare(&format!(
                 "{} JOIN snoozed_messages s ON s.message_id=m.id AND s.account_id=m.account_id WHERE m.account_id=?1 ORDER BY s.snoozed_until ASC",
@@ -684,7 +752,9 @@ impl Database {
         conn.pragma_update(None, "synchronous", "FULL")
             .map_err(db_error)?;
         let changed = conn.execute(
-            "UPDATE outbox SET state='sending',attempt_started_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP
+            "UPDATE outbox SET state='sending',attempt_started_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP,
+                 retry_after=NULL,
+                 retry_attempts=CASE WHEN ?3='needs_attention' THEN 0 ELSE retry_attempts END
                  WHERE id=?1 AND account_id=?2 AND state=?3",
             params![id, account_id, from_state],
         );
@@ -821,6 +891,7 @@ impl Database {
         draft.id = Some(draft_id);
         Ok(draft)
     }
+}
 }
 
 fn rule_match_pattern(rule: &FilterRule) -> Option<(&'static str, String, String)> {

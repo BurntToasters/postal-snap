@@ -1672,7 +1672,7 @@ describe("MessageReader", () => {
     ).toBeEnabled();
   });
 
-  it("loads images for a remembered sender without asking again", async () => {
+  it("requires consent even for a remembered From address", async () => {
     const message = readerMessage({
       htmlBody: '<p>Picture</p><img src="https://img.example/one.png">',
     });
@@ -1689,43 +1689,14 @@ describe("MessageReader", () => {
       dataUrl: "data:image/png;base64,AQ==",
     });
     render(<MessageReader />);
-
-    await waitFor(() =>
-      expect(api.fetchRemoteImage).toHaveBeenCalledWith(
-        "https://img.example/one.png",
-      ),
-    );
+    const load = await screen.findByRole("button", {
+      name: strings.reader.loadImages,
+    });
+    expect(api.fetchRemoteImage).not.toHaveBeenCalled();
     expect(
-      screen.queryByRole("button", {
-        name: strings.reader.alwaysLoadImages("jane@example.test"),
-      }),
+      screen.queryByRole("button", { name: /^Always load images/ }),
     ).toBeNull();
-  });
-
-  it("remembers a sender and then loads that message's images", async () => {
-    const message = readerMessage({
-      htmlBody: '<p>Picture</p><img src="https://img.example/one.png">',
-    });
-    setReaderState(message);
-    vi.spyOn(api, "saveSettings").mockImplementation(async (next) => next);
-    vi.spyOn(api, "fetchRemoteImage").mockResolvedValue({
-      status: "loaded",
-      dataUrl: "data:image/png;base64,AQ==",
-    });
-    render(<MessageReader />);
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: strings.reader.alwaysLoadImages("jane@example.test"),
-      }),
-    );
-
-    await waitFor(() =>
-      expect(api.saveSettings).toHaveBeenCalledWith(
-        expect.objectContaining({
-          imageSenders: ["jane@example.test"],
-        }),
-      ),
-    );
+    fireEvent.click(load);
     await waitFor(() =>
       expect(api.fetchRemoteImage).toHaveBeenCalledWith(
         "https://img.example/one.png",

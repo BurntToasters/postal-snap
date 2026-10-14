@@ -3,6 +3,7 @@ use rusqlite::{params, OptionalExtension};
 
 use crate::models::{ComposeDraft, DraftSummary};
 
+database_operations! {
 impl Database {
     pub fn save_draft(&self, draft: &ComposeDraft) -> Result<String, String> {
         let mut conn = self.conn()?;
@@ -13,7 +14,7 @@ impl Database {
     }
 
     pub fn list_drafts(&self, account_id: &str) -> Result<Vec<DraftSummary>, String> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut statement = conn
             .prepare(
                 // Older rows hold SQLite's "YYYY-MM-DD HH:MM:SS" (UTC, no zone)
@@ -427,6 +428,7 @@ impl Database {
         }
         transaction.commit().map_err(db_error)
     }
+}
 }
 
 pub(crate) fn save_draft_in_transaction(

@@ -10,13 +10,31 @@ interface StorageTabProps {
   usage?: CacheUsage;
   update: SettingsSaveUpdate;
   clearCache: () => Promise<void>;
+  retryAttachmentCleanup: () => Promise<void>;
 }
 
-export function StorageTab({ usage, update, clearCache }: StorageTabProps) {
+export function StorageTab({
+  usage,
+  update,
+  clearCache,
+  retryAttachmentCleanup,
+}: StorageTabProps) {
   const settings = useAppStore((state) => state.settings);
 
   return (
     <SettingsPanel id="storage" title={strings.settings.storage}>
+      {usage?.attachmentLeftovers ? (
+        <div className="settings-warning storage-leftovers" role="status">
+          <p>{strings.settings.attachmentLeftovers}</p>
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() => void retryAttachmentCleanup()}
+          >
+            {strings.settings.attachmentLeftoversRetry}
+          </button>
+        </div>
+      ) : null}
       <div className="storage-card">
         <Database />
         <span>

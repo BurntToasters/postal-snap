@@ -80,11 +80,18 @@ export async function registerMockSettingsSystem(page: Page): Promise<void> {
         !location.search.includes("firstRun") && !params.has("setupIncomplete"),
       setupStep: null,
     };
+    let leftoversPending = params.has("attachmentLeftovers");
     const copySettings = () => ({
       ...currentSettings,
       cachePolicy: { ...currentSettings.cachePolicy },
     });
     Object.assign(mock.handlers, {
+      clear_downloaded_mail() {
+        return undefined;
+      },
+      accessibility_reduce_transparency() {
+        return params.has("nativeReducedTransparency");
+      },
       get_settings() {
         return copySettings();
       },
@@ -175,7 +182,16 @@ export async function registerMockSettingsSystem(page: Page): Promise<void> {
           : null;
       },
       get_cache_usage() {
-        return { bytes: 0, maxBytes: 1_073_741_824, messageCount: 0 };
+        return {
+          bytes: 0,
+          maxBytes: 1_073_741_824,
+          messageCount: 0,
+          attachmentLeftovers: leftoversPending,
+        };
+      },
+      retry_attachment_cleanup() {
+        leftoversPending = params.has("attachmentLeftoversStuck");
+        return leftoversPending;
       },
       get_distribution_channel() {
         return { kind: "direct", updatesManagedBy: "postalSnap" };

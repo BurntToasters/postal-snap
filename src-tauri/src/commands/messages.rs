@@ -5,9 +5,12 @@ use tauri_plugin_dialog::DialogExt;
 use super::sync::account_policy;
 use super::{command_result, emit_folder_counts, emit_message_change, AppState, CommandResult};
 use crate::{
-    mail,
+    mail::{
+        self,
+        failure::{FailureKind, MailError},
+    },
     models::{
-        IpcError, MessageCursor, MessageDetail, MessageListFilter, MessageListSort, MessagePage,
+        MessageCursor, MessageDetail, MessageListFilter, MessageListSort, MessagePage,
         MessageSummary, SearchQuery,
     },
 };
@@ -43,31 +46,61 @@ pub async fn list_messages(
     command_result(result)
 }
 
+/// A previous parse of this body never returned (the app stopped mid-parse).
+pub(crate) const QUARANTINED: &str =
+    "Postal Snap could not read this message safely, so it will not open it again. Read it in another mail app or delete it.";
+
 pub(crate) async fn ensure_message_content(
     account_id: &str,
     message_id: i64,
     state: &AppState,
-) -> Result<(), String> {
+) -> Result<(), MailError> {
+    let storage = MailError::local_storage;
     let (owner_id, ..) = state.db.message_fetch_location(message_id)?;
     if owner_id != account_id {
-        return Err("Message does not belong to this account.".into());
+        return Err("Message does not belong to this account."
+            .to_string()
+            .into());
     }
-    if state.db.message_content_cached(message_id, account_id)? {
+    if state
+        .db
+        .message_content_cached(message_id, account_id)
+        .map_err(storage)?
+    {
         return Ok(());
     }
     let _guard = state.lock_account(account_id).await?;
     let (owner_id, mailbox_id, mailbox, uid, size) = state.db.message_fetch_location(message_id)?;
     if owner_id != account_id {
-        return Err("Message does not belong to this account.".into());
+        return Err("Message does not belong to this account."
+            .to_string()
+            .into());
     }
-    if state.db.message_content_cached(message_id, account_id)? {
+    if state
+        .db
+        .message_content_cached(message_id, account_id)
+        .map_err(storage)?
+    {
         return Ok(());
     }
-    let uid_validity = state.db.mailbox_uid_validity(account_id, &mailbox)?;
+    if state
+        .db
+        .parse_quarantined(message_id, account_id)
+        .map_err(storage)?
+    {
+        return Err(MailError::new(FailureKind::Unreadable, QUARANTINED));
+    }
+    let uid_validity = state
+        .db
+        .mailbox_uid_validity(account_id, &mailbox)
+        .map_err(storage)?;
     let account = state.db.account(account_id)?;
-    let password = crate::oauth::session_secret(&account).await?;
+    let password = crate::oauth::session_secret(&account)
+        .await
+        .map_err(storage)?;
     let cached_received_at = state.db.message_received_at(message_id).ok().flatten();
-    let message = mail::download_message(
+    let parsing = std::sync::atomic::AtomicBool::new(false);
+    let downloaded = mail::download_message(
         &account,
         &password,
         &mailbox,
@@ -75,16 +108,34 @@ pub(crate) async fn ensure_message_content(
         size,
         uid_validity,
         cached_received_at.as_deref(),
+        || {
+            parsing.store(true, std::sync::atomic::Ordering::SeqCst);
+            state.db.begin_parse(mailbox_id, uid)
+        },
     )
-    .await?;
+    .await;
+    if parsing.load(std::sync::atomic::Ordering::SeqCst) {
+        if matches!(&downloaded, Err(error) if error.kind == FailureKind::Unreadable) {
+            state
+                .db
+                .quarantine_parse(mailbox_id, uid)
+                .map_err(storage)?;
+            return Err(MailError::new(FailureKind::Unreadable, QUARANTINED));
+        }
+        state.db.end_parse(mailbox_id, uid).map_err(storage)?;
+    }
+    let message = downloaded?;
     let uid_validity = uid_validity.ok_or_else(|| {
-        "Mailbox identity is unavailable; refresh mail and try again.".to_string()
+        MailError::from("Mailbox identity is unavailable; refresh mail and try again.".to_string())
     })?;
     if !state
         .db
-        .attach_body_if_current(mailbox_id, uid_validity, &message)?
+        .attach_body_if_current(mailbox_id, uid_validity, &message)
+        .map_err(storage)?
     {
-        return Err("This message is no longer available on the server.".into());
+        return Err("This message is no longer available on the server."
+            .to_string()
+            .into());
     }
     let id = message
         .message_id
@@ -105,11 +156,9 @@ pub async fn get_message(
     // instead of failing the whole message.
     let body_status = match ensure_message_content(&account_id, message_id, &state).await {
         Ok(()) => "available",
-        Err(error) => match IpcError::from(error.as_str()).code.as_str() {
-            "connectionFailed" | "localStorageFailed" => "offline",
-            "authenticationFailed" => "signInNeeded",
-            "limitExceeded" => "tooLarge",
-            _ => return Err(error.into()),
+        Err(error) => match mail::failure::body_status(&error) {
+            Some(status) => status,
+            None => return Err(error.into()),
         },
     };
     let db = state.db.clone();
@@ -195,11 +244,12 @@ pub async fn save_message_eml(
     let destination = destination
         .into_path()
         .map_err(|_| "Choose a valid save location.".to_string())?;
-    tokio::fs::write(destination, raw).await.map_err(|_| {
-        "Could not save the message at that location."
-            .to_string()
-            .into()
-    })
+    tokio::fs::write(&destination, raw)
+        .await
+        .map_err(|_| "Could not save the message at that location.".to_string())?;
+    // A saved message can carry attachments; mark it like saved files.
+    crate::download_mark::mark_downloaded(&destination);
+    Ok(())
 }
 
 /// RFC 8058 one-click unsubscribe. The URL comes from the stored header, never
@@ -1074,8 +1124,35 @@ pub async fn search_server_messages(
 ) -> CommandResult<Vec<MessageSummary>> {
     // Search progress is shown by the search UI. It must not overwrite the
     // account's sync state, which may be reporting "Sign-in failed".
-    let _guard = state.lock_account(&query.account_id).await?;
+    let actor = state.actor(&query.account_id)?;
+    actor.request(super::wake::OPERATION);
+    let guard = actor.acquire().await;
+    let mut hooks = SearchHooks {
+        actor,
+        guard: Some(guard),
+    };
     let account = state.db.account(&query.account_id)?;
     let password = crate::oauth::session_secret(&account).await?;
-    command_result(mail::server_search(&state.db, &account, &password, &query).await)
+    command_result(mail::server_search(&state.db, &account, &password, &query, &mut hooks).await)
+}
+
+/// Lets a server search hand the account to waiting user actions between
+/// mailboxes.
+struct SearchHooks {
+    actor: std::sync::Arc<super::AccountActor>,
+    guard: Option<tokio::sync::OwnedMutexGuard<()>>,
+}
+
+impl mail::SyncHooks for SearchHooks {
+    fn contended(&self) -> bool {
+        self.actor.contended()
+    }
+
+    async fn yield_account(&mut self) {
+        self.guard.take();
+        tokio::task::yield_now().await;
+        self.guard = Some(self.actor.acquire().await);
+    }
+
+    fn progress(&mut self, _folder: &str) {}
 }

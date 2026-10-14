@@ -48,6 +48,8 @@ const Composer = lazy(() =>
   })),
 );
 
+const TEXT_ENTRY_SELECTOR =
+  "textarea, select, input:not([type]), input[type='text'], input[type='search'], input[type='email'], input[type='url'], input[type='tel'], input[type='password'], input[type='number']";
 export default function App() {
   const accounts = useAppStore((state) => state.accounts);
   const activeAccountId = useAppStore((state) => state.activeAccountId);
@@ -341,12 +343,20 @@ export default function App() {
   }, [openSettings]);
 
   useEffect(() => {
+    void api.setComposerOpen(composerOpen).catch(() => undefined);
+  }, [composerOpen]);
+
+  useEffect(() => {
     const syncGuard = () => {
       const target = document.activeElement as HTMLElement | null;
+      // Text fields own editing keys such as Cmd+Backspace, so native mail
+      // commands must not take them while one has focus.
       const guarded = Boolean(
         document.querySelector(
           ".composer-layer, .settings-window, .modal-layer",
-        ) || target?.closest("[contenteditable='true']"),
+        ) ||
+        target?.closest("[contenteditable='true']") ||
+        target?.matches(TEXT_ENTRY_SELECTOR),
       );
       void api.setMailShortcutGuard(guarded).catch(() => undefined);
     };

@@ -16,7 +16,7 @@ pub struct AccountConnection {
     blockers: crate::models::ConnectionBlockers,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_account_connection(
     account_id: String,
     state: State<'_, AppState>,
@@ -60,6 +60,11 @@ pub async fn update_account_connection(
         || account.imap.port != imap.port
         || account.imap.tls_mode != imap.tls_mode
         || account.imap.username != imap.username;
+    // The saved password goes to whichever server is named here.
+    let outgoing_changed = account.smtp.host != smtp.host || account.smtp.username != smtp.username;
+    if outgoing_changed && !confirm_identity_change {
+        return Err("Confirm the outgoing server change before saving.".into());
+    }
     if changed {
         if !confirm_identity_change {
             return Err("Confirm the incoming server identity change before saving.".into());
@@ -192,7 +197,7 @@ pub async fn remove_bridge_certificate(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_folder_assignments(
     account_id: String,
     state: State<'_, AppState>,

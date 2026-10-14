@@ -4,6 +4,7 @@ use std::path::Path;
 
 use crate::models::{AppSettings, CachePolicy, CacheUsage};
 
+database_operations! {
 impl Database {
     pub fn record_flag_change(
         &self,
@@ -343,7 +344,7 @@ impl Database {
     }
 
     pub fn cache_usage(&self, max_bytes: u64) -> Result<CacheUsage, String> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let (bytes, message_count): (i64, i64) = conn
             .query_row(
                 "SELECT COALESCE(SUM(LENGTH(raw_message)),0), COALESCE(SUM(CASE WHEN LENGTH(raw_message) > 0 THEN 1 ELSE 0 END),0) FROM messages",
@@ -364,7 +365,29 @@ impl Database {
             bytes: bytes.max(0) as u64 + outbox_bytes.max(0) as u64,
             max_bytes,
             message_count: message_count.max(0) as u64,
+            attachment_leftovers: false,
         })
+    }
+
+    /// Return freed space to the disk and drop old pages from the WAL. Run
+    /// after large removals; it holds the database for the whole rewrite.
+    pub fn compact(&self) -> Result<(), String> {
+        // Writer, then reader: no read path takes the writer while holding
+        // the reader. Holding both lets the WAL truncate fully.
+        let conn = self.conn()?;
+        let _reads_paused = self.reader.as_ref().map(|reader| {
+            reader
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        });
+        conn.execute("VACUUM", []).map_err(db_error)?;
+        let busy: i64 = conn
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))
+            .map_err(db_error)?;
+        if busy != 0 {
+            return Err("Postal Snap could not finish freeing disk space. Try again.".into());
+        }
+        Ok(())
     }
 
     pub fn clear_downloaded_mail(&self) -> Result<(), String> {
@@ -493,7 +516,7 @@ impl Database {
         max_bytes: u64,
     ) -> Result<CacheUsage, String> {
         let (bytes, message_count): (i64, i64) = self
-            .conn()?
+            .read_conn()?
             .query_row(
                 "SELECT COALESCE(SUM(body_bytes),0), COUNT(*) FROM messages WHERE account_id=?1 AND body_bytes>0",
                 [account_id],
@@ -504,6 +527,7 @@ impl Database {
             bytes: bytes.max(0) as u64,
             max_bytes,
             message_count: message_count.max(0) as u64,
+            attachment_leftovers: false,
         })
     }
 
@@ -565,7 +589,7 @@ impl Database {
             .prepare(
                 "SELECT uid, received_at, size FROM messages
                  WHERE mailbox_id=?1 AND body_bytes=0 AND LENGTH(raw_message)=0 AND size<=?2
-                 AND prefetch_failures<5
+                 AND prefetch_failures<5 AND parse_pending<2
                  AND (prefetch_retry_at IS NULL OR prefetch_retry_at<=strftime('%Y-%m-%dT%H:%M:%S+00:00','now'))
                  AND (?3 IS NULL OR julianday(COALESCE(internal_at,received_at)) >= julianday(?3))
                  ORDER BY COALESCE(internal_at,received_at) DESC, uid DESC
@@ -606,6 +630,7 @@ impl Database {
         }
         Ok(selected)
     }
+}
 }
 
 /// Clear body columns and FTS body text for the rows matched by `filter`

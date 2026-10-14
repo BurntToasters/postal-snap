@@ -1,4 +1,11 @@
 import { create } from "zustand";
+import {
+  flushOpenDraft,
+  isOpenDraftBusy,
+  openDraftSession,
+  waitForDraftFlush,
+} from "./draftFlush";
+import { strings } from "./i18n";
 import type { MessageListSort } from "./listSort";
 import { rememberOpenMessage } from "./recentMessage";
 import type {
@@ -12,6 +19,7 @@ import type {
   MessageSummary,
   OutboxSummary,
   SnoozedSummary,
+  SyncProgress,
   SyncState,
 } from "./types";
 
@@ -22,8 +30,6 @@ export interface SentNotice {
   scheduled: boolean;
   /** Undo-send hold length in seconds; undefined for explicit Send Later. */
   undoSeconds?: number;
-  /** Original moved to Archive with this send. Undo puts it back. */
-  archivedMessage?: { messageId: number; mailboxId: number };
 }
 
 export interface ComposerSeed {
@@ -127,6 +133,9 @@ interface AppState {
   lastSent?: SentNotice;
   updateReady: string | null;
   setUpdateReady: (version: string | null) => void;
+  /** Kept here so progress events re-render only the status line. */
+  syncProgress: SyncProgress | undefined;
+  setSyncProgress: (progress: SyncProgress | undefined) => void;
   setAccounts: (accounts: AccountSummary[]) => void;
   selectAccount: (id: string) => void;
   setMailboxes: (mailboxes: MailboxSummary[]) => void;
@@ -184,6 +193,89 @@ function pendingComposerState(
   };
 }
 
+function openComposerState(
+  state: AppState,
+  composeSeed: ComposerSeed | undefined,
+): Partial<AppState> {
+  const composerAccountId =
+    composeSeed?.draft?.accountId ??
+    composeSeed?.sourceMessage?.accountId ??
+    state.activeAccountId;
+  if (!composerAccountId) {
+    if (!composeSeed) return {};
+    return { pendingComposeSeed: composeSeed };
+  }
+  return {
+    composerOpen: true,
+    composerAccountId,
+    composeSeed,
+    composeNonce: state.composeNonce + 1,
+    pendingComposeSeed: undefined,
+  };
+}
+
+// Replacing an open composer unmounts it, so its edits are saved first.
+// Requests run one at a time. Each save covers the editor open at that moment.
+// A busy composer (sending or discarding) or a failed save keeps it and drops
+// the queued requests with a visible error. With no registered editor there is
+// nothing to save, so the replacement opens at once.
+let replacementQueue: Array<ComposerSeed | undefined> = [];
+let replacing = false;
+// Session of a composer that replaced a saved editor. Its editor registers only
+// after React commits it, so the next replacement waits for that registration.
+let mountingSession: number | undefined;
+
+function failReplacement(message: string) {
+  replacementQueue = [];
+  useAppStore.getState().setError(message);
+}
+
+function openReplacement(
+  composeSeed: ComposerSeed | undefined,
+  saved: boolean,
+) {
+  useAppStore.setState((state) => openComposerState(state, composeSeed));
+  const { composerOpen, composeNonce } = useAppStore.getState();
+  mountingSession = saved && composerOpen ? composeNonce : undefined;
+}
+
+async function runReplacements(): Promise<void> {
+  if (replacing) return;
+  replacing = true;
+  try {
+    while (replacementQueue.length > 0) {
+      const composeSeed = replacementQueue.shift();
+      let saved = false;
+      if (useAppStore.getState().composerOpen) {
+        const session = useAppStore.getState().composeNonce;
+        const mounting = mountingSession === session;
+        mountingSession = undefined;
+        if (mounting) await waitForDraftFlush(session);
+        if (openDraftSession() === session) {
+          if (isOpenDraftBusy()) {
+            failReplacement(strings.composer.replaceWhileSending);
+            return;
+          }
+          try {
+            await flushOpenDraft();
+          } catch {
+            failReplacement(strings.composer.replaceSaveFailed);
+            return;
+          }
+          if (useAppStore.getState().composerOpen && isOpenDraftBusy()) {
+            failReplacement(strings.composer.replaceWhileSending);
+            return;
+          }
+          saved = true;
+        }
+      }
+      openReplacement(composeSeed, saved);
+    }
+  } finally {
+    replacing = false;
+  }
+}
+
 export const useAppStore = create<AppState>((set) => ({
   accounts: [],
   lastMailboxByAccount: {},
@@ -200,6 +292,8 @@ export const useAppStore = create<AppState>((set) => ({
   busy: false,
   updateReady: null,
   setUpdateReady: (updateReady) => set({ updateReady }),
+  syncProgress: undefined,
+  setSyncProgress: (syncProgress) => set({ syncProgress }),
   setAccounts: (accounts) =>
     set((state) => {
       const accountIds = new Set(accounts.map((account) => account.id));
@@ -370,24 +464,14 @@ export const useAppStore = create<AppState>((set) => ({
         ...pendingComposerState(state, activeAccountId),
       };
     }),
-  openComposer: (composeSeed) =>
-    set((state) => {
-      const composerAccountId =
-        composeSeed?.draft?.accountId ??
-        composeSeed?.sourceMessage?.accountId ??
-        state.activeAccountId;
-      if (!composerAccountId) {
-        if (!composeSeed) return state;
-        return { pendingComposeSeed: composeSeed };
-      }
-      return {
-        composerOpen: true,
-        composerAccountId,
-        composeSeed,
-        composeNonce: state.composeNonce + 1,
-        pendingComposeSeed: undefined,
-      };
-    }),
+  openComposer: (composeSeed) => {
+    if (!replacing && !useAppStore.getState().composerOpen) {
+      set((state) => openComposerState(state, composeSeed));
+      return;
+    }
+    replacementQueue.push(composeSeed);
+    void runReplacements();
+  },
   closeComposer: () =>
     set({
       composerOpen: false,
