@@ -1,69 +1,36 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { useRemoteImages } from "./reader/useRemoteImages";
 import {
   CONTEXT_ACTION_EVENT,
-  IFRAME_CONTEXT_EVENT,
   addressMailbox,
   earlierHeaderId,
-  sameSenderMessages,
   senderRuleNeedle,
   subjectRuleNeedle,
-  type ContextMenuActionDetail,
-  type IframeContextMenuDetail,
 } from "../contextMenu";
 import { strings } from "../i18n";
 import {
   markLoadedConversationRead,
   markLoadedConversationUnread,
 } from "../markConversation";
-import { waitToMarkRead } from "../markRead";
 import {
   domainIsBlocked,
-  matchingBlockRules,
-  matchingDomainRules,
   blockableDomain,
   canBlockSender,
   rememberBlockedSenders,
-  senderDomain,
   senderIsBlocked,
 } from "../blockedSenders";
 
-function readerAccount(accountId: string) {
-  return useAppStore
-    .getState()
-    .accounts.find((account) => account.id === accountId);
-}
-import { deleteLoadedConversation } from "../deleteConversation";
-import {
-  moveLoadedConversation,
-  type ConversationMoveRole,
-} from "../moveConversation";
-import { beginMessageOpen, isCurrentMessageOpen } from "../messageOpen";
+import { beginMessageOpen } from "../messageOpen";
 import { forgetOpenMessage } from "../recentMessage";
-import { rememberedLetterScroll, rememberLetterScroll } from "../letterScroll";
+import { rememberedLetterScroll } from "../letterScroll";
 import { snoozeLoadedConversation } from "../snoozeConversation";
 import { starLoadedConversation } from "../starConversation";
 import { inspectAndOpenExternalLink } from "./externalLink";
 import { parseMailto } from "../mailto";
-import {
-  differentLinkAddress,
-  hasAuthorColors,
-  messageFrameDocument,
-  sanitizeReceivedHtml,
-  withFrameLinks,
-} from "../security";
-import { markHtmlText, textHighlightTerms } from "../searchHighlight";
-import { ShieldCheck } from "lucide-react";
+import { hasAuthorColors, sanitizeReceivedHtml } from "../security";
+import { textHighlightTerms } from "../searchHighlight";
 import { useIsDark } from "../hooks/useColorScheme";
-import { formatFullMessageDate, formatMessageDate } from "../format";
 import { useAppStore } from "../store";
 import { copyLoadedConversation } from "../copyConversation";
 import { rememberMoveMailboxId } from "../recentMailbox";
@@ -72,20 +39,7 @@ import { forwardLoadedConversation } from "../forwardConversation";
 import { pinLoadedMessages } from "../pinConversation";
 import { printLoadedConversation } from "../printConversation";
 import { saveLoadedConversationFiles } from "../saveConversation";
-import {
-  conversationIndex,
-  conversationMessages,
-  conversationRead,
-  conversationUnread,
-  messageAfterRemoval,
-  messageListPosition,
-} from "../threads";
-import type {
-  Attachment,
-  AttachmentPreview,
-  MessageDetail,
-  MessageSummary,
-} from "../types";
+import type { AttachmentPreview, MessageSummary } from "../types";
 import { useDialogFocus } from "./useDialogFocus";
 import { AttachmentList } from "./reader/attachmentList";
 import { MessageBody } from "./reader/messageBody";
@@ -96,53 +50,35 @@ import {
   messageSelectionQuote,
   preferredReplyMode,
 } from "./composer/composerSeed";
+import { ConversationIndex } from "./reader/conversationIndex";
+import {
+  ContinueDraftNotice,
+  JunkTrashBanner,
+  ReadReceiptBanner,
+  UnsubscribeSentNotice,
+} from "./reader/readerNotices";
 import { QuickReply } from "./reader/quickReply";
+import { useReaderAttachments } from "./reader/useReaderAttachments";
+import { useMessageFrame } from "./reader/useMessageFrame";
+import { useConversationState } from "./reader/useConversationState";
+import { useReaderCompose } from "./reader/useReaderCompose";
+import { useReaderFind } from "./reader/useReaderFind";
+import { useReaderMenuActions } from "./reader/useReaderMenuActions";
+import { useReaderFlags } from "./reader/useReaderFlags";
+import { useReaderMoves } from "./reader/useReaderMoves";
+import { readerAccount, useSenderRules } from "./reader/useSenderRules";
 import { useReplyNotes } from "./reader/useReplyNotes";
 import { ReaderToolbar } from "./reader/readerToolbar";
 import { SnoozePanel } from "./reader/snoozePanel";
 import {
   buildPrintDocument,
-  collapseQuotedMail,
-  countTextMatches,
-  selectTextMatch,
   presentPrintDocument,
   hasVisibleHtml,
-  hydrateInlineImages,
   htmlToPlainText,
-  moveCounts,
   readableMessageText,
   recipientLines,
   readReceiptState,
-  scrollRoom,
 } from "./reader/readerUtils";
-
-function restoreMovedMessage(
-  current: MessageSummary[],
-  expected: MessageSummary[],
-  message: MessageSummary,
-  previousIndex: number,
-): MessageSummary[] | undefined {
-  if (previousIndex < 0) return undefined;
-  if (current.some((summary) => summary.id === message.id)) return undefined;
-  if (current.length > expected.length) return undefined;
-  const expectedIndexes = new Map(
-    expected.map((summary, index) => [summary.id, index]),
-  );
-  let lastIndex = -1;
-  let insertAt = 0;
-  for (const summary of current) {
-    const index = expectedIndexes.get(summary.id);
-    if (index === undefined || index < lastIndex) return undefined;
-    if (index < previousIndex) insertAt += 1;
-    lastIndex = index;
-  }
-  const restored = [...current];
-  restored.splice(insertAt, 0, message);
-  return restored;
-}
-
-/** Smallest shrink-to-fit scale before wide mail scrolls sideways. */
-const MIN_FIT_ZOOM = 0.6;
 
 export function MessageReader({
   onSnoozed,
@@ -208,40 +144,6 @@ export function MessageReader({
   } | null>(null);
   const [previewAttachmentId, setPreviewAttachmentId] = useState<string>();
 
-  function isPreviewable(attachment: Attachment): boolean {
-    if (attachment.inline || attachment.size > 10 * 1024 * 1024) return false;
-    const contentType = attachment.contentType.toLowerCase();
-    return (
-      contentType === "text/plain" ||
-      ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(
-        contentType,
-      )
-    );
-  }
-
-  async function previewFile(attachmentId: string) {
-    if (!message || previewAttachmentId !== undefined) return;
-    const targetMessageId = message.id;
-    setPreviewAttachmentId(attachmentId);
-    try {
-      const loaded = await api.previewAttachment(
-        message.accountId,
-        message.id,
-        attachmentId,
-      );
-      if (targetMessageId !== useAppStore.getState().selectedMessage?.id)
-        return;
-      setPreview({
-        messageId: targetMessageId,
-        attachmentId,
-        preview: loaded,
-      });
-    } catch (cause) {
-      setError(String(cause));
-    } finally {
-      setPreviewAttachmentId(undefined);
-    }
-  }
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const [snoozeConversation, setSnoozeConversation] = useState(false);
@@ -309,73 +211,22 @@ export function MessageReader({
     );
   }
   const printMessageRef = useRef(printMessage);
+  // eslint-disable-next-line react-hooks/refs -- latest-ref pattern
   printMessageRef.current = printMessage;
 
   const neighborRef = useRef({ onNext, onPrevious });
+  // eslint-disable-next-line react-hooks/refs -- latest-ref pattern
   neighborRef.current = { onNext, onPrevious };
 
-  function scrollMessage(direction: 1 | -1) {
-    const amount = Math.round(window.innerHeight * 0.85) * direction;
-    const frameWindow = frame.current?.contentWindow;
-    const scrolling = frameWindow
-      ? (frameWindow.document.scrollingElement ??
-        frameWindow.document.documentElement)
-      : null;
-    const body = bodyRef.current;
-    const room = scrolling
-      ? scrollRoom(
-          frameWindow?.scrollY || scrolling.scrollTop,
-          scrolling.scrollHeight,
-          frameWindow?.innerHeight ?? 0,
-          direction,
-        )
-      : body
-        ? scrollRoom(
-            body.scrollTop,
-            body.scrollHeight,
-            body.clientHeight,
-            direction,
-          )
-        : null;
-    if (room === null || room > 2) {
-      if (frameWindow) frameWindow.scrollBy(0, amount);
-      else body?.scrollBy?.({ top: amount, behavior: "auto" });
-      return;
-    }
-    if (direction > 0) neighborRef.current.onNext?.();
-    else neighborRef.current.onPrevious?.();
-  }
-
-  function findInMessage(direction: 1 | -1 = 1) {
-    const query = findQuery.trim();
-    if (!query) {
-      setFindStatus("");
-      return;
-    }
-    const liveBody = frame.current?.contentDocument?.body;
-    const root =
-      liveBody && liveBody.textContent?.trim()
-        ? liveBody
-        : frame.current?.srcdoc
-          ? new DOMParser().parseFromString(frame.current.srcdoc, "text/html")
-              .body
-          : bodyRef.current;
-    const total = root ? countTextMatches(root, query) : 0;
-    if (!root || total === 0) {
-      setFindIndex(0);
-      setFindStatus(strings.reader.findNoMatches);
-      return;
-    }
-    const next =
-      findIndex === 0 && direction < 0
-        ? total
-        : findIndex === 0
-          ? 1
-          : ((findIndex - 1 + direction + total) % total) + 1;
-    setFindIndex(next);
-    setFindStatus(strings.reader.findMatchCount(next, total));
-    selectTextMatch(root, query, next);
-  }
+  const { scrollMessage, findInMessage } = useReaderFind({
+    frame,
+    bodyRef,
+    neighborRef,
+    findQuery,
+    findIndex,
+    setFindIndex,
+    setFindStatus,
+  });
 
   async function snoozeCurrentMessage(untilIso: string) {
     if (!message) return;
@@ -516,74 +367,31 @@ export function MessageReader({
   if (message?.id !== menuMessageId) {
     setMenuMessageId(message?.id);
     if (moreOpen) setMoreOpen(false);
+    // eslint-disable-next-line react-hooks/refs -- latest-ref pattern
     if (snoozeOpen && !keepSnooze.current) {
       setSnoozeOpen(false);
       setSnoozeConversation(false);
     }
+    // eslint-disable-next-line react-hooks/refs -- latest-ref pattern
     keepSnooze.current = false;
     if (originalOpen) setOriginalOpen(false);
   }
 
-  const loadedMessages = useAppStore((state) => state.messages);
-  const mailboxSort = useAppStore((state) => state.mailboxSort);
-  const listPosition = message
-    ? messageListPosition(
-        loadedMessages,
-        settings.groupThreads && (mailboxSort ?? "date") === "date",
-        message.id,
-      )
-    : undefined;
-  const conversation = message
-    ? conversationIndex(loadedMessages, message)
-    : [];
-  const listed = useAppStore((state) =>
-    message ? state.messages.find((item) => item.id === message.id) : undefined,
-  );
-  const canMarkConversationRead = useAppStore((state) =>
-    message ? conversationUnread(state.messages, message).length > 0 : false,
-  );
-  const canMarkConversationUnread = useAppStore((state) =>
-    message ? conversationRead(state.messages, message).length > 0 : false,
-  );
-  const canMoveConversation = useAppStore((state) =>
-    message ? conversationMessages(state.messages, message).length > 1 : false,
-  );
-  const canSelectFromSender = useAppStore((state) =>
-    message
-      ? sameSenderMessages(state.messages, message.senderAddress).length > 1
-      : false,
-  );
-  const canSaveConversationFiles = useAppStore((state) =>
-    message
-      ? conversationMessages(state.messages, message).some(
-          (item) => item.hasAttachments,
-        )
-      : false,
-  );
-  const canStarConversation = useAppStore((state) =>
-    message
-      ? conversationMessages(state.messages, message).some(
-          (item) => !item.isStarred,
-        )
-      : false,
-  );
-  const canUnstarConversation = useAppStore((state) => {
-    if (!message) return false;
-    const members = conversationMessages(state.messages, message);
-    return members.length > 1 && members.every((item) => item.isStarred);
-  });
-  const canPinConversation = useAppStore((state) =>
-    message
-      ? conversationMessages(state.messages, message).some(
-          (item) => !item.pinned,
-        )
-      : false,
-  );
-  const canUnpinConversation = useAppStore((state) => {
-    if (!message) return false;
-    const members = conversationMessages(state.messages, message);
-    return members.length > 1 && members.every((item) => item.pinned);
-  });
+  const {
+    listPosition,
+    conversation,
+    listed,
+    canMarkConversationRead,
+    canMarkConversationUnread,
+    canMoveConversation,
+    canSelectFromSender,
+    canSaveConversationFiles,
+    canStarConversation,
+    canUnstarConversation,
+    canPinConversation,
+    canUnpinConversation,
+  } = useConversationState(message, settings);
+
   const account = accounts.find((a) => a.id === message?.accountId);
   function indexSender(item: { senderName: string; senderAddress: string }) {
     const address = addressMailbox(item.senderAddress)?.toLowerCase();
@@ -662,6 +470,7 @@ export function MessageReader({
   }
 
   const handleExternalLinkRef = useRef(handleExternalLink);
+  // eslint-disable-next-line react-hooks/refs -- latest-ref pattern
   handleExternalLinkRef.current = handleExternalLink;
 
   // Native side routes denied frame popups (WebKit link clicks) here.
@@ -684,67 +493,6 @@ export function MessageReader({
     };
   }, []);
 
-  async function deleteForever() {
-    const snapshot = useAppStore.getState();
-    const message = snapshot.selectedMessage;
-    if (!message) return;
-    const source = snapshot.mailboxes.find(
-      (mailbox) => mailbox.id === message.mailboxId,
-    );
-    if (source?.role !== "trash") return;
-    const confirmed = await api.showNativeConfirm(
-      strings.mail.deleteForever,
-      strings.mail.deleteForeverQuestion(1),
-    );
-    if (!confirmed) return;
-    const current = useAppStore.getState();
-    if (
-      current.selectedMessage?.id !== message.id ||
-      current.activeAccountId !== message.accountId
-    )
-      return;
-    const next = messageAfterRemoval(
-      current.messages,
-      current.settings.groupThreads &&
-        (current.mailboxSort ?? "date") === "date",
-      message.id,
-    );
-    beginMessageOpen();
-    try {
-      await api.deleteTrashMessages(message.accountId, [message.id]);
-    } catch (cause) {
-      if (useAppStore.getState().selectedMessage?.id === message.id)
-        setError(String(cause));
-      return;
-    }
-    const after = useAppStore.getState();
-    if (
-      after.activeAccountId !== message.accountId ||
-      after.activeMailboxId !== message.mailboxId ||
-      after.activeLocalView ||
-      (after.selectedMessage && after.selectedMessage.id !== message.id)
-    )
-      return;
-    const remaining = after.messages.filter(
-      (summary) => summary.id !== message.id,
-    );
-    if (remaining.length !== after.messages.length) {
-      setMailboxes(moveCounts(after.mailboxes, message));
-      setMessages(remaining, after.messageCursor, after.hasMoreMessages);
-    }
-    const following =
-      next &&
-      (remaining.some((summary) => summary.id === next.id) ||
-        after.messages.some((summary) => summary.id === next.id))
-        ? next
-        : undefined;
-    if (following) void showNextMessage(following);
-    else {
-      beginMessageOpen();
-      selectMessage(undefined);
-    }
-  }
-
   async function copyReadableText() {
     if (!message) return;
     const text = readableMessageText(message);
@@ -760,7 +508,67 @@ export function MessageReader({
     await navigator.clipboard.writeText(text).catch(() => undefined);
   }
 
-  const menuHandlersRef = useRef({
+  const {
+    editAsNewMessage,
+    redirectMessage,
+    forwardAsAttachment,
+    replyWithAttachments,
+    forwardMessage,
+  } = useReaderCompose({
+    openComposer,
+    setError,
+    setMoreOpen,
+    preparingForward,
+    setPreparingForward,
+    forwardOperation,
+  });
+
+  const { setStarred, setRead } = useReaderFlags({
+    selectMessage,
+    setMessages,
+    setMailboxes,
+    setError,
+    starredOperation,
+    readOperation,
+  });
+
+  const {
+    deleteForever,
+    muteConversation,
+    move,
+    deleteConversation,
+    moveConversation,
+    moveToInbox,
+    moveToMailbox,
+    copyToMailbox,
+  } = useReaderMoves({
+    selectMessage,
+    setMessages,
+    setMailboxes,
+    setError,
+    moveOperations,
+  });
+
+  const { blockSender, blockDomain, unblockDomain, unblockSender } =
+    useSenderRules({ setError, setBlockRevision, move, moveToInbox });
+
+  const {
+    isPreviewable,
+    previewFile,
+    saveChosenAttachments,
+    saveAllAttachments,
+    download,
+  } = useReaderAttachments({
+    message,
+    previewAttachmentId,
+    setPreviewAttachmentId,
+    setPreview,
+    downloadingAttachmentId,
+    setDownloadingAttachmentId,
+    setError,
+  });
+
+  useReaderMenuActions({
     openComposer,
     replyWithAttachments,
     forwardMessage,
@@ -782,272 +590,19 @@ export function MessageReader({
     previewFile,
     download,
     copyRecipients,
+    printMessageRef,
+    findInputRef,
+    setFindOpen,
+    scrollMessage,
+    setSnoozeConversation,
+    setSnoozeOpen,
+    keepSnooze,
+    frame,
   });
-
-  useEffect(() => {
-    menuHandlersRef.current = {
-      openComposer,
-      replyWithAttachments,
-      forwardMessage,
-      forwardAsAttachment,
-      redirectMessage,
-      editAsNewMessage,
-      move,
-      blockSender,
-      unblockSender,
-      blockDomain,
-      unblockDomain,
-      muteConversation,
-      deleteForever,
-      moveToInbox,
-      moveToMailbox,
-      copyToMailbox,
-      setRead,
-      setStarred,
-      previewFile,
-      download,
-      copyRecipients,
-    };
-  });
-
-  useEffect(() => {
-    const menuAction = (event: Event) => {
-      const h = menuHandlersRef.current;
-      const selected = useAppStore.getState().selectedMessage;
-      if (!selected) return;
-      const action = (event as CustomEvent<string>).detail;
-      if (action === "reply")
-        h.openComposer({
-          sourceMessage: selected,
-          composeMode: "reply",
-          quoteExcerpt: messageSelectionQuote(),
-        });
-      if (action === "reply-preferred") {
-        const account = useAppStore
-          .getState()
-          .accounts.find((item) => item.id === selected.accountId);
-        h.openComposer({
-          sourceMessage: selected,
-          composeMode: preferredReplyMode(
-            selected,
-            useAppStore.getState().settings.replyToAll,
-            account?.email ?? "",
-            account?.aliases ?? [],
-          ),
-          quoteExcerpt: messageSelectionQuote(),
-        });
-      }
-      if (action === "reply-all")
-        h.openComposer({
-          sourceMessage: selected,
-          composeMode: "replyAll",
-          quoteExcerpt: messageSelectionQuote(),
-        });
-      if (action === "reply-bare")
-        h.openComposer({
-          sourceMessage: selected,
-          composeMode: "reply",
-          omitQuote: true,
-        });
-      if (action === "reply-all-bare")
-        h.openComposer({
-          sourceMessage: selected,
-          composeMode: "replyAll",
-          omitQuote: true,
-        });
-      if (action === "reply-list" && listPostAddress(selected.listPost))
-        h.openComposer({
-          sourceMessage: selected,
-          composeMode: "replyList",
-          quoteExcerpt: messageSelectionQuote(),
-        });
-      if (action === "reply-with-attachments")
-        void h.replyWithAttachments("reply");
-      if (action === "reply-all-with-attachments")
-        void h.replyWithAttachments("replyAll");
-      if (action === "forward") void h.forwardMessage();
-      if (action === "forward-conversation")
-        void forwardLoadedConversation(selected);
-      if (action === "forward-attachment") void h.forwardAsAttachment();
-      if (action === "redirect") h.redirectMessage();
-      if (action === "edit-as-new") void h.editAsNewMessage();
-      if (action === "archive") void h.move("archive");
-      if (action === "move-to-inbox") void h.moveToInbox();
-      if (action === "trash") void h.move("trash");
-      if (action === "delete-forever") void h.deleteForever();
-      if (action === "toggle-read") void h.setRead();
-      if (action === "toggle-star") void h.setStarred();
-      if (action === "junk") void h.move("junk");
-      if (action === "block-sender") void h.blockSender();
-      if (action === "unblock-sender") void h.unblockSender();
-      if (action === "block-domain") void h.blockDomain();
-      if (action === "unblock-domain") void h.unblockDomain();
-      if (action === "mute-conversation") void h.muteConversation();
-      if (action === "not-junk") {
-        const inbox = useAppStore
-          .getState()
-          .mailboxes.find((box) => box.role === "inbox");
-        if (inbox) void h.moveToMailbox(inbox.id);
-      }
-      if (action === "copy-recipients") void h.copyRecipients();
-      if (action === "save-eml") {
-        void api
-          .saveMessageEml(selected.accountId, selected.id)
-          .catch((cause) => {
-            useAppStore.getState().setError(String(cause));
-          });
-      }
-      if (action === "print" || action === "file-print") {
-        window.dispatchEvent(new Event("postal:print-message"));
-      }
-      if (action === "find-in-message") {
-        window.dispatchEvent(new Event("postal:find-in-message"));
-      }
-      if (action === "create-rule") {
-        const contains = senderRuleNeedle(selected.senderAddress);
-        if (!contains) return;
-        window.dispatchEvent(
-          new CustomEvent("postal:create-rule", {
-            detail: { accountId: selected.accountId, contains, field: "from" },
-          }),
-        );
-      }
-      if (action === "create-subject-rule") {
-        const contains = subjectRuleNeedle(selected.subject);
-        if (!contains) return;
-        window.dispatchEvent(
-          new CustomEvent("postal:create-rule", {
-            detail: {
-              accountId: selected.accountId,
-              contains,
-              field: "subject",
-            },
-          }),
-        );
-      }
-    };
-    window.addEventListener("postal:menu-action", menuAction);
-    return () => window.removeEventListener("postal:menu-action", menuAction);
-  }, []);
-
-  useEffect(() => {
-    const print = () => printMessageRef.current();
-    const find = () => {
-      setFindOpen(true);
-      window.setTimeout(() => findInputRef.current?.focus(), 0);
-    };
-    const scroll = (event: Event) => {
-      const direction = (event as CustomEvent<1 | -1>).detail;
-      scrollMessage(direction);
-    };
-    window.addEventListener("postal:print-message", print);
-    window.addEventListener("postal:find-in-message", find);
-    window.addEventListener("postal:scroll-reader", scroll);
-    const openSnooze = () => {
-      setSnoozeConversation(false);
-      setSnoozeOpen(true);
-    };
-    const openConversationSnooze = () => {
-      keepSnooze.current = true;
-      setSnoozeConversation(true);
-      setSnoozeOpen(true);
-    };
-    const moveMailbox = (event: Event) => {
-      const mailboxId = (event as CustomEvent<number>).detail;
-      if (typeof mailboxId === "number") {
-        void menuHandlersRef.current.moveToMailbox(mailboxId);
-      }
-    };
-    const copyMailbox = (event: Event) => {
-      const mailboxId = (event as CustomEvent<number>).detail;
-      if (typeof mailboxId === "number") {
-        void menuHandlersRef.current.copyToMailbox(mailboxId);
-      }
-    };
-    const contextAction = (event: Event) => {
-      const detail = (event as CustomEvent<ContextMenuActionDetail>).detail;
-      if (!detail) return;
-      if (detail.id === "find-in-message" && detail.target.kind === "reader") {
-        find();
-        return;
-      }
-      if (detail.id === "print" && detail.target.kind === "reader") {
-        print();
-        return;
-      }
-      if (detail.id === "copy" && detail.target.kind === "reader") {
-        const iframeText =
-          frame.current?.contentDocument?.getSelection()?.toString() ?? "";
-        const parentText = window.getSelection()?.toString() ?? "";
-        const text = iframeText || parentText;
-        if (text)
-          void navigator.clipboard.writeText(text).catch(() => undefined);
-        return;
-      }
-      if (detail.id === "copy-subject" && detail.target.kind === "reader") {
-        const subject =
-          useAppStore.getState().selectedMessage?.subject.trim() ?? "";
-        if (subject)
-          void navigator.clipboard.writeText(subject).catch(() => undefined);
-        return;
-      }
-      if (
-        detail.id === "copy-sender-address" &&
-        detail.target.kind === "reader"
-      ) {
-        const address = addressMailbox(
-          useAppStore.getState().selectedMessage?.senderAddress ?? "",
-        );
-        if (address)
-          void navigator.clipboard.writeText(address).catch(() => undefined);
-        return;
-      }
-      if (
-        detail.id === "copy-message-text" &&
-        detail.target.kind === "reader"
-      ) {
-        const selected = useAppStore.getState().selectedMessage;
-        const text = selected ? readableMessageText(selected) : "";
-        if (text)
-          void navigator.clipboard.writeText(text).catch(() => undefined);
-        return;
-      }
-      if (detail.target.kind !== "attachment") return;
-      if (detail.id === "preview") {
-        void menuHandlersRef.current.previewFile(detail.target.attachmentId);
-      }
-      if (detail.id === "download") {
-        void menuHandlersRef.current.download(
-          detail.target.attachmentId,
-          detail.target.filename,
-        );
-      }
-    };
-    window.addEventListener("postal:open-snooze", openSnooze);
-    window.addEventListener(
-      "postal:open-snooze-conversation",
-      openConversationSnooze,
-    );
-    window.addEventListener("postal:move-mailbox", moveMailbox);
-    window.addEventListener("postal:copy-mailbox", copyMailbox);
-    window.addEventListener(CONTEXT_ACTION_EVENT, contextAction);
-    return () => {
-      window.removeEventListener("postal:print-message", print);
-      window.removeEventListener("postal:find-in-message", find);
-      window.removeEventListener("postal:scroll-reader", scroll);
-      window.removeEventListener("postal:open-snooze", openSnooze);
-      window.removeEventListener(
-        "postal:open-snooze-conversation",
-        openConversationSnooze,
-      );
-      window.removeEventListener("postal:move-mailbox", moveMailbox);
-      window.removeEventListener("postal:copy-mailbox", copyMailbox);
-      window.removeEventListener(CONTEXT_ACTION_EVENT, contextAction);
-    };
-  }, []);
 
   const htmlBody = message?.htmlBody;
   const attachments = message?.attachments;
+  // eslint-disable-next-line react-hooks/preserve-manual-memoization -- memo kept as written
   const sanitized = useMemo(
     () => (htmlBody ? sanitizeReceivedHtml(htmlBody) : undefined),
     [htmlBody],
@@ -1055,10 +610,12 @@ export function MessageReader({
   // Fall back to the text part when the HTML part sanitizes to nothing visible.
   const formatted = useMemo(
     () => (sanitized ? hasVisibleHtml(sanitized.html) : false),
+    // eslint-disable-next-line react-hooks/preserve-manual-memoization -- memo kept as written
     [sanitized],
   );
   const extractedPlain = useMemo(
     () => (sanitized ? htmlToPlainText(sanitized.html) : ""),
+    // eslint-disable-next-line react-hooks/preserve-manual-memoization -- memo kept as written
     [sanitized],
   );
   const viewingPlain = plainMessageId === message?.id;
@@ -1112,1160 +669,24 @@ export function MessageReader({
     setLoadedHtml,
     setError,
   });
-  const frameSource = currentLoadedHtml ?? sanitized?.html ?? "";
-  const frameHtml = useMemo(
-    () =>
-      messageFrameDocument(
-        collapseQuotedMail(
-          markHtmlText(
-            withFrameLinks(frameSource),
-            textHighlightTerms(searchQuery ?? ""),
-          ),
-          strings.reader.quotedText,
-        ),
-        settings.textScale,
-        // Colorless mail follows dark mode; designed mail keeps its page.
-        isDark && !hasAuthorColors(frameSource),
-      ) +
-      // Identical bodies must still reload, so the frame gets its link wiring.
-      `<!-- ${messageId ?? ""} -->`,
-    [frameSource, isDark, messageId, searchQuery, settings.textScale],
-  );
 
-  useEffect(() => {
-    contentOperation.current += 1;
-  }, [messageId]);
-
-  useEffect(() => {
-    const operation = ++contentOperation.current;
-    if (
-      !messageId ||
-      !messageAccountId ||
-      !sanitized ||
-      inlineAttachments.length === 0
-    )
-      return;
-    const doc = new DOMParser().parseFromString(sanitized.html, "text/html");
-    void hydrateInlineImages(
-      doc,
-      messageAccountId,
+  const { frameSource, frameHtml, fitFrameContent, wireFrameLinks } =
+    useMessageFrame({
+      frame,
+      contentOperation,
+      message,
       messageId,
+      messageAccountId,
+      sanitized,
+      currentLoadedHtml,
       inlineAttachments,
-    ).then(() => {
-      if (contentOperation.current === operation)
-        setLoadedHtml({ messageId, html: doc.body.innerHTML });
+      setLoadedHtml,
+      searchQuery,
+      settings,
+      isDark,
+      handleExternalLink,
+      openComposer,
     });
-    return () => {
-      if (contentOperation.current === operation) contentOperation.current += 1;
-    };
-  }, [inlineAttachments, messageAccountId, messageId, sanitized]);
-
-  const frameLinkCleanup = useRef<(() => void) | undefined>(undefined);
-
-  // Shrink fixed-width mail to the pane, like other mail apps, but never
-  // below a readable size; past that it scrolls sideways.
-  const fitFrameContent = useCallback(() => {
-    const iframe = frame.current;
-    const doc = iframe?.contentDocument;
-    if (!doc?.body || !iframe) return;
-    doc.body.style.zoom = "";
-    const header = iframe
-      .closest(".reader-pane")
-      ?.querySelector(".message-header");
-    if (header instanceof HTMLElement) {
-      const style = getComputedStyle(header);
-      doc.body.style.marginLeft = style.paddingLeft;
-      doc.body.style.marginRight = style.paddingRight;
-    }
-    const root = doc.documentElement;
-    const available = root.clientWidth;
-    const needed = root.scrollWidth;
-    if (available > 0 && needed > available + 1) {
-      const zoom = Math.max(MIN_FIT_ZOOM, available / needed);
-      doc.body.style.zoom = String(Math.floor(zoom * 100) / 100);
-    }
-  }, []);
-
-  useEffect(() => {
-    const node = frame.current;
-    if (!node || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => fitFrameContent());
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [fitFrameContent, frameHtml]);
-
-  function wireFrameLinks() {
-    frameLinkCleanup.current?.();
-    frameLinkCleanup.current = undefined;
-    const doc = frame.current?.contentDocument;
-    const body = doc?.body;
-    if (!doc || !body) return;
-    body.querySelectorAll("[usemap]").forEach((element) => {
-      element.removeAttribute("usemap");
-    });
-    const linkSelector = "a[href], a[data-external-href], area[href]";
-    const handleLink = (event: MouseEvent) => {
-      if (event.button > 1) return;
-      const target = (event.target as HTMLElement).closest<HTMLElement>(
-        linkSelector,
-      );
-      if (!target) return;
-      event.preventDefault();
-      event.stopPropagation();
-      const marked = target.getAttribute("data-external-href")?.trim() ?? "";
-      const href = target.getAttribute("href")?.trim() ?? "";
-      const url = /^https?:/i.test(marked)
-        ? marked
-        : /^https?:/i.test(href)
-          ? href
-          : /^mailto:/i.test(href)
-            ? href
-            : "";
-      if (/^https?:/i.test(url)) {
-        void handleExternalLink(url, target.textContent ?? "");
-        return;
-      }
-      if (/^mailto:/i.test(url)) openComposer({ prefill: parseMailto(url) });
-    };
-    const blockNativeOpen = (event: MouseEvent) => {
-      event.preventDefault();
-      const iframe = frame.current;
-      if (!iframe) return;
-      const rect = iframe.getBoundingClientRect();
-      const target = (event.target as HTMLElement | null)?.closest<HTMLElement>(
-        linkSelector,
-      );
-      const marked = target?.getAttribute("data-external-href")?.trim() ?? "";
-      const href = target?.getAttribute("href")?.trim() ?? "";
-      const url = /^https?:/i.test(marked)
-        ? marked
-        : /^https?:/i.test(href)
-          ? href
-          : /^mailto:/i.test(href)
-            ? href
-            : /^mailto:/i.test(marked)
-              ? marked
-              : "";
-      const detail: IframeContextMenuDetail = {
-        x: event.clientX + rect.left,
-        y: event.clientY + rect.top,
-      };
-      if (/^https?:/i.test(url)) {
-        detail.href = url;
-        const text = differentLinkAddress(target?.textContent ?? "", url);
-        if (text) detail.text = text;
-      } else if (/^mailto:/i.test(url)) detail.mailto = url;
-      window.dispatchEvent(
-        new CustomEvent<IframeContextMenuDetail>(IFRAME_CONTEXT_EVENT, {
-          detail,
-        }),
-      );
-    };
-    const forwardKey = (event: KeyboardEvent) => {
-      if (event.isComposing || event.metaKey || event.ctrlKey || event.altKey) {
-        return;
-      }
-      const key = event.key;
-      const readingKey =
-        key === "j" ||
-        key === "k" ||
-        key === "n" ||
-        key === "p" ||
-        key === "r" ||
-        key === "a" ||
-        key === "i" ||
-        key === "]" ||
-        key === "[" ||
-        key === "ArrowDown" ||
-        key === "ArrowUp" ||
-        key === "Home" ||
-        key === "End" ||
-        key === "Delete" ||
-        key === " ";
-      if (!readingKey) return;
-      event.preventDefault();
-      window.dispatchEvent(
-        new KeyboardEvent("keydown", {
-          key: event.key,
-          code: event.code,
-          shiftKey: event.shiftKey,
-          bubbles: true,
-          cancelable: true,
-        }),
-      );
-    };
-    body.addEventListener("click", handleLink);
-    body.addEventListener("auxclick", handleLink);
-    doc.addEventListener("contextmenu", blockNativeOpen, true);
-    doc.addEventListener("keydown", forwardKey);
-    const scrolling = doc.scrollingElement ?? doc.documentElement;
-    const letterId = message?.id;
-    const onLetterScroll = (event: Event) => {
-      if (letterId == null) return;
-      const top = scrolling.scrollTop;
-      if (top <= 0 && !event.isTrusted) return;
-      rememberLetterScroll(letterId, top);
-    };
-    if (letterId != null) {
-      const top = rememberedLetterScroll(letterId);
-      if (top > 0) scrolling.scrollTop = top;
-    }
-    scrolling.addEventListener("scroll", onLetterScroll);
-    frameLinkCleanup.current = () => {
-      body.removeEventListener("click", handleLink);
-      body.removeEventListener("auxclick", handleLink);
-      doc.removeEventListener("contextmenu", blockNativeOpen, true);
-      doc.removeEventListener("keydown", forwardKey);
-      scrolling.removeEventListener("scroll", onLetterScroll);
-    };
-  }
-
-  useEffect(
-    () => () => {
-      frameLinkCleanup.current?.();
-    },
-    [],
-  );
-
-  useLayoutEffect(() => {
-    const letterId = message?.id;
-    return () => {
-      // Read at cleanup on purpose: the frame may mount after this effect runs.
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-      const doc = frame.current?.contentDocument;
-      const scrolling = doc?.scrollingElement ?? doc?.documentElement;
-      if (letterId != null && scrolling && scrolling.scrollTop > 0) {
-        rememberLetterScroll(letterId, scrolling.scrollTop);
-      }
-      frameLinkCleanup.current?.();
-      frameLinkCleanup.current = undefined;
-    };
-  }, [message?.id]);
-
-  async function setStarred() {
-    const current = useAppStore.getState();
-    const message = current.selectedMessage;
-    if (!message) return;
-    const operation = ++starredOperation.current;
-    const viewMailboxId = current.activeMailboxId;
-    const next = !message.isStarred;
-    selectMessage({ ...message, isStarred: next });
-    setMessages(
-      current.messages.map((summary) =>
-        summary.id === message.id ? { ...summary, isStarred: next } : summary,
-      ),
-      current.messageCursor,
-      current.hasMoreMessages,
-    );
-    try {
-      await api.setMessageFlags(message.accountId, message.id, undefined, next);
-    } catch (cause) {
-      const current = useAppStore.getState();
-      if (
-        operation !== starredOperation.current ||
-        current.activeAccountId !== message.accountId ||
-        current.activeMailboxId !== viewMailboxId ||
-        current.activeLocalView
-      )
-        return;
-      setMessages(
-        current.messages.map((summary) =>
-          summary.id === message.id && summary.isStarred === next
-            ? { ...summary, isStarred: message.isStarred }
-            : summary,
-        ),
-        current.messageCursor,
-        current.hasMoreMessages,
-      );
-      if (
-        current.selectedMessage?.id === message.id &&
-        current.selectedMessage.isStarred === next
-      )
-        selectMessage({
-          ...current.selectedMessage,
-          isStarred: message.isStarred,
-        });
-      setError(String(cause));
-    }
-  }
-
-  async function setRead() {
-    const current = useAppStore.getState();
-    const message = current.selectedMessage;
-    if (!message) return;
-    const operation = ++readOperation.current;
-    const viewMailboxId = current.activeMailboxId;
-    const next = !message.isRead;
-    const previousUnreadCount = current.mailboxes.find(
-      (mailbox) => mailbox.id === message.mailboxId,
-    )?.unreadCount;
-    selectMessage({ ...message, isRead: next });
-    setMailboxes(
-      current.mailboxes.map((mailbox) =>
-        mailbox.id === message.mailboxId
-          ? {
-              ...mailbox,
-              unreadCount: Math.max(0, mailbox.unreadCount + (next ? -1 : 1)),
-            }
-          : mailbox,
-      ),
-    );
-    setMessages(
-      current.messages.map((summary) =>
-        summary.id === message.id ? { ...summary, isRead: next } : summary,
-      ),
-      current.messageCursor,
-      current.hasMoreMessages,
-    );
-    try {
-      await api.setMessageFlags(message.accountId, message.id, next, undefined);
-    } catch (cause) {
-      const current = useAppStore.getState();
-      if (
-        operation !== readOperation.current ||
-        current.activeAccountId !== message.accountId ||
-        current.activeMailboxId !== viewMailboxId ||
-        current.activeLocalView
-      )
-        return;
-      setMessages(
-        current.messages.map((summary) =>
-          summary.id === message.id && summary.isRead === next
-            ? { ...summary, isRead: message.isRead }
-            : summary,
-        ),
-        current.messageCursor,
-        current.hasMoreMessages,
-      );
-      if (
-        current.selectedMessage?.id === message.id &&
-        current.selectedMessage.isRead === next
-      )
-        selectMessage({ ...current.selectedMessage, isRead: message.isRead });
-      if (previousUnreadCount !== undefined) {
-        const expectedUnreadCount = previousUnreadCount + (next ? -1 : 1);
-        setMailboxes(
-          current.mailboxes.map((mailbox) =>
-            mailbox.id === message.mailboxId &&
-            mailbox.unreadCount === expectedUnreadCount
-              ? { ...mailbox, unreadCount: previousUnreadCount }
-              : mailbox,
-          ),
-        );
-      }
-      setError(String(cause));
-    }
-  }
-
-  function previewDetail(summary: MessageSummary): MessageDetail {
-    return {
-      ...summary,
-      to: [],
-      cc: [],
-      replyTo: null,
-      textBody: summary.preview,
-      htmlBody: null,
-      remoteImagesBlocked: false,
-      attachments: [],
-    };
-  }
-
-  async function showNextMessage(next: MessageSummary) {
-    const request = beginMessageOpen();
-    selectMessage(previewDetail(next));
-    try {
-      const detail = await api.getMessage(next.accountId, next.id);
-      if (!isCurrentMessageOpen(request)) return;
-      const current = useAppStore.getState();
-      if (
-        current.activeAccountId !== next.accountId ||
-        current.activeMailboxId !== next.mailboxId ||
-        current.activeLocalView
-      )
-        return;
-      selectMessage(detail);
-      if (next.isRead) return;
-      const readyToMark = await waitToMarkRead(
-        useAppStore.getState().settings.markRead,
-        () => {
-          const latest = useAppStore.getState();
-          return (
-            isCurrentMessageOpen(request) &&
-            latest.selectedMessage?.id === next.id &&
-            latest.activeAccountId === next.accountId &&
-            latest.activeMailboxId === next.mailboxId &&
-            !latest.activeLocalView
-          );
-        },
-      );
-      if (!readyToMark) return;
-      await api.setMessageFlags(next.accountId, next.id, true, undefined);
-      if (!isCurrentMessageOpen(request)) return;
-      const latest = useAppStore.getState();
-      if (
-        latest.activeAccountId !== next.accountId ||
-        latest.activeMailboxId !== next.mailboxId ||
-        latest.activeLocalView
-      )
-        return;
-      setMessages(
-        latest.messages.map((item) =>
-          item.id === next.id ? { ...item, isRead: true } : item,
-        ),
-        latest.messageCursor,
-        latest.hasMoreMessages,
-      );
-      setMailboxes(
-        latest.mailboxes.map((mailbox) =>
-          mailbox.id === next.mailboxId
-            ? {
-                ...mailbox,
-                unreadCount: Math.max(0, mailbox.unreadCount - 1),
-              }
-            : mailbox,
-        ),
-      );
-      if (latest.selectedMessage?.id === next.id)
-        selectMessage({ ...detail, isRead: true });
-    } catch (cause) {
-      if (!isCurrentMessageOpen(request)) return;
-      setError(String(cause));
-    }
-  }
-
-  function restoreFailedMove(
-    currentSelectedId: number | undefined,
-    nextId: number | undefined,
-    message: MessageDetail,
-  ) {
-    if (currentSelectedId && currentSelectedId !== nextId) return;
-    beginMessageOpen();
-    selectMessage(message);
-  }
-
-  async function blockSender() {
-    const snapshot = useAppStore.getState();
-    const message = snapshot.selectedMessage;
-    if (!message) return;
-    const contains = senderRuleNeedle(message.senderAddress);
-    if (
-      !contains ||
-      !canBlockSender(message.senderAddress, readerAccount(message.accountId))
-    )
-      return;
-    const alreadyJunk = snapshot.mailboxes.some(
-      (box) => box.id === message.mailboxId && box.role === "junk",
-    );
-    const confirmed = await api.showNativeConfirm(
-      strings.reader.blockSender,
-      alreadyJunk
-        ? strings.reader.blockSenderFuture
-        : strings.reader.blockSenderQuestion,
-    );
-    if (!confirmed) return;
-    if (!alreadyJunk) await move("junk");
-    try {
-      const rules = await api.listFilterRules(message.accountId);
-      const blocked = rules.some(
-        (rule) =>
-          rule.enabled &&
-          rule.field === "from" &&
-          rule.action === "move_junk" &&
-          rule.contains.trim().toLowerCase() === contains.toLowerCase(),
-      );
-      if (blocked) {
-        rememberBlockedSenders(message.accountId, rules);
-        setBlockRevision((revision) => revision + 1);
-        return;
-      }
-      const created = await api.createFilterRule({
-        id: "",
-        accountId: message.accountId,
-        name: strings.reader.blockSender,
-        field: "from",
-        contains,
-        action: "move_junk",
-        targetMailbox: null,
-        enabled: true,
-      });
-      rememberBlockedSenders(message.accountId, [...rules, created]);
-      setBlockRevision((revision) => revision + 1);
-    } catch (cause) {
-      setError(String(cause));
-    }
-  }
-
-  async function blockDomain() {
-    const snapshot = useAppStore.getState();
-    const message = snapshot.selectedMessage;
-    if (!message) return;
-    const domain = blockableDomain(
-      message.senderAddress,
-      readerAccount(message.accountId),
-    );
-    if (!domain) return;
-    const alreadyJunk = snapshot.mailboxes.some(
-      (box) => box.id === message.mailboxId && box.role === "junk",
-    );
-    const confirmed = await api.showNativeConfirm(
-      strings.reader.blockDomain,
-      alreadyJunk
-        ? strings.reader.blockDomainFuture(domain)
-        : strings.reader.blockDomainQuestion(domain),
-    );
-    if (!confirmed) return;
-    if (!alreadyJunk) await move("junk");
-    try {
-      const rules = await api.listFilterRules(message.accountId);
-      if (matchingDomainRules(rules, message.senderAddress).length > 0) {
-        rememberBlockedSenders(message.accountId, rules);
-        setBlockRevision((revision) => revision + 1);
-        return;
-      }
-      const created = await api.createFilterRule({
-        id: "",
-        accountId: message.accountId,
-        name: `Block ${domain}`.slice(0, 80),
-        field: "domain",
-        contains: domain,
-        action: "move_junk",
-        targetMailbox: null,
-        enabled: true,
-      });
-      rememberBlockedSenders(message.accountId, [...rules, created]);
-      setBlockRevision((revision) => revision + 1);
-    } catch (cause) {
-      setError(String(cause));
-    }
-  }
-
-  async function unblockDomain() {
-    const snapshot = useAppStore.getState();
-    const message = snapshot.selectedMessage;
-    if (!message) return;
-    const domain = senderDomain(message.senderAddress);
-    if (!domain) return;
-    const inJunk = snapshot.mailboxes.some(
-      (box) => box.id === message.mailboxId && box.role === "junk",
-    );
-    const confirmed = await api.showNativeConfirm(
-      strings.reader.unblockDomain,
-      inJunk
-        ? strings.reader.unblockDomainFromJunk(domain)
-        : strings.reader.unblockDomainQuestion(domain),
-    );
-    if (!confirmed) return;
-    if (useAppStore.getState().selectedMessage?.id !== message.id) return;
-    try {
-      const rules = await api.listFilterRules(message.accountId);
-      const matches = matchingDomainRules(rules, message.senderAddress);
-      for (const rule of matches) {
-        await api.deleteFilterRule(message.accountId, rule.id);
-      }
-      rememberBlockedSenders(
-        message.accountId,
-        rules.filter((rule) => !matches.some((match) => match.id === rule.id)),
-      );
-      setBlockRevision((revision) => revision + 1);
-    } catch (cause) {
-      setError(String(cause));
-      return;
-    }
-    if (useAppStore.getState().selectedMessage?.id !== message.id) return;
-    if (inJunk) moveToInbox();
-  }
-
-  async function unblockSender() {
-    const snapshot = useAppStore.getState();
-    const message = snapshot.selectedMessage;
-    if (!message) return;
-    const contains = senderRuleNeedle(message.senderAddress);
-    if (!contains) return;
-    const inJunk = snapshot.mailboxes.some(
-      (box) => box.id === message.mailboxId && box.role === "junk",
-    );
-    const confirmed = await api.showNativeConfirm(
-      strings.reader.unblockSender,
-      inJunk
-        ? strings.reader.unblockSenderFromJunk
-        : strings.reader.unblockSenderQuestion,
-    );
-    if (!confirmed) return;
-    if (useAppStore.getState().selectedMessage?.id !== message.id) return;
-    try {
-      const rules = await api.listFilterRules(message.accountId);
-      const matches = matchingBlockRules(rules, contains);
-      for (const rule of matches) {
-        await api.deleteFilterRule(message.accountId, rule.id);
-      }
-      rememberBlockedSenders(
-        message.accountId,
-        rules.filter((rule) => !matches.some((match) => match.id === rule.id)),
-      );
-      setBlockRevision((revision) => revision + 1);
-    } catch (cause) {
-      setError(String(cause));
-      return;
-    }
-    if (useAppStore.getState().selectedMessage?.id !== message.id) return;
-    if (inJunk) moveToInbox();
-  }
-
-  async function muteConversation() {
-    const snapshot = useAppStore.getState();
-    const message = snapshot.selectedMessage;
-    if (!message?.messageId?.trim()) return;
-    if (message.conversationMuted) {
-      try {
-        await api.unmuteConversation(message.accountId, message.id);
-        paintConversationMuted(message, false);
-      } catch (cause) {
-        setError(String(cause));
-      }
-      return;
-    }
-    const inInbox = snapshot.mailboxes.some(
-      (box) => box.id === message.mailboxId && box.role === "inbox",
-    );
-    const confirmed = await api.showNativeConfirm(
-      strings.reader.muteConversation,
-      inInbox
-        ? strings.reader.muteConversationQuestion
-        : strings.reader.muteConversationFuture,
-    );
-    if (!confirmed) return;
-    try {
-      const filed = await api.muteConversation(message.accountId, message.id);
-      dropFiledMessages(message, filed);
-      paintConversationMuted(message, true);
-    } catch (cause) {
-      setError(String(cause));
-    }
-  }
-
-  function paintConversationMuted(message: MessageSummary, muted: boolean) {
-    const latest = useAppStore.getState();
-    const root = message.threadRoot;
-    const sameThread = (item: MessageSummary) =>
-      item.accountId === message.accountId &&
-      (item.id === message.id || Boolean(root && item.threadRoot === root));
-    setMessages(
-      latest.messages.map((item) =>
-        sameThread(item) ? { ...item, conversationMuted: muted } : item,
-      ),
-      latest.messageCursor,
-      latest.hasMoreMessages,
-    );
-    const selected = latest.selectedMessage;
-    if (selected && sameThread(selected)) {
-      selectMessage({ ...selected, conversationMuted: muted });
-    }
-  }
-
-  function dropFiledMessages(message: MessageSummary, filed: number[]) {
-    if (filed.length === 0) return;
-    const latest = useAppStore.getState();
-    const filedIds = new Set(filed);
-    const rows = latest.messages.filter((item) => filedIds.has(item.id));
-    if (rows.length === 0 && !filedIds.has(message.id)) return;
-    const archive = latest.mailboxes.find(
-      (box) => box.accountId === message.accountId && box.role === "archive",
-    );
-    let mailboxes = latest.mailboxes;
-    for (const row of rows) {
-      mailboxes = mailboxes.map((box) => {
-        if (box.id === row.mailboxId) {
-          return {
-            ...box,
-            totalCount: Math.max(0, box.totalCount - 1),
-            unreadCount: Math.max(0, box.unreadCount - (row.isRead ? 0 : 1)),
-          };
-        }
-        if (box.id === archive?.id) {
-          return { ...box, totalCount: box.totalCount + 1 };
-        }
-        return box;
-      });
-    }
-    setMailboxes(mailboxes);
-    const remaining = latest.messages.filter((item) => !filedIds.has(item.id));
-    setMessages(remaining, latest.messageCursor, latest.hasMoreMessages);
-    if (!filedIds.has(message.id)) return;
-    const grouped =
-      latest.settings.groupThreads && (latest.mailboxSort ?? "date") === "date";
-    let next = messageAfterRemoval(latest.messages, grouped, message.id);
-    while (next && filedIds.has(next.id)) {
-      next = messageAfterRemoval(
-        latest.messages.filter(
-          (item) => !filedIds.has(item.id) || item.id === next?.id,
-        ),
-        grouped,
-        next.id,
-      );
-    }
-    if (next && !filedIds.has(next.id)) void showNextMessage(next);
-    else {
-      beginMessageOpen();
-      selectMessage(undefined);
-    }
-  }
-
-  async function move(role: "archive" | "trash" | "junk") {
-    const snapshot = useAppStore.getState();
-    const message = snapshot.selectedMessage;
-    if (!message) return;
-    const mailboxes = snapshot.mailboxes;
-    const messages = snapshot.messages;
-    const messageCursor = snapshot.messageCursor;
-    const hasMoreMessages = snapshot.hasMoreMessages;
-    const destination = mailboxes.find((mailbox) => mailbox.role === role);
-    const source = mailboxes.find(
-      (mailbox) => mailbox.id === message.mailboxId,
-    );
-    if (
-      destination?.id === message.mailboxId ||
-      (destination && source?.name === destination.name)
-    )
-      return;
-    const operation = (moveOperations.current.get(message.id) ?? 0) + 1;
-    moveOperations.current.set(message.id, operation);
-    const viewMailboxId = snapshot.activeMailboxId;
-    const previousUnreadCounts = new Map(
-      mailboxes.map((mailbox) => [mailbox.id, mailbox.unreadCount]),
-    );
-    const previousIndex = messages.findIndex(
-      (summary) => summary.id === message.id,
-    );
-    const next = messageAfterRemoval(
-      messages,
-      snapshot.settings.groupThreads &&
-        (snapshot.mailboxSort ?? "date") === "date",
-      message.id,
-    );
-    setMailboxes(moveCounts(mailboxes, message, destination?.id));
-    setMessages(
-      messages.filter((summary) => summary.id !== message.id),
-      messageCursor,
-      hasMoreMessages,
-    );
-    if (next) void showNextMessage(next);
-    else {
-      beginMessageOpen();
-      selectMessage(undefined);
-    }
-    try {
-      await api.moveMessage(message.accountId, message.id, role);
-    } catch (cause) {
-      const current = useAppStore.getState();
-      if (
-        moveOperations.current.get(message.id) !== operation ||
-        current.activeAccountId !== message.accountId ||
-        current.activeMailboxId !== viewMailboxId ||
-        current.activeLocalView
-      )
-        return;
-      const expectedMessages = messages.filter(
-        (summary) => summary.id !== message.id,
-      );
-      const restoredMessages = restoreMovedMessage(
-        current.messages,
-        expectedMessages,
-        message,
-        previousIndex,
-      );
-      if (restoredMessages) {
-        setMessages(
-          restoredMessages,
-          current.messageCursor,
-          current.hasMoreMessages,
-        );
-      }
-      setMailboxes(
-        current.mailboxes.map((mailbox) => {
-          const previousUnreadCount = previousUnreadCounts.get(mailbox.id);
-          if (previousUnreadCount === undefined) return mailbox;
-          const delta =
-            mailbox.id === message.mailboxId
-              ? message.isRead
-                ? 0
-                : -1
-              : mailbox.id === destination?.id
-                ? message.isRead
-                  ? 0
-                  : 1
-                : 0;
-          return mailbox.unreadCount === previousUnreadCount + delta
-            ? { ...mailbox, unreadCount: previousUnreadCount }
-            : mailbox;
-        }),
-      );
-      if (restoredMessages)
-        restoreFailedMove(current.selectedMessage?.id, next?.id, message);
-      setError(String(cause));
-    }
-  }
-
-  function deleteConversation() {
-    const message = useAppStore.getState().selectedMessage;
-    if (!message) return;
-    void deleteLoadedConversation(message, (next, openWasDeleted) => {
-      if (!openWasDeleted) return;
-      if (next) void showNextMessage(next);
-      else {
-        beginMessageOpen();
-        selectMessage(undefined);
-      }
-    });
-  }
-
-  function moveConversation(target: ConversationMoveRole | number) {
-    const snapshot = useAppStore.getState();
-    const message = snapshot.selectedMessage;
-    if (!message) return;
-    if (typeof target === "number")
-      rememberMoveMailboxId(snapshot.mailboxes, target);
-    void moveLoadedConversation(message, target, (next, openWasMoved) => {
-      if (!openWasMoved) return;
-      if (next) void showNextMessage(next);
-      else {
-        beginMessageOpen();
-        selectMessage(undefined);
-      }
-    });
-  }
-
-  function moveToInbox() {
-    const snapshot = useAppStore.getState();
-    const message = snapshot.selectedMessage;
-    if (!message) return;
-    const inbox = snapshot.mailboxes.find(
-      (mailbox) =>
-        mailbox.accountId === message.accountId && mailbox.role === "inbox",
-    );
-    if (inbox) void moveToMailbox(inbox.id);
-  }
-
-  async function moveToMailbox(mailboxId: number) {
-    const snapshot = useAppStore.getState();
-    const message = snapshot.selectedMessage;
-    if (!message) return;
-    if (mailboxId === message.mailboxId) return;
-    rememberMoveMailboxId(snapshot.mailboxes, mailboxId);
-    const mailboxes = snapshot.mailboxes;
-    const messages = snapshot.messages;
-    const messageCursor = snapshot.messageCursor;
-    const hasMoreMessages = snapshot.hasMoreMessages;
-    const operation = (moveOperations.current.get(message.id) ?? 0) + 1;
-    moveOperations.current.set(message.id, operation);
-    const viewMailboxId = snapshot.activeMailboxId;
-    const previousUnreadCounts = new Map(
-      mailboxes.map((mailbox) => [mailbox.id, mailbox.unreadCount]),
-    );
-    const previousIndex = messages.findIndex(
-      (summary) => summary.id === message.id,
-    );
-    const next = messageAfterRemoval(
-      messages,
-      snapshot.settings.groupThreads &&
-        (snapshot.mailboxSort ?? "date") === "date",
-      message.id,
-    );
-    setMailboxes(moveCounts(mailboxes, message, mailboxId));
-    setMessages(
-      messages.filter((summary) => summary.id !== message.id),
-      messageCursor,
-      hasMoreMessages,
-    );
-    if (next) void showNextMessage(next);
-    else {
-      beginMessageOpen();
-      selectMessage(undefined);
-    }
-    try {
-      await api.moveMessageToMailbox(message.accountId, message.id, mailboxId);
-    } catch (cause) {
-      const current = useAppStore.getState();
-      if (
-        moveOperations.current.get(message.id) !== operation ||
-        current.activeAccountId !== message.accountId ||
-        current.activeMailboxId !== viewMailboxId ||
-        current.activeLocalView
-      )
-        return;
-      const expectedMessages = messages.filter(
-        (summary) => summary.id !== message.id,
-      );
-      const restoredMessages = restoreMovedMessage(
-        current.messages,
-        expectedMessages,
-        message,
-        previousIndex,
-      );
-      if (restoredMessages) {
-        setMessages(
-          restoredMessages,
-          current.messageCursor,
-          current.hasMoreMessages,
-        );
-      }
-      setMailboxes(
-        current.mailboxes.map((mailbox) => {
-          const previousUnreadCount = previousUnreadCounts.get(mailbox.id);
-          if (previousUnreadCount === undefined) return mailbox;
-          const delta =
-            mailbox.id === message.mailboxId
-              ? message.isRead
-                ? 0
-                : -1
-              : mailbox.id === mailboxId
-                ? message.isRead
-                  ? 0
-                  : 1
-                : 0;
-          return mailbox.unreadCount === previousUnreadCount + delta
-            ? { ...mailbox, unreadCount: previousUnreadCount }
-            : mailbox;
-        }),
-      );
-      if (restoredMessages)
-        restoreFailedMove(current.selectedMessage?.id, next?.id, message);
-      setError(String(cause));
-    }
-  }
-
-  async function copyToMailbox(mailboxId: number) {
-    const snapshot = useAppStore.getState();
-    const message = snapshot.selectedMessage;
-    if (!message || mailboxId === message.mailboxId) return;
-    rememberMoveMailboxId(snapshot.mailboxes, mailboxId);
-    const accountId = message.accountId;
-    const messageId = message.id;
-    try {
-      await api.copyMessageToMailbox(accountId, messageId, mailboxId);
-    } catch (cause) {
-      const current = useAppStore.getState();
-      if (
-        current.activeAccountId !== accountId ||
-        current.selectedMessage?.id !== messageId
-      )
-        return;
-      setError(String(cause));
-    }
-  }
-
-  async function saveChosenAttachments(attachmentIds: string[]) {
-    if (!message || downloadingAttachmentId !== undefined) return;
-    if (attachmentIds.length === 0) return;
-    setDownloadingAttachmentId("chosen");
-    try {
-      await api.saveChosenAttachments(
-        message.accountId,
-        message.id,
-        attachmentIds,
-      );
-    } catch (cause) {
-      setError(String(cause));
-    } finally {
-      setDownloadingAttachmentId(undefined);
-    }
-  }
-
-  async function saveAllAttachments() {
-    if (!message || downloadingAttachmentId !== undefined) return;
-    setDownloadingAttachmentId("all");
-    try {
-      await api.saveAllAttachments(message.accountId, message.id);
-    } catch (cause) {
-      setError(String(cause));
-    } finally {
-      setDownloadingAttachmentId(undefined);
-    }
-  }
-
-  async function download(attachmentId: string, filename: string) {
-    if (!message || downloadingAttachmentId !== undefined) return;
-    setDownloadingAttachmentId(attachmentId);
-    try {
-      await api.saveAttachment(
-        message.accountId,
-        message.id,
-        attachmentId,
-        filename,
-      );
-    } catch (cause) {
-      setError(String(cause));
-    } finally {
-      setDownloadingAttachmentId(undefined);
-    }
-  }
-
-  async function editAsNewMessage() {
-    const message = useAppStore.getState().selectedMessage;
-    if (!message || preparingForward) return;
-    const operation = ++forwardOperation.current;
-    const messageId = message.id;
-    const accountId = message.accountId;
-    setPreparingForward(true);
-    try {
-      const attachments = await api.prepareForwardAttachments(
-        accountId,
-        messageId,
-      );
-      const current = useAppStore.getState();
-      if (
-        operation !== forwardOperation.current ||
-        current.activeAccountId !== accountId ||
-        current.selectedMessage?.id !== messageId
-      )
-        return;
-      openComposer({
-        sourceMessage: message,
-        composeMode: "editAsNew",
-        prefill: { attachments },
-      });
-    } catch (cause) {
-      const current = useAppStore.getState();
-      if (
-        operation === forwardOperation.current &&
-        current.activeAccountId === accountId &&
-        current.selectedMessage?.id === messageId
-      )
-        setError(String(cause));
-    } finally {
-      if (operation === forwardOperation.current) setPreparingForward(false);
-    }
-  }
-
-  function redirectMessage() {
-    const message = useAppStore.getState().selectedMessage;
-    if (!message) return;
-    setMoreOpen(false);
-    openComposer({
-      composeMode: "redirect",
-      sourceMessage: message,
-    });
-  }
-
-  async function forwardAsAttachment() {
-    const message = useAppStore.getState().selectedMessage;
-    if (!message || preparingForward) return;
-    const operation = ++forwardOperation.current;
-    const messageId = message.id;
-    const accountId = message.accountId;
-    setPreparingForward(true);
-    try {
-      const attachment = await api.prepareForwardedMessage(
-        accountId,
-        messageId,
-      );
-      const current = useAppStore.getState();
-      if (
-        operation !== forwardOperation.current ||
-        current.activeAccountId !== accountId ||
-        current.selectedMessage?.id !== messageId
-      )
-        return;
-      openComposer({
-        sourceMessage: message,
-        composeMode: "forwardAttachment",
-        prefill: { attachments: [attachment] },
-      });
-    } catch (cause) {
-      const current = useAppStore.getState();
-      if (
-        operation === forwardOperation.current &&
-        current.activeAccountId === accountId &&
-        current.selectedMessage?.id === messageId
-      )
-        setError(String(cause));
-    } finally {
-      if (operation === forwardOperation.current) setPreparingForward(false);
-    }
-  }
-
-  async function replyWithAttachments(composeMode: "reply" | "replyAll") {
-    const message = useAppStore.getState().selectedMessage;
-    if (!message || preparingForward) return;
-    if (!message.attachments.some((item) => !item.inline)) {
-      setError(strings.reader.noFilesToAttach);
-      return;
-    }
-    const operation = ++forwardOperation.current;
-    const messageId = message.id;
-    const accountId = message.accountId;
-    setPreparingForward(true);
-    try {
-      const attachments = await api.prepareReplyAttachments(
-        accountId,
-        messageId,
-      );
-      const files = attachments.filter((item) => !item.inline);
-      const current = useAppStore.getState();
-      if (
-        operation !== forwardOperation.current ||
-        current.activeAccountId !== accountId ||
-        current.selectedMessage?.id !== messageId
-      )
-        return;
-      if (files.length === 0) {
-        setError(strings.reader.noFilesToAttach);
-        return;
-      }
-      openComposer({
-        sourceMessage: message,
-        composeMode,
-        quoteExcerpt: messageSelectionQuote(),
-        prefill: { attachments: files },
-      });
-    } catch (cause) {
-      const current = useAppStore.getState();
-      if (
-        operation === forwardOperation.current &&
-        current.activeAccountId === accountId &&
-        current.selectedMessage?.id === messageId
-      )
-        setError(String(cause));
-    } finally {
-      if (operation === forwardOperation.current) setPreparingForward(false);
-    }
-  }
-
-  async function forwardMessage() {
-    const message = useAppStore.getState().selectedMessage;
-    if (!message || preparingForward) return;
-    const operation = ++forwardOperation.current;
-    const messageId = message.id;
-    const accountId = message.accountId;
-    setPreparingForward(true);
-    try {
-      const attachments = await api.prepareForwardAttachments(
-        accountId,
-        messageId,
-      );
-      const current = useAppStore.getState();
-      if (
-        operation !== forwardOperation.current ||
-        current.activeAccountId !== accountId ||
-        current.selectedMessage?.id !== messageId
-      )
-        return;
-      openComposer({
-        sourceMessage: message,
-        composeMode: "forward",
-        prefill: { attachments },
-      });
-    } catch (cause) {
-      const current = useAppStore.getState();
-      if (
-        operation === forwardOperation.current &&
-        current.activeAccountId === accountId &&
-        current.selectedMessage?.id === messageId
-      )
-        setError(String(cause));
-    } finally {
-      if (operation === forwardOperation.current) setPreparingForward(false);
-    }
-  }
 
   if (settings.readingPane === "hidden" && !message)
     return (
@@ -2683,130 +1104,32 @@ export function MessageReader({
         }
         searchQuery={searchQuery}
       />
-      {isJunkMailbox || isTrashMailbox ? (
-        <div className="remote-content-banner warning" role="status">
-          <span>
-            {isJunkMailbox ? strings.reader.inJunk : strings.reader.inTrash}
-          </span>
-          <button type="button" onClick={moveToInbox}>
-            {isJunkMailbox
-              ? strings.reader.notJunk
-              : strings.reader.moveToInbox}
-          </button>
-        </div>
-      ) : null}
-      {onContinueDraft
-        ? (() => {
-            const replyDrafts = drafts.filter(
-              (draft) =>
-                draft.accountId === message.accountId &&
-                draft.sourceMessageId === message.id,
-            );
-            if (replyDrafts.length === 0) return null;
-            const kind = replyDrafts[0]?.sourceKind;
-            const note =
-              replyDrafts.length > 1
-                ? strings.reader.unsentDrafts(replyDrafts.length)
-                : kind === "forward"
-                  ? strings.reader.unsentForward
-                  : kind === "redirect"
-                    ? strings.reader.unsentRedirect
-                    : strings.reader.unsentReply;
-            return (
-              <div className="continue-draft">
-                <p role="status">{note}</p>
-                <button
-                  type="button"
-                  className="secondary-button"
-                  onClick={() => onContinueDraft(replyDrafts[0].id)}
-                >
-                  {strings.reader.continueDraft}
-                </button>
-              </div>
-            );
-          })()
-        : null}
-      {conversation.length > 1 ? (
-        <nav
-          className="conversation-index"
-          aria-label={strings.reader.conversationMessages}
-        >
-          {conversation.map((item) => {
-            const label = strings.reader.conversationMessage(
-              item.subject || strings.common.noSubject,
-              indexSender(item),
-              formatFullMessageDate(item.receivedAt),
-            );
-            return (
-              <button
-                key={item.id}
-                type="button"
-                aria-current={item.id === message.id ? "true" : undefined}
-                aria-label={
-                  item.isRead ? label : `${strings.mail.unread}, ${label}`
-                }
-                onClick={() => {
-                  if (item.id !== message.id) onOpenInConversation?.(item);
-                }}
-              >
-                <span>{item.subject || strings.common.noSubject}</span>
-                {!item.isRead ? (
-                  <span className="conversation-index-unread">
-                    {strings.mail.unread}
-                  </span>
-                ) : null}
-                <span className="conversation-index-sender">
-                  {indexSender(item)}
-                </span>
-                <time
-                  dateTime={item.receivedAt}
-                  title={formatFullMessageDate(item.receivedAt)}
-                >
-                  {formatMessageDate(item.receivedAt)}
-                </time>
-              </button>
-            );
-          })}
-        </nav>
-      ) : null}
-      {receiptView === "ask" ? (
-        <div className="remote-content-banner">
-          <span>
-            {strings.reader.readReceiptAsk(
-              message.senderName || message.senderAddress,
-              message.dispositionTo ?? "",
-            )}
-          </span>
-          <button
-            type="button"
-            disabled={receiptBusy}
-            onClick={() => void chooseReceipt(true)}
-          >
-            {strings.reader.sendReceipt}
-          </button>
-          <button
-            type="button"
-            disabled={receiptBusy}
-            onClick={() => void chooseReceipt(false)}
-          >
-            {strings.reader.declineReceipt}
-          </button>
-        </div>
-      ) : null}
-      {receiptView === "sent" ? (
-        <div className="remote-content-banner" role="status">
-          <span>{strings.reader.receiptSent}</span>
-        </div>
-      ) : null}
-      {unsubscribeSentFor === message.id ? (
-        <div className="remote-content-banner" role="status" aria-live="polite">
-          <ShieldCheck aria-hidden="true" />
-          <span>
-            <strong>{strings.reader.unsubscribeSent}</strong>{" "}
-            {strings.reader.unsubscribeSentDetail}
-          </span>
-        </div>
-      ) : null}
+      <JunkTrashBanner
+        isJunkMailbox={isJunkMailbox}
+        isTrashMailbox={isTrashMailbox}
+        onMoveToInbox={moveToInbox}
+      />
+      <ContinueDraftNotice
+        drafts={drafts}
+        message={message}
+        onContinueDraft={onContinueDraft}
+      />
+      <ConversationIndex
+        conversation={conversation}
+        message={message}
+        indexSender={indexSender}
+        onOpenInConversation={onOpenInConversation}
+      />
+      <ReadReceiptBanner
+        receiptView={receiptView}
+        message={message}
+        receiptBusy={receiptBusy}
+        chooseReceipt={chooseReceipt}
+      />
+      <UnsubscribeSentNotice
+        unsubscribeSentFor={unsubscribeSentFor}
+        message={message}
+      />
       {originalOpen ? (
         <OriginalDialog
           accountId={message.accountId}
