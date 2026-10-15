@@ -106,9 +106,9 @@ test("the select checkbox leads the wrap in select mode", async ({ page }) => {
 
 test("a selected row paints no accent outside the row", async ({ page }) => {
   await page.goto(`/${MIX}`);
-  await page.getByRole("option", { name: /Pinned reminder/i }).click();
+  await page.locator(".message-row", { hasText: /Pinned reminder/i }).click();
   await expect(
-    page.getByRole("option", { name: /Pinned reminder/i }),
+    page.locator(".message-row", { hasText: /Pinned reminder/i }),
   ).toHaveAttribute("aria-selected", "true");
   await page.mouse.move(2, 2);
   const stray = await page.evaluate(() => {

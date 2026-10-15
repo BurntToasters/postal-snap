@@ -2739,7 +2739,7 @@ export function MailShell({ onOpenSettings }: Props) {
       />
 
       <section
-        className="message-pane"
+        className={`message-pane${selecting ? " selecting" : ""}`}
         id="message-pane"
         aria-label={heading}
         data-list={activeLocalView ? "local" : undefined}

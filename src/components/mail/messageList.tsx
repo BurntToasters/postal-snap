@@ -40,6 +40,7 @@ import {
   messageDragPayload,
 } from "../../messageDrag";
 import { HighlightedText } from "../HighlightedText";
+import { RowActions } from "./rowActions";
 import { highlightTerms } from "../../searchHighlight";
 import { useAppStore } from "../../store";
 import { groupThreads, pinnedFirst } from "../../threads";
@@ -485,67 +486,41 @@ export function MessageList({
     onToggleRead?.(option.message);
   }
 
-  function starControl(
+  function rowActions(
     message: MessageSummary,
-    pressed: boolean,
-    conversation = false,
-  ) {
-    if (selecting || !onToggleStar) return null;
-    const label = conversation
-      ? pressed
-        ? strings.reader.unstarConversation
-        : strings.reader.starConversation
-      : pressed
-        ? strings.reader.removeStar
-        : strings.reader.addStar;
-    return (
-      <button
-        type="button"
-        className={`message-star-hit${pressed ? " starred" : ""}`}
-        aria-pressed={pressed}
-        aria-label={label}
-        title={label}
-        // Pointer shortcut only: the row names the state, and keys and the menu act on it.
-        aria-hidden="true"
-        tabIndex={-1}
-        onClick={() => {
-          if (conversation) onToggleConversationStar?.(message, !pressed);
-          else onToggleStar(message);
-        }}
-      >
-        <Star fill={pressed ? "currentColor" : "none"} aria-hidden="true" />
-      </button>
-    );
-  }
-
-  function readControl(
-    message: MessageSummary,
+    conversation: boolean,
+    starred: boolean,
     unread: boolean,
-    conversation = false,
   ) {
-    if (selecting || !onToggleRead) return null;
-    const label = conversation
-      ? unread
-        ? strings.reader.markConversationRead
-        : strings.reader.markConversationUnread
-      : unread
-        ? strings.reader.markRead
-        : strings.reader.markUnread;
+    if (selecting) return null;
+    const role = mailboxes.find((box) => box.id === message.mailboxId)?.role;
     return (
-      <button
-        type="button"
-        className={`message-read-hit${unread ? " unread" : ""}`}
-        aria-label={label}
-        title={label}
-        aria-hidden="true"
-        tabIndex={-1}
-        onClick={() => {
-          if (conversation) onToggleConversationRead?.(message, unread);
-          else onToggleRead(message);
-        }}
-      >
-        <span className="unread-dot" data-unread={unread} aria-hidden="true" />
-      </button>
+      <RowActions
+        message={message}
+        conversation={conversation}
+        starred={starred}
+        unread={unread}
+        fromArchive={role === "archive"}
+        inTrash={role === "trash"}
+        onStar={
+          onToggleStar
+            ? () => {
+                if (conversation) onToggleConversationStar?.(message, !starred);
+                else onToggleStar(message);
+              }
+            : undefined
+        }
+        onRead={
+          onToggleRead
+            ? () => {
+                if (conversation) onToggleConversationRead?.(message, unread);
+                else onToggleRead(message);
+              }
+            : undefined
+        }
+        onArchive={onArchiveFocused}
+        onTrash={onTrashFocused}
+      />
     );
   }
 
@@ -853,9 +828,10 @@ export function MessageList({
       .filter(Boolean)
       .join(", ");
     return (
-      <div key={message.id} className="message-row-wrap">
-        {starControl(message, message.isStarred)}
-        {readControl(message, !message.isRead)}
+      <div
+        key={message.id}
+        className={`message-row-wrap${!selecting && isSelected ? " selected" : ""}`}
+      >
         {selecting ? (
           // A compact checkbox inside a full 44px click target.
           <label className="message-select-hit">
@@ -907,6 +883,13 @@ export function MessageList({
           </span>
           <MessageWhen message={message} />
           <span className="message-subject">
+            {message.isStarred ? (
+              <Star
+                className="message-mark star-mark"
+                fill="currentColor"
+                aria-hidden="true"
+              />
+            ) : null}
             {folder ? <span className="message-folder">{folder}</span> : null}
             {message.pinned ? (
               <Pin className="message-mark pin-mark" aria-hidden="true" />
@@ -951,6 +934,7 @@ export function MessageList({
             </span>
           ) : null}
         </button>
+        {rowActions(message, false, message.isStarred, !message.isRead)}
       </div>
     );
   }
@@ -989,9 +973,9 @@ export function MessageList({
     const childrenId = `thread-children-${listId}-${index}`;
     return (
       <div key={group.key} className="thread-group">
-        <div className="message-row-wrap thread-header-wrap">
-          {starControl(group.newest, conversationStarred, true)}
-          {readControl(group.newest, group.unread > 0, true)}
+        <div
+          className={`message-row-wrap thread-header-wrap${group.newest.id === selectedId ? " selected" : ""}`}
+        >
           <button
             type="button"
             role="treeitem"
@@ -1060,6 +1044,13 @@ export function MessageList({
             </span>
             <MessageWhen message={group.newest} />
             <span className="message-subject">
+              {conversationStarred ? (
+                <Star
+                  className="message-mark star-mark"
+                  fill="currentColor"
+                  aria-hidden="true"
+                />
+              ) : null}
               {headerFolder ? (
                 <span className="message-folder">{headerFolder}</span>
               ) : null}
@@ -1105,6 +1096,12 @@ export function MessageList({
               </span>
             ) : null}
           </button>
+          {rowActions(
+            group.newest,
+            true,
+            conversationStarred,
+            group.unread > 0,
+          )}
         </div>
         {expanded ? (
           <div role="group" id={childrenId} className="thread-children">

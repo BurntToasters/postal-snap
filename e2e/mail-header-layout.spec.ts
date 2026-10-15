@@ -83,7 +83,10 @@ test("reader and mailbox bars align and shrink after text scaling", async ({
   page.on("pageerror", (error) => errors.push(error.message));
   await installMockIpc(page);
   await page.goto("/?density=compact&scale=2&pane=right");
-  await page.getByRole("option", { name: /Weekend plans/i }).click();
+  // At 200% the hover cluster covers the row center; click the left side.
+  await page
+    .getByRole("option", { name: /Weekend plans/i })
+    .click({ position: { x: 24, y: 16 } });
   const heights = () =>
     page.evaluate(() => {
       const bar = document
