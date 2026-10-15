@@ -479,3 +479,32 @@ test("selected read message shows no unread dot", async ({ page }) => {
   );
   await row.screenshot({ path: "test-results/ui-polish-read-selected.png" });
 });
+
+// A queued pre-open list scroll must not dismiss the menu. New list scrolling must.
+test("context menu ignores completed list scrolling and closes on new scrolling", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/?nestedFolders=1&scale=2");
+  await page
+    .getByRole("option", { name: /Weekend plans/i })
+    .click({ button: "right" });
+  const menu = page.getByRole("menu", { name: "Actions" });
+  await expect(
+    menu.getByRole("menuitem", { name: "Move to Projects / 2026 / Launch" }),
+  ).toBeVisible();
+  await page
+    .locator(".message-list")
+    .evaluate((list) => list.dispatchEvent(new Event("scroll")));
+  await expect(menu).toBeVisible();
+  await menu.evaluate((node) => {
+    node.scrollTop = 100;
+  });
+  await expect(menu).toBeVisible();
+  await page.locator(".message-list").evaluate((list) => {
+    list.scrollTop = list.scrollTop > 0 ? 0 : 32;
+  });
+  await expect(menu).toHaveCount(0);
+  const path = testInfo.outputPath("context-menu-list-scroll.png");
+  await page.screenshot({ path });
+  await testInfo.attach("screenshot", { path, contentType: "image/png" });
+});
