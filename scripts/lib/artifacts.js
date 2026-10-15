@@ -77,3 +77,10 @@ export function artifactArch(name) {
   if (/macOS/i.test(name)) return "universal";
   return undefined;
 }
+
+// Stable releases ship both feeds; beta releases ship only the beta feed.
+export function updaterManifestNames(platform, arch, version) {
+  const beta = `latest-${platform}-beta-${arch}.json`;
+  if (String(version).includes("-")) return [beta];
+  return [`latest-${platform}-${arch}.json`, beta];
+}

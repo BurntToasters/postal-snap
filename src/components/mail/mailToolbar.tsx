@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useId,
   useLayoutEffect,
   useState,
@@ -7,7 +8,12 @@ import {
   type RefObject,
 } from "react";
 import { MailPlus, PanelLeft, RefreshCw, Search, Settings } from "lucide-react";
+import {
+  CONTEXT_ACTION_EVENT,
+  type ContextMenuActionDetail,
+} from "../../contextMenu";
 import { strings } from "../../i18n";
+import { moveMenuFocus } from "../toolbarNav";
 import { GetMailMenu } from "./getMailMenu";
 import { SearchTips } from "./searchTips";
 
@@ -124,10 +130,68 @@ export function SearchBox({
       return;
     }
     if (!showRecent) return;
-    if (event.key !== "ArrowDown") return;
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
     event.preventDefault();
-    const menu = document.getElementById(menuId);
-    menu?.querySelector<HTMLButtonElement>("[role='menuitem']")?.focus();
+    const items = document
+      .getElementById(menuId)
+      ?.querySelectorAll<HTMLButtonElement>("[role='menuitem']");
+    if (!items?.length) return;
+    items[event.key === "ArrowDown" ? 0 : items.length - 1].focus();
+  }
+
+  // Forgets one entry and moves focus to a neighbor, or the field if last.
+  function forgetRecent(recent: string) {
+    const items = [
+      ...(document
+        .getElementById(menuId)
+        ?.querySelectorAll<HTMLElement>("[role='menuitem']") ?? []),
+    ];
+    const at = items.findIndex((node) => node.dataset.recent === recent);
+    const next =
+      items[at + 1]?.dataset.recent !== undefined
+        ? items[at + 1]
+        : items.find(
+            (node, i) => i !== at && node.dataset.recent !== undefined,
+          );
+    onForgetRecent(recent);
+    if (next) next.focus();
+    else inputRef.current?.focus();
+  }
+
+  useEffect(() => {
+    const onAction = (event: Event) => {
+      const detail = (event as CustomEvent<ContextMenuActionDetail>).detail;
+      if (
+        detail?.id === "forget-recent-search" &&
+        detail.target?.kind === "recent-search"
+      ) {
+        forgetRecent(detail.target.query);
+      }
+    };
+    window.addEventListener(CONTEXT_ACTION_EVENT, onAction);
+    return () => window.removeEventListener(CONTEXT_ACTION_EVENT, onAction);
+  });
+
+  function onMenuKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      inputRef.current?.focus();
+      setOpen(false);
+      return;
+    }
+    if (event.key === "Tab") {
+      setOpen(false);
+      return;
+    }
+    if (event.key === "Delete" || event.key === "Backspace") {
+      const recent = (event.target as HTMLElement).dataset.recent;
+      if (recent === undefined) return;
+      event.preventDefault();
+      forgetRecent(recent);
+      return;
+    }
+    moveMenuFocus(event);
   }
 
   return (
@@ -159,42 +223,32 @@ export function SearchBox({
           role="menu"
           aria-label={strings.mail.recentSearches}
           onMouseDown={(event) => event.preventDefault()}
-          onKeyDown={(event) => {
-            if (event.key !== "Escape") return;
-            event.preventDefault();
-            event.stopPropagation();
-            setOpen(false);
-            inputRef.current?.focus();
-          }}
+          onKeyDown={onMenuKeyDown}
         >
           <div className="context-menu-heading">
             {strings.mail.recentSearches}
           </div>
           {recentSearches.map((recent) => (
-            <div key={recent} className="search-recent-row">
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setOpen(false);
-                  onPickRecent(recent);
-                }}
-              >
-                {recent}
-              </button>
-              <button
-                type="button"
-                className="search-recent-forget"
-                aria-label={strings.mail.forgetRecentSearch(recent)}
-                onClick={() => onForgetRecent(recent)}
-              >
-                ×
-              </button>
-            </div>
+            <button
+              key={recent}
+              type="button"
+              role="menuitem"
+              tabIndex={-1}
+              data-recent={recent}
+              data-context="recent-search"
+              title={strings.mail.forgetRecentHint}
+              onClick={() => {
+                setOpen(false);
+                onPickRecent(recent);
+              }}
+            >
+              {recent}
+            </button>
           ))}
           <button
             type="button"
             role="menuitem"
+            tabIndex={-1}
             onClick={() => {
               setOpen(false);
               onClearRecent();
@@ -210,12 +264,10 @@ export function SearchBox({
           className="search-scope"
           type="button"
           aria-pressed={allFolders}
-          title={
-            allFolders ? strings.mail.thisAccount : strings.mail.thisMailbox
-          }
+          title={strings.mail.searchAllFoldersTitle}
           onClick={onToggleScope}
         >
-          {allFolders ? strings.mail.thisAccount : strings.mail.thisMailbox}
+          {strings.mail.searchAllFolders}
         </button>
       ) : null}
     </form>
@@ -274,6 +326,11 @@ export function MailToolbar({
           type="button"
           onClick={onToggleSidebar}
           aria-label={
+            sidebarExpanded
+              ? strings.mail.hideMailboxes
+              : strings.mail.showMailboxes
+          }
+          title={
             sidebarExpanded
               ? strings.mail.hideMailboxes
               : strings.mail.showMailboxes

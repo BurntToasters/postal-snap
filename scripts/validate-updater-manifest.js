@@ -8,7 +8,7 @@ export function validateManifest(manifest) {
   if (!manifest.platforms || typeof manifest.platforms !== "object")
     throw new Error("Manifest platforms object is required.");
   for (const [platform, entry] of Object.entries(manifest.platforms)) {
-    if (!/^(windows|darwin|linux)-(x86_64|aarch64)$/.test(platform))
+    if (!/^(windows|darwin|linux)-(x86_64|aarch64|beta)$/.test(platform))
       throw new Error(`Unsupported updater platform: ${platform}`);
     if (
       !entry.url?.startsWith(

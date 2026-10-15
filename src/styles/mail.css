@@ -320,6 +320,12 @@
   background: var(--accent-soft);
 }
 
+@media (forced-colors: active) {
+  .search-scope[aria-pressed="true"] {
+    border: 2px solid Highlight;
+  }
+}
+
 .update-ready-badge {
   display: inline-flex;
   align-items: center;
@@ -525,8 +531,17 @@
   white-space: normal;
 }
 
-.account-switcher-menu > [aria-current="true"] {
+.account-switcher-menu > [aria-current="true"],
+.account-switcher-menu > [aria-checked="true"] {
   background: var(--surface-hover);
+}
+
+@media (forced-colors: active) {
+  .account-switcher-menu > [aria-current="true"],
+  .account-switcher-menu > [aria-checked="true"] {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
 }
 
 .account-switcher-copy {
@@ -806,7 +821,7 @@
 
 .folder-expand {
   flex: 0 0 auto;
-  width: 24px;
+  width: min(var(--target-size-inset), 2rem);
   min-height: var(--target-size);
   padding: 0;
   display: flex;
@@ -833,7 +848,7 @@
 }
 
 .folder-expand-spacer {
-  flex: 0 0 24px;
+  flex: 0 0 min(var(--target-size-inset), 2rem);
 }
 
 .folder-dialog {

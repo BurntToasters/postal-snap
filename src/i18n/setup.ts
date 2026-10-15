@@ -18,6 +18,7 @@ export const setup = {
   title: "Add your email",
   intro: "Choose an account. Password stays in your computer’s secure vault.",
   progress: "Setup progress",
+  stepCompleted: "completed",
   chooseAccount: "Choose account",
   signIn: "Sign in securely",
   recommended: "Recommended",

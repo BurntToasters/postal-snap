@@ -19,7 +19,7 @@ test("renaming a nested folder keeps the folders above it", async ({
   page,
 }) => {
   await page.goto("/?nestedFolders=1");
-  await page.getByRole("button", { name: "Rename 2026" }).click();
+  await page.getByRole("button", { name: "Rename folder 2026" }).click();
   await expect(page.getByText("Inside Projects")).toBeVisible();
   const input = page.getByPlaceholder("Folder name");
   await expect(input).toHaveValue("2026");

@@ -45,13 +45,13 @@ test("badges show other-account unread with spoken counts", async ({
     /^3\s*3 unread in other accounts$/,
   );
   await trigger.click();
-  const work = page.getByRole("menuitem", { name: /Work.*3 unread/ });
+  const work = page.getByRole("menuitemradio", { name: /Work.*3 unread/ });
   await expect(work).toBeVisible();
   await expect(work.locator(".account-unread [aria-hidden='true']")).toHaveText(
     "3",
   );
   await expect(
-    page.getByRole("menuitem", { name: /Sam.*1 unread/ }),
+    page.getByRole("menuitemradio", { name: /Sam.*1 unread/ }),
   ).toBeVisible();
   expect(await commandCount(page, "get_account_inbox_counts")).toBeGreaterThan(
     0,
@@ -68,7 +68,7 @@ test("badges hide at zero and cap the visible count", async ({ page }) => {
   const menu = page.getByRole("menu", { name: "Email accounts" });
   await expect(menu.locator(".account-unread")).toHaveCount(1);
   await expect(
-    menu.getByRole("menuitem", { name: /Sam/ }).locator(".account-unread"),
+    menu.getByRole("menuitemradio", { name: /Sam/ }).locator(".account-unread"),
   ).toHaveCount(0);
 });
 

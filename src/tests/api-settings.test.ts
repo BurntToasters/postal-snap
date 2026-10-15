@@ -63,6 +63,7 @@ const settings = (theme: AppSettings["theme"]): AppSettings => ({
   notifyNewMail: true,
   closeToTray: true,
   updateCheckInterval: "startupAnd6h",
+  updateChannel: "auto",
   setupCompleted: true,
   setupStep: null,
 });

@@ -19,7 +19,9 @@ test("moving an account changes the switcher order", async ({ page }) => {
   await page.goto("/?multiAccount=1");
   await page.getByRole("button", { name: /Sam.*sam@icloud\.com/i }).click();
   const switcher = page.getByRole("menu", { name: "Email accounts" });
-  await expect(switcher.getByRole("menuitem").first()).toContainText("Sam");
+  await expect(switcher.getByRole("menuitemradio").first()).toContainText(
+    "Sam",
+  );
   await page.keyboard.press("Escape");
 
   await page.getByRole("button", { name: "Settings" }).click();
@@ -36,7 +38,7 @@ test("moving an account changes the switcher order", async ({ page }) => {
   await expect(
     page
       .getByRole("menu", { name: "Email accounts" })
-      .getByRole("menuitem")
+      .getByRole("menuitemradio")
       .first(),
   ).toContainText("Work");
 });

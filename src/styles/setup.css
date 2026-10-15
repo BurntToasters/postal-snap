@@ -149,7 +149,7 @@
 .provider-button {
   display: grid;
   width: 100%;
-  min-height: 82px;
+  min-height: var(--provider-button-height);
   grid-template-columns: 50px 1fr auto;
   align-items: center;
   gap: 14px;

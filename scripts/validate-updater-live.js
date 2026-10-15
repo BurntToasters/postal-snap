@@ -1,4 +1,5 @@
 import { basename, join } from "node:path";
+import { updaterManifestNames } from "./lib/artifacts.js";
 import { json } from "./lib/json.js";
 import { process, root } from "./lib/paths.js";
 import { validateManifest } from "./validate-updater-manifest.js";
@@ -14,10 +15,7 @@ const targets = [
 ];
 const optionalTargets = [["linux", "aarch64"]];
 
-export function updaterManifestName(platform, arch, version) {
-  const channel = String(version).includes("-") ? "-beta" : "";
-  return `latest-${platform}${channel}-${arch}.json`;
-}
+export { updaterManifestNames };
 
 function isOptionalTarget(platform, arch) {
   return optionalTargets.some(
@@ -36,26 +34,27 @@ export function isDirectRun(argv1) {
 
 async function main() {
   for (const [platform, arch] of [...targets, ...optionalTargets]) {
-    const filename = updaterManifestName(platform, arch, pkg.version);
-    const url = `https://github.com/BurntToasters/postal-snap/releases/latest/download/${filename}`;
-    const response = await fetch(url);
-    if (!response.ok) {
-      if (shouldSkipMissingTarget(platform, arch, response.status)) {
-        console.log(
-          `Skipping optional updater manifest ${filename} (HTTP ${response.status}).`,
+    for (const filename of updaterManifestNames(platform, arch, pkg.version)) {
+      const url = `https://github.com/BurntToasters/postal-snap/releases/latest/download/${filename}`;
+      const response = await fetch(url);
+      if (!response.ok) {
+        if (shouldSkipMissingTarget(platform, arch, response.status)) {
+          console.log(
+            `Skipping optional updater manifest ${filename} (HTTP ${response.status}).`,
+          );
+          continue;
+        }
+        throw new Error(
+          `Missing updater manifest ${filename}: ${url} returned HTTP ${response.status}`,
         );
-        continue;
       }
-      throw new Error(
-        `Missing updater manifest ${filename}: ${url} returned HTTP ${response.status}`,
-      );
+      const manifest = await response.json();
+      validateManifest(manifest);
+      if (expectedCurrent && manifest.version !== pkg.version)
+        throw new Error(
+          `${filename} points to ${manifest.version}; expected ${pkg.version}`,
+        );
     }
-    const manifest = await response.json();
-    validateManifest(manifest);
-    if (expectedCurrent && manifest.version !== pkg.version)
-      throw new Error(
-        `${platform}-${arch} points to ${manifest.version}; expected ${pkg.version}`,
-      );
   }
 }
 

@@ -44,9 +44,9 @@ test("invitation card shows local time, plain location, and no RSVP", async ({
   await attachArtifacts(page, testInfo, "invite-card-request");
 });
 
-test("a cancellation is labelled Cancelled", async ({ page }, testInfo) => {
+test("a cancellation is labelled Canceled", async ({ page }, testInfo) => {
   const card = await open(page, "?invite=cancel");
-  await expect(card).toContainText("Cancelled");
+  await expect(card).toContainText("Canceled");
   await expect(card).not.toContainText("Invitation");
   await expect(card).toHaveAttribute("data-cancelled", "true");
   await attachArtifacts(page, testInfo, "invite-card-cancel");

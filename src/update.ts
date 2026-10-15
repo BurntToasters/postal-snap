@@ -3,7 +3,7 @@ import { flushOpenDraft } from "./draftFlush";
 import { strings } from "./i18n";
 import { closesToTrayOnClose } from "./settings";
 import { useAppStore } from "./store";
-import type { AppSettings, UpdateCheckInterval } from "./types";
+import type { AppSettings, UpdateChannel, UpdateCheckInterval } from "./types";
 
 export interface UpdateCheckResult {
   available: boolean;
@@ -23,6 +23,16 @@ interface DownloadedUpdate {
   version: string;
   download: () => Promise<void>;
   install: (options?: { restartAfterInstall?: boolean }) => Promise<void>;
+  // Plugin Update objects are native resources.
+  close?: () => Promise<void>;
+}
+
+function releaseUpdate(update: DownloadedUpdate | null | undefined): void {
+  try {
+    void Promise.resolve(update?.close?.()).catch(() => undefined);
+  } catch {
+    // A failed release must not break the update flow.
+  }
 }
 
 let updateInFlight: Promise<UpdateCheckResult> | undefined;
@@ -81,6 +91,60 @@ function markUpdateReady(update: DownloadedUpdate): void {
   for (const listener of updateReadyListeners) listener();
 }
 
+/** Drops a downloaded update, e.g. after the update channel changes. */
+export function discardPendingUpdate(): void {
+  releaseUpdate(pendingPackage);
+  pendingPackage = undefined;
+  updateReadyVersion = undefined;
+  useAppStore.getState().setUpdateReady(null);
+  void api.setUpdateReady(false).catch(() => undefined);
+}
+
+/** Drops the old channel's update and checks the new channel now. */
+export function onUpdateChannelChanged(): void {
+  discardPendingUpdate();
+  // A running interactive check re-runs itself on the new channel.
+  if (interactiveInFlight) return;
+  void runUpdateSingleFlight().catch(() => undefined);
+}
+
+function currentChannel(): UpdateChannel {
+  return useAppStore.getState().settings.updateChannel;
+}
+
+/** Updater target for the channel; undefined selects the stable manifest. */
+export async function resolveUpdateTarget(
+  channel: UpdateChannel,
+): Promise<string | undefined> {
+  if (channel === "stable") return undefined;
+  if (channel === "beta") return api.getBetaUpdaterTarget();
+  const { getVersion } = await import("@tauri-apps/api/app");
+  return (await getVersion()).includes("-")
+    ? api.getBetaUpdaterTarget()
+    : undefined;
+}
+
+// Beta manifests are re-uploaded with --clobber, leaving a brief 404 gap.
+let betaRetryDelayMs = 2000;
+
+export function setBetaRetryDelayForTesting(ms: number): void {
+  betaRetryDelayMs = ms;
+}
+
+async function checkForChannel(channel: UpdateChannel) {
+  const target = await resolveUpdateTarget(channel);
+  const { check } = await import("@tauri-apps/plugin-updater");
+  if (!target) return check();
+  try {
+    const first = await check({ target });
+    if (first) return first;
+  } catch {
+    // Retry once below.
+  }
+  await new Promise((resolve) => setTimeout(resolve, betaRetryDelayMs));
+  return check({ target });
+}
+
 function notifyUpdateFound(version: string): void {
   updateFound = true;
   updateVersion = version;
@@ -107,18 +171,30 @@ export function runUpdateSingleFlight(
     if (!(await updatesManagedByPostalSnap())) {
       return { available: false };
     }
-    const { check } = await import("@tauri-apps/plugin-updater");
-    const update = await check();
-    // A check only counts once nothing is left to download.
-    if (!update) {
+    // One re-run on the new channel if it changes mid-check; no loop.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const channel = currentChannel();
+      const update = await checkForChannel(channel);
+      if (currentChannel() !== channel) {
+        releaseUpdate(update);
+        continue;
+      }
+      // A check only counts once nothing is left to download.
+      if (!update) {
+        void api.markUpdateChecked().catch(() => undefined);
+        return { available: false };
+      }
+      notifyUpdateFound(update.version);
+      await update.download();
+      if (currentChannel() !== channel) {
+        releaseUpdate(update);
+        continue;
+      }
+      markUpdateReady(update);
       void api.markUpdateChecked().catch(() => undefined);
-      return { available: false };
+      return { available: true, version: update.version };
     }
-    notifyUpdateFound(update.version);
-    await update.download();
-    markUpdateReady(update);
-    void api.markUpdateChecked().catch(() => undefined);
-    return { available: true, version: update.version };
+    return { available: false };
   })();
   updateInFlight = task;
   const cleanup = () => {
@@ -240,31 +316,50 @@ export async function checkUpdateInteractive(): Promise<void> {
       if (!(await updatesManagedByPostalSnap())) {
         return;
       }
-      const { check } = await import("@tauri-apps/plugin-updater");
-      const update = await check();
-      if (!update) {
-        void api.markUpdateChecked().catch(() => undefined);
-        await api.showNativeMessage(
-          strings.update.upToDateTitle,
-          strings.update.upToDateMessage,
-        );
+      // One re-run on the new channel if it changes mid-check; no loop.
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const channel = currentChannel();
+        const update = await checkForChannel(channel);
+        if (currentChannel() !== channel) {
+          releaseUpdate(update);
+          continue;
+        }
+        if (!update) {
+          void api.markUpdateChecked().catch(() => undefined);
+          await api.showNativeMessage(
+            strings.update.upToDateTitle,
+            strings.update.upToDateMessage,
+          );
+          return;
+        }
+
+        notifyUpdateFound(update.version);
+        let stale = false;
+        try {
+          await update.download();
+          stale = currentChannel() !== channel;
+          if (stale) {
+            releaseUpdate(update);
+          } else {
+            markUpdateReady(update);
+            void api.markUpdateChecked().catch(() => undefined);
+          }
+        } catch {
+          await api.showNativeMessage(
+            strings.update.downloadErrorTitle,
+            strings.update.downloadErrorMessage,
+          );
+          return;
+        }
+        if (stale) continue;
+
+        await promptToRestartForUpdate(update.version);
         return;
       }
-
-      notifyUpdateFound(update.version);
-      try {
-        await update.download();
-        markUpdateReady(update);
-        void api.markUpdateChecked().catch(() => undefined);
-      } catch {
-        await api.showNativeMessage(
-          strings.update.downloadErrorTitle,
-          strings.update.downloadErrorMessage,
-        );
-        return;
-      }
-
-      await promptToRestartForUpdate(update.version);
+      await api.showNativeMessage(
+        strings.update.checkErrorTitle,
+        strings.update.channelChangedMessage,
+      );
     } catch {
       await api.showNativeMessage(
         strings.update.checkErrorTitle,

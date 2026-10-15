@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronRight, Inbox, Search } from "lucide-react";
+import { ChevronRight, Inbox, Search, X } from "lucide-react";
 import { folderLabel, folderPathLabel } from "../../i18n/mail";
 import { strings } from "../../i18n";
 import type { MailboxRole, MailboxSummary } from "../../types";
@@ -82,9 +82,10 @@ export function FolderTree({
               type="button"
               className="icon-button"
               aria-label={strings.mail.clearSearch}
+              title={strings.mail.clearSearch}
               onClick={() => setQuery("")}
             >
-              <span aria-hidden="true">×</span>
+              <X aria-hidden="true" />
             </button>
           ) : null}
         </div>
@@ -172,7 +173,9 @@ function FolderTreeNode({
     return (
       <form
         className="folder-dialog"
-        style={{ paddingInlineStart: `${depth * 16}px` }}
+        style={{
+          paddingInlineStart: `calc(var(--folder-indent, 1rem) * ${depth})`,
+        }}
         onKeyDown={onFolderDialogKeyDown}
         onSubmit={(event) => {
           event.preventDefault();
@@ -216,7 +219,9 @@ function FolderTreeNode({
     <>
       <div
         className="folder-tree-row"
-        style={{ paddingInlineStart: `${depth * 16}px` }}
+        style={{
+          paddingInlineStart: `calc(var(--folder-indent, 1rem) * ${depth})`,
+        }}
       >
         {hasChildren ? (
           <button
@@ -227,7 +232,12 @@ function FolderTreeNode({
               setPendingCollapsed(nextCollapsed);
               onToggleCollapsed?.(mailbox.id, nextCollapsed);
             }}
-            aria-label={open ? `Collapse ${label}` : `Expand ${label}`}
+            aria-label={
+              open
+                ? strings.mail.collapseFolder(label)
+                : strings.mail.expandFolder(label)
+            }
+            aria-expanded={open}
           >
             <ChevronRight
               aria-hidden="true"

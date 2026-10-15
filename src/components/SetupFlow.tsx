@@ -121,6 +121,11 @@ export function SetupFlow({
                 {position < index ? <Check /> : position + 1}
               </span>
               <small>{STEP_LABELS[value]}</small>
+              {position < index ? (
+                <span className="visually-hidden">
+                  {strings.setup.stepCompleted}
+                </span>
+              ) : null}
             </div>
           ))}
         </div>

@@ -18,8 +18,8 @@ textarea {
 /* Radios and checkboxes keep native size; the global width/padding above
    otherwise stretches them across flex rows. */
 input:where([type="radio"], [type="checkbox"]) {
-  width: 20px;
-  height: 20px;
+  width: 1.25rem;
+  height: 1.25rem;
   flex: none;
   margin: 0;
   padding: 0;
@@ -173,7 +173,7 @@ legend {
 .settings-row,
 .switch-row {
   display: flex;
-  min-height: 52px;
+  min-height: var(--settings-row-height);
   align-items: center;
   justify-content: space-between;
   gap: 18px;
@@ -227,9 +227,12 @@ legend {
 
 .switch-row input {
   position: relative;
-  width: 50px;
+  --sw-h: min(1.75rem, calc(var(--target-size) - 2px));
+  --sw-w: calc(var(--sw-h) * 1.64);
+  --sw-knob: calc(var(--sw-h) - 6px);
+  width: calc(var(--sw-w) + 0.25rem);
   height: var(--target-size);
-  min-width: 50px;
+  min-width: calc(var(--sw-w) + 0.25rem);
   min-height: var(--target-size);
   padding: 0;
   appearance: none;
@@ -251,10 +254,11 @@ legend {
 }
 
 .switch-row input::before {
-  top: 8px;
-  left: 2px;
-  width: 46px;
-  height: 28px;
+  top: 50%;
+  left: 0.125rem;
+  width: var(--sw-w);
+  height: var(--sw-h);
+  translate: 0 -50%;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-pill);
   background: color-mix(in srgb, var(--surface-sunken) 72%, var(--surface));
@@ -262,10 +266,11 @@ legend {
 }
 
 .switch-row input::after {
-  top: 11px;
-  left: 5px;
-  width: 22px;
-  height: 22px;
+  top: 50%;
+  left: calc(0.125rem + 3px);
+  width: var(--sw-knob);
+  height: var(--sw-knob);
+  translate: 0 -50%;
   border-radius: 50%;
   background: white;
   box-shadow: 0 1px 3px rgb(0 0 0 / 32%);
@@ -277,7 +282,7 @@ legend {
 }
 
 .switch-row input:checked::after {
-  transform: translateX(18px);
+  transform: translateX(calc(var(--sw-w) - var(--sw-knob) - 6px));
 }
 
 .switch-row input:focus-visible {

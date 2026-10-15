@@ -110,7 +110,7 @@ export function AttachmentPreviewDialog({
       >
         <header>
           <div>
-            <h2>{preview.filename}</h2>
+            <h2 title={preview.filename}>{preview.filename}</h2>
             <small>
               {fileKind(preview.contentType)} · {formatBytes(preview.size)}
             </small>

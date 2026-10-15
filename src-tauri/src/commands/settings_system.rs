@@ -142,6 +142,19 @@ pub async fn clear_downloaded_mail(state: State<'_, AppState>) -> CommandResult<
     command_result(result)
 }
 
+/// Updater target for the beta manifests, e.g. `darwin-beta`.
+#[tauri::command]
+pub fn get_beta_updater_target() -> String {
+    let os = if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "darwin"
+    } else {
+        "linux"
+    };
+    format!("{os}-beta")
+}
+
 #[tauri::command]
 pub fn get_distribution_channel() -> DistributionChannel {
     if cfg!(feature = "mas") {

@@ -392,6 +392,7 @@ describe("small settings tabs", () => {
       <AdvancedTab
         setAdvertisingBlocking={setAdvertisingBlocking}
         setThreatBlocking={setThreatBlocking}
+        update={vi.fn().mockResolvedValue(undefined)}
       />,
     );
     const toggles = screen.getAllByRole("checkbox");
@@ -407,6 +408,7 @@ describe("small settings tabs", () => {
       <AdvancedTab
         setAdvertisingBlocking={setAdvertisingBlocking}
         setThreatBlocking={setThreatBlocking}
+        update={vi.fn().mockResolvedValue(undefined)}
       />,
     );
     expect(screen.getByRole("status")).toHaveTextContent(

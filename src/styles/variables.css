@@ -77,6 +77,10 @@
   --target-size-inset: var(--target-size);
   --bar-height-sm: 48px;
   --bar-height-md: 56px;
+  --settings-row-height: 52px;
+  --button-lg-height: 50px;
+  --provider-button-height: 82px;
+  --folder-indent: 1rem;
   --control-pad-block: 8px;
   --row-pad-block: 7px;
   --toolbar-pad-block: 7px;
@@ -235,10 +239,14 @@
      cover the default density only. rem values scale with text size. */
   --control-height: 2rem;
   --toolbar-height: 3rem;
-  --target-size: 2rem;
-  --target-size-inset: 1.75rem;
-  --bar-height-sm: 2.5rem;
-  --bar-height-md: 2.75rem;
+  --target-size: min(2rem, 44px);
+  --target-size-inset: min(1.75rem, 44px);
+  --settings-row-height: min(2.5rem, 52px);
+  --button-lg-height: min(2.25rem, 50px);
+  --provider-button-height: min(3.5rem, 82px);
+  --folder-indent: 0.75rem;
+  --bar-height-sm: min(2.5rem, 48px);
+  --bar-height-md: min(2.75rem, 56px);
   --control-pad-block: 4px;
   --row-pad-block: 4px;
   --toolbar-pad-block: 5px;
@@ -250,9 +258,9 @@
   --sidebar-gap: 1px;
   --pane-heading-height: 2.75rem;
   --pane-heading-pad-block: 4px;
-  --message-row-height: 3.25rem;
+  --message-row-height: min(3.25rem, 88px);
   --message-row-pad-block: 6px;
-  --list-row-height: 3.5rem;
+  --list-row-height: min(3.5rem, 72px);
   --list-row-pad-block: 8px;
   --space-3: 0.625rem;
   --space-4: 0.75rem;

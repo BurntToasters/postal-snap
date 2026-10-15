@@ -564,7 +564,7 @@ test.describe("whole-app responsive UI", () => {
       "Accounts",
       "Shortcuts",
       "Updates",
-      "Privacy & Security",
+      "Advanced",
       "About",
     ];
     for (const name of names) {

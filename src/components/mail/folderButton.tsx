@@ -107,8 +107,8 @@ export function FolderButton({
           type="button"
           className="icon-button folder-action"
           onClick={onRename}
-          aria-label={`${strings.mail.rename} ${label}`}
-          title={`${strings.mail.rename} ${label}`}
+          aria-label={strings.mail.renameFolderNamed(label)}
+          title={strings.mail.renameFolderNamed(label)}
         >
           <Pencil aria-hidden="true" />
         </button>
@@ -118,8 +118,8 @@ export function FolderButton({
           type="button"
           className="icon-button folder-action"
           onClick={onDelete}
-          aria-label={`${strings.mail.deleteFolder}: ${label}`}
-          title={`${strings.mail.deleteFolder}: ${label}`}
+          aria-label={strings.mail.deleteFolderNamed(label)}
+          title={strings.mail.deleteFolderNamed(label)}
         >
           <Trash2 aria-hidden="true" />
         </button>

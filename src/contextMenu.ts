@@ -54,6 +54,7 @@ export type ContextMenuTarget =
   | { kind: "address"; address: string }
   | { kind: "composer" }
   | { kind: "composer-attachment"; index: number }
+  | { kind: "recent-search"; query: string }
   | { kind: "editable" };
 
 export type ContextMenuIcon =
@@ -232,6 +233,9 @@ export function resolveContextTarget(
       if (Number.isFinite(index)) return { kind: "composer-attachment", index };
     }
     if (kind === "editable") return { kind: "editable" };
+    if (kind === "recent-search" && marked.dataset.recent) {
+      return { kind: "recent-search", query: marked.dataset.recent };
+    }
   }
 
   if (start.closest(".composer-editor, .ProseMirror")) {
@@ -1018,6 +1022,12 @@ export function itemsForTarget(target: ContextMenuTarget): ContextMenuItem[] {
       return editItems(true);
     case "editable":
       return editItems(false);
+    case "recent-search":
+      return [
+        item("forget-recent-search", strings.mail.forgetThisSearch, {
+          icon: "remove",
+        }),
+      ];
     case "composer-attachment":
       return [
         item("remove-attachment", strings.common.remove, {

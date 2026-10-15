@@ -45,6 +45,7 @@ export function makeSettings(
     notifyNewMail: true,
     closeToTray: true,
     updateCheckInterval: "startupAnd6h",
+    updateChannel: "auto",
     setupCompleted: true,
     setupStep: null,
   };

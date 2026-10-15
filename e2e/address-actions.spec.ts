@@ -43,6 +43,6 @@ test("messages to this address searches the whole account", async ({
     page.getByRole("searchbox", { name: "Search mail" }),
   ).toHaveValue('to:"jane@example.com"');
   await expect(
-    page.getByRole("button", { name: "This account" }),
+    page.getByRole("button", { name: "All folders" }),
   ).toHaveAttribute("aria-pressed", "true");
 });

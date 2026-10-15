@@ -9,7 +9,7 @@ import { validateManifest } from "./validate-updater-manifest.js";
 import {
   isDirectRun,
   shouldSkipMissingTarget,
-  updaterManifestName,
+  updaterManifestNames,
 } from "./validate-updater-live.js";
 import {
   assertReleaseWorktreeClean,
@@ -131,23 +131,35 @@ test("signed GitHub updater manifest shape", () => {
   );
 });
 
-test("live updater validation selects published beta manifest names", () => {
+test("signed manifest accepts the platform-beta key", () => {
   assert.equal(
-    updaterManifestName("windows", "x86_64", "0.1.9"),
+    validateManifest({
+      version: "0.4.3",
+      platforms: {
+        "darwin-beta": {
+          signature: "a".repeat(80),
+          url: "https://github.com/BurntToasters/postal-snap/releases/download/v0.4.3/payload.zip",
+        },
+      },
+    }),
+    true,
+  );
+  assert.throws(() =>
+    validateManifest({
+      version: "0.4.3",
+      platforms: { "darwin-nightly": { signature: "a".repeat(80), url: "x" } },
+    }),
+  );
+});
+
+test("live updater validation requires both manifests for stable", () => {
+  assert.deepEqual(updaterManifestNames("windows", "x86_64", "0.1.9"), [
     "latest-windows-x86_64.json",
-  );
-  assert.equal(
-    updaterManifestName("windows", "x86_64", "0.1.9-beta.1"),
     "latest-windows-beta-x86_64.json",
-  );
-  assert.equal(
-    updaterManifestName("darwin", "aarch64", "0.1.9-beta.1"),
+  ]);
+  assert.deepEqual(updaterManifestNames("darwin", "aarch64", "0.1.9-beta.1"), [
     "latest-darwin-beta-aarch64.json",
-  );
-  assert.doesNotMatch(
-    updaterManifestName("windows", "x86_64", "0.1.9-beta.1"),
-    /x86_64-beta/,
-  );
+  ]);
 });
 
 test("live updater validation fails on missing required manifests", () => {
@@ -390,7 +402,10 @@ test("finalize-release uses draft identity before upload and strict identity aft
     'runGitHub([\n    "release",\n    "upload",',
   );
   const hardIndex = finalize.indexOf("await runHardFinalize({");
-  const publishIndex = finalize.indexOf('"--draft=false"');
+  const publishIndex = finalize.indexOf(
+    "publish: () => runGitHub(publishArgs(",
+  );
+  assert.match(finalize, /export function publishArgs[\s\S]*?"--draft=false"/);
   assert.ok(draftIndex >= 0);
   assert.ok(uploadIndex > draftIndex);
   assert.doesNotMatch(
@@ -409,7 +424,7 @@ test("finalize-release uses draft identity before upload and strict identity aft
   );
   assert.match(
     finalize,
-    /reconcileBetaManifests: \(\) =>\s*run\("node", \["scripts\/finalize-release\.js", "--sync-beta-manifests"\]\)/,
+    /reconcileBetaManifests: async \(\) => \{\s*try \{\s*await run\(\s*"node",\s*\[\s*"scripts\/finalize-release\.js",\s*"--sync-beta-manifests"/,
   );
 
   const hardFinalize = finalize.slice(
@@ -789,7 +804,10 @@ test("release verification covers generated manifests after finalization", async
   const packageJson = JSON.parse(
     await readFile(join(root, "package.json"), "utf8"),
   );
-  assert.ok(verifier.includes("latest-${platform}${channel}-${arch}.json"));
+  assert.ok(
+    verifier.includes("updaterManifestNames(platform, arch, pkg.version)"),
+  );
+  assert.ok(verifier.includes("beta ? 2 : 1"));
   assert.ok(verifier.includes("verifyTauriSignatureFile"));
   assert.ok(verifier.includes("gpgVerifyStatusArgs"));
   assert.ok(verifier.includes("assertGpgSignatureFingerprint"));

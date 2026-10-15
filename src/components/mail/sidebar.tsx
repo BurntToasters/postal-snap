@@ -157,8 +157,9 @@ export function Sidebar({
           className="icon-button"
           onClick={onCloseSidebar}
           aria-label={strings.mail.closeMailboxes}
+          title={strings.mail.closeMailboxes}
         >
-          <X />
+          <X aria-hidden="true" />
         </button>
       </div>
       <AccountSwitcher

@@ -142,9 +142,9 @@ test("uses an edge-to-edge Mail-style sidebar and trailing scoped search", async
   await expect(current).toBeVisible();
   await expect(current).not.toHaveAccessibleName(/In Inbox/);
 
-  await page.getByRole("button", { name: "This mailbox" }).click();
+  await page.getByRole("button", { name: "All folders" }).click();
   await expect(
-    page.getByRole("button", { name: "This account" }),
+    page.getByRole("button", { name: "All folders" }),
   ).toHaveAttribute("aria-pressed", "true");
   await expect(
     page.getByRole("option", { name: /Across account/i }),
@@ -172,9 +172,7 @@ test("opens the mailbox drawer across the responsive sidebar range", async ({
   ).toHaveAttribute("aria-expanded", "true");
 
   await page.setViewportSize({ width: 620, height: 540 });
-  await expect(
-    page.getByRole("button", { name: "This mailbox" }),
-  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "All folders" })).toBeVisible();
 });
 
 test("completes guided iCloud first run", async ({ page }) => {
@@ -287,7 +285,7 @@ test("keeps settings tab names accessible in a narrow window", async ({
     "Accounts",
     "Shortcuts",
     "Updates",
-    "Privacy & Security",
+    "Advanced",
     "About",
   ];
   const sections = page.getByRole("combobox", {
@@ -386,7 +384,7 @@ test("requires typing CONFIRM before reported-threat warnings can be disabled", 
 }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
-  await page.getByRole("tab", { name: "Privacy & Security" }).click();
+  await page.getByRole("tab", { name: "Advanced" }).click();
   const toggle = page.getByRole("checkbox", {
     name: /Warn about reported dangerous addresses/,
   });
@@ -1255,13 +1253,13 @@ test("creates, renames, and deletes personal folders", async ({ page }) => {
   await page.getByRole("button", { name: "Create folder" }).click();
   await expect(page.getByRole("button", { name: /^Receipts/ })).toBeVisible();
 
-  await page.getByRole("button", { name: "Rename Receipts" }).click();
+  await page.getByRole("button", { name: "Rename folder Receipts" }).click();
   await page.getByPlaceholder("Folder name").fill("Bills");
   await page.getByRole("button", { name: "Rename", exact: true }).click();
   await expect(page.getByRole("button", { name: /^Bills/ })).toBeVisible();
 
   page.once("dialog", (dialog) => void dialog.accept());
-  await page.getByRole("button", { name: "Delete folder: Bills" }).click();
+  await page.getByRole("button", { name: "Delete folder Bills" }).click();
   await expect(page.getByRole("button", { name: /^Bills/ })).toHaveCount(0);
 });
 

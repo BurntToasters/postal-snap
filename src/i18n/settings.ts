@@ -86,7 +86,7 @@ export const settings = {
   storage: "Storage",
   accounts: "Accounts",
   updates: "Updates",
-  advanced: "Privacy & Security",
+  advanced: "Advanced",
   appearanceSection: "Appearance",
   sendingSection: "Sending",
   privacySection: "Privacy",
@@ -387,4 +387,10 @@ export const settings = {
   updateCheckStartupAnd24h: "On startup and every 24 hours",
   updateCheckStartup: "On startup only",
   updateCheckManual: "Only when I check",
+  updateChannel: "Update channel",
+  updateChannelHelp:
+    "Auto follows the version you run. Stable gets only finished releases. Beta also gets pre-releases, which may be unstable. Switching from Beta to Stable waits for a newer stable release; it never downgrades.",
+  updateChannelAuto: "Auto",
+  updateChannelStable: "Stable",
+  updateChannelBeta: "Beta",
 } as const;

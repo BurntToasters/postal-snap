@@ -119,5 +119,5 @@
 
 .full-button {
   width: 100%;
-  min-height: 50px;
+  min-height: var(--button-lg-height);
 }

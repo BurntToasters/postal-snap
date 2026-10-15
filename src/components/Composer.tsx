@@ -1470,7 +1470,10 @@ export function Composer({ accountId }: Props) {
           onClick={() => setMinimized(false)}
           aria-label={`${strings.composer.restore}: ${subject.trim() || strings.common.noSubject}`}
         >
-          <span className="docked-pill-title">
+          <span
+            className="docked-pill-title"
+            title={subject.trim() || strings.common.noSubject}
+          >
             {subject.trim() || strings.common.noSubject}
           </span>
           <span className="docked-pill-status">

@@ -151,10 +151,8 @@ if (!noBundle) {
 
 const overrideDir = await mkdtemp(join(tmpdir(), "postal-snap-config-"));
 try {
-  const packageInfo = await json(join(root, "package.json"));
-  const manifestName = packageInfo.version.includes("-")
-    ? "latest-{{target}}-beta-{{arch}}.json"
-    : "latest-{{target}}-{{arch}}.json";
+  // The channel is chosen at runtime via the updater target.
+  const manifestName = "latest-{{target}}-{{arch}}.json";
   const committedConfig = await json(join(root, "src-tauri/tauri.conf.json"));
   const updaterOverride = storeBuild
     ? { plugins: { updater: null } }

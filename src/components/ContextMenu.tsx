@@ -316,11 +316,10 @@ export function ContextMenuHost() {
   const menuRef = useRef<HTMLDivElement>(null);
   const savedEditRef = useRef<SavedEditSelection | null>(null);
   const openerRef = useRef<HTMLElement | null>(null);
-  const openingListScrollRef = useRef<{
-    element: Element;
-    top: number;
-    left: number;
-  } | null>(null);
+  // Scroll offsets of the opener's ancestors when the menu opened.
+  const openingScrollsRef = useRef<
+    Array<{ element: Element; top: number; left: number }>
+  >([]);
 
   const close = useCallback(() => {
     savedEditRef.current = null;
@@ -344,10 +343,19 @@ export function ContextMenuHost() {
         return;
       }
       savedEditRef.current = savedEdit;
-      const list = openerRef.current?.closest(".message-list");
-      openingListScrollRef.current = list
-        ? { element: list, top: list.scrollTop, left: list.scrollLeft }
-        : null;
+      const scrolls: typeof openingScrollsRef.current = [];
+      for (
+        let node = openerRef.current?.parentElement;
+        node;
+        node = node.parentElement
+      ) {
+        scrolls.push({
+          element: node,
+          top: node.scrollTop,
+          left: node.scrollLeft,
+        });
+      }
+      openingScrollsRef.current = scrolls;
       setMenu({ x, y, target, items });
     },
     [],
@@ -438,10 +446,12 @@ export function ContextMenuHost() {
       ) {
         return;
       }
-      // Ignore a queued pre-open scroll with unchanged list offsets.
-      const openingScroll = openingListScrollRef.current;
+      // Ignore a queued pre-open scroll with unchanged ancestor offsets.
+      const openingScroll = openingScrollsRef.current.find(
+        (entry) => entry.element === event.target,
+      );
       if (
-        openingScroll?.element === event.target &&
+        openingScroll &&
         openingScroll.element.scrollTop === openingScroll.top &&
         openingScroll.element.scrollLeft === openingScroll.left
       ) {

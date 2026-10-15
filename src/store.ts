@@ -102,6 +102,7 @@ export const defaultSettings: AppSettings = {
   notifyNewMail: true,
   closeToTray: true,
   updateCheckInterval: "startupAnd6h",
+  updateChannel: "auto",
   setupCompleted: false,
   setupStep: null,
 };

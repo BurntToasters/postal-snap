@@ -195,6 +195,13 @@ export const settingsSearchEntries: SettingsSearchEntry[] = [
     keywords: "privacy security tweetfeed dangerous reported",
   },
   {
+    section: "advanced",
+    directUpdates: true,
+    title: s.updateChannel,
+    help: s.updateChannelHelp,
+    keywords: "beta stable pre-release prerelease channel updates",
+  },
+  {
     section: "storage",
     title: s.cacheMode,
     help: s.cachePolicyHelp,
