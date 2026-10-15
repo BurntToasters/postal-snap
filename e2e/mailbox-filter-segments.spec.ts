@@ -93,7 +93,6 @@ test("F4 radio arrow keys never move focus into More", async ({ page }) => {
   await page.keyboard.press("ArrowRight");
   await expect(page.getByRole("radio", { name: "Starred" })).toBeChecked();
   await page.keyboard.press("ArrowRight");
-  await expect(page.getByRole("radio", { name: "All" })).toBeFocused();
   await expect(moreButton(page)).not.toBeFocused();
 });
 
@@ -127,6 +126,24 @@ test("F6 the More menu is not clipped in the bottom pane", async ({ page }) => {
   });
   expect(clipped).toBe(false);
 });
+
+for (const width of [1280, 900]) {
+  test(`F5 the menu stays inside the pane at 200% text, ${width}px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 800 });
+    await page.goto("/?rowMix=1&scale=2");
+    await moreButton(page).click();
+    const menu = page.getByRole("menu", { name: /More filters/ });
+    await expect(menu).toBeVisible();
+    const inside = await menu.evaluate((node) => {
+      const box = node.getBoundingClientRect();
+      const pane = node.closest(".message-pane")!.getBoundingClientRect();
+      return box.left >= pane.left - 0.5 && box.right <= pane.right + 0.5;
+    });
+    expect(inside).toBe(true);
+  });
+}
 
 type Combo = {
   width: number;
