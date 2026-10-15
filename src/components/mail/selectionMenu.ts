@@ -1,7 +1,7 @@
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
-import type { Mailbox, MessageSummary } from "../../types";
+import type { MessageSummary } from "../../types";
 import { folderPathLabel } from "../../i18n/mail";
 import { copySelectedMessageText } from "../../copyMessageText";
 import { forwardSelectedMessages } from "../../forwardConversation";
@@ -19,7 +19,7 @@ type SelectionMenu = NonNullable<
 
 export interface SelectionMenuCtx {
   activeAccountId: AppState["activeAccountId"];
-  activeMailbox: Mailbox | undefined;
+  activeMailbox: AppState["mailboxes"][number] | undefined;
   mailboxes: AppState["mailboxes"];
   messages: AppState["messages"];
   listedMessages: MessageSummary[];
