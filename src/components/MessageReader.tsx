@@ -95,9 +95,9 @@ import {
   listPostAddress,
   messageSelectionQuote,
   preferredReplyMode,
-  quickReplyAudience,
-  replyAllAddsRecipients,
 } from "./composer/composerSeed";
+import { QuickReply } from "./reader/quickReply";
+import { useReplyNotes } from "./reader/useReplyNotes";
 import { ReaderToolbar } from "./reader/readerToolbar";
 import { SnoozePanel } from "./reader/snoozePanel";
 import {
@@ -200,36 +200,13 @@ export function MessageReader({
   const [preparingForward, setPreparingForward] = useState(false);
   const [downloadingAttachmentId, setDownloadingAttachmentId] =
     useState<string>();
-  const [replyNotes, setReplyNotes] = useState<Record<number, string>>({});
+  const replyNotes = useReplyNotes();
   const [preview, setPreview] = useState<{
     messageId: number;
     attachmentId: string;
     preview: AttachmentPreview;
   } | null>(null);
   const [previewAttachmentId, setPreviewAttachmentId] = useState<string>();
-
-  function rememberReplyDraft(id: number, text: string) {
-    setReplyNotes((current) => {
-      const next = { ...current };
-      delete next[id];
-      if (text) next[id] = text;
-      const ids = Object.keys(next);
-      while (ids.length > 30) {
-        const oldest = ids.shift();
-        if (oldest !== undefined) delete next[Number(oldest)];
-      }
-      return next;
-    });
-  }
-
-  function clearReplyDraft(id: number) {
-    setReplyNotes((current) => {
-      if (!(id in current)) return current;
-      const next = { ...current };
-      delete next[id];
-      return next;
-    });
-  }
 
   function isPreviewable(attachment: Attachment): boolean {
     if (attachment.inline || attachment.size > 10 * 1024 * 1024) return false;
@@ -2908,101 +2885,7 @@ export function MessageReader({
         }}
         onPreviewClose={() => setPreview(null)}
       />
-      <form
-        className="quick-reply"
-        onSubmit={(event) => {
-          event.preventDefault();
-          const text = (replyNotes[message.id] ?? "").trim();
-          if (!text) return;
-          const account = accounts.find(
-            (item) => item.id === message.accountId,
-          );
-          openComposer({
-            sourceMessage: message,
-            composeMode: preferredReplyMode(
-              message,
-              settings.replyToAll,
-              account?.email ?? "",
-              account?.aliases ?? [],
-            ),
-            quoteExcerpt: messageSelectionQuote(),
-            replyNote: text,
-          });
-          clearReplyDraft(message.id);
-        }}
-      >
-        {(() => {
-          const account = accounts.find(
-            (item) => item.id === message.accountId,
-          );
-          const people = quickReplyAudience(
-            message,
-            settings.replyToAll,
-            account?.email ?? "",
-            account?.aliases ?? [],
-          );
-          return people ? (
-            <p className="quick-reply-to">
-              {strings.reader.quickReplyTo(people)}
-            </p>
-          ) : null;
-        })()}
-        <label>
-          <span className="visually-hidden">{strings.reader.quickReply}</span>
-          <textarea
-            value={replyNotes[message.id] ?? ""}
-            placeholder={strings.reader.quickReply}
-            aria-label={strings.reader.quickReply}
-            rows={2}
-            onChange={(event) =>
-              rememberReplyDraft(message.id, event.target.value)
-            }
-            onKeyDown={(event) => {
-              if (event.key !== "Enter" || !(event.metaKey || event.ctrlKey))
-                return;
-              event.preventDefault();
-              event.currentTarget.form?.requestSubmit();
-            }}
-          />
-        </label>
-        <div className="quick-reply-actions">
-          <button
-            type="submit"
-            className="primary-button"
-            aria-label={strings.reader.startReply}
-            disabled={!(replyNotes[message.id] ?? "").trim()}
-          >
-            {strings.reader.reply}
-          </button>
-          {replyAllAddsRecipients(
-            message,
-            accounts.find((account) => account.id === message.accountId)
-              ?.email ?? "",
-            accounts.find((account) => account.id === message.accountId)
-              ?.aliases ?? [],
-          ) ? (
-            <button
-              type="button"
-              className="toolbar-button"
-              aria-label={strings.reader.startReplyAll}
-              disabled={!(replyNotes[message.id] ?? "").trim()}
-              onClick={() => {
-                const text = (replyNotes[message.id] ?? "").trim();
-                if (!text) return;
-                openComposer({
-                  sourceMessage: message,
-                  composeMode: "replyAll",
-                  quoteExcerpt: messageSelectionQuote(),
-                  replyNote: text,
-                });
-                clearReplyDraft(message.id);
-              }}
-            >
-              {strings.reader.replyAll}
-            </button>
-          ) : null}
-        </div>
-      </form>
+      <QuickReply message={message} replyNotes={replyNotes} />
     </article>
   );
 }
