@@ -246,62 +246,64 @@ export function MessageHeader({
             <span className="recipient-preview">{message.replyTo}</span>
           </div>
         ) : null}
-        {onOpenEarlier ? (
+        <div className="message-header-links">
+          {onOpenEarlier ? (
+            <button
+              type="button"
+              className="header-files"
+              onClick={onOpenEarlier}
+            >
+              {strings.reader.openEarlier}
+            </button>
+          ) : null}
+          {fileCount > 0 ? (
+            <button
+              type="button"
+              className="header-files"
+              onClick={() => {
+                const target = document.getElementById("message-attachments");
+                target?.scrollIntoView({ block: "nearest" });
+                target?.focus();
+              }}
+            >
+              {strings.reader.showFiles(fileCount)}
+              <span className="header-file-size">{formatBytes(fileBytes)}</span>
+            </button>
+          ) : null}
+          {onShowInFolder && currentMailbox ? (
+            <button
+              type="button"
+              className="header-files"
+              onClick={onShowInFolder}
+            >
+              {strings.reader.showInFolder(folderName)}
+            </button>
+          ) : null}
           <button
             type="button"
-            className="header-files"
-            onClick={onOpenEarlier}
+            className="details-toggle"
+            onClick={onToggleDetails}
+            aria-expanded={showDetails}
+            aria-controls="message-details-panel"
+            aria-label={
+              showDetails
+                ? strings.reader.hideDetails
+                : strings.reader.showDetails
+            }
           >
-            {strings.reader.openEarlier}
+            {showDetails ? (
+              <>
+                <ChevronUp size={15} aria-hidden="true" />
+                {strings.reader.hideDetails}
+              </>
+            ) : (
+              <>
+                <ChevronDown size={15} aria-hidden="true" />
+                {strings.reader.showDetails}
+              </>
+            )}
           </button>
-        ) : null}
-        {fileCount > 0 ? (
-          <button
-            type="button"
-            className="header-files"
-            onClick={() => {
-              const target = document.getElementById("message-attachments");
-              target?.scrollIntoView({ block: "nearest" });
-              target?.focus();
-            }}
-          >
-            {strings.reader.showFiles(fileCount)}
-            <span className="header-file-size">{formatBytes(fileBytes)}</span>
-          </button>
-        ) : null}
-        {onShowInFolder && currentMailbox ? (
-          <button
-            type="button"
-            className="header-files"
-            onClick={onShowInFolder}
-          >
-            {strings.reader.showInFolder(folderName)}
-          </button>
-        ) : null}
-        <button
-          type="button"
-          className="details-toggle"
-          onClick={onToggleDetails}
-          aria-expanded={showDetails}
-          aria-controls="message-details-panel"
-          aria-label={
-            showDetails
-              ? strings.reader.hideDetails
-              : strings.reader.showDetails
-          }
-        >
-          {showDetails ? (
-            <>
-              <ChevronUp size={15} aria-hidden="true" />
-              {strings.reader.hideDetails}
-            </>
-          ) : (
-            <>
-              <ChevronDown size={15} aria-hidden="true" />
-              {strings.reader.showDetails}
-            </>
-          )}
-        </button>
+        </div>
       </div>
       <div className="message-stamp">
         <time

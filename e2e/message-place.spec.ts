@@ -5,7 +5,7 @@ import { installMockIpc } from "./mock-ipc";
 // Failure modes covered here:
 // 1. An open message names its place among the loaded messages.
 // 2. Next moves that place with the message.
-// 3. A mailbox with one loaded message says 1 of 1.
+// 3. A mailbox with one loaded message hides navigation.
 // Each test ends with a screenshot.
 
 test.beforeEach(async ({ page }) => installMockIpc(page));
@@ -35,7 +35,7 @@ test("an open message names its place in the loaded list", async ({ page }) => {
   await expect(page.locator(".reader-position")).toHaveText("2 of 3");
 });
 
-test("one loaded message is 1 of 1", async ({ page }) => {
+test("one loaded message hides navigation", async ({ page }) => {
   await page.goto("/");
   await page
     .getByRole("option", { name: /Weekend plans/i })
@@ -44,5 +44,8 @@ test("one loaded message is 1 of 1", async ({ page }) => {
   await expect(
     page.getByRole("heading", { name: "Weekend plans" }),
   ).toBeVisible();
-  await expect(page.locator(".reader-position")).toHaveText("1 of 1");
+  await expect(page.locator(".reader-position")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Next message" })).toHaveCount(
+    0,
+  );
 });

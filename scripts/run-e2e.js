@@ -3,6 +3,7 @@ import { basename, join } from "node:path";
 import process from "node:process";
 import { createServer } from "vite";
 
+import { resolveE2ePort } from "./lib/e2e-port.js";
 import { root } from "./lib/paths.js";
 
 const playwrightCli = join(
@@ -28,11 +29,12 @@ export async function runE2e({
   createViteServer = createServer,
   spawnChild = spawn,
 } = {}) {
+  const port = resolveE2ePort(env);
   // Host Vite in this process so Windows cannot orphan a grandchild that
   // keeps test:all's captured output pipe open after Playwright exits.
   const server = await createViteServer({
     root,
-    server: { host: "127.0.0.1", port: 4173, strictPort: true },
+    server: { host: "127.0.0.1", port, strictPort: true },
   });
   await server.listen();
   try {
@@ -41,7 +43,11 @@ export async function runE2e({
       [playwrightCli, "test", ...args],
       {
         cwd: root,
-        env: { ...env, POSTAL_SNAP_E2E_EXTERNAL_SERVER: "1" },
+        env: {
+          ...env,
+          POSTAL_SNAP_E2E_EXTERNAL_SERVER: "1",
+          POSTAL_SNAP_E2E_PORT: String(port),
+        },
         stdio: "inherit",
         windowsHide: true,
       },

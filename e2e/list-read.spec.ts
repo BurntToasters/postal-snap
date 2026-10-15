@@ -5,6 +5,7 @@ import { installMockIpc } from "./mock-ipc";
 // Failure modes covered here:
 // 1. Marking a row read opens the message.
 // 2. The row stays labeled unread after the click.
+// 3. The in-row unread dot stays filled after the row is read.
 // Each test ends with a screenshot.
 
 test.beforeEach(async ({ page }) => installMockIpc(page));
@@ -22,20 +23,22 @@ test("a listed message can be marked read without opening it", async ({
   await page.goto("/");
   const row = page.getByRole("option", { name: /Weekend plans/i });
   await expect(row).toHaveAccessibleName(/Unread/i);
-  await page
-    .getByRole("button", {
-      name: "Mark read",
-      exact: true,
-      includeHidden: true,
-    })
-    .click();
+  const dot = row.locator(".unread-dot");
+  await expect(dot).toBeVisible();
+  const unreadColor = await dot.evaluate(
+    (node) => getComputedStyle(node).backgroundColor,
+  );
+  expect(unreadColor).not.toBe("rgba(0, 0, 0, 0)");
+  const wrap = page.locator(".message-row-wrap").filter({ has: row });
+  await wrap.hover();
+  const read = wrap.locator('button.row-action[data-action="read"]');
+  await expect(read).toHaveAttribute("aria-label", "Mark read");
+  await read.click();
   await expect(row).not.toHaveAttribute("aria-selected", "true");
   await expect(row).not.toHaveAccessibleName(/Unread/i);
-  await expect(
-    page.getByRole("button", {
-      name: "Mark unread",
-      exact: true,
-      includeHidden: true,
-    }),
-  ).toBeVisible();
+  await expect(read).toHaveAttribute("aria-label", "Mark unread");
+  const readColor = await dot.evaluate(
+    (node) => getComputedStyle(node).backgroundColor,
+  );
+  expect(readColor).toBe("rgba(0, 0, 0, 0)");
 });

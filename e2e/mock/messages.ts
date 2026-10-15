@@ -49,6 +49,70 @@ export async function registerMockMessages(page: Page): Promise<void> {
             : olderSummary.isRead,
       },
     ];
+    // `?rowMix=1`: pinned, thread, urgent, files, invitation, across days.
+    const rowMixItems = () => [
+      {
+        ...summary,
+        id: 63,
+        uid: 63,
+        messageId: "<pinned-note@example.com>",
+        subject: "Pinned reminder",
+        senderName: "Riley",
+        senderAddress: "riley@example.com",
+        receivedAt: "2026-08-18T09:00:00Z",
+        isRead: true,
+        pinned: true,
+      },
+      {
+        ...summary,
+        isRead: false,
+        isStarred: true,
+        threadRoot: "<weekend@example.com>",
+        toMe: true,
+      },
+      {
+        ...olderSummary,
+        isRead: true,
+        threadRoot: "<weekend@example.com>",
+      },
+      {
+        ...summary,
+        id: 62,
+        uid: 62,
+        messageId: "<urgent@example.com>",
+        subject: "Urgent: server maintenance",
+        senderName: "Morgan",
+        senderAddress: "morgan@example.com",
+        receivedAt: "2026-08-17T08:00:00Z",
+        importance: "high",
+        isRead: false,
+      },
+      {
+        ...summary,
+        id: 61,
+        uid: 61,
+        messageId: "<tickets@example.com>",
+        subject: "Receipt and tickets",
+        senderName: "Taylor",
+        senderAddress: "taylor@example.com",
+        receivedAt: "2026-08-15T12:00:00Z",
+        isRead: true,
+        hasAttachments: true,
+        attachmentCount: 2,
+      },
+      {
+        ...summary,
+        id: 64,
+        uid: 64,
+        messageId: "<invite@example.com>",
+        subject: "Team calendar invitation",
+        senderName: "Casey",
+        senderAddress: "casey@example.com",
+        receivedAt: "2026-08-10T12:00:00Z",
+        isRead: false,
+        hasCalendar: true,
+      },
+    ];
     const trashThreadItems = () => [
       {
         ...summary,
@@ -155,6 +219,8 @@ export async function registerMockMessages(page: Page): Promise<void> {
             nextCursor: null,
             hasMore: false,
           };
+        } else if (params.has("rowMix")) {
+          page = { items: rowMixItems(), nextCursor: null, hasMore: false };
         } else if (params.has("threadGap")) {
           // `?threadGap=1`: a solo message between two replies of one thread.
           page = { items: threadGapItems(), nextCursor: null, hasMore: false };
@@ -383,12 +449,16 @@ export async function registerMockMessages(page: Page): Promise<void> {
           ? earlierHit
           : trashHit
             ? trashHit
-            : params.has("threadGap")
-              ? (threadGapItems().find((item) => item.id === args.messageId) ??
+            : params.has("rowMix")
+              ? (rowMixItems().find((item) => item.id === args.messageId) ??
                 summary)
-              : args.accountId === secondSummary.accountId
-                ? secondSummary
-                : summary;
+              : params.has("threadGap")
+                ? (threadGapItems().find(
+                    (item) => item.id === args.messageId,
+                  ) ?? summary)
+                : args.accountId === secondSummary.accountId
+                  ? secondSummary
+                  : summary;
         if (params.has("bodyOffline")) {
           return {
             ...selected,

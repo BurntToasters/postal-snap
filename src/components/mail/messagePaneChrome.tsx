@@ -1,7 +1,8 @@
-import type { RefObject } from "react";
+import { useLayoutEffect, useRef, useState, type RefObject } from "react";
 import {
   Archive,
   ArrowUpNarrowWide,
+  ChevronDown,
   ChevronsDownUp,
   ChevronsUpDown,
   Clock,
@@ -32,6 +33,7 @@ import {
 } from "../../listSort";
 import type { MailboxRole } from "../../types";
 import { moveMenuFocus } from "../toolbarNav";
+import { usePopupMenu } from "../usePopupMenu";
 import { folderIcons } from "./folderIcons";
 
 type LocalView = "drafts" | "outbox" | "snoozed";
@@ -142,15 +144,54 @@ export function MessagePaneHeader({
   selection,
 }: MessagePaneHeaderProps) {
   const selectionDisabled = !selection || selection.count === 0 || bulkBusy;
-  const filters: Array<{ id: MessageListFilter; label: string }> = [
+  const primaryFilters: Array<{ id: MessageListFilter; label: string }> = [
     { id: "all", label: strings.mail.filterAll },
     { id: "unread", label: strings.mail.unread },
     { id: "starred", label: strings.mail.starred },
+  ];
+  const moreFilters: Array<{ id: MessageListFilter; label: string }> = [
     { id: "pinned", label: strings.mail.pinned },
     { id: "toMe", label: strings.mail.toMe },
     { id: "attachments", label: strings.mail.hasAttachments },
     { id: "invitations", label: strings.mail.invitations },
   ];
+  const activeMore = moreFilters.find((filter) => filter.id === listFilter);
+  const [filterMenuOpen, setFilterMenuOpen] = useState(false);
+  const filterMenuRef = useRef<HTMLDivElement>(null);
+  usePopupMenu(filterMenuOpen, filterMenuRef, () => setFilterMenuOpen(false));
+  // Fixed placement escapes the pane's overflow; flips up when roomier.
+  useLayoutEffect(() => {
+    if (!filterMenuOpen) return;
+    const root = filterMenuRef.current;
+    const trigger = root?.querySelector<HTMLElement>(
+      "button[aria-haspopup='menu']",
+    );
+    const menu = root?.querySelector<HTMLElement>("[role='menu']");
+    if (!trigger || !menu) return;
+    const edge = 8;
+    const gap = 6;
+    const anchor = trigger.getBoundingClientRect();
+    menu.style.maxHeight = "";
+    const pane = trigger.closest(".message-pane")?.getBoundingClientRect();
+    const lo = Math.max(edge, (pane?.left ?? 0) + edge);
+    const hi = Math.min(window.innerWidth, pane?.right ?? Infinity) - edge;
+    menu.style.minWidth = `min(12rem, ${hi - lo}px)`;
+    menu.style.maxWidth = `${hi - lo}px`;
+    const width = menu.offsetWidth;
+    const height = menu.offsetHeight;
+    const below = window.innerHeight - anchor.bottom - gap - edge;
+    const above = anchor.top - gap - edge;
+    const up = height > below && above > below;
+    const room = Math.max(up ? above : below, 0);
+    const shown = Math.min(height, room);
+    menu.style.maxHeight = `${room}px`;
+    menu.style.top = `${up ? anchor.top - gap - shown : anchor.bottom + gap}px`;
+    const fit = Math.min(width, hi - lo);
+    menu.style.left = `${Math.max(lo, Math.min(anchor.right - fit, hi - fit))}px`;
+    const close = () => setFilterMenuOpen(false);
+    window.addEventListener("resize", close);
+    return () => window.removeEventListener("resize", close);
+  }, [filterMenuOpen]);
   const sorts: Array<{ id: MessageListSort; label: string }> = [
     { id: "date", label: strings.mail.sortDate },
     { id: "sender", label: strings.mail.sortFrom },
@@ -569,22 +610,81 @@ export function MessagePaneHeader({
         </div>
       </div>
       {!activeLocalView && !submittedQuery ? (
-        <div
-          className="mailbox-filter"
-          role="radiogroup"
-          aria-label={strings.mail.showMessages}
-        >
-          {filters.map((filter) => (
-            <label key={filter.id}>
-              <input
-                type="radio"
-                name="mailbox-filter"
-                checked={listFilter === filter.id}
-                onChange={() => onListFilter(filter.id)}
-              />
-              {filter.label}
-            </label>
-          ))}
+        <div className="mailbox-filter">
+          <div className="mailbox-filter-control">
+            <div
+              className="mailbox-filter-segments"
+              role="radiogroup"
+              aria-label={strings.mail.showMessages}
+            >
+              {primaryFilters.map((filter) => (
+                <label key={filter.id} className="mailbox-filter-segment">
+                  <input
+                    type="radio"
+                    name="mailbox-filter"
+                    checked={listFilter === filter.id}
+                    onChange={() => onListFilter(filter.id)}
+                  />
+                  <span>{filter.label}</span>
+                </label>
+              ))}
+            </div>
+            <div className="mailbox-filter-more" ref={filterMenuRef}>
+              <button
+                type="button"
+                className={`mailbox-filter-segment${activeMore ? " checked" : ""}`}
+                onClick={() => setFilterMenuOpen((open) => !open)}
+                onKeyDown={(event) => {
+                  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                    event.preventDefault();
+                    setFilterMenuOpen(true);
+                  }
+                }}
+                aria-haspopup="menu"
+                aria-expanded={filterMenuOpen}
+                aria-controls="mailbox-filter-menu"
+                aria-label={
+                  activeMore
+                    ? strings.mail.moreFiltersActive(activeMore.label)
+                    : strings.mail.moreFilters
+                }
+              >
+                <span>
+                  {activeMore ? activeMore.label : strings.mail.filterMore}
+                </span>
+                <ChevronDown aria-hidden="true" />
+              </button>
+              {filterMenuOpen ? (
+                <div
+                  id="mailbox-filter-menu"
+                  className="mailbox-filter-menu app-menu"
+                  role="menu"
+                  aria-label={strings.mail.moreFilters}
+                  onKeyDownCapture={moveMenuFocus}
+                >
+                  {moreFilters.map((filter) => (
+                    <button
+                      key={filter.id}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={listFilter === filter.id}
+                      onClick={() => {
+                        onListFilter(filter.id);
+                        setFilterMenuOpen(false);
+                        filterMenuRef.current
+                          ?.querySelector<HTMLElement>(
+                            "button[aria-haspopup='menu']",
+                          )
+                          ?.focus();
+                      }}
+                    >
+                      {filter.label}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          </div>
         </div>
       ) : null}
     </>

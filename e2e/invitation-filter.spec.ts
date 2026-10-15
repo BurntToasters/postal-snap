@@ -23,7 +23,10 @@ test("Invitations lists only mail with a calendar invitation", async ({
   await expect(
     page.getByRole("treeitem", { name: /Library hours/i }),
   ).toBeVisible();
-  await page.getByRole("radio", { name: "Invitations", exact: true }).click();
+  await page.getByRole("button", { name: /^More filters/ }).click();
+  await page
+    .getByRole("menuitemradio", { name: "Invitations", exact: true })
+    .click();
   await expect(
     page.getByRole("option", { name: /Weekend plans/i }),
   ).toBeVisible();
@@ -41,6 +44,9 @@ test("Invitations lists only mail with a calendar invitation", async ({
 
 test("a mailbox without invitations says so", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("radio", { name: "Invitations", exact: true }).click();
+  await page.getByRole("button", { name: /^More filters/ }).click();
+  await page
+    .getByRole("menuitemradio", { name: "Invitations", exact: true })
+    .click();
   await expect(page.getByText("No calendar invitations.")).toBeVisible();
 });

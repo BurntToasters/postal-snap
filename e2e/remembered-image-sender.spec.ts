@@ -36,7 +36,10 @@ for (const density of ["comfortable", "compact"] as const) {
       await page.goto(
         `/?remote=1&imageSender=jane@example.com&density=${density}&scale=${scale}`,
       );
-      await page.getByRole("option", { name: /Weekend plans/i }).click();
+      // At compact 200% the hover cluster covers the row center.
+      await page
+        .getByRole("option", { name: /Weekend plans/i })
+        .click({ position: { x: 24, y: 16 } });
       const load = page.getByRole("button", {
         name: "Load images",
         exact: true,

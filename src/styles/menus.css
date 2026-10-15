@@ -91,6 +91,14 @@
   min-width: 15rem;
 }
 
+.mailbox-filter-menu {
+  position: fixed;
+  z-index: 30;
+  min-width: 12rem;
+  max-width: calc(100vw - 16px);
+  overflow-y: auto;
+}
+
 .reader-more-menu {
   position: absolute;
   z-index: 20;

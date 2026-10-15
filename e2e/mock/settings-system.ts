@@ -26,8 +26,16 @@ export async function registerMockSettingsSystem(page: Page): Promise<void> {
       },
       lastAccountId: null,
       lastMailboxId: null,
-      folderPaneWidth: params.has("oversized") ? 400 : 248,
-      messagePaneWidth: params.has("oversized") ? 720 : 390,
+      folderPaneWidth: params.has("folderPaneWidth")
+        ? Number(params.get("folderPaneWidth"))
+        : params.has("oversized")
+          ? 400
+          : 248,
+      messagePaneWidth: params.has("messagePaneWidth")
+        ? Number(params.get("messagePaneWidth"))
+        : params.has("oversized")
+          ? 720
+          : 390,
       readerPaneHeight: location.search.includes("tallBottom") ? 800 : 360,
       windowEffects: !windowFxSupported,
       sidebarVisible: !params.has("hiddenSidebar"),
