@@ -316,6 +316,11 @@ export function ContextMenuHost() {
   const menuRef = useRef<HTMLDivElement>(null);
   const savedEditRef = useRef<SavedEditSelection | null>(null);
   const openerRef = useRef<HTMLElement | null>(null);
+  const openingListScrollRef = useRef<{
+    element: Element;
+    top: number;
+    left: number;
+  } | null>(null);
 
   const close = useCallback(() => {
     savedEditRef.current = null;
@@ -339,6 +344,10 @@ export function ContextMenuHost() {
         return;
       }
       savedEditRef.current = savedEdit;
+      const list = openerRef.current?.closest(".message-list");
+      openingListScrollRef.current = list
+        ? { element: list, top: list.scrollTop, left: list.scrollLeft }
+        : null;
       setMenu({ x, y, target, items });
     },
     [],
@@ -426,6 +435,15 @@ export function ContextMenuHost() {
       if (
         event.target instanceof Node &&
         menuRef.current?.contains(event.target)
+      ) {
+        return;
+      }
+      // Ignore a queued pre-open scroll with unchanged list offsets.
+      const openingScroll = openingListScrollRef.current;
+      if (
+        openingScroll?.element === event.target &&
+        openingScroll.element.scrollTop === openingScroll.top &&
+        openingScroll.element.scrollLeft === openingScroll.left
       ) {
         return;
       }
