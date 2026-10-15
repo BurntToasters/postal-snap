@@ -1,5 +1,9 @@
 import { defineConfig } from "@playwright/test";
 
+import { resolveE2ePort } from "./scripts/lib/e2e-port.js";
+
+const port = resolveE2ePort();
+
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: false,
@@ -17,15 +21,15 @@ export default defineConfig({
     },
   ],
   use: {
-    baseURL: "http://127.0.0.1:4173",
+    baseURL: `http://127.0.0.1:${port}`,
     trace: "retain-on-failure",
   },
   webServer:
     process.env.POSTAL_SNAP_E2E_EXTERNAL_SERVER === "1"
       ? undefined
       : {
-          command: "npm run dev -- --host 127.0.0.1 --port 4173",
-          url: "http://127.0.0.1:4173",
+          command: `npm run dev -- --host 127.0.0.1 --port ${port}`,
+          url: `http://127.0.0.1:${port}`,
           reuseExistingServer:
             !process.env.CI && process.env.VITE_COVERAGE !== "true",
         },
