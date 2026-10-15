@@ -403,10 +403,16 @@ describe("message list states and keyboard", () => {
       />,
     );
     // Pointer shortcut: hidden from assistive tech; the s key is the keyboard path.
-    const star =
-      document.querySelector<HTMLButtonElement>(".message-star-hit")!;
+    const star = document.querySelector<HTMLButtonElement>(
+      ".row-action[data-action='star']",
+    )!;
     expect(star).toHaveAttribute("aria-label", strings.reader.removeStar);
-    expect(star).toHaveAttribute("aria-hidden", "true");
+    expect(star).toHaveAttribute("tabindex", "-1");
+    expect(star.closest(".row-actions")).toHaveAttribute("aria-hidden", "true");
+    expect(
+      document.querySelector(".message-subject .star-mark"),
+    ).not.toBeNull();
+    expect(document.querySelector(".message-star-hit")).toBeNull();
     fireEvent.click(star);
     expect(onToggleStar).toHaveBeenCalledWith(
       expect.objectContaining({ id: first.id }),
@@ -432,10 +438,13 @@ describe("message list states and keyboard", () => {
       />,
     );
     // Pointer shortcut: hidden from assistive tech; the u key is the keyboard path.
-    const read =
-      document.querySelector<HTMLButtonElement>(".message-read-hit")!;
+    const read = document.querySelector<HTMLButtonElement>(
+      ".row-action[data-action='read']",
+    )!;
     expect(read).toHaveAttribute("aria-label", strings.reader.markRead);
-    expect(read).toHaveAttribute("aria-hidden", "true");
+    expect(read).toHaveAttribute("tabindex", "-1");
+    expect(read.closest(".row-actions")).toHaveAttribute("aria-hidden", "true");
+    expect(document.querySelector(".message-read-hit")).toBeNull();
     fireEvent.click(read);
     expect(onToggleRead).toHaveBeenCalledWith(
       expect.objectContaining({ id: first.id }),

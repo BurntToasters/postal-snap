@@ -325,6 +325,8 @@ export async function registerMockFixtures(page: Page): Promise<void> {
       summary.mailboxId = 6;
     }
     if (params.has("inTrash")) summary.mailboxId = 3;
+    // 0.4.2 row actions: summary rows that live in Archive.
+    if (params.has("inArchive")) summary.mailboxId = 2;
     const olderSummary = {
       ...summary,
       id: 9,
