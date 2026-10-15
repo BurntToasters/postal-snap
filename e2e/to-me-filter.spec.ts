@@ -20,7 +20,8 @@ test("To me keeps mail addressed to this account", async ({ page }) => {
   await expect(
     page.getByRole("treeitem", { name: /Library hours/i }),
   ).toBeVisible();
-  await page.getByRole("radio", { name: "To me" }).click();
+  await page.getByRole("button", { name: /^More filters/ }).click();
+  await page.getByRole("menuitemradio", { name: "To me" }).click();
   await expect(
     page.getByRole("option", { name: /Weekend plans/i }),
   ).toBeVisible();

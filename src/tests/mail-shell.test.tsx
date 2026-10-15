@@ -4701,7 +4701,8 @@ describe("mail shell", () => {
     expect(
       await screen.findByRole("option", { name: /Plain note/i }),
     ).toBeVisible();
-    fireEvent.click(screen.getByRole("radio", { name: "Pinned" }));
+    fireEvent.click(screen.getByRole("button", { name: /^More filters/ }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Pinned" }));
 
     await waitFor(() =>
       expect(mockedListMessages).toHaveBeenCalledWith(
@@ -4716,7 +4717,9 @@ describe("mail shell", () => {
       expect(screen.queryByRole("option", { name: /Plain note/i })).toBeNull(),
     );
     expect(screen.getByRole("option", { name: /Pinned note/i })).toBeVisible();
-    expect(screen.getByRole("radio", { name: "Pinned" })).toBeChecked();
+    expect(
+      screen.getByRole("button", { name: "More filters: Pinned" }),
+    ).toBeVisible();
   });
 
   it("says when the mailbox has no pinned mail", async () => {
@@ -4730,7 +4733,8 @@ describe("mail shell", () => {
     });
     renderShell();
     await screen.findByRole("option", { name: /First message/i });
-    fireEvent.click(screen.getByRole("radio", { name: "Pinned" }));
+    fireEvent.click(screen.getByRole("button", { name: /^More filters/ }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Pinned" }));
     expect(await screen.findByText(strings.mail.noPinned)).toBeVisible();
   });
 
