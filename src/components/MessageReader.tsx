@@ -211,9 +211,11 @@ export function MessageReader({
     );
   }
   const printMessageRef = useRef(printMessage);
+  // eslint-disable-next-line react-hooks/refs -- latest-ref pattern
   printMessageRef.current = printMessage;
 
   const neighborRef = useRef({ onNext, onPrevious });
+  // eslint-disable-next-line react-hooks/refs -- latest-ref pattern
   neighborRef.current = { onNext, onPrevious };
 
   const { scrollMessage, findInMessage } = useReaderFind({
@@ -365,10 +367,12 @@ export function MessageReader({
   if (message?.id !== menuMessageId) {
     setMenuMessageId(message?.id);
     if (moreOpen) setMoreOpen(false);
+    // eslint-disable-next-line react-hooks/refs -- latest-ref pattern
     if (snoozeOpen && !keepSnooze.current) {
       setSnoozeOpen(false);
       setSnoozeConversation(false);
     }
+    // eslint-disable-next-line react-hooks/refs -- latest-ref pattern
     keepSnooze.current = false;
     if (originalOpen) setOriginalOpen(false);
   }
@@ -466,6 +470,7 @@ export function MessageReader({
   }
 
   const handleExternalLinkRef = useRef(handleExternalLink);
+  // eslint-disable-next-line react-hooks/refs -- latest-ref pattern
   handleExternalLinkRef.current = handleExternalLink;
 
   // Native side routes denied frame popups (WebKit link clicks) here.
@@ -597,6 +602,7 @@ export function MessageReader({
 
   const htmlBody = message?.htmlBody;
   const attachments = message?.attachments;
+  // eslint-disable-next-line react-hooks/preserve-manual-memoization -- memo kept as written
   const sanitized = useMemo(
     () => (htmlBody ? sanitizeReceivedHtml(htmlBody) : undefined),
     [htmlBody],
@@ -604,10 +610,12 @@ export function MessageReader({
   // Fall back to the text part when the HTML part sanitizes to nothing visible.
   const formatted = useMemo(
     () => (sanitized ? hasVisibleHtml(sanitized.html) : false),
+    // eslint-disable-next-line react-hooks/preserve-manual-memoization -- memo kept as written
     [sanitized],
   );
   const extractedPlain = useMemo(
     () => (sanitized ? htmlToPlainText(sanitized.html) : ""),
+    // eslint-disable-next-line react-hooks/preserve-manual-memoization -- memo kept as written
     [sanitized],
   );
   const viewingPlain = plainMessageId === message?.id;
