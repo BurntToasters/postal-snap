@@ -65,7 +65,7 @@ async function probeList(page: Page) {
     const listBox = box(list);
     const rows = [...document.querySelectorAll(".message-row")];
     const row = box(rows[0]);
-    const filter = q(".mailbox-filter-control, .mailbox-filter");
+    const filter = q(".mailbox-filter-control") ?? q(".mailbox-filter");
     const sender = q(".message-sender");
     return {
       rowInset:
@@ -97,17 +97,19 @@ async function probeHover(page: Page) {
       return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
     };
     const rows = [...document.querySelectorAll(".message-row")];
-    const wrap = rows[1] ?? null;
+    const row = rows[1] ?? null;
+    // The cluster is a sibling of the row button inside the wrap.
+    const wrap = row?.closest(".message-row-wrap") ?? null;
     const cluster = wrap?.querySelector(".row-actions") ?? null;
     return {
-      row: box(wrap),
+      row: box(row),
       cluster: box(cluster),
       clusterOpacity: cluster ? getComputedStyle(cluster).opacity : null,
       actionButtons: wrap
         ? wrap.querySelectorAll("button.row-action[data-action]").length
         : 0,
-      starMark: wrap ? wrap.querySelectorAll(".star-mark").length : 0,
-      date: box(wrap?.querySelector(".message-date, .message-when")),
+      starMark: row ? row.querySelectorAll(".star-mark").length : 0,
+      date: box(row?.querySelector(".message-date, .message-when")),
     };
   });
 }
@@ -124,7 +126,17 @@ async function probeReader(page: Page) {
       (node) => node.closest(".quick-reply") !== null,
     );
     return {
-      readerWidth: reader ? reader.getBoundingClientRect().width : null,
+      // Content width: the reader minus the reply bar's inline padding.
+      readerWidth: (() => {
+        const bar = document.querySelector(".quick-reply");
+        if (!reader) return null;
+        const width = reader.getBoundingClientRect().width;
+        if (!bar) return width;
+        const style = getComputedStyle(bar);
+        return (
+          width - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
+        );
+      })(),
       quickReply: area
         ? {
             width: area.getBoundingClientRect().width,

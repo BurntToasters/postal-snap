@@ -57,6 +57,16 @@
   );
 }
 
+/* min-height beats max-height, so the short bottom pane caps both. */
+.pane-bottom .quick-reply:focus-within textarea,
+.pane-bottom .quick-reply[data-filled] textarea {
+  min-height: min(
+    calc(3lh + 2 * var(--control-pad-block) + 2px),
+    var(--quick-reply-max-block),
+    calc(var(--rendered-reader-height) * 0.35)
+  );
+}
+
 .quick-reply-footer {
   display: none;
   flex-wrap: wrap;

@@ -33,7 +33,7 @@ async function lefts(page: Page) {
     };
     return {
       title: left(".pane-heading h1"),
-      filter: left(".mailbox-filter-segment, .mailbox-filter label"),
+      filter: left(".mailbox-filter-control"),
       day: left(".list-day > span"),
       sender: left(".message-sender"),
     };
