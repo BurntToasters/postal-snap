@@ -105,27 +105,49 @@ test("F7 a remembered filter shows in the control", async ({ page }) => {
   await expect(moreButton(page)).toHaveAccessibleName("More filters");
 });
 
-test("F6 the More menu is not clipped in the bottom pane", async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 800 });
-  await page.goto("/?rowMix=1&pane=bottom");
-  await moreButton(page).click();
-  const menu = page.getByRole("menu", { name: /More filters/ });
-  await expect(menu).toBeVisible();
-  const clipped = await menu.evaluate((node) => {
-    const box = node.getBoundingClientRect();
-    const points = [
-      [box.left + 4, box.top + 4],
-      [box.right - 4, box.top + 4],
-      [box.left + 4, box.bottom - 4],
-      [box.right - 4, box.bottom - 4],
-    ];
-    return points.some(([x, y]) => {
-      const hit = document.elementFromPoint(x, y);
-      return !hit || !node.contains(hit);
-    });
-  });
-  expect(clipped).toBe(false);
-});
+for (const density of ["compact", "comfortable"] as const)
+  for (const scale of [1, 2] as const)
+    for (const pane of ["bottom", "right"] as const)
+      test(`F6 every More item is reachable: ${density} ${scale}x ${pane}`, async ({
+        page,
+      }) => {
+        await page.setViewportSize({ width: 1280, height: 800 });
+        await page.goto(
+          `/?rowMix=1&density=${density}&scale=${scale}&pane=${pane}`,
+        );
+        await moreButton(page).click();
+        const menu = page.getByRole("menu", { name: /More filters/ });
+        await expect(menu).toBeVisible();
+        const result = await menu.evaluate((node) => {
+          const box = node.getBoundingClientRect();
+          const items = [
+            ...node.querySelectorAll<HTMLElement>('[role="menuitemradio"]'),
+          ];
+          return {
+            inViewport:
+              box.left >= 0 &&
+              box.top >= 0 &&
+              box.right <= window.innerWidth &&
+              box.bottom <= window.innerHeight,
+            count: items.length,
+            blocked: items.filter((item) => {
+              const r = item.getBoundingClientRect();
+              const hit = document.elementFromPoint(
+                r.left + r.width / 2,
+                r.top + r.height / 2,
+              );
+              return hit !== item && !item.contains(hit);
+            }).length,
+          };
+        });
+        expect(result.count).toBe(4);
+        expect(result.inViewport).toBe(true);
+        expect(result.blocked).toBe(0);
+        await page.getByRole("menuitemradio", { name: "Invitations" }).click();
+        await expect(moreButton(page)).toHaveAccessibleName(
+          "More filters: Invitations",
+        );
+      });
 
 for (const width of [1280, 900]) {
   test(`F5 the menu stays inside the pane at 200% text, ${width}px`, async ({
