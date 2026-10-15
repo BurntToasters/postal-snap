@@ -60,6 +60,7 @@ import { BulkBar, MessagePaneHeader } from "./mail/messagePaneChrome";
 import { SnoozePanel } from "./reader/snoozePanel";
 import { PaneSplitter } from "./mail/paneSplitter";
 import { useSettingsSave } from "./settings/useSettingsSave";
+import { useOverlayFocus } from "./mail/useOverlayFocus";
 
 import { MEDIA_QUERIES } from "../breakpoints";
 import { toggleListedRead } from "../markRead";
@@ -2404,71 +2405,15 @@ export function MailShell({ onOpenSettings }: Props) {
     return () => window.removeEventListener(CONTEXT_ACTION_EVENT, onAction);
   });
 
-  useEffect(() => {
-    if (!sidebarOpen) return;
-    const pane = folderPaneRef.current;
-    const toggle = sidebarToggleRef.current;
-    const previous = document.activeElement as HTMLElement | null;
-    const firstFocusable = pane?.querySelector<HTMLElement>(
-      "button:not([disabled]), select:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex='-1'])",
-    );
-    window.setTimeout(() => firstFocusable?.focus(), 0);
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented) return;
-      event.preventDefault();
-      setSidebarOpen(false);
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      if (previous && document.contains(previous)) previous.focus();
-      else toggle?.focus();
-    };
-  }, [sidebarOpen]);
-
-  useEffect(() => {
-    if (!sidebarOpen || !sidebarDrawerViewport) return;
-    const shell = document.querySelector(".mail-shell");
-    const inertTargets = shell
-      ? [...shell.children].filter(
-          (child) =>
-            child !== folderPaneRef.current &&
-            !child.classList.contains("sidebar-scrim") &&
-            !child.classList.contains("folder-pane"),
-        )
-      : [];
-    for (const target of inertTargets) {
-      target.setAttribute("inert", "");
-    }
-    return () => {
-      for (const target of inertTargets) {
-        target.removeAttribute("inert");
-      }
-    };
-  }, [sidebarDrawerViewport, sidebarOpen]);
-
-  const narrowViewport = useMediaQuery(MEDIA_QUERIES.narrowViewport);
-  const readerOverlay =
-    Boolean(selectedMessage) &&
-    (settings.readingPane === "hidden" || narrowViewport);
-
-  useEffect(() => {
-    if (!readerOverlay) return;
-    const shell = document.querySelector(".mail-shell");
-    if (!shell) return;
-    const inertTargets = [...shell.children].filter(
-      (child) => child.id !== "reader-pane",
-    );
-    for (const target of inertTargets) {
-      target.setAttribute("inert", "");
-    }
-    return () => {
-      for (const target of inertTargets) {
-        target.removeAttribute("inert");
-      }
-    };
-  }, [readerOverlay]);
+  useOverlayFocus({
+    sidebarOpen,
+    setSidebarOpen,
+    sidebarDrawerViewport,
+    folderPaneRef,
+    sidebarToggleRef,
+    selectedMessage,
+    settings,
+  });
 
   const activeMailbox = useMemo(
     () => mailboxes.find((box) => box.id === activeMailboxId),
