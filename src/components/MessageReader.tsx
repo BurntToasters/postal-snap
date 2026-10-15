@@ -65,7 +65,7 @@ import {
   conversationUnread,
   messageListPosition,
 } from "../threads";
-import type { Attachment, AttachmentPreview, MessageSummary } from "../types";
+import type { AttachmentPreview, MessageSummary } from "../types";
 import { useDialogFocus } from "./useDialogFocus";
 import { AttachmentList } from "./reader/attachmentList";
 import { MessageBody } from "./reader/messageBody";
@@ -77,6 +77,7 @@ import {
   preferredReplyMode,
 } from "./composer/composerSeed";
 import { QuickReply } from "./reader/quickReply";
+import { useReaderAttachments } from "./reader/useReaderAttachments";
 import { useReaderCompose } from "./reader/useReaderCompose";
 import { useReaderFlags } from "./reader/useReaderFlags";
 import { useReaderMoves } from "./reader/useReaderMoves";
@@ -166,40 +167,6 @@ export function MessageReader({
   } | null>(null);
   const [previewAttachmentId, setPreviewAttachmentId] = useState<string>();
 
-  function isPreviewable(attachment: Attachment): boolean {
-    if (attachment.inline || attachment.size > 10 * 1024 * 1024) return false;
-    const contentType = attachment.contentType.toLowerCase();
-    return (
-      contentType === "text/plain" ||
-      ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(
-        contentType,
-      )
-    );
-  }
-
-  async function previewFile(attachmentId: string) {
-    if (!message || previewAttachmentId !== undefined) return;
-    const targetMessageId = message.id;
-    setPreviewAttachmentId(attachmentId);
-    try {
-      const loaded = await api.previewAttachment(
-        message.accountId,
-        message.id,
-        attachmentId,
-      );
-      if (targetMessageId !== useAppStore.getState().selectedMessage?.id)
-        return;
-      setPreview({
-        messageId: targetMessageId,
-        attachmentId,
-        preview: loaded,
-      });
-    } catch (cause) {
-      setError(String(cause));
-    } finally {
-      setPreviewAttachmentId(undefined);
-    }
-  }
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const [snoozeConversation, setSnoozeConversation] = useState(false);
@@ -700,6 +667,22 @@ export function MessageReader({
 
   const { blockSender, blockDomain, unblockDomain, unblockSender } =
     useSenderRules({ setError, setBlockRevision, move, moveToInbox });
+
+  const {
+    isPreviewable,
+    previewFile,
+    saveChosenAttachments,
+    saveAllAttachments,
+    download,
+  } = useReaderAttachments({
+    message,
+    previewAttachmentId,
+    setPreviewAttachmentId,
+    setPreview,
+    downloadingAttachmentId,
+    setDownloadingAttachmentId,
+    setError,
+  });
 
   const menuHandlersRef = useRef({
     openComposer,
@@ -1282,52 +1265,6 @@ export function MessageReader({
       frameLinkCleanup.current = undefined;
     };
   }, [message?.id]);
-
-  async function saveChosenAttachments(attachmentIds: string[]) {
-    if (!message || downloadingAttachmentId !== undefined) return;
-    if (attachmentIds.length === 0) return;
-    setDownloadingAttachmentId("chosen");
-    try {
-      await api.saveChosenAttachments(
-        message.accountId,
-        message.id,
-        attachmentIds,
-      );
-    } catch (cause) {
-      setError(String(cause));
-    } finally {
-      setDownloadingAttachmentId(undefined);
-    }
-  }
-
-  async function saveAllAttachments() {
-    if (!message || downloadingAttachmentId !== undefined) return;
-    setDownloadingAttachmentId("all");
-    try {
-      await api.saveAllAttachments(message.accountId, message.id);
-    } catch (cause) {
-      setError(String(cause));
-    } finally {
-      setDownloadingAttachmentId(undefined);
-    }
-  }
-
-  async function download(attachmentId: string, filename: string) {
-    if (!message || downloadingAttachmentId !== undefined) return;
-    setDownloadingAttachmentId(attachmentId);
-    try {
-      await api.saveAttachment(
-        message.accountId,
-        message.id,
-        attachmentId,
-        filename,
-      );
-    } catch (cause) {
-      setError(String(cause));
-    } finally {
-      setDownloadingAttachmentId(undefined);
-    }
-  }
 
   if (settings.readingPane === "hidden" && !message)
     return (
