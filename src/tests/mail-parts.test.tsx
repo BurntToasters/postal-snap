@@ -123,7 +123,7 @@ describe("local mailbox lists", () => {
     fireEvent.click(screen.getByRole("button", { name: /Unread/ }));
     fireEvent.click(
       screen.getByRole("button", {
-        name: `${strings.mail.unsnooze}: ${strings.common.noSubject}`,
+        name: strings.mail.unsnoozeMessage(strings.common.noSubject),
       }),
     );
     expect(onOpen).toHaveBeenCalledWith(message);

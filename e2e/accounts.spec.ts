@@ -15,13 +15,13 @@ test("switches isolated accounts from the account popover and clears stale mail 
 
   await page.getByRole("button", { name: /Sam.*sam@icloud\.com/i }).click();
   const switcher = page.getByRole("menu", { name: "Email accounts" });
-  await expect(switcher.getByRole("menuitem", { name: /Sam/ })).toContainText(
-    "1",
-  );
-  await expect(switcher.getByRole("menuitem", { name: /Work/ })).toContainText(
-    "3",
-  );
-  await switcher.getByRole("menuitem", { name: /Work/ }).click();
+  await expect(
+    switcher.getByRole("menuitemradio", { name: /Sam/ }),
+  ).toContainText("1");
+  await expect(
+    switcher.getByRole("menuitemradio", { name: /Work/ }),
+  ).toContainText("3");
+  await switcher.getByRole("menuitemradio", { name: /Work/ }).click();
 
   await expect(
     page.getByRole("option", { name: /Team launch/i }),
@@ -43,9 +43,9 @@ test("shows per-account status and switcher actions", async ({ page }) => {
   await page.goto("/?multiAccount=1&secondOffline=1");
   await page.getByRole("button", { name: /Sam.*sam@icloud\.com/i }).click();
   const switcher = page.getByRole("menu", { name: "Email accounts" });
-  await expect(switcher.getByRole("menuitem", { name: /Work/ })).toContainText(
-    "Offline",
-  );
+  await expect(
+    switcher.getByRole("menuitemradio", { name: /Work/ }),
+  ).toContainText("Offline");
   await expect(
     switcher.getByRole("menuitem", { name: "Get mail for all accounts" }),
   ).toBeVisible();
@@ -84,7 +84,7 @@ test("remembers the open folder separately for each account", async ({
   await page.getByRole("button", { name: /Sam.*sam@icloud\.com/i }).click();
   await page
     .getByRole("menu", { name: "Email accounts" })
-    .getByRole("menuitem", { name: /Work/ })
+    .getByRole("menuitemradio", { name: /Work/ })
     .click();
   await expect(page.getByRole("heading", { name: "Inbox" })).toBeVisible();
 
@@ -94,7 +94,7 @@ test("remembers the open folder separately for each account", async ({
     .click();
   await page
     .getByRole("menu", { name: "Email accounts" })
-    .getByRole("menuitem", { name: /Sam/ })
+    .getByRole("menuitemradio", { name: /Sam/ })
     .click();
   await expect(page.getByRole("heading", { name: "Archive" })).toBeVisible();
 });
@@ -106,7 +106,7 @@ test("opens a sent notice in the account that owns its outbox", async ({
   await page.getByRole("button", { name: /Sam.*sam@icloud\.com/i }).click();
   await page
     .getByRole("menu", { name: "Email accounts" })
-    .getByRole("menuitem", { name: /Work/ })
+    .getByRole("menuitemradio", { name: /Work/ })
     .click();
   await page.getByRole("button", { name: "Compose", exact: true }).click();
   await page.getByPlaceholder("name@example.com").fill("lee@example.com");
@@ -119,7 +119,7 @@ test("opens a sent notice in the account that owns its outbox", async ({
     .click();
   await page
     .getByRole("menu", { name: "Email accounts" })
-    .getByRole("menuitem", { name: /Sam/ })
+    .getByRole("menuitemradio", { name: /Sam/ })
     .click();
   await page
     .locator(".sent-toast")

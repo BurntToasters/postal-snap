@@ -3,6 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@tauri-apps/plugin-updater", () => ({
   check: vi.fn(),
 }));
+vi.mock("@tauri-apps/api/app", () => ({
+  getVersion: vi.fn().mockResolvedValue("0.4.3"),
+}));
 vi.mock("@tauri-apps/plugin-process", () => ({
   relaunch: vi.fn(),
 }));
@@ -30,6 +33,7 @@ vi.mock("../api", () => ({
     markUpdateChecked: vi.fn().mockResolvedValue(undefined),
     scheduleBackgroundUpdate: vi.fn().mockResolvedValue(undefined),
     distribution: vi.fn().mockResolvedValue({ updatesManagedBy: "postalSnap" }),
+    getBetaUpdaterTarget: vi.fn().mockResolvedValue("darwin-beta"),
   },
 }));
 
@@ -46,6 +50,9 @@ import {
   removeUpdateFoundListener,
   resetUpdateStateForTesting,
   runUpdateSingleFlight,
+  discardPendingUpdate,
+  onUpdateChannelChanged,
+  setBetaRetryDelayForTesting,
   quitOrApplyPendingUpdate,
   startDeferredUpdateOnQuit,
   startPeriodicUpdateCheck,
@@ -69,6 +76,179 @@ function fakeUpdate(
     downloadAndInstall: vi.fn(),
   };
 }
+
+describe("update channel", () => {
+  beforeEach(() => {
+    resetUpdateStateForTesting();
+    mockedCheck.mockReset();
+    useAppStore.setState({
+      settings: { ...useAppStore.getState().settings, updateChannel: "auto" },
+    });
+  });
+
+  it("does not mark an update ready when the channel changes mid-check", async () => {
+    let finishDownload: () => void = () => undefined;
+    mockedCheck
+      .mockResolvedValueOnce(
+        fakeUpdate(
+          "0.5.0-beta.1",
+          () => new Promise<void>((resolve) => (finishDownload = resolve)),
+        ) as never,
+      )
+      .mockResolvedValueOnce(null);
+    useAppStore.setState({
+      settings: { ...useAppStore.getState().settings, updateChannel: "beta" },
+    });
+    const task = runUpdateSingleFlight();
+    await vi.waitFor(() => expect(mockedCheck).toHaveBeenCalledTimes(1));
+    expect(mockedCheck).toHaveBeenCalledWith({ target: "darwin-beta" });
+    useAppStore.setState({
+      settings: { ...useAppStore.getState().settings, updateChannel: "stable" },
+    });
+    finishDownload();
+    expect(await task).toEqual({ available: false });
+    expect(useAppStore.getState().updateReady).toBeNull();
+  });
+});
+
+describe("update polish (0.4.3)", () => {
+  beforeEach(() => {
+    resetUpdateStateForTesting();
+    mockedCheck.mockReset();
+    mockedMessage.mockReset();
+    mockedConfirm.mockReset();
+    setBetaRetryDelayForTesting(0);
+    vi.mocked(api.distribution).mockResolvedValue({
+      updatesManagedBy: "postalSnap",
+    } as never);
+    setChannel("beta");
+  });
+
+  function setChannel(updateChannel: "auto" | "stable" | "beta") {
+    useAppStore.setState({
+      settings: { ...useAppStore.getState().settings, updateChannel },
+    });
+  }
+
+  it("P1 retries a beta check once after a throw", async () => {
+    mockedCheck
+      .mockRejectedValueOnce(new Error("404"))
+      .mockResolvedValueOnce(fakeUpdate("0.5.0-beta.2") as never);
+    expect(await runUpdateSingleFlight()).toEqual({
+      available: true,
+      version: "0.5.0-beta.2",
+    });
+    expect(mockedCheck).toHaveBeenCalledTimes(2);
+  });
+
+  it("P1 retries a beta check once after an empty answer", async () => {
+    mockedCheck
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(fakeUpdate("0.5.0-beta.2") as never);
+    expect((await runUpdateSingleFlight()).available).toBe(true);
+    expect(mockedCheck).toHaveBeenCalledTimes(2);
+  });
+
+  it("P1 gives up after the one retry", async () => {
+    mockedCheck.mockRejectedValue(new Error("404"));
+    await expect(runUpdateSingleFlight()).rejects.toThrow("404");
+    expect(mockedCheck).toHaveBeenCalledTimes(2);
+  });
+
+  it("P2 never retries on stable", async () => {
+    setChannel("stable");
+    mockedCheck.mockResolvedValue(null);
+    expect(await runUpdateSingleFlight()).toEqual({ available: false });
+    expect(mockedCheck).toHaveBeenCalledTimes(1);
+    resetUpdateStateForTesting();
+    mockedCheck.mockClear();
+    mockedCheck.mockRejectedValue(new Error("offline"));
+    await expect(runUpdateSingleFlight()).rejects.toThrow("offline");
+    expect(mockedCheck).toHaveBeenCalledTimes(1);
+  });
+
+  it("P3 closes a discarded ready update and survives a close error", async () => {
+    const update = { ...fakeUpdate("0.5.0-beta.2"), close: vi.fn() };
+    update.close.mockRejectedValue(new Error("gone"));
+    mockedCheck.mockResolvedValue(update as never);
+    await runUpdateSingleFlight();
+    expect(useAppStore.getState().updateReady).toBe("0.5.0-beta.2");
+    discardPendingUpdate();
+    expect(update.close).toHaveBeenCalledTimes(1);
+    expect(useAppStore.getState().updateReady).toBeNull();
+    discardPendingUpdate();
+    expect(update.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("P3 closes a stale download and re-runs on the new channel", async () => {
+    const stale = { ...fakeUpdate("0.5.0-beta.2"), close: vi.fn() };
+    stale.download.mockImplementation(async () => setChannel("stable"));
+    const fresh = fakeUpdate("0.4.4");
+    mockedCheck
+      .mockResolvedValueOnce(stale as never)
+      .mockResolvedValueOnce(fresh as never);
+    const found: Array<string | undefined> = [];
+    const result = await runUpdateSingleFlight((v) => found.push(v));
+    expect(stale.close).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ available: true, version: "0.4.4" });
+    expect(mockedCheck).toHaveBeenNthCalledWith(2);
+  });
+
+  it("P4 a stale result is never reported as up to date", async () => {
+    const stale = { ...fakeUpdate("0.5.0-beta.2"), close: vi.fn() };
+    stale.download.mockImplementation(async () => setChannel("stable"));
+    mockedCheck
+      .mockResolvedValueOnce(stale as never)
+      .mockResolvedValueOnce(fakeUpdate("0.4.4") as never);
+    await checkUpdateInteractive();
+    expect(stale.close).toHaveBeenCalledTimes(1);
+    expect(mockedMessage).not.toHaveBeenCalled();
+    expect(mockedConfirm).toHaveBeenCalledTimes(1);
+    expect(useAppStore.getState().updateReady).toBe("0.4.4");
+  });
+
+  it("P4 says so when the channel keeps changing", async () => {
+    const make = () => {
+      const u = { ...fakeUpdate("0.5.0-beta.2"), close: vi.fn() };
+      u.download.mockImplementation(async () =>
+        setChannel(currentCh() === "stable" ? "beta" : "stable"),
+      );
+      return u;
+    };
+    const currentCh = () => useAppStore.getState().settings.updateChannel;
+    const first = make();
+    mockedCheck
+      .mockResolvedValueOnce(first as never)
+      .mockResolvedValueOnce(make() as never);
+    await checkUpdateInteractive();
+    expect(mockedCheck).toHaveBeenCalledTimes(2);
+    expect(mockedConfirm).not.toHaveBeenCalled();
+    expect(mockedMessage).toHaveBeenCalledWith(
+      "Check for Updates",
+      "Update channel changed. Check again.",
+    );
+  });
+
+  it("only announces a version once the channel is confirmed", async () => {
+    const stale = { ...fakeUpdate("0.5.0-beta.2"), close: vi.fn() };
+    stale.download.mockImplementation(async () => setChannel("stable"));
+    mockedCheck
+      .mockResolvedValueOnce(stale as never)
+      .mockResolvedValueOnce(null);
+    const found: Array<string | undefined> = [];
+    await runUpdateSingleFlight((v) => found.push(v));
+    expect(found).toEqual(["0.5.0-beta.2"]);
+    expect(mockedCheck).toHaveBeenCalledTimes(2);
+  });
+
+  it("onUpdateChannelChanged discards and checks the new target", async () => {
+    mockedCheck.mockResolvedValue(null);
+    setChannel("stable");
+    onUpdateChannelChanged();
+    await vi.waitFor(() => expect(mockedCheck).toHaveBeenCalledTimes(1));
+    expect(mockedCheck).toHaveBeenCalledWith();
+  });
+});
 
 describe("update checks", () => {
   beforeEach(() => {

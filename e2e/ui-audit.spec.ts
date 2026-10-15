@@ -180,7 +180,7 @@ test("nested folders fit the sidebar and actions appear on demand", async ({
     (node) => node.scrollWidth - node.clientWidth,
   );
   expect(overflow).toBeLessThanOrEqual(1);
-  const rename = page.getByRole("button", { name: "Rename Launch" });
+  const rename = page.getByRole("button", { name: "Rename folder Launch" });
   expect(await rename.evaluate((node) => getComputedStyle(node).opacity)).toBe(
     "0",
   );

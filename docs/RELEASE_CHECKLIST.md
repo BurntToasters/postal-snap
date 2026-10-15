@@ -88,6 +88,9 @@ Windows creates the GitHub draft. Mac and Linux wait for that draft and never cr
 - [ ] A machine without WebView2 gets a usable first-run installer; the embedded bootstrapper still downloads the Evergreen WebView2 runtime from Microsoft, so network access to `go.microsoft.com` is required. Do not ship `webviewInstallMode: skip`. Test `offlineInstaller` before claiming offline installs.
 - [ ] Download the Windows installer in a browser on a clean VM with SmartScreen enabled and record the SmartScreen state and any warning the user sees. Artifact Signing provides base reputation only and is not an EV certificate.
 - [ ] Direct builds update from the correct signed stable or beta GitHub manifest.
+- [ ] On a signed stable build, Update channel Auto checks `latest-<target>-<arch>.json`; Beta checks `latest-<target>-beta-<arch>.json`.
+- [ ] On a signed beta build, Stable does not downgrade and waits for a newer stable release. Switching channels discards an already-downloaded update.
+- [ ] Microsoft Store, Mac App Store, and Flatpak builds show no Update channel picker.
 - [ ] Install, upgrade, and uninstall preserve or remove user data exactly as documented.
 
 ## Later: store packages (not a GitHub 0.4.0 gate)
@@ -104,6 +107,7 @@ Windows creates the GitHub draft. Mac and Linux wait for that draft and never cr
 - [ ] `GPG_KEY_ID` is the signer's full fingerprint; local and draft GPG verification compares it against `VALIDSIG` and rejects any other key.
 - [ ] Normalized artifacts, SHA-256 files, GPG signatures, updater payloads, and embedded updater signatures all verify.
 - [ ] Stable and beta manifest names route to the intended release.
+- [ ] After a stable publish, `/releases/latest` holds both the stable and the beta manifest sets for every target and architecture.
 - [ ] After every architecture is uploaded, `npm run release:verify:local` and/or `npm run release:verify-draft` pass on the complete set. `release:finalize:hard` is the publish step; it also verifies the remote draft.
 - [ ] The assembled GitHub release remains an unpublished draft until every required GitHub-only manual gate is checked.
 - [ ] A recovery copy of signing and updater keys exists outside the build host.

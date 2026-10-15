@@ -202,6 +202,7 @@ export type NativeCommand =
   | "clear_downloaded_mail"
   | "retry_attachment_cleanup"
   | "get_distribution_channel"
+  | "get_beta_updater_target"
   | "get_license_credits"
   | "get_sync_progress"
   | "discover_account_aliases"
@@ -654,6 +655,7 @@ export const api = {
   clearCache: () => call<void>("clear_downloaded_mail"),
   retryAttachmentCleanup: () => call<boolean>("retry_attachment_cleanup"),
   distribution: () => call<DistributionChannel>("get_distribution_channel"),
+  getBetaUpdaterTarget: () => call<string>("get_beta_updater_target"),
   getLicenseCredits: () => call<LicenseCredits>("get_license_credits"),
   getSyncProgress: (accountId: string) =>
     call<SyncProgress>("get_sync_progress", { accountId }),

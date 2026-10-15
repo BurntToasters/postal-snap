@@ -950,19 +950,20 @@ describe("SettingsDialog component", () => {
     ]);
   });
 
-  it("opens Privacy & Security from General settings", async () => {
+  it("opens Advanced from General settings", async () => {
     render(<SettingsDialog initialTab="general" onClose={vi.fn()} />);
 
     expect(screen.getByRole("heading", { name: "General" })).toBeVisible();
     await act(async () => {
-      const privacy = screen.getByRole("tab", { name: "Privacy & Security" });
+      const privacy = screen.getByRole("tab", { name: "Advanced" });
       privacy.focus();
       fireEvent.click(privacy);
     });
 
-    expect(
-      screen.getByRole("tab", { name: "Privacy & Security" }),
-    ).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Advanced" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
     expect(
       screen.getByRole("checkbox", {
         name: /Block advertising and tracking images/,
@@ -978,9 +979,7 @@ describe("SettingsDialog component", () => {
         requestAnimationFrame(() => resolve());
       });
     });
-    expect(
-      screen.getByRole("tab", { name: "Privacy & Security" }),
-    ).toHaveFocus();
+    expect(screen.getByRole("tab", { name: "Advanced" })).toHaveFocus();
   });
 
   it("asks before turning off advertising and tracking image checks", async () => {
@@ -1437,7 +1436,7 @@ describe("SettingsDialog component", () => {
       target: { value: "recent" },
     });
 
-    fireEvent.click(screen.getByRole("tab", { name: "Privacy & Security" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Advanced" }));
     fireEvent.click(await screen.findByRole("checkbox", { name: /reported/i }));
     fireEvent.click(
       document.querySelector(".settings-confirm-overlay") as HTMLElement,

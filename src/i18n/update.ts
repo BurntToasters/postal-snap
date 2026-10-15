@@ -14,6 +14,7 @@ export const update = {
   checkErrorTitle: "Check for Updates",
   checkErrorMessage:
     "Postal Snap could not connect to the update service. Please check your internet connection and try again.",
+  channelChangedMessage: "Update channel changed. Check again.",
   downloadErrorTitle: "Update Failed",
   downloadErrorMessage:
     "Failed to download the update. Please check your internet connection and try again.",

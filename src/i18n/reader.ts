@@ -225,7 +225,7 @@ export const reader = {
   forwardedMessage: "You forwarded this message",
   invitation: "Calendar invitation",
   inviteMethod: (method: string | null | undefined, status?: string | null) => {
-    if (method === "CANCEL" || status === "CANCELLED") return "Cancelled";
+    if (method === "CANCEL" || status === "CANCELLED") return "Canceled";
     if (method === "REQUEST") return "Invitation";
     if (method === "REPLY") return "Reply to an invitation";
     if (method === "COUNTER") return "Proposed new time";

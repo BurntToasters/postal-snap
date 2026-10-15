@@ -10,6 +10,14 @@ export async function registerMockSettingsSystem(page: Page): Promise<void> {
     const state = window.__POSTAL_SNAP_TEST__ as MockState;
     const { params } = mock;
     const windowFxSupported = !location.search.includes("noWindowFx");
+    // Channel survives reload like the saved settings file does.
+    const savedChannel = (() => {
+      try {
+        return sessionStorage.getItem("mockUpdateChannel");
+      } catch {
+        return null;
+      }
+    })();
     let currentSettings = {
       schemaVersion: 2,
       readingPane:
@@ -84,6 +92,7 @@ export async function registerMockSettingsSystem(page: Page): Promise<void> {
       notifyNewMail: true,
       closeToTray: true,
       updateCheckInterval: "startupAnd6h",
+      updateChannel: params.get("channel") ?? savedChannel ?? "auto",
       setupCompleted:
         !location.search.includes("firstRun") && !params.has("setupIncomplete"),
       setupStep: null,
@@ -127,10 +136,24 @@ export async function registerMockSettingsSystem(page: Page): Promise<void> {
         if (params.has("failStepSave") && next.setupStep) {
           throw new Error("Could not write settings.");
         }
+        if (
+          params.has("failChannelSave") &&
+          next.updateChannel !== currentSettings.updateChannel
+        ) {
+          throw new Error("Could not write settings.");
+        }
         if (params.has("failDarkSave") && next.theme === "dark") {
           throw new Error("Could not write settings.");
         }
         state.savedSettings.push(args.settings);
+        try {
+          sessionStorage.setItem(
+            "mockUpdateChannel",
+            String(next.updateChannel),
+          );
+        } catch {
+          // Storage may be unavailable.
+        }
         currentSettings = {
           ...currentSettings,
           ...next,
@@ -176,6 +199,7 @@ export async function registerMockSettingsSystem(page: Page): Promise<void> {
           quietHoursEnd: "",
           closeToTray: true,
           updateCheckInterval: "startupAnd6h",
+          updateChannel: "auto",
           setupCompleted: true,
           setupStep: null,
         };
@@ -202,7 +226,15 @@ export async function registerMockSettingsSystem(page: Page): Promise<void> {
         return leftoversPending;
       },
       get_distribution_channel() {
-        return { kind: "direct", updatesManagedBy: "postalSnap" };
+        return params.has("store")
+          ? { kind: "microsoftStore", updatesManagedBy: "store" }
+          : { kind: "direct", updatesManagedBy: "postalSnap" };
+      },
+      get_beta_updater_target() {
+        return "darwin-beta";
+      },
+      "plugin:app|version"() {
+        return params.get("version") ?? "0.4.3";
       },
       get_license_credits() {
         return {

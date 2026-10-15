@@ -5,8 +5,8 @@
 
 | <img height="20" src="https://raw.githubusercontent.com/BurntToasters/bcls/main/media/windows.png" /> Windows                                                                                                                                                                                      | <img height="20" src="https://raw.githubusercontent.com/BurntToasters/bcls/main/media/mac.png" /> macOS                           | <img height="20" src="https://raw.githubusercontent.com/BurntToasters/bcls/main/media/linux.png" /> Linux                                                                                                                                                                       |
 | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | :-------------------------------------------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **EXE:** [x64](https://github.com/BurntToasters/postal-snap/releases/download/v0.4.2/Postal-Snap-Windows-x64.exe) / [arm64](https://github.com/BurntToasters/postal-snap/releases/download/v0.4.2/Postal-Snap-Windows-arm64.exe)                                                                   | **[Universal DMG](https://github.com/BurntToasters/postal-snap/releases/download/v0.4.2/Postal-Snap-macOS.dmg)**                  | **AppImage:** [x64](https://github.com/BurntToasters/postal-snap/releases/download/v0.4.2/Postal-Snap-Linux-x64.AppImage)                                                                                                                                                     |
-| <!-- <div align="center"><a href="https://apps.microsoft.com/detail/<MS_STORE_ID>?referrer=appbadge&mode=full"><img src="https://get.microsoft.com/images/en-us%20light.svg" width="150"/></a></div> -->                                                                                           | **[Universal ZIP](https://github.com/BurntToasters/postal-snap/releases/download/v0.4.2/Postal-Snap-macOS.zip)**                  | **Flatpak:** [x64](https://github.com/BurntToasters/postal-snap/releases/download/v0.4.2/Postal-Snap-Linux-x64.flatpak)                                                                                                                                                          |
+| **EXE:** [x64](https://github.com/BurntToasters/postal-snap/releases/download/v0.4.3/Postal-Snap-Windows-x64.exe) / [arm64](https://github.com/BurntToasters/postal-snap/releases/download/v0.4.3/Postal-Snap-Windows-arm64.exe)                                                                   | **[Universal DMG](https://github.com/BurntToasters/postal-snap/releases/download/v0.4.3/Postal-Snap-macOS.dmg)**                  | **AppImage:** [x64](https://github.com/BurntToasters/postal-snap/releases/download/v0.4.3/Postal-Snap-Linux-x64.AppImage)                                                                                                                                                     |
+| <!-- <div align="center"><a href="https://apps.microsoft.com/detail/<MS_STORE_ID>?referrer=appbadge&mode=full"><img src="https://get.microsoft.com/images/en-us%20light.svg" width="150"/></a></div> -->                                                                                           | **[Universal ZIP](https://github.com/BurntToasters/postal-snap/releases/download/v0.4.3/Postal-Snap-macOS.zip)**                  | **Flatpak:** [x64](https://github.com/BurntToasters/postal-snap/releases/download/v0.4.3/Postal-Snap-Linux-x64.flatpak)                                                                                                                                                          |
 
 > [!IMPORTANT]
 > The `.sig` files in this repo are NOT normal gpg signatures — they are for Tauri V2's
@@ -20,17 +20,16 @@
 
 Postal Snap is a calm, accessible desktop email client. Mail stays on your computer. There is no Postal Snap cloud, telemetry, or account of mine to log into.
 
-## Changes in `v0.4.2:`
+## Changes in `v0.4.3:`
 
-- **FIX - Message list layout:** Messages, folder headings, filters, and day labels line up again. Selected messages use one continuous highlight.
-- **NEW - Message hover actions:** Hover over a message for Star, Read or Unread, Archive, and Trash. Star and unread indicators stay visible. Touch and keyboard controls remain available.
-- **IMPROVED - Mailbox filters:** All, Unread, and Starred stay visible. More holds Pinned, To me, Has attachments, and Invitations, and shows the active filter.
-- **FIX - Quick reply width:** Quick reply fills the reader width, expands when focused or filled, and grows as you type. Reply still opens the full composer.
-- **FIX - Quick reply keeps your note:** If another message cannot be saved or replaced, your quick reply stays in the box. Opening a reply also avoids a composer crash in WebKit.
-- **IMPROVED - Reader toolbar:** Reply actions stay together. Star, Archive, Trash, and More share a group. Message navigation appears only when needed.
-- **IMPROVED - Header and sidebar alignment:** Reader links and notices line up with the message. The unread-folders control matches the sidebar.
-- **FIX - Large text and compact layout:** Message rows, filters, and reader controls fit better at 200% text in comfortable and compact density.
-- **IMPROVED - Code organization:** Mailbox and reader behavior is split into smaller modules for easier maintenance.
+- **NEW - Update channel:** Settings > Advanced has an Update channel choice: Auto, Stable, or Beta. Auto follows the build you installed. It is hidden in Microsoft Store, Mac App Store, and Flatpak builds. Switching channels discards an update that was already downloaded.
+- **IMPROVED - Beta to Stable:** Choosing Stable on a beta build never downgrades. Postal Snap waits for a newer stable release.
+- **IMPROVED - Settings tab name:** "Privacy & Security" is now "Advanced".
+- **IMPROVED - Large text and density:** Switches, checkboxes, radio buttons, folder indents, and recipient suggestions scale with text size in comfortable and compact density.
+- **IMPROVED - Keyboard and screen readers:** Dialogs keep focus inside, including summaries and the composer body. Recent searches support full keyboard use. The account switcher announces the selected account. Setup announces completed steps. The search scope label stays stable and shows its state in forced-colors mode.
+- **IMPROVED - Folder list:** The expand button is a full-size target and reports whether it is expanded. Folder action names are consistent.
+- **IMPROVED - Truncated text:** Cut-off text and icon buttons show their full name on hover.
+- **FIX - Wording:** Uses "Canceled" and "On this computer" consistently.
 
 ## ℹ️ Release Info
 

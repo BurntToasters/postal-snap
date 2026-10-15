@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { updaterManifestNames } from "./lib/artifacts.js";
 import { json } from "./lib/json.js";
 import { root } from "./lib/paths.js";
 import { run } from "./lib/spawn.js";
@@ -14,7 +15,6 @@ assertGitHubCliAuthenticated();
 
 const pkg = await json(join(root, "package.json"));
 const tag = `v${pkg.version}`;
-const channel = pkg.version.includes("-") ? "-beta" : "";
 const assets = githubJson([
   "release",
   "view",
@@ -69,7 +69,7 @@ for (const [platform, arch] of [
     ? [["linux", "aarch64"]]
     : []),
 ]) {
-  required.push(`latest-${platform}${channel}-${arch}.json`);
+  required.push(...updaterManifestNames(platform, arch, pkg.version));
 }
 const missing = required.filter((name) => !assets.includes(name));
 if (missing.length)

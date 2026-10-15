@@ -69,7 +69,9 @@ export function SnoozedList({
             type="button"
             className="icon-button"
             onClick={() => void onUnsnooze(item.message.id)}
-            aria-label={`${strings.mail.unsnooze}: ${item.message.subject || strings.common.noSubject}`}
+            aria-label={strings.mail.unsnoozeMessage(
+              item.message.subject || strings.common.noSubject,
+            )}
             title={strings.mail.unsnooze}
           >
             <X aria-hidden="true" />

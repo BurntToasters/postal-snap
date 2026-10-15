@@ -243,7 +243,9 @@ export function MessageHeader({
         {message.replyTo && message.replyTo !== message.senderAddress ? (
           <div className="recipient-summary">
             <span className="recipient-label">{strings.reader.replyTo}</span>
-            <span className="recipient-preview">{message.replyTo}</span>
+            <span className="recipient-preview" title={message.replyTo}>
+              {message.replyTo}
+            </span>
           </div>
         ) : null}
         <div className="message-header-links">

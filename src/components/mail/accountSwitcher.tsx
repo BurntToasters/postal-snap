@@ -1,7 +1,14 @@
 import { useEffect, useRef } from "react";
-import { ChevronDown, MailPlus, RefreshCw, Settings } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  MailPlus,
+  RefreshCw,
+  Settings,
+} from "lucide-react";
 import { accountSyncPhase } from "../../accountStatus";
 import { strings } from "../../i18n";
+import { moveMenuFocus } from "../toolbarNav";
 import type { AccountInboxCount, AccountSummary, SyncState } from "../../types";
 import { UnreadBadge } from "./unreadBadge";
 
@@ -70,7 +77,7 @@ export function AccountSwitcher({
     if (!open) return;
     rootRef.current
       ?.querySelector<HTMLButtonElement>(
-        "[role='menuitem'][aria-current='true']",
+        "[role='menuitemradio'][aria-checked='true']",
       )
       ?.focus();
     const close = (event: MouseEvent) => {
@@ -110,8 +117,10 @@ export function AccountSwitcher({
           {initial(activeAccount)}
         </span>
         <span>
-          <strong>{activeAccount?.displayName || strings.mail.account}</strong>
-          <small>{activeAccount?.email}</small>
+          <strong title={activeAccount?.displayName || undefined}>
+            {activeAccount?.displayName || strings.mail.account}
+          </strong>
+          <small title={activeAccount?.email}>{activeAccount?.email}</small>
         </span>
         <UnreadBadge
           count={otherUnread}
@@ -124,6 +133,13 @@ export function AccountSwitcher({
           className="account-switcher-menu app-menu"
           role="menu"
           aria-label={strings.mail.emailAccounts}
+          onKeyDown={(event) => {
+            if (event.key === "Tab") {
+              onOpenChange(false);
+              return;
+            }
+            moveMenuFocus(event);
+          }}
         >
           {accounts.map((account) => {
             const count = counts.find((item) => item.accountId === account.id);
@@ -132,10 +148,8 @@ export function AccountSwitcher({
               <button
                 key={account.id}
                 type="button"
-                role="menuitem"
-                aria-current={
-                  account.id === activeAccount?.id ? "true" : undefined
-                }
+                role="menuitemradio"
+                aria-checked={account.id === activeAccount?.id}
                 data-context="account"
                 data-account-id={account.id}
                 onClick={() => {
@@ -152,8 +166,10 @@ export function AccountSwitcher({
                   {initial(account)}
                 </span>
                 <span className="account-switcher-copy">
-                  <strong>{account.displayName || account.email}</strong>
-                  <small>{account.email}</small>
+                  <strong title={account.displayName || account.email}>
+                    {account.displayName || account.email}
+                  </strong>
+                  <small title={account.email}>{account.email}</small>
                   <small className="account-status-label">
                     <i className={`account-status-dot ${status.className}`} />
                     {status.label}
@@ -163,6 +179,9 @@ export function AccountSwitcher({
                   count={count?.unreadCount ?? 0}
                   label={strings.mail.unreadCount(count?.unreadCount ?? 0)}
                 />
+                {account.id === activeAccount?.id ? (
+                  <Check className="account-check" aria-hidden="true" />
+                ) : null}
               </button>
             );
           })}

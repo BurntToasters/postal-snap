@@ -39,7 +39,7 @@ test("the window title shows the active Inbox unread count", async ({
   await page.getByRole("button", { name: /Sam.*sam@icloud\.com/i }).click();
   await page
     .getByRole("menu", { name: "Email accounts" })
-    .getByRole("menuitem", { name: /Work/ })
+    .getByRole("menuitemradio", { name: /Work/ })
     .click();
   await expect(page).toHaveTitle("Work (3) — Postal Snap");
   await expect

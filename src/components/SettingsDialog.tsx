@@ -1091,6 +1091,7 @@ export function SettingsDialog({
             type="button"
             onClick={requestClose}
             aria-label={strings.settings.close}
+            title={strings.settings.close}
           >
             <X aria-hidden="true" />
           </button>
@@ -1292,6 +1293,8 @@ export function SettingsDialog({
                 ) : null}
                 {tab === "advanced" ? (
                   <AdvancedTab
+                    distribution={distribution}
+                    update={update}
                     setAdvertisingBlocking={setAdvertisingBlocking}
                     setThreatBlocking={setThreatBlocking}
                   />

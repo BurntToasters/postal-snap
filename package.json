@@ -1,6 +1,6 @@
 {
   "name": "postal-snap",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "private": true,
   "packageManager": "npm@12.0.2",
   "license": "MPL-2.0",
@@ -32,6 +32,7 @@
     "test:e2e": "node scripts/run-e2e.js",
     "setup:e2e": "playwright install chromium webkit",
     "test:release-assets": "node scripts/run-release-asset-tests.js",
+    "test:release-dry-run": "node scripts/release-dry-run.js",
     "test:cargo-safe-update": "node --test scripts/cargo/safe-update.test.mjs scripts/cargo/check-update-policy.test.mjs",
     "check:cargo-update-policy": "node scripts/check-cargo-update-policy.mjs",
     "test:all": "node scripts/test-all.js",

@@ -166,7 +166,7 @@ function switchToAccount(accountId: string) {
   if (!account) throw new Error(`Missing account ${accountId}`);
   fireEvent.click(document.querySelector(".account-switcher-trigger")!);
   fireEvent.click(
-    screen.getByRole("menuitem", {
+    screen.getByRole("menuitemradio", {
       name: new RegExp(account.displayName || account.email, "i"),
     }),
   );
@@ -3953,7 +3953,7 @@ describe("mail shell", () => {
       }),
     ).toBeVisible();
     fireEvent.click(
-      screen.getByRole("button", { name: "Bring back: First message" }),
+      screen.getByRole("button", { name: "Bring back First message" }),
     );
     await waitFor(() =>
       expect(mockedUnsnoozeMessage).toHaveBeenCalledWith("account-1", 1),
@@ -4180,15 +4180,16 @@ describe("mail shell", () => {
       limit: 250,
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "This mailbox" }));
+    fireEvent.click(screen.getByRole("button", { name: "All folders" }));
     await waitFor(() =>
       expect(mockedSearchServer).toHaveBeenLastCalledWith(
         expect.objectContaining({ allFolders: true }),
       ),
     );
-    expect(
-      screen.getByRole("button", { name: "This account" }),
-    ).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "All folders" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
     expect(
       screen.getByRole("option", { name: /Cached match/i }),
     ).toHaveAccessibleName(/In Inbox/);
@@ -4496,7 +4497,7 @@ describe("mail shell", () => {
       'from:"jane@example.test"',
     );
     expect(
-      screen.getByRole("button", { name: strings.mail.thisAccount }),
+      screen.getByRole("button", { name: strings.mail.searchAllFolders }),
     ).toHaveAttribute("aria-pressed", "true");
   });
 
@@ -4826,7 +4827,9 @@ describe("mail shell", () => {
       expect(mockedCreateFolder).toHaveBeenCalledWith("account-1", "Receipts"),
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Rename Projects" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Rename folder Projects" }),
+    );
     fireEvent.change(screen.getByPlaceholderText("Folder name"), {
       target: { value: "Client work" },
     });
@@ -4835,7 +4838,9 @@ describe("mail shell", () => {
     });
     expect(mockedRenameFolder).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Rename Projects" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Rename folder Projects" }),
+    );
     fireEvent.change(screen.getByPlaceholderText("Folder name"), {
       target: { value: "Client work" },
     });
@@ -4850,13 +4855,13 @@ describe("mail shell", () => {
 
     vi.mocked(api.showNativeConfirm).mockResolvedValueOnce(false);
     fireEvent.click(
-      screen.getByRole("button", { name: "Delete folder: Projects" }),
+      screen.getByRole("button", { name: "Delete folder Projects" }),
     );
     await waitFor(() => expect(api.showNativeConfirm).toHaveBeenCalled());
     expect(mockedDeleteFolder).not.toHaveBeenCalled();
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Delete folder: Projects" }),
+      screen.getByRole("button", { name: "Delete folder Projects" }),
     );
     await waitFor(() =>
       expect(mockedDeleteFolder).toHaveBeenCalledWith("account-1", 4),
@@ -5390,7 +5395,7 @@ describe("mail shell", () => {
     );
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Delete folder: Projects" }),
+      screen.getByRole("button", { name: "Delete folder Projects" }),
     );
     await waitFor(() =>
       expect(useAppStore.getState().error).toMatch(/delete denied/i),
@@ -5514,7 +5519,7 @@ describe("mail shell", () => {
 
     mockedUnsnoozeMessage.mockRejectedValueOnce(new Error("unsnooze failed"));
     fireEvent.click(
-      screen.getByRole("button", { name: "Bring back: First message" }),
+      screen.getByRole("button", { name: "Bring back First message" }),
     );
     await waitFor(() =>
       expect(useAppStore.getState().error).toMatch(/unsnooze failed/i),

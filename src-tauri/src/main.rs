@@ -462,6 +462,7 @@ fn main() {
             commands::settings_system::clear_downloaded_mail,
             commands::settings_system::retry_attachment_cleanup,
             commands::settings_system::get_distribution_channel,
+            commands::settings_system::get_beta_updater_target,
             commands::settings_system::get_license_credits,
             commands::accounts::discover_account_aliases,
             commands::accounts::update_account_aliases,

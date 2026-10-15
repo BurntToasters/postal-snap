@@ -1,6 +1,6 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { sha256 } from "./lib/artifacts.js";
+import { sha256, updaterManifestNames } from "./lib/artifacts.js";
 import {
   assertGpgSignatureFingerprint,
   expectedGpgFingerprint,
@@ -53,7 +53,6 @@ if (!expectedGpgKey) {
 }
 const pkg = await json(join(root, "package.json"));
 const tag = `v${pkg.version}`;
-const channel = pkg.version.includes("-") ? "-beta" : "";
 const manifests = [
   ["windows", "x86_64", "Postal-Snap-Windows-x64.exe"],
   ["windows", "aarch64", "Postal-Snap-Windows-arm64.exe"],
@@ -63,12 +62,15 @@ const manifests = [
   ...(updaterPayloads.includes("Postal-Snap-Linux-arm64.AppImage")
     ? [["linux", "aarch64", "Postal-Snap-Linux-arm64.AppImage"]]
     : []),
-].map(([platform, arch, payload]) => ({
-  platform,
-  arch,
-  payload,
-  name: `latest-${platform}${channel}-${arch}.json`,
-}));
+].flatMap(([platform, arch, payload]) =>
+  updaterManifestNames(platform, arch, pkg.version).map((name) => ({
+    platform,
+    arch,
+    payload,
+    name,
+    beta: name.includes("-beta-"),
+  })),
+);
 const required = [];
 for (const name of [...artifacts, ...updaterPayloads]) {
   required.push(name, `${name}.sha256`, `${name}.asc`);
@@ -116,7 +118,7 @@ if (
   );
 }
 
-for (const { platform, arch, payload, name } of manifests) {
+for (const { platform, arch, payload, name, beta } of manifests) {
   const manifest = JSON.parse(await readFile(join(directory, name), "utf8"));
   validateManifest(manifest);
   const key = `${platform}-${arch}`;
@@ -127,10 +129,14 @@ for (const { platform, arch, payload, name } of manifests) {
   ).trim();
   if (
     manifest.version !== pkg.version ||
-    Object.keys(manifest.platforms).length !== 1 ||
+    Object.keys(manifest.platforms).length !== (beta ? 2 : 1) ||
     !platformEntry ||
     platformEntry.url !== expectedUrl ||
-    platformEntry.signature !== expectedSignature
+    platformEntry.signature !== expectedSignature ||
+    (beta &&
+      (manifest.platforms[`${platform}-beta`]?.url !== expectedUrl ||
+        manifest.platforms[`${platform}-beta`]?.signature !==
+          expectedSignature))
   ) {
     throw new Error(`Updater manifest does not match ${payload}: ${name}`);
   }

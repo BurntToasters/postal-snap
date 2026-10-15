@@ -47,6 +47,10 @@ fn default_update_check_interval() -> String {
     "startupAnd6h".into()
 }
 
+fn default_update_channel() -> String {
+    "auto".into()
+}
+
 fn default_mark_read() -> String {
     "open".into()
 }
@@ -783,6 +787,10 @@ pub struct AppSettings {
     pub close_to_tray: bool,
     #[serde(default = "default_update_check_interval")]
     pub update_check_interval: String,
+    /// Update channel: `auto`, `stable`, or `beta`. Not portable: import
+    /// must never switch a user's channel.
+    #[serde(default = "default_update_channel")]
+    pub update_channel: String,
     #[serde(default)]
     pub setup_completed: bool,
     #[serde(default)]
@@ -940,6 +948,7 @@ impl Default for AppSettings {
             notify_new_mail: true,
             close_to_tray: true,
             update_check_interval: default_update_check_interval(),
+            update_channel: default_update_channel(),
             setup_completed: false,
             setup_step: None,
         }

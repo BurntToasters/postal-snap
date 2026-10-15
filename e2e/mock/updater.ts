@@ -4,6 +4,8 @@ import type { MockShared, MockState } from "./context";
 // Updater plugin plus update relaunch commands. `?update=1` offers 9.9.9;
 // `?updateLater=1` offers it only from the second check (Check for Updates);
 // `?updateRelaunch=window|background` simulates a launch after an update.
+// `?betaFlaky=1|empty` fails (or empties) the first beta check, and
+// `?downloadSlow=1` holds the download ~1.5s. `?version=` sets the app version; check's target arg is recorded.
 // Every call is recorded in state.updateCalls. The init script below is
 // stringified into the page, so keep it self-contained.
 export async function registerMockUpdater(page: Page): Promise<void> {
@@ -18,9 +20,19 @@ export async function registerMockUpdater(page: Page): Promise<void> {
         return result ? result() : undefined;
       };
     let checks = 0;
+    let betaChecks = 0;
     Object.assign(mock.handlers, {
       "plugin:updater|check": record("check", () => {
         checks += 1;
+        const args = state.updateCalls[state.updateCalls.length - 1].args;
+        if (args.target) {
+          betaChecks += 1;
+          const flaky = params.get("betaFlaky");
+          if (flaky && betaChecks === 1) {
+            if (flaky === "empty") return null;
+            throw "404 Not Found";
+          }
+        }
         const offered =
           params.has("update") || (params.has("updateLater") && checks > 1);
         return offered
@@ -29,6 +41,9 @@ export async function registerMockUpdater(page: Page): Promise<void> {
       }),
       "plugin:updater|download": record("download", () => {
         if (params.has("downloadFails")) throw "network lost";
+        if (params.has("downloadSlow")) {
+          return new Promise((resolve) => setTimeout(() => resolve(72), 1500));
+        }
         return 72;
       }),
       "plugin:updater|install": record("install"),

@@ -56,7 +56,7 @@ Important files:
 - `src-tauri/src/security.rs`: remote-image SSRF defenses, redaction, and shared external-link inspection.
 - `src-tauri/src/content_blocking.rs`: Brave `adblock` network-rule checks for remote images.
 - `src-tauri/src/threat_blocking.rs`: local TweetFeed domain/URL reported-threat checks.
-- `src-tauri/src/settings.rs`: validated atomic `settings.json` storage, including the direct-edition `updateCheckInterval` cadence and `closeToTray`.
+- `src-tauri/src/settings.rs`: validated atomic `settings.json` storage, including the direct-edition `updateCheckInterval` cadence, `updateChannel`, and `closeToTray`.
 - `src-tauri/src/tray.rs`: Windows notification-area / macOS menu bar extra for close-to-tray.
 - `src-tauri/src/bridge.rs`: Proton Bridge certificate staging, approval, and fingerprint pinning.
 - `src-tauri/src/providers.rs`: provider presets, MX matching, and HTTPS autoconfig discovery.
@@ -126,6 +126,7 @@ These are release blockers. Do not weaken them for convenience.
   `https://github.com/BurntToasters/postal-snap/releases/latest/download/latest-{{target}}-{{arch}}.json`
 - Stable manifests: `latest-<target>-<arch>.json`.
 - Beta manifests: `latest-<target>-beta-<arch>.json`.
+- The update channel is chosen at runtime (`updateChannel`: auto, stable, or beta; Settings > Advanced, direct builds only). Stable releases publish both stable and beta manifests.
 - Never reintroduce `prod.rosie.run` or S3 updater assumptions.
 - Direct Windows: signed x64/arm64 NSIS `.exe` plus signed updater payloads.
 - Direct macOS: universal Developer ID signed/notarized DMG and ZIP.

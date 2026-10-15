@@ -423,6 +423,8 @@ export type SettingsPatch = Partial<Omit<AppSettings, "cachePolicy">> & {
 
 export type SetupStep = "welcome" | "appearance" | "comfort" | "account";
 
+export type UpdateChannel = "auto" | "stable" | "beta";
+
 export type UpdateCheckInterval =
   "startupAnd6h" | "startupAnd12h" | "startupAnd24h" | "startup" | "manual";
 
@@ -521,6 +523,7 @@ export interface AppSettings {
   notifyNewMail: boolean;
   closeToTray: boolean;
   updateCheckInterval: UpdateCheckInterval;
+  updateChannel: UpdateChannel;
   setupCompleted: boolean;
   setupStep?: SetupStep | null;
 }
