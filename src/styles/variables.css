@@ -85,6 +85,8 @@
   --reader-pad-inline: clamp(18px, 3vw, 30px);
   --bar-pad-block: 6px;
   --bar-pad-block-lg: 10px;
+  /* Quick reply grows with typing up to this height. */
+  --quick-reply-max-block: min(12rem, 35dvh);
   --sidebar-gap: 3px;
   --pane-heading-height: 4.125rem;
   --pane-heading-pad-block: 9px;
@@ -244,6 +246,7 @@
   --reader-pad-inline: 16px;
   --bar-pad-block: 4px;
   --bar-pad-block-lg: 4px;
+  --quick-reply-max-block: min(9rem, 30dvh);
   --sidebar-gap: 1px;
   --pane-heading-height: 2.75rem;
   --pane-heading-pad-block: 4px;

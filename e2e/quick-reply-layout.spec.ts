@@ -85,8 +85,9 @@ for (const [label, query] of variants) {
     const control = await px(page, "var(--control-height)");
     expect(textarea.height).toBeLessThanOrEqual(control * 1.3);
     const pane = await rect(page.locator(".reader-pane"));
-    expect(textarea.width).toBeGreaterThanOrEqual(pane.width * 0.9);
     const title = await rect(page.locator("#message-title"));
+    const content = pane.width - 2 * (title.x - pane.x);
+    expect(textarea.width).toBeGreaterThanOrEqual(content * 0.9);
     expect(Math.abs(textarea.x - title.x)).toBeLessThanOrEqual(1);
     await expect(page.locator(".quick-reply-footer")).toBeHidden();
   });

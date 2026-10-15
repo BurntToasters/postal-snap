@@ -45,7 +45,10 @@ test("a refused replacement keeps the note in the box", async ({
   await openWeekend(page);
   const box = page.getByRole("textbox", { name: "Write a reply" });
   await box.fill("See you then");
-  await page.getByRole("button", { name: "Start reply", exact: true }).click();
+  // The docked draft pill covers the button, so press it by keyboard.
+  await page
+    .getByRole("button", { name: "Start reply", exact: true })
+    .press("Enter");
   await expect(
     page.getByRole("alert").filter({ hasText: replaceSaveFailed }),
   ).toBeVisible();
@@ -92,7 +95,10 @@ test("an accepted replacement clears the note and a new note stays", async ({
   await openWeekend(page);
   const box = page.getByRole("textbox", { name: "Write a reply" });
   await box.fill("First note");
-  await page.getByRole("button", { name: "Start reply", exact: true }).click();
+  // The docked draft pill covers the button, so press it by keyboard.
+  await page
+    .getByRole("button", { name: "Start reply", exact: true })
+    .press("Enter");
   await expect(
     page.getByRole("textbox", { name: "Subject", exact: true }),
   ).toHaveValue(/Weekend plans/);

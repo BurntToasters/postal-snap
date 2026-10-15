@@ -22,29 +22,56 @@
   min-height: var(--reader-body-min);
 }
 
-/* Short windows: quick reply scrolls with the letter instead of covering it. */
-@media (max-height: 640px) {
-  .quick-reply {
-    position: static;
-  }
-}
-
 .quick-reply {
   position: sticky;
   bottom: 0;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-2);
   margin-top: auto;
-  padding-block: var(--bar-pad-block-lg);
-  padding-inline: var(--space-4);
+  padding: var(--bar-pad-block-lg) var(--reader-pad-inline);
   border-top: 1px solid var(--border);
   background: var(--surface);
 }
 
+/* One line until focused or filled; WebKit buttons never take focus. */
+.quick-reply textarea {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  min-height: var(--control-height);
+  max-height: var(--quick-reply-max-block);
+  padding-block: var(--control-pad-block);
+  resize: none;
+}
+
+.quick-reply:focus-within textarea,
+.quick-reply[data-filled] textarea {
+  min-height: calc(3lh + 2 * var(--control-pad-block) + 2px);
+}
+
+.pane-bottom .quick-reply textarea {
+  max-height: min(
+    var(--quick-reply-max-block),
+    calc(var(--rendered-reader-height) * 0.35)
+  );
+}
+
+.quick-reply-footer {
+  display: none;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.quick-reply:focus-within .quick-reply-footer,
+.quick-reply[data-filled] .quick-reply-footer {
+  display: flex;
+}
+
 .quick-reply-to {
-  flex: 1 0 100%;
+  min-width: 0;
   margin: 0;
   color: var(--text-muted);
 }
@@ -53,19 +80,19 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
-}
-
-.quick-reply textarea {
-  flex: 1 1 auto;
-  min-width: 0;
-  min-height: var(--control-height);
-  max-height: 8rem;
-  resize: vertical;
+  margin-inline-start: auto;
 }
 
 .quick-reply button {
   flex: 0 0 auto;
   min-height: var(--target-size);
+}
+
+/* Short windows: quick reply scrolls with the letter instead of covering it. */
+@media (max-height: 640px) {
+  .quick-reply {
+    position: static;
+  }
 }
 
 .pane-hidden .reader-pane.reader-hidden,
