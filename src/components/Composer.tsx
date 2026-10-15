@@ -558,8 +558,14 @@ export function Composer({ accountId }: Props) {
       return;
     }
     if (!editor) return;
-    editor.commands.focus("start");
-    didFocusLetter.current = true;
+    const focusFrame = window.requestAnimationFrame(() => {
+      if (editor.isDestroyed) return;
+      // Commit selection before WebKit focus can change the editor state.
+      editor.commands.setTextSelection(0);
+      editor.view.focus();
+      didFocusLetter.current = true;
+    });
+    return () => window.cancelAnimationFrame(focusFrame);
   }, [bodyFormat, editor, focusLetter]);
   const bodyFormatRef = useRef(bodyFormat);
   const plainBodyRef = useRef(plainBody);
