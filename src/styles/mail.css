@@ -1077,18 +1077,6 @@ html[data-text-scale="large"] .mailbox-filter-control {
   border-radius: var(--radius-lg);
 }
 
-/* Large menus anchor to the band so they never run past the pane. */
-html[data-text-scale="large"] .mailbox-filter-more {
-  position: static;
-}
-
-html[data-text-scale="large"] .mailbox-filter-menu {
-  top: 100%;
-  inset-inline-end: var(--toolbar-pad-inline);
-  min-width: 0;
-  max-width: calc(100% - 2 * var(--toolbar-pad-inline));
-}
-
 @media (forced-colors: active) {
   .mailbox-filter-segment:has(input:checked),
   .mailbox-filter-segment.checked {

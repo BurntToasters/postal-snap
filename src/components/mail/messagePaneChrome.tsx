@@ -1,4 +1,4 @@
-import { useRef, useState, type RefObject } from "react";
+import { useLayoutEffect, useRef, useState, type RefObject } from "react";
 import {
   Archive,
   ArrowUpNarrowWide,
@@ -159,6 +159,39 @@ export function MessagePaneHeader({
   const [filterMenuOpen, setFilterMenuOpen] = useState(false);
   const filterMenuRef = useRef<HTMLDivElement>(null);
   usePopupMenu(filterMenuOpen, filterMenuRef, () => setFilterMenuOpen(false));
+  // Fixed placement escapes the pane's overflow; flips up when roomier.
+  useLayoutEffect(() => {
+    if (!filterMenuOpen) return;
+    const root = filterMenuRef.current;
+    const trigger = root?.querySelector<HTMLElement>(
+      "button[aria-haspopup='menu']",
+    );
+    const menu = root?.querySelector<HTMLElement>("[role='menu']");
+    if (!trigger || !menu) return;
+    const edge = 8;
+    const gap = 6;
+    const anchor = trigger.getBoundingClientRect();
+    menu.style.maxHeight = "";
+    const pane = trigger.closest(".message-pane")?.getBoundingClientRect();
+    const lo = Math.max(edge, (pane?.left ?? 0) + edge);
+    const hi = Math.min(window.innerWidth, pane?.right ?? Infinity) - edge;
+    menu.style.minWidth = `min(12rem, ${hi - lo}px)`;
+    menu.style.maxWidth = `${hi - lo}px`;
+    const width = menu.offsetWidth;
+    const height = menu.offsetHeight;
+    const below = window.innerHeight - anchor.bottom - gap - edge;
+    const above = anchor.top - gap - edge;
+    const up = height > below && above > below;
+    const room = Math.max(up ? above : below, 0);
+    const shown = Math.min(height, room);
+    menu.style.maxHeight = `${room}px`;
+    menu.style.top = `${up ? anchor.top - gap - shown : anchor.bottom + gap}px`;
+    const fit = Math.min(width, hi - lo);
+    menu.style.left = `${Math.max(lo, Math.min(anchor.right - fit, hi - fit))}px`;
+    const close = () => setFilterMenuOpen(false);
+    window.addEventListener("resize", close);
+    return () => window.removeEventListener("resize", close);
+  }, [filterMenuOpen]);
   const sorts: Array<{ id: MessageListSort; label: string }> = [
     { id: "date", label: strings.mail.sortDate },
     { id: "sender", label: strings.mail.sortFrom },
