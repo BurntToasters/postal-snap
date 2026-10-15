@@ -218,10 +218,6 @@
     left: auto;
   }
 
-  .action-spacer {
-    flex: 0;
-  }
-
   .modal-layer {
     padding: 0;
   }

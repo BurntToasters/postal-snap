@@ -121,10 +121,17 @@ html[data-reduce-transparency="true"] .reader-actions {
 }
 
 .reader-unified-actions {
-  display: inline-flex;
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-1);
+}
+
+/* Thread navigation sits last, at the trailing edge. */
+.reader-nav {
+  margin-inline-start: auto;
 }
 
 /* One borderless capsule per group, on a system fill (HIG toolbars). */
@@ -150,7 +157,7 @@ html[data-reduce-transparency="true"] .reader-actions {
   min-height: var(--target-size-inset);
   align-items: center;
   gap: 5px;
-  padding: 7px 10px;
+  padding: 7px var(--space-2);
   white-space: nowrap;
   border: 0;
   border-radius: var(--radius-pill);
@@ -177,10 +184,6 @@ html[data-reduce-transparency="true"] .reader-actions {
   display: none !important;
 }
 
-.action-spacer {
-  flex: 1;
-}
-
 .conversation-index {
   display: flex;
   flex-direction: column;
@@ -197,6 +200,7 @@ html[data-reduce-transparency="true"] .reader-actions {
   gap: var(--space-2);
   min-height: var(--target-size);
   padding: 0 var(--space-2);
+  margin-inline: calc(-1 * var(--space-2));
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -337,11 +341,19 @@ html[data-reduce-transparency="true"] .reader-actions {
   min-height: var(--target-size);
   align-items: center;
   gap: var(--space-2);
-  padding-inline: var(--space-2);
+  padding-inline: 0;
   border: 0;
   border-radius: var(--radius-sm);
   color: var(--accent);
   background: transparent;
+}
+
+.message-header-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 var(--space-3);
+  min-width: 0;
 }
 
 .header-file-size {
@@ -356,8 +368,7 @@ html[data-reduce-transparency="true"] .reader-actions {
   min-height: var(--target-size);
   align-items: center;
   gap: 6px;
-  padding: 6px 4px;
-  margin-top: 4px;
+  padding: 6px 0;
   border: 0;
   border-radius: var(--radius-sm);
   color: var(--accent);
@@ -526,6 +537,7 @@ html[data-reduce-transparency="true"] .reader-actions {
   align-items: center;
   gap: var(--space-2);
   margin-block: var(--space-2);
+  padding-inline: var(--reader-pad-inline);
 }
 
 .continue-draft p {
