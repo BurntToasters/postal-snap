@@ -252,3 +252,21 @@ test("the Unread folders toggle is borderless, centered, and pressed-styled", as
   expect(pressed.background).not.toBe(idle);
   expect(pressed.border).toBe("0px");
 });
+
+test("a selected row shows every mark in a color unlike its background", async ({
+  page,
+}) => {
+  await page.goto(`/${MIX}`);
+  const row = page.locator(".message-row", { hasText: /Pinned reminder/i });
+  await row.click({ position: { x: 24, y: 16 } });
+  await expect(row).toHaveAttribute("aria-selected", "true");
+  await page.mouse.move(2, 2);
+  const clashes = await row.evaluate((node) => {
+    const bg = getComputedStyle(node).backgroundColor;
+    return [...node.querySelectorAll(".message-subject svg")].filter(
+      (mark) => getComputedStyle(mark).color === bg,
+    ).length;
+  });
+  expect(clashes).toBe(0);
+  expect(await row.locator(".pin-mark").count()).toBeGreaterThan(0);
+});

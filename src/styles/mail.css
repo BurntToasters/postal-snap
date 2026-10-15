@@ -1186,15 +1186,15 @@ html[data-text-scale="large"] .mailbox-filter-menu {
 .row-actions {
   --row-actions-bg: var(--surface-hover);
   position: absolute;
-  inset-block-start: var(--list-row-margin-block);
+  inset-block: var(--list-row-margin-block);
   inset-inline-end: var(--list-row-inset);
-  /* Never cover more than half the row, so the left half stays clickable. */
+  /* Never cover half the row, so the left half stays clickable. */
   width: max-content;
-  max-width: calc(50% - var(--list-row-inset));
+  max-width: calc(48% - var(--list-row-inset));
   z-index: 1;
   display: flex;
   align-items: center;
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-sm);
   background: var(--row-actions-bg);
   opacity: 0;
   pointer-events: none;
@@ -1712,7 +1712,9 @@ button.list-day:focus-visible {
   color: var(--warning);
 }
 
-.message-row.selected .message-subject svg.message-mark.star-mark {
+/* Accent marks vanish on the accent background; selected rows use contrast. */
+.message-row.selected .message-subject svg,
+.message-row.selected .message-subject svg.message-mark {
   color: var(--accent-contrast);
 }
 
@@ -1721,7 +1723,8 @@ button.list-day:focus-visible {
     color: CanvasText;
   }
 
-  .message-row.selected .message-subject svg.message-mark.star-mark {
+  .message-row.selected .message-subject svg,
+  .message-row.selected .message-subject svg.message-mark {
     color: HighlightText;
   }
 }

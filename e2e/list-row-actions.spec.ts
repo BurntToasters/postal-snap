@@ -415,3 +415,21 @@ test.describe("touch", () => {
     expect(dateHidden(m)).toBe(false);
   });
 });
+
+for (const [label, query] of [
+  ["comfortable", ""],
+  ["compact", "&density=compact"],
+  ["200% text", "&scale=2"],
+] as const) {
+  test(`the cluster spans the full row height: ${label}`, async ({ page }) => {
+    await page.goto(`${MIX}${query}`);
+    const wrap = wrapFor(page, /Weekend plans/i);
+    await wrap.scrollIntoViewIfNeeded();
+    await wrap.hover();
+    await expect.poll(async () => (await measure(wrap)).opacity).toBe(1);
+    const m = await measure(wrap);
+    expect(Math.abs(m.cluster!.top - m.row!.top)).toBeLessThanOrEqual(1);
+    expect(Math.abs(m.cluster!.bottom - m.row!.bottom)).toBeLessThanOrEqual(1);
+    expect(m.cluster!.right).toBeLessThanOrEqual(m.row!.right + 0.5);
+  });
+}
