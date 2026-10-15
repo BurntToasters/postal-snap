@@ -270,3 +270,79 @@ test("a selected row shows every mark in a color unlike its background", async (
   expect(clashes).toBe(0);
   expect(await row.locator(".pin-mark").count()).toBeGreaterThan(0);
 });
+
+for (const density of ["comfortable", "compact"] as const) {
+  for (const pane of ["right", "bottom"] as const) {
+    for (const height of [800, 640]) {
+      test(`large-text heading controls stay visible: ${density} ${pane} ${height}`, async ({
+        page,
+      }, testInfo) => {
+        await page.setViewportSize({ width: 1280, height });
+        await page.goto(
+          `/?rowMix=1&density=${density}&scale=2&theme=dark&pane=${pane}`,
+        );
+        await expect(page.locator(".message-row").first()).toBeVisible();
+        await expect
+          .poll(() =>
+            page
+              .locator("html")
+              .evaluate((node) => getComputedStyle(node).fontSize),
+          )
+          .toBe("32px");
+        const metrics = await page.evaluate(() => {
+          const heading = document.querySelector(".pane-heading")!;
+          const band = heading.getBoundingClientRect();
+          const pane = document.querySelector(".message-pane")!;
+          const paneBox = pane.getBoundingClientRect();
+          const list = document.querySelector(".message-list")!;
+          const listBox = list.getBoundingClientRect();
+          const buttons = [
+            ...heading.querySelectorAll(
+              ".pane-heading-actions > button, .mailbox-more > button",
+            ),
+          ].map((button) => {
+            const box = button.getBoundingClientRect();
+            const hit = document.elementFromPoint(
+              box.left + box.width / 2,
+              box.top + box.height / 2,
+            );
+            return {
+              label: button.getAttribute("aria-label") ?? button.textContent,
+              insideHeading: box.top >= band.top && box.bottom <= band.bottom,
+              unobscured: hit !== null && button.contains(hit),
+              bottom: box.bottom,
+            };
+          });
+          return {
+            buttons,
+            headingBottom: band.bottom,
+            listHeight: list.clientHeight,
+            listInsidePane: listBox.bottom <= paneBox.bottom + 1,
+            paneOverflow: pane.scrollHeight - pane.clientHeight,
+            documentOverflow:
+              document.documentElement.scrollHeight - window.innerHeight,
+          };
+        });
+        await testInfo.attach("heading-metrics", {
+          body: JSON.stringify(metrics, null, 2),
+          contentType: "application/json",
+        });
+        expect.soft(metrics.buttons).toHaveLength(2);
+        for (const button of metrics.buttons) {
+          expect
+            .soft(button.insideHeading, `${button.label}: inside heading`)
+            .toBe(true);
+          expect
+            .soft(button.unobscured, `${button.label}: unobscured center`)
+            .toBe(true);
+        }
+        expect
+          .soft(metrics.listHeight, "list remains usable")
+          .toBeGreaterThan(32);
+        expect.soft(metrics.listInsidePane).toBe(true);
+        expect.soft(metrics.paneOverflow).toBeLessThanOrEqual(1);
+        expect.soft(metrics.documentOverflow).toBeLessThanOrEqual(1);
+      });
+    }
+  }
+}
