@@ -22,7 +22,7 @@ import { strings } from "../i18n";
 import { matchesListFilter, type MessageListFilter } from "../listFilter";
 import type { MessageListSort } from "../listSort";
 import { mailboxListView, rememberMailboxView } from "../mailboxView";
-import { folderLabel, folderParentLabel, folderPathLabel } from "../i18n/mail";
+import { folderLabel, folderParentLabel } from "../i18n/mail";
 import { useAppStore } from "../store";
 import type { AccountInboxCount, ComposeDraft, MessageSummary } from "../types";
 import { applyPendingUpdate } from "../update";
@@ -56,6 +56,7 @@ import { useLocalListActions } from "./mail/useLocalListActions";
 import { useMailEvents } from "./mail/useMailEvents";
 import { useMessageSelection } from "./mail/useMessageSelection";
 import { useRowActions } from "./mail/useRowActions";
+import { useSelectionMenu } from "./mail/selectionMenu";
 import { useMessageOpening } from "./mail/useMessageOpening";
 import {
   useFolderDialog,
@@ -76,10 +77,6 @@ import {
   unpinMailbox,
 } from "../pinnedMailboxes";
 import { hydrateRecentMoveMailbox } from "../recentMailbox";
-import { copySelectedMessageText } from "../copyMessageText";
-import { forwardSelectedMessages } from "../forwardConversation";
-import { printSelectedMessages } from "../printConversation";
-import { saveSelectedFiles, saveSelectedMessages } from "../saveConversation";
 import { starLoadedConversation, toggleListedStar } from "../starConversation";
 import { beginMessageOpen } from "../messageOpen";
 import {
@@ -208,6 +205,7 @@ export function MailShell({ onOpenSettings }: Props) {
     moveFolderId == null
       ? undefined
       : mailboxes.find((mailbox) => mailbox.id === moveFolderId);
+  const [selecting, setSelecting] = useState(false);
   const viewKey = `${activeAccountId ?? ""}:${activeMailboxId ?? ""}`;
   const [viewEpoch, setViewEpoch] = useState(viewKey);
   const [pendingSort, setPendingSort] = useState<MessageListSort | null>(null);
@@ -246,7 +244,6 @@ export function MailShell({ onOpenSettings }: Props) {
   useEffect(() => {
     useAppStore.setState({ mailboxSort: listSort });
   }, [listSort]);
-  const [selecting, setSelecting] = useState(false);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const selectionAnchor = useRef<number | undefined>(undefined);
   const [bulkBusy, setBulkBusy] = useState(false);
@@ -908,6 +905,25 @@ export function MailShell({ onOpenSettings }: Props) {
     "--reader-pane-height": `${settings.readerPaneHeight}px`,
   } as CSSProperties;
 
+  const selection = useSelectionMenu({
+    activeAccountId,
+    activeMailbox,
+    mailboxes,
+    messages,
+    listedMessages,
+    selectedIds,
+    selectionAnchor,
+    setSelectedIds,
+    setSelectionSnoozeOpen,
+    setError,
+    closeMailboxMore,
+    bulkFlags,
+    pinSelection,
+    bulkMove,
+    bulkMoveTo,
+    bulkCopyTo,
+  });
+
   return (
     <main className={shellClass} style={shellStyle}>
       <MailToolbar
@@ -1236,131 +1252,7 @@ export function MailShell({ onOpenSettings }: Props) {
               ),
             });
           }}
-          selection={{
-            count: selectedIds.length,
-            mailboxRole: activeMailbox?.role,
-            onSelectAll: () => {
-              closeMailboxMore();
-              const ids = listedMessages.map((message) => message.id);
-              selectionAnchor.current = ids[0];
-              if (ids.length > 200) {
-                setError(strings.mail.bulkTooMany);
-                setSelectedIds(ids.slice(0, 200));
-                return;
-              }
-              setSelectedIds(ids);
-            },
-            onSelectUnread: () => {
-              closeMailboxMore();
-              const ids = listedMessages
-                .filter((message) => !message.isRead)
-                .map((message) => message.id);
-              if (ids.length === 0) return;
-              selectionAnchor.current = ids[0];
-              if (ids.length > 200) {
-                setError(strings.mail.bulkTooMany);
-                setSelectedIds(ids.slice(0, 200));
-                return;
-              }
-              setSelectedIds(ids);
-            },
-            selectUnreadDisabled: !listedMessages.some(
-              (message) => !message.isRead,
-            ),
-            onMarkRead: () => {
-              closeMailboxMore();
-              void bulkFlags(true, undefined);
-            },
-            onMarkUnread: () => {
-              closeMailboxMore();
-              void bulkFlags(false, undefined);
-            },
-            onStar: () => {
-              closeMailboxMore();
-              void bulkFlags(undefined, true);
-            },
-            onUnstar: () => {
-              closeMailboxMore();
-              void bulkFlags(undefined, false);
-            },
-            onPin: () => {
-              closeMailboxMore();
-              void pinSelection(true);
-            },
-            onUnpin: () => {
-              closeMailboxMore();
-              void pinSelection(false);
-            },
-            pinDisabled: !messages.some(
-              (message) => selectedIds.includes(message.id) && !message.pinned,
-            ),
-            unpinDisabled: !messages.some(
-              (message) => selectedIds.includes(message.id) && message.pinned,
-            ),
-            onJunk: () => {
-              closeMailboxMore();
-              void bulkMove("junk");
-            },
-            onNotJunk: () => {
-              closeMailboxMore();
-              void bulkMove("inbox");
-            },
-            moveDestinations: mailboxes
-              .filter(
-                (mailbox) =>
-                  mailbox.accountId === activeAccountId &&
-                  mailbox.id !== activeMailbox?.id &&
-                  mailbox.role !== "archive" &&
-                  mailbox.role !== "junk" &&
-                  mailbox.role !== "trash",
-              )
-              .map((mailbox) => ({
-                id: mailbox.id,
-                name: folderPathLabel(mailbox),
-                role: mailbox.role,
-              })),
-            onMoveTo: (mailboxId) => {
-              closeMailboxMore();
-              void bulkMoveTo(mailboxId);
-            },
-            onCopyTo: (mailboxId) => {
-              closeMailboxMore();
-              void bulkCopyTo(mailboxId);
-            },
-            onSnooze: () => {
-              closeMailboxMore();
-              setSelectionSnoozeOpen(true);
-            },
-            onSaveFiles: () => {
-              closeMailboxMore();
-              if (!activeAccountId) return;
-              void saveSelectedFiles(activeAccountId, selectedIds);
-            },
-            onSaveMessages: () => {
-              closeMailboxMore();
-              if (!activeAccountId) return;
-              void saveSelectedMessages(activeAccountId, selectedIds);
-            },
-            saveFilesDisabled: !messages.some(
-              (message) =>
-                selectedIds.includes(message.id) && message.hasAttachments,
-            ),
-            onPrint: () => {
-              closeMailboxMore();
-              if (!activeAccountId) return;
-              void printSelectedMessages(activeAccountId, selectedIds);
-            },
-            onCopyText: () => {
-              closeMailboxMore();
-              if (!activeAccountId) return;
-              void copySelectedMessageText(activeAccountId, selectedIds);
-            },
-            onForward: () => {
-              closeMailboxMore();
-              if (!activeAccountId) return;
-              void forwardSelectedMessages(activeAccountId, selectedIds);
-            },
-          }}
+          selection={selection}
           onClearSearch={() => {
             messageRequest.current += 1;
             searchRequest.current += 1;
