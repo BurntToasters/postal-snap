@@ -31,9 +31,7 @@ import { inspectAndOpenExternalLink } from "./externalLink";
 import { parseMailto } from "../mailto";
 import { hasAuthorColors, sanitizeReceivedHtml } from "../security";
 import { textHighlightTerms } from "../searchHighlight";
-import { ShieldCheck } from "lucide-react";
 import { useIsDark } from "../hooks/useColorScheme";
-import { formatFullMessageDate, formatMessageDate } from "../format";
 import { useAppStore } from "../store";
 import { copyLoadedConversation } from "../copyConversation";
 import { rememberMoveMailboxId } from "../recentMailbox";
@@ -60,6 +58,13 @@ import {
   messageSelectionQuote,
   preferredReplyMode,
 } from "./composer/composerSeed";
+import { ConversationIndex } from "./reader/conversationIndex";
+import {
+  ContinueDraftNotice,
+  JunkTrashBanner,
+  ReadReceiptBanner,
+  UnsubscribeSentNotice,
+} from "./reader/readerNotices";
 import { QuickReply } from "./reader/quickReply";
 import { useReaderAttachments } from "./reader/useReaderAttachments";
 import { useMessageFrame } from "./reader/useMessageFrame";
@@ -1198,130 +1203,32 @@ export function MessageReader({
         }
         searchQuery={searchQuery}
       />
-      {isJunkMailbox || isTrashMailbox ? (
-        <div className="remote-content-banner warning" role="status">
-          <span>
-            {isJunkMailbox ? strings.reader.inJunk : strings.reader.inTrash}
-          </span>
-          <button type="button" onClick={moveToInbox}>
-            {isJunkMailbox
-              ? strings.reader.notJunk
-              : strings.reader.moveToInbox}
-          </button>
-        </div>
-      ) : null}
-      {onContinueDraft
-        ? (() => {
-            const replyDrafts = drafts.filter(
-              (draft) =>
-                draft.accountId === message.accountId &&
-                draft.sourceMessageId === message.id,
-            );
-            if (replyDrafts.length === 0) return null;
-            const kind = replyDrafts[0]?.sourceKind;
-            const note =
-              replyDrafts.length > 1
-                ? strings.reader.unsentDrafts(replyDrafts.length)
-                : kind === "forward"
-                  ? strings.reader.unsentForward
-                  : kind === "redirect"
-                    ? strings.reader.unsentRedirect
-                    : strings.reader.unsentReply;
-            return (
-              <div className="continue-draft">
-                <p role="status">{note}</p>
-                <button
-                  type="button"
-                  className="secondary-button"
-                  onClick={() => onContinueDraft(replyDrafts[0].id)}
-                >
-                  {strings.reader.continueDraft}
-                </button>
-              </div>
-            );
-          })()
-        : null}
-      {conversation.length > 1 ? (
-        <nav
-          className="conversation-index"
-          aria-label={strings.reader.conversationMessages}
-        >
-          {conversation.map((item) => {
-            const label = strings.reader.conversationMessage(
-              item.subject || strings.common.noSubject,
-              indexSender(item),
-              formatFullMessageDate(item.receivedAt),
-            );
-            return (
-              <button
-                key={item.id}
-                type="button"
-                aria-current={item.id === message.id ? "true" : undefined}
-                aria-label={
-                  item.isRead ? label : `${strings.mail.unread}, ${label}`
-                }
-                onClick={() => {
-                  if (item.id !== message.id) onOpenInConversation?.(item);
-                }}
-              >
-                <span>{item.subject || strings.common.noSubject}</span>
-                {!item.isRead ? (
-                  <span className="conversation-index-unread">
-                    {strings.mail.unread}
-                  </span>
-                ) : null}
-                <span className="conversation-index-sender">
-                  {indexSender(item)}
-                </span>
-                <time
-                  dateTime={item.receivedAt}
-                  title={formatFullMessageDate(item.receivedAt)}
-                >
-                  {formatMessageDate(item.receivedAt)}
-                </time>
-              </button>
-            );
-          })}
-        </nav>
-      ) : null}
-      {receiptView === "ask" ? (
-        <div className="remote-content-banner">
-          <span>
-            {strings.reader.readReceiptAsk(
-              message.senderName || message.senderAddress,
-              message.dispositionTo ?? "",
-            )}
-          </span>
-          <button
-            type="button"
-            disabled={receiptBusy}
-            onClick={() => void chooseReceipt(true)}
-          >
-            {strings.reader.sendReceipt}
-          </button>
-          <button
-            type="button"
-            disabled={receiptBusy}
-            onClick={() => void chooseReceipt(false)}
-          >
-            {strings.reader.declineReceipt}
-          </button>
-        </div>
-      ) : null}
-      {receiptView === "sent" ? (
-        <div className="remote-content-banner" role="status">
-          <span>{strings.reader.receiptSent}</span>
-        </div>
-      ) : null}
-      {unsubscribeSentFor === message.id ? (
-        <div className="remote-content-banner" role="status" aria-live="polite">
-          <ShieldCheck aria-hidden="true" />
-          <span>
-            <strong>{strings.reader.unsubscribeSent}</strong>{" "}
-            {strings.reader.unsubscribeSentDetail}
-          </span>
-        </div>
-      ) : null}
+      <JunkTrashBanner
+        isJunkMailbox={isJunkMailbox}
+        isTrashMailbox={isTrashMailbox}
+        onMoveToInbox={moveToInbox}
+      />
+      <ContinueDraftNotice
+        drafts={drafts}
+        message={message}
+        onContinueDraft={onContinueDraft}
+      />
+      <ConversationIndex
+        conversation={conversation}
+        message={message}
+        indexSender={indexSender}
+        onOpenInConversation={onOpenInConversation}
+      />
+      <ReadReceiptBanner
+        receiptView={receiptView}
+        message={message}
+        receiptBusy={receiptBusy}
+        chooseReceipt={chooseReceipt}
+      />
+      <UnsubscribeSentNotice
+        unsubscribeSentFor={unsubscribeSentFor}
+        message={message}
+      />
       {originalOpen ? (
         <OriginalDialog
           accountId={message.accountId}
