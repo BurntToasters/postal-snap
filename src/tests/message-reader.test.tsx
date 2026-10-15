@@ -1746,6 +1746,9 @@ describe("MessageReader", () => {
       .spyOn(frameWindow, "scrollBy")
       .mockImplementation(() => undefined);
     const body = (iframe as HTMLIFrameElement).contentDocument!.body;
+    (
+      frameWindow as unknown as { Element: typeof Element }
+    ).Element.prototype.scrollIntoView = () => undefined;
     body.innerHTML =
       '<a id="web" data-external-href="https://example.test/path" href="#">web</a><a id="mail" href="mailto:jane@example.test">mail</a><span id="plain">plain</span>';
     fireEvent.load(iframe);
@@ -1757,7 +1760,7 @@ describe("MessageReader", () => {
     });
     fireEvent.change(
       screen.getByRole("textbox", { name: strings.reader.findInMessage }),
-      { target: { value: "HTML" } },
+      { target: { value: "plain" } },
     );
     fireEvent.submit(
       screen

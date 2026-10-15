@@ -281,6 +281,9 @@ export function ReaderToolbar({
       shell.style.removeProperty("--reader-bar-height");
     };
   }, [readingPane]);
+  const showNav = listPosition
+    ? listPosition.total > 1
+    : Boolean(onPrevious || onNext);
   const moveDestinations = withRecentMoveMailbox(
     mailboxes.filter(
       (mailbox) =>
@@ -323,7 +326,7 @@ export function ReaderToolbar({
         </button>
       ) : null}
       <div className="reader-unified-actions">
-        {/* Two glass groups (HIG): labeled replies, then symbol actions. */}
+        {/* Replies, then symbol actions; thread navigation last. */}
         <div className="reader-action-group">
           <button
             type="button"
@@ -373,40 +376,6 @@ export function ReaderToolbar({
         <div className="reader-action-group">
           <button
             type="button"
-            onClick={onPrevious}
-            disabled={!onPrevious}
-            aria-label={strings.reader.previousMessage}
-            title={strings.reader.previousMessage}
-          >
-            <ChevronUp aria-hidden="true" />
-          </button>
-          {listPosition ? (
-            <span
-              className="reader-position"
-              aria-label={strings.reader.messagePosition(
-                listPosition.index,
-                listPosition.total,
-              )}
-            >
-              {strings.reader.messagePlace(
-                listPosition.index,
-                listPosition.total,
-              )}
-            </span>
-          ) : null}
-          <button
-            type="button"
-            onClick={onNext}
-            disabled={!onNext}
-            aria-label={strings.reader.nextMessage}
-            title={strings.reader.nextMessage}
-          >
-            <ChevronDown aria-hidden="true" />
-          </button>
-        </div>
-        <div className="reader-action-group">
-          <button
-            type="button"
             onClick={onToggleStar}
             aria-pressed={message.isStarred}
             aria-label={
@@ -427,8 +396,6 @@ export function ReaderToolbar({
               fill={message.isStarred ? "currentColor" : "none"}
             />
           </button>
-        </div>
-        <div className="reader-action-group">
           <button
             type="button"
             onClick={isArchiveMailbox ? onMoveToInbox : onArchive}
@@ -1370,6 +1337,42 @@ export function ReaderToolbar({
             ) : null}
           </div>
         </div>
+        {showNav ? (
+          <div className="reader-action-group reader-nav">
+            <button
+              type="button"
+              onClick={onPrevious}
+              disabled={!onPrevious}
+              aria-label={strings.reader.previousMessage}
+              title={strings.reader.previousMessage}
+            >
+              <ChevronUp aria-hidden="true" />
+            </button>
+            {listPosition ? (
+              <span
+                className="reader-position"
+                aria-label={strings.reader.messagePosition(
+                  listPosition.index,
+                  listPosition.total,
+                )}
+              >
+                {strings.reader.messagePlace(
+                  listPosition.index,
+                  listPosition.total,
+                )}
+              </span>
+            ) : null}
+            <button
+              type="button"
+              onClick={onNext}
+              disabled={!onNext}
+              aria-label={strings.reader.nextMessage}
+              title={strings.reader.nextMessage}
+            >
+              <ChevronDown aria-hidden="true" />
+            </button>
+          </div>
+        ) : null}
       </div>
     </div>
   );
