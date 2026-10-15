@@ -32,7 +32,7 @@ Kept on purpose; each has a planned consumer. Remove if still unused after that 
 - **Redirect drafts**: kept as redirects locally and through Undo Send. The server Drafts copy has no body, and a draft imported back from the server opens as an ordinary message.
 - **Block domain**: hidden for the account's own domains and a fixed list of shared providers (`SHARED_MAIL_DOMAINS` in `src/blockedSenders.ts`). Other large shared domains are not detected.
 - **Remembered open message**: returning to a folder reopens the last read message only. A message left unread stays closed so it is not marked read.
-- **Message list pointer shortcuts**: the star, read, and day-select buttons are mouse shortcuts hidden from assistive tech. Row names carry the state, and `s`, `u`, select mode, and the context menu do the same work. Not yet checked with VoiceOver.
+- **Message list pointer shortcuts**: the hover cluster provides Star, Read or Unread, Archive, and Trash shortcuts hidden from assistive tech. The cluster stays hidden on touch. Row names carry the state; `s`, `u`, `e`, `Delete`, select mode, and the context menu provide keyboard equivalents. The day-select button is also hidden from assistive tech. Not yet checked with VoiceOver.
 - **Linux arm64**: build scripts exist (`build:linux:arm64`, flatpak arm64) but only x64 ships.
 - **Store trains**: MSIX/PKG scripts exist; GitHub-only for now.
 - **Vibrancy on Linux**: intentionally opaque; toggle hidden where unsupported.
