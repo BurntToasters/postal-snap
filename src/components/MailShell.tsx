@@ -7,7 +7,6 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { useMailboxMessages } from "../hooks/useMailboxMessages";
 import { useMediaQuery } from "../hooks/useMediaQuery";
@@ -59,6 +58,10 @@ import { useLocalListActions } from "./mail/useLocalListActions";
 import { useMailEvents } from "./mail/useMailEvents";
 import { useMessageSelection } from "./mail/useMessageSelection";
 import { useRowActions } from "./mail/useRowActions";
+import {
+  useFolderDialog,
+  type FolderDialogState,
+} from "./mail/useFolderDialog";
 
 import { MEDIA_QUERIES } from "../breakpoints";
 import { toggleListedRead } from "../markRead";
@@ -199,11 +202,7 @@ export function MailShell({ onOpenSettings }: Props) {
   const sidebarToggleRef = useRef<HTMLButtonElement>(null);
   const folderPaneRef = useRef<HTMLElement>(null);
   const [loadingMessageId, setLoadingMessageId] = useState<number>();
-  const [folderDialog, setFolderDialog] = useState<
-    | null
-    | { mode: "create"; parentId?: number; parentLabel?: string }
-    | { mode: "rename"; id: number; name: string; parentLabel?: string }
-  >(null);
+  const [folderDialog, setFolderDialog] = useState<FolderDialogState>(null);
   const [folderName, setFolderName] = useState("");
   const [folderBusy, setFolderBusy] = useState(false);
   const [moveFolderId, setMoveFolderId] = useState<number | null>(null);
@@ -337,31 +336,6 @@ export function MailShell({ onOpenSettings }: Props) {
     void updateSettings({ sidebarVisible: !sidebarVisible });
   }
 
-  function openFolderDialog(
-    dialog:
-      | { mode: "create"; parentId?: number; parentLabel?: string }
-      | { mode: "rename"; id: number; name: string; parentLabel?: string },
-  ) {
-    lastFolderInvoker.current =
-      dialog.mode === "create"
-        ? newFolderButtonRef.current
-        : (document.activeElement as HTMLElement | null);
-    setFolderName(dialog.mode === "rename" ? dialog.name : "");
-    setFolderDialog(dialog);
-  }
-
-  function closeFolderDialog() {
-    setFolderDialog(null);
-    setFolderName("");
-    lastFolderInvoker.current?.focus();
-  }
-
-  function folderDialogKeyDown(event: ReactKeyboardEvent) {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      closeFolderDialog();
-    }
-  }
   const mailboxRequest = useRef(0);
   const messageRequest = useRef(0);
   const pagingRequest = useRef(0);
@@ -597,160 +571,31 @@ export function MailShell({ onOpenSettings }: Props) {
     else await loadMessages();
   }
 
-  async function submitFolderDialog() {
-    if (!activeAccountId || folderBusy) return;
-    const name = folderName.trim();
-    if (!name) return;
-    setFolderBusy(true);
-    try {
-      if (folderDialog?.mode === "rename") {
-        await api.renameFolder(activeAccountId, folderDialog.id, name);
-      } else {
-        const parentId =
-          folderDialog?.mode === "create" ? folderDialog.parentId : undefined;
-        if (parentId == null) await api.createFolder(activeAccountId, name);
-        else await api.createFolder(activeAccountId, name, parentId);
-        if (
-          parentId != null &&
-          mailboxIsPinned(
-            useAppStore.getState().settings.collapsedMailboxes,
-            activeAccountId,
-            parentId,
-          )
-        ) {
-          void updateSettings({
-            collapsedMailboxes: unpinMailbox(
-              useAppStore.getState().settings.collapsedMailboxes,
-              activeAccountId,
-              parentId,
-            ),
-          });
-        }
-      }
-      closeFolderDialog();
-      await loadAccountData();
-    } catch (cause) {
-      setError(String(cause));
-    } finally {
-      setFolderBusy(false);
-    }
-  }
-
-  async function submitMoveFolder(parentId: number | null) {
-    if (!activeAccountId || moveFolderId == null || folderBusy) return;
-    const accountId = activeAccountId;
-    const mailboxId = moveFolderId;
-    setFolderBusy(true);
-    try {
-      if (parentId == null) await api.moveFolder(accountId, mailboxId);
-      else await api.moveFolder(accountId, mailboxId, parentId);
-      setMoveFolderId(null);
-      if (
-        parentId != null &&
-        mailboxIsPinned(
-          useAppStore.getState().settings.collapsedMailboxes,
-          accountId,
-          parentId,
-        )
-      ) {
-        void updateSettings({
-          collapsedMailboxes: unpinMailbox(
-            useAppStore.getState().settings.collapsedMailboxes,
-            accountId,
-            parentId,
-          ),
-        });
-      }
-      await loadAccountData();
-    } catch (cause) {
-      setError(String(cause));
-    } finally {
-      setFolderBusy(false);
-    }
-  }
-
-  async function deleteFolderById(id: number, label: string) {
-    if (!activeAccountId) return;
-    const confirmed = await api.showNativeConfirm(
-      strings.appName,
-      strings.mail.deleteFolderQuestion(label),
-    );
-    if (!confirmed) return;
-    try {
-      await api.deleteFolder(activeAccountId, id);
-      const latest = useAppStore.getState();
-      if (
-        mailboxIsPinned(latest.settings.pinnedMailboxes, activeAccountId, id)
-      ) {
-        void updateSettings({
-          pinnedMailboxes: unpinMailbox(
-            latest.settings.pinnedMailboxes,
-            activeAccountId,
-            id,
-          ),
-        });
-      }
-      if (latest.settings.recentMoveMailboxId === id) {
-        void updateSettings({ recentMoveMailboxId: null });
-      }
-      if (
-        mailboxIsPinned(latest.settings.hiddenMailboxes, activeAccountId, id)
-      ) {
-        void updateSettings({
-          hiddenMailboxes: unpinMailbox(
-            latest.settings.hiddenMailboxes,
-            activeAccountId,
-            id,
-          ),
-        });
-      }
-      if (
-        mailboxIsPinned(latest.settings.collapsedMailboxes, activeAccountId, id)
-      ) {
-        void updateSettings({
-          collapsedMailboxes: unpinMailbox(
-            latest.settings.collapsedMailboxes,
-            activeAccountId,
-            id,
-          ),
-        });
-      }
-      await loadAccountData();
-    } catch (cause) {
-      setError(String(cause));
-    }
-  }
-
-  async function emptyTrashFolders() {
-    if (!activeAccountId) return;
-    const confirmed = await api.showNativeConfirm(
-      strings.appName,
-      strings.mail.emptyTrashQuestion,
-    );
-    if (!confirmed) return;
-    try {
-      await api.emptyTrash(activeAccountId);
-      await loadAccountData();
-    } catch (cause) {
-      setError(String(cause));
-    }
-  }
-
-  async function emptyJunkFolders() {
-    if (!activeAccountId) return;
-    const confirmed = await api.showNativeConfirm(
-      strings.appName,
-      strings.mail.emptyJunkQuestion,
-    );
-    if (!confirmed) return;
-    try {
-      await api.emptyJunk(activeAccountId);
-      await loadAccountData();
-    } catch (cause) {
-      setError(String(cause));
-    }
-  }
-
+  const {
+    openFolderDialog,
+    closeFolderDialog,
+    folderDialogKeyDown,
+    submitFolderDialog,
+    submitMoveFolder,
+    deleteFolderById,
+    emptyTrashFolders,
+    emptyJunkFolders,
+  } = useFolderDialog({
+    activeAccountId,
+    folderDialog,
+    setFolderDialog,
+    folderName,
+    setFolderName,
+    folderBusy,
+    setFolderBusy,
+    moveFolderId,
+    setMoveFolderId,
+    newFolderButtonRef,
+    lastFolderInvoker,
+    loadAccountData,
+    updateSettings,
+    setError,
+  });
   const chooseMessage = useCallback(
     async (summary: MessageSummary) => {
       const accountId = activeAccountId;
