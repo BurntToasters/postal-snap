@@ -17,7 +17,7 @@ export default defineConfig({
       name: "webkit",
       use: { browserName: "webkit" },
       testMatch:
-        /(?:reader-body|print-files|shortcuts-typing|quit-saves-draft|compose-hidden-recipients|download-older-mail|remembered-image-sender|outbox-reason|native-command-flows|mail-header-layout|composer-replacement-(?:save|races|no-editor))\.spec\.ts/,
+        /(?:reader-body|print-files|shortcuts-typing|quit-saves-draft|compose-hidden-recipients|download-older-mail|remembered-image-sender|outbox-reason|native-command-flows|mail-header-layout|composer-replacement-(?:save|races|no-editor)|list-row-layout|list-row-actions|mailbox-filter-segments|quick-reply-layout|quick-reply-refused|reader-toolbar-groups|ui-matrix-0\.4\.2)\.spec\.ts/,
     },
   ],
   use: {
