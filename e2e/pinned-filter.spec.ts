@@ -21,7 +21,10 @@ test("Pinned lists only pinned mail", async ({ page }) => {
   await expect(
     page.getByRole("treeitem", { name: /Weekend plans/i }),
   ).toBeVisible();
-  await page.getByRole("radio", { name: "Pinned", exact: true }).click();
+  await page.getByRole("button", { name: /^More filters/ }).click();
+  await page
+    .getByRole("menuitemradio", { name: "Pinned", exact: true })
+    .click();
   await expect(
     page.getByRole("option", { name: /Library hours/i }),
   ).toBeVisible();
@@ -42,7 +45,10 @@ test("Pinned lists only pinned mail", async ({ page }) => {
 
 test("Pinned says when the mailbox has no pins", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("radio", { name: "Pinned", exact: true }).click();
+  await page.getByRole("button", { name: /^More filters/ }).click();
+  await page
+    .getByRole("menuitemradio", { name: "Pinned", exact: true })
+    .click();
   await expect(page.getByText("No pinned messages.")).toBeVisible();
   await expect(
     page.getByRole("option", { name: /Weekend plans/i }),
