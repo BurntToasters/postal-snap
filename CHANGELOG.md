@@ -26,7 +26,7 @@ Postal Snap is a calm, accessible desktop email client. Mail stays on your compu
 - **NEW - Message hover actions:** Hover over a message for Star, Read or Unread, Archive, and Trash. Star and unread indicators stay visible. Touch and keyboard controls remain available.
 - **IMPROVED - Mailbox filters:** All, Unread, and Starred stay visible. More holds Pinned, To me, Has attachments, and Invitations, and shows the active filter.
 - **FIX - Quick reply width:** Quick reply fills the reader width, expands when focused or filled, and grows as you type. Reply still opens the full composer.
-- **FIX - Quick reply keeps your note:** If another message cannot be saved or replaced, your quick reply stays in the box.
+- **FIX - Quick reply keeps your note:** If another message cannot be saved or replaced, your quick reply stays in the box. Opening a reply also avoids a composer crash in WebKit.
 - **IMPROVED - Reader toolbar:** Reply actions stay together. Star, Archive, Trash, and More share a group. Message navigation appears only when needed.
 - **IMPROVED - Header and sidebar alignment:** Reader links and notices line up with the message. The unread-folders control matches the sidebar.
 - **FIX - Large text and compact layout:** Message rows, filters, and reader controls fit better at 200% text in comfortable and compact density.
