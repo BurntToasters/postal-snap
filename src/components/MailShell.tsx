@@ -25,7 +25,6 @@ import { matchesListFilter, type MessageListFilter } from "../listFilter";
 import type { MessageListSort } from "../listSort";
 import { mailboxListView, rememberMailboxView } from "../mailboxView";
 import { rememberedOpenMessage } from "../recentMessage";
-import { preferredReplyMode } from "./composer/composerSeed";
 import { folderLabel, folderParentLabel, folderPathLabel } from "../i18n/mail";
 import { useAppStore } from "../store";
 import type { AccountInboxCount, ComposeDraft, MessageSummary } from "../types";
@@ -59,6 +58,7 @@ import { handleContextAction } from "./mail/mailContextActions";
 import { useLocalListActions } from "./mail/useLocalListActions";
 import { useMailEvents } from "./mail/useMailEvents";
 import { useMessageSelection } from "./mail/useMessageSelection";
+import { useRowActions } from "./mail/useRowActions";
 
 import { MEDIA_QUERIES } from "../breakpoints";
 import { toggleListedRead } from "../markRead";
@@ -79,16 +79,10 @@ import { forwardSelectedMessages } from "../forwardConversation";
 import { printSelectedMessages } from "../printConversation";
 import { saveSelectedFiles, saveSelectedMessages } from "../saveConversation";
 import { starLoadedConversation, toggleListedStar } from "../starConversation";
-import {
-  deleteListedMessage,
-  deleteLoadedConversation,
-} from "../deleteConversation";
-import { moveListedMessage, moveLoadedConversation } from "../moveConversation";
 import { waitToMarkRead } from "../markRead";
 import { beginMessageOpen, isCurrentMessageOpen } from "../messageOpen";
 import {
   adjacentMessage,
-  conversationMessages,
   conversationNeighbor,
   conversationUnreadTarget,
   groupThreads,
@@ -757,143 +751,6 @@ export function MailShell({ onOpenSettings }: Props) {
     }
   }
 
-  function archiveFocused(message: MessageSummary, conversation: boolean) {
-    const current = useAppStore.getState();
-    const mailbox = current.mailboxes.find(
-      (box) => box.id === message.mailboxId,
-    );
-    const toInbox = mailbox?.role === "archive";
-    const loaded = conversation
-      ? conversationMessages(current.messages, message)
-      : [];
-    const members = loaded.length > 1 ? loaded : [message];
-    const removed = new Set(members.map((item) => item.id));
-    const after = (next?: MessageSummary, openWasMoved?: boolean) => {
-      setSelectedIds((ids) => ids.filter((id) => !removed.has(id)));
-      if (!openWasMoved) return;
-      if (next) void chooseMessage(next);
-      else {
-        beginMessageOpen();
-        selectMessage(undefined);
-      }
-    };
-    if (members.length > 1) {
-      if (toInbox) {
-        const inbox = current.mailboxes.find(
-          (box) => box.accountId === message.accountId && box.role === "inbox",
-        );
-        if (!inbox) {
-          setError(strings.mail.noInbox);
-          return;
-        }
-        void moveLoadedConversation(message, inbox.id, after);
-        return;
-      }
-      void moveLoadedConversation(message, "archive", after);
-      return;
-    }
-    void moveListedMessage(message, toInbox ? "inbox" : "archive", after);
-  }
-
-  function trashFocused(message: MessageSummary, conversation: boolean) {
-    const current = useAppStore.getState();
-    const mailbox = current.mailboxes.find(
-      (box) => box.id === message.mailboxId,
-    );
-    const loaded = conversation
-      ? conversationMessages(current.messages, message)
-      : [];
-    const members = loaded.length > 1 ? loaded : [message];
-    const removed = new Set(members.map((item) => item.id));
-    const after = (next?: MessageSummary, openWasMoved?: boolean) => {
-      setSelectedIds((ids) => ids.filter((id) => !removed.has(id)));
-      if (!openWasMoved) return;
-      if (next) void chooseMessage(next);
-      else {
-        beginMessageOpen();
-        selectMessage(undefined);
-      }
-    };
-    if (mailbox?.role === "trash") {
-      if (members.length > 1) {
-        void deleteLoadedConversation(message, after);
-        return;
-      }
-      void deleteListedMessage(message, after);
-      return;
-    }
-    if (members.length > 1) {
-      void moveLoadedConversation(message, "trash", after);
-      return;
-    }
-    void moveListedMessage(message, "trash", after);
-  }
-
-  function junkFocused(message: MessageSummary, conversation: boolean) {
-    const current = useAppStore.getState();
-    const mailbox = current.mailboxes.find(
-      (box) => box.id === message.mailboxId,
-    );
-    const toInbox = mailbox?.role === "junk";
-    const loaded = conversation
-      ? conversationMessages(current.messages, message)
-      : [];
-    const members = loaded.length > 1 ? loaded : [message];
-    const removed = new Set(members.map((item) => item.id));
-    const after = (next?: MessageSummary, openWasMoved?: boolean) => {
-      setSelectedIds((ids) => ids.filter((id) => !removed.has(id)));
-      if (!openWasMoved) return;
-      if (next) void chooseMessage(next);
-      else {
-        beginMessageOpen();
-        selectMessage(undefined);
-      }
-    };
-    if (members.length > 1) {
-      if (toInbox) {
-        const inbox = current.mailboxes.find(
-          (box) => box.accountId === message.accountId && box.role === "inbox",
-        );
-        if (!inbox) {
-          setError(strings.mail.noInbox);
-          return;
-        }
-        void moveLoadedConversation(message, inbox.id, after);
-        return;
-      }
-      void moveLoadedConversation(message, "junk", after);
-      return;
-    }
-    void moveListedMessage(message, toInbox ? "inbox" : "junk", after);
-  }
-
-  async function replyFocused(
-    message: MessageSummary,
-    mode: "reply" | "replyAll",
-  ) {
-    const accountId = message.accountId;
-    try {
-      const detail = await api.getMessage(accountId, message.id);
-      const state = useAppStore.getState();
-      if (state.activeAccountId !== accountId) return;
-      const account = state.accounts.find((item) => item.id === accountId);
-      openComposer({
-        sourceMessage: detail,
-        composeMode:
-          mode === "reply"
-            ? preferredReplyMode(
-                detail,
-                state.settings.replyToAll,
-                account?.email ?? "",
-                account?.aliases ?? [],
-              )
-            : mode,
-      });
-    } catch (cause) {
-      setError(String(cause));
-    }
-  }
-
   const chooseMessage = useCallback(
     async (summary: MessageSummary) => {
       const accountId = activeAccountId;
@@ -1051,6 +908,7 @@ export function MailShell({ onOpenSettings }: Props) {
     const messageId = rememberedOpenMessage(activeAccountId, activeMailboxId);
     const summary = messages.find((item) => item.id === messageId);
     // An unread message was left unread on purpose; reopening would mark it read.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (summary?.isRead) void chooseMessage(summary);
   }, [
     activeAccountId,
@@ -1062,6 +920,15 @@ export function MailShell({ onOpenSettings }: Props) {
     selectedMessage,
     submittedQuery,
   ]);
+
+  const { archiveFocused, trashFocused, junkFocused, replyFocused } =
+    useRowActions({
+      setSelectedIds,
+      chooseMessage,
+      selectMessage,
+      setError,
+      openComposer,
+    });
 
   async function openEarlierMessage(summary: MessageSummary) {
     const accountId = useAppStore.getState().activeAccountId;
