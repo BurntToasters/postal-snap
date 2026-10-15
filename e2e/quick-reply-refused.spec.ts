@@ -82,12 +82,7 @@ test("a refused Ctrl+Enter keeps the note too", async ({ page }, testInfo) => {
 
 test("an accepted replacement clears the note and a new note stays", async ({
   page,
-  browserName,
 }, testInfo) => {
-  test.skip(
-    browserName === "webkit",
-    "Reply composer does not mount in headless WebKit",
-  );
   await installMockIpc(page);
   await recordIpc(page);
   await page.goto("/");
@@ -103,6 +98,9 @@ test("an accepted replacement clears the note and a new note stays", async ({
     page.getByRole("textbox", { name: "Subject", exact: true }),
   ).toHaveValue(/Weekend plans/);
   await expect(box).toHaveValue("");
+  const body = page.getByRole("textbox", { name: "Message body", exact: true });
+  await expect(body).toContainText("First note");
+  await expect(body).toBeFocused();
   await box.fill("Second note");
   await page.waitForTimeout(300);
   await expect(box).toHaveValue("Second note");

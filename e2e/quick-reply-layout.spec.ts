@@ -33,9 +33,6 @@ async function openMessage(page: Page, query = "") {
   await expect(page.locator("form.quick-reply")).toBeVisible();
 }
 
-// Reply composers fail to mount in headless WebKit (Tiptap), before this change.
-const WEBKIT_REPLY = "Reply composer does not mount in headless WebKit";
-
 const noteBox = (page: Page) =>
   page.getByRole("textbox", { name: "Write a reply" });
 
@@ -200,11 +197,7 @@ test("short windows keep the quick reply static", async ({ page }) => {
   );
 });
 
-test("Ctrl+Enter starts the reply with the note", async ({
-  page,
-  browserName,
-}) => {
-  test.skip(browserName === "webkit", WEBKIT_REPLY);
+test("Ctrl+Enter starts the reply with the note", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await openMessage(page);
   const box = noteBox(page);
@@ -214,13 +207,12 @@ test("Ctrl+Enter starts the reply with the note", async ({
     page.getByRole("textbox", { name: "Subject", exact: true }),
   ).toHaveValue(/Weekend plans/);
   await expect(box).toHaveValue("");
+  const body = page.getByRole("textbox", { name: "Message body", exact: true });
+  await expect(body).toContainText("See you then");
+  await expect(body).toBeFocused();
 });
 
-test("Cmd+Enter starts the reply with the note", async ({
-  page,
-  browserName,
-}) => {
-  test.skip(browserName === "webkit", WEBKIT_REPLY);
+test("Cmd+Enter starts the reply with the note", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await openMessage(page);
   const box = noteBox(page);
@@ -229,6 +221,9 @@ test("Cmd+Enter starts the reply with the note", async ({
   await expect(
     page.getByRole("textbox", { name: "Subject", exact: true }),
   ).toHaveValue(/Weekend plans/);
+  const body = page.getByRole("textbox", { name: "Message body", exact: true });
+  await expect(body).toContainText("On my way");
+  await expect(body).toBeFocused();
 });
 
 test("notes expand only their own message", async ({ page }) => {
