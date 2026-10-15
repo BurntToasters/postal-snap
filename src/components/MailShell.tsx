@@ -16,14 +16,12 @@ import { api } from "../api";
 import {
   CONTEXT_ACTION_EVENT,
   addressSearchQuery,
-  earlierHeaderId,
   subjectSearchQuery,
 } from "../contextMenu";
 import { strings } from "../i18n";
 import { matchesListFilter, type MessageListFilter } from "../listFilter";
 import type { MessageListSort } from "../listSort";
 import { mailboxListView, rememberMailboxView } from "../mailboxView";
-import { rememberedOpenMessage } from "../recentMessage";
 import { folderLabel, folderParentLabel, folderPathLabel } from "../i18n/mail";
 import { useAppStore } from "../store";
 import type { AccountInboxCount, ComposeDraft, MessageSummary } from "../types";
@@ -38,7 +36,7 @@ import {
 } from "./mail/mailDialogs";
 import { Sidebar } from "./mail/sidebar";
 import { DraftList, OutboxList, SnoozedList } from "./mail/localLists";
-import { isOversizeError, matchesLocalQuery } from "./mail/mailSearch";
+import { matchesLocalQuery } from "./mail/mailSearch";
 import { folderIcons } from "./mail/folderIcons";
 import {
   mailboxByRole,
@@ -58,6 +56,7 @@ import { useLocalListActions } from "./mail/useLocalListActions";
 import { useMailEvents } from "./mail/useMailEvents";
 import { useMessageSelection } from "./mail/useMessageSelection";
 import { useRowActions } from "./mail/useRowActions";
+import { useMessageOpening } from "./mail/useMessageOpening";
 import {
   useFolderDialog,
   type FolderDialogState,
@@ -82,8 +81,7 @@ import { forwardSelectedMessages } from "../forwardConversation";
 import { printSelectedMessages } from "../printConversation";
 import { saveSelectedFiles, saveSelectedMessages } from "../saveConversation";
 import { starLoadedConversation, toggleListedStar } from "../starConversation";
-import { waitToMarkRead } from "../markRead";
-import { beginMessageOpen, isCurrentMessageOpen } from "../messageOpen";
+import { beginMessageOpen } from "../messageOpen";
 import {
   adjacentMessage,
   conversationNeighbor,
@@ -596,91 +594,23 @@ export function MailShell({ onOpenSettings }: Props) {
     updateSettings,
     setError,
   });
-  const chooseMessage = useCallback(
-    async (summary: MessageSummary) => {
-      const accountId = activeAccountId;
-      const mailboxId = activeMailboxId;
-      if (!accountId || !mailboxId) return false;
-      const request = beginMessageOpen();
-      setLoadingMessageId(summary.id);
-      try {
-        const detail = await api.getMessage(accountId, summary.id);
-        const current = useAppStore.getState();
-        if (
-          !isCurrentMessageOpen(request) ||
-          current.activeAccountId !== accountId ||
-          current.activeMailboxId !== mailboxId
-        )
-          return false;
-        selectMessage(detail);
-        const readyToMark = !summary.isRead
-          ? await waitToMarkRead(
-              useAppStore.getState().settings.markRead,
-              () => {
-                const latest = useAppStore.getState();
-                return (
-                  isCurrentMessageOpen(request) &&
-                  latest.activeAccountId === accountId &&
-                  latest.activeMailboxId === mailboxId &&
-                  !latest.activeLocalView &&
-                  latest.selectedMessage?.id === summary.id
-                );
-              },
-            )
-          : false;
-        if (readyToMark) {
-          await api.setMessageFlags(accountId, summary.id, true, undefined);
-          const latest = useAppStore.getState();
-          if (
-            isCurrentMessageOpen(request) &&
-            latest.activeAccountId === accountId &&
-            latest.activeMailboxId === mailboxId &&
-            !latest.activeLocalView
-          ) {
-            setMessages(
-              latest.messages.map((message) =>
-                message.id === summary.id
-                  ? { ...message, isRead: true }
-                  : message,
-              ),
-              latest.messageCursor,
-              latest.hasMoreMessages,
-            );
-            if (latest.selectedMessage?.id === summary.id)
-              selectMessage({ ...detail, isRead: true });
-            await loadAccountData();
-          }
-        }
-      } catch (cause) {
-        if (!isCurrentMessageOpen(request)) return false;
-        const detail = String(cause);
-        setError(detail);
-        if (isOversizeError(cause)) {
-          selectMessage({
-            ...summary,
-            to: [],
-            cc: [],
-            replyTo: null,
-            textBody: "",
-            htmlBody: null,
-            remoteImagesBlocked: false,
-            attachments: [],
-          });
-        }
-      } finally {
-        if (isCurrentMessageOpen(request)) setLoadingMessageId(undefined);
-      }
-      return useAppStore.getState().selectedMessage?.id === summary.id;
-    },
-    [
-      activeAccountId,
-      activeMailboxId,
-      loadAccountData,
-      selectMessage,
-      setError,
-      setMessages,
-    ],
-  );
+  const { chooseMessage, openEarlierMessage } = useMessageOpening({
+    activeAccountId,
+    activeMailboxId,
+    activeLocalView,
+    messages,
+    selectedMessage,
+    submittedQuery,
+    loadingMessages,
+    loadAccountData,
+    selectMessage,
+    selectMailbox,
+    setError,
+    setMessages,
+    setLoadingMessageId,
+    clearQuery,
+    resetListState,
+  });
   const listedMessages =
     activeLocalView || submittedQuery || listFilter === "all"
       ? messages
@@ -725,47 +655,6 @@ export function MailShell({ onOpenSettings }: Props) {
     setSelectionSnoozeOpen,
   });
 
-  const restoreFolder = useRef("");
-  const restoredFor = useRef("");
-  useEffect(() => {
-    const folderKey =
-      activeAccountId && activeMailboxId && !activeLocalView
-        ? `${activeAccountId}:${activeMailboxId}`
-        : "";
-    if (restoreFolder.current !== folderKey) {
-      restoreFolder.current = folderKey;
-      restoredFor.current = "";
-    }
-    if (
-      !folderKey ||
-      !activeAccountId ||
-      !activeMailboxId ||
-      activeLocalView ||
-      submittedQuery ||
-      loadingMessages ||
-      messages.length === 0 ||
-      restoredFor.current === folderKey
-    ) {
-      return;
-    }
-    restoredFor.current = folderKey;
-    if (selectedMessage) return;
-    const messageId = rememberedOpenMessage(activeAccountId, activeMailboxId);
-    const summary = messages.find((item) => item.id === messageId);
-    // An unread message was left unread on purpose; reopening would mark it read.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (summary?.isRead) void chooseMessage(summary);
-  }, [
-    activeAccountId,
-    activeLocalView,
-    activeMailboxId,
-    chooseMessage,
-    loadingMessages,
-    messages,
-    selectedMessage,
-    submittedQuery,
-  ]);
-
   const { archiveFocused, trashFocused, junkFocused, replyFocused } =
     useRowActions({
       setSelectedIds,
@@ -774,77 +663,6 @@ export function MailShell({ onOpenSettings }: Props) {
       setError,
       openComposer,
     });
-
-  async function openEarlierMessage(summary: MessageSummary) {
-    const accountId = useAppStore.getState().activeAccountId;
-    const detail = useAppStore.getState().selectedMessage;
-    if (!accountId || !detail || detail.id !== summary.id) return;
-    const headerId = earlierHeaderId(detail);
-    if (!headerId) return;
-    let found: MessageSummary | null;
-    try {
-      found = await api.findCachedMessage(accountId, headerId);
-    } catch (cause) {
-      setError(String(cause));
-      return;
-    }
-    if (!found || found.id === summary.id) {
-      setError(strings.reader.earlierMessageMissing);
-      return;
-    }
-    clearQuery();
-    resetListState();
-    const viewing = useAppStore.getState();
-    if (
-      found.mailboxId === viewing.activeMailboxId &&
-      !viewing.activeLocalView
-    ) {
-      void chooseMessage(found);
-      return;
-    }
-    selectMailbox(found.mailboxId);
-    const mailboxId = found.mailboxId;
-    const request = beginMessageOpen();
-    setLoadingMessageId(found.id);
-    try {
-      const opened = await api.getMessage(accountId, found.id);
-      const current = useAppStore.getState();
-      if (
-        !isCurrentMessageOpen(request) ||
-        current.activeAccountId !== accountId ||
-        current.activeMailboxId !== mailboxId
-      )
-        return;
-      selectMessage(opened);
-      const readyToMark = !found.isRead
-        ? await waitToMarkRead(useAppStore.getState().settings.markRead, () => {
-            const latest = useAppStore.getState();
-            return (
-              isCurrentMessageOpen(request) &&
-              latest.activeAccountId === accountId &&
-              latest.activeMailboxId === mailboxId &&
-              !latest.activeLocalView &&
-              latest.selectedMessage?.id === found.id
-            );
-          })
-        : false;
-      if (readyToMark) {
-        await api.setMessageFlags(accountId, found.id, true, undefined);
-        const latest = useAppStore.getState();
-        if (
-          isCurrentMessageOpen(request) &&
-          latest.activeAccountId === accountId &&
-          latest.activeMailboxId === mailboxId &&
-          latest.selectedMessage?.id === found.id
-        )
-          selectMessage({ ...opened, isRead: true });
-      }
-    } catch (cause) {
-      if (isCurrentMessageOpen(request)) setError(String(cause));
-    } finally {
-      if (isCurrentMessageOpen(request)) setLoadingMessageId(undefined);
-    }
-  }
 
   useEffect(() => {
     void loadAccountData();
