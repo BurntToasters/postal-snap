@@ -18,16 +18,18 @@ test.afterEach(async ({ page }, testInfo: TestInfo) => {
   await testInfo.attach("screenshot", { path, contentType: "image/png" });
 });
 
-function openMessage(page: import("@playwright/test").Page) {
-  return page
+async function openMessage(page: import("@playwright/test").Page) {
+  await page
     .getByRole("option", { name: /Weekend plans/i })
     .or(page.getByRole("treeitem", { name: /Weekend plans/i }))
     .click();
+  await page.getByRole("textbox", { name: "Write a reply" }).focus();
 }
 
 test("a short reply names the sender", async ({ page }) => {
   await page.goto("/");
   await openMessage(page);
+  await expect(page.locator(".quick-reply-to")).toBeVisible();
   await expect(page.locator(".quick-reply-to")).toHaveText("To Jane");
 });
 

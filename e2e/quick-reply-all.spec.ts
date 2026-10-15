@@ -27,6 +27,8 @@ test("a note can reply to everyone on the message", async ({ page }) => {
   const replyAll = page.getByRole("button", {
     name: "Start reply to everyone",
   });
+  await box.focus();
+  await expect(replyAll).toBeVisible();
   await expect(replyAll).toBeDisabled();
   await box.fill("See you then");
   await replyAll.click();
