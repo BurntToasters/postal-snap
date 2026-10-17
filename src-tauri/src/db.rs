@@ -1207,7 +1207,8 @@ mod tests {
         let operation_id = db.queued_operations(&account_id).unwrap()[0].0;
         // Replay removes the operation and the moved row.
         db.remove_operation(&account_id, operation_id).unwrap();
-        db.remove_message(message_id).unwrap();
+        db.remove_moved_messages(&account_id, &[message_id], "Archive")
+            .unwrap();
 
         assert_eq!(db.undo_deferred(&account_id, "undo-1").unwrap(), (0, true));
         assert!(db.list_messages(inbox, None, 10).unwrap().items.is_empty());

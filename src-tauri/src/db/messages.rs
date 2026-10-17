@@ -1284,14 +1284,6 @@ impl Database {
         Ok(())
     }
 
-    pub fn remove_message(&self, id: i64) -> Result<(), String> {
-        let mut conn = self.conn()?;
-        let transaction = conn.transaction().map_err(db_error)?;
-        remove_message_in_transaction(&transaction, id)?;
-        transaction.commit().map_err(db_error)?;
-        Ok(())
-    }
-
     pub fn message_location(&self, id: i64) -> Result<(String, String, u32), String> {
         self.read_conn()?
             .prepare_cached("SELECT m.account_id, f.name, m.uid FROM messages m JOIN mailboxes f ON f.id=m.mailbox_id WHERE m.id=?1")

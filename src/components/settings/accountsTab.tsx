@@ -6,6 +6,7 @@ import {
   type SetStateAction,
 } from "react";
 import { api } from "../../api";
+import { mergeAccountFields } from "../../accountMerge";
 import { Mail } from "lucide-react";
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
@@ -254,9 +255,7 @@ export function AccountsTab({
     setColorError("");
     try {
       const updated = await api.updateAccountColor(accountId, color);
-      setAccounts(
-        accounts.map((item) => (item.id === accountId ? updated : item)),
-      );
+      mergeAccountFields(accountId, { color: updated.color });
     } catch {
       setColorError(strings.settings.accountColorFailed);
     }

@@ -12,7 +12,8 @@ const NOW_SQL: &str = "strftime('%Y-%m-%dT%H:%M:%S+00:00','now')";
 
 database_operations! {
 impl Database {
-    /// Delete source rows after a successful remote move, in one transaction.
+    /// Delete source rows after a successful remote move (live, deferred, or
+    /// queued), in one transaction.
     /// A snooze on a message with a Message-ID header becomes a transfer for
     /// the destination mailbox. A snooze cannot be keyed when the message has
     /// no Message-ID or the destination folder is not cached yet; it is dropped

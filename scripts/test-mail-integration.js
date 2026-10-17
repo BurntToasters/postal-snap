@@ -603,6 +603,8 @@ try {
       "greenmail-deferred-move-commit-once",
       "greenmail-dropped-operation-notification",
       "greenmail-batched-move-keeps-snoozes",
+      "greenmail-live-single-move-keeps-snooze",
+      "greenmail-live-bulk-move-keeps-snoozes",
     ]) {
       report.results.push({
         name,
@@ -758,6 +760,24 @@ try {
     );
     report.results.push({
       name: "greenmail-batched-move-keeps-snoozes",
+      status: "passed",
+    });
+    stage = "greenmail-live-single-move-keeps-snooze";
+    await deferredReplayTest("greenmail_live_single_move_keeps_the_snooze", {
+      ...environment,
+      POSTAL_SNAP_MAIL_INTEGRATION: "1",
+    });
+    report.results.push({
+      name: "greenmail-live-single-move-keeps-snooze",
+      status: "passed",
+    });
+    stage = "greenmail-live-bulk-move-keeps-snoozes";
+    await deferredReplayTest("greenmail_live_bulk_move_keeps_every_snooze", {
+      ...environment,
+      POSTAL_SNAP_MAIL_INTEGRATION: "1",
+    });
+    report.results.push({
+      name: "greenmail-live-bulk-move-keeps-snoozes",
       status: "passed",
     });
     stage = "greenmail-undo-session-restart-recovery";

@@ -9,6 +9,9 @@ import type { MockShared } from "./mock/context";
 // Failure modes covered here:
 // 1. A name save response taken before a Reply-To save erases the new Reply-To.
 // 2. A signature save response taken before a name save erases the new name.
+// 3. A color save response taken before a Reply-To save erases the new Reply-To.
+// 4. A body-format save response taken before a name save erases the new name.
+// 5. A stale account list from an auth/offline sync event erases a newer Reply-To.
 
 const variants = [
   { density: "comfortable", scale: 1 },
@@ -38,7 +41,10 @@ async function holdNextResponse(
   command:
     | "update_account_display_name"
     | "update_account_reply_to"
-    | "update_account_signature",
+    | "update_account_signature"
+    | "update_account_color"
+    | "update_account_default_body_format"
+    | "list_accounts",
   controlKey: string,
 ) {
   await page.evaluate(
@@ -105,6 +111,9 @@ async function readStoreAccount(page: Page) {
             displayName: string;
             replyTo?: string;
             signature?: string;
+            color?: string | null;
+            defaultBodyFormat?: string;
+            syncState: string;
           }[];
         };
       };
@@ -114,7 +123,40 @@ async function readStoreAccount(page: Page) {
       displayName: account.displayName,
       replyTo: account.replyTo ?? "",
       signature: account.signature ?? "",
+      color: account.color ?? null,
+      defaultBodyFormat: account.defaultBodyFormat ?? "",
+      syncState: account.syncState,
     };
+  });
+}
+
+/** Emits a sync-state event the way the native shell does. */
+async function emitSyncState(page: Page, phase: string) {
+  await page.evaluate(async (phase) => {
+    const internals = (
+      window as typeof window & {
+        __TAURI_INTERNALS__: {
+          invoke: (
+            command: string,
+            args: Record<string, unknown>,
+          ) => Promise<unknown>;
+        };
+      }
+    ).__TAURI_INTERNALS__;
+    await internals.invoke("plugin:event|emit", {
+      event: "sync-state",
+      payload: { accountId: "account-1", phase },
+    });
+  }, phase);
+}
+
+/** Prepares the mock so the next account list reports an auth failure. */
+async function markAuthFailed(page: Page) {
+  await page.evaluate(() => {
+    const mock = window.__POSTAL_SNAP_MOCK__;
+    if (!mock) throw new Error("Mock IPC was not installed");
+    mock.account.syncState = "authFailed";
+    mock.account.error = "Sign-in failed. Update the account password.";
   });
 }
 
@@ -205,5 +247,106 @@ for (const { density, scale } of variants) {
     });
     expect(store.displayName).toBe("Interleaved name");
     expect(store.signature).toBe("Held signature");
+  });
+}
+
+for (const { density, scale } of variants) {
+  const variant = `${density}-${scale * 100}`;
+
+  test(`late color response keeps newer Reply-To: ${variant}`, async ({
+    page,
+  }, testInfo) => {
+    await openIdentity(page, density, scale);
+    await holdNextResponse(page, "update_account_color", "__colorHeld");
+    await page.getByRole("radio", { name: "Purple", exact: true }).click();
+    await waitForHeld(page, "__colorHeld");
+
+    await page.getByLabel("Reply-To address").fill("color-reply@example.test");
+    await page
+      .getByRole("button", { name: "Save Reply-To", exact: true })
+      .click();
+    await expect(
+      page.getByText("Reply-To address saved.", { exact: true }),
+    ).toBeVisible();
+
+    await release(page, "__colorHeld");
+    await expect(
+      page.getByRole("radio", { name: "Purple", exact: true }),
+    ).toHaveAttribute("aria-checked", "true");
+
+    const store = await readStoreAccount(page);
+    await expect(page.getByLabel("Reply-To address")).toHaveValue(
+      "color-reply@example.test",
+    );
+    await saveEvidence(page, testInfo, `color-${variant}`, {
+      variant,
+      store,
+    });
+    expect(store.color).toBe("purple");
+    expect(store.replyTo).toBe("color-reply@example.test");
+  });
+
+  test(`late body format response keeps newer name: ${variant}`, async ({
+    page,
+  }, testInfo) => {
+    await openIdentity(page, density, scale);
+    await holdNextResponse(
+      page,
+      "update_account_default_body_format",
+      "__formatHeld",
+    );
+    await page.getByLabel("New messages start as").selectOption("plain");
+    await waitForHeld(page, "__formatHeld");
+
+    await page.getByLabel("Name on mail you send").fill("Format interleaved");
+    await page.getByRole("button", { name: "Save name", exact: true }).click();
+    await expect(page.getByText("Name saved.", { exact: true })).toBeVisible();
+
+    await release(page, "__formatHeld");
+    await expect(page.getByLabel("New messages start as")).toHaveValue("plain");
+
+    const store = await readStoreAccount(page);
+    await expect(page.getByLabel("Name on mail you send")).toHaveValue(
+      "Format interleaved",
+    );
+    await saveEvidence(page, testInfo, `body-format-${variant}`, {
+      variant,
+      store,
+    });
+    expect(store.displayName).toBe("Format interleaved");
+    expect(store.defaultBodyFormat).toBe("plain");
+  });
+
+  test(`stale sync account list keeps newer Reply-To: ${variant}`, async ({
+    page,
+  }, testInfo) => {
+    await openIdentity(page, density, scale);
+    await markAuthFailed(page);
+    await holdNextResponse(page, "list_accounts", "__listHeld");
+    await emitSyncState(page, "authFailed");
+    await waitForHeld(page, "__listHeld");
+
+    await page.getByLabel("Reply-To address").fill("sync-reply@example.test");
+    await page
+      .getByRole("button", { name: "Save Reply-To", exact: true })
+      .click();
+    await expect(
+      page.getByText("Reply-To address saved.", { exact: true }),
+    ).toBeVisible();
+
+    await release(page, "__listHeld");
+    await expect
+      .poll(async () => (await readStoreAccount(page)).syncState)
+      .toBe("authFailed");
+
+    const store = await readStoreAccount(page);
+    await expect(page.getByLabel("Reply-To address")).toHaveValue(
+      "sync-reply@example.test",
+    );
+    await saveEvidence(page, testInfo, `sync-list-${variant}`, {
+      variant,
+      store,
+    });
+    expect(store.replyTo).toBe("sync-reply@example.test");
   });
 }

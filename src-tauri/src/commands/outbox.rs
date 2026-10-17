@@ -144,7 +144,13 @@ async fn archive_source_after_delivery(
         .await
         {
             Ok(()) => {
-                let _ = state.db.remove_message(message_id);
+                super::messages::record_live_moves(
+                    &state.db,
+                    account_id,
+                    &[message_id],
+                    destination_id,
+                    &destination,
+                );
                 let policy = super::sync::account_policy(state, account_id).unwrap_or_default();
                 let _ = mail::refresh_mailbox_envelopes(
                     account,

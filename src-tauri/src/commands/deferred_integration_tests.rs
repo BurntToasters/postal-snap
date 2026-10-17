@@ -636,3 +636,107 @@ async fn greenmail_batched_move_replay_keeps_every_snooze() {
     expected.sort();
     assert_eq!(snoozed_row_ids(&fixture), expected);
 }
+
+/// A live single move, the same remote call and bookkeeping as the command,
+/// keeps the snooze on the destination copy after production sync.
+#[tokio::test]
+#[ignore = "requires npm run test:mail-integration"]
+async fn greenmail_live_single_move_keeps_the_snooze() {
+    let fixture = fixture().await;
+    let account_id = fixture.account.summary.id.clone();
+    let snoozed_until = (Utc::now() + ChronoDuration::minutes(60)).to_rfc3339();
+    fixture
+        .db
+        .snooze_message(&account_id, fixture.message_row_id, &snoozed_until)
+        .expect("snooze the fixture message");
+
+    mail::move_remote(
+        &fixture.account,
+        PASSWORD,
+        "INBOX",
+        "Archive",
+        fixture.uid,
+        Some(fixture.uid_validity),
+        mail::MoveOptions {
+            message_id: Some(&fixture.message_id),
+            dedupe_existing: false,
+            replay_flags: None,
+        },
+    )
+    .await
+    .expect("live move succeeds on GreenMail");
+    crate::commands::messages::record_live_moves(
+        &fixture.db,
+        &account_id,
+        &[fixture.message_row_id],
+        fixture.archive_id,
+        "Archive",
+    );
+
+    assert_eq!(
+        matching_message_count(&fixture.account, PASSWORD, "INBOX", &fixture.message_id).await,
+        0,
+        "live move removes the source from GreenMail"
+    );
+    let landed_id = wait_for_landed_copy(&fixture, &fixture.message_id).await;
+    assert_ne!(landed_id, fixture.message_row_id, "the row id changed");
+    assert_eq!(
+        snoozed_row_ids(&fixture),
+        vec![(landed_id, snoozed_until)],
+        "the snooze is on the destination copy only"
+    );
+}
+
+/// A live bulk move without an undo token keeps every snooze in the batch.
+#[tokio::test]
+#[ignore = "requires npm run test:mail-integration"]
+async fn greenmail_live_bulk_move_keeps_every_snooze() {
+    let fixture = fixture().await;
+    let account_id = fixture.account.summary.id.clone();
+    let second_message_id = deliver_synthetic(&fixture.account).await;
+    let second = cached_inbox_row(&fixture, &second_message_id).await;
+
+    let snoozed_until = (Utc::now() + ChronoDuration::minutes(60)).to_rfc3339();
+    fixture
+        .db
+        .snooze_messages(
+            &account_id,
+            &[fixture.message_row_id, second.id],
+            &snoozed_until,
+        )
+        .expect("snooze both messages");
+
+    mail::move_remote_uids(
+        &fixture.account,
+        PASSWORD,
+        "INBOX",
+        "Archive",
+        &[fixture.uid, second.uid],
+        Some(fixture.uid_validity),
+    )
+    .await
+    .expect("live bulk move succeeds on GreenMail");
+    crate::commands::messages::record_live_moves(
+        &fixture.db,
+        &account_id,
+        &[fixture.message_row_id, second.id],
+        fixture.archive_id,
+        "Archive",
+    );
+
+    for message_id in [&fixture.message_id, &second_message_id] {
+        assert_eq!(
+            matching_message_count(&fixture.account, PASSWORD, "INBOX", message_id).await,
+            0,
+            "live bulk move removes the source from GreenMail"
+        );
+    }
+    let first_landed = wait_for_landed_copy(&fixture, &fixture.message_id).await;
+    let second_landed = wait_for_landed_copy(&fixture, &second_message_id).await;
+    let mut expected = vec![
+        (first_landed, snoozed_until.clone()),
+        (second_landed, snoozed_until),
+    ];
+    expected.sort();
+    assert_eq!(snoozed_row_ids(&fixture), expected);
+}

@@ -876,6 +876,22 @@ fn validate_undo_token(token: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Local bookkeeping after the server committed a live move. The copies are
+/// removed and their snoozes follow to the destination, like replayed moves.
+/// Best effort: a database error must not report a completed move as failed.
+pub(crate) fn record_live_moves(
+    db: &crate::db::Database,
+    account_id: &str,
+    row_ids: &[i64],
+    destination_mailbox_id: i64,
+    destination: &str,
+) {
+    for &row_id in row_ids {
+        let _ = db.mark_pending_move(row_id, destination_mailbox_id);
+    }
+    let _ = db.remove_moved_messages(account_id, row_ids, destination);
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn move_message_inner(
     message_id: i64,
@@ -921,10 +937,13 @@ async fn move_message_inner(
             return Err(error);
         }
     } else {
-        // The remote move committed; local bookkeeping is best effort so a
-        // database hiccup cannot report a completed move as failed.
-        let _ = state.db.mark_pending_move(message_id, destination_id);
-        let _ = state.db.remove_message(message_id);
+        record_live_moves(
+            &state.db,
+            &account_id,
+            &[message_id],
+            destination_id,
+            &destination,
+        );
         let policy = account_policy(state, &account_id).unwrap_or_default();
         let _ =
             mail::refresh_mailbox_envelopes(&account, &password, &destination, &state.db, &policy)
@@ -1157,10 +1176,14 @@ pub async fn move_messages_to_mailbox(
         )
         .await;
         if remote.is_ok() {
-            for (id, _) in &entries {
-                let _ = state.db.mark_pending_move(*id, destination_mailbox_id);
-                let _ = state.db.remove_message(*id);
-            }
+            let ids: Vec<i64> = entries.iter().map(|(id, _)| *id).collect();
+            record_live_moves(
+                &state.db,
+                &account_id,
+                &ids,
+                destination_mailbox_id,
+                &destination,
+            );
             updated += entries.len();
         } else if remote.as_ref().is_err_and(|error| error.terminal) {
             failed += entries.len();

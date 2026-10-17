@@ -1,27 +1,12 @@
 import { useCallback, useState } from "react";
 
 import { api } from "../../api";
+import { mergeAccountFields } from "../../accountMerge";
 import { strings } from "../../i18n";
 import { htmlToPlainText } from "../../security";
 import { useAppStore } from "../../store";
-import type { AccountSummary } from "../../types";
 import { preparePassword } from "../setup/request";
 import type { SettingsSaveUpdate } from "./useSettingsSave";
-
-type AccountPatch = Partial<Omit<AccountSummary, "id">>;
-
-/**
- * Merges only the fields one save owns into the latest store account.
- * Responses can be older snapshots, so whole-account replacement is unsafe.
- */
-function mergeAccountFields(accountId: string, fields: AccountPatch) {
-  const { accounts, setAccounts } = useAppStore.getState();
-  setAccounts(
-    accounts.map((item) =>
-      item.id === accountId ? { ...item, ...fields } : item,
-    ),
-  );
-}
 
 interface Options {
   onClose: () => void;

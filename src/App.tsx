@@ -16,6 +16,7 @@ import {
   requestPermission,
 } from "@tauri-apps/plugin-notification";
 import { api, inTauri } from "./api";
+import { reconcileAccountList } from "./accountMerge";
 import { CONTEXT_DISMISS_EVENT } from "./contextMenu";
 import { strings } from "./i18n";
 import { parseMailto } from "./mailto";
@@ -301,7 +302,7 @@ export default function App() {
             .listAccounts()
             .then((loadedAccounts) => {
               if (active) {
-                setAccounts(loadedAccounts);
+                reconcileAccountList(loadedAccounts);
                 if (loadedAccounts.length === 0) claimAccountlessSetup();
               }
             })
