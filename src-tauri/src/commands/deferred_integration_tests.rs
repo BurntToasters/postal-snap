@@ -17,7 +17,10 @@ use chrono::{Duration as ChronoDuration, Utc};
 use serde_json::Value;
 use tempfile::TempDir;
 
-use super::replay_offline_operations_with_notification;
+use super::{
+    plan_replay_batches, replay_candidates, replay_offline_operations_with_notification,
+    ReplayBatchCaps,
+};
 use crate::{
     db::Database,
     mail,
@@ -113,6 +116,65 @@ async fn fixture() -> Fixture {
     let _ = session.create("Archive").await;
     session.logout().await.expect("close setup session");
 
+    let prepared_message_id = deliver_synthetic(&account).await;
+
+    let mut message = None;
+    for _ in 0..20 {
+        mail::sync::sync_account(
+            &db,
+            &account,
+            PASSWORD,
+            &CachePolicy::default(),
+            &mut mail::sync::Uncontended,
+        )
+        .await
+        .expect("sync GreenMail envelopes");
+        if let Some(inbox_id) = db
+            .mailbox_id_for_name(&account.summary.id, "INBOX")
+            .expect("look up Inbox")
+        {
+            message = db
+                .list_messages(inbox_id, None, 100)
+                .expect("list cached Inbox")
+                .items
+                .into_iter()
+                .find(|item| item.message_id.as_deref() == Some(prepared_message_id.as_str()));
+        }
+        if message.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let message = message.expect("sent message was cached from GreenMail Inbox");
+    let uid_validity = db
+        .mailbox_uid_validity(&account.summary.id, "INBOX")
+        .expect("read Inbox UIDVALIDITY")
+        .expect("GreenMail reports Inbox UIDVALIDITY");
+    let archive_id = db
+        .mailbox_id_for_name(&account.summary.id, "Archive")
+        .expect("look up Archive")
+        .expect("sync discovered Archive");
+
+    let source = matching_message_count(&account, PASSWORD, "INBOX", &prepared_message_id).await;
+    let destination =
+        matching_message_count(&account, PASSWORD, "Archive", &prepared_message_id).await;
+    assert_eq!(source, 1, "fixture is present in GreenMail Inbox");
+    assert_eq!(destination, 0, "fixture is absent from GreenMail Archive");
+
+    Fixture {
+        db,
+        _directory: directory,
+        account,
+        message_id: prepared_message_id,
+        message_row_id: message.id,
+        uid: message.uid,
+        uid_validity,
+        archive_id,
+    }
+}
+
+/// Deliver one uniquely subjected message into GreenMail's Inbox.
+async fn deliver_synthetic(account: &AccountRecord) -> String {
     let draft = ComposeDraft {
         id: None,
         account_id: account.summary.id.clone(),
@@ -135,66 +197,14 @@ async fn fixture() -> Fixture {
         request_receipt: false,
         reply_to: None,
     };
-    let prepared = mail::prepare_message(&account, &draft)
+    let prepared = mail::prepare_message(account, &draft)
         .await
         .expect("prepare synthetic message");
-    mail::send_prepared(&account, PASSWORD, &draft, &prepared.bytes)
+    mail::send_prepared(account, PASSWORD, &draft, &prepared.bytes)
         .await
         .unwrap_or_else(|error| panic!("deliver synthetic message: {error:?}"));
 
-    let mut message = None;
-    for _ in 0..20 {
-        mail::sync::sync_account(
-            &db,
-            &account,
-            PASSWORD,
-            &CachePolicy::default(),
-            &mut mail::sync::Uncontended,
-        )
-        .await
-        .expect("sync GreenMail envelopes");
-        if let Some(inbox_id) = db
-            .mailbox_id_for_name(&account.summary.id, "INBOX")
-            .expect("look up Inbox")
-        {
-            message = db
-                .list_messages(inbox_id, None, 100)
-                .expect("list cached Inbox")
-                .items
-                .into_iter()
-                .find(|item| item.message_id.as_deref() == Some(prepared.message_id.as_str()));
-        }
-        if message.is_some() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    let message = message.expect("sent message was cached from GreenMail Inbox");
-    let uid_validity = db
-        .mailbox_uid_validity(&account.summary.id, "INBOX")
-        .expect("read Inbox UIDVALIDITY")
-        .expect("GreenMail reports Inbox UIDVALIDITY");
-    let archive_id = db
-        .mailbox_id_for_name(&account.summary.id, "Archive")
-        .expect("look up Archive")
-        .expect("sync discovered Archive");
-
-    let source = matching_message_count(&account, PASSWORD, "INBOX", &prepared.message_id).await;
-    let destination =
-        matching_message_count(&account, PASSWORD, "Archive", &prepared.message_id).await;
-    assert_eq!(source, 1, "fixture is present in GreenMail Inbox");
-    assert_eq!(destination, 0, "fixture is absent from GreenMail Archive");
-
-    Fixture {
-        db,
-        _directory: directory,
-        account,
-        message_id: prepared.message_id,
-        message_row_id: message.id,
-        uid: message.uid,
-        uid_validity,
-        archive_id,
-    }
+    prepared.message_id
 }
 
 async fn matching_message_count(
@@ -414,9 +424,82 @@ async fn greenmail_replay_keeps_dropped_operation_notification_contract() {
     drop(directory);
 }
 
-/// A snooze rides along with a replayed move: capture (by row id) before the
-/// replay, rebind (by Message-ID header) after the moved copy lands, and the
-/// snooze list points at the new row only.
+/// Find a cached row by Message-ID in the Inbox, syncing GreenMail until it appears.
+async fn cached_inbox_row(fixture: &Fixture, message_id: &str) -> crate::models::MessageSummary {
+    let account_id = &fixture.account.summary.id;
+    for _ in 0..20 {
+        let inbox_id = fixture
+            .db
+            .mailbox_id_for_name(account_id, "INBOX")
+            .expect("look up Inbox")
+            .expect("Inbox is cached");
+        let found = fixture
+            .db
+            .list_messages(inbox_id, None, 100)
+            .expect("list cached Inbox")
+            .items
+            .into_iter()
+            .find(|item| item.message_id.as_deref() == Some(message_id));
+        if let Some(found) = found {
+            return found;
+        }
+        mail::sync::sync_account(
+            &fixture.db,
+            &fixture.account,
+            PASSWORD,
+            &CachePolicy::default(),
+            &mut mail::sync::Uncontended,
+        )
+        .await
+        .expect("sync GreenMail into the Inbox cache");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("the Inbox cache never showed the message");
+}
+
+/// Wait for a moved copy to appear in the destination cache. Only sync runs
+/// here; no snooze is captured or restored by the test.
+async fn wait_for_landed_copy(fixture: &Fixture, message_id: &str) -> i64 {
+    for _ in 0..20 {
+        let found = fixture
+            .db
+            .find_message_by_header_id_in_mailbox(
+                &fixture.account.summary.id,
+                fixture.archive_id,
+                message_id,
+            )
+            .expect("look up the moved message");
+        if let Some(found) = found {
+            return found.id;
+        }
+        mail::sync::sync_account(
+            &fixture.db,
+            &fixture.account,
+            PASSWORD,
+            &CachePolicy::default(),
+            &mut mail::sync::Uncontended,
+        )
+        .await
+        .expect("sync GreenMail into the Archive cache");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("the moved message never reached the Archive cache");
+}
+
+fn snoozed_row_ids(fixture: &Fixture) -> Vec<(i64, String)> {
+    let mut rows: Vec<(i64, String)> = fixture
+        .db
+        .list_snoozed(&fixture.account.summary.id, &Utc::now().to_rfc3339())
+        .expect("list snoozed mail")
+        .into_iter()
+        .map(|entry| (entry.message.id, entry.snoozed_until))
+        .collect();
+    rows.sort();
+    rows
+}
+
+/// A snooze survives a replayed move with no test-side capture or restore:
+/// production replay has to carry it to the destination copy.
 #[tokio::test]
 #[ignore = "requires npm run test:mail-integration"]
 async fn greenmail_replayed_deferred_move_keeps_the_snooze() {
@@ -424,48 +507,10 @@ async fn greenmail_replayed_deferred_move_keeps_the_snooze() {
     let account_id = &fixture.account.summary.id;
 
     let snoozed_until = (Utc::now() + ChronoDuration::minutes(60)).to_rfc3339();
-    let inbox_id = fixture
-        .db
-        .mailbox_id_for_name(account_id, "INBOX")
-        .expect("look up Inbox")
-        .expect("Inbox is cached");
-    assert!(
-        fixture
-            .db
-            .list_messages(inbox_id, None, 100)
-            .expect("list cached Inbox")
-            .items
-            .iter()
-            .any(|item| item.id == fixture.message_row_id),
-        "the fixture message is visible before snoozing"
-    );
     fixture
         .db
         .snooze_message(account_id, fixture.message_row_id, &snoozed_until)
         .expect("snooze the fixture message");
-    assert!(
-        !fixture
-            .db
-            .list_messages(inbox_id, None, 100)
-            .expect("list cached Inbox")
-            .items
-            .iter()
-            .any(|item| item.id == fixture.message_row_id),
-        "snoozing hides the message from its folder"
-    );
-
-    let mut captures = fixture
-        .db
-        .capture_snoozes(&[fixture.message_row_id])
-        .expect("capture the snooze under the doomed row id");
-    assert_eq!(captures.len(), 1, "exactly one snooze was captured");
-    let capture = captures.remove(0);
-    assert_eq!(
-        capture.message_id_header.as_deref(),
-        Some(fixture.message_id.as_str()),
-        "the capture carries the rebind header"
-    );
-    assert_eq!(capture.snoozed_until, snoozed_until);
 
     defer_move(&fixture, "snooze-after-move");
     fixture
@@ -481,70 +526,113 @@ async fn greenmail_replayed_deferred_move_keeps_the_snooze() {
         "committed move removes the source from GreenMail"
     );
     assert_eq!(
-        matching_message_count(&fixture.account, PASSWORD, "Archive", &fixture.message_id,).await,
+        matching_message_count(&fixture.account, PASSWORD, "Archive", &fixture.message_id).await,
         1,
         "committed move creates exactly one destination copy"
     );
 
-    // Wait for the moved copy to appear in the local Archive cache.
-    for _ in 0..20 {
-        let found = fixture
-            .db
-            .find_message_by_header_id_in_mailbox(
-                account_id,
-                fixture.archive_id,
-                &fixture.message_id,
-            )
-            .expect("look up the moved message");
-        if found.is_some() {
-            break;
-        }
-        mail::sync::sync_account(
-            &fixture.db,
-            &fixture.account,
-            PASSWORD,
-            &CachePolicy::default(),
-            &mut mail::sync::Uncontended,
-        )
-        .await
-        .expect("sync GreenMail into the Archive cache");
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    let landed = fixture
-        .db
-        .find_message_by_header_id_in_mailbox(account_id, fixture.archive_id, &fixture.message_id)
-        .expect("look up the moved message")
-        .expect("the moved message landed in the Archive cache");
-    assert_ne!(landed.id, fixture.message_row_id, "the row id changed");
+    let landed_id = wait_for_landed_copy(&fixture, &fixture.message_id).await;
+    assert_ne!(landed_id, fixture.message_row_id, "the row id changed");
+    assert_eq!(
+        snoozed_row_ids(&fixture),
+        vec![(landed_id, snoozed_until)],
+        "the snooze is on the destination copy only"
+    );
+}
 
+/// Two snoozed messages moved in one IMAP MOVE command keep both snoozes.
+#[tokio::test]
+#[ignore = "requires npm run test:mail-integration"]
+async fn greenmail_batched_move_replay_keeps_every_snooze() {
+    let fixture = fixture().await;
+    let account_id = fixture.account.summary.id.clone();
+    let second_message_id = deliver_synthetic(&fixture.account).await;
+    let second = cached_inbox_row(&fixture, &second_message_id).await;
+
+    let snoozed_until = (Utc::now() + ChronoDuration::minutes(60)).to_rfc3339();
     fixture
         .db
-        .restore_snooze_for_message(
-            account_id,
-            capture.message_id_header.as_deref().expect("header"),
-            &capture.snoozed_until,
-            &capture.created_at,
+        .snooze_messages(
+            &account_id,
+            &[fixture.message_row_id, second.id],
+            &snoozed_until,
         )
-        .expect("rebind the captured snooze");
+        .expect("snooze both messages");
 
-    let archived = fixture
+    let operations: Vec<_> = [
+        (fixture.message_row_id, fixture.uid),
+        (second.id, second.uid),
+    ]
+    .into_iter()
+    .map(|(row_id, uid)| {
+        (
+            row_id,
+            serde_json::json!({
+                "messageId": row_id,
+                "uid": uid,
+                "source": "INBOX",
+                "destination": "Archive",
+                "uidValidity": fixture.uid_validity,
+            }),
+            fixture.archive_id,
+        )
+    })
+    .collect();
+    fixture
         .db
-        .list_messages(fixture.archive_id, None, 100)
-        .expect("list cached Archive after restore");
+        .defer_moves(
+            &account_id,
+            &operations,
+            "batched-snooze-moves",
+            Utc::now() + ChronoDuration::minutes(5),
+        )
+        .expect("defer both moves in local database");
+    fixture
+        .db
+        .commit_deferred(&account_id, "batched-snooze-moves")
+        .unwrap();
+
+    // Both queued moves must form one planned batch, or this test proves nothing.
+    let queued = fixture
+        .db
+        .queued_operations_with_attempts(&account_id)
+        .expect("read queued moves");
+    let batch_sizes: Vec<usize> = plan_replay_batches(
+        &replay_candidates(&queued),
+        ReplayBatchCaps {
+            move_supported: true,
+        },
+    )
+    .iter()
+    .map(Vec::len)
+    .collect();
     assert!(
-        !archived.items.iter().any(|item| item.id == landed.id),
-        "the re-snoozed message hides from its new folder"
+        batch_sizes.contains(&2),
+        "both moves plan as one batch: {batch_sizes:?}"
     );
-    let snoozed = fixture
-        .db
-        .list_snoozed(account_id, &Utc::now().to_rfc3339())
-        .expect("list snoozed mail");
-    assert_eq!(
-        snoozed
-            .iter()
-            .map(|entry| (entry.message.id, entry.snoozed_until.clone()))
-            .collect::<Vec<_>>(),
-        vec![(landed.id, snoozed_until)],
-        "exactly the re-bound row is snoozed"
-    );
+
+    let (pending, notifications) = replay(&fixture).await;
+    assert!(!pending, "successful replay drains the operation queue");
+    assert!(notifications.is_empty());
+    for message_id in [&fixture.message_id, &second_message_id] {
+        assert_eq!(
+            matching_message_count(&fixture.account, PASSWORD, "INBOX", message_id).await,
+            0,
+            "batched move removes the source from GreenMail"
+        );
+        assert_eq!(
+            matching_message_count(&fixture.account, PASSWORD, "Archive", message_id).await,
+            1,
+            "batched move creates exactly one destination copy"
+        );
+    }
+
+    let first_landed = wait_for_landed_copy(&fixture, &fixture.message_id).await;
+    let second_landed = wait_for_landed_copy(&fixture, &second_message_id).await;
+    let mut expected = vec![
+        (first_landed, snoozed_until.clone()),
+        (second_landed, snoozed_until),
+    ];
+    expected.sort();
+    assert_eq!(snoozed_row_ids(&fixture), expected);
 }

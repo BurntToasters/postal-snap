@@ -602,6 +602,7 @@ try {
       "greenmail-deferred-move-undo-window",
       "greenmail-deferred-move-commit-once",
       "greenmail-dropped-operation-notification",
+      "greenmail-batched-move-keeps-snoozes",
     ]) {
       report.results.push({
         name,
@@ -745,6 +746,18 @@ try {
     );
     report.results.push({
       name: "greenmail-replayed-move-keeps-snooze",
+      status: "passed",
+    });
+    stage = "greenmail-batched-move-keeps-snoozes";
+    await deferredReplayTest(
+      "greenmail_batched_move_replay_keeps_every_snooze",
+      {
+        ...environment,
+        POSTAL_SNAP_MAIL_INTEGRATION: "1",
+      },
+    );
+    report.results.push({
+      name: "greenmail-batched-move-keeps-snoozes",
       status: "passed",
     });
     stage = "greenmail-undo-session-restart-recovery";

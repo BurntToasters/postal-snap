@@ -1306,12 +1306,31 @@ async fn replay_move_batch(
     {
         return Ok(false);
     }
-    for (id, operation) in &operations {
-        db.remove_message(operation.message_id)?;
+    let row_ids: Vec<i64> = operations
+        .iter()
+        .map(|(_, operation)| operation.message_id)
+        .collect();
+    // Only a database failure lands here; the per-op path dedupes and retries it.
+    if db
+        .remove_moved_messages(account_id, &row_ids, &destination)
+        .is_err()
+    {
+        return Ok(false);
+    }
+    for (id, _) in &operations {
         db.remove_operation(account_id, *id)?;
     }
     let _ = mail::refresh_mailbox_envelopes(account, password, &destination, db, policy).await;
+    land_pending_snoozes(db, account_id, &destination);
     Ok(true)
+}
+
+/// Land snoozes waiting on a destination the refresh just synced. Best effort:
+/// the transfer rows are durable, so a later sync lands whatever this misses.
+fn land_pending_snoozes(db: &Database, account_id: &str, destination: &str) {
+    if let Ok(Some(mailbox_id)) = db.mailbox_id_for_name(account_id, destination) {
+        let _ = db.apply_pending_snooze_transfers(account_id, mailbox_id);
+    }
 }
 
 async fn replay_offline_operations(
@@ -1520,10 +1539,21 @@ async fn replay_offline_operations_with_notification(
                             db.remove_operation(account_id, flag_id)?;
                             flag_state.handled.insert(flag_id);
                         }
-                        // Carry a snooze across the row-id change the move
-                        // causes; the FK cascade would otherwise drop it.
-                        let snoozes = db.capture_snoozes(&[operation.message_id])?;
-                        db.remove_message(operation.message_id)?;
+                        // Durable transfer: the snooze survives the row-id
+                        // change and lands once the destination caches the copy.
+                        // Source row and transfer commit together; a database
+                        // failure retries the dedupe-safe move on the next replay.
+                        if db
+                            .remove_moved_messages(
+                                account_id,
+                                &[operation.message_id],
+                                &operation.destination,
+                            )
+                            .is_err()
+                        {
+                            let _ = db.record_operation_attempt(account_id, id);
+                            continue;
+                        }
                         let _ = mail::refresh_mailbox_envelopes(
                             account,
                             password,
@@ -1532,16 +1562,7 @@ async fn replay_offline_operations_with_notification(
                             policy,
                         )
                         .await;
-                        for snooze in snoozes {
-                            if let Some(header) = snooze.message_id_header.as_deref() {
-                                let _ = db.restore_snooze_for_message(
-                                    &snooze.account_id,
-                                    header,
-                                    &snooze.snoozed_until,
-                                    &snooze.created_at,
-                                );
-                            }
-                        }
+                        land_pending_snoozes(db, account_id, &operation.destination);
                     }
                     Err(error) => {
                         if error.terminal {

@@ -602,14 +602,54 @@ test("direct updater is GitHub-only and notices are bundled", async () => {
   );
   assert.match(hooks, /NSIS_HOOK_PREINSTALL/);
   assert.match(hooks, /NSIS_HOOK_PREUNINSTALL/);
+  assert.match(hooks, /NSIS_HOOK_POSTINSTALL/);
   assert.match(hooks, /POSTAL_SNAP_MIN_WINDOWS_BUILD 19045/);
   assert.match(hooks, /--cleanup-credentials/);
-  // Windows direct installs must appear under Default apps by protocol.
-  assert.match(
-    hooks,
-    /WriteRegStr HKCU "Software\\Classes\\mailto\\shell\\open\\command"/,
+  // Never touch the shared mailto key, so another client's handler survives.
+  assert.doesNotMatch(hooks, /WriteRegStr HKCU "Software\\Classes\\mailto/);
+  assert.doesNotMatch(hooks, /DeleteRegKey HKCU "Software\\Classes\\mailto"/);
+  // Default apps registration uses an app-specific ProgID and capabilities.
+  const postinstall = hooks.slice(
+    hooks.indexOf("!macro NSIS_HOOK_POSTINSTALL"),
+    hooks.indexOf("!macro NSIS_HOOK_PREUNINSTALL"),
   );
-  assert.match(hooks, /DeleteRegKey HKCU "Software\\Classes\\mailto"/);
+  assert.match(
+    postinstall,
+    /WriteRegStr HKCU "Software\\Classes\\\$\{POSTAL_SNAP_PROGID\}\\shell\\open\\command" "" '"\$INSTDIR\\\$\{MAINBINARYNAME\}\.exe" "%1"'/,
+  );
+  assert.match(
+    postinstall,
+    /WriteRegStr HKCU "\$\{POSTAL_SNAP_CAPS_KEY\}\\URLAssociations" "mailto" "\$\{POSTAL_SNAP_PROGID\}"/,
+  );
+  assert.match(
+    postinstall,
+    /WriteRegStr HKCU "\$\{POSTAL_SNAP_REGISTERED_APPS\}" "\$\{POSTAL_SNAP_APP_NAME\}" "\$\{POSTAL_SNAP_CAPS_KEY\}"/,
+  );
+  assert.match(postinstall, /ApplicationName/);
+  assert.match(postinstall, /ApplicationIcon/);
+  // Uninstall removals of app-owned keys must sit behind the upgrade guard.
+  const preuninstall = hooks.slice(
+    hooks.indexOf("!macro NSIS_HOOK_PREUNINSTALL"),
+  );
+  const guard = preuninstall.indexOf("${If} $UpdateMode <> 1");
+  const removal = preuninstall.indexOf(
+    'DeleteRegKey HKCU "Software\\Classes\\${POSTAL_SNAP_PROGID}"',
+  );
+  assert.ok(guard >= 0 && removal > guard, "ProgID removal must be guarded");
+  assert.match(preuninstall, /DeleteRegKey HKCU "\$\{POSTAL_SNAP_CAPS_KEY\}"/);
+  assert.match(
+    preuninstall,
+    /DeleteRegValue HKCU "\$\{POSTAL_SNAP_REGISTERED_APPS\}" "\$\{POSTAL_SNAP_APP_NAME\}"/,
+  );
+  // Legacy cleanup deletes only the exact command, not the shared key.
+  assert.match(
+    preuninstall,
+    /DeleteRegKey HKCU "\$\{POSTAL_SNAP_LEGACY_MAILTO\}\\shell\\open\\command"/,
+  );
+  assert.doesNotMatch(
+    preuninstall,
+    /DeleteRegKey HKCU "\$\{POSTAL_SNAP_LEGACY_MAILTO\}"/,
+  );
 });
 
 test("secret scanning ignores only TweetFeed IOC snapshots", async () => {

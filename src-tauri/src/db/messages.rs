@@ -352,6 +352,7 @@ impl Database {
         for message in messages {
             write_envelope(&transaction, account_id, mailbox_id, message)?;
         }
+        super::snooze_transfers::apply_in_transaction(&transaction, account_id, mailbox_id)?;
         transaction.commit().map_err(db_error)
     }
 
@@ -1286,20 +1287,7 @@ impl Database {
     pub fn remove_message(&self, id: i64) -> Result<(), String> {
         let mut conn = self.conn()?;
         let transaction = conn.transaction().map_err(db_error)?;
-        let row: Option<(i64, bool, Option<i64>)> = transaction
-            .query_row(
-                "SELECT mailbox_id,is_read != 0,pending_move_to FROM messages WHERE id=?1",
-                [id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .optional()
-            .map_err(db_error)?;
-        transaction
-            .execute("DELETE FROM messages WHERE id=?1", [id])
-            .map_err(db_error)?;
-        if let Some((mailbox_id, is_read, None)) = row {
-            adjust_mailbox_counts(&transaction, mailbox_id, -1, (!is_read).then_some(-1))?;
-        }
+        remove_message_in_transaction(&transaction, id)?;
         transaction.commit().map_err(db_error)?;
         Ok(())
     }
@@ -2092,6 +2080,28 @@ fn write_full_message(
     ).map_err(db_error)?.execute([id]).map_err(db_error)?;
     super::refresh_list_columns(transaction, "id=?1", [id])?;
     Ok(id)
+}
+
+/// Delete one row and fix its folder counts. Snoozes cascade with the row.
+pub(crate) fn remove_message_in_transaction(
+    transaction: &rusqlite::Transaction<'_>,
+    id: i64,
+) -> Result<(), String> {
+    let row: Option<(i64, bool, Option<i64>)> = transaction
+        .query_row(
+            "SELECT mailbox_id,is_read != 0,pending_move_to FROM messages WHERE id=?1",
+            [id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
+        .map_err(db_error)?;
+    transaction
+        .execute("DELETE FROM messages WHERE id=?1", [id])
+        .map_err(db_error)?;
+    if let Some((mailbox_id, is_read, None)) = row {
+        adjust_mailbox_counts(transaction, mailbox_id, -1, (!is_read).then_some(-1))?;
+    }
+    Ok(())
 }
 
 fn write_envelope(

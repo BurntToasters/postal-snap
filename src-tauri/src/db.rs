@@ -29,6 +29,7 @@ mod migrations;
 pub mod offline_ops;
 pub mod outbox;
 pub mod recent_searches;
+mod snooze_transfers;
 
 use std::{
     path::Path,
@@ -46,7 +47,7 @@ use crate::models::{
 };
 use crate::models::{Attachment, ComposeDraft, MailboxRole, MessageSummary, ProviderKind, TlsMode};
 
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 40;
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 41;
 
 /// Hot write and read paths reuse prepared statements; rusqlite's default of 16 evicts them.
 const STATEMENT_CACHE_CAPACITY: usize = 64;

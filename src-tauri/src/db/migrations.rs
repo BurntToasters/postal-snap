@@ -43,6 +43,7 @@ const MIGRATIONS: &[(u32, Migration)] = &[
     (38, step_v38),
     (39, step_v39),
     (40, step_v40),
+    (41, step_v41),
 ];
 
 pub(super) fn migrate_schema(connection: &mut Connection) -> Result<(), String> {
@@ -937,6 +938,27 @@ fn step_v40(transaction: &rusqlite::Transaction<'_>) -> Result<(), String> {
     Ok(())
 }
 
+fn step_v41(transaction: &rusqlite::Transaction<'_>) -> Result<(), String> {
+    // Snoozes that follow a server move wait here until the destination
+    // folder caches the copy. Rows go with the account or the folder.
+    transaction
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS pending_snooze_transfers (
+               account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+               mailbox_id INTEGER NOT NULL REFERENCES mailboxes(id) ON DELETE CASCADE,
+               message_id_header TEXT NOT NULL,
+               snoozed_until TEXT NOT NULL,
+               created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+               PRIMARY KEY(account_id, mailbox_id, message_id_header)
+             );",
+        )
+        .map_err(db_error)?;
+    transaction
+        .pragma_update(None, "user_version", 41)
+        .map_err(db_error)?;
+    Ok(())
+}
+
 /// Schema v23: convert cached IMAP4rev1 mailbox names from modified UTF-7.
 fn migrate_v23_mailbox_names(transaction: &rusqlite::Transaction) -> Result<(), String> {
     let rows = {
@@ -1288,6 +1310,40 @@ fn migrate_v20(transaction: &rusqlite::Transaction) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn v41_adds_pending_snooze_transfers_to_a_v40_database() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("mail.sqlite3");
+        {
+            let _database = Database::open(&path).unwrap();
+        }
+        {
+            // Rebuild the v40 shape: no transfer table yet.
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(
+                    "DROP TABLE pending_snooze_transfers;
+                     PRAGMA user_version=40;",
+                )
+                .unwrap();
+        }
+
+        let reopened = Database::open(&path).unwrap();
+        let conn = reopened.conn().unwrap();
+        let version: u32 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 41);
+        assert!(conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='pending_snooze_transfers'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|count| count == 1)
+            .unwrap());
+    }
 
     #[test]
     fn v40_drops_attempt_started_at_keeping_outbox_rows() {

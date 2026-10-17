@@ -24,28 +24,6 @@ pub struct OutboxArchiveSource {
     pub pending_move_to: Option<i64>,
 }
 
-/// A snooze about to lose its message row, kept keyed by the row id it was
-/// touching. `message_id_header` is the durable Message-ID the wiring needs
-/// to rebind after a replayed move.
-///
-/// Wiring for the deferred-move replay wave in `commands.rs`:
-/// `Database::capture_snoozes(&self, message_ids: &[i64])
-/// -> Result<Vec<CapturedSnooze>, String>` reads snoozes by row id after a
-/// move op is queued and before replay retires the rows; `Database::
-/// restore_snooze_for_message(&self, account_id: &str, message_id_header:
-/// &str, snoozed_until: &str, created_at: &str) -> Result<(), String>`
-/// rebinds each capture to the landed row once the moved copy has synced in.
-/// Zip captures to move ops by row id, and restore per capture in input
-/// order.
-#[derive(Clone, Debug)]
-pub struct CapturedSnooze {
-    pub source_message_row_id: i64,
-    pub account_id: String,
-    pub message_id_header: Option<String>,
-    pub snoozed_until: String,
-    pub created_at: String,
-}
-
 enum StoredDetail<'a> {
     Legacy(Option<&'a str>),
     Reason(Option<OutboxReason>),
@@ -513,82 +491,6 @@ impl Database {
             )
             .map_err(db_error)?;
         Ok(())
-    }
-
-    /// Read the snooze rows touching these message row ids, in input order.
-    /// Wiring queues the offline move and captures the snooze before the row
-    /// id dies; ids without a snooze simply produce no capture.
-    pub fn capture_snoozes(&self, message_ids: &[i64]) -> Result<Vec<CapturedSnooze>, String> {
-        if message_ids.is_empty() {
-            return Ok(Vec::new());
-        }
-        let conn = self.read_conn()?;
-        let placeholders = std::iter::repeat_n("?", message_ids.len())
-            .collect::<Vec<_>>()
-            .join(",");
-        let sql = format!(
-            "SELECT s.message_id, s.account_id, m.message_id, s.snoozed_until, s.created_at
-             FROM snoozed_messages s JOIN messages m ON m.id=s.message_id AND m.account_id=s.account_id
-             WHERE s.message_id IN ({placeholders})"
-        );
-        let values: Vec<&dyn rusqlite::ToSql> =
-            message_ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
-        let mut statement = conn.prepare(&sql).map_err(db_error)?;
-        let mut captures: Vec<CapturedSnooze> = statement
-            .query_map(values.as_slice(), |row| {
-                Ok(CapturedSnooze {
-                    source_message_row_id: row.get(0)?,
-                    account_id: row.get(1)?,
-                    message_id_header: row.get(2)?,
-                    snoozed_until: row.get(3)?,
-                    created_at: row.get(4)?,
-                })
-            })
-            .map_err(db_error)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(db_error)?;
-        captures.sort_by_key(|capture| {
-            message_ids
-                .iter()
-                .position(|id| *id == capture.source_message_row_id)
-                .unwrap_or(usize::MAX)
-        });
-        Ok(captures)
-    }
-
-    /// Put a captured snooze back after a replayed move landed the message in
-    /// its new folder. The row id changed, so rebind by Message-ID header.
-    /// Missing mail (moved on, deleted) and rows still under a pending move
-    /// are skipped: the move that owns them handles its own snooze.
-    pub fn restore_snooze_for_message(
-        &self,
-        account_id: &str,
-        message_id_header: &str,
-        snoozed_until: &str,
-        created_at: &str,
-    ) -> Result<(), String> {
-        let mut conn = self.conn()?;
-        let transaction = conn.transaction().map_err(db_error)?;
-        let landing: Option<i64> = transaction
-            .query_row(
-                "SELECT id FROM messages WHERE account_id=?1 AND message_id=?2 AND pending_move_to IS NULL
-                 ORDER BY received_at DESC, uid DESC LIMIT 1",
-                params![account_id, message_id_header],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(db_error)?;
-        let Some(landing) = landing else {
-            return Ok(());
-        };
-        transaction
-            .execute(
-                "INSERT OR IGNORE INTO snoozed_messages(account_id,message_id,snoozed_until,created_at)
-                 VALUES(?1,?2,?3,?4)",
-                params![account_id, landing, snoozed_until, created_at],
-            )
-            .map_err(db_error)?;
-        transaction.commit().map_err(db_error)
     }
 
     pub fn list_filter_rules(&self, account_id: &str) -> Result<Vec<FilterRule>, String> {
@@ -1106,10 +1008,9 @@ fn preview_subject(value: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::CachedMessage;
     use crate::models::{
-        AccountRecord, AccountSummary, BodyFormat, ComposeDraft, MailboxRole, ProviderKind,
-        ServerConfig, TlsMode,
+        AccountRecord, AccountSummary, BodyFormat, ComposeDraft, ProviderKind, ServerConfig,
+        TlsMode,
     };
 
     fn account() -> AccountRecord {
@@ -1153,41 +1054,6 @@ mod tests {
         (database, account.summary.id.clone())
     }
 
-    fn message(uid: u32, received_at: &str) -> CachedMessage {
-        CachedMessage {
-            uid,
-            internal_at: None,
-            message_id: Some(format!("<{uid}@example.com>")),
-            subject: "Checking in".into(),
-            sender_name: "Jane".into(),
-            sender_address: "jane@example.com".into(),
-            recipients: "sam@example.com".into(),
-            received_at: received_at.into(),
-            preview: "Hello".into(),
-            is_read: false,
-            is_starred: false,
-            size: 32,
-            to: vec!["sam@example.com".into()],
-            cc: vec![],
-            bcc: vec![],
-            reply_to: None,
-            thread_parent: None,
-            text_body: "Hello".into(),
-            html_body: None,
-            attachments: vec![],
-            raw_message: b"Subject: Checking in\r\n\r\nHello".to_vec(),
-            has_attachments: false,
-            is_answered: false,
-            is_forwarded: false,
-            has_calendar: false,
-            calendar_json: None,
-            list_unsubscribe: None,
-            list_unsubscribe_post: None,
-            importance: String::new(),
-            disposition_to: String::new(),
-        }
-    }
-
     fn draft() -> ComposeDraft {
         ComposeDraft {
             body_format: BodyFormat::Html,
@@ -1211,129 +1077,6 @@ mod tests {
             references: None,
             send_at: None,
         }
-    }
-
-    fn mailbox(db: &Database, name: &str, role: &MailboxRole) -> i64 {
-        // Server counts stay None so the cached-row SUM branches run.
-        db.upsert_mailbox("account-1", name, role, Some(1), Some(2), None, 0)
-            .unwrap()
-    }
-
-    fn list_ids(db: &Database, mailbox_id: i64) -> Vec<i64> {
-        db.list_messages(mailbox_id, None, 10)
-            .unwrap()
-            .items
-            .into_iter()
-            .map(|message| message.id)
-            .collect()
-    }
-
-    #[test]
-    fn capture_snoozes_skips_ids_without_a_snooze() {
-        let (db, account_id) = with_account();
-        let inbox = mailbox(&db, "INBOX", &MailboxRole::Inbox);
-        db.upsert_message(&account_id, inbox, &message(1, "2026-08-18T12:00:00Z"))
-            .unwrap();
-        db.upsert_message(&account_id, inbox, &message(2, "2026-08-18T13:00:00Z"))
-            .unwrap();
-        let ids = list_ids(&db, inbox);
-        let (first, second) = (ids[0], ids[1]);
-        db.snooze_message(&account_id, second, "2999-01-01T00:00:00+00:00")
-            .unwrap();
-
-        let captures = db.capture_snoozes(&[first, second]).unwrap();
-        assert_eq!(captures.len(), 1);
-        assert_eq!(captures[0].source_message_row_id, second);
-        assert_eq!(captures[0].account_id, account_id);
-        // Newest first: ids[1] is the older UID 1 row.
-        assert_eq!(
-            captures[0].message_id_header.as_deref(),
-            Some("<1@example.com>")
-        );
-        assert_eq!(captures[0].snoozed_until, "2999-01-01T00:00:00+00:00");
-        assert!(!captures[0].created_at.is_empty());
-
-        // Both snoozed: input order defines capture order.
-        db.snooze_message(&account_id, first, "2999-02-01T00:00:00+00:00")
-            .unwrap();
-        let captures = db.capture_snoozes(&[second, first]).unwrap();
-        assert_eq!(
-            captures
-                .iter()
-                .map(|capture| capture.source_message_row_id)
-                .collect::<Vec<_>>(),
-            vec![second, first]
-        );
-        assert_eq!(
-            captures[0].message_id_header,
-            Some("<1@example.com>".into())
-        );
-        assert!(db.capture_snoozes(&[]).unwrap().is_empty());
-    }
-
-    #[test]
-    fn restore_snooze_rebinds_after_a_move_and_skips_missing_mail() {
-        let (db, account_id) = with_account();
-        let inbox = mailbox(&db, "INBOX", &MailboxRole::Inbox);
-        let archive = mailbox(&db, "Archive", &MailboxRole::Archive);
-        db.upsert_message(&account_id, inbox, &message(9, "2026-08-18T12:00:00Z"))
-            .unwrap();
-        let source = list_ids(&db, inbox)[0];
-        db.snooze_message(&account_id, source, "2999-01-01T00:00:00+00:00")
-            .unwrap();
-        let mut captures = db.capture_snoozes(&[source]).unwrap();
-        let capture = captures.remove(0);
-        let header = capture.message_id_header.clone().unwrap();
-
-        // The move deleted the source row. No landing row yet: restore is a
-        // no-op, not an error.
-        db.remove_message(source).unwrap();
-        db.restore_snooze_for_message(
-            &account_id,
-            &header,
-            &capture.snoozed_until,
-            &capture.created_at,
-        )
-        .unwrap();
-        assert!(db
-            .list_snoozed(&account_id, "2026-01-01T00:00:00+00:00")
-            .unwrap()
-            .is_empty());
-
-        // Replayed move: the same Message-ID lands in Archive under a new row.
-        db.upsert_message(&account_id, archive, &message(9, "2026-08-18T12:00:00Z"))
-            .unwrap();
-        let landing = list_ids(&db, archive)[0];
-        assert_ne!(landing, source);
-        assert!(db.list_messages(inbox, None, 10).unwrap().items.is_empty());
-
-        db.restore_snooze_for_message(
-            &account_id,
-            &header,
-            &capture.snoozed_until,
-            &capture.created_at,
-        )
-        .unwrap();
-        let snoozed = db
-            .list_snoozed(&account_id, "2026-01-01T00:00:00+00:00")
-            .unwrap();
-        assert_eq!(snoozed.len(), 1);
-        assert_eq!(snoozed[0].message.id, landing);
-        assert_eq!(snoozed[0].snoozed_until, "2999-01-01T00:00:00+00:00");
-
-        // Restoring again keeps the existing snooze instead of duplicating it.
-        db.restore_snooze_for_message(
-            &account_id,
-            &header,
-            "2999-03-01T00:00:00+00:00",
-            &capture.created_at,
-        )
-        .unwrap();
-        let again = db
-            .list_snoozed(&account_id, "2026-01-01T00:00:00+00:00")
-            .unwrap();
-        assert_eq!(again.len(), 1);
-        assert_eq!(again[0].snoozed_until, "2999-01-01T00:00:00+00:00");
     }
 
     #[test]

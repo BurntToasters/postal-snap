@@ -4,8 +4,24 @@ import { api } from "../../api";
 import { strings } from "../../i18n";
 import { htmlToPlainText } from "../../security";
 import { useAppStore } from "../../store";
+import type { AccountSummary } from "../../types";
 import { preparePassword } from "../setup/request";
 import type { SettingsSaveUpdate } from "./useSettingsSave";
+
+type AccountPatch = Partial<Omit<AccountSummary, "id">>;
+
+/**
+ * Merges only the fields one save owns into the latest store account.
+ * Responses can be older snapshots, so whole-account replacement is unsafe.
+ */
+function mergeAccountFields(accountId: string, fields: AccountPatch) {
+  const { accounts, setAccounts } = useAppStore.getState();
+  setAccounts(
+    accounts.map((item) =>
+      item.id === accountId ? { ...item, ...fields } : item,
+    ),
+  );
+}
 
 interface Options {
   onClose: () => void;
@@ -156,8 +172,7 @@ export function useSettingsAccountManagement({
     setDetectingAliasesAccountId(accountId);
     try {
       const updated = await api.discoverAccountAliases(accountId);
-      const remaining = await api.listAccounts();
-      setAccounts(remaining);
+      mergeAccountFields(accountId, { aliases: updated.aliases });
       const count = updated.aliases?.length ?? 0;
       setAliasStatus((prev) => ({
         ...prev,
@@ -186,9 +201,11 @@ export function useSettingsAccountManagement({
       return;
     }
     try {
-      await api.updateAccountAliases(accountId, [...current, input]);
-      const remaining = await api.listAccounts();
-      setAccounts(remaining);
+      const updated = await api.updateAccountAliases(accountId, [
+        ...current,
+        input,
+      ]);
+      mergeAccountFields(accountId, { aliases: updated.aliases });
       setNewAliasInputs((prev) => ({ ...prev, [accountId]: "" }));
       setAliasStatus((prev) => ({
         ...prev,
@@ -213,9 +230,11 @@ export function useSettingsAccountManagement({
       (item) => item !== alias,
     );
     try {
-      await api.updateAccountAliases(accountId, remainingAliases);
-      const remaining = await api.listAccounts();
-      setAccounts(remaining);
+      const updated = await api.updateAccountAliases(
+        accountId,
+        remainingAliases,
+      );
+      mergeAccountFields(accountId, { aliases: updated.aliases });
     } catch (cause) {
       setError(String(cause));
     }
@@ -232,9 +251,11 @@ export function useSettingsAccountManagement({
     );
     setUpdatingPasswordId(accountId);
     try {
-      await api.updateAccountPassword(accountId, password);
-      const remaining = await api.listAccounts();
-      setAccounts(remaining);
+      const updated = await api.updateAccountPassword(accountId, password);
+      mergeAccountFields(accountId, {
+        error: updated.error,
+        syncState: updated.syncState,
+      });
       setPasswordInputs((prev) => ({ ...prev, [accountId]: "" }));
       setPasswordStatus((prev) => ({
         ...prev,
@@ -259,11 +280,7 @@ export function useSettingsAccountManagement({
     setSavingNameId(accountId);
     try {
       const updated = await api.updateAccountDisplayName(accountId, value);
-      setAccounts(
-        useAppStore
-          .getState()
-          .accounts.map((item) => (item.id === accountId ? updated : item)),
-      );
+      mergeAccountFields(accountId, { displayName: updated.displayName });
       setNameInputs((prev) =>
         (prev[accountId] ?? fallback) === value
           ? { ...prev, [accountId]: updated.displayName }
@@ -295,11 +312,7 @@ export function useSettingsAccountManagement({
     setSavingReplyToId(accountId);
     try {
       const updated = await api.updateAccountReplyTo(accountId, value);
-      setAccounts(
-        useAppStore
-          .getState()
-          .accounts.map((item) => (item.id === accountId ? updated : item)),
-      );
+      mergeAccountFields(accountId, { replyTo: updated.replyTo });
       setReplyToInputs((prev) =>
         (prev[accountId] ?? fallback) === value
           ? { ...prev, [accountId]: updated.replyTo ?? "" }
@@ -334,11 +347,10 @@ export function useSettingsAccountManagement({
       const updated = hasRichContent
         ? await api.updateAccountSignature(accountId, value, html)
         : await api.updateAccountSignature(accountId, value);
-      setAccounts(
-        useAppStore
-          .getState()
-          .accounts.map((item) => (item.id === accountId ? updated : item)),
-      );
+      mergeAccountFields(accountId, {
+        signature: updated.signature,
+        signatureHtml: updated.signatureHtml,
+      });
       const savedSignature = updated.signature ?? "";
       const savedSignatureHtml = updated.signatureHtml ?? "";
       setSignatureInputs((prev) =>

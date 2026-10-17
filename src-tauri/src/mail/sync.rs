@@ -690,6 +690,8 @@ async fn sync_folder<H: SyncHooks>(
         // Without this the next pass sees an unchanged UIDNEXT and skips the gap.
         db.forget_uid_next(mailbox_id)?;
     }
+    // This pass's envelopes are stored; land snoozes moved in from elsewhere.
+    db.apply_pending_snooze_transfers(account_id, mailbox_id)?;
 
     let expunge_suspected = !purged
         && previous.as_ref().is_some_and(|meta| {
@@ -1514,7 +1516,7 @@ pub async fn refresh_mailbox_envelopes(
     match refresh {
         Ok(()) => {
             lease.release();
-            Ok(())
+            db.apply_pending_snooze_transfers(&account.summary.id, mailbox_id)
         }
         Err(error) => {
             lease.discard();
