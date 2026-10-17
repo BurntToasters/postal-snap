@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -10,11 +11,12 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { URL, fileURLToPath } from "node:url";
+import { URL, fileURLToPath, pathToFileURL } from "node:url";
 import {
   CARGO_SAFE_UPDATE_POLICY_VERSION,
   CARGO_SAFE_UPDATE_VERSION,
@@ -69,6 +71,255 @@ function createCargoFixture(
       `[package]\nname = "${name}"\nversion = "0.1.0"\nedition = "2024"\n\n[lib]\npath = "src/lib.rs"\n`,
     );
   }
+}
+
+function createGitTransitionFixture() {
+  const tempRoot = mkdtempSync(
+    path.join(
+      process.env.POSTAL_SNAP_DEPENDENCY_TMP ?? os.tmpdir(),
+      "postal-snap-dependencies-transition-",
+    ),
+  );
+  const workspace = path.join(tempRoot, "workspace");
+  const depDir = path.join(workspace, "deps", "fixture-dep");
+  mkdirSync(depDir, { recursive: true });
+  createCargoFixture(workspace, { name: "source-transition-fixture" });
+  writeFileSync(
+    path.join(workspace, "Cargo.toml"),
+    '[package]\nname = "source-transition-fixture"\nversion = "0.1.0"\nedition = "2021"\n\n[dependencies]\nfixture-dep = { path = "deps/fixture-dep" }\n',
+  );
+  writeFileSync(
+    path.join(depDir, "Cargo.toml"),
+    '[package]\nname = "fixture-dep"\nversion = "0.1.0"\nedition = "2021"\n\n[lib]\npath = "src/lib.rs"\n',
+  );
+  mkdirSync(path.join(depDir, "src"), { recursive: true });
+  writeFileSync(path.join(depDir, "src", "lib.rs"), "pub fn fixture() {}\n");
+
+  const git = (...args) => {
+    const result = spawnSync("git", args, {
+      cwd: depDir,
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  git("init", "-q");
+  git("add", "Cargo.toml", "src/lib.rs");
+  const commit = spawnSync(
+    "git",
+    [
+      "-c",
+      "user.name=Postal Snap Fixture",
+      "-c",
+      "user.email=postal-snap-fixture@example.invalid",
+      "commit",
+      "-q",
+      "-m",
+      "fixture dependency",
+    ],
+    { cwd: depDir, encoding: "utf8", timeout: 30_000 },
+  );
+  assert.equal(commit.status, 0, commit.stderr);
+  const revision = git("rev-parse", "HEAD");
+  const manifest = path.join(workspace, "Cargo.toml");
+  const baselineManifest = path.join(tempRoot, "baseline-Cargo.toml");
+  writeFileSync(baselineManifest, readFileSync(manifest));
+  const generate = spawnSync(
+    "cargo",
+    ["generate-lockfile", "--manifest-path", manifest],
+    {
+      cwd: workspace,
+      encoding: "utf8",
+      timeout: 120_000,
+      env: {
+        ...process.env,
+        TMPDIR: process.env.POSTAL_SNAP_DEPENDENCY_TMP ?? os.tmpdir(),
+        RUSTUP_TOOLCHAIN: PINNED_RUST_VERSION,
+      },
+    },
+  );
+  assert.equal(generate.status, 0, generate.stderr);
+  const lockPath = path.join(workspace, "Cargo.lock");
+  const originalLock = readFileSync(lockPath);
+  const gitUrl = pathToFileURL(depDir).href;
+  writeFileSync(
+    manifest,
+    `[package]\nname = "source-transition-fixture"\nversion = "0.1.0"\nedition = "2021"\n\n[dependencies]\nfixture-dep = { git = ${JSON.stringify(gitUrl)}, rev = "${revision}" }\n`,
+  );
+
+  return {
+    tempRoot,
+    workspace,
+    manifest,
+    baselineManifest,
+    lockPath,
+    originalLock,
+    revision,
+    cleanup: () => rmSync(tempRoot, { recursive: true, force: true }),
+  };
+}
+
+function runSafeCargoUpdate(fixture, args = []) {
+  return spawnSync(
+    process.execPath,
+    [
+      fileURLToPath(new URL("../cargo-safe-update.mjs", import.meta.url)),
+      "--manifest-path",
+      fixture.manifest,
+      ...args,
+    ],
+    {
+      cwd: fixture.workspace,
+      encoding: "utf8",
+      timeout: 120_000,
+      env: {
+        ...process.env,
+        TMPDIR: process.env.POSTAL_SNAP_DEPENDENCY_TMP ?? os.tmpdir(),
+        RUSTUP_TOOLCHAIN: PINNED_RUST_VERSION,
+      },
+    },
+  );
+}
+
+function runSafeCargoUpdateAsync(
+  fixture,
+  args = [],
+  { preloadPath, env = {} },
+) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      process.execPath,
+      [
+        "--import",
+        preloadPath,
+        fileURLToPath(new URL("../cargo-safe-update.mjs", import.meta.url)),
+        "--manifest-path",
+        fixture.manifest,
+        ...args,
+      ],
+      {
+        cwd: fixture.workspace,
+        env: {
+          ...process.env,
+          TMPDIR: process.env.POSTAL_SNAP_DEPENDENCY_TMP ?? os.tmpdir(),
+          RUSTUP_TOOLCHAIN: PINNED_RUST_VERSION,
+          ...env,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.setEncoding("utf8").on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.once("error", reject);
+    child.once("close", (status, signal) => {
+      resolve({ status, signal, stdout, stderr });
+    });
+  });
+}
+
+function createRegistryRaceFixture() {
+  const tempRoot = mkdtempSync(
+    path.join(
+      process.env.POSTAL_SNAP_DEPENDENCY_TMP ?? os.tmpdir(),
+      "postal-snap-dependencies-manifest-race-",
+    ),
+  );
+  const workspace = path.join(tempRoot, "workspace");
+  mkdirSync(workspace, { recursive: true });
+  createCargoFixture(workspace, { name: "manifest-race-fixture" });
+  const manifest = path.join(workspace, "Cargo.toml");
+  const baselineManifest = path.join(tempRoot, "baseline-Cargo.toml");
+  writeFileSync(baselineManifest, readFileSync(manifest));
+  const generate = spawnSync(
+    "cargo",
+    ["generate-lockfile", "--manifest-path", manifest],
+    {
+      cwd: workspace,
+      encoding: "utf8",
+      timeout: 120_000,
+      env: {
+        ...process.env,
+        TMPDIR: process.env.POSTAL_SNAP_DEPENDENCY_TMP ?? os.tmpdir(),
+        RUSTUP_TOOLCHAIN: PINNED_RUST_VERSION,
+      },
+    },
+  );
+  assert.equal(generate.status, 0, generate.stderr);
+  const lockPath = path.join(workspace, "Cargo.lock");
+  const originalLock = readFileSync(lockPath);
+  writeFileSync(
+    manifest,
+    `${readFileSync(manifest, "utf8")}\n[dependencies]\nrace-dep = "=1.0.0"\n`,
+  );
+
+  const crateRoot = path.join(tempRoot, "race-dep-1.0.0");
+  mkdirSync(path.join(crateRoot, "src"), { recursive: true });
+  writeFileSync(
+    path.join(crateRoot, "Cargo.toml"),
+    '[package]\nname = "race-dep"\nversion = "1.0.0"\nedition = "2021"\n\n[lib]\npath = "src/lib.rs"\n',
+  );
+  writeFileSync(path.join(crateRoot, "src", "lib.rs"), "pub fn race() {}\n");
+  const archive = path.join(tempRoot, "race-dep-1.0.0.crate");
+  const tar = spawnSync(
+    "tar",
+    ["-czf", archive, "-C", tempRoot, "race-dep-1.0.0"],
+    {
+      encoding: "utf8",
+      timeout: 30_000,
+      env: { ...process.env, COPYFILE_DISABLE: "1" },
+    },
+  );
+  assert.equal(tar.status, 0, tar.stderr);
+  const archiveBytes = readFileSync(archive);
+  const record = {
+    name: "race-dep",
+    vers: "1.0.0",
+    deps: [],
+    cksum: createHash("sha256").update(archiveBytes).digest("hex"),
+    features: {},
+    yanked: false,
+    pubtime: "2026-10-10T00:00:00Z",
+  };
+  const preloadPath = path.join(tempRoot, "manifest-race-hook.mjs");
+  writeFileSync(
+    preloadPath,
+    [
+      'import { appendFileSync } from "node:fs";',
+      "const originalFetch = globalThis.fetch;",
+      "const indexRecord = JSON.parse(process.env.POSTAL_SNAP_RACE_INDEX_RECORD);",
+      "globalThis.fetch = async (input, init) => {",
+      "  const url = String(input);",
+      '  if (url === "https://index.crates.io/config.json") {',
+      '    return new Response(JSON.stringify({ dl: process.env.POSTAL_SNAP_RACE_DOWNLOAD_URL }), { headers: { "content-type": "application/json" } });',
+      "  }",
+      '  if (url === "https://index.crates.io/ra/ce/race-dep") {',
+      '    if (new Error().stack?.includes("readRegistryRecord")) appendFileSync(process.env.POSTAL_SNAP_RACE_MANIFEST, "\\n# concurrent manifest edit during age verification\\n");',
+      '    return new Response(`${JSON.stringify(indexRecord)}\\n`, { headers: { "content-type": "application/json" } });',
+      "  }",
+      "  return originalFetch(input, init);",
+      "};",
+    ].join("\n"),
+  );
+
+  return {
+    tempRoot,
+    workspace,
+    manifest,
+    baselineManifest,
+    lockPath,
+    originalLock,
+    preloadPath,
+    record,
+    archiveBytes,
+    cleanup: () => rmSync(tempRoot, { recursive: true, force: true }),
+  };
 }
 
 const now = Date.parse("2026-08-20T12:00:00Z");
@@ -1776,3 +2027,259 @@ test("51. npm rollback refuses to overwrite a concurrent package-lock edit", () 
     rmSync(tempRoot, { recursive: true, force: true });
   }
 });
+
+test(
+  "52. source transition installs only after comparing an explicit locked baseline",
+  { skip: SKIP_CARGO_INTEGRATION },
+  () => {
+    const fixture = createGitTransitionFixture();
+    try {
+      const result = runSafeCargoUpdate(fixture, [
+        "--baseline-manifest-path",
+        fixture.baselineManifest,
+        "--allow-git",
+        `fixture-dep@${fixture.revision}`,
+        "--reason",
+        "Test exact Git source transition.",
+      ]);
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(
+        result.stdout,
+        new RegExp(`GIT OVERRIDE fixture-dep@${fixture.revision}`),
+      );
+      const lock = readFileSync(fixture.lockPath, "utf8");
+      assert.match(lock, /name = "fixture-dep"/);
+      assert.match(lock, new RegExp(`git\\+file:.*#${fixture.revision}`));
+
+      const metadata = spawnSync(
+        "cargo",
+        [
+          "metadata",
+          "--locked",
+          "--format-version=1",
+          "--manifest-path",
+          fixture.manifest,
+        ],
+        {
+          cwd: fixture.workspace,
+          encoding: "utf8",
+          timeout: 120_000,
+          env: {
+            ...process.env,
+            TMPDIR: process.env.POSTAL_SNAP_DEPENDENCY_TMP ?? os.tmpdir(),
+            RUSTUP_TOOLCHAIN: PINNED_RUST_VERSION,
+          },
+        },
+      );
+      assert.equal(metadata.status, 0, metadata.stderr);
+    } finally {
+      fixture.cleanup();
+    }
+  },
+);
+
+test(
+  "53. source transition without an explicit baseline is rejected and preserves Cargo.lock",
+  { skip: SKIP_CARGO_INTEGRATION },
+  () => {
+    const fixture = createGitTransitionFixture();
+    try {
+      const result = runSafeCargoUpdate(fixture, ["--dry-run"]);
+      assert.notEqual(result.status, 0);
+      assert.match(
+        `${result.stdout}\n${result.stderr}`,
+        /--baseline-manifest-path/,
+      );
+      assert.deepEqual(readFileSync(fixture.lockPath), fixture.originalLock);
+    } finally {
+      fixture.cleanup();
+    }
+  },
+);
+
+test(
+  "54. mismatched explicit baseline is rejected and preserves Cargo.lock",
+  { skip: SKIP_CARGO_INTEGRATION },
+  () => {
+    const fixture = createGitTransitionFixture();
+    try {
+      const mismatchedBaseline = path.join(
+        fixture.tempRoot,
+        "wrong-Cargo.toml",
+      );
+      writeFileSync(
+        mismatchedBaseline,
+        readFileSync(fixture.baselineManifest, "utf8").replace(
+          'name = "source-transition-fixture"',
+          'name = "different-fixture"',
+        ),
+      );
+      const result = runSafeCargoUpdate(fixture, [
+        "--baseline-manifest-path",
+        mismatchedBaseline,
+        "--allow-git",
+        `fixture-dep@${fixture.revision}`,
+        "--reason",
+        "Test mismatched baseline rejection.",
+        "--dry-run",
+      ]);
+      assert.notEqual(result.status, 0);
+      assert.match(
+        `${result.stdout}\n${result.stderr}`,
+        /baseline manifest.*(match|compatible|workspace identity)/i,
+      );
+      assert.deepEqual(readFileSync(fixture.lockPath), fixture.originalLock);
+    } finally {
+      fixture.cleanup();
+    }
+  },
+);
+
+test(
+  "55. Git source denial leaves the original Cargo.lock byte-for-byte intact",
+  { skip: SKIP_CARGO_INTEGRATION },
+  () => {
+    const fixture = createGitTransitionFixture();
+    try {
+      const result = runSafeCargoUpdate(fixture, [
+        "--baseline-manifest-path",
+        fixture.baselineManifest,
+        "--dry-run",
+      ]);
+      assert.notEqual(result.status, 0);
+      assert.match(
+        `${result.stdout}\n${result.stderr}`,
+        /Blocked Git dependency update:\nfixture-dep/,
+      );
+      assert.deepEqual(readFileSync(fixture.lockPath), fixture.originalLock);
+    } finally {
+      fixture.cleanup();
+    }
+  },
+);
+
+test(
+  "56. existing locked manifest keeps the ordinary dry-run path unchanged",
+  { skip: SKIP_CARGO_INTEGRATION },
+  () => {
+    const tempRoot = mkdtempSync(
+      path.join(
+        process.env.POSTAL_SNAP_DEPENDENCY_TMP ?? os.tmpdir(),
+        "postal-snap-dependencies-locked-",
+      ),
+    );
+    try {
+      createCargoFixture(tempRoot, { name: "locked-baseline-fixture" });
+      const manifest = path.join(tempRoot, "Cargo.toml");
+      const generate = spawnSync(
+        "cargo",
+        ["generate-lockfile", "--manifest-path", manifest],
+        {
+          cwd: tempRoot,
+          encoding: "utf8",
+          timeout: 120_000,
+          env: {
+            ...process.env,
+            TMPDIR: process.env.POSTAL_SNAP_DEPENDENCY_TMP ?? os.tmpdir(),
+            RUSTUP_TOOLCHAIN: PINNED_RUST_VERSION,
+          },
+        },
+      );
+      assert.equal(generate.status, 0, generate.stderr);
+      const lockPath = path.join(tempRoot, "Cargo.lock");
+      const originalLock = readFileSync(lockPath);
+      const result = runSafeCargoUpdate({ workspace: tempRoot, manifest }, [
+        "--dry-run",
+      ]);
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(
+        result.stdout,
+        /Dry run: real Cargo\.lock was not modified\./,
+      );
+      assert.deepEqual(readFileSync(lockPath), originalLock);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "57. concurrent manifest edits during async registry validation reject dry-run and installation",
+  { skip: SKIP_CARGO_INTEGRATION },
+  async () => {
+    for (const args of [[], ["--dry-run"]]) {
+      const fixture = createRegistryRaceFixture();
+      const server = createServer((request, response) => {
+        if (request.method !== "GET") {
+          response.writeHead(404).end();
+          return;
+        }
+        if (request.url === "/config.json") {
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(
+            JSON.stringify({
+              dl: `http://127.0.0.1:${server.address().port}/crates/{crate}/{version}/download`,
+            }),
+          );
+          return;
+        }
+        if (request.url === "/ra/ce/race-dep") {
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(`${JSON.stringify(fixture.record)}\n`);
+          return;
+        }
+        if (request.url !== "/crates/race-dep/1.0.0/download") {
+          response.writeHead(404).end();
+          return;
+        }
+        response.writeHead(200, {
+          "content-type": "application/octet-stream",
+          "content-length": fixture.archiveBytes.length,
+        });
+        response.end(fixture.archiveBytes);
+      });
+
+      try {
+        await new Promise((resolve, reject) => {
+          server.once("error", reject);
+          server.listen(0, "127.0.0.1", resolve);
+        });
+        const address = server.address();
+        assert.ok(address && typeof address !== "string");
+        const cargoConfig = path.join(fixture.workspace, ".cargo");
+        mkdirSync(cargoConfig, { recursive: true });
+        writeFileSync(
+          path.join(cargoConfig, "config.toml"),
+          `[source.crates-io]\nreplace-with = "race-test-registry"\n\n[source.race-test-registry]\nregistry = "sparse+http://127.0.0.1:${address.port}/"\n`,
+        );
+        const downloadUrl = `http://127.0.0.1:${address.port}/crates/{crate}/{version}/download`;
+        const result = await runSafeCargoUpdateAsync(
+          fixture,
+          ["--baseline-manifest-path", fixture.baselineManifest, ...args],
+          {
+            preloadPath: fixture.preloadPath,
+            env: {
+              POSTAL_SNAP_RACE_MANIFEST: fixture.manifest,
+              POSTAL_SNAP_RACE_INDEX_RECORD: JSON.stringify(fixture.record),
+              POSTAL_SNAP_RACE_DOWNLOAD_URL: downloadUrl,
+            },
+          },
+        );
+        assert.notEqual(result.status, 0, result.stdout);
+        assert.match(
+          `${result.stdout}\n${result.stderr}`,
+          /Cargo\.toml changed during dependency update; Cargo\.lock was not modified/,
+        );
+        assert.match(
+          readFileSync(fixture.manifest, "utf8"),
+          /concurrent manifest edit during age verification/,
+        );
+        assert.deepEqual(readFileSync(fixture.lockPath), fixture.originalLock);
+      } finally {
+        server.closeAllConnections?.();
+        await new Promise((resolve) => server.close(resolve));
+        fixture.cleanup();
+      }
+    }
+  },
+);

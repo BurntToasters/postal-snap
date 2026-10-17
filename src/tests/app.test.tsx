@@ -18,6 +18,7 @@ vi.mock("@tauri-apps/plugin-notification", () => ({
 vi.mock("../api", () => ({
   inTauri: vi.fn(),
   api: {
+    beginUndoSession: vi.fn().mockResolvedValue("a".repeat(32)),
     listAccounts: vi.fn(),
     getSettings: vi.fn(),
     getStartupNotice: vi.fn(),

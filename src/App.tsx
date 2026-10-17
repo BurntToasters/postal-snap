@@ -33,6 +33,7 @@ import { useSettingsSave } from "./components/settings/useSettingsSave";
 import { applySettings } from "./settings";
 import { mailboxWindowTitle } from "./windowTitle";
 import { useUnreadBadge } from "./hooks/useUnreadBadge";
+import { ensureUndoSession } from "./undoMove";
 import {
   checkUpdateInteractive,
   checksUpdatesOnStartup,
@@ -180,6 +181,7 @@ export default function App() {
   const loadAccounts = useCallback(async () => {
     const request = ++loadRequest.current;
     try {
+      if (inTauri()) await ensureUndoSession();
       const [
         loadedAccounts,
         loadedSettings,

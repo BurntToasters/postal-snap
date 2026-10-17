@@ -35,7 +35,7 @@ const report = {
     }).trim().length > 0,
   mode: bridgeOnly ? "bridge-only" : "full",
   startedAt: new Date().toISOString(),
-  fixtureVersions: { greenmail: "2.1.11", compatibility: "7" },
+  fixtureVersions: { greenmail: "2.1.11", compatibility: "8" },
   commands: [],
   results: [],
   status: "running",
@@ -81,6 +81,23 @@ async function protocolTest(name, env) {
     { env },
   );
 }
+async function watcherTest(name, env) {
+  await recordedRun(
+    "cargo",
+    [
+      "test",
+      "--locked",
+      "--manifest-path",
+      "src-tauri/Cargo.toml",
+      `mail::watch::tests::${name}`,
+      "--",
+      "--ignored",
+      "--exact",
+      "--nocapture",
+    ],
+    { env },
+  );
+}
 async function deferredReplayTest(name, env) {
   await recordedRun(
     "cargo",
@@ -90,6 +107,23 @@ async function deferredReplayTest(name, env) {
       "--manifest-path",
       "src-tauri/Cargo.toml",
       `commands::deferred_integration_tests::${name}`,
+      "--",
+      "--ignored",
+      "--exact",
+      "--nocapture",
+    ],
+    { env },
+  );
+}
+async function undoSessionTest(name, env) {
+  await recordedRun(
+    "cargo",
+    [
+      "test",
+      "--locked",
+      "--manifest-path",
+      "src-tauri/Cargo.toml",
+      `commands::messages::undo_session_tls_tests::${name}`,
       "--",
       "--ignored",
       "--exact",
@@ -395,6 +429,20 @@ try {
   const utf8Ports = await utf8Fixture.start();
   environment.POSTAL_SNAP_BRIDGE_IMAP_UTF8 = String(utf8Ports.imap);
   environment.POSTAL_SNAP_BRIDGE_SMTP_UTF8 = String(utf8Ports.smtp);
+  stage = "no-idle-watcher-fixture-start";
+  const watcherEvents = join(temporary, "watcher-events.txt");
+  const watcherFixture = await createCompatibilityFixture({
+    certificatePath: certificate,
+    keyPath: key,
+    tlsMode: "tls",
+    capabilities: ["IMAP4rev1", "UIDPLUS"],
+    maxImapConnections: 1,
+    statePath: watcherEvents,
+  });
+  fixtures.push({ name: "NO-IDLE-WATCHER-CAP", fixture: watcherFixture });
+  const watcherPorts = await watcherFixture.start();
+  environment.POSTAL_SNAP_WATCH_NO_IDLE_PORT = String(watcherPorts.imap);
+  environment.POSTAL_SNAP_WATCH_EVENTS = watcherEvents;
   stage = "bridge-protocol-integration";
   await protocolTest("bridge_tls_protocol_integration", environment);
   stage = "bridge-list-status-protocol-integration";
@@ -477,6 +525,7 @@ try {
       });
       continue;
     }
+    if (name === "NO-IDLE-WATCHER-CAP") continue;
     const positive = ["TLS", "STARTTLS"].includes(name);
     if (name === "TLS") {
       assert.ok(
@@ -685,6 +734,28 @@ try {
     report.results.push({
       name: "greenmail-dropped-operation-notification",
       status: "passed",
+    });
+    stage = "greenmail-undo-session-restart-recovery";
+    await undoSessionTest(
+      "greenmail_undo_session_holds_expired_move_then_recovers_once_on_restart",
+      {
+        ...environment,
+        POSTAL_SNAP_MAIL_INTEGRATION: "1",
+      },
+    );
+    report.results.push({
+      name: "greenmail-undo-session-restart-recovery",
+      status: "passed",
+    });
+    stage = "no-idle-watcher-cap";
+    await watcherTest(
+      "no_idle_watcher_releases_cap_and_restarts_in_both_connection_orders",
+      environment,
+    );
+    report.results.push({
+      name: "bridge-no-idle-watcher-cap",
+      status: "passed",
+      counters: watcherFixture.results(),
     });
   }
   report.status = "passed";

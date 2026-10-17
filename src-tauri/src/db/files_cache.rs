@@ -170,7 +170,7 @@ impl Database {
         let conn = self.read_conn()?;
         let (bytes, message_count): (i64, i64) = conn
             .query_row(
-                "SELECT COALESCE(SUM(LENGTH(raw_message)),0), COALESCE(SUM(CASE WHEN LENGTH(raw_message) > 0 THEN 1 ELSE 0 END),0) FROM messages",
+                "SELECT COALESCE(SUM(body_bytes),0), COUNT(*) FROM messages WHERE body_bytes>0",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )

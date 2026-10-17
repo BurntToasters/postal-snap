@@ -122,6 +122,7 @@ export type NativeCommand =
   | "set_messages_flags"
   | "set_messages_pinned"
   | "move_messages_to_mailbox"
+  | "begin_undo_session"
   | "undo_deferred"
   | "commit_deferred"
   | "set_visible_folder"
@@ -247,6 +248,8 @@ async function call<T>(
 }
 
 export const api = {
+  /** Starts or rotates the durable native Undo session for this window. */
+  beginUndoSession: () => call<string>("begin_undo_session", {}),
   getAccountConnection: (accountId: string) =>
     call<AccountConnection>("get_account_connection", { accountId }),
   updateAccountConnection: (

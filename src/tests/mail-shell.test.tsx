@@ -32,6 +32,7 @@ import { resetStore } from "./helpers/store";
 
 vi.mock("../api", () => ({
   api: {
+    beginUndoSession: vi.fn().mockResolvedValue("b".repeat(32)),
     listMailboxes: vi.fn(),
     listDrafts: vi.fn(),
     listOutbox: vi.fn(),

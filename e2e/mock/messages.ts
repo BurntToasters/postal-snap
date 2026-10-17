@@ -31,7 +31,11 @@ export async function registerMockMessages(page: Page): Promise<void> {
     }
     const batches = new Map<
       string,
-      { state: "pending" | "committed" | "undone"; moves: AwayMove[] }
+      {
+        state: "pending" | "committed" | "undone";
+        moves: AwayMove[];
+        sessionId: string | null;
+      }
     >();
     function emit(event: string, payload: unknown) {
       for (const handler of state.eventListeners.get(event) ?? []) {
@@ -78,6 +82,8 @@ export async function registerMockMessages(page: Page): Promise<void> {
       accountId: string,
       requests: Array<{ id: number; to: number }>,
     ): number {
+      if (state.undoSession && !token.startsWith(state.undoSession))
+        throw new Error("This undo request is no longer valid.");
       const moves = requests.map(({ id, to }) => {
         const message = knownMessages().find((item) => item.id === id);
         return {
@@ -92,7 +98,19 @@ export async function registerMockMessages(page: Page): Promise<void> {
       movedByToken = true;
       away.push(...moves);
       saveAway();
-      batches.set(token, { state: "pending", moves });
+      const sessionId = state.undoSession ?? null;
+      batches.set(token, { state: "pending", moves, sessionId });
+      window.setTimeout(() => {
+        const batch = batches.get(token);
+        if (
+          batch?.state === "pending" &&
+          (!batch.sessionId ||
+            batch.sessionId !== state.undoSession ||
+            !token.startsWith(batch.sessionId))
+        ) {
+          batch.state = "committed";
+        }
+      }, 60_000);
       emit("message-changed", { accountId, messageId: null, kind: "moved" });
       emit("folder-counts-changed", { accountId });
       return moves.length;
@@ -235,6 +253,30 @@ export async function registerMockMessages(page: Page): Promise<void> {
       },
     ];
     Object.assign(mock.handlers, {
+      begin_undo_session() {
+        let counter = 0;
+        try {
+          counter = Number(
+            sessionStorage.getItem("postal-snap-mock-undo-session") ?? "0",
+          );
+        } catch {
+          // Use a random id when browser storage is unavailable.
+        }
+        const sessionId =
+          Number.isSafeInteger(counter) && counter >= 0
+            ? (counter + 1).toString(16).padStart(32, "0")
+            : crypto.randomUUID().replaceAll("-", "");
+        try {
+          sessionStorage.setItem(
+            "postal-snap-mock-undo-session",
+            String(Number.parseInt(sessionId, 16)),
+          );
+        } catch {
+          // The current page still gets a fresh session id.
+        }
+        state.undoSession = sessionId;
+        return sessionId;
+      },
       save_attachment(args: Record<string, unknown>) {
         const message = mock.handlers.get_message(args) as {
           accountId: string;

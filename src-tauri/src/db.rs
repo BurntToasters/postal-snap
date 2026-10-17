@@ -64,6 +64,8 @@ pub struct Database {
     reader: Option<Arc<Mutex<Connection>>>,
     /// Shared copy of `keepAttachmentsOffline`, mirrored by the settings store.
     attachments_offline: Arc<std::sync::atomic::AtomicBool>,
+    /// Frontend instance that owns live deferred-move holds. Empty before boot.
+    undo_session: Arc<Mutex<String>>,
 }
 
 /// What a cached row holds, read before deciding whether to download.
@@ -183,6 +185,7 @@ impl Database {
             connection: Arc::new(Mutex::new(connection)),
             reader: Some(Arc::new(Mutex::new(reader))),
             attachments_offline: Arc::default(),
+            undo_session: Arc::new(Mutex::new(String::new())),
         })
     }
 
@@ -195,6 +198,7 @@ impl Database {
             connection: Arc::new(Mutex::new(connection)),
             reader: None,
             attachments_offline: Arc::default(),
+            undo_session: Arc::new(Mutex::new(String::new())),
         })
     }
 
@@ -226,6 +230,7 @@ impl Database {
             connection: Arc::new(Mutex::new(connection)),
             reader: None,
             attachments_offline: Arc::default(),
+            undo_session: Arc::new(Mutex::new(String::new())),
         }
     }
 
@@ -259,6 +264,14 @@ impl Database {
 
     pub(crate) fn conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>, String> {
         Ok(lock_connection(&self.connection))
+    }
+
+    /// Copy the live frontend session before taking a database read lock.
+    pub(crate) fn current_undo_session(&self) -> Result<String, String> {
+        self.undo_session
+            .lock()
+            .map(|session| session.clone())
+            .map_err(|_| "The undo session is unavailable.".to_string())
     }
 }
 }
@@ -1057,6 +1070,93 @@ mod tests {
 
         assert_eq!(db.queued_operations(&account_id).unwrap().len(), 1);
         assert!(db.next_deferred_due(&account_id).unwrap().is_none());
+    }
+
+    #[test]
+    fn live_undo_session_keeps_expired_moves_and_their_dependencies_held() {
+        let (db, account_id, _inbox, archive, message_id) = deferred_fixture();
+        let session = db.begin_undo_session().unwrap();
+        let token = format!("{session}{}", "a".repeat(32));
+        db.defer_moves(
+            &account_id,
+            &[(
+                message_id,
+                deferred_move_payload(message_id, "INBOX", "Archive"),
+                archive,
+            )],
+            &token,
+            future(-1),
+        )
+        .unwrap();
+        db.queue_operation(
+            &account_id,
+            "flags",
+            &serde_json::json!({"messageId":message_id,"uid":1,"mailbox":"INBOX","uidValidity":2,"isRead":true}),
+            Some(&format!("flags:{message_id}:true:false")),
+        )
+        .unwrap();
+
+        assert!(db.queued_operations(&account_id).unwrap().is_empty());
+        assert!(db.next_deferred_due(&account_id).unwrap().is_none());
+        assert_eq!(db.undo_deferred(&account_id, &token).unwrap(), (1, false));
+        let queued = db.queued_operations(&account_id).unwrap();
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].1, "flags");
+
+        let commit_token = format!("{session}{}", "e".repeat(32));
+        db.defer_moves(
+            &account_id,
+            &[(
+                message_id,
+                deferred_move_payload(message_id, "INBOX", "Archive"),
+                archive,
+            )],
+            &commit_token,
+            future(3600),
+        )
+        .unwrap();
+        assert_eq!(db.queued_operations(&account_id).unwrap().len(), 1);
+        db.commit_deferred(&account_id, &commit_token).unwrap();
+        assert_eq!(db.queued_operations(&account_id).unwrap().len(), 2);
+        assert!(db.next_deferred_due(&account_id).unwrap().is_none());
+    }
+
+    #[test]
+    fn restarting_undo_session_releases_old_moves_and_rejects_stale_enqueue() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("mail.sqlite3");
+        let account = account();
+        let account_id = account.summary.id.clone();
+        let db = Database::open(&path).unwrap();
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, &account_id, "INBOX", &MailboxRole::Inbox);
+        let archive = mailbox(&db, &account_id, "Archive", &MailboxRole::Archive);
+        db.upsert_message(&account_id, inbox, &message(1, "2026-08-18T12:00:00Z"))
+            .unwrap();
+        let message_id = db.list_messages(inbox, None, 10).unwrap().items[0].id;
+        let old_session = db.begin_undo_session().unwrap();
+        let old_token = format!("{old_session}{}", "b".repeat(32));
+        db.defer_moves(
+            &account_id,
+            &[(
+                message_id,
+                deferred_move_payload(message_id, "INBOX", "Archive"),
+                archive,
+            )],
+            &old_token,
+            future(3600),
+        )
+        .unwrap();
+        drop(db);
+
+        let db = Database::open(&path).unwrap();
+        let new_session = db.begin_undo_session().unwrap();
+        assert_ne!(old_session, new_session);
+        assert_eq!(db.queued_operations(&account_id).unwrap().len(), 1);
+        assert!(db.next_deferred_due(&account_id).unwrap().is_none());
+        assert!(db
+            .defer_moves::<serde_json::Value>(&account_id, &[], &old_token, future(3600))
+            .is_err());
     }
 
     #[test]
@@ -7069,6 +7169,72 @@ mod tests {
         assert!(!state.has_raw && !state.body_partial);
         assert!(!db.message_detail(id, &account_id).unwrap().body_partial);
         assert!(is_candidate(&db));
+    }
+
+    // Failure modes: partial-only usage is zero globally; mixed rows count
+    // only raw MIME; message count excludes partial bodies; clear leaves stale
+    // body totals; or queued MIME disappears from global storage usage.
+    #[test]
+    fn global_cache_usage_counts_partial_full_and_outbox_then_clear() {
+        let db = Database::memory();
+        let account = account();
+        let account_id = account.summary.id.clone();
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, &account_id, "INBOX", &MailboxRole::Inbox);
+
+        let mut partial = message(1, "2026-08-18T12:00:00Z");
+        partial.raw_message.clear();
+        partial.text_body = "partial cached text".into();
+        partial.html_body = Some("<p>partial cached html</p>".into());
+        partial.attachments = vec![];
+        let mut envelope = message(1, "2026-08-18T12:00:00Z");
+        envelope.raw_message.clear();
+        envelope.text_body.clear();
+        envelope.html_body = None;
+        envelope.attachments.clear();
+        db.upsert_envelope(&account_id, inbox, &envelope).unwrap();
+        assert!(db
+            .attach_partial_body_if_current(inbox, 1, &partial)
+            .unwrap());
+
+        let partial_account = db.account_cache_usage(&account_id, 1024).unwrap();
+        let partial_global = db.cache_usage(1024).unwrap();
+        assert!(partial_account.bytes > 0);
+        assert_eq!(partial_global.bytes, partial_account.bytes);
+        assert_eq!(partial_global.message_count, 1);
+
+        db.upsert_message(&account_id, inbox, &message(2, "2026-08-19T12:00:00Z"))
+            .unwrap();
+        let mixed_account = db.account_cache_usage(&account_id, 1024).unwrap();
+        let mixed_global = db.cache_usage(1024).unwrap();
+        assert_eq!(mixed_global.bytes, mixed_account.bytes);
+        assert!(mixed_global.bytes > partial_global.bytes);
+        assert_eq!(mixed_global.message_count, 2);
+
+        let outbox_mime = b"synthetic queued MIME";
+        db.queue_outbox(
+            &draft(&account_id),
+            "queued",
+            None,
+            "<synthetic@example.invalid>",
+            outbox_mime,
+            None,
+        )
+        .unwrap();
+        let queued_global = db.cache_usage(1024).unwrap();
+        assert_eq!(
+            queued_global.bytes,
+            mixed_account.bytes + outbox_mime.len() as u64
+        );
+        assert_eq!(queued_global.message_count, 2);
+
+        db.clear_downloaded_mail().unwrap();
+        let cleared_account = db.account_cache_usage(&account_id, 1024).unwrap();
+        let cleared_global = db.cache_usage(1024).unwrap();
+        assert_eq!(cleared_account.bytes, 0);
+        assert_eq!(cleared_account.message_count, 0);
+        assert_eq!(cleared_global.bytes, outbox_mime.len() as u64);
+        assert_eq!(cleared_global.message_count, 0);
     }
 
     #[test]

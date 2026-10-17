@@ -335,14 +335,18 @@ export function useSettingsAccountManagement({
           .getState()
           .accounts.map((item) => (item.id === accountId ? updated : item)),
       );
-      setSignatureInputs((prev) => ({
-        ...prev,
-        [accountId]: updated.signature ?? "",
-      }));
-      setSignatureHtmlInputs((prev) => ({
-        ...prev,
-        [accountId]: updated.signatureHtml ?? "",
-      }));
+      const savedSignature = updated.signature ?? "";
+      const savedSignatureHtml = updated.signatureHtml ?? "";
+      setSignatureInputs((prev) =>
+        (prev[accountId] ?? fallback) === value
+          ? { ...prev, [accountId]: savedSignature }
+          : prev,
+      );
+      setSignatureHtmlInputs((prev) =>
+        (prev[accountId] ?? fallbackHtml) === html
+          ? { ...prev, [accountId]: savedSignatureHtml }
+          : prev,
+      );
       setSignatureStatus((prev) => ({
         ...prev,
         [accountId]: strings.settings.signatureSaved,

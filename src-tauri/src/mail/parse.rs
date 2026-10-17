@@ -349,6 +349,29 @@ pub(crate) fn parse_message(
     ))
 }
 
+/// Recreate full and prefix IDs from the exact full MIME message.
+/// Prefix parsing uses the sender-declared size, or zero when it is absent.
+pub(crate) fn attachment_id_variants(
+    raw: &[u8],
+) -> Result<(Vec<Attachment>, Vec<Attachment>), String> {
+    validate_mime_resource_shape(raw)?;
+    let message = MessageParser::default()
+        .parse(raw)
+        .ok_or_else(|| "A malformed message was skipped.".to_string())?;
+    check_mime_limits(&message)?;
+    let mut aliases = Vec::new();
+    let mut current = Vec::new();
+    for (index, part) in message.attachments().take(MAX_ATTACHMENTS).enumerate() {
+        aliases.push(attachment_from_part(
+            part,
+            index,
+            declared_attachment_size(part),
+        ));
+        current.push(attachment_from_part(part, index, part.len() as u64));
+    }
+    Ok((aliases, current))
+}
+
 /// Parse the first bytes of a large message. Returns `Ok(None)` when the
 /// prefix cannot stand alone, so the caller fetches the whole message. Only
 /// text and HTML parts that end inside the prefix are kept; attachments are
@@ -1195,5 +1218,28 @@ mod tests {
     fn partial_bodies_keep_the_nesting_limit() {
         let nested = "--bnd\r\nContent-Type: multipart/mixed; boundary=\"bnd\"\r\n\r\n".repeat(70);
         assert!(partial(&mixed_message(&nested)).is_err());
+    }
+
+    // Attachments without a declared size change IDs when full parsing learns
+    // the decoded length; command tests cover resolution against that part.
+    #[test]
+    fn partial_attachment_id_changes_after_full_fetch_without_declared_size() {
+        let data = "QUJD\r\n".repeat(4000);
+        let raw = mixed_message(&format!(
+            "{}{}--bnd--\r\n",
+            text_part("Hello Jane"),
+            attachment_part(&data)
+        ));
+        let cut = cut_after(&raw, b"QUJD\r\nQUJD\r\n");
+        let partial = partial(&raw[..cut]).unwrap().unwrap();
+        let full = parse_message(7, &raw, true, false, None).unwrap();
+        assert_eq!(
+            partial.attachments[0].filename,
+            full.attachments[0].filename
+        );
+        assert_ne!(
+            partial.attachments[0].id, full.attachments[0].id,
+            "decoded size participates in the full attachment ID"
+        );
     }
 }

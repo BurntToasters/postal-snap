@@ -1261,6 +1261,16 @@ pub struct UndoDeferredOutcome {
     pub already_committed: bool,
 }
 
+/// Start the frontend's undo session and replay moves left by an older page.
+#[tauri::command]
+pub async fn begin_undo_session(state: State<'_, AppState>) -> CommandResult<String> {
+    let session = state.db.begin_undo_session()?;
+    for account in state.db.list_accounts()? {
+        let _ = state.request(&account.id, wake::REPLAY);
+    }
+    Ok(session)
+}
+
 /// Cancel a queued move from its undo window. Works offline: it only edits
 /// the local queue and the local row.
 #[tauri::command]
@@ -1622,5 +1632,279 @@ mod content_plan_tests {
             content_plan(Need::Text, state(false, false, false), LARGE, true),
             ContentPlan::Download(BodyFetch::Full)
         );
+    }
+}
+
+#[cfg(test)]
+mod undo_session_tls_tests {
+    use chrono::{Duration as ChronoDuration, Utc};
+    use tempfile::TempDir;
+
+    use crate::{
+        db::Database,
+        mail,
+        models::{
+            AccountRecord, AccountSummary, BodyFormat, CachePolicy, ProviderKind, ServerConfig,
+            TlsMode,
+        },
+    };
+
+    const PASSWORD: &str = "mail-test-password";
+    const EMAIL: &str = "user@example.test";
+
+    struct Fixture {
+        db: Database,
+        _directory: TempDir,
+        account: AccountRecord,
+        account_id: String,
+        message_id: String,
+        row_id: i64,
+        uid: u32,
+        uid_validity: u32,
+        archive_id: i64,
+    }
+
+    fn account() -> AccountRecord {
+        AccountRecord {
+            summary: AccountSummary {
+                id: uuid::Uuid::new_v4().to_string(),
+                provider: ProviderKind::Manual,
+                email: EMAIL.into(),
+                display_name: "Undo session integration fixture".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+                signature_html: String::new(),
+                reply_to: String::new(),
+                color: None,
+                default_body_format: BodyFormat::Plain,
+            },
+            imap: ServerConfig {
+                host: "localhost".into(),
+                port: 3993,
+                tls_mode: TlsMode::Tls,
+                username: EMAIL.into(),
+                trusted_certificate: None,
+            },
+            smtp: ServerConfig {
+                host: "localhost".into(),
+                port: 3465,
+                tls_mode: TlsMode::Tls,
+                username: EMAIL.into(),
+                trusted_certificate: None,
+            },
+        }
+    }
+
+    async fn fixture() -> Fixture {
+        assert_eq!(
+            std::env::var("POSTAL_SNAP_MAIL_INTEGRATION").as_deref(),
+            Ok("1")
+        );
+        let account = account();
+        let account_id = account.summary.id.clone();
+        let directory = tempfile::tempdir().expect("temporary database directory");
+        let database_path = directory.path().join("mail.sqlite3");
+        let db = Database::open(&database_path).expect("open temporary database");
+        db.insert_account(&account)
+            .expect("insert synthetic account");
+
+        let message_id = format!("<undo-session-{}@example.test>", uuid::Uuid::new_v4());
+        let raw = format!(
+            "From: sender@example.test\r\nTo: {EMAIL}\r\nSubject: Undo session fixture\r\nMessage-ID: {message_id}\r\nDate: Thu, 01 Jan 2026 12:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nSynthetic undo session body."
+        );
+        let mut session = mail::connect::connect_imap(&account.imap, PASSWORD)
+            .await
+            .expect("connect to synthetic GreenMail over verified TLS");
+        let _ = session.create("Archive").await;
+        session
+            .append("INBOX", None, None, raw.as_bytes())
+            .await
+            .expect("append synthetic message");
+        session.logout().await.expect("close setup session");
+
+        mail::sync::sync_account(
+            &db,
+            &account,
+            PASSWORD,
+            &CachePolicy::default(),
+            &mut mail::sync::Uncontended,
+        )
+        .await
+        .expect("sync the synthetic message");
+        let inbox_id = db
+            .mailbox_id_for_name(&account_id, "INBOX")
+            .expect("look up Inbox")
+            .expect("Inbox was synced");
+        let cached = db
+            .list_messages(inbox_id, None, 100)
+            .expect("list cached messages")
+            .items
+            .into_iter()
+            .find(|message| message.message_id.as_deref() == Some(message_id.as_str()))
+            .expect("synthetic message was cached");
+        let uid_validity = db
+            .mailbox_uid_validity(&account_id, "INBOX")
+            .expect("read Inbox UIDVALIDITY")
+            .expect("GreenMail reports UIDVALIDITY");
+        let archive_id = db
+            .mailbox_id_for_name(&account_id, "Archive")
+            .expect("look up Archive")
+            .expect("Archive was synced");
+
+        Fixture {
+            db,
+            _directory: directory,
+            account,
+            account_id,
+            message_id,
+            row_id: cached.id,
+            uid: cached.uid,
+            uid_validity,
+            archive_id,
+        }
+    }
+
+    fn defer(fixture: &Fixture, token: &str, not_before: chrono::DateTime<Utc>) {
+        let operation = serde_json::json!({
+            "messageId": fixture.row_id,
+            "uid": fixture.uid,
+            "source": "INBOX",
+            "destination": "Archive",
+            "uidValidity": fixture.uid_validity,
+        });
+        fixture
+            .db
+            .defer_moves(
+                &fixture.account_id,
+                &[(fixture.row_id, operation, fixture.archive_id)],
+                token,
+                not_before,
+            )
+            .expect("defer synthetic move");
+    }
+
+    async fn replay(fixture: &Fixture) -> bool {
+        super::super::replay_offline_operations_with_notification(
+            &fixture.db,
+            &fixture.account,
+            PASSWORD,
+            &CachePolicy::default(),
+            |_, _| {},
+        )
+        .await
+        .expect("run production offline replay")
+    }
+
+    async fn server_count(fixture: &Fixture, mailbox: &str) -> usize {
+        let mut session = mail::connect::connect_imap(&fixture.account.imap, PASSWORD)
+            .await
+            .expect("connect to synthetic GreenMail to verify state");
+        session
+            .select(mailbox)
+            .await
+            .expect("select synthetic mailbox");
+        let matches = session
+            .search(format!("HEADER Message-ID \"{}\"", fixture.message_id))
+            .await
+            .expect("search synthetic message ID");
+        session.logout().await.expect("close verification session");
+        matches.len()
+    }
+
+    // Failure modes for A19: a live frontend's move replays at its expired
+    // deadline; offline Undo leaves a replayable move behind; startup leaves
+    // an abandoned hold permanent; stale enqueue races rotation; or replay
+    // moves the message more than once.
+    #[tokio::test]
+    #[ignore = "requires npm run test:mail-integration"]
+    async fn greenmail_undo_session_holds_expired_move_then_recovers_once_on_restart() {
+        let fixture = fixture().await;
+        let live_session = fixture.db.begin_undo_session().unwrap();
+        let live_token = format!("{live_session}{}", "c".repeat(32));
+        defer(
+            &fixture,
+            &live_token,
+            Utc::now() - ChronoDuration::seconds(1),
+        );
+
+        assert!(fixture
+            .db
+            .queued_operations(&fixture.account_id)
+            .unwrap()
+            .is_empty());
+        assert!(fixture
+            .db
+            .next_deferred_due(&fixture.account_id)
+            .unwrap()
+            .is_none());
+        assert!(!replay(&fixture).await);
+        assert_eq!(server_count(&fixture, "INBOX").await, 1);
+        assert_eq!(server_count(&fixture, "Archive").await, 0);
+
+        assert_eq!(
+            fixture
+                .db
+                .undo_deferred(&fixture.account_id, &live_token)
+                .unwrap(),
+            (1, false),
+            "undo edits the local queue while the account is offline"
+        );
+        assert!(!replay(&fixture).await);
+        assert_eq!(server_count(&fixture, "INBOX").await, 1);
+        assert_eq!(server_count(&fixture, "Archive").await, 0);
+
+        let restart_token = format!("{live_session}{}", "d".repeat(32));
+        defer(
+            &fixture,
+            &restart_token,
+            Utc::now() + ChronoDuration::minutes(5),
+        );
+        let database_path = fixture._directory.path().join("mail.sqlite3");
+        let account_id = fixture.account_id.clone();
+        let account = fixture.account.clone();
+        let message_id = fixture.message_id.clone();
+        let row_id = fixture.row_id;
+        let uid = fixture.uid;
+        let uid_validity = fixture.uid_validity;
+        let archive_id = fixture.archive_id;
+        let Fixture {
+            db,
+            _directory: directory,
+            ..
+        } = fixture;
+        drop(db);
+
+        let db = Database::open(&database_path).expect("reopen durable mail database");
+        let restarted_session = db.begin_undo_session().unwrap();
+        assert_ne!(restarted_session, live_session);
+        assert_eq!(db.queued_operations(&account_id).unwrap().len(), 1);
+        assert!(db
+            .defer_moves::<serde_json::Value>(
+                &account_id,
+                &[],
+                &restart_token,
+                Utc::now() + ChronoDuration::minutes(5),
+            )
+            .is_err());
+        let reopened = Fixture {
+            db,
+            _directory: directory,
+            account,
+            account_id,
+            message_id,
+            row_id,
+            uid,
+            uid_validity,
+            archive_id,
+        };
+        assert!(!replay(&reopened).await);
+        assert_eq!(server_count(&reopened, "INBOX").await, 0);
+        assert_eq!(server_count(&reopened, "Archive").await, 1);
+        assert!(!replay(&reopened).await);
+        assert_eq!(server_count(&reopened, "INBOX").await, 0);
+        assert_eq!(server_count(&reopened, "Archive").await, 1);
     }
 }

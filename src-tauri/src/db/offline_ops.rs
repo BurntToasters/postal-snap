@@ -9,8 +9,37 @@ fn format_instant(value: chrono::DateTime<chrono::Utc>) -> String {
     value.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
+fn token_session(undo_token: &str) -> Option<&str> {
+    let bytes = undo_token.as_bytes();
+    if bytes.len() == 64 && bytes.iter().all(|byte| byte.is_ascii_hexdigit()) {
+        Some(&undo_token[..32])
+    } else {
+        None
+    }
+}
+
 database_operations! {
 impl Database {
+    /// Rotate the live frontend session and release holds from the old one.
+    pub fn begin_undo_session(&self) -> Result<String, String> {
+        let mut active_session = self
+            .undo_session
+            .lock()
+            .map_err(|_| "The undo session is unavailable.".to_string())?;
+        let next_session = uuid::Uuid::new_v4().simple().to_string();
+        let mut conn = self.conn()?;
+        let transaction = conn.transaction().map_err(db_error)?;
+        transaction
+            .execute(
+                "UPDATE offline_ops SET not_before=NULL WHERE kind='move' AND not_before IS NOT NULL",
+                [],
+            )
+            .map_err(db_error)?;
+        transaction.commit().map_err(db_error)?;
+        *active_session = next_session.clone();
+        Ok(next_session)
+    }
+
     pub fn record_flag_change(
         &self,
         account_id: &str,
@@ -183,6 +212,7 @@ impl Database {
         &self,
         account_id: &str,
     ) -> Result<Vec<(i64, String, String, i64)>, String> {
+        let session = self.current_undo_session()?;
         let now = format_instant(chrono::Utc::now());
         let conn = self.conn()?;
         let mut statement = conn
@@ -190,10 +220,14 @@ impl Database {
                 "SELECT o.id,o.kind,o.payload,o.attempts FROM offline_ops o
                  WHERE o.account_id=?1
                    AND (o.not_before IS NULL OR o.not_before<=?2)
+                   AND NOT (o.kind='move' AND o.not_before IS NOT NULL
+                     AND COALESCE(length(o.undo_token)=64 AND substr(o.undo_token,1,32)=?3,0))
                    AND NOT EXISTS (
                      SELECT 1 FROM offline_ops held
                      WHERE held.account_id=o.account_id AND held.kind='move'
-                       AND held.not_before>?2 AND held.id<o.id
+                       AND held.not_before IS NOT NULL
+                       AND (held.not_before>?2 OR COALESCE(length(held.undo_token)=64 AND substr(held.undo_token,1,32)=?3,0))
+                       AND held.id<o.id
                        AND CASE WHEN json_valid(held.payload) THEN json_extract(held.payload,'$.messageId') END
                          = CASE WHEN json_valid(o.payload) THEN json_extract(o.payload,'$.messageId') END
                    )
@@ -201,7 +235,7 @@ impl Database {
             )
             .map_err(db_error)?;
         let rows = statement
-            .query_map(params![account_id, now], |row| {
+            .query_map(params![account_id, now, session], |row| {
                 Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
             })
             .map_err(db_error)?;
@@ -218,6 +252,13 @@ impl Database {
         not_before: chrono::DateTime<chrono::Utc>,
     ) -> Result<(), String> {
         let not_before = format_instant(not_before);
+        let active_session = self
+            .undo_session
+            .lock()
+            .map_err(|_| "The undo session is unavailable.".to_string())?;
+        if token_session(undo_token).is_some_and(|session| session != active_session.as_str()) {
+            return Err("This undo request is no longer valid.".into());
+        }
         let mut conn = self.conn()?;
         let transaction = conn.transaction().map_err(db_error)?;
         for (message_id, operation, destination_id) in entries {
@@ -299,12 +340,15 @@ impl Database {
 
     /// Time until the next deferred operation becomes due, if any is still waiting.
     pub fn next_deferred_due(&self, account_id: &str) -> Result<Option<std::time::Duration>, String> {
+        let session = self.current_undo_session()?;
         let now = chrono::Utc::now();
         let next: Option<String> = self
             .read_conn()?
             .query_row(
-                "SELECT MIN(not_before) FROM offline_ops WHERE account_id=?1 AND not_before>?2",
-                params![account_id, format_instant(now)],
+                "SELECT MIN(not_before) FROM offline_ops
+                 WHERE account_id=?1 AND not_before>?2
+                   AND NOT COALESCE(length(undo_token)=64 AND substr(undo_token,1,32)=?3,0)",
+                params![account_id, format_instant(now), session],
                 |row| row.get(0),
             )
             .map_err(db_error)?;

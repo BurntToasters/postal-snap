@@ -314,6 +314,7 @@ pub(crate) async fn run_with_secret(
         };
         if !capabilities.idle {
             // Without IDLE the worker keeps its polling path.
+            drop(session);
             if !park(link, &db, &account_id, generation, epoch).await {
                 break;
             }
@@ -377,6 +378,72 @@ mod tests {
     use crate::mail::connect::{is_bye, ConnectError};
     use crate::mail::failure::{FailureKind, MailError};
     use std::time::Duration;
+
+    fn no_idle_fixture_account(port: u16) -> crate::models::AccountRecord {
+        use crate::models::{
+            AccountRecord, AccountSummary, BodyFormat, ProviderKind, ServerConfig, TlsMode,
+        };
+        AccountRecord {
+            summary: AccountSummary {
+                id: uuid::Uuid::new_v4().to_string(),
+                provider: ProviderKind::Manual,
+                email: "fixture@example.test".into(),
+                display_name: "No IDLE fixture".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+                signature_html: String::new(),
+                reply_to: String::new(),
+                color: None,
+                default_body_format: BodyFormat::Plain,
+            },
+            imap: ServerConfig {
+                host: "localhost".into(),
+                port,
+                tls_mode: TlsMode::Tls,
+                username: "fixture@example.test".into(),
+                trusted_certificate: None,
+            },
+            smtp: ServerConfig {
+                host: "localhost".into(),
+                port: port.saturating_add(1),
+                tls_mode: TlsMode::Tls,
+                username: "fixture@example.test".into(),
+                trusted_certificate: None,
+            },
+        }
+    }
+
+    fn fixture_event_counts(path: &std::path::Path) -> (usize, usize, usize) {
+        let events = std::fs::read_to_string(path).unwrap_or_default();
+        let count = |event| events.lines().filter(|line| *line == event).count();
+        (
+            count("imap-authenticated"),
+            count("imap-limit"),
+            count("imap-closed"),
+        )
+    }
+
+    async fn wait_fixture_events(
+        path: &std::path::Path,
+        auth: usize,
+        limits: usize,
+        closed: usize,
+    ) {
+        for _ in 0..240 {
+            let observed = fixture_event_counts(path);
+            if observed.0 >= auth && observed.1 >= limits && observed.2 >= closed {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        panic!(
+            "no-IDLE fixture did not reach expected state; observed counts: {:?}",
+            fixture_event_counts(path)
+        );
+    }
 
     fn no(text: &str) -> async_imap::error::Error {
         async_imap::error::Error::No(text.into())
@@ -493,6 +560,86 @@ mod tests {
     #[test]
     fn idle_rounds_stay_under_the_server_timeout() {
         assert!(WATCH_ROUND <= Duration::from_secs(25 * 60));
+    }
+
+    // No-IDLE failure modes (D15): the authenticated watcher session is kept
+    // while parked; the actor cannot use the sole connection; actor-first
+    // refusal is treated as bad credentials; restart does not reconnect; or
+    // removing an account leaves the watcher task alive.
+    #[tokio::test]
+    #[ignore = "requires npm run test:mail-integration"]
+    async fn no_idle_watcher_releases_cap_and_restarts_in_both_connection_orders() {
+        use crate::{commands::AccountActor, db::Database, mail::connect::connect_imap};
+        use std::{path::PathBuf, sync::Arc};
+
+        let port = std::env::var("POSTAL_SNAP_WATCH_NO_IDLE_PORT")
+            .expect("no-IDLE fixture port")
+            .parse::<u16>()
+            .expect("valid no-IDLE fixture port");
+        let events =
+            PathBuf::from(std::env::var("POSTAL_SNAP_WATCH_EVENTS").expect("fixture event path"));
+        let password = "fixture-password";
+
+        // Watcher-first: it authenticates, detects no IDLE, closes, then parks.
+        let account = no_idle_fixture_account(port);
+        let db = Database::memory();
+        db.insert_account(&account).unwrap();
+        let actor = Arc::new(AccountActor::new());
+        let watcher = tokio::spawn(super::run_with_secret(
+            account.summary.id.clone(),
+            db.clone(),
+            actor.clone(),
+            super::SecretSource::Fixed(password.into()),
+        ));
+        wait_fixture_events(&events, 1, 0, 1).await;
+        let mut actor_session = connect_imap(&account.imap, password)
+            .await
+            .expect("actor uses the released one-connection slot");
+        actor_session.logout().await.unwrap();
+        drop(actor_session);
+        wait_fixture_events(&events, 2, 0, 2).await;
+
+        actor.watch().signal_restart();
+        wait_fixture_events(&events, 3, 0, 3).await;
+        db.remove_account(&account.summary.id).unwrap();
+        actor.watch().signal_restart();
+        tokio::time::timeout(Duration::from_secs(3), watcher)
+            .await
+            .expect("removed-account watcher did not stop")
+            .unwrap();
+
+        // Actor-first: the watcher receives a connection-cap refusal, waits,
+        // then reconnects after a restart once the actor releases the slot.
+        let account = no_idle_fixture_account(port);
+        let db = Database::memory();
+        db.insert_account(&account).unwrap();
+        let actor = Arc::new(AccountActor::new());
+        let mut actor_session = connect_imap(&account.imap, password)
+            .await
+            .expect("actor acquires the fixture slot first");
+        let watcher = tokio::spawn(super::run_with_secret(
+            account.summary.id.clone(),
+            db.clone(),
+            actor.clone(),
+            super::SecretSource::Fixed(password.into()),
+        ));
+        wait_fixture_events(&events, 4, 1, 3).await;
+        actor_session.logout().await.unwrap();
+        drop(actor_session);
+        wait_fixture_events(&events, 4, 1, 4).await;
+        actor.watch().signal_restart();
+        wait_fixture_events(&events, 5, 1, 5).await;
+        db.remove_account(&account.summary.id).unwrap();
+        actor.watch().signal_restart();
+        tokio::time::timeout(Duration::from_secs(3), watcher)
+            .await
+            .expect("removed-account watcher did not stop after retry")
+            .unwrap();
+
+        let (authenticated, refusals, closed) = fixture_event_counts(&events);
+        assert_eq!(authenticated, 5);
+        assert_eq!(refusals, 1);
+        assert_eq!(closed, 5);
     }
 
     // Read-only failure mode (D2): the watcher never selects read-write or

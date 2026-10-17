@@ -29,6 +29,10 @@ for (const { density, scale } of combos) {
     await page.goto(`/?${query}`);
     const row = page.getByRole("option", { name: /Weekend plans/i });
     await expect(row).toBeVisible();
+    const originalSession = await page.evaluate(
+      () => window.__POSTAL_SNAP_TEST__?.undoSession,
+    );
+    expect(originalSession).toMatch(/^[a-f0-9]{32}$/);
     await row.focus();
     await page.keyboard.press("e");
     await expect(row).toBeHidden();
@@ -42,8 +46,35 @@ for (const { density, scale } of combos) {
         ),
       )
       .toBe(1);
+    const originalCalls = await page.evaluate(
+      () => window.__POSTAL_SNAP_TEST__?.ipcCalls ?? [],
+    );
+    const originalMove = originalCalls.find(
+      (call) => call.command === "move_message",
+    );
+    expect(String(originalMove?.args.undoToken).slice(0, 32)).toBe(
+      originalSession,
+    );
+    expect(
+      originalCalls.findIndex((call) => call.command === "begin_undo_session"),
+    ).toBeLessThan(
+      originalCalls.findIndex((call) => call.command === "move_message"),
+    );
 
     await page.reload();
+    const restartedSession = await page.evaluate(
+      () => window.__POSTAL_SNAP_TEST__?.undoSession,
+    );
+    expect(restartedSession).toMatch(/^[a-f0-9]{32}$/);
+    expect(restartedSession).not.toBe(originalSession);
+    const restartCalls = await page.evaluate(
+      () => window.__POSTAL_SNAP_TEST__?.ipcCalls ?? [],
+    );
+    expect(
+      restartCalls.findIndex((call) => call.command === "begin_undo_session"),
+    ).toBeLessThan(
+      restartCalls.findIndex((call) => call.command === "list_accounts"),
+    );
     await expect(page.getByRole("button", { name: /^Archive/ })).toContainText(
       "1",
     );

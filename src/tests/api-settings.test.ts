@@ -99,6 +99,12 @@ describe("settings IPC serialization", () => {
     expect(calls).toEqual(["save_settings", "save_settings"]);
   });
 
+  it("starts a durable undo session through the typed command", async () => {
+    mockedInvoke.mockResolvedValue("a".repeat(32));
+    await expect(api.beginUndoSession()).resolves.toBe("a".repeat(32));
+    expect(mockedInvoke).toHaveBeenCalledWith("begin_undo_session", {});
+  });
+
   it("does not let a save queued behind import overwrite imported preferences", async () => {
     const calls: string[] = [];
     let releaseFirst: () => void = () => undefined;

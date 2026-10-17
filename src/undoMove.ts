@@ -8,6 +8,24 @@ import type { MailboxSummary } from "./types";
 // One fixed id: a newer move replaces this notice, which commits the older move.
 export const UNDO_MOVE_NOTICE_ID = "undo-move";
 const UNDO_ACTION_ID = "undo";
+let undoSessionPromise: Promise<string> | undefined;
+
+/** Initialize once per frontend instance; clear rejection so a reload retry works. */
+export function ensureUndoSession(): Promise<string> {
+  if (!undoSessionPromise) {
+    const started = api.beginUndoSession().then((session) => {
+      if (!/^[a-f0-9]{32}$/.test(session)) {
+        throw new Error("The undo session could not be started.");
+      }
+      return session;
+    });
+    undoSessionPromise = started.catch((cause: unknown) => {
+      undoSessionPromise = undefined;
+      throw cause;
+    });
+  }
+  return undoSessionPromise;
+}
 
 export type UndoMoveTarget =
   { kind: "archive" | "trash" | "junk" } | { kind: "folder"; name: string };
@@ -37,7 +55,8 @@ interface UndoableMove<T> {
  * itself are thrown to the caller, as before.
  */
 export async function undoableMove<T>(move: UndoableMove<T>): Promise<T> {
-  const undoToken = crypto.randomUUID();
+  const session = await ensureUndoSession();
+  const undoToken = `${session}${crypto.randomUUID().replaceAll("-", "")}`;
   const result = await move.send(undoToken);
   const count = move.deferred(result);
   if (count > 0) offerUndo(move.accountId, undoToken, count, move.target);

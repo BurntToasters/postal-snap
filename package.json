@@ -169,7 +169,7 @@
     "@tauri-apps/plugin-deep-link": "^2.4.0",
     "@tauri-apps/plugin-notification": "^2.3.3",
     "@tauri-apps/plugin-process": "^2.3.1",
-    "@tauri-apps/plugin-updater": "^2.10.0",
+    "@tauri-apps/plugin-updater": "2.14.0",
     "@tiptap/core": "^3.30.5",
     "@tiptap/extension-color": "^3.30.5",
     "@tiptap/extension-font-family": "^3.30.5",

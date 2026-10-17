@@ -7,6 +7,7 @@
 // - Protocol transcripts must never enter result artifacts.
 
 import { readFile } from "node:fs/promises";
+import { appendFileSync } from "node:fs";
 import net from "node:net";
 import tls from "node:tls";
 import { once } from "node:events";
@@ -22,6 +23,8 @@ export async function createCompatibilityFixture({
   advertiseStartTls = true,
   rejectStartTls = false,
   allowRestartCommand = false,
+  maxImapConnections = Number.POSITIVE_INFINITY,
+  statePath,
   username = "fixture@example.test",
   password = "fixture-password",
   imapPort = 0,
@@ -55,6 +58,8 @@ export async function createCompatibilityFixture({
   const servers = [];
   const counts = {
     connections: 0,
+    activeImapConnections: 0,
+    connectionLimitRefusals: 0,
     authenticated: 0,
     listStatusReplies: 0,
     idCommands: 0,
@@ -168,6 +173,7 @@ export async function createCompatibilityFixture({
     let socket = initialSocket;
     let secure = tlsMode === "tls";
     let authenticated = false;
+    let countedImap = false;
     let buffer = Buffer.alloc(0);
     let selectedMailbox = "";
     let literal = null;
@@ -176,13 +182,35 @@ export async function createCompatibilityFixture({
     let smtpUser = "";
     let smtpData = false;
     counts.connections++;
+    const mark = (event) => {
+      if (statePath) appendFileSync(statePath, `${event}\n`, "utf8");
+    };
     function track(current) {
       sockets.add(current);
       current.on("error", () => current.destroy());
-      current.on("close", () => sockets.delete(current));
+      current.on("close", () => {
+        sockets.delete(current);
+        if (current === socket && countedImap) {
+          countedImap = false;
+          counts.activeImapConnections--;
+          mark("imap-closed");
+        }
+      });
     }
     track(socket);
     const send = (line) => socket.write(`${line}\r\n`);
+    if (protocol === "imap") {
+      if (counts.activeImapConnections >= maxImapConnections) {
+        counts.connectionLimitRefusals++;
+        mark("imap-limit");
+        send("* BYE [LIMIT] Too many connections");
+        socket.end();
+        return;
+      }
+      counts.activeImapConnections++;
+      countedImap = true;
+      mark("imap-connected");
+    }
     const wireMailbox = (name) => {
       const value = encodeMailbox(name);
       return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
@@ -210,6 +238,7 @@ export async function createCompatibilityFixture({
     function authenticate(user, secret, prefix = "") {
       authenticated = user === username && secret === password;
       counts[authenticated ? "authenticated" : "rejectedAuthentication"]++;
+      if (authenticated && protocol === "imap") mark("imap-authenticated");
       send(
         protocol === "imap"
           ? `${prefix} ${authenticated ? "OK authenticated" : "NO authentication rejected"}`

@@ -391,6 +391,7 @@ fn main() {
             commands::messages::copy_message_to_mailbox,
             commands::messages::copy_messages_to_mailbox,
             commands::messages::move_messages_to_mailbox,
+            commands::messages::begin_undo_session,
             commands::messages::undo_deferred,
             commands::messages::commit_deferred,
             commands::messages::mark_mailbox_read,

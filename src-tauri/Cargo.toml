@@ -45,7 +45,8 @@ tauri-plugin-deep-link = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-process = { version = "2", optional = true }
-tauri-plugin-updater = { version = "2", optional = true }
+# Pinned to upstream v2's zip 9 security fix; the registry release still uses zip 4.
+tauri-plugin-updater = { git = "https://github.com/tauri-apps/plugins-workspace.git", rev = "f36ba7ba48695776bc11cce0bfdc45678ec24f72", package = "tauri-plugin-updater", optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "fs", "io-util"] }
 tokio-native-tls = "0.3"
 url = "2"

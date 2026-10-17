@@ -93,6 +93,7 @@ beforeEach(() => {
   vi.spyOn(api, "setMessageFlags").mockResolvedValue(undefined);
   vi.spyOn(api, "listFilterRules").mockResolvedValue([]);
   vi.spyOn(api, "deleteFilterRule").mockResolvedValue(undefined);
+  vi.spyOn(api, "beginUndoSession").mockResolvedValue("c".repeat(32));
   vi.spyOn(api, "moveMessage").mockResolvedValue(undefined);
   vi.spyOn(api, "moveMessageToMailbox").mockResolvedValue(undefined);
   vi.spyOn(api, "prepareForwardAttachments").mockResolvedValue([]);
