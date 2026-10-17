@@ -250,7 +250,8 @@ export function useSettingsAccountManagement({
   async function handleSaveName(accountId: string) {
     if (savingNameId) return;
     const account = accounts.find((item) => item.id === accountId);
-    const value = (nameInputs[accountId] ?? account?.displayName ?? "").trim();
+    const fallback = account?.displayName ?? "";
+    const value = (nameInputs[accountId] ?? fallback).trim();
     if (!value) {
       setError(strings.settings.accountNameHelp);
       return;
@@ -263,10 +264,11 @@ export function useSettingsAccountManagement({
           .getState()
           .accounts.map((item) => (item.id === accountId ? updated : item)),
       );
-      setNameInputs((prev) => ({
-        ...prev,
-        [accountId]: updated.displayName,
-      }));
+      setNameInputs((prev) =>
+        (prev[accountId] ?? fallback) === value
+          ? { ...prev, [accountId]: updated.displayName }
+          : prev,
+      );
       setNameStatus((prev) => ({
         ...prev,
         [accountId]: strings.settings.accountNameSaved,
@@ -281,7 +283,8 @@ export function useSettingsAccountManagement({
   async function handleSaveReplyTo(accountId: string) {
     if (savingReplyToId) return;
     const account = accounts.find((item) => item.id === accountId);
-    const value = (replyToInputs[accountId] ?? account?.replyTo ?? "").trim();
+    const fallback = account?.replyTo ?? "";
+    const value = (replyToInputs[accountId] ?? fallback).trim();
     if (value && !oneReplyAddress(value)) {
       setReplyToStatus((prev) => ({
         ...prev,
@@ -297,10 +300,11 @@ export function useSettingsAccountManagement({
           .getState()
           .accounts.map((item) => (item.id === accountId ? updated : item)),
       );
-      setReplyToInputs((prev) => ({
-        ...prev,
-        [accountId]: updated.replyTo ?? "",
-      }));
+      setReplyToInputs((prev) =>
+        (prev[accountId] ?? fallback) === value
+          ? { ...prev, [accountId]: updated.replyTo ?? "" }
+          : prev,
+      );
       setReplyToStatus((prev) => ({
         ...prev,
         [accountId]: strings.settings.replyToAddressSaved,
