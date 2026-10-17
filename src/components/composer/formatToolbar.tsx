@@ -1,20 +1,20 @@
 import type { Dispatch, ReactNode, SetStateAction } from "react";
 import type { Editor } from "@tiptap/core";
 import {
-  AlignCenter,
-  AlignLeft,
-  AlignRight,
+  TextAlignCenter,
+  TextAlignStart,
+  TextAlignEnd,
   Bold,
   Highlighter,
-  IndentDecrease,
-  IndentIncrease,
+  ListIndentDecrease,
+  ListIndentIncrease,
   Italic,
   Link as LinkIcon,
   List,
   ListOrdered,
   Quote,
   Minus,
-  MoreHorizontal,
+  Ellipsis,
   Redo2,
   RemoveFormatting,
   Strikethrough,
@@ -224,7 +224,7 @@ export function FormatToolbar({
             title={strings.composer.moreFormatting}
             onClick={() => setMoreFormattingOpen((value) => !value)}
           >
-            <MoreHorizontal />
+            <Ellipsis />
           </button>
         </div>
 
@@ -244,7 +244,7 @@ export function FormatToolbar({
               aria-pressed={Boolean(editor?.isActive({ textAlign: "left" }))}
               title={strings.composer.alignLeft}
             >
-              <AlignLeft />
+              <TextAlignStart />
             </button>
             <button
               type="button"
@@ -258,7 +258,7 @@ export function FormatToolbar({
               aria-pressed={Boolean(editor?.isActive({ textAlign: "center" }))}
               title={strings.composer.alignCenter}
             >
-              <AlignCenter />
+              <TextAlignCenter />
             </button>
             <button
               type="button"
@@ -272,7 +272,7 @@ export function FormatToolbar({
               aria-pressed={Boolean(editor?.isActive({ textAlign: "right" }))}
               title={strings.composer.alignRight}
             >
-              <AlignRight />
+              <TextAlignEnd />
             </button>
           </div>
 
@@ -313,7 +313,7 @@ export function FormatToolbar({
               aria-label={strings.composer.indentLess}
               title={strings.composer.indentLess}
             >
-              <IndentDecrease />
+              <ListIndentDecrease />
             </button>
             <button
               type="button"
@@ -321,7 +321,7 @@ export function FormatToolbar({
               aria-label={strings.composer.indentMore}
               title={strings.composer.indentMore}
             >
-              <IndentIncrease />
+              <ListIndentIncrease />
             </button>
           </div>
 

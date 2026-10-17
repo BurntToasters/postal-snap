@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, type RefObject } from "react";
 import {
-  AlignLeft,
+  TextAlignStart,
   Archive,
   ArrowLeft,
   Bell,
@@ -14,7 +14,7 @@ import {
   FilePen,
   Inbox,
   ListChecks,
-  Filter,
+  Funnel,
   Copy,
   Download,
   CornerUpRight,
@@ -26,7 +26,7 @@ import {
   MailMinus,
   SquarePen,
   MailOpen,
-  MoreHorizontal,
+  Ellipsis,
   Printer,
   Reply,
   Search,
@@ -34,7 +34,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   Star,
-  Trash2,
+  Trash,
   X,
 } from "lucide-react";
 import { senderDomain } from "../../blockedSenders";
@@ -53,12 +53,14 @@ import { folderPathLabel } from "../../i18n/mail";
 import type { MailboxSummary, MessageDetail, ReadingPane } from "../../types";
 import { folderIcons } from "../mail/folderIcons";
 import { moveMenuFocus, moveToolbarFocus } from "../toolbarNav";
+import type { ReaderToolbarActions } from "./readerActions";
 
 function withShortcut(label: string, keys: string) {
   return `${label} (${keys})`;
 }
 
 export function ReaderToolbar({
+  actions,
   message,
   mailboxes,
   readingPane,
@@ -69,84 +71,14 @@ export function ReaderToolbar({
   isArchiveMailbox,
   isTrashMailbox,
   isJunkMailbox,
-  onBack,
-  onPrevious,
-  onNext,
   listPosition,
-  onReply,
-  onReplyAll,
-  onReplyWithoutQuoting,
-  onReplyAllWithoutQuoting,
-  onReplyToList,
-  onReplyWithAttachments,
-  onReplyAllWithAttachments,
-  onForward,
-  onForwardConversation,
-  onForwardAsAttachment,
-  onRedirect,
-  onEditAsNew,
-  onArchive,
-  onTrash,
-  onPrint,
-  onPrintConversation,
-  onCopyMessageText,
-  onCopySubject,
-  onCopySenderAddress,
-  onCopyRecipients,
-  onCopyConversationText,
-  onSaveConversationFiles,
-  onToggleRead,
-  onMarkConversationRead,
-  onMarkConversationUnread,
-  onArchiveConversation,
-  onTrashConversation,
-  onDeleteConversation,
-  onJunkConversation,
-  onMoveConversationToInbox,
-  onToggleStar,
-  onPin,
-  onPinConversation,
-  onUnpinConversation,
-  onStarConversation,
-  onUnstarConversation,
-  onSelectConversation,
-  onSelectFromSender,
-  onOpenEarlier,
-  onOlderInConversation,
-  onNewerInConversation,
-  onUnreadInConversation,
-  onMoveJunk,
-  onBlockSender,
   senderBlocked = false,
-  onUnblockSender,
-  onBlockDomain,
   domainBlocked = false,
-  onUnblockDomain,
-  onMuteConversation,
-  onMoveToInbox,
-  onMoveToMailbox,
-  onMoveConversationToMailbox,
-  onCopyToMailbox,
-  onCopyConversationToMailbox,
-  onOpenSnooze,
-  onSnoozeConversation,
-  onCreateRule,
-  onCreateSubjectRule,
-  onMessagesFromSender,
-  onComposeToSender,
-  onMessagesWithSubject,
-  onUnsubscribe,
-  onShowOriginal,
-  onSaveEml,
   canViewPlain = false,
   viewingPlain = false,
-  onTogglePlain,
-  onToggleMore,
-  onOpenMore,
-  onCloseMore,
-  onDismissMore,
   windowDrag,
 }: {
+  actions: ReaderToolbarActions;
   message: MessageDetail;
   mailboxes: MailboxSummary[];
   readingPane: ReadingPane;
@@ -157,84 +89,87 @@ export function ReaderToolbar({
   isArchiveMailbox: boolean;
   isTrashMailbox: boolean;
   isJunkMailbox: boolean;
-  onBack: () => void;
-  onPrevious?: () => void;
-  onNext?: () => void;
   listPosition?: { index: number; total: number };
-  onReply: () => void;
-  onReplyAll: () => void;
-  onReplyWithoutQuoting?: () => void;
-  onReplyAllWithoutQuoting?: () => void;
-  onReplyToList?: () => void;
-  onReplyWithAttachments?: () => void;
-  onReplyAllWithAttachments?: () => void;
-  onForward: () => void;
-  onForwardConversation?: () => void;
-  onForwardAsAttachment?: () => void;
-  onRedirect?: () => void;
-  onEditAsNew?: () => void;
-  onArchive: () => void;
-  onTrash: () => void;
-  onPrint: () => void;
-  onPrintConversation?: () => void;
-  onCopyMessageText: () => void;
-  onCopySubject?: () => void;
-  onCopySenderAddress?: () => void;
-  onCopyRecipients?: () => void;
-  onCopyConversationText?: () => void;
-  onSaveConversationFiles?: () => void;
-  onToggleRead: () => void;
-  onMarkConversationRead?: () => void;
-  onMarkConversationUnread?: () => void;
-  onArchiveConversation?: () => void;
-  onTrashConversation?: () => void;
-  onDeleteConversation?: () => void;
-  onJunkConversation?: () => void;
-  onMoveConversationToInbox?: () => void;
-  onToggleStar: () => void;
-  onPin?: () => void;
-  onPinConversation?: () => void;
-  onUnpinConversation?: () => void;
-  onStarConversation?: () => void;
-  onUnstarConversation?: () => void;
-  onSelectConversation?: () => void;
-  onSelectFromSender?: () => void;
-  onOpenEarlier?: () => void;
-  onOlderInConversation?: () => void;
-  onNewerInConversation?: () => void;
-  onUnreadInConversation?: () => void;
-  onMoveJunk: () => void;
-  onBlockSender?: () => void;
   senderBlocked?: boolean;
-  onUnblockSender?: () => void;
-  onBlockDomain?: () => void;
   domainBlocked?: boolean;
-  onUnblockDomain?: () => void;
-  onMuteConversation?: () => void;
-  onMoveToInbox: () => void;
-  onMoveToMailbox: (mailboxId: number) => void;
-  onMoveConversationToMailbox?: (mailboxId: number) => void;
-  onCopyToMailbox?: (mailboxId: number) => void;
-  onCopyConversationToMailbox?: (mailboxId: number) => void;
-  onOpenSnooze: () => void;
-  onSnoozeConversation?: () => void;
-  onCreateRule: () => void;
-  onCreateSubjectRule?: () => void;
-  onMessagesFromSender?: () => void;
-  onComposeToSender?: () => void;
-  onMessagesWithSubject?: () => void;
-  onUnsubscribe: () => void;
-  onShowOriginal: () => void;
-  onSaveEml?: () => void;
   canViewPlain?: boolean;
   viewingPlain?: boolean;
-  onTogglePlain?: () => void;
-  onToggleMore: () => void;
-  onOpenMore: () => void;
-  onCloseMore: () => void;
-  onDismissMore: () => void;
   windowDrag?: boolean;
 }) {
+  const {
+    onBack,
+    onPrevious,
+    onNext,
+    onReply,
+    onReplyAll,
+    onReplyWithoutQuoting,
+    onReplyAllWithoutQuoting,
+    onReplyToList,
+    onReplyWithAttachments,
+    onReplyAllWithAttachments,
+    onForward,
+    onForwardConversation,
+    onForwardAsAttachment,
+    onRedirect,
+    onEditAsNew,
+    onArchive,
+    onTrash,
+    onPrint,
+    onPrintConversation,
+    onCopyMessageText,
+    onCopySubject,
+    onCopySenderAddress,
+    onCopyRecipients,
+    onCopyConversationText,
+    onSaveConversationFiles,
+    onToggleRead,
+    onMarkConversationRead,
+    onMarkConversationUnread,
+    onArchiveConversation,
+    onTrashConversation,
+    onDeleteConversation,
+    onJunkConversation,
+    onMoveConversationToInbox,
+    onToggleStar,
+    onPin,
+    onPinConversation,
+    onUnpinConversation,
+    onStarConversation,
+    onUnstarConversation,
+    onSelectConversation,
+    onSelectFromSender,
+    onOpenEarlier,
+    onOlderInConversation,
+    onNewerInConversation,
+    onUnreadInConversation,
+    onMoveJunk,
+    onBlockSender,
+    onUnblockSender,
+    onBlockDomain,
+    onUnblockDomain,
+    onMuteConversation,
+    onMoveToInbox,
+    onMoveToMailbox,
+    onMoveConversationToMailbox,
+    onCopyToMailbox,
+    onCopyConversationToMailbox,
+    onOpenSnooze,
+    onSnoozeConversation,
+    onCreateRule,
+    onCreateSubjectRule,
+    onMessagesFromSender,
+    onComposeToSender,
+    onMessagesWithSubject,
+    onUnsubscribe,
+    onShowOriginal,
+    onSaveEml,
+    onTogglePlain,
+    onToggleMore,
+    onOpenMore,
+    onCloseMore,
+    onDismissMore,
+  } = actions;
+
   // Share natural heights without measuring a previously stretched bar.
   const barRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -435,7 +370,7 @@ export function ReaderToolbar({
               isTrashMailbox ? "Delete" : "Meta+Backspace Control+Backspace"
             }
           >
-            <Trash2 aria-hidden="true" />
+            <Trash aria-hidden="true" />
           </button>
           <div className="reader-more" ref={moreMenuRef}>
             <button
@@ -454,7 +389,7 @@ export function ReaderToolbar({
               aria-label={strings.reader.moreActions}
               title={strings.reader.moreActions}
             >
-              <MoreHorizontal aria-hidden="true" />
+              <Ellipsis aria-hidden="true" />
             </button>
             {moreOpen ? (
               <div
@@ -766,7 +701,7 @@ export function ReaderToolbar({
                       onCloseMore();
                     }}
                   >
-                    <Trash2 aria-hidden="true" />
+                    <Trash aria-hidden="true" />
                     {strings.reader.trashConversation}
                   </button>
                 ) : null}
@@ -779,7 +714,7 @@ export function ReaderToolbar({
                       onCloseMore();
                     }}
                   >
-                    <Trash2 aria-hidden="true" />
+                    <Trash aria-hidden="true" />
                     {strings.reader.deleteConversation}
                   </button>
                 ) : null}
@@ -1090,7 +1025,7 @@ export function ReaderToolbar({
                       onDismissMore();
                     }}
                   >
-                    <Filter aria-hidden="true" />
+                    <Funnel aria-hidden="true" />
                     {strings.reader.createRuleFromSender}
                   </button>
                 ) : null}
@@ -1103,7 +1038,7 @@ export function ReaderToolbar({
                       onDismissMore();
                     }}
                   >
-                    <Filter aria-hidden="true" />
+                    <Funnel aria-hidden="true" />
                     {strings.reader.createRuleFromSubject}
                   </button>
                 ) : null}
@@ -1170,7 +1105,7 @@ export function ReaderToolbar({
                       onDismissMore();
                     }}
                   >
-                    <AlignLeft aria-hidden="true" />
+                    <TextAlignStart aria-hidden="true" />
                     {viewingPlain
                       ? strings.reader.viewFormatted
                       : strings.reader.viewPlain}

@@ -8,8 +8,8 @@ import {
   messageAfterRemovals,
 } from "./threads";
 import type { MailboxSummary, MessageSummary } from "./types";
-
-const BULK_LIMIT = 200;
+import { BULK_LIMIT } from "./bulk";
+import { undoableMove, undoTargetFor } from "./undoMove";
 
 export type ConversationMoveRole = "archive" | "trash" | "junk" | "inbox";
 
@@ -106,15 +106,23 @@ export async function moveListedMessage(
     }
   };
   try {
-    if (role === "inbox") {
-      await api.moveMessageToMailbox(
-        summary.accountId,
-        summary.id,
-        destination.id,
-      );
-    } else {
-      await api.moveMessage(summary.accountId, summary.id, role);
-    }
+    await undoableMove({
+      accountId: summary.accountId,
+      target: undoTargetFor(destination),
+      send: async (undoToken) => {
+        if (role === "inbox") {
+          await api.moveMessageToMailbox(
+            summary.accountId,
+            summary.id,
+            destination.id,
+            undoToken,
+          );
+        } else {
+          await api.moveMessage(summary.accountId, summary.id, role, undoToken);
+        }
+      },
+      deferred: () => 1,
+    });
   } catch (cause) {
     restore();
     if (sameView()) useAppStore.getState().setError(String(cause));
@@ -204,11 +212,18 @@ export async function moveLoadedConversation(
     }
   };
   try {
-    const outcome = await api.moveMessagesToMailbox(
-      summary.accountId,
-      ids,
-      destination.id,
-    );
+    const outcome = await undoableMove({
+      accountId: summary.accountId,
+      target: undoTargetFor(destination),
+      send: (undoToken) =>
+        api.moveMessagesToMailbox(
+          summary.accountId,
+          ids,
+          destination.id,
+          undoToken,
+        ),
+      deferred: (result) => result.queued,
+    });
     if (outcome.failed > 0) {
       useAppStore.getState().setError(strings.mail.bulkPartial(outcome.failed));
     }

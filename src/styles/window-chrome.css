@@ -4,7 +4,7 @@
 }
 
 html:is([data-platform="macos"], [data-platform="windows"]) {
-  --native-chrome-height: 44px;
+  --native-chrome-height: var(--caption-button-height);
 }
 
 .window-chrome,
@@ -53,7 +53,7 @@ html[data-platform="windows"] .global-window-caption-controls {
 
 .global-window-caption-controls button {
   display: grid;
-  width: 46px;
+  width: var(--caption-button-width);
   height: var(--caption-button-height);
   min-height: var(--caption-button-height);
   place-items: center;
@@ -88,7 +88,7 @@ html[data-platform="macos"] .app-toolbar {
 
 /* Traffic lights float over the sidebar, which starts the window's first row. */
 html[data-platform="macos"] .mail-shell.sidebar-collapsed .app-toolbar {
-  padding-left: 84px;
+  padding-left: var(--mac-traffic-light-space);
 }
 
 html:is([data-platform="macos"], [data-platform="windows"]) .folder-pane {
@@ -113,7 +113,7 @@ html[data-platform="macos"][data-window-fullscreen="true"]
 }
 
 html[data-platform="windows"] .app-toolbar {
-  padding-right: 150px;
+  padding-right: var(--caption-controls-space);
 }
 
 @media (max-width: 760px) {
@@ -160,14 +160,14 @@ html[data-platform="macos"][data-window-fullscreen="true"] .app-toolbar {
       .attachment-list,
       .snooze-panel
     ) {
-    padding-left: 84px;
+    padding-left: var(--mac-traffic-light-space);
   }
 
   html[data-platform="macos"]:not([data-window-fullscreen="true"])
     .pane-hidden
     .reader-pane:not(.reader-hidden):not(.empty-reader)
     .invite-card {
-    margin-left: 84px;
+    margin-left: var(--mac-traffic-light-space);
   }
 
   html[data-platform="windows"]
@@ -182,13 +182,13 @@ html[data-platform="macos"][data-window-fullscreen="true"] .app-toolbar {
       .attachment-list,
       .snooze-panel
     ) {
-    padding-right: 150px;
+    padding-right: var(--caption-controls-space);
   }
 
   html[data-platform="windows"]
     .pane-hidden
     .reader-pane:not(.reader-hidden):not(.empty-reader)
     .invite-card {
-    margin-right: 150px;
+    margin-right: var(--caption-controls-space);
   }
 }

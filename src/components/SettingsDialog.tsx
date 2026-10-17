@@ -8,7 +8,7 @@ import {
 import {
   Bell,
   Database,
-  DownloadCloud,
+  CloudDownload,
   Eye,
   Info,
   Keyboard,
@@ -19,23 +19,8 @@ import {
 } from "lucide-react";
 import { api } from "../api";
 import { strings } from "../i18n";
-import { applySettings } from "../settings";
 import { useAppStore } from "../store";
-import { supportsWorkspaceWindowFx } from "../window-fx";
-import type {
-  CacheUsage,
-  DistributionChannel,
-  FilterRule,
-  MailboxSummary,
-} from "../types";
-import {
-  addUpdateFoundListener,
-  checkUpdateInteractive,
-  removeUpdateFoundListener,
-  type UpdateFoundListener,
-} from "../update";
 import { useDialogFocus } from "./useDialogFocus";
-import { preparePassword } from "./setup/request";
 import type { SettingsTab } from "./settings/primitives";
 import { useSettingsSave } from "./settings/useSettingsSave";
 import { settingsSearchEntries } from "./settings/settingsSearch";
@@ -49,18 +34,16 @@ import { ShortcutsTab } from "./settings/shortcutsTab";
 import { UpdatesTab } from "./settings/updatesTab";
 import { AdvancedTab } from "./settings/advancedTab";
 import { AboutTab } from "./settings/aboutTab";
+import { useSettingsAccountManagement } from "./settings/useSettingsAccountManagement";
+import { useSettingsCapabilities } from "./settings/useSettingsCapabilities";
+import { useSettingsFilterRules } from "./settings/useSettingsFilterRules";
+import type { RuleSeed } from "./settings/useSettingsFilterRules";
+import { useSettingsStorage } from "./settings/useSettingsStorage";
+import { useSettingsThreatProtection } from "./settings/useSettingsThreatProtection";
+import { useSettingsUpdates } from "./settings/useSettingsUpdates";
 
 export type { SettingsTab } from "./settings/primitives";
-
-export interface RuleSeed {
-  accountId: string;
-  contains: string;
-  field?: "from" | "to" | "subject";
-}
-
-function seedField(field: RuleSeed["field"]): "from" | "to" | "subject" {
-  return field === "to" || field === "subject" ? field : "from";
-}
+export type { RuleSeed } from "./settings/useSettingsFilterRules";
 
 interface Props {
   onClose: () => void;
@@ -82,29 +65,10 @@ const tabs: Array<{
   { id: "storage", label: strings.settings.storage, icon: Database },
   { id: "accounts", label: strings.settings.accounts, icon: UserRound },
   { id: "shortcuts", label: strings.settings.shortcuts, icon: Keyboard },
-  { id: "updates", label: strings.settings.updates, icon: DownloadCloud },
+  { id: "updates", label: strings.settings.updates, icon: CloudDownload },
   { id: "advanced", label: strings.settings.advanced, icon: ShieldAlert },
   { id: "about", label: strings.settings.about, icon: Info },
 ];
-
-/** One mailbox, or blank. A blank address means replies use From. */
-function oneReplyAddress(value: string): boolean {
-  if (
-    value.length > 320 ||
-    value.includes(",") ||
-    Array.from(value).some((char) => {
-      const code = char.charCodeAt(0);
-      return code < 0x20 || code === 0x7f;
-    })
-  ) {
-    return false;
-  }
-  const address = "[^\\s@<>]+@[^\\s@<>]+";
-  return (
-    new RegExp(`^${address}$`).test(value) ||
-    new RegExp(`^[^<>]+<${address}>$`).test(value)
-  );
-}
 
 export function SettingsDialog({
   onClose,
@@ -115,9 +79,6 @@ export function SettingsDialog({
 }: Props) {
   const accounts = useAppStore((state) => state.accounts);
   const settings = useAppStore((state) => state.settings);
-  const setAccounts = useAppStore((state) => state.setAccounts);
-  const setSettings = useAppStore((state) => state.setSettings);
-  const setError = useAppStore((state) => state.setError);
   const [tab, setTab] = useState<SettingsTab>(initialTab);
   const [query, setQuery] = useState("");
   const [selectedAccountId, setSelectedAccountId] = useState(initialAccountId);
@@ -128,117 +89,105 @@ export function SettingsDialog({
   const [saveError, setSaveError] = useState("");
   const [searchTarget, setSearchTarget] = useState<string>();
   const discardBusy = useRef(false);
-  const [usage, setUsage] = useState<CacheUsage>();
-  const [distribution, setDistribution] = useState<DistributionChannel>();
-  const [windowFxSupported, setWindowFxSupported] = useState(false);
-  const [updateStatus, setUpdateStatus] = useState<string>(
-    strings.settings.checkUpdates,
-  );
   const { saving, update } = useSettingsSave((cause) =>
     setSaveError(String(cause)),
   );
-  const [dataBusy, setDataBusy] = useState(false);
-  const [dataStatus, setDataStatus] = useState<string>();
-  const [eraseBusy, setEraseBusy] = useState(false);
-  const [eraseStatus, setEraseStatus] = useState<string>();
-  const [checkingUpdate, setCheckingUpdate] = useState(false);
-  const [testingAccountId, setTestingAccountId] = useState<string>();
-  const [testedHealthy, setTestedHealthy] = useState<string>();
-  const [detectingAliasesAccountId, setDetectingAliasesAccountId] =
-    useState<string>();
-  const [newAliasInputs, setNewAliasInputs] = useState<Record<string, string>>(
-    {},
-  );
-  const [aliasStatus, setAliasStatus] = useState<Record<string, string>>({});
-  const [passwordInputs, setPasswordInputs] = useState<Record<string, string>>(
-    {},
-  );
-  const [passwordStatus, setPasswordStatus] = useState<Record<string, string>>(
-    {},
-  );
-  const [updatingPasswordId, setUpdatingPasswordId] = useState<string>();
-  const [nameInputs, setNameInputs] = useState<Record<string, string>>({});
-  const [nameStatus, setNameStatus] = useState<Record<string, string>>({});
-  const [savingNameId, setSavingNameId] = useState<string>();
-  const [replyToInputs, setReplyToInputs] = useState<Record<string, string>>(
-    {},
-  );
-  const [replyToStatus, setReplyToStatus] = useState<Record<string, string>>(
-    {},
-  );
-  const [savingReplyToId, setSavingReplyToId] = useState<string>();
-  const [signatureInputs, setSignatureInputs] = useState<
-    Record<string, string>
-  >({});
-  const [signatureStatus, setSignatureStatus] = useState<
-    Record<string, string>
-  >({});
-  const [savingSignatureId, setSavingSignatureId] = useState<string>();
-  const [confirmThreatOff, setConfirmThreatOff] = useState(false);
   const [horizontalTabs, setHorizontalTabs] = useState(() =>
     typeof window.matchMedia === "function"
       ? window.matchMedia("(max-width: 760px)").matches
       : false,
   );
-  const [confirmToken, setConfirmToken] = useState("");
-  const confirmInputRef = useRef<HTMLInputElement>(null);
   const settingsContentRef = useRef<HTMLDivElement>(null);
-  const [filterRules, setFilterRules] = useState<Record<string, FilterRule[]>>(
-    {},
-  );
-  const [accountMailboxes, setAccountMailboxes] = useState<MailboxSummary[]>(
-    [],
-  );
-  const [newRuleInputs, setNewRuleInputs] = useState<
-    Record<
-      string,
-      {
-        name: string;
-        field: string;
-        contains: string;
-        action: string;
-        target: string;
-      }
-    >
-  >(() => {
-    const contains = initialRuleSeed?.contains.trim() ?? "";
-    if (!initialRuleSeed || !contains) return {};
-    return {
-      [initialRuleSeed.accountId]: {
-        name: contains.slice(0, 80),
-        field: seedField(initialRuleSeed.field),
-        contains: contains.slice(0, 200),
-        action: "move_archive",
-        target: "",
-      },
-    };
+  const accountSettings = useSettingsAccountManagement({
+    onClose,
+    onLastAccountRemoved,
+    update,
   });
-  const [ruleStatus, setRuleStatus] = useState<Record<string, string>>({});
+  const ruleSettings = useSettingsFilterRules({
+    enabled: tab === "accounts",
+    initialRuleSeed,
+  });
+  const storageSettings = useSettingsStorage();
+  const { distribution, windowFxSupported } = useSettingsCapabilities();
+  const { updateStatus, checkingUpdate, checkForUpdates } = useSettingsUpdates({
+    distribution,
+  });
+  const threatSettings = useSettingsThreatProtection({ update });
+  const {
+    testingAccountId,
+    testedHealthy,
+    testAccount,
+    removeAccount,
+    passwordInputs,
+    setPasswordInputs,
+    passwordStatus,
+    updatingPasswordId,
+    handleUpdatePassword,
+    nameInputs,
+    setNameInputs,
+    nameStatus,
+    savingNameId,
+    handleSaveName,
+    replyToInputs,
+    setReplyToInputs,
+    replyToStatus,
+    savingReplyToId,
+    handleSaveReplyTo,
+    signatureInputs,
+    setSignatureInputs,
+    signatureHtmlInputs,
+    setSignatureHtmlInputs,
+    signatureStatus,
+    savingSignatureId,
+    handleSaveSignature,
+    detectingAliasesAccountId,
+    handleDetectAliases,
+    aliasStatus,
+    newAliasInputs,
+    setNewAliasInputs,
+    handleAddAlias,
+    handleRemoveAlias,
+  } = accountSettings;
+  const {
+    accountMailboxes,
+    filterRules,
+    ruleInput,
+    ruleStatus,
+    setRuleField,
+    handleAddRule,
+    handlePreviewRule,
+    handleMoveRule,
+    handleToggleRule,
+    handleDeleteRule,
+  } = ruleSettings;
+  const {
+    usage,
+    dataBusy,
+    dataStatus,
+    eraseBusy,
+    eraseStatus,
+    clearCache,
+    retryAttachmentCleanup,
+    exportSettings,
+    importSettings,
+    eraseAllData,
+  } = storageSettings;
+  const {
+    confirmThreatOff,
+    confirmToken,
+    setConfirmToken,
+    confirmInputRef,
+    cancelThreatOff,
+    setAdvertisingBlocking,
+    setThreatBlocking,
+    confirmDisableThreats,
+  } = threatSettings;
   const hasDirtyForms =
     connectionDirty ||
-    Object.entries(nameInputs).some(
-      ([id, value]) =>
-        value !==
-        (accounts.find((account) => account.id === id)?.displayName ?? ""),
-    ) ||
-    Object.entries(replyToInputs).some(
-      ([id, value]) =>
-        value !==
-        (accounts.find((account) => account.id === id)?.replyTo ?? ""),
-    ) ||
-    Object.entries(signatureInputs).some(
-      ([id, value]) =>
-        value !==
-        (accounts.find((account) => account.id === id)?.signature ?? ""),
-    ) ||
-    Object.values(newRuleInputs).some(
-      (draft) =>
-        draft.name !== "" ||
-        draft.contains !== "" ||
-        draft.field !== "from" ||
-        draft.action !== "mark_read" ||
-        draft.target !== "",
-    );
+    accountSettings.hasDirtyForms ||
+    ruleSettings.hasDirtyForms;
+  const discardAccountForms = accountSettings.discardUnsavedForms;
+  const discardRuleForms = ruleSettings.discardUnsavedForms;
   const confirmDiscard = useCallback(async () => {
     if (!hasDirtyForms) return true;
     if (discardBusy.current) return false;
@@ -251,10 +200,9 @@ export function SettingsDialog({
         ))
       )
         return false;
-      setSignatureInputs({});
-      setNewRuleInputs({});
+      discardAccountForms();
+      discardRuleForms();
       setConnectionDirty(false);
-      setPasswordInputs({});
       return true;
     } catch (cause) {
       setSaveError(String(cause));
@@ -262,7 +210,7 @@ export function SettingsDialog({
     } finally {
       discardBusy.current = false;
     }
-  }, [hasDirtyForms]);
+  }, [discardAccountForms, hasDirtyForms, discardRuleForms]);
   const openAccountOutbox = useCallback(
     async (accountId: string) => {
       if (!(await confirmDiscard())) return;
@@ -275,8 +223,7 @@ export function SettingsDialog({
   );
   const requestClose = useCallback(() => {
     if (confirmThreatOff) {
-      setConfirmThreatOff(false);
-      setConfirmToken("");
+      cancelThreatOff();
       return;
     }
     void confirmDiscard()
@@ -284,7 +231,7 @@ export function SettingsDialog({
         if (leave) onClose();
       })
       .catch((cause) => setSaveError(String(cause)));
-  }, [confirmThreatOff, confirmDiscard, onClose]);
+  }, [cancelThreatOff, confirmThreatOff, confirmDiscard, onClose]);
   const dialogRef = useDialogFocus(requestClose);
   async function changeTab(next: SettingsTab) {
     if (next === tab) return true;
@@ -395,15 +342,6 @@ export function SettingsDialog({
     return () => window.cancelAnimationFrame(frame);
   }, [tab, query, searchTarget]);
 
-  const handleUpdateFound = useCallback<UpdateFoundListener>((version) => {
-    setUpdateStatus(strings.settings.installing(version ?? ""));
-  }, []);
-
-  useEffect(() => {
-    addUpdateFoundListener(handleUpdateFound);
-    return () => removeUpdateFoundListener(handleUpdateFound);
-  }, [handleUpdateFound]);
-
   useEffect(() => {
     if (typeof window.matchMedia !== "function") return;
     const media = window.matchMedia("(max-width: 760px)");
@@ -414,624 +352,8 @@ export function SettingsDialog({
   }, []);
 
   useEffect(() => {
-    if (tab !== "accounts") return;
-    let active = true;
-    void api
-      .listAllMailboxes()
-      .then((mailboxes) => {
-        if (active) setAccountMailboxes(mailboxes);
-      })
-      .catch(() => undefined);
-    void (async () => {
-      for (const account of accounts) {
-        try {
-          const rules = (await api.listFilterRules(account.id)) ?? [];
-          if (active) {
-            setFilterRules((prev) => {
-              const existing = prev[account.id] ?? [];
-              const merged = [...existing];
-              for (const rule of rules) {
-                if (!merged.some((item) => item.id === rule.id)) {
-                  merged.push(rule);
-                }
-              }
-              return { ...prev, [account.id]: merged };
-            });
-          }
-        } catch {
-          // Rules stay empty; the form below still works.
-        }
-      }
-    })();
-    return () => {
-      active = false;
-    };
-  }, [tab, accounts]);
-  useEffect(() => {
-    let active = true;
-    void api
-      .cacheUsage()
-      .then((u) => {
-        if (active) setUsage(u);
-      })
-      .catch(() => undefined);
-    void api
-      .distribution()
-      .then((d) => {
-        if (active) setDistribution(d);
-      })
-      .catch(() => undefined);
-    void supportsWorkspaceWindowFx().then((supported) => {
-      if (active) setWindowFxSupported(supported);
-    });
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!confirmThreatOff) return;
-    const timer = window.setTimeout(() => confirmInputRef.current?.focus(), 0);
-    return () => window.clearTimeout(timer);
-  }, [confirmThreatOff]);
-
-  useEffect(() => {
     if (settingsContentRef.current) settingsContentRef.current.scrollTop = 0;
   }, [tab]);
-
-  function cancelThreatOff() {
-    setConfirmThreatOff(false);
-    setConfirmToken("");
-  }
-
-  async function setAdvertisingBlocking(enabled: boolean) {
-    if (!enabled) {
-      const confirmed = await api.showNativeConfirm(
-        strings.settings.disableAdblockTitle,
-        strings.settings.disableAdblockQuestion,
-      );
-      if (!confirmed) return;
-    }
-    await update({ blockAdvertisingAndTracking: enabled });
-  }
-
-  async function setThreatBlocking(enabled: boolean) {
-    if (!enabled) {
-      setConfirmToken("");
-      setConfirmThreatOff(true);
-      return;
-    }
-    await update({ blockReportedThreats: true });
-  }
-
-  async function confirmDisableThreats() {
-    if (confirmToken !== strings.settings.threatDisableToken) return;
-    cancelThreatOff();
-    await update(
-      { blockReportedThreats: false },
-      strings.settings.threatDisableToken,
-    );
-  }
-
-  async function clearCache() {
-    const confirmed = await api.showNativeConfirm(
-      strings.settings.clearMail,
-      strings.settings.clearMailQuestion,
-    );
-    if (!confirmed) return;
-    try {
-      await api.clearCache();
-      setUsage(await api.cacheUsage());
-    } catch (cause) {
-      setError(String(cause));
-    }
-  }
-
-  async function retryAttachmentCleanup() {
-    try {
-      const leftovers = await api.retryAttachmentCleanup();
-      setUsage((current) =>
-        current ? { ...current, attachmentLeftovers: leftovers } : current,
-      );
-    } catch (cause) {
-      setError(String(cause));
-    }
-  }
-
-  async function exportSettings() {
-    if (dataBusy) return;
-    setDataBusy(true);
-    setDataStatus(undefined);
-    try {
-      if (await api.exportSettings())
-        setDataStatus(strings.settings.exportSaved);
-    } catch (cause) {
-      setError(String(cause));
-    } finally {
-      setDataBusy(false);
-    }
-  }
-
-  async function importSettings() {
-    if (dataBusy) return;
-    const confirmed = await api.showNativeConfirm(
-      strings.settings.importSettings,
-      strings.settings.importQuestion,
-    );
-    if (!confirmed) return;
-    setDataBusy(true);
-    setDataStatus(undefined);
-    try {
-      const imported = await api.importSettings();
-      if (imported) {
-        setSettings(imported);
-        applySettings(imported);
-        setDataStatus(strings.settings.importApplied);
-      }
-    } catch (cause) {
-      setError(String(cause));
-    } finally {
-      setDataBusy(false);
-    }
-  }
-
-  async function eraseAllData() {
-    if (eraseBusy) return;
-    const confirmed = await api.showNativeConfirm(
-      strings.settings.eraseTitle,
-      strings.settings.eraseQuestion,
-    );
-    if (!confirmed) return;
-    setEraseBusy(true);
-    setEraseStatus(undefined);
-    try {
-      await api.eraseAllData();
-      await api.relaunch();
-    } catch (cause) {
-      setEraseStatus(strings.settings.eraseFailed);
-      setError(String(cause));
-    } finally {
-      setEraseBusy(false);
-    }
-  }
-
-  const checkForUpdates = useCallback(async () => {
-    if (checkingUpdate || distribution?.updatesManagedBy !== "postalSnap")
-      return;
-    setCheckingUpdate(true);
-    setUpdateStatus(strings.settings.checking);
-    try {
-      await checkUpdateInteractive();
-    } catch (cause) {
-      setError(String(cause));
-    } finally {
-      setCheckingUpdate(false);
-      setUpdateStatus(strings.settings.checkUpdates);
-    }
-  }, [checkingUpdate, distribution, setError]);
-
-  async function removeAccount(id: string, name: string) {
-    try {
-      const impact = await api.getAccountRemovalImpact(id);
-      const hasLocalWork =
-        impact.unsentMessages > 0 ||
-        impact.unsyncedDrafts > 0 ||
-        impact.queuedChanges > 0;
-      const confirmed = await api.showNativeConfirm(
-        strings.common.remove,
-        hasLocalWork
-          ? strings.settings.removeAccountWithImpact(
-              name,
-              impact.unsentMessages,
-              impact.unsyncedDrafts,
-              impact.queuedChanges,
-            )
-          : strings.settings.removeAccount(name),
-      );
-      if (!confirmed) return;
-      const result = await api.removeAccount(id);
-      // Rust prunes these too, but a later full save from this copy would
-      // write them back, so drop them here through the same save queue.
-      const latest = useAppStore.getState().settings;
-      const keep = (entry: { accountId: string }) => entry.accountId !== id;
-      const pruned = {
-        lastFromAddresses: (latest.lastFromAddresses ?? []).filter(keep),
-        mailboxViews: (latest.mailboxViews ?? []).filter(keep),
-        pinnedMailboxes: (latest.pinnedMailboxes ?? []).filter(keep),
-        hiddenMailboxes: (latest.hiddenMailboxes ?? []).filter(keep),
-        collapsedMailboxes: (latest.collapsedMailboxes ?? []).filter(keep),
-      };
-      if (
-        Object.entries(pruned).some(
-          ([key, value]) =>
-            value.length !==
-            ((latest[key as keyof typeof pruned] as unknown[] | undefined)
-              ?.length ?? 0),
-        )
-      ) {
-        void update(pruned, undefined, { quiet: true });
-      }
-      const remaining = await api.listAccounts();
-      setAccounts(remaining);
-      if (result?.cleanupPending) {
-        setError(strings.settings.accountCleanupWarning);
-      } else if (result?.diskSpacePending) {
-        setError(strings.settings.accountDiskSpacePending);
-      }
-      if (remaining.length === 0) {
-        onLastAccountRemoved?.();
-        onClose();
-      }
-    } catch (cause) {
-      setError(String(cause));
-    }
-  }
-
-  async function testAccount(id: string) {
-    if (testingAccountId) return;
-    setTestingAccountId(id);
-    setTestedHealthy(undefined);
-    try {
-      await api.testSavedAccount(id);
-      setTestedHealthy(id);
-    } catch (cause) {
-      setError(String(cause));
-    } finally {
-      setTestingAccountId(undefined);
-    }
-  }
-
-  async function handleDetectAliases(accountId: string) {
-    if (detectingAliasesAccountId) return;
-    setDetectingAliasesAccountId(accountId);
-    try {
-      const updated = await api.discoverAccountAliases(accountId);
-      const remaining = await api.listAccounts();
-      setAccounts(remaining);
-      const count = updated.aliases?.length ?? 0;
-      setAliasStatus((prev) => ({
-        ...prev,
-        [accountId]: strings.settings.aliasesFound(count),
-      }));
-    } catch (cause) {
-      setError(String(cause));
-    } finally {
-      setDetectingAliasesAccountId(undefined);
-    }
-  }
-
-  async function handleAddAlias(accountId: string) {
-    const input = (newAliasInputs[accountId] ?? "").trim().toLowerCase();
-    if (!input || !/^[^\s@<>]+@[^\s@<>]+$/.test(input)) {
-      setError(strings.settings.aliasInvalid);
-      return;
-    }
-    const acc = useAppStore.getState().accounts.find((a) => a.id === accountId);
-    if (!acc) return;
-    const current = acc.aliases ?? [];
-    if (current.includes(input) || acc.email.toLowerCase() === input) {
-      setNewAliasInputs((prev) => ({ ...prev, [accountId]: "" }));
-      return;
-    }
-    try {
-      await api.updateAccountAliases(accountId, [...current, input]);
-      const remaining = await api.listAccounts();
-      setAccounts(remaining);
-      setNewAliasInputs((prev) => ({ ...prev, [accountId]: "" }));
-      setAliasStatus((prev) => ({
-        ...prev,
-        [accountId]: strings.settings.aliasAdded(input),
-      }));
-    } catch (cause) {
-      setError(String(cause));
-    }
-  }
-
-  async function handleRemoveAlias(accountId: string, alias: string) {
-    const confirmed = await api.showNativeConfirm(
-      strings.settings.aliasesTitle,
-      strings.settings.removeAliasConfirm(alias),
-    );
-    if (!confirmed) return;
-    const acc = useAppStore.getState().accounts.find((a) => a.id === accountId);
-    if (!acc) return;
-    const remainingAliases = (acc.aliases ?? []).filter((a) => a !== alias);
-    try {
-      await api.updateAccountAliases(accountId, remainingAliases);
-      const remaining = await api.listAccounts();
-      setAccounts(remaining);
-    } catch (cause) {
-      setError(String(cause));
-    }
-  }
-
-  async function handleUpdatePassword(accountId: string) {
-    if (updatingPasswordId) return;
-    const rawPassword = passwordInputs[accountId] ?? "";
-    if (!rawPassword) return;
-    const account = accounts.find((item) => item.id === accountId);
-    const password = preparePassword(
-      account?.provider ?? "manual",
-      rawPassword,
-    );
-    setUpdatingPasswordId(accountId);
-    try {
-      await api.updateAccountPassword(accountId, password);
-      const remaining = await api.listAccounts();
-      setAccounts(remaining);
-      setPasswordInputs((prev) => ({ ...prev, [accountId]: "" }));
-      setPasswordStatus((prev) => ({
-        ...prev,
-        [accountId]: strings.settings.passwordUpdated,
-      }));
-    } catch (cause) {
-      setError(String(cause));
-    } finally {
-      setUpdatingPasswordId(undefined);
-    }
-  }
-
-  async function handleSaveName(accountId: string) {
-    if (savingNameId) return;
-    const account = accounts.find((item) => item.id === accountId);
-    const value = (nameInputs[accountId] ?? account?.displayName ?? "").trim();
-    if (!value) {
-      setError(strings.settings.accountNameHelp);
-      return;
-    }
-    setSavingNameId(accountId);
-    try {
-      const updated = await api.updateAccountDisplayName(accountId, value);
-      setAccounts(
-        useAppStore
-          .getState()
-          .accounts.map((item) => (item.id === accountId ? updated : item)),
-      );
-      setNameInputs((prev) => ({
-        ...prev,
-        [accountId]: updated.displayName,
-      }));
-      setNameStatus((prev) => ({
-        ...prev,
-        [accountId]: strings.settings.accountNameSaved,
-      }));
-    } catch (cause) {
-      setError(String(cause));
-    } finally {
-      setSavingNameId(undefined);
-    }
-  }
-
-  async function handleSaveReplyTo(accountId: string) {
-    if (savingReplyToId) return;
-    const account = accounts.find((item) => item.id === accountId);
-    const value = (replyToInputs[accountId] ?? account?.replyTo ?? "").trim();
-    if (value && !oneReplyAddress(value)) {
-      setReplyToStatus((prev) => ({
-        ...prev,
-        [accountId]: strings.settings.replyToAddressInvalid,
-      }));
-      return;
-    }
-    setSavingReplyToId(accountId);
-    try {
-      const updated = await api.updateAccountReplyTo(accountId, value);
-      setAccounts(
-        useAppStore
-          .getState()
-          .accounts.map((item) => (item.id === accountId ? updated : item)),
-      );
-      setReplyToInputs((prev) => ({
-        ...prev,
-        [accountId]: updated.replyTo ?? "",
-      }));
-      setReplyToStatus((prev) => ({
-        ...prev,
-        [accountId]: strings.settings.replyToAddressSaved,
-      }));
-    } catch (cause) {
-      setError(String(cause));
-    } finally {
-      setSavingReplyToId(undefined);
-    }
-  }
-
-  async function handleSaveSignature(accountId: string, fallback: string) {
-    if (savingSignatureId) return;
-    setSavingSignatureId(accountId);
-    try {
-      const value = signatureInputs[accountId] ?? fallback;
-      const updated = await api.updateAccountSignature(accountId, value);
-      setAccounts(
-        useAppStore
-          .getState()
-          .accounts.map((item) => (item.id === accountId ? updated : item)),
-      );
-      setSignatureInputs((prev) => ({
-        ...prev,
-        [accountId]: updated.signature ?? "",
-      }));
-      setSignatureStatus((prev) => ({
-        ...prev,
-        [accountId]: strings.settings.signatureSaved,
-      }));
-    } catch (cause) {
-      setError(String(cause));
-    } finally {
-      setSavingSignatureId(undefined);
-    }
-  }
-
-  function ruleInput(accountId: string): {
-    name: string;
-    field: string;
-    contains: string;
-    action: string;
-    target: string;
-  } {
-    return (
-      newRuleInputs[accountId] ?? {
-        name: "",
-        field: "from",
-        contains: "",
-        action: "mark_read",
-        target: "",
-      }
-    );
-  }
-
-  function setRuleField(accountId: string, patch: Record<string, string>) {
-    setNewRuleInputs((prev) => ({
-      ...prev,
-      [accountId]: { ...ruleInput(accountId), ...patch },
-    }));
-  }
-
-  async function handleAddRule(accountId: string) {
-    const input = ruleInput(accountId);
-    const name = input.name.trim() || input.contains.trim();
-    if (!name) {
-      setError(strings.settings.ruleNameRequired);
-      return;
-    }
-    if (!input.contains.trim()) {
-      setError(strings.settings.ruleMatchRequired);
-      return;
-    }
-    try {
-      const created = await api.createFilterRule({
-        id: "",
-        accountId,
-        name,
-        field: input.field as FilterRule["field"],
-        contains: input.contains,
-        action: input.action as FilterRule["action"],
-        targetMailbox:
-          input.action === "move_mailbox" ? (input.target ?? "") : null,
-        enabled: true,
-      });
-      setFilterRules((prev) => {
-        const existing = prev[accountId] ?? [];
-        if (existing.some((item) => item.id === created.id)) return prev;
-        return { ...prev, [accountId]: [...existing, created] };
-      });
-      setNewRuleInputs((prev) => ({
-        ...prev,
-        [accountId]: {
-          name: "",
-          field: "from",
-          contains: "",
-          action: "mark_read",
-          target: "",
-        },
-      }));
-      setRuleStatus((prev) => ({
-        ...prev,
-        [accountId]: strings.settings.ruleSaved,
-      }));
-    } catch (cause) {
-      setError(String(cause));
-    }
-  }
-
-  async function handlePreviewRule(accountId: string) {
-    const input = ruleInput(accountId);
-    if (!input.contains.trim()) {
-      setError(strings.settings.ruleMatchRequired);
-      return;
-    }
-    try {
-      const preview = await api.previewFilterRule({
-        id: "",
-        accountId,
-        name: input.name.trim() || "Preview",
-        field: input.field as FilterRule["field"],
-        contains: input.contains,
-        action: input.action as FilterRule["action"],
-        targetMailbox:
-          input.action === "move_mailbox" ? (input.target ?? "") : null,
-        enabled: true,
-      });
-      const summary = preview.capped
-        ? strings.settings.ruleMatchesCapped
-        : preview.matched === 0
-          ? strings.settings.ruleMatchesNone
-          : strings.settings.ruleMatchesSome(preview.matched);
-      const examples = preview.subjects.filter(Boolean);
-      setRuleStatus((prev) => ({
-        ...prev,
-        [accountId]:
-          examples.length > 0
-            ? `${summary} ${strings.settings.ruleMatchSample(examples.join(", "))}`
-            : summary,
-      }));
-    } catch (cause) {
-      setError(String(cause));
-    }
-  }
-
-  async function handleMoveRule(
-    accountId: string,
-    ruleId: string,
-    direction: -1 | 1,
-  ) {
-    const rules = filterRules[accountId] ?? [];
-    const index = rules.findIndex((rule) => rule.id === ruleId);
-    const next = index + direction;
-    if (index < 0 || next < 0 || next >= rules.length) return;
-    const ordered = [...rules];
-    const [moved] = ordered.splice(index, 1);
-    ordered.splice(next, 0, moved);
-    try {
-      const saved = await api.reorderFilterRules(
-        accountId,
-        ordered.map((rule) => rule.id),
-      );
-      setFilterRules((prev) => ({ ...prev, [accountId]: saved }));
-    } catch (cause) {
-      setError(String(cause));
-    }
-  }
-
-  async function handleToggleRule(accountId: string, rule: FilterRule) {
-    try {
-      const updated = await api.updateFilterRule({
-        ...rule,
-        enabled: !rule.enabled,
-      });
-      setFilterRules((prev) => ({
-        ...prev,
-        [accountId]: (prev[accountId] ?? []).map((item) =>
-          item.id === rule.id ? updated : item,
-        ),
-      }));
-    } catch (cause) {
-      setError(String(cause));
-    }
-  }
-
-  async function handleDeleteRule(accountId: string, rule: FilterRule) {
-    const confirmed = await api.showNativeConfirm(
-      strings.settings.rulesTitle,
-      strings.settings.removeRuleConfirm(rule.name),
-    );
-    if (!confirmed) return;
-    try {
-      await api.deleteFilterRule(accountId, rule.id);
-      setFilterRules((prev) => ({
-        ...prev,
-        [accountId]: (prev[accountId] ?? []).filter(
-          (item) => item.id !== rule.id,
-        ),
-      }));
-      setRuleStatus((prev) => ({
-        ...prev,
-        [accountId]: strings.settings.ruleRemoved,
-      }));
-    } catch (cause) {
-      setError(String(cause));
-    }
-  }
 
   function moveTab(event: KeyboardEvent<HTMLButtonElement>, index: number) {
     const directionKeys = horizontalTabs
@@ -1257,6 +579,8 @@ export function SettingsDialog({
                     handleSaveReplyTo={handleSaveReplyTo}
                     signatureInputs={signatureInputs}
                     setSignatureInputs={setSignatureInputs}
+                    signatureHtmlInputs={signatureHtmlInputs}
+                    setSignatureHtmlInputs={setSignatureHtmlInputs}
                     signatureStatus={signatureStatus}
                     savingSignatureId={savingSignatureId}
                     handleSaveSignature={handleSaveSignature}

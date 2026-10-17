@@ -97,6 +97,11 @@ export const settings = {
   dark: "Dark",
   spacing: "Interface spacing",
   spacingHelp: "Comfortable is easiest to scan. Compact shows more mail.",
+  badgeScope: "Unread badge",
+  badgeScopeHelp:
+    "Show unread Inbox mail for the active account or across all accounts.",
+  badgeScopeActiveInbox: "Active account Inbox",
+  badgeScopeAllInboxes: "All account Inboxes",
   sidebar: "Mailboxes sidebar",
   sidebarHelp: "Keep account folders visible beside your messages.",
   comfortable: "Comfortable",
@@ -199,6 +204,10 @@ export const settings = {
   shortcutJunkFocused: "Mark the focused message as junk",
   shortcutReplyFocused: "Reply to the focused message",
   shortcutReplyAllFocused: "Reply all to the focused message",
+  shortcutSwitchAccount: "Switch account",
+  shortcutReadingPaneRight: "Reading pane on the right",
+  shortcutReadingPaneBottom: "Reading pane below",
+  shortcutReadingPaneHidden: "Hide reading pane",
   cachePolicy: "Cache policy",
   cachePolicyHelp: "Control how long downloaded messages are kept locally.",
   cacheMode: "Mail to keep",
@@ -208,6 +217,9 @@ export const settings = {
   cacheDays: "Keep mail for",
   cacheDaysOption: (days: number) => `${days} days`,
   cacheLimit: "Maximum cache size",
+  keepAttachmentsOffline: "Keep attachments for offline use",
+  keepAttachmentsOfflineHelp:
+    "Download attachments with new mail so they open without a connection. Uses more storage.",
   accountDownload: "Mail kept for this account",
   accountDownloadHelp:
     "This account can keep a different amount of mail than the Storage setting.",
@@ -246,8 +258,17 @@ export const settings = {
   saveAccountName: "Save name",
   signature: "Email signature",
   signatureHelp:
-    "Added automatically when sending. Plain text, up to 2000 characters.",
+    "Added automatically when sending. Format it for rich messages and provide a plain-text fallback.",
   signaturePlaceholder: "Best regards,\nSam",
+  signatureRich: "Rich signature",
+  signatureEditorHelp:
+    "Shown in rich messages. Plain-text messages use the fallback below.",
+  signatureFallbackHelp:
+    "Used for messages sent as plain text, up to 2000 characters.",
+  signatureFormatting: "Signature formatting",
+  signatureBold: "Bold",
+  signatureItalic: "Italic",
+  signatureUnderline: "Underline",
   signatureSaved: "Signature saved.",
   newMessageFormat: "New messages start as",
   newMessageFormatHelp:

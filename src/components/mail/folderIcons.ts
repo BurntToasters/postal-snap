@@ -5,7 +5,7 @@ import {
   Inbox,
   Send,
   ShieldAlert,
-  Trash2,
+  Trash,
 } from "lucide-react";
 import type { MailboxRole } from "../../types";
 
@@ -14,7 +14,7 @@ export const folderIcons: Record<MailboxRole, typeof Inbox> = {
   sent: Send,
   drafts: FileText,
   archive: Archive,
-  trash: Trash2,
+  trash: Trash,
   junk: ShieldAlert,
   other: Folder,
 };

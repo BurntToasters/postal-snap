@@ -8,10 +8,16 @@
 @import "./styles/avatars.css";
 @import "./styles/setup.css";
 @import "./styles/mail.css";
+@import "./styles/mail-toolbar.css";
+@import "./styles/mail-sidebar.css";
+@import "./styles/mail-list.css";
+@import "./styles/mail-toolbar-popups.css";
 @import "./styles/reader.css";
 @import "./styles/composer.css";
 @import "./styles/settings.css";
 @import "./styles/status.css";
+@import "./styles/notices.css";
+@import "./styles/palette.css";
 @import "./styles/density.css";
 @import "./styles/responsive.css";
 @import "./styles/a11y.css";

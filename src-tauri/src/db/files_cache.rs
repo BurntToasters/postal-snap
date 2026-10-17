@@ -1,198 +1,21 @@
-use super::{adjust_mailbox_counts, db_error, Database};
+use super::{db_error, Database};
 use rusqlite::{params, OptionalExtension};
 use std::path::Path;
 
 use crate::models::{AppSettings, CachePolicy, CacheUsage};
 
+/// Shared with the schema tests so `EXPLAIN QUERY PLAN` checks the real text.
+/// Its ORDER BY must match the `messages_prefetch_order` index expression.
+pub(super) const PREFETCH_CANDIDATES_SQL: &str = "SELECT uid, received_at, size FROM messages
+     WHERE mailbox_id=?1 AND body_bytes=0 AND LENGTH(raw_message)=0 AND body_partial=0 AND size<=?2
+     AND prefetch_failures<5 AND parse_pending<2
+     AND (prefetch_retry_at IS NULL OR prefetch_retry_at<=strftime('%Y-%m-%dT%H:%M:%S+00:00','now'))
+     AND (?3 IS NULL OR julianday(COALESCE(internal_at,received_at)) >= julianday(?3))
+     ORDER BY COALESCE(internal_at,received_at) DESC, uid DESC
+     LIMIT ?4";
+
 database_operations! {
 impl Database {
-    pub fn record_flag_change(
-        &self,
-        account_id: &str,
-        message_id: i64,
-        is_read: Option<bool>,
-        is_starred: Option<bool>,
-        queued: Option<&serde_json::Value>,
-    ) -> Result<(), String> {
-        let mut conn = self.conn()?;
-        let tx = conn.transaction().map_err(db_error)?;
-        let (
-            source_mailbox_id,
-            pending_destination_id,
-            was_read,
-            source_overlay_active,
-            destination_overlay_active,
-        ): (i64, Option<i64>, bool, bool, bool) = tx
-            .query_row(
-                "SELECT m.mailbox_id,m.pending_move_to,m.is_read != 0,
-                         COALESCE(m.pending_move_to IS NOT NULL AND m.pending_source_generation=s.counts_generation,0),
-                         COALESCE(m.pending_move_to IS NOT NULL AND m.pending_destination_generation=d.counts_generation,0)
-                 FROM messages m JOIN mailboxes s ON s.id=m.mailbox_id
-                 LEFT JOIN mailboxes d ON d.id=m.pending_move_to
-                 WHERE m.id=?1 AND m.account_id=?2",
-                params![message_id, account_id],
-                |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                    ))
-                },
-            )
-            .optional()
-            .map_err(db_error)?
-            .ok_or_else(|| "Message not found.".to_string())?;
-        let operations: Vec<(i64, String)> = {
-            let mut statement = tx.prepare(
-                "SELECT id,payload FROM offline_ops WHERE account_id=?1 AND kind='flags' AND json_valid(payload) AND json_extract(payload,'$.messageId')=?2 ORDER BY id"
-            ).map_err(db_error)?;
-            let rows = statement
-                .query_map(params![account_id, message_id], |row| {
-                    Ok((row.get(0)?, row.get(1)?))
-                })
-                .map_err(db_error)?
-                .collect::<Result<_, _>>()
-                .map_err(db_error)?;
-            rows
-        };
-        for (id, payload) in operations {
-            let mut operation: serde_json::Value = serde_json::from_str(&payload)
-                .map_err(|_| "Queued flag change could not be read.".to_string())?;
-            if is_read.is_some() {
-                operation["isRead"] = serde_json::Value::Null;
-            }
-            if is_starred.is_some() {
-                operation["isStarred"] = serde_json::Value::Null;
-            }
-            let has_read = !operation["isRead"].is_null();
-            let has_star = !operation["isStarred"].is_null();
-            if !has_read && !has_star {
-                tx.execute("DELETE FROM offline_ops WHERE id=?1", [id])
-                    .map_err(db_error)?;
-                continue;
-            }
-            let dedupe = format!("flags:{message_id}:{has_read}:{has_star}");
-            let collision: Option<i64> = tx
-                .query_row(
-                    "SELECT id FROM offline_ops WHERE account_id=?1 AND dedupe_key=?2 AND id<>?3",
-                    params![account_id, dedupe, id],
-                    |row| row.get(0),
-                )
-                .optional()
-                .map_err(db_error)?;
-            if let Some(other_id) = collision {
-                let older = id.min(other_id);
-                tx.execute("DELETE FROM offline_ops WHERE id=?1", [older])
-                    .map_err(db_error)?;
-                if older == id {
-                    continue;
-                }
-            }
-            tx.execute(
-                "UPDATE offline_ops SET payload=?2,dedupe_key=?3 WHERE id=?1",
-                params![id, operation.to_string(), dedupe],
-            )
-            .map_err(db_error)?;
-        }
-        if let Some(operation) = queued {
-            for (read, star) in [(is_read, None), (None, is_starred)] {
-                if read.is_none() && star.is_none() {
-                    continue;
-                }
-                let mut field = operation.clone();
-                field["isRead"] = read
-                    .map(serde_json::Value::Bool)
-                    .unwrap_or(serde_json::Value::Null);
-                field["isStarred"] = star
-                    .map(serde_json::Value::Bool)
-                    .unwrap_or(serde_json::Value::Null);
-                let dedupe = format!("flags:{message_id}:{}:{}", read.is_some(), star.is_some());
-                tx.execute(
-                    "INSERT INTO offline_ops(account_id,kind,payload,dedupe_key) VALUES(?1,'flags',?2,?3)
-                     ON CONFLICT(account_id,dedupe_key) DO UPDATE SET payload=excluded.payload,created_at=CURRENT_TIMESTAMP",
-                    params![account_id, field.to_string(), dedupe],
-                ).map_err(db_error)?;
-            }
-        }
-        tx.execute(
-            "UPDATE messages SET is_read=COALESCE(?2,is_read),is_starred=COALESCE(?3,is_starred) WHERE id=?1",
-            params![message_id, is_read.map(i32::from), is_starred.map(i32::from)],
-        ).map_err(db_error)?;
-        if let Some(is_read) = is_read.filter(|value| *value != was_read) {
-            let delta = if is_read { -1 } else { 1 };
-            if pending_destination_id.is_none() || !source_overlay_active {
-                adjust_mailbox_counts(&tx, source_mailbox_id, 0, Some(delta))?;
-            }
-            if let Some(destination_id) =
-                pending_destination_id.filter(|_| destination_overlay_active)
-            {
-                adjust_mailbox_counts(&tx, destination_id, 0, Some(delta))?;
-            }
-        }
-        tx.commit().map_err(db_error)
-    }
-
-    pub fn queue_operation<T: serde::Serialize>(
-        &self,
-        account_id: &str,
-        kind: &str,
-        payload: &T,
-        dedupe_key: Option<&str>,
-    ) -> Result<(), String> {
-        let json = serde_json::to_string(payload)
-            .map_err(|_| "Could not queue the offline change.".to_string())?;
-        self.conn()?
-            .execute(
-                "INSERT INTO offline_ops(account_id,kind,payload,dedupe_key) VALUES(?1,?2,?3,?4)
-                 ON CONFLICT(account_id,dedupe_key) DO UPDATE SET kind=excluded.kind,payload=excluded.payload,created_at=CURRENT_TIMESTAMP",
-                params![account_id, kind, json, dedupe_key],
-            )
-            .map_err(db_error)?;
-        Ok(())
-    }
-
-    pub fn queued_operations(
-        &self,
-        account_id: &str,
-    ) -> Result<Vec<(i64, String, String)>, String> {
-        let conn = self.conn()?;
-        let mut statement = conn
-            .prepare("SELECT id,kind,payload FROM offline_ops WHERE account_id=?1 ORDER BY id")
-            .map_err(db_error)?;
-        let rows = statement
-            .query_map([account_id], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-            })
-            .map_err(db_error)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
-    }
-
-    pub fn remove_operation(&self, account_id: &str, id: i64) -> Result<(), String> {
-        self.conn()?
-            .execute(
-                "DELETE FROM offline_ops WHERE id=?1 AND account_id=?2",
-                params![id, account_id],
-            )
-            .map_err(db_error)?;
-        Ok(())
-    }
-
-    pub fn remove_operation_by_dedupe(
-        &self,
-        account_id: &str,
-        dedupe_key: &str,
-    ) -> Result<(), String> {
-        self.conn()?
-            .execute(
-                "DELETE FROM offline_ops WHERE account_id=?1 AND dedupe_key=?2",
-                params![account_id, dedupe_key],
-            )
-            .map_err(db_error)?;
-        Ok(())
-    }
-
     pub fn grant_file(
         &self,
         token: &str,
@@ -398,7 +221,7 @@ impl Database {
             .map_err(db_error)?;
         transaction
             .execute(
-                "UPDATE messages SET preview='',text_body='',html_body=NULL,raw_message=X'',body_bytes=0,
+                "UPDATE messages SET preview='',text_body='',html_body=NULL,raw_message=X'',body_bytes=0,body_partial=0,
                  prefetch_failures=0,prefetch_retry_at=NULL",
                 [],
             )
@@ -413,7 +236,7 @@ impl Database {
         let transaction = conn.transaction().map_err(db_error)?;
         clear_bodies(
             &transaction,
-            "account_id=?1 AND body_bytes>0",
+            "account_id=?1 AND (body_bytes>0 OR body_partial=1)",
             params![account_id],
         )?;
         transaction.commit().map_err(db_error)
@@ -583,19 +406,25 @@ impl Database {
         budget_bytes: u64,
         max_item_bytes: u64,
     ) -> Result<Vec<(u32, String)>, String> {
+        Ok(self
+            .prefetch_candidate_rows(mailbox_id, policy, limit, budget_bytes, max_item_bytes)?
+            .into_iter()
+            .map(|(uid, received_at, _)| (uid, received_at))
+            .collect())
+    }
+
+    /// Candidates with their declared sizes, so the fetch can pick a prefix.
+    pub fn prefetch_candidate_rows(
+        &self,
+        mailbox_id: i64,
+        policy: &CachePolicy,
+        limit: u32,
+        budget_bytes: u64,
+        max_item_bytes: u64,
+    ) -> Result<Vec<(u32, String, u64)>, String> {
         let cutoff = policy.cutoff().map(crate::mail::parse::canonical_time);
         let conn = self.conn()?;
-        let mut statement = conn
-            .prepare(
-                "SELECT uid, received_at, size FROM messages
-                 WHERE mailbox_id=?1 AND body_bytes=0 AND LENGTH(raw_message)=0 AND size<=?2
-                 AND prefetch_failures<5 AND parse_pending<2
-                 AND (prefetch_retry_at IS NULL OR prefetch_retry_at<=strftime('%Y-%m-%dT%H:%M:%S+00:00','now'))
-                 AND (?3 IS NULL OR julianday(COALESCE(internal_at,received_at)) >= julianday(?3))
-                 ORDER BY COALESCE(internal_at,received_at) DESC, uid DESC
-                 LIMIT ?4",
-            )
-            .map_err(db_error)?;
+        let mut statement = conn.prepare_cached(PREFETCH_CANDIDATES_SQL).map_err(db_error)?;
         let rows = statement
             .query_map(
                 params![
@@ -621,12 +450,12 @@ impl Database {
             let size = size.max(0) as u64;
             if total.saturating_add(size) > budget_bytes {
                 if selected.is_empty() {
-                    selected.push((uid, received_at));
+                    selected.push((uid, received_at, size));
                 }
                 break;
             }
             total = total.saturating_add(size);
-            selected.push((uid, received_at));
+            selected.push((uid, received_at, size));
         }
         Ok(selected)
     }
@@ -649,7 +478,7 @@ fn clear_bodies(
     transaction
         .execute(
             &format!(
-                "UPDATE messages SET text_body='',html_body=NULL,raw_message=X'',body_bytes=0 WHERE {filter}"
+                "UPDATE messages SET text_body='',html_body=NULL,raw_message=X'',body_bytes=0,body_partial=0 WHERE {filter}"
             ),
             parameters,
         )

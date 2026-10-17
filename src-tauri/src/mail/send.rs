@@ -1,4 +1,3 @@
-use super::failure::{login_failure_kind, FailureKind, MailError};
 use std::{
     io,
     net::SocketAddr,
@@ -8,7 +7,6 @@ use std::{
     time::Duration,
 };
 
-use async_imap::Authenticator;
 use lettre::{
     address::Envelope,
     message::{
@@ -28,8 +26,8 @@ use super::flowed::encode_flowed;
 use super::parse::parse_mailbox;
 use super::remote_drafts::search_header_id;
 use super::{
-    ImapSession, PreparedMessage, CONNECT_TIMEOUT, IMAP_COMMAND_TIMEOUT, MAX_ATTACHMENTS,
-    MAX_MESSAGE_BYTES, MAX_OUTGOING_BYTES,
+    PreparedMessage, CONNECT_TIMEOUT, IMAP_COMMAND_TIMEOUT, MAX_ATTACHMENTS, MAX_MESSAGE_BYTES,
+    MAX_OUTGOING_BYTES,
 };
 use crate::{
     models::{
@@ -415,144 +413,7 @@ pub async fn ensure_sent_copy(
     Ok(())
 }
 
-pub(crate) async fn connect_imap(
-    server: &ServerConfig,
-    password: &str,
-) -> Result<ImapSession, MailError> {
-    connect_imap_auth(server, password, false).await
-}
-
-pub(crate) async fn connect_imap_auth(
-    server: &ServerConfig,
-    password: &str,
-    xoauth2: bool,
-) -> Result<ImapSession, MailError> {
-    if xoauth2 {
-        guard_xoauth2_server(server, true)?;
-    }
-    let address = (server.host.as_str(), server.port);
-    let tcp = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(address))
-        .await
-        .map_err(|_| MailError::connection("Incoming server timed out."))?
-        .map_err(|error| MailError::connection(redact_error(&error, "Incoming connection")))?;
-    let mut native_connector = tokio_native_tls::native_tls::TlsConnector::builder();
-    if let Some(pem) = &server.trusted_certificate {
-        crate::bridge::validate_loopback(&server.host)?;
-        crate::bridge::certificate_metadata(pem)?;
-        let certificate = tokio_native_tls::native_tls::Certificate::from_pem(pem.as_bytes())
-            .map_err(|_| MailError::connection("The saved Bridge certificate is invalid."))?;
-        native_connector.add_root_certificate(certificate);
-    }
-    #[cfg(test)]
-    let native_connector = add_test_imap_root(native_connector)?;
-    let native_connector = native_connector
-        .build()
-        .map_err(|error| MailError::connection(redact_error(&error, "Incoming TLS setup")))?;
-    let connector = tokio_native_tls::TlsConnector::from(native_connector);
-    let client = match server.tls_mode {
-        TlsMode::Tls => {
-            let tls = tokio::time::timeout(CONNECT_TIMEOUT, connector.connect(&server.host, tcp))
-                .await
-                .map_err(|_| MailError::connection("Incoming TLS negotiation timed out."))?
-                .map_err(|error| {
-                    MailError::connection(crate::bridge::tls_error(
-                        &error,
-                        "Incoming TLS negotiation",
-                    ))
-                })?;
-            verify_pinned_stream(server, &tls)?;
-            let mut client = async_imap::Client::new(tls);
-            tokio::time::timeout(CONNECT_TIMEOUT, client.read_response())
-                .await
-                .map_err(|_| MailError::connection("Incoming greeting timed out."))?
-                .map_err(|error| MailError::connection(redact_error(&error, "Incoming greeting")))?
-                .ok_or_else(|| {
-                    MailError::connection("The incoming server closed the secure connection.")
-                })?;
-            client
-        }
-        TlsMode::StartTls => {
-            let mut plain = async_imap::Client::new(tcp);
-            tokio::time::timeout(CONNECT_TIMEOUT, plain.read_response())
-                .await
-                .map_err(|_| MailError::connection("Incoming greeting timed out."))?
-                .map_err(|error| MailError::connection(redact_error(&error, "Incoming greeting")))?
-                .ok_or_else(|| {
-                    MailError::connection("The incoming server closed the connection.")
-                })?;
-            tokio::time::timeout(
-                CONNECT_TIMEOUT,
-                plain.run_command_and_check_ok("STARTTLS", None),
-            )
-            .await
-            .map_err(|_| MailError::connection("Incoming STARTTLS timed out."))?
-            .map_err(|error| {
-                MailError::connection(redact_error(&error, "Required incoming STARTTLS"))
-            })?;
-            let tls = tokio::time::timeout(
-                CONNECT_TIMEOUT,
-                connector.connect(&server.host, plain.into_inner()),
-            )
-            .await
-            .map_err(|_| MailError::connection("Incoming STARTTLS timed out."))?
-            .map_err(|error| {
-                MailError::connection(crate::bridge::tls_error(&error, "Incoming STARTTLS"))
-            })?;
-            verify_pinned_stream(server, &tls)?;
-            async_imap::Client::new(tls)
-        }
-    };
-    // Only an explicit NO/BAD answer means the credentials were rejected.
-    // Timeouts and dropped connections are transient and must not park the
-    // account as "Sign-in failed".
-    let authenticated = if xoauth2 {
-        let auth = Xoauth2Authenticator::new(&server.username, password);
-        tokio::time::timeout(CONNECT_TIMEOUT, client.authenticate("XOAUTH2", auth)).await
-    } else {
-        tokio::time::timeout(CONNECT_TIMEOUT, client.login(&server.username, password)).await
-    };
-    authenticated
-        .map_err(|_| MailError::connection("Incoming server timed out."))?
-        .map_err(|(error, _)| match login_failure_kind(&error) {
-            FailureKind::SignInRejected => MailError::new(
-                FailureKind::SignInRejected,
-                redact_error(&error, "Incoming sign-in"),
-            ),
-            kind => MailError::new(kind, redact_error(&error, "Incoming connection")),
-        })
-}
-
-struct Xoauth2Authenticator {
-    initial: Zeroizing<Vec<u8>>,
-    sent: bool,
-}
-
-impl Xoauth2Authenticator {
-    fn new(username: &str, access_token: &str) -> Self {
-        Self {
-            initial: Zeroizing::new(
-                format!("user={username}\x01auth=Bearer {access_token}\x01\x01").into_bytes(),
-            ),
-            sent: false,
-        }
-    }
-}
-
-impl Authenticator for Xoauth2Authenticator {
-    type Response = Vec<u8>;
-
-    fn process(&mut self, challenge: &[u8]) -> Self::Response {
-        // An empty continuation asks for the initial response. A later
-        // challenge is a failure body; answer empty so the server closes it.
-        if self.sent || !challenge.is_empty() {
-            return Vec::new();
-        }
-        self.sent = true;
-        self.initial.to_vec()
-    }
-}
-
-fn guard_xoauth2_server(server: &ServerConfig, incoming: bool) -> Result<(), String> {
+pub(super) fn guard_xoauth2_server(server: &ServerConfig, incoming: bool) -> Result<(), String> {
     if server.trusted_certificate.is_some() {
         return Err("This sign-in only works with the provider's mail servers.".into());
     }
@@ -575,7 +436,7 @@ pub(crate) fn smtp_auth_mechanisms(xoauth2: bool) -> Vec<Mechanism> {
     }
 }
 
-fn verify_pinned_stream(
+pub(super) fn verify_pinned_stream(
     server: &ServerConfig,
     stream: &tokio_native_tls::TlsStream<TcpStream>,
 ) -> Result<(), String> {
@@ -749,20 +610,6 @@ async fn connect_pinned_smtp(
     })
     .await
     .map_err(|_| "Outgoing server timed out before sending.".to_string())?
-}
-
-#[cfg(test)]
-fn add_test_imap_root(
-    mut builder: tokio_native_tls::native_tls::TlsConnectorBuilder,
-) -> Result<tokio_native_tls::native_tls::TlsConnectorBuilder, String> {
-    if let Ok(path) = std::env::var("POSTAL_SNAP_MAIL_TEST_CA_CERT") {
-        let pem = std::fs::read(path)
-            .map_err(|_| "Incoming test certificate could not be read.".to_string())?;
-        let certificate = tokio_native_tls::native_tls::Certificate::from_pem(&pem)
-            .map_err(|_| "Incoming test certificate is invalid.".to_string())?;
-        builder.add_root_certificate(certificate);
-    }
-    Ok(builder)
 }
 
 pub(crate) async fn test_smtp(
@@ -1248,6 +1095,40 @@ fn escape_signature_html(value: &str) -> String {
         .replace('"', "&quot;")
 }
 
+/// Sanitize a signature with the compose policy, then drop every image. A
+/// reusable signature never carries inline or remote image payloads.
+pub fn sanitize_signature_html(input: &str) -> String {
+    strip_signature_images(&crate::html_sanitize::sanitize_compose_html(input))
+}
+
+fn strip_signature_images(html: &str) -> String {
+    let mut output = String::with_capacity(html.len());
+    let mut rest = html;
+    loop {
+        let Some(start) = rest.find("<img") else {
+            output.push_str(rest);
+            break;
+        };
+        output.push_str(&rest[..start]);
+        let tag = &rest[start..];
+        let mut quote = None;
+        let end = tag.char_indices().find_map(|(index, character)| {
+            match (quote, character) {
+                (None, '"' | '\'') => quote = Some(character),
+                (Some(marker), current) if marker == current => quote = None,
+                (None, '>') => return Some(index + character.len_utf8()),
+                _ => {}
+            }
+            None
+        });
+        let Some(end) = end else {
+            break;
+        };
+        rest = &tag[end..];
+    }
+    output
+}
+
 /// True when the app's own signature closes the text, or sits right above the
 /// trailing quote. A signature earlier in the body does not count.
 fn signature_present(text: &str, signature: &str) -> bool {
@@ -1402,13 +1283,47 @@ pub fn apply_signature(
     draft
 }
 
+/// Add a sanitized rich signature while keeping the stored plain signature as
+/// the text alternative. The legacy plain-only helper remains unchanged.
+pub fn apply_signature_with_html(
+    mut draft: ComposeDraft,
+    plain_signature: &str,
+    rich_signature: &str,
+    above_quote: bool,
+) -> ComposeDraft {
+    let plain_signature = plain_signature.trim();
+    if plain_signature.is_empty() || signature_present(&draft.text_body, plain_signature) {
+        return draft;
+    }
+    draft.text_body = insert_plain_signature(&draft.text_body, plain_signature, above_quote);
+    if draft.body_format == BodyFormat::Plain {
+        return draft;
+    }
+
+    let rich_signature = sanitize_signature_html(rich_signature);
+    let rich_signature = if rich_signature.trim().is_empty() {
+        escape_signature_html(plain_signature).replace('\n', "<br>")
+    } else {
+        rich_signature
+    };
+    let html_signature = format!("<br><br>-- <br>{rich_signature}");
+    if draft.html_body.trim().is_empty() || draft.html_body.trim() == "<p></p>" {
+        draft.html_body = format!("<p>-- </p>{rich_signature}");
+    } else {
+        draft.html_body = insert_html_signature(&draft.html_body, &html_signature, above_quote);
+    }
+    draft
+}
+
 #[cfg(test)]
 mod plain_tests {
     use super::*;
+    use crate::mail::connect::Xoauth2Authenticator;
     use crate::models::{
         AccountSummary, BodyFormat, ComposeAttachment, DraftSourceKind, ProviderKind, ServerConfig,
         TlsMode,
     };
+    use async_imap::Authenticator;
 
     // Failure modes for plain-text sends:
     // 1. A plain draft still ships text/html or multipart/alternative.
@@ -1436,6 +1351,7 @@ mod plain_tests {
                 aliases: vec![],
                 auth_method: "password".into(),
                 signature: String::new(),
+                signature_html: String::new(),
                 reply_to: String::new(),
                 color: None,
             },
@@ -1621,6 +1537,77 @@ mod plain_tests {
         assert_eq!(signed.html_body, plain.html_body);
         let twice = apply_signature(signed.clone(), "Sam\nsam@example.com", true);
         assert_eq!(twice.text_body, signed.text_body);
+    }
+
+    #[test]
+    fn rich_signature_is_sanitized_placed_before_quotes_and_applied_once() {
+        // Failure modes:
+        // 1. Active markup, unsafe links, or remote images reach the MIME body.
+        // 2. The signature loses formatting or moves below a trailing quote.
+        // 3. Retrying a queued send inserts a second signature.
+        let mut reply = draft(
+            BodyFormat::Html,
+            "Thanks\n\n> On Monday, Jane wrote:\n> Hello",
+        );
+        reply.html_body = "<p>Thanks</p><blockquote><p>Hello</p></blockquote>".into();
+        let signature = "<p><strong>Best,</strong></p><p>Sam</p><script>secret()</script><img src=\"https://tracker.example.test/p.gif\"><a href=\"javascript:alert(1)\">unsafe</a>";
+        let signed = apply_signature_with_html(reply, "Best,\nSam", signature, true);
+
+        assert_eq!(
+            signed.text_body,
+            "Thanks\n\n-- \nBest,\nSam\n\n> On Monday, Jane wrote:\n> Hello"
+        );
+        assert!(signed.html_body.contains("<strong>Best,</strong>"));
+        assert!(
+            signed.html_body.find("<strong>").unwrap()
+                < signed.html_body.find("<blockquote>").unwrap()
+        );
+        assert!(!signed.html_body.contains("<script"));
+        assert!(!signed.html_body.contains("secret()"));
+        assert!(!signed.html_body.contains("<img"));
+        assert!(!signed.html_body.contains("tracker.example.test"));
+        assert!(!signed.html_body.contains("javascript:"));
+
+        let retried = apply_signature_with_html(signed.clone(), "Best,\nSam", signature, true);
+        assert_eq!(retried.text_body, signed.text_body);
+        assert_eq!(retried.html_body, signed.html_body);
+    }
+
+    #[test]
+    fn plain_body_uses_the_plain_fallback_for_a_rich_signature() {
+        // Failure mode: a plain message contains HTML or loses the signature
+        // when its rich representation cannot be sent.
+        let plain = draft(BodyFormat::Plain, "Hello");
+        let signed = apply_signature_with_html(
+            plain.clone(),
+            "Best,\nSam",
+            "<p><strong>Best,</strong></p><p>Sam</p>",
+            true,
+        );
+        assert_eq!(signed.text_body, "Hello\n\n-- \nBest,\nSam");
+        assert_eq!(signed.html_body, plain.html_body);
+    }
+
+    #[tokio::test]
+    async fn rich_signature_keeps_a_plain_mime_alternative() {
+        // Failure mode: HTML signatures ship without an equivalent text part.
+        let mut message = draft(BodyFormat::Html, "Hello\n\n-- \nBest,\nSam");
+        message.html_body =
+            "<p>Hello</p><br><br>-- <br><p><strong>Best,</strong></p><p>Sam</p>".into();
+        let out = rendered(&message).await;
+        let parsed = mail_parser::MessageParser::default()
+            .parse(out.as_bytes())
+            .unwrap();
+        assert!(out.contains("multipart/alternative"));
+        assert!(parsed
+            .body_text(0)
+            .unwrap()
+            .replace("\r\n", "\n")
+            .contains("Best,\nSam"));
+        assert!(parsed
+            .body_html(0)
+            .unwrap()
+            .contains("<strong>Best,</strong>"));
     }
 
     #[test]

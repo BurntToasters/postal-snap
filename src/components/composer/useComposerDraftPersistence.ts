@@ -16,6 +16,7 @@ import { hasDraftContent } from "./composerValidate";
 type SaveState = "unsaved" | "saving" | "saved";
 interface Options {
   accountId: string;
+  onDraftSaved?: (id: string) => void;
   editor: Editor | null;
   sending: boolean;
   buildDraft: () => ComposeDraft;
@@ -43,6 +44,7 @@ interface Options {
 
 export function useComposerDraftPersistence({
   accountId,
+  onDraftSaved,
   editor,
   sending,
   buildDraft,
@@ -96,6 +98,7 @@ export function useComposerDraftPersistence({
           .then((outcome) => {
             draftIdRef.current = outcome.id;
             if (isDiscardingRef.current) return;
+            onDraftSaved?.(outcome.id);
             setDraftId(outcome.id);
             if (draftRevisionRef.current === revision) {
               setSaveState("saved");
@@ -147,6 +150,7 @@ export function useComposerDraftPersistence({
     };
   }, [
     accountId,
+    onDraftSaved,
     currentBodyText,
     editor,
     sending,
@@ -190,6 +194,7 @@ export function useComposerDraftPersistence({
         savePromiseRef.current = savePromise;
         const outcome = await savePromise;
         if (isDiscardingRef.current) return;
+        onDraftSaved?.(outcome.id);
         setDraftId(outcome.id);
         if (draftRevisionRef.current === revision) {
           setSaveState("saved");
@@ -220,6 +225,7 @@ export function useComposerDraftPersistence({
     },
     [
       accountId,
+      onDraftSaved,
       buildDraft,
       close,
       currentBodyText,
@@ -264,11 +270,15 @@ export function useComposerDraftPersistence({
         .then(() =>
           api.saveDraft({ ...draft, id: draftIdRef.current ?? draft.id }),
         )
-        .then(() => announceLocalMailChanged(draft.accountId))
+        .then((outcome) => {
+          onDraftSaved?.(outcome.id);
+          announceLocalMailChanged(draft.accountId);
+        })
         .catch(() => undefined);
     },
     [
       currentBodyText,
+      onDraftSaved,
       closedByComposerRef,
       draftIdRef,
       draftRevisionRef,
@@ -311,6 +321,7 @@ export function useComposerDraftPersistence({
               savePromiseRef.current = save;
               const outcome = await save;
               draftIdRef.current = outcome.id;
+              onDraftSaved?.(outcome.id);
               setDraftId(outcome.id);
               if (draftRevisionRef.current !== revision) continue;
               // Set now, not after render: a replacement unmounts this editor
@@ -331,6 +342,7 @@ export function useComposerDraftPersistence({
       ),
     [
       session,
+      onDraftSaved,
       currentBodyText,
       closedByComposerRef,
       draftIdRef,

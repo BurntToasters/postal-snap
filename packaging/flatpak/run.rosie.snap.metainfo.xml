@@ -24,7 +24,11 @@
   </developer>
   <content_rating type="oars-1.1" />
   <releases>
-    <release version="0.4.3" date="2026-10-15" />
+    <release version="0.5.0" date="2026-10-16">
+      <description>
+        <p>Postal Snap 0.5.0 adds message and attachment downloads on demand, optional offline attachment storage, faster sync and large-mailbox handling, an Undo notice for moves, a keyboard command palette, and rich account signatures.</p>
+      </description>
+    </release>
     <release version="0.4.1" date="2026-10-14" />
     <release version="0.1.14" date="2026-09-14" />
   </releases>

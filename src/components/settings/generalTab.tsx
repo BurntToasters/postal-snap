@@ -1,4 +1,4 @@
-import { DownloadCloud, Upload } from "lucide-react";
+import { CloudDownload, Upload } from "lucide-react";
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
 import { CloseToTraySwitch } from "./closeToTray";
@@ -51,7 +51,7 @@ export function GeneralTab({
               onClick={() => void importSettings()}
               disabled={dataBusy}
             >
-              <DownloadCloud aria-hidden="true" />{" "}
+              <CloudDownload aria-hidden="true" />{" "}
               {strings.settings.importSettings}
             </button>
           </div>

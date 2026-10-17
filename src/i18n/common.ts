@@ -37,7 +37,11 @@ export const app = {
   crashTitle: "Something went wrong in this window",
   crashHelp:
     "Your mail and saved drafts are safe. Reload the window to continue.",
+  crashTryAgain: "Try again",
   crashReload: "Reload window",
+  crashClose: "Close",
+  crashRetryFailed:
+    "The view could not be restored. Try again or reload the window.",
   readerCrashHelp:
     "This message could not be shown. Choose another message, or reload the window.",
 } as const;

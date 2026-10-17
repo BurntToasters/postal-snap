@@ -192,7 +192,7 @@
   }
 
   .message-header {
-    grid-template-columns: 38px minmax(0, 1fr) auto;
+    grid-template-columns: var(--sender-avatar-narrow-size) minmax(0, 1fr) auto;
     padding: 14px;
   }
 

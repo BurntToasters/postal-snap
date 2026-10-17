@@ -1,8 +1,8 @@
 /* Shared avatar / brand pattern (moved, no visual change) */
 .provider-symbol {
   display: grid;
-  width: 50px;
-  height: 50px;
+  width: var(--provider-symbol-size);
+  height: var(--provider-symbol-size);
   place-items: center;
   border-radius: var(--radius-md);
   color: var(--accent);
@@ -16,50 +16,50 @@
 
 .account-avatar {
   display: grid;
-  width: 32px;
-  height: 32px;
+  width: var(--account-avatar-size);
+  height: var(--account-avatar-size);
   flex: 0 0 auto;
   place-items: center;
   border-radius: 50%;
   color: var(--accent-contrast);
   background: var(--accent);
-  font-size: 0.9rem;
+  font-size: var(--account-avatar-font-size);
   font-weight: 700;
 }
 
 .account-avatar[data-color="teal"],
 .account-color-swatch[data-color="teal"] {
-  background: #00868a;
+  background: var(--avatar-teal);
 }
 
 .account-avatar[data-color="green"],
 .account-color-swatch[data-color="green"] {
-  background: #27843c;
+  background: var(--avatar-green);
 }
 
 .account-avatar[data-color="amber"],
 .account-color-swatch[data-color="amber"] {
-  background: #9a6700;
+  background: var(--avatar-amber);
 }
 
 .account-avatar[data-color="orange"],
 .account-color-swatch[data-color="orange"] {
-  background: #c65300;
+  background: var(--avatar-orange);
 }
 
 .account-avatar[data-color="red"],
 .account-color-swatch[data-color="red"] {
-  background: #c42b1c;
+  background: var(--avatar-red);
 }
 
 .account-avatar[data-color="pink"],
 .account-color-swatch[data-color="pink"] {
-  background: #bd3975;
+  background: var(--avatar-pink);
 }
 
 .account-avatar[data-color="purple"],
 .account-color-swatch[data-color="purple"] {
-  background: #7651c9;
+  background: var(--avatar-purple);
 }
 
 .account-color-picker {
@@ -88,14 +88,35 @@
 
 .sender-avatar {
   display: grid;
-  width: 42px;
-  height: 42px;
+  width: var(--sender-avatar-size);
+  height: var(--sender-avatar-size);
   place-items: center;
   border-radius: 50%;
   /* Contacts-style monogram, as Mail shows for senders without a photo. */
   color: #ffffff;
   background: var(--monogram);
+  font-size: var(--sender-avatar-font-size);
   font-weight: 650;
+}
+
+@media (forced-colors: active) {
+  .account-avatar[data-color],
+  .sender-avatar {
+    border: 1px solid CanvasText;
+    color: CanvasText;
+    background: Canvas;
+  }
+
+  .account-color-swatch[data-color] {
+    border: 1px solid ButtonText;
+    background: Canvas;
+  }
+
+  .account-color-swatch[aria-checked="true"] {
+    border-color: Highlight;
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
 }
 
 .app-mark,

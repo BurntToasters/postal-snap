@@ -11,6 +11,7 @@ import {
 import { rememberMoveMailboxId } from "../../recentMailbox";
 import { useAppStore } from "../../store";
 import { messageAfterRemoval } from "../../threads";
+import { undoableMove, undoTargetFor } from "../../undoMove";
 import type { MessageDetail, MessageSummary } from "../../types";
 import { moveCounts } from "./readerUtils";
 
@@ -346,7 +347,13 @@ export function useReaderMoves({
       selectMessage(undefined);
     }
     try {
-      await api.moveMessage(message.accountId, message.id, role);
+      await undoableMove({
+        accountId: message.accountId,
+        target: { kind: role },
+        send: (undoToken) =>
+          api.moveMessage(message.accountId, message.id, role, undoToken),
+        deferred: () => 1,
+      });
     } catch (cause) {
       const current = useAppStore.getState();
       if (
@@ -442,6 +449,8 @@ export function useReaderMoves({
     const message = snapshot.selectedMessage;
     if (!message) return;
     if (mailboxId === message.mailboxId) return;
+    const destination = snapshot.mailboxes.find((box) => box.id === mailboxId);
+    if (!destination) return;
     rememberMoveMailboxId(snapshot.mailboxes, mailboxId);
     const mailboxes = snapshot.mailboxes;
     const messages = snapshot.messages;
@@ -474,7 +483,18 @@ export function useReaderMoves({
       selectMessage(undefined);
     }
     try {
-      await api.moveMessageToMailbox(message.accountId, message.id, mailboxId);
+      await undoableMove({
+        accountId: message.accountId,
+        target: undoTargetFor(destination),
+        send: (undoToken) =>
+          api.moveMessageToMailbox(
+            message.accountId,
+            message.id,
+            mailboxId,
+            undoToken,
+          ),
+        deferred: () => 1,
+      });
     } catch (cause) {
       const current = useAppStore.getState();
       if (

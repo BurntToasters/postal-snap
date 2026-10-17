@@ -1,4 +1,4 @@
-import { DownloadCloud } from "lucide-react";
+import { CloudDownload } from "lucide-react";
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
 import type { DistributionChannel, UpdateCheckInterval } from "../../types";
@@ -31,7 +31,7 @@ export function UpdatesTab({
       {updateReady ? (
         <div className="update-ready-card">
           <div className="update-ready-icon">
-            <DownloadCloud aria-hidden="true" />
+            <CloudDownload aria-hidden="true" />
           </div>
           <div className="update-ready-body">
             <strong>{strings.settings.updateReadyCardTitle}</strong>
@@ -47,7 +47,7 @@ export function UpdatesTab({
         </div>
       ) : null}
       <div className="storage-card">
-        <DownloadCloud aria-hidden="true" />
+        <CloudDownload aria-hidden="true" />
         <span>
           <strong>
             {distribution?.updatesManagedBy === "store"

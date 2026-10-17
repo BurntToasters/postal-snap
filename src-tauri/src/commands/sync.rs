@@ -87,7 +87,17 @@ pub async fn sync_one(account_id: &str, app: &AppHandle, state: &AppState) -> Re
     let actor = state.actor(account_id)?;
     actor.request(wake::OPERATION);
     let guard = actor.acquire().await;
-    match run_sync_pass(account_id, app, state, &actor, guard, true).await {
+    match run_sync_pass(
+        account_id,
+        app,
+        state,
+        &actor,
+        guard,
+        true,
+        mail::sync::SyncScope::All,
+    )
+    .await
+    {
         Ok(outcome) => {
             // A successful manual pass proves the credentials work again.
             // Skipped backfill and bodies continue in the background.
@@ -202,6 +212,7 @@ pub(crate) async fn run_sync_pass(
     actor: &Arc<AccountActor>,
     guard: OwnedMutexGuard<()>,
     quick: bool,
+    scope: mail::sync::SyncScope,
 ) -> Result<mail::SyncOutcome, PassError> {
     let account = state.db.account(account_id).map_err(PassError::Other)?;
     let password = match crate::oauth::session_secret(&account).await {
@@ -235,7 +246,9 @@ pub(crate) async fn run_sync_pass(
         last_progress: None,
         quick,
     };
-    let result = mail::sync_account(&state.db, &account, &password, &policy, &mut hooks).await;
+    let result =
+        mail::sync::sync_account_scoped(&state.db, &account, &password, &policy, scope, &mut hooks)
+            .await;
     // Everything below needs the account; the hooks hold it again after any
     // yield.
     let _guard = hooks.guard.take();
@@ -299,13 +312,136 @@ pub(crate) async fn run_sync_pass(
     }
 }
 
+/// How often the visible non-INBOX folder is re-checked. INBOX has its own
+/// watcher, so it is never polled here.
+pub(crate) const FOLDER_POLL: Duration = Duration::from_secs(60);
+
+/// The folder an account has open, as the frontend reports it.
+#[derive(Debug, Clone)]
+pub(crate) struct VisibleFolder {
+    pub mailbox_id: i64,
+    pub inbox: bool,
+    /// When the folder was last scanned, or selected.
+    pub polled_at: Instant,
+}
+
+/// Time until the visible folder is due, or `None` when nothing is polled.
+pub(crate) fn folder_poll_due(visible: Option<&VisibleFolder>, now: Instant) -> Option<Duration> {
+    let visible = visible?;
+    if visible.inbox {
+        return None;
+    }
+    Some((visible.polled_at + FOLDER_POLL).saturating_duration_since(now))
+}
+
+/// Folders a wake covers: INBOX for the watcher, and the visible folder once
+/// its poll is due. Each folder appears once, so a pass never repeats one.
+pub(crate) fn scope_for_wake(
+    reasons: u16,
+    visible_name: Option<&str>,
+) -> Option<mail::sync::SyncScope> {
+    let mut folders = Vec::new();
+    if reasons & wake::INBOX != 0 {
+        folders.push("INBOX".to_string());
+    }
+    if reasons & wake::FOLDER != 0 {
+        if let Some(name) = visible_name {
+            if !folders.iter().any(|folder| folder == name) {
+                folders.push(name.to_string());
+            }
+        }
+    }
+    (!folders.is_empty()).then_some(mail::sync::SyncScope::Folders(folders))
+}
+
+impl AppState {
+    pub(crate) fn visible_folder_due(&self, account_id: &str) -> Option<Duration> {
+        let folders = self.visible_folders.lock().ok()?;
+        folder_poll_due(folders.get(account_id), Instant::now())
+    }
+
+    pub(crate) fn mark_visible_folder_polled(&self, account_id: &str) {
+        if let Ok(mut folders) = self.visible_folders.lock() {
+            if let Some(folder) = folders.get_mut(account_id) {
+                folder.polled_at = Instant::now();
+            }
+        }
+    }
+
+    /// The non-INBOX folder to poll, by its current name.
+    pub(crate) fn visible_folder_name(&self, account_id: &str) -> Option<String> {
+        let mailbox_id = {
+            let folders = self.visible_folders.lock().ok()?;
+            folders
+                .get(account_id)
+                .filter(|folder| !folder.inbox)
+                .map(|folder| folder.mailbox_id)?
+        };
+        let (owner, name) = self.db.mailbox(mailbox_id).ok()?;
+        (owner == account_id).then_some(name)
+    }
+}
+
+/// Record the folder the mailbox has open, or clear it with `None`. The
+/// worker re-checks its timers so a new selection is polled on time.
+#[tauri::command]
+pub async fn set_visible_folder(
+    account_id: String,
+    mailbox_id: Option<i64>,
+    state: State<'_, AppState>,
+) -> CommandResult<()> {
+    command_result(store_visible_folder(&state, &account_id, mailbox_id))
+}
+
+fn store_visible_folder(
+    state: &AppState,
+    account_id: &str,
+    mailbox_id: Option<i64>,
+) -> Result<(), String> {
+    let actor = state.actor(account_id)?;
+    {
+        let mut folders = state
+            .visible_folders
+            .lock()
+            .map_err(|_| "Folder polling is unavailable.".to_string())?;
+        match mailbox_id {
+            None => {
+                folders.remove(account_id);
+            }
+            Some(id) => {
+                let (owner, _) = state
+                    .db
+                    .mailbox(id)
+                    .map_err(|_| "Folder not found.".to_string())?;
+                if owner != account_id {
+                    return Err("Folder not found.".into());
+                }
+                let inbox = state
+                    .db
+                    .mailbox_for_role(account_id, "inbox")?
+                    .is_some_and(|(inbox_id, _)| inbox_id == id);
+                folders.insert(
+                    account_id.to_string(),
+                    VisibleFolder {
+                        mailbox_id: id,
+                        inbox,
+                        polled_at: Instant::now(),
+                    },
+                );
+            }
+        }
+    }
+    actor.nudge();
+    Ok(())
+}
+
 /// Draft and outbox work that does not need a full pass. The caller holds
 /// the account.
 pub(crate) async fn run_targeted_jobs(
     account_id: &str,
     app: &AppHandle,
     state: &AppState,
-    reasons: u8,
+    reasons: u16,
 ) {
     let Ok(account) = state.db.account(account_id) else {
         return;
@@ -320,6 +456,24 @@ pub(crate) async fn run_targeted_jobs(
         replay_outbox_locked(account_id, app, state).await;
         emit_outbox_change(app, account_id, None, None);
     }
+    if reasons & wake::REPLAY != 0 {
+        replay_due_operations_locked(account_id, app, state).await;
+    }
+}
+
+/// Replay queued operations that came due, such as undo-window moves. Does
+/// not run a mailbox pass.
+async fn replay_due_operations_locked(account_id: &str, app: &AppHandle, state: &AppState) {
+    let Ok(account) = state.db.account(account_id) else {
+        return;
+    };
+    let Ok(password) = crate::oauth::session_secret(&account).await else {
+        return;
+    };
+    let policy = account_policy(state, account_id).unwrap_or_default();
+    let _ = replay_offline_operations(app, &state.db, &account, &password, &policy).await;
+    emit_message_change(app, account_id, None, "moved");
+    emit_folder_counts(app, account_id);
 }
 
 /// Rows newer than this mark are filed after the pass. A failed pass leaves
@@ -780,5 +934,59 @@ pub(crate) async fn replay_outbox_locked(account_id: &str, app: &AppHandle, stat
         for id in ids {
             let _ = deliver_outbox_locked(&id, account_id, "scheduled", app, state).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{folder_poll_due, scope_for_wake, VisibleFolder, FOLDER_POLL};
+    use crate::commands::wake;
+    use crate::mail::sync::SyncScope;
+    use std::time::{Duration, Instant};
+
+    // Visible-folder failure modes (D8):
+    // 1. INBOX is polled on a timer on top of its IDLE watcher.
+    // 2. A hidden folder keeps polling after the selection is cleared.
+    // 3. A new selection polls at once instead of after one interval.
+    #[test]
+    fn visible_folder_polls_after_one_interval_and_never_inbox() {
+        let now = Instant::now();
+        assert_eq!(folder_poll_due(None, now), None, "cleared selection");
+        let inbox = VisibleFolder {
+            mailbox_id: 1,
+            inbox: true,
+            polled_at: now,
+        };
+        assert_eq!(folder_poll_due(Some(&inbox), now), None);
+        let archive = VisibleFolder {
+            mailbox_id: 2,
+            inbox: false,
+            polled_at: now,
+        };
+        assert_eq!(FOLDER_POLL, Duration::from_secs(60));
+        assert_eq!(folder_poll_due(Some(&archive), now), Some(FOLDER_POLL));
+        let later = now + Duration::from_secs(45);
+        assert_eq!(
+            folder_poll_due(Some(&archive), later),
+            Some(Duration::from_secs(15))
+        );
+    }
+
+    #[test]
+    fn wake_scope_scans_inbox_and_visible_folder_once() {
+        assert_eq!(
+            scope_for_wake(wake::INBOX, None),
+            Some(SyncScope::Folders(vec!["INBOX".into()]))
+        );
+        assert_eq!(
+            scope_for_wake(wake::FOLDER, Some("Archive")),
+            Some(SyncScope::Folders(vec!["Archive".into()]))
+        );
+        assert_eq!(scope_for_wake(wake::FOLDER, None), None, "cleared folder");
+        assert_eq!(scope_for_wake(wake::OUTBOX, Some("Archive")), None);
+        assert_eq!(
+            scope_for_wake(wake::INBOX | wake::FOLDER, Some("Archive")),
+            Some(SyncScope::Folders(vec!["INBOX".into(), "Archive".into()]))
+        );
     }
 }

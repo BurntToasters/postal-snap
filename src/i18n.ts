@@ -6,6 +6,8 @@ import { composer } from "./i18n/composer";
 import { contextMenu } from "./i18n/contextMenu";
 import { errors } from "./i18n/errors";
 import { mail } from "./i18n/mail";
+import { notices } from "./i18n/notices";
+import { palette } from "./i18n/palette";
 import { reader } from "./i18n/reader";
 import { settings } from "./i18n/settings";
 import { setup } from "./i18n/setup";
@@ -24,4 +26,6 @@ export const strings = {
   settings,
   errors,
   contextMenu,
+  notices,
+  palette,
 } as const;

@@ -3,12 +3,25 @@ use rusqlite::{params, OptionalExtension};
 
 use crate::models::{AccountRecord, AccountSummary, BodyFormat, ServerConfig};
 
+fn normalized_signature(signature: &str) -> Result<String, String> {
+    let normalized = signature.replace("\r\n", "\n").replace('\r', "\n");
+    let trimmed = normalized.trim();
+    if trimmed.chars().count() > 2000
+        || trimmed
+            .chars()
+            .any(|c| c.is_control() && c != '\n' && c != '\t')
+    {
+        return Err("Keep the signature under 2000 characters of plain text.".into());
+    }
+    Ok(trimmed.to_string())
+}
+
 database_operations! {
 impl Database {
     pub fn list_accounts(&self) -> Result<Vec<AccountSummary>, String> {
         let conn = self.read_conn()?;
         let mut statement = conn.prepare(
-            "SELECT id, provider, email, display_name, sync_state, error, aliases_json, auth_method, signature, color, default_body_format, reply_to FROM accounts ORDER BY sort_order, created_at",
+            "SELECT id, provider, email, display_name, sync_state, error, aliases_json, auth_method, signature, signature_html, color, default_body_format, reply_to FROM accounts ORDER BY sort_order, created_at",
         ).map_err(db_error)?;
         let rows = statement
             .query_map([], |row| {
@@ -26,9 +39,10 @@ impl Database {
                         .get::<_, Option<String>>(7)?
                         .unwrap_or_else(|| "password".into()),
                     signature: row.get::<_, Option<String>>(8)?.unwrap_or_default(),
-                    reply_to: row.get::<_, Option<String>>(11)?.unwrap_or_default(),
-                    color: row.get(9)?,
-                    default_body_format: BodyFormat::from_db(&row.get::<_, String>(10)?),
+                    signature_html: row.get::<_, Option<String>>(9)?.unwrap_or_default(),
+                    reply_to: row.get::<_, Option<String>>(12)?.unwrap_or_default(),
+                    color: row.get(10)?,
+                    default_body_format: BodyFormat::from_db(&row.get::<_, String>(11)?),
                 })
             })
             .map_err(db_error)?;
@@ -41,7 +55,7 @@ impl Database {
             "SELECT id, provider, email, display_name, sync_state, error,
                     imap_host, imap_port, imap_tls, imap_username,
                     smtp_host, smtp_port, smtp_tls, smtp_username,
-                    aliases_json, auth_method, signature, color, default_body_format, bridge_certificate, reply_to
+                    aliases_json, auth_method, signature, signature_html, color, default_body_format, bridge_certificate, reply_to
              FROM accounts WHERE id = ?1",
             [id],
             |row| {
@@ -60,19 +74,20 @@ impl Database {
                             .get::<_, Option<String>>(15)?
                             .unwrap_or_else(|| "password".into()),
                         signature: row.get::<_, Option<String>>(16)?.unwrap_or_default(),
-                        reply_to: row.get::<_, Option<String>>(20)?.unwrap_or_default(),
-                        color: row.get(17)?,
-                        default_body_format: BodyFormat::from_db(&row.get::<_, String>(18)?),
+                        signature_html: row.get::<_, Option<String>>(17)?.unwrap_or_default(),
+                        reply_to: row.get::<_, Option<String>>(21)?.unwrap_or_default(),
+                        color: row.get(18)?,
+                        default_body_format: BodyFormat::from_db(&row.get::<_, String>(19)?),
                     },
                     imap: ServerConfig {
-                        trusted_certificate: row.get(19)?,
+                        trusted_certificate: row.get(20)?,
                         host: row.get(6)?,
                         port: row.get::<_, u16>(7)?,
                         tls_mode: parse_tls(&row.get::<_, String>(8)?),
                         username: row.get(9)?,
                     },
                     smtp: ServerConfig {
-                        trusted_certificate: row.get(19)?,
+                        trusted_certificate: row.get(20)?,
                         host: row.get(10)?,
                         port: row.get::<_, u16>(11)?,
                         tls_mode: parse_tls(&row.get::<_, String>(12)?),
@@ -95,8 +110,8 @@ impl Database {
                 id, provider, email, display_name, sync_state,
                 imap_host, imap_port, imap_tls, imap_username,
                 smtp_host, smtp_port, smtp_tls, smtp_username,
-                aliases_json, auth_method, color, default_body_format, bridge_certificate, sort_order
-             ) VALUES (?1, ?2, ?3, ?4, 'idle', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
+                aliases_json, auth_method, signature, signature_html, color, default_body_format, bridge_certificate, sort_order
+             ) VALUES (?1, ?2, ?3, ?4, 'idle', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
                 (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM accounts))",
             params![
                 account.summary.id,
@@ -113,6 +128,8 @@ impl Database {
                 account.smtp.username,
                 aliases_json,
                 account.summary.auth_method,
+                account.summary.signature,
+                account.summary.signature_html,
                 account.summary.color,
                 account.summary.default_body_format.as_str(),
                 account.imap.trusted_certificate,
@@ -232,21 +249,13 @@ impl Database {
         id: &str,
         signature: &str,
     ) -> Result<AccountSummary, String> {
-        let normalized = signature.replace("\r\n", "\n").replace('\r', "\n");
-        let trimmed = normalized.trim();
-        if trimmed.chars().count() > 2000
-            || trimmed
-                .chars()
-                .any(|c| c.is_control() && c != '\n' && c != '\t')
-        {
-            return Err("Keep the signature under 2000 characters of plain text.".into());
-        }
+        let normalized = normalized_signature(signature)?;
         {
             let conn = self.conn()?;
             let updated = conn
                 .execute(
-                    "UPDATE accounts SET signature = ?1 WHERE id = ?2",
-                    params![trimmed, id],
+                    "UPDATE accounts SET signature = ?1, signature_html = '' WHERE id = ?2",
+                    params![normalized, id],
                 )
                 .map_err(db_error)?;
             if updated != 1 {
@@ -255,6 +264,32 @@ impl Database {
         }
         let record = self.account(id)?;
         Ok(record.summary)
+    }
+
+    pub fn update_account_signatures(
+        &self,
+        id: &str,
+        signature: &str,
+        signature_html: &str,
+    ) -> Result<AccountSummary, String> {
+        let normalized = normalized_signature(signature)?;
+        if signature_html.chars().count() > 20_000 {
+            return Err("Keep the rich signature under 20000 characters.".into());
+        }
+        let sanitized_html = crate::mail::send::sanitize_signature_html(signature_html);
+        {
+            let conn = self.conn()?;
+            let updated = conn
+                .execute(
+                    "UPDATE accounts SET signature = ?1, signature_html = ?2 WHERE id = ?3",
+                    params![normalized, sanitized_html, id],
+                )
+                .map_err(db_error)?;
+            if updated != 1 {
+                return Err("Account not found.".into());
+            }
+        }
+        Ok(self.account(id)?.summary)
     }
 
     pub fn set_account_default_body_format(

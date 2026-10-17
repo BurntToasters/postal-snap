@@ -1,6 +1,6 @@
 [package]
 name = "postal-snap"
-version = "0.4.3"
+version = "0.5.0"
 description = "A calm, accessible desktop email client."
 authors = ["BurntToasters <code@rosie.run>"]
 edition = "2021"
@@ -12,7 +12,7 @@ direct-updater = ["dep:tauri-plugin-process", "dep:tauri-plugin-updater"]
 flatpak = []
 mas = []
 msstore = []
-# Gmail/Outlook sign-in. Off until it has setup UI and review (0.5.0).
+# Gmail/Outlook sign-in. Off until setup UI and review, deferred to 0.6.0.
 oauth = []
 
 [build-dependencies]

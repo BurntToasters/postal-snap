@@ -77,6 +77,29 @@ export function AppearanceTab({
             ))}
           </select>
         </SettingRow>
+        <SettingRow
+          title={strings.settings.badgeScope}
+          help={strings.settings.badgeScopeHelp}
+        >
+          <select
+            aria-label={strings.settings.badgeScope}
+            value={settings.badgeScope ?? "activeInbox"}
+            onChange={(event) =>
+              void update({
+                badgeScope: event.target.value as NonNullable<
+                  AppSettings["badgeScope"]
+                >,
+              })
+            }
+          >
+            <option value="activeInbox">
+              {strings.settings.badgeScopeActiveInbox}
+            </option>
+            <option value="allInboxes">
+              {strings.settings.badgeScopeAllInboxes}
+            </option>
+          </select>
+        </SettingRow>
       </SettingsSection>
       <SettingsSection title={strings.settings.readingPane}>
         <SettingRow

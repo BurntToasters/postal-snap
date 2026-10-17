@@ -14,8 +14,8 @@ The command requires Node.js `^22.22.2 || ^24.15.0 || >=26.0.0`, npm 12.0.1 or n
 
 Both updaters serialize their own runs. npm rollback and final Cargo lock installation compare expected bytes, preserving a concurrent process's lockfile edit instead of overwriting it.
 
-Review both lockfile diffs before committing. Push the update branch and let GitHub-hosted CI perform code-executing validation. CI installs npm packages with lifecycle scripts disabled, verifies registry signatures, and only then runs dependency code. CI is intentionally the first environment that installs or executes newly selected dependency code.
+Review both lockfile diffs before committing. Local validation after a lockfile change is allowed: run `npm ci --ignore-scripts`, then the usual checks (`npm run test:all`, Cargo checks, and builds).
 
-Do not run `npm run workspace:prepare`, `npm run test:all`, Cargo checks, builds, or tests on a workstation immediately after updating locks. Those commands execute dependency code. If local validation is necessary, use a disposable VM with no credentials, mounted home directory, SSH agent, signing keys, cloud metadata access, or persistent package caches.
+The hard rule is the three-day (72-hour) minimum release age for both npm and Cargo, applied to direct and transitive packages. It is the guard against newly published supply-chain attacks. Keep `min-release-age=3` and `ignore-scripts=true` in `.npmrc`, and do not lower the age or bypass the check except through the emergency override below.
 
 The three-day delay reduces exposure to newly published supply-chain attacks; it cannot prove that an older package is benign. Emergency young-crate and Git overrides must name one exact version or revision and include a written reason.

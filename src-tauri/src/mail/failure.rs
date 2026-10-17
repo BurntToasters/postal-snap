@@ -125,30 +125,44 @@ pub fn body_status(error: &MailError) -> Option<&'static str> {
 mod tests {
     use super::*;
 
-    // Failure modes for decisions that used to read error wording:
-    // 1. Rewording a sign-in error stops the worker from pausing, so a
-    //    rejected password is retried until the provider locks the account.
-    // 2. A timeout or dropped connection pauses the account as "Sign-in
-    //    failed" and waits for a new password.
-    // 3. The reader shows an error page instead of the envelope when the
-    //    body is unavailable for an expected reason.
-    // 4. An unreadable (quarantined) message is retried or shown as offline.
-    // 5. Converting to a String for older callers loses the wording.
-    // IPC conversion must preserve the kind and redact arbitrary server text.
+    // Failure modes:
+    // 1. Rewording changes retry or connection-stage behavior.
+    // 2. Readers hide expected envelopes or quarantined mail retries.
+    // 3. Conversion loses kind, code, retry policy, stage, or redaction.
+    // 4. Permitted authored wording is lost or arbitrary text reaches the UI.
+    // 5. `Other` bypasses the legacy classifier.
     #[test]
     fn ipc_failure_kind_does_not_depend_on_prose() {
-        for (kind, code) in [
-            (FailureKind::SignInRejected, "authenticationFailed"),
-            (FailureKind::Connection, "connectionFailed"),
-            (FailureKind::TooLarge, "limitExceeded"),
-            (FailureKind::Unreadable, "operationFailed"),
-            (FailureKind::LocalStorage, "localStorageFailed"),
+        for (kind, code, retryable) in [
+            (FailureKind::SignInRejected, "authenticationFailed", true),
+            (FailureKind::Connection, "connectionFailed", true),
+            (FailureKind::TooLarge, "limitExceeded", false),
+            (FailureKind::Unreadable, "operationFailed", false),
+            (FailureKind::LocalStorage, "localStorageFailed", true),
         ] {
             let error: crate::models::IpcError =
                 MailError::new(kind, "private@example.test /private/file").into();
             assert_eq!(error.code, code);
+            assert_eq!(error.retryable, retryable);
+            assert_eq!(error.stage, None);
             assert!(!error.message.contains("private"));
         }
+    }
+
+    #[test]
+    fn other_kind_keeps_legacy_ipc_classification_and_text_rules() {
+        let connection: crate::models::IpcError = MailError::from(
+            "Incoming connection failed for private@example.test at /private/mail.db.".to_string(),
+        )
+        .into();
+        assert_eq!(connection.code, "connectionFailed");
+        assert!(connection.retryable);
+        assert!(!connection.message.contains("private"));
+
+        let validation: crate::models::IpcError =
+            MailError::from("Enter one recipient.".to_string()).into();
+        assert_eq!(validation.code, "invalidInput");
+        assert_eq!(validation.message, "Enter one recipient.");
     }
 
     #[test]

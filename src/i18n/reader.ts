@@ -155,6 +155,11 @@ export const reader = {
   retryImages: "Retry loading images",
   messageContent: "Message content",
   attachments: "Attachments",
+  attachmentsNotDownloaded: (size: string) =>
+    `Attachments are not downloaded yet (${size} message).`,
+  downloadFullMessage: "Download full message",
+  downloadingFullMessage: "Downloading full message…",
+  attachmentsOnlineOnly: "Attachments are available when you are online.",
   showFiles: (count: number) =>
     count === 1 ? "Show 1 file" : `Show ${count} files`,
   preview: "Preview",

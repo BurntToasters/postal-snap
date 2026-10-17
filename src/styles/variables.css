@@ -49,6 +49,14 @@
   --folder-archive: #6e6e73;
   --folder-trash: #d70015;
   --folder-junk: #7d2ae8;
+  /* Account identity colors stay stable across themes. */
+  --avatar-teal: #00868a;
+  --avatar-green: #27843c;
+  --avatar-amber: #9a6700;
+  --avatar-orange: #c65300;
+  --avatar-red: #c42b1c;
+  --avatar-pink: #bd3975;
+  --avatar-purple: #7651c9;
 
   --radius-xs: 7px;
   --radius-sm: 9px;
@@ -62,14 +70,55 @@
   --space-5: 1.25rem;
   --space-6: 1.5rem;
   --settings-nav-width: 14rem;
-  --settings-control-width: 14rem;
+  --settings-control-width: 13.75rem;
+  --settings-field-min-width: 12rem;
   --settings-window-width: 64rem;
   --settings-window-height: 46rem;
+  --settings-empty-padding-block: 2rem;
+  --settings-empty-icon-size: 1.875rem;
+  --settings-signature-min-height: 5.5rem;
+  --settings-chip-height: 2.25rem;
+  --settings-update-icon-size: 2rem;
   --control-height: 2.75rem;
   --toolbar-height: 3.75rem;
   /* Density tokens: size UI with these, never literals, so compact
      (below) can restyle everything by overriding them. */
   --target-size: 44px;
+  --account-avatar-size: 32px;
+  --account-avatar-font-size: min(
+    0.9rem,
+    calc(var(--account-avatar-size) * 0.45)
+  );
+  --sender-avatar-size: 42px;
+  --sender-avatar-font-size: min(1rem, calc(var(--sender-avatar-size) * 0.4));
+  --sender-avatar-narrow-size: 38px;
+  --provider-symbol-size: 50px;
+  --provider-arrow-size: 34px;
+  --setup-icon-size: 2.125rem;
+  --setup-step-size: 1.875rem;
+  --setup-progress-width: 11.25rem;
+  --setup-preview-list-width: 6.875rem;
+  --setup-preview-min-height: 8.25rem;
+  --setup-page-padding: 1.75rem;
+  --setup-card-padding: clamp(1.5rem, 5vw, 2.625rem);
+  --composer-resize-gutter: calc(var(--target-size) + var(--space-2));
+  --composer-editor-min-height: 10rem;
+  --composer-table-cell-min-width: 5rem;
+  --composer-options-menu-min-width: 12.5rem;
+  --composer-docked-pill-max-width: 23.75rem;
+  --composer-docked-restore-min-width: 11.25rem;
+  --composer-docked-restore-max-width: 16.25rem;
+  --menu-search-min-width: 15.625rem;
+  --mailbox-more-menu-min-width: 15rem;
+  --mailbox-filter-menu-min-width: 12rem;
+  --reader-more-menu-min-width: 16rem;
+  --context-menu-min-width: 12.5rem;
+  --search-box-min-width: 9.375rem;
+  --account-select-arrow-space: 2.125rem;
+  --get-mail-menu-min-width: 14rem;
+  --caption-button-width: 46px;
+  --caption-controls-space: 150px;
+  --mac-traffic-light-space: 84px;
   /* Composer field labels; rem so the column grows with text size. */
   --address-label-width: 5rem;
   /* The letter keeps a readable height; the reader scrolls past it in short windows. */
@@ -244,6 +293,44 @@
   --settings-row-height: min(2.5rem, 52px);
   --button-lg-height: min(2.25rem, 50px);
   --provider-button-height: min(3.5rem, 82px);
+  --settings-control-width: min(12.5rem, 13.75rem);
+  --settings-field-min-width: 11rem;
+  --settings-empty-padding-block: 1.5rem;
+  --settings-empty-icon-size: 1.625rem;
+  --settings-signature-min-height: 4.5rem;
+  --settings-chip-height: 2rem;
+  --settings-update-icon-size: 1.75rem;
+  --account-avatar-size: 30px;
+  --account-avatar-font-size: min(
+    0.9rem,
+    calc(var(--account-avatar-size) * 0.45)
+  );
+  --sender-avatar-size: 38px;
+  --sender-avatar-font-size: min(1rem, calc(var(--sender-avatar-size) * 0.4));
+  --sender-avatar-narrow-size: 36px;
+  --provider-symbol-size: min(2.5rem, 42px);
+  --provider-arrow-size: min(2rem, 32px);
+  --setup-icon-size: 2rem;
+  --setup-step-size: 1.75rem;
+  --setup-progress-width: 10rem;
+  --setup-preview-list-width: 6rem;
+  --setup-preview-min-height: 7.5rem;
+  --setup-page-padding: 1.25rem;
+  --setup-card-padding: clamp(1rem, 4vw, 2rem);
+  --composer-editor-min-height: 9rem;
+  --composer-table-cell-min-width: 4rem;
+  --composer-options-menu-min-width: 11.5rem;
+  --composer-docked-pill-max-width: min(22rem, 23.75rem);
+  --composer-docked-restore-min-width: min(10rem, 11.25rem);
+  --composer-docked-restore-max-width: min(14rem, 16.25rem);
+  --menu-search-min-width: 14rem;
+  --mailbox-more-menu-min-width: 13.5rem;
+  --mailbox-filter-menu-min-width: 11rem;
+  --reader-more-menu-min-width: 14.5rem;
+  --context-menu-min-width: 11.5rem;
+  --search-box-min-width: min(8rem, 9.375rem);
+  --account-select-arrow-space: 2rem;
+  --get-mail-menu-min-width: 12.5rem;
   --folder-indent: 0.75rem;
   --bar-height-sm: min(2.5rem, 48px);
   --bar-height-md: min(2.75rem, 56px);

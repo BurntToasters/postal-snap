@@ -1,19 +1,28 @@
-use std::{collections::HashSet, future::Future, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    future::Future,
+    time::Duration,
+};
 
 use async_imap::extensions::idle::IdleResponse;
 use chrono::{DateTime, Utc};
 use futures_util::TryStreamExt;
 use tokio::sync::Notify;
 
+use async_imap::types::Mailbox;
+
+use super::connect::connect_imap;
 use super::failure::{FailureKind, MailError};
+use super::list_status::{self, ListStatusError, ListedName};
 use super::parse::{
-    internal_date, parse_envelope, parse_message, received_at_fallback, reply_flags, system_flags,
+    internal_date, parse_envelope, parse_message, parse_partial_message, received_at_fallback,
+    reply_flags, system_flags,
 };
 use super::pool::{self, Lease};
 use super::qresync::{
     decide_expunge_path, drain_vanished, plan_vanished, ExpungePath, VanishedPlan,
 };
-use super::send::{connect_imap, test_smtp};
+use super::send::test_smtp;
 use super::{
     BodyBudget, BACKFILL_MESSAGE_BATCH, IMAP_COMMAND_TIMEOUT, INITIAL_MESSAGE_BATCH,
     MAX_MESSAGE_BYTES,
@@ -22,7 +31,8 @@ use crate::{
     db::{CachedMessage, Database},
     models::{
         mailbox_role_assignment, AccountRecord, AccountSetupRequest, CachePolicy, MailboxRole,
-        MessageSummary, ProviderKind, SearchQuery, ServerConfig,
+        MessageSummary, ProviderKind, SearchQuery, ServerConfig, ROLE_SOURCE_NAME,
+        ROLE_SOURCE_SPECIAL_USE,
     },
     security::redact_error,
 };
@@ -35,6 +45,34 @@ const PREFETCH_TOTAL_BYTES: u64 = MAX_MESSAGE_BYTES as u64;
 /// Bodies requested per prefetch command, so each round trip stays short and
 /// the pass can yield to waiting user actions between batches.
 const PREFETCH_BATCH: u32 = 10;
+
+/// Messages above this size prefetch only their first bytes, unless the user
+/// keeps attachments offline. The full body downloads when it is needed.
+pub(crate) const PARTIAL_BODY_THRESHOLD: u64 = 1024 * 1024;
+
+/// Bytes requested for a partial body.
+pub(crate) const PARTIAL_BODY_BYTES: usize = 256 * 1024;
+
+/// Whether a body request asks for the whole message or its first bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BodyFetch {
+    Full,
+    Partial,
+}
+
+pub(crate) fn body_fetch_for(size: u64, keep_attachments_offline: bool) -> BodyFetch {
+    if keep_attachments_offline || size <= PARTIAL_BODY_THRESHOLD {
+        BodyFetch::Full
+    } else {
+        BodyFetch::Partial
+    }
+}
+
+/// A server that ignores the range sends the whole message, which is longer
+/// than the prefix and must be handled as a full body.
+pub(crate) fn response_is_partial(requested: BodyFetch, raw_len: usize) -> bool {
+    requested == BodyFetch::Partial && raw_len <= PARTIAL_BODY_BYTES
+}
 
 /// Upper bound on new-mail chunks pulled in a single sync pass.
 const MAX_NEW_MAIL_CHUNKS: u32 = 200;
@@ -107,7 +145,7 @@ pub async fn probe_mail_login(
     secret: &str,
     xoauth2: bool,
 ) -> Result<(), String> {
-    let mut session = super::send::connect_imap_auth(imap, secret, xoauth2)
+    let mut session = super::connect::connect_imap_auth(imap, secret, xoauth2)
         .await
         .map_err(|error| format!("IMAP connection test failed: {error}"))?;
     let _ = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.logout()).await;
@@ -167,6 +205,8 @@ struct ListedFolder {
     /// Junk, Trash and `\All` bodies are never prefetched: they are either
     /// unwanted or duplicate every other folder (Gmail-style All Mail).
     skip_prefetch: bool,
+    /// STATUS from a LIST-STATUS reply; None means ask the server.
+    prefetched: Option<Mailbox>,
 }
 
 fn folder_rank(role: &MailboxRole) -> u8 {
@@ -193,60 +233,85 @@ async fn list_folders(
         .await
         .map_err(|_| "Mailbox discovery timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Mailbox discovery"))?;
-    let mut folders = Vec::new();
-    for name in names {
-        let attributes = name
-            .attributes()
-            .iter()
-            .map(|attribute| match attribute {
-                async_imap::types::NameAttribute::NoSelect => "NoSelect".to_string(),
-                async_imap::types::NameAttribute::NoInferiors => "NoInferiors".to_string(),
-                async_imap::types::NameAttribute::Marked => "Marked".to_string(),
-                async_imap::types::NameAttribute::Unmarked => "Unmarked".to_string(),
-                async_imap::types::NameAttribute::Extension(val) => val.to_string(),
-                _ => format!("{attribute:?}"),
-            })
-            .collect::<Vec<_>>();
-        let has = |expected: &str| {
-            attributes.iter().any(|attribute| {
-                attribute
-                    .trim_start_matches('\\')
-                    .eq_ignore_ascii_case(expected)
-            })
-        };
-        if has("NoSelect") || has("NonExistent") {
-            continue;
-        }
-        let mailbox_name = super::utf7::decode(name.name());
-        let lower_name = mailbox_name.to_ascii_lowercase();
-        let bridge_all = *provider == ProviderKind::ProtonBridge
-            && (has("All") || matches!(lower_name.as_str(), "all mail" | "allmail" | "all"));
-        let bridge_label = *provider == ProviderKind::ProtonBridge
-            && (lower_name == "labels"
-                || name
-                    .delimiter()
-                    .filter(|delimiter| !delimiter.is_empty())
-                    .is_some_and(|delimiter| {
-                        lower_name.starts_with(&format!("labels{delimiter}"))
-                    }));
-        // Bridge labels and All Mail retain their hierarchy and names.
-        let (role, role_source) = if bridge_all || bridge_label {
-            (MailboxRole::Other, crate::models::ROLE_SOURCE_NAME)
-        } else {
-            mailbox_role_assignment(&mailbox_name, &attributes)
-        };
-        let skip_prefetch =
-            matches!(role, MailboxRole::Junk | MailboxRole::Trash) || has("All") || bridge_all;
-        folders.push(ListedFolder {
+    let listed: Vec<ListedName> = names
+        .iter()
+        .map(|name| ListedName {
+            wire_name: name.name().to_string(),
             delimiter: name.delimiter().map(ToOwned::to_owned),
-            name: mailbox_name,
-            role,
-            role_source,
-            skip_prefetch,
-        });
-    }
+            attributes: list_status::attribute_names(name.attributes()),
+        })
+        .collect();
+    Ok(folders_from_listing(&listed, HashMap::new(), provider))
+}
+
+/// Selectable folders from LIST entries. A STATUS from the same reply is
+/// attached to the folder it names. Every STATUS is consumed here, so a
+/// NoSelect or unknown name's STATUS is dropped.
+fn folders_from_listing(
+    names: &[ListedName],
+    mut statuses: HashMap<String, Mailbox>,
+    provider: &ProviderKind,
+) -> Vec<ListedFolder> {
+    let mut folders: Vec<ListedFolder> = names
+        .iter()
+        .filter_map(|listed| {
+            let mut folder = build_folder(listed, provider)?;
+            folder.prefetched = statuses.remove(&listed.wire_name);
+            Some(folder)
+        })
+        .collect();
     folders.sort_by_key(|folder| folder_rank(&folder.role));
-    Ok(folders)
+    folders
+}
+
+/// A folder from one LIST entry, or None for NoSelect and NonExistent names.
+fn build_folder(listed: &ListedName, provider: &ProviderKind) -> Option<ListedFolder> {
+    let attributes = &listed.attributes;
+    let has = |expected: &str| {
+        attributes.iter().any(|attribute| {
+            attribute
+                .trim_start_matches('\\')
+                .eq_ignore_ascii_case(expected)
+        })
+    };
+    if has("NoSelect") || has("NonExistent") {
+        return None;
+    }
+    let mailbox_name = super::utf7::decode(&listed.wire_name);
+    let lower_name = mailbox_name.to_ascii_lowercase();
+    let delimiter = listed.delimiter.as_deref();
+    let bridge_all = *provider == ProviderKind::ProtonBridge
+        && (has("All") || matches!(lower_name.as_str(), "all mail" | "allmail" | "all"));
+    let bridge_label = *provider == ProviderKind::ProtonBridge
+        && (lower_name == "labels"
+            || delimiter
+                .filter(|delimiter| !delimiter.is_empty())
+                .is_some_and(|delimiter| lower_name.starts_with(&format!("labels{delimiter}"))));
+    // Bridge labels and All Mail retain their hierarchy and names.
+    let (role, role_source) = if bridge_all || bridge_label {
+        (MailboxRole::Other, ROLE_SOURCE_NAME)
+    } else {
+        mailbox_role_assignment(&mailbox_name, attributes)
+    };
+    let skip_prefetch =
+        matches!(role, MailboxRole::Junk | MailboxRole::Trash) || has("All") || bridge_all;
+    Some(ListedFolder {
+        delimiter: listed.delimiter.clone(),
+        name: mailbox_name,
+        role,
+        role_source,
+        skip_prefetch,
+        prefetched: None,
+    })
+}
+
+/// STATUS items for a pass. HIGHESTMODSEQ only with CONDSTORE.
+fn status_items(condstore: bool) -> &'static str {
+    if condstore {
+        "(MESSAGES UNSEEN UIDNEXT UIDVALIDITY HIGHESTMODSEQ)"
+    } else {
+        "(MESSAGES UNSEEN UIDNEXT UIDVALIDITY)"
+    }
 }
 
 /// Park the session, let waiting user actions run, then take the account and
@@ -293,8 +358,17 @@ impl PassBudget {
     }
 }
 
-/// One sync pass over every selectable folder. A folder that fails is
-/// recorded and skipped; only losing the connection itself fails the pass.
+/// Which folders a pass covers. `Folders` takes its list from the cache, so
+/// it never reconciles the folder list or evicts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SyncScope {
+    All,
+    Folders(Vec<String>),
+}
+
+/// One full sync pass for tests. A folder that fails is recorded and skipped;
+/// only losing the connection itself fails the pass.
+#[cfg(test)]
 pub async fn sync_account<H: SyncHooks>(
     db: &Database,
     account: &AccountRecord,
@@ -302,14 +376,54 @@ pub async fn sync_account<H: SyncHooks>(
     policy: &CachePolicy,
     hooks: &mut H,
 ) -> Result<SyncOutcome, MailError> {
+    sync_account_scoped(db, account, password, policy, SyncScope::All, hooks).await
+}
+
+/// A sync pass over `scope`. Folder-scoped passes skip LIST, folder
+/// reconciliation and cache eviction; the full pass owns those.
+pub async fn sync_account_scoped<H: SyncHooks>(
+    db: &Database,
+    account: &AccountRecord,
+    password: &str,
+    policy: &CachePolicy,
+    scope: SyncScope,
+    hooks: &mut H,
+) -> Result<SyncOutcome, MailError> {
     let account_id = &account.summary.id;
     let mut lease = pool::checkout(account, password).await?;
-    let folders = match list_folders(&mut lease, &account.summary.provider).await {
-        Ok(folders) => folders,
-        Err(error) => {
-            lease.discard();
-            return Err(MailError::connection(error));
+    let folders = match &scope {
+        SyncScope::All => {
+            // One LIST-STATUS round trip when offered. Any refusal or bad
+            // reply uses the legacy LIST plus per-folder STATUS path.
+            let condstore = lease.capabilities.condstore;
+            let special_use = lease.capabilities.special_use;
+            let answered = if lease.capabilities.list_status {
+                match list_status::fetch(&mut lease, status_items(condstore), special_use).await {
+                    Ok(reply) => Some(reply),
+                    Err(ListStatusError::Broken) => {
+                        lease.discard();
+                        lease = pool::checkout(account, password).await?;
+                        None
+                    }
+                    Err(ListStatusError::Refused | ListStatusError::Rejected) => None,
+                }
+            } else {
+                None
+            };
+            match answered {
+                Some(reply) => {
+                    folders_from_listing(&reply.names, reply.statuses, &account.summary.provider)
+                }
+                None => match list_folders(&mut lease, &account.summary.provider).await {
+                    Ok(folders) => folders,
+                    Err(error) => {
+                        lease.discard();
+                        return Err(MailError::connection(error));
+                    }
+                },
+            }
         }
+        SyncScope::Folders(names) => folders_in_scope(db, account_id, names)?,
     };
     let usage = db.account_cache_usage(account_id, policy.max_bytes)?;
     let mut budget = PassBudget {
@@ -346,15 +460,74 @@ pub async fn sync_account<H: SyncHooks>(
             }
         }
     }
-    db.reconcile_mailboxes(account_id, &server_mailboxes)?;
+    reconcile_scope(db, account_id, &scope, &server_mailboxes)?;
     lease.release();
-    let db = db.clone();
-    let account_id = account_id.clone();
-    let policy = policy.clone();
-    tokio::task::spawn_blocking(move || db.evict_account_to_policy(&account_id, &policy))
-        .await
-        .map_err(|_| "Local mail cleanup stopped unexpectedly.".to_string())??;
+    if scope == SyncScope::All {
+        let db = db.clone();
+        let account_id = account_id.clone();
+        let policy = policy.clone();
+        tokio::task::spawn_blocking(move || db.evict_account_to_policy(&account_id, &policy))
+            .await
+            .map_err(|_| "Local mail cleanup stopped unexpectedly.".to_string())??;
+    }
     Ok(outcome)
+}
+
+/// Only a full pass saw every server folder, so only it may delete local
+/// folders that the server no longer lists.
+pub(crate) fn reconcile_scope(
+    db: &Database,
+    account_id: &str,
+    scope: &SyncScope,
+    server_names: &HashSet<String>,
+) -> Result<(), String> {
+    match scope {
+        SyncScope::All => db.reconcile_mailboxes(account_id, server_names),
+        SyncScope::Folders(_) => Ok(()),
+    }
+}
+
+/// Folders named by a scoped pass, read from the cache. Unknown names are
+/// skipped: the next full pass creates them. The stored role source is kept,
+/// because the upsert writes it back.
+fn folders_in_scope(
+    db: &Database,
+    account_id: &str,
+    names: &[String],
+) -> Result<Vec<ListedFolder>, String> {
+    let cached = db.list_mailboxes(account_id)?;
+    let sources: std::collections::HashMap<String, String> = {
+        let conn = db.read_conn()?;
+        let mut statement = conn
+            .prepare("SELECT name, role_source FROM mailboxes WHERE account_id=?1")
+            .map_err(|_| "Mail folders could not be read.".to_string())?;
+        let rows = statement
+            .query_map([account_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|_| "Mail folders could not be read.".to_string())?
+            .collect::<Result<_, _>>()
+            .map_err(|_| "Mail folders could not be read.".to_string())?;
+        rows
+    };
+    Ok(cached
+        .into_iter()
+        .filter(|folder| names.contains(&folder.name))
+        .map(|folder| {
+            let role_source = match sources.get(&folder.name).map(String::as_str) {
+                Some(ROLE_SOURCE_SPECIAL_USE) => ROLE_SOURCE_SPECIAL_USE,
+                _ => ROLE_SOURCE_NAME,
+            };
+            ListedFolder {
+                skip_prefetch: matches!(folder.role, MailboxRole::Junk | MailboxRole::Trash),
+                name: folder.name,
+                delimiter: folder.delimiter,
+                role: folder.role,
+                role_source,
+                prefetched: None,
+            }
+        })
+        .collect())
 }
 
 async fn sync_folder<H: SyncHooks>(
@@ -369,16 +542,17 @@ async fn sync_folder<H: SyncHooks>(
     let account_id = &account.summary.id;
     let quick = hooks.quick();
     let condstore = lease.capabilities.condstore;
-    let items = if condstore {
-        "(MESSAGES UNSEEN UIDNEXT UIDVALIDITY HIGHESTMODSEQ)"
-    } else {
-        "(MESSAGES UNSEEN UIDNEXT UIDVALIDITY)"
-    };
     let wire_name = lease.mailbox_name(&folder.name);
-    let status = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.status(&wire_name, items))
+    let status = match &folder.prefetched {
+        Some(status) => status.clone(),
+        None => tokio::time::timeout(
+            IMAP_COMMAND_TIMEOUT,
+            lease.status(&wire_name, status_items(condstore)),
+        )
         .await
         .map_err(|_| "Mailbox status timed out.".to_string())?
-        .map_err(|error| redact_error(&error, "Mailbox status"))?;
+        .map_err(|error| redact_error(&error, "Mailbox status"))?,
+    };
     let previous = match db.mailbox_id_for_name(account_id, &folder.name)? {
         Some(id) => Some(db.mailbox_sync_meta(id)?),
         None => None,
@@ -812,6 +986,28 @@ async fn backfill_batch(
     })
 }
 
+/// (uid, first flag, second flag) for `reconcile_flags` and `reconcile_reply_flags`.
+type FlagRow = (u32, bool, bool);
+
+/// Seen/flagged rows and answered/forwarded rows for one UID FLAGS batch.
+fn flag_rows(rows: &[async_imap::types::Fetch]) -> (Vec<FlagRow>, Vec<FlagRow>) {
+    let changed = rows
+        .iter()
+        .filter_map(|item| {
+            let (seen, flagged) = system_flags(item);
+            item.uid.map(|uid| (uid, seen, flagged))
+        })
+        .collect::<Vec<_>>();
+    let replies = rows
+        .iter()
+        .filter_map(|item| {
+            let (answered, forwarded) = reply_flags(item);
+            item.uid.map(|uid| (uid, answered, forwarded))
+        })
+        .collect::<Vec<_>>();
+    (changed, replies)
+}
+
 /// Fetch flag changes since `since`. With QRESYNC, the same command reports
 /// expunged UIDs (VANISHED) and they are applied here; the returned plan tells
 /// the caller whether `reconcile_expunges` can be skipped.
@@ -846,20 +1042,7 @@ async fn sync_changed_flags(
         let (ranges, drained) = drain_vanished(lease);
         plan_vanished(&ranges, drained)
     });
-    let changed = rows
-        .iter()
-        .filter_map(|item| {
-            let (seen, flagged) = system_flags(item);
-            item.uid.map(|uid| (uid, seen, flagged))
-        })
-        .collect::<Vec<_>>();
-    let replies = rows
-        .iter()
-        .filter_map(|item| {
-            let (answered, forwarded) = reply_flags(item);
-            item.uid.map(|uid| (uid, answered, forwarded))
-        })
-        .collect::<Vec<_>>();
+    let (changed, replies) = flag_rows(&rows);
     db.reconcile_reply_flags(mailbox_id, &replies)?;
     db.reconcile_flags(mailbox_id, &changed, &[])?;
     if let Some(VanishedPlan::Apply(uids)) = &plan {
@@ -884,20 +1067,7 @@ async fn full_flag_scan(lease: &mut Lease, db: &Database, mailbox_id: i64) -> Re
         .await
         .map_err(|_| "Flag sync timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Flag sync"))?;
-        let seen = rows
-            .iter()
-            .filter_map(|item| {
-                let (seen, flagged) = system_flags(item);
-                item.uid.map(|uid| (uid, seen, flagged))
-            })
-            .collect::<Vec<_>>();
-        let replies = rows
-            .iter()
-            .filter_map(|item| {
-                let (answered, forwarded) = reply_flags(item);
-                item.uid.map(|uid| (uid, answered, forwarded))
-            })
-            .collect::<Vec<_>>();
+        let (seen, replies) = flag_rows(&rows);
         db.reconcile_reply_flags(mailbox_id, &replies)?;
         db.reconcile_flags(mailbox_id, &seen, chunk)?;
     }
@@ -946,7 +1116,7 @@ async fn prefetch_bodies<H: SyncHooks>(
                 .prefetch_candidates(mailbox_id, policy, 1, u64::MAX, MAX_MESSAGE_BYTES as u64)?
                 .is_empty());
         }
-        let candidates = db.prefetch_candidates(
+        let candidates = db.prefetch_candidate_rows(
             mailbox_id,
             policy,
             PREFETCH_BATCH,
@@ -964,7 +1134,7 @@ async fn prefetch_bodies<H: SyncHooks>(
 
 /// Parse on the blocking pool so a hostile MIME body cannot stall a runtime
 /// worker while the account lock is held.
-async fn parse_message_off_runtime(
+async fn parse_full_off_runtime(
     uid: u32,
     raw: &[u8],
     seen: bool,
@@ -981,31 +1151,152 @@ async fn parse_message_off_runtime(
     .map_err(MailError::from)
 }
 
+/// Like `parse_full_off_runtime` for a prefix. `None` means the prefix cannot
+/// stand alone and the whole message must be fetched.
+async fn parse_partial_off_runtime(
+    uid: u32,
+    raw: &[u8],
+    declared_size: u64,
+    seen: bool,
+    flagged: bool,
+    fallback: Option<String>,
+) -> Result<Option<CachedMessage>, MailError> {
+    let raw = raw.to_vec();
+    tokio::task::spawn_blocking(move || {
+        parse_partial_message(uid, &raw, declared_size, seen, flagged, fallback.as_deref())
+    })
+    .await
+    .map_err(|_| MailError::new(FailureKind::Unreadable, "Message parsing was interrupted."))?
+    .map_err(MailError::from)
+}
+
+/// Runs one parse under the quarantine count. The attempt is counted before
+/// the parser starts, so an attempt that never returns still counts.
+pub(crate) async fn guard_parse<T>(
+    db: &Database,
+    mailbox_id: i64,
+    uid: u32,
+    parse: impl Future<Output = Result<T, MailError>>,
+) -> Result<T, MailError> {
+    db.begin_parse(mailbox_id, uid)
+        .map_err(MailError::local_storage)?;
+    let parsed = parse.await;
+    if matches!(&parsed, Err(error) if error.kind == FailureKind::Unreadable) {
+        db.quarantine_parse(mailbox_id, uid)
+            .map_err(MailError::local_storage)?;
+    } else {
+        db.end_parse(mailbox_id, uid)
+            .map_err(MailError::local_storage)?;
+    }
+    parsed
+}
+
+#[derive(Default)]
+struct BatchState {
+    budget: BodyBudget,
+    delivered: HashSet<u32>,
+    repair_ids: Vec<String>,
+    consumed: u64,
+}
+
+/// Candidate rows for one prefetch batch, keyed by UID.
+struct BatchRow {
+    received_at: String,
+    size: u64,
+}
+
 async fn download_body_batch(
     lease: &mut Lease,
     db: &Database,
     mailbox_id: i64,
     uid_validity: u32,
-    candidates: &[(u32, String)],
+    candidates: &[(u32, String, u64)],
 ) -> Result<u64, String> {
-    let cached_by_uid = candidates
+    let keep_offline = db.keep_attachments_offline();
+    let rows: HashMap<u32, BatchRow> = candidates
         .iter()
-        .cloned()
-        .collect::<std::collections::HashMap<_, _>>();
-    let range = candidates
+        .map(|(uid, received_at, size)| {
+            (
+                *uid,
+                BatchRow {
+                    received_at: received_at.clone(),
+                    size: *size,
+                },
+            )
+        })
+        .collect();
+    let (partial, full): (Vec<u32>, Vec<u32>) =
+        candidates.iter().map(|(uid, _, _)| *uid).partition(|uid| {
+            let size = rows.get(uid).map_or(0, |row| row.size);
+            body_fetch_for(size, keep_offline) == BodyFetch::Partial
+        });
+    let mut state = BatchState::default();
+    let mut whole = full;
+    if !partial.is_empty() {
+        // A rejected prefix is fetched whole in the same batch.
+        whole.extend(
+            fetch_body_group(
+                lease,
+                db,
+                mailbox_id,
+                uid_validity,
+                &partial,
+                BodyFetch::Partial,
+                &rows,
+                &mut state,
+            )
+            .await?,
+        );
+    }
+    if !whole.is_empty() {
+        fetch_body_group(
+            lease,
+            db,
+            mailbox_id,
+            uid_validity,
+            &whole,
+            BodyFetch::Full,
+            &rows,
+            &mut state,
+        )
+        .await?;
+    }
+    if !state.repair_ids.is_empty() {
+        let _ = db.repair_thread_roots_batch(&parsed_account(db, mailbox_id)?, &state.repair_ids);
+    }
+    for (uid, _, _) in candidates {
+        if !state.delivered.contains(uid) {
+            db.record_prefetch_failure(mailbox_id, *uid)?;
+        }
+    }
+    Ok(state.consumed)
+}
+
+/// Fetch and store one group of bodies. Returns the UIDs whose prefix was
+/// rejected, which the caller must fetch whole.
+#[allow(clippy::too_many_arguments)]
+async fn fetch_body_group(
+    lease: &mut Lease,
+    db: &Database,
+    mailbox_id: i64,
+    uid_validity: u32,
+    uids: &[u32],
+    fetch: BodyFetch,
+    rows: &HashMap<u32, BatchRow>,
+    state: &mut BatchState,
+) -> Result<Vec<u32>, String> {
+    let range = uids
         .iter()
-        .map(|(uid, _)| uid.to_string())
+        .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(",");
-    let body_query = body_fetch_query("UID FLAGS RFC822.SIZE INTERNALDATE");
+    let body_query = body_fetch_query_for("UID FLAGS RFC822.SIZE INTERNALDATE", fetch);
     let mut fetched =
         tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.uid_fetch(range, body_query))
             .await
             .map_err(|_| "Message prefetch timed out.".to_string())?
             .map_err(|error| redact_error(&error, "Message prefetch"))?;
-    let mut budget = BodyBudget::default();
-    let mut delivered = HashSet::new();
-    let mut consumed = 0u64;
+    let mut rejected = Vec::new();
     loop {
         let next = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, fetched.try_next())
             .await
@@ -1020,44 +1311,64 @@ async fn download_body_batch(
         // The delivered length decides, never the declared RFC822.SIZE, and
         // the cumulative budget stops a hostile server from filling memory or
         // the database. Over-budget bodies are drained and dropped.
-        if !budget.admit(raw.len(), MAX_MESSAGE_BYTES, PREFETCH_TOTAL_BYTES as usize) {
+        if !state
+            .budget
+            .admit(raw.len(), MAX_MESSAGE_BYTES, PREFETCH_TOTAL_BYTES as usize)
+        {
             continue;
         }
+        let partial = response_is_partial(fetch, raw.len());
         let (seen, flagged) = system_flags(&item);
-        let fallback = received_at_fallback(&item, cached_by_uid.get(&uid).map(String::as_str));
-        db.begin_parse(mailbox_id, uid)?;
-        let parsed = parse_message_off_runtime(uid, raw, seen, flagged, fallback).await;
-        // A panic quarantines at once; other errors use normal backoff.
-        if matches!(&parsed, Err(error) if error.kind == FailureKind::Unreadable) {
-            db.quarantine_parse(mailbox_id, uid)?;
+        let cached_received_at = rows.get(&uid).map(|row| row.received_at.as_str());
+        let fallback = received_at_fallback(&item, cached_received_at);
+        let internal_at = internal_date(&item);
+        let declared_size = item
+            .size
+            .map(u64::from)
+            .or_else(|| rows.get(&uid).map(|row| row.size))
+            .unwrap_or(raw.len() as u64);
+        let parsed = if partial {
+            guard_parse(
+                db,
+                mailbox_id,
+                uid,
+                parse_partial_off_runtime(uid, raw, declared_size, seen, flagged, fallback),
+            )
+            .await
         } else {
-            db.end_parse(mailbox_id, uid)?;
-        }
+            guard_parse(db, mailbox_id, uid, async {
+                parse_full_off_runtime(uid, raw, seen, flagged, fallback)
+                    .await
+                    .map(Some)
+            })
+            .await
+        };
         match parsed {
-            Ok(mut parsed) => {
-                parsed.internal_at = internal_date(&item);
-                consumed = consumed.saturating_add(raw.len() as u64);
-                delivered.insert(uid);
-                if db.attach_body_if_current(mailbox_id, uid_validity, &parsed)? {
-                    let id = parsed
-                        .message_id
-                        .clone()
-                        .unwrap_or_else(|| crate::db::synthetic_thread_id(mailbox_id, parsed.uid));
-                    let _ = db.repair_thread_roots(&parsed_account(db, mailbox_id)?, &[id]);
+            Ok(Some(mut parsed)) => {
+                parsed.internal_at = internal_at;
+                state.consumed = state.consumed.saturating_add(raw.len() as u64);
+                state.delivered.insert(uid);
+                let stored = if partial {
+                    db.attach_partial_body_if_current(mailbox_id, uid_validity, &parsed)?
+                } else {
+                    db.attach_body_if_current(mailbox_id, uid_validity, &parsed)?
+                };
+                if stored {
+                    state.repair_ids.push(
+                        parsed.message_id.clone().unwrap_or_else(|| {
+                            crate::db::synthetic_thread_id(mailbox_id, parsed.uid)
+                        }),
+                    );
                 }
             }
+            Ok(None) => rejected.push(uid),
             Err(_) => {
-                delivered.insert(uid);
+                state.delivered.insert(uid);
                 db.record_prefetch_failure(mailbox_id, uid)?;
             }
         }
     }
-    for (uid, _) in candidates {
-        if !delivered.contains(uid) {
-            db.record_prefetch_failure(mailbox_id, *uid)?;
-        }
-    }
-    Ok(consumed)
+    Ok(rejected)
 }
 
 fn parsed_account(db: &Database, mailbox_id: i64) -> Result<String, String> {
@@ -1587,7 +1898,7 @@ pub async fn download_message(
         let fallback = received_at_fallback(&item, cached_received_at);
         // Only the parse itself is counted, never the network download.
         before_parse().map_err(MailError::local_storage)?;
-        let mut parsed = parse_message_off_runtime(uid, raw, seen, flagged, fallback).await?;
+        let mut parsed = parse_full_off_runtime(uid, raw, seen, flagged, fallback).await?;
         parsed.internal_at = internal_date(&item);
         Ok(parsed)
     }
@@ -1604,20 +1915,192 @@ pub async fn download_message(
     }
 }
 
-pub(crate) fn body_fetch_query(prefix: &str) -> String {
+/// Result of a prefix download. `Fallback` means the prefix cannot stand
+/// alone, so the caller must fetch the whole message.
+pub(crate) enum FetchedBody {
+    Partial(CachedMessage),
+    Full(CachedMessage),
+    Fallback,
+}
+
+/// Download the first bytes of a large message. A server that ignores the
+/// range and sends the whole message is parsed as a full body.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn download_partial_message(
+    account: &AccountRecord,
+    password: &str,
+    mailbox: &str,
+    uid: u32,
+    expected_size: u64,
+    expected_uid_validity: Option<u32>,
+    cached_received_at: Option<&str>,
+    before_parse: impl FnOnce() -> Result<(), String>,
+) -> Result<FetchedBody, MailError> {
+    if expected_size > MAX_MESSAGE_BYTES as u64 {
+        return Err(MailError::new(
+            FailureKind::TooLarge,
+            "This message is too large to download safely.",
+        ));
+    }
+    let expected_uid_validity = expected_uid_validity.ok_or_else(|| {
+        MailError::from("Mailbox identity is unavailable; refresh mail and try again.".to_string())
+    })?;
+    let mut lease = pool::checkout(account, password).await?;
+    let result = async {
+        let wire_mailbox = lease.mailbox_name(mailbox);
+        let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.examine(&wire_mailbox))
+            .await
+            .map_err(|_| MailError::connection("Message download timed out."))?
+            .map_err(|error| MailError::from(redact_error(&error, "Message download")))?;
+        if selected.uid_validity != Some(expected_uid_validity) {
+            return Err(MailError::from(
+                "This mailbox changed; refresh mail and try again.".to_string(),
+            ));
+        }
+        let query = body_fetch_query_for("UID FLAGS RFC822.SIZE INTERNALDATE", BodyFetch::Partial);
+        let item = fetch_one_body(&mut lease, uid, query, expected_size).await?;
+        let raw = item.body().ok_or_else(|| {
+            MailError::from("The mail server did not return this message.".to_string())
+        })?;
+        let (seen, flagged) = system_flags(&item);
+        let fallback = received_at_fallback(&item, cached_received_at);
+        let internal_at = internal_date(&item);
+        let declared_size = item.size.map_or(expected_size, u64::from);
+        if !response_is_partial(BodyFetch::Partial, raw.len()) {
+            if raw.len() > MAX_MESSAGE_BYTES {
+                return Err(MailError::new(
+                    FailureKind::TooLarge,
+                    "This message is too large to download safely.",
+                ));
+            }
+            before_parse().map_err(MailError::local_storage)?;
+            let mut parsed = parse_full_off_runtime(uid, raw, seen, flagged, fallback).await?;
+            parsed.internal_at = internal_at;
+            return Ok(FetchedBody::Full(parsed));
+        }
+        before_parse().map_err(MailError::local_storage)?;
+        let parsed =
+            parse_partial_off_runtime(uid, raw, declared_size, seen, flagged, fallback).await?;
+        Ok(match parsed {
+            Some(mut parsed) => {
+                parsed.internal_at = internal_at;
+                FetchedBody::Partial(parsed)
+            }
+            None => FetchedBody::Fallback,
+        })
+    }
+    .await;
+    match result {
+        Ok(fetched) => {
+            lease.release();
+            Ok(fetched)
+        }
+        Err(error) => {
+            lease.discard();
+            Err(error)
+        }
+    }
+}
+
+/// Fetch one message's body item on an open session, with the download timeout.
+async fn fetch_one_body(
+    lease: &mut Lease,
+    uid: u32,
+    query: String,
+    expected_size: u64,
+) -> Result<async_imap::types::Fetch, MailError> {
+    let mut rows = tokio::time::timeout(download_timeout(expected_size), async {
+        lease
+            .uid_fetch(uid.to_string(), query)
+            .await
+            .map_err(|error| redact_error(&error, "Message download"))?
+            .try_collect::<Vec<_>>()
+            .await
+            .map_err(|error| redact_error(&error, "Message download"))
+    })
+    .await
+    .map_err(|_| MailError::connection("Message download timed out."))?
+    .map_err(MailError::from)?;
+    // Unsolicited FETCH lines for other messages may share the response.
+    let index = rows
+        .iter()
+        .rposition(|row| row.uid == Some(uid) && row.body().is_some())
+        .ok_or_else(|| {
+            MailError::from("This message is no longer available on the server.".to_string())
+        })?;
+    Ok(rows.swap_remove(index))
+}
+
+/// Body request for a message. A partial request asks for the first
+/// `PARTIAL_BODY_BYTES`; the integration override always asks for the whole message.
+pub(crate) fn body_fetch_query_for(prefix: &str, fetch: BodyFetch) -> String {
     #[cfg(test)]
     if std::env::var_os("POSTAL_SNAP_MAIL_INTEGRATION").is_some() {
         return format!("({prefix} BODY.PEEK[])");
     }
-    format!("({prefix} BODY.PEEK[]<0.{}>)", MAX_MESSAGE_BYTES + 1)
+    match fetch {
+        BodyFetch::Full => format!("({prefix} BODY.PEEK[]<0.{}>)", MAX_MESSAGE_BYTES + 1),
+        BodyFetch::Partial => format!("({prefix} BODY.PEEK[]<0.{PARTIAL_BODY_BYTES}>)"),
+    }
+}
+
+pub(crate) fn body_fetch_query(prefix: &str) -> String {
+    body_fetch_query_for(prefix, BodyFetch::Full)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        plan_new_uid_chunks, refresh_window_start, should_purge_stale_generation, ServerHitFilter,
-        INITIAL_MESSAGE_BATCH,
+        folders_from_listing, plan_new_uid_chunks, refresh_window_start,
+        should_purge_stale_generation, ServerHitFilter, INITIAL_MESSAGE_BATCH,
     };
+    use crate::mail::list_status::ListedName;
+    use crate::models::ProviderKind;
+    use async_imap::types::Mailbox;
+    use std::collections::HashMap;
+
+    fn listed(name: &str, attributes: &[&str]) -> ListedName {
+        ListedName {
+            wire_name: name.to_string(),
+            delimiter: Some("/".to_string()),
+            attributes: attributes.iter().map(|value| value.to_string()).collect(),
+        }
+    }
+
+    fn status(uid_next: u32) -> Mailbox {
+        Mailbox {
+            exists: 1,
+            unseen: Some(0),
+            uid_next: Some(uid_next),
+            uid_validity: Some(7),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn listed_status_attaches_only_to_the_selectable_folder_it_names() {
+        let names = [
+            listed("INBOX", &[]),
+            listed("Hidden", &["NoSelect"]),
+            listed("Archive", &[]),
+        ];
+        let statuses = HashMap::from([
+            ("INBOX".to_string(), status(2)),
+            ("Hidden".to_string(), status(3)),
+            ("Stray".to_string(), status(4)),
+        ]);
+        let folders = folders_from_listing(&names, statuses, &ProviderKind::Manual);
+        let names: Vec<_> = folders.iter().map(|folder| folder.name.as_str()).collect();
+        assert_eq!(names, ["INBOX", "Archive"]);
+        assert_eq!(
+            folders[0].prefetched.as_ref().map(|s| s.uid_next),
+            Some(Some(2))
+        );
+        assert!(
+            folders[1].prefetched.is_none(),
+            "missing STATUS is asked for later"
+        );
+    }
 
     // New-mail catch-up failure modes:
     // 1. A wide UID gap costs one round trip per empty range.
@@ -1712,5 +2195,148 @@ mod tests {
         assert!(!should_purge_stale_generation(Some(7), Some(7)));
         assert!(!should_purge_stale_generation(None, Some(7)));
         assert!(!should_purge_stale_generation(None, None));
+    }
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use super::{folders_in_scope, reconcile_scope, SyncScope};
+    use crate::db::Database;
+    use crate::models::{
+        AccountRecord, AccountSummary, BodyFormat, MailboxRole, ProviderKind, ServerConfig,
+        TlsMode, ROLE_SOURCE_NAME,
+    };
+    use std::collections::HashSet;
+
+    fn account() -> AccountRecord {
+        let server = ServerConfig {
+            trusted_certificate: None,
+            host: "imap.example.test".into(),
+            port: 993,
+            tls_mode: TlsMode::Tls,
+            username: "sam@example.test".into(),
+        };
+        AccountRecord {
+            summary: AccountSummary {
+                default_body_format: BodyFormat::Html,
+                id: "scope-account".into(),
+                provider: ProviderKind::Manual,
+                email: "sam@example.test".into(),
+                display_name: "Sam".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+                signature_html: String::new(),
+                reply_to: String::new(),
+                color: None,
+            },
+            imap: server.clone(),
+            smtp: server,
+        }
+    }
+
+    // Scoped-pass failure modes (D6):
+    // 1. A pass over INBOX alone deletes every other folder from the local list.
+    // 2. A scoped pass reads its folder list from the server instead of the cache.
+    // 3. A full pass stops reconciling, so folders removed on the server linger.
+    #[test]
+    fn folder_scoped_pass_never_reconciles_mailboxes() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let id = account.summary.id.clone();
+        db.upsert_mailbox_with_source(
+            &id,
+            "INBOX",
+            &MailboxRole::Inbox,
+            ROLE_SOURCE_NAME,
+            Some(1),
+            Some(1),
+            Some(0),
+            0,
+        )
+        .unwrap();
+        db.upsert_mailbox_with_source(
+            &id,
+            "Archive",
+            &MailboxRole::Archive,
+            ROLE_SOURCE_NAME,
+            Some(1),
+            Some(1),
+            Some(0),
+            0,
+        )
+        .unwrap();
+        let server: HashSet<String> = ["INBOX".to_string()].into();
+
+        reconcile_scope(&db, &id, &SyncScope::Folders(vec!["INBOX".into()]), &server).unwrap();
+        assert_eq!(db.list_mailboxes(&id).unwrap().len(), 2);
+
+        reconcile_scope(&db, &id, &SyncScope::All, &server).unwrap();
+        assert_eq!(db.list_mailboxes(&id).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn scoped_folders_come_from_the_cache_and_skip_unknown_names() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let id = account.summary.id.clone();
+        db.upsert_mailbox_with_source(
+            &id,
+            "Archive",
+            &MailboxRole::Archive,
+            ROLE_SOURCE_NAME,
+            Some(1),
+            Some(1),
+            Some(0),
+            0,
+        )
+        .unwrap();
+        let folders = folders_in_scope(&db, &id, &["Archive".into(), "Missing".into()]).unwrap();
+        assert_eq!(folders.len(), 1);
+        assert_eq!(folders[0].name, "Archive");
+        assert_eq!(folders[0].role, MailboxRole::Archive);
+    }
+
+    // Failure modes for the prefetch rule:
+    // 1. A message just over 1 MiB is fetched whole instead of as a prefix.
+    // 2. "Keep attachments offline" still fetches prefixes.
+    // 3. A server that ignores the prefix request is parsed as partial (E5).
+    #[test]
+    fn partial_fetch_applies_only_above_one_mib_and_only_when_not_kept_offline() {
+        use super::{body_fetch_for, response_is_partial, BodyFetch, PARTIAL_BODY_BYTES};
+        const MIB: u64 = 1024 * 1024;
+        assert_eq!(PARTIAL_BODY_BYTES, 256 * 1024);
+        assert_eq!(body_fetch_for(MIB, false), BodyFetch::Full);
+        assert_eq!(body_fetch_for(MIB + 1, false), BodyFetch::Partial);
+        assert_eq!(body_fetch_for(MIB + 1, true), BodyFetch::Full);
+        assert!(response_is_partial(BodyFetch::Partial, PARTIAL_BODY_BYTES));
+        assert!(!response_is_partial(
+            BodyFetch::Partial,
+            PARTIAL_BODY_BYTES + 1
+        ));
+        assert!(!response_is_partial(BodyFetch::Full, 100));
+    }
+
+    // Failure modes for the body request:
+    // 1. A partial request asks for the whole message.
+    // 2. A full request is truncated below the message limit.
+    #[test]
+    fn body_query_requests_the_prefix_or_the_whole_message() {
+        use super::{body_fetch_query_for, BodyFetch};
+        assert_eq!(
+            body_fetch_query_for("UID", BodyFetch::Partial),
+            "(UID BODY.PEEK[]<0.262144>)"
+        );
+        assert_eq!(
+            body_fetch_query_for("UID", BodyFetch::Full),
+            format!(
+                "(UID BODY.PEEK[]<0.{}>)",
+                crate::mail::MAX_MESSAGE_BYTES + 1
+            )
+        );
     }
 }

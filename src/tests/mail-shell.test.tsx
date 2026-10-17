@@ -590,6 +590,7 @@ describe("mail shell", () => {
       "account-1",
       firstMessage.id,
       "junk",
+      expect.any(String),
     );
   });
 
@@ -690,6 +691,7 @@ describe("mail shell", () => {
         "account-1",
         firstMessage.id,
         "junk",
+        expect.any(String),
       ),
     );
     expect(api.createFilterRule).not.toHaveBeenCalled();
@@ -1366,6 +1368,7 @@ describe("mail shell", () => {
         "account-1",
         [1, 2],
         5,
+        expect.any(String),
       ),
     );
     expect(useAppStore.getState().messages.map((item) => item.id)).toEqual([3]);
@@ -1723,6 +1726,7 @@ describe("mail shell", () => {
         "account-1",
         [1, 2],
         4,
+        expect.any(String),
       ),
     );
     expect(useAppStore.getState().messages.map((item) => item.id)).toEqual([3]);
@@ -2517,6 +2521,7 @@ describe("mail shell", () => {
         "account-1",
         [1],
         inbox.id,
+        expect.any(String),
       ),
     );
   });
@@ -2539,6 +2544,7 @@ describe("mail shell", () => {
         "account-1",
         [1],
         3,
+        expect.any(String),
       ),
     );
   });
@@ -2579,6 +2585,7 @@ describe("mail shell", () => {
         "account-1",
         [1],
         4,
+        expect.any(String),
       ),
     );
   });
@@ -3248,7 +3255,7 @@ describe("mail shell", () => {
     );
     expect(api.setMessagesPinned).toHaveBeenCalledWith("account-1", [2], true);
     expect(
-      screen.getByRole("group", { name: strings.mail.pinned }),
+      screen.getByText(strings.mail.pinned, { selector: ".list-day > span" }),
     ).toBeInTheDocument();
     expect(useAppStore.getState().selectedMessage).toBeUndefined();
   });
@@ -3491,6 +3498,7 @@ describe("mail shell", () => {
         "account-1",
         [1, 2],
         4,
+        expect.any(String),
       ),
     );
     expect(useAppStore.getState().messages.map((item) => item.id)).toEqual([3]);
@@ -3560,7 +3568,12 @@ describe("mail shell", () => {
     fireEvent.drop(trash, { dataTransfer });
 
     await waitFor(() =>
-      expect(moveOne).toHaveBeenCalledWith("account-1", 1, 3),
+      expect(moveOne).toHaveBeenCalledWith(
+        "account-1",
+        1,
+        3,
+        expect.any(String),
+      ),
     );
     expect(dataTransfer.getData("application/x-postal-snap-messages")).toBe(
       "account-1\n1",
@@ -3592,6 +3605,7 @@ describe("mail shell", () => {
         "account-1",
         [1, 2],
         3,
+        expect.any(String),
       ),
     );
   });
@@ -3631,6 +3645,7 @@ describe("mail shell", () => {
         "account-1",
         [1, 2],
         3,
+        expect.any(String),
       ),
     );
   });
@@ -3667,7 +3682,12 @@ describe("mail shell", () => {
     });
 
     await waitFor(() =>
-      expect(moveOne).toHaveBeenCalledWith("account-1", 2, 3),
+      expect(moveOne).toHaveBeenCalledWith(
+        "account-1",
+        2,
+        3,
+        expect.any(String),
+      ),
     );
     expect(mockedMoveMessagesToMailbox).not.toHaveBeenCalled();
   });
@@ -4219,6 +4239,7 @@ describe("mail shell", () => {
         "account-1",
         firstMessage.id,
         "archive",
+        expect.any(String),
       ),
     );
     expect(
@@ -4295,6 +4316,7 @@ describe("mail shell", () => {
         "account-1",
         firstMessage.id,
         "junk",
+        expect.any(String),
       ),
     );
     expect(
@@ -4340,6 +4362,7 @@ describe("mail shell", () => {
         "account-1",
         filed.id,
         inbox.id,
+        expect.any(String),
       ),
     );
     expect(
@@ -4369,6 +4392,7 @@ describe("mail shell", () => {
         "account-1",
         firstMessage.id,
         "trash",
+        expect.any(String),
       ),
     );
     expect(
@@ -4448,6 +4472,7 @@ describe("mail shell", () => {
         "account-1",
         filed.id,
         inbox.id,
+        expect.any(String),
       ),
     );
     expect(
@@ -5964,6 +5989,7 @@ describe("mail shell", () => {
         "account-1",
         [1],
         inbox.id,
+        expect.any(String),
       ),
     );
   });
@@ -6354,7 +6380,12 @@ describe("mail shell", () => {
     fireEvent.click(screen.getByRole("button", { name: strings.reader.trash }));
 
     await waitFor(() =>
-      expect(api.moveMessage).toHaveBeenCalledWith("account-1", 1, "trash"),
+      expect(api.moveMessage).toHaveBeenCalledWith(
+        "account-1",
+        1,
+        "trash",
+        expect.any(String),
+      ),
     );
     expect(
       await screen.findByRole("heading", { name: "Second message" }),
@@ -6379,7 +6410,12 @@ describe("mail shell", () => {
       screen.getByRole("menuitem", { name: strings.reader.trash }),
     );
     await waitFor(() =>
-      expect(api.moveMessage).toHaveBeenCalledWith("account-1", 2, "trash"),
+      expect(api.moveMessage).toHaveBeenCalledWith(
+        "account-1",
+        2,
+        "trash",
+        expect.any(String),
+      ),
     );
   });
 

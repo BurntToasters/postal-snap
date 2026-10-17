@@ -3,8 +3,7 @@ import { strings } from "./i18n";
 import { useAppStore } from "./store";
 import { conversationMessages } from "./threads";
 import type { MessageSummary } from "./types";
-
-const BULK_LIMIT = 200;
+import { BULK_LIMIT } from "./bulk";
 
 /**
  * Saves every regular file from the loaded messages in this conversation

@@ -12,6 +12,7 @@ import type { MessageSummary } from "../../types";
 import { pinSelectedMessages } from "../../pinConversation";
 import { beginMessageOpen, isCurrentMessageOpen } from "../../messageOpen";
 import { messageAfterRemovals } from "../../threads";
+import { undoableMove, undoTargetFor } from "../../undoMove";
 
 type AppState = ReturnType<typeof useAppStore.getState>;
 
@@ -191,11 +192,18 @@ export function useMessageSelection({
     setBulkBusy(true);
     try {
       const movedIds = selectedIds;
-      const outcome = await api.moveMessagesToMailbox(
-        activeAccountId,
-        movedIds,
-        destination.id,
-      );
+      const outcome = await undoableMove({
+        accountId: activeAccountId,
+        target: undoTargetFor(destination),
+        send: (undoToken) =>
+          api.moveMessagesToMailbox(
+            activeAccountId,
+            movedIds,
+            destination.id,
+            undoToken,
+          ),
+        deferred: (result) => result.queued,
+      });
       if (outcome.failed > 0)
         setError(strings.mail.bulkPartial(outcome.failed));
       // The bulk event names no message, so close a moved open message here.
@@ -340,18 +348,32 @@ export function useMessageSelection({
     setBulkBusy(true);
     try {
       if (known.length === 1) {
-        await api.moveMessageToMailbox(
-          activeAccountId,
-          known[0],
-          destination.id,
-        );
+        await undoableMove({
+          accountId: activeAccountId,
+          target: undoTargetFor(destination),
+          send: (undoToken) =>
+            api.moveMessageToMailbox(
+              activeAccountId,
+              known[0],
+              destination.id,
+              undoToken,
+            ),
+          deferred: () => 1,
+        });
         releaseDragged(known[0]);
       } else {
-        const outcome = await api.moveMessagesToMailbox(
-          activeAccountId,
-          known,
-          destination.id,
-        );
+        const outcome = await undoableMove({
+          accountId: activeAccountId,
+          target: undoTargetFor(destination),
+          send: (undoToken) =>
+            api.moveMessagesToMailbox(
+              activeAccountId,
+              known,
+              destination.id,
+              undoToken,
+            ),
+          deferred: (result) => result.queued,
+        });
         if (outcome.failed > 0)
           setError(strings.mail.bulkPartial(outcome.failed));
         setSelectedIds([]);

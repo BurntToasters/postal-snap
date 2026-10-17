@@ -10,6 +10,94 @@ export async function registerMockMessages(page: Page): Promise<void> {
     const state = window.__POSTAL_SNAP_TEST__ as MockState;
     const { mailboxes, summary, olderSummary, secondSummary, params } = mock;
     let paginatedCursorConsumed = false;
+    // Set once a tokened move ran. Its moved items are filtered by location
+    // instead of emptying the whole list, so Undo can bring them back.
+    let movedByToken = false;
+    // Tokened moves (the app always sends an undo token) keep their location
+    // here. sessionStorage carries them across a reload, like a restart.
+    interface AwayMove {
+      id: number;
+      from: number;
+      to: number;
+      unread: boolean;
+      token: string;
+    }
+    const awayKey = "postal-snap-mock-away";
+    let away: AwayMove[] = [];
+    try {
+      away = JSON.parse(sessionStorage.getItem(awayKey) ?? "[]") as AwayMove[];
+    } catch {
+      away = [];
+    }
+    const batches = new Map<
+      string,
+      { state: "pending" | "committed" | "undone"; moves: AwayMove[] }
+    >();
+    function emit(event: string, payload: unknown) {
+      for (const handler of state.eventListeners.get(event) ?? []) {
+        state.callbacks.get(handler)?.({ event, id: handler, payload });
+      }
+    }
+    function saveAway() {
+      try {
+        sessionStorage.setItem(awayKey, JSON.stringify(away));
+      } catch {
+        // Storage can be blocked; the move still applies to this page.
+      }
+    }
+    function homeOf(id: number): number | undefined {
+      const hits = away.filter((move) => move.id === id);
+      return hits.length > 0 ? hits[hits.length - 1].to : undefined;
+    }
+    function knownMessages(): MockMessageSummary[] {
+      return [
+        summary,
+        olderSummary,
+        secondSummary,
+        ...rowMixItems(),
+        ...threadGapItems(),
+        ...trashThreadItems(),
+      ];
+    }
+    // direction 1 applies a move to the folder counts; -1 reverses it.
+    function shiftCounts(move: AwayMove, direction: 1 | -1) {
+      const from = mailboxes.find((box) => box.id === move.from);
+      const to = mailboxes.find((box) => box.id === move.to);
+      const unread = move.unread ? direction : 0;
+      if (from) {
+        from.totalCount = Math.max(0, from.totalCount - direction);
+        from.unreadCount = Math.max(0, from.unreadCount - unread);
+      }
+      if (to) {
+        to.totalCount = Math.max(0, to.totalCount + direction);
+        to.unreadCount = Math.max(0, to.unreadCount + unread);
+      }
+    }
+    function deferMoves(
+      token: string,
+      accountId: string,
+      requests: Array<{ id: number; to: number }>,
+    ): number {
+      const moves = requests.map(({ id, to }) => {
+        const message = knownMessages().find((item) => item.id === id);
+        return {
+          id,
+          from: homeOf(id) ?? message?.mailboxId ?? 1,
+          to,
+          unread: message ? !message.isRead : false,
+          token,
+        };
+      });
+      for (const move of moves) shiftCounts(move, 1);
+      movedByToken = true;
+      away.push(...moves);
+      saveAway();
+      batches.set(token, { state: "pending", moves });
+      emit("message-changed", { accountId, messageId: null, kind: "moved" });
+      emit("folder-counts-changed", { accountId });
+      return moves.length;
+    }
+    for (const move of away) shiftCounts(move, 1);
     const threadGapItems = () => [
       {
         ...summary,
@@ -202,7 +290,7 @@ export async function registerMockMessages(page: Page): Promise<void> {
           nextCursor: unknown;
           hasMore: boolean;
         };
-        if (state.moved || params.has("empty")) {
+        if (params.has("empty") || (state.moved && !movedByToken)) {
           page = { items: [], nextCursor: null, hasMore: false };
         } else if (params.has("earlier") && Number(args.mailboxId) === 3) {
           page = {
@@ -405,6 +493,14 @@ export async function registerMockMessages(page: Page): Promise<void> {
             ),
           };
         }
+        const requested = Number(args.mailboxId);
+        page = {
+          ...page,
+          items: page.items.filter((item) => {
+            const home = homeOf(item.id);
+            return home === undefined || home === requested;
+          }),
+        };
         const hidden = state.snoozedIds ?? [];
         if (hidden.length === 0) return page;
         return {
@@ -652,10 +748,34 @@ export async function registerMockMessages(page: Page): Promise<void> {
         state.unmuted = Number(args.messageId);
         return undefined;
       },
-      move_message_to_mailbox() {
+      move_message_to_mailbox(args: Record<string, unknown>) {
+        if (typeof args.undoToken === "string") {
+          deferMoves(args.undoToken, String(args.accountId), [
+            {
+              id: Number(args.messageId),
+              to: Number(args.destinationMailboxId),
+            },
+          ]);
+          return null;
+        }
         return undefined;
       },
-      move_message() {
+      move_message(args: Record<string, unknown>) {
+        if (typeof args.undoToken === "string") {
+          const destination = mailboxes.find(
+            (box) =>
+              box.accountId === String(args.accountId) &&
+              box.role === args.role,
+          );
+          // Without that folder the untokened path only sets the flag, so match it.
+          if (destination) {
+            deferMoves(args.undoToken, String(args.accountId), [
+              { id: Number(args.messageId), to: destination.id },
+            ]);
+          }
+          state.moved = true;
+          return null;
+        }
         state.moved = true;
         mailboxes[0].totalCount = 0;
         mailboxes[0].unreadCount = 0;
@@ -676,12 +796,47 @@ export async function registerMockMessages(page: Page): Promise<void> {
         };
       },
       move_messages_to_mailbox(args: Record<string, unknown>) {
+        if (typeof args.undoToken === "string") {
+          const ids = (args.messageIds ?? []) as number[];
+          const queued = deferMoves(
+            args.undoToken,
+            String(args.accountId),
+            ids.map((id) => ({ id, to: Number(args.destinationMailboxId) })),
+          );
+          state.moved = true;
+          return { updated: 0, queued, failed: 0 };
+        }
         state.moved = true;
         return {
           updated: ((args.messageIds ?? []) as number[]).length,
           queued: 0,
           failed: 0,
         };
+      },
+      undo_deferred(args: Record<string, unknown>) {
+        const batch = batches.get(String(args.undoToken));
+        if (!batch) return { restored: 0, alreadyCommitted: false };
+        if (batch.state !== "pending") {
+          return { restored: 0, alreadyCommitted: true };
+        }
+        batch.state = "undone";
+        for (const move of batch.moves) {
+          shiftCounts(move, -1);
+          away = away.filter((item) => item !== move);
+        }
+        saveAway();
+        emit("message-changed", {
+          accountId: String(args.accountId),
+          messageId: null,
+          kind: "moved",
+        });
+        emit("folder-counts-changed", { accountId: String(args.accountId) });
+        return { restored: batch.moves.length, alreadyCommitted: false };
+      },
+      commit_deferred(args: Record<string, unknown>) {
+        const batch = batches.get(String(args.undoToken));
+        if (batch?.state === "pending") batch.state = "committed";
+        return null;
       },
       mark_mailbox_read(args: Record<string, unknown>) {
         const mailbox = mailboxes.find(

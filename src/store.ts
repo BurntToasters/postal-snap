@@ -7,6 +7,15 @@ import {
 } from "./draftFlush";
 import { strings } from "./i18n";
 import type { MessageListSort } from "./listSort";
+import {
+  isAssertiveNotice,
+  LEGACY_ERROR_NOTICE_ID,
+  NOTICE_LIMIT,
+  noticeTimeout,
+  type Notice,
+  type NoticeEndReason,
+  type NoticeInput,
+} from "./notices";
 import { rememberOpenMessage } from "./recentMessage";
 import type {
   AccountSummary,
@@ -84,6 +93,7 @@ export const defaultSettings: AppSettings = {
   signatureAboveQuote: true,
   replyToAll: false,
   unreadFoldersOnly: false,
+  badgeScope: "activeInbox",
   composerWidth: 0,
   composerHeight: 0,
   lastFromAddresses: [],
@@ -130,7 +140,9 @@ interface AppState {
   pendingComposeSeed?: ComposerSeed;
   composeNonce: number;
   busy: boolean;
+  /** Legacy single error; mirrored by the `legacy-error` notice. */
   error?: string;
+  notices: Notice[];
   lastSent?: SentNotice;
   updateReady: string | null;
   setUpdateReady: (version: string | null) => void;
@@ -162,7 +174,21 @@ interface AppState {
   closeComposer: () => void;
   setBusy: (busy: boolean) => void;
   setError: (error?: string) => void;
+  pushNotice: (notice: NoticeInput) => string;
+  dismissNotice: (id: string, reason: NoticeEndReason) => void;
   setLastSent: (notice?: SentNotice) => void;
+}
+
+let noticeSerial = 0;
+
+// Non-error notices leave first, oldest first; errors leave only when nothing else is left.
+function chooseEvicted(notices: Notice[], count: number): Notice[] {
+  if (count <= 0) return [];
+  const order = [
+    ...notices.filter((item) => !isAssertiveNotice(item)),
+    ...notices.filter((item) => isAssertiveNotice(item)),
+  ];
+  return order.slice(0, count);
 }
 
 function keepOpenMessage(state: AppState) {
@@ -277,8 +303,9 @@ async function runReplacements(): Promise<void> {
   }
 }
 
-export const useAppStore = create<AppState>((set) => ({
+export const useAppStore = create<AppState>((set, get) => ({
   accounts: [],
+  notices: [],
   lastMailboxByAccount: {},
   mailboxes: [],
   messages: [],
@@ -481,5 +508,57 @@ export const useAppStore = create<AppState>((set) => ({
     }),
   setBusy: (busy) => set({ busy }),
   setError: (error) => set({ error }),
+  pushNotice: (input) => {
+    noticeSerial += 1;
+    const id = input.id ?? `notice-${noticeSerial}`;
+    const notice: Notice = {
+      ...input,
+      id,
+      timeoutMs: input.severity === "error" ? null : input.timeoutMs,
+    };
+    const current = get().notices;
+    const existing = current.find((item) => item.id === id);
+    // Same-id pushes replace in place; the newest notice goes last.
+    const merged = existing
+      ? current.map((item) => (item.id === id ? notice : item))
+      : [...current, notice];
+    const evicted = chooseEvicted(merged, merged.length - NOTICE_LIMIT);
+    const kept = merged.filter((item) => !evicted.includes(item));
+    set({
+      notices: kept,
+      ...(evicted.some((item) => item.id === LEGACY_ERROR_NOTICE_ID)
+        ? { error: undefined }
+        : {}),
+    });
+    existing?.onEnd?.("replaced");
+    for (const item of evicted) item.onEnd?.("replaced");
+    return id;
+  },
+  dismissNotice: (id, reason) => {
+    const current = get().notices;
+    const target = current.find((item) => item.id === id);
+    // Removing first means a second dismiss is a no-op, so onEnd runs once.
+    if (!target) return;
+    set({
+      notices: current.filter((item) => item !== target),
+      ...(id === LEGACY_ERROR_NOTICE_ID ? { error: undefined } : {}),
+    });
+    target.onEnd?.(reason);
+  },
   setLastSent: (lastSent) => set({ lastSent }),
 }));
+
+// Keeps the legacy `error` slot and its notice in step, including direct writes.
+useAppStore.subscribe((state, previous) => {
+  if (state.error === previous.error) return;
+  if (state.error) {
+    state.pushNotice({
+      id: LEGACY_ERROR_NOTICE_ID,
+      severity: "error",
+      message: state.error,
+      timeoutMs: noticeTimeout("error"),
+    });
+  } else {
+    state.dismissNotice(LEGACY_ERROR_NOTICE_ID, "dismiss");
+  }
+});

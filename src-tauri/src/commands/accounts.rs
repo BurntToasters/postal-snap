@@ -159,6 +159,7 @@ pub async fn add_account(
         aliases,
         auth_method: "password".into(),
         signature: String::new(),
+        signature_html: String::new(),
         reply_to: String::new(),
         color: Some(
             ACCOUNT_COLORS[state.db.account_count().unwrap_or(0) % ACCOUNT_COLORS.len()].into(),
@@ -191,7 +192,7 @@ pub async fn add_account(
     refresh_mail_menu(&app, &state);
     // The account is already durably saved. A transient watcher setup failure
     // must not make setup look unsuccessful or roll back the account.
-    if state.ensure_watcher(id.clone(), app.clone()).is_err() {
+    if state.ensure_worker(id.clone(), app.clone()).is_err() {
         let _ = state.db.set_account_state(
             &id,
             "offline",
@@ -248,6 +249,7 @@ async fn save_oauth_account(
         aliases: Vec::new(),
         auth_method: "oauth".into(),
         signature: String::new(),
+        signature_html: String::new(),
         reply_to: String::new(),
         color: Some(
             ACCOUNT_COLORS[state.db.account_count().unwrap_or(0) % ACCOUNT_COLORS.len()].into(),
@@ -268,7 +270,7 @@ async fn save_oauth_account(
         .db
         .set_account_cache_policy(&id, &default_policy, &default_policy);
     refresh_mail_menu(app, state);
-    if state.ensure_watcher(id, app.clone()).is_err() {
+    if state.ensure_worker(id, app.clone()).is_err() {
         let _ = state.db.set_account_state(
             &summary.id,
             "offline",
@@ -617,9 +619,17 @@ pub fn update_account_display_name(
 pub fn update_account_signature(
     account_id: String,
     signature: String,
+    signature_html: Option<String>,
     state: State<'_, AppState>,
 ) -> CommandResult<AccountSummary> {
-    command_result(state.db.update_account_signature(&account_id, &signature))
+    command_result(match signature_html {
+        Some(signature_html) => {
+            state
+                .db
+                .update_account_signatures(&account_id, &signature, &signature_html)
+        }
+        None => state.db.update_account_signature(&account_id, &signature),
+    })
 }
 
 /// Unknown formats fail IPC deserialization before reaching the database.

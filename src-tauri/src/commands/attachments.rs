@@ -7,7 +7,7 @@ use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 use tokio::io::AsyncWriteExt;
 
-use super::messages::ensure_message_content;
+use super::messages::{ensure_message_content_for, Need};
 use super::{
     managed_account_dir, release_attachment_tokens, write_managed_file, AppState, CommandResult,
 };
@@ -43,7 +43,7 @@ pub async fn save_attachment(
     let destination = destination
         .into_path()
         .map_err(|_| "Choose a valid save location.".to_string())?;
-    ensure_message_content(&account_id, message_id, &state).await?;
+    ensure_message_content_for(&account_id, message_id, &state, Need::Full).await?;
     let detail = state.db.message_detail(message_id, &account_id)?;
     let stored = detail
         .attachments
@@ -247,7 +247,7 @@ pub async fn save_chosen_attachments(
     state: State<'_, AppState>,
 ) -> CommandResult<u32> {
     state.db.account(&account_id)?;
-    ensure_message_content(&account_id, message_id, &state).await?;
+    ensure_message_content_for(&account_id, message_id, &state, Need::Full).await?;
     let detail = state.db.message_detail(message_id, &account_id)?;
     let chosen = chosen_message_files(&detail.attachments, &attachment_ids)?;
     if !confirm_risky_files(&app, risky_file_names(regular_file_names(&chosen))).await? {
@@ -288,7 +288,7 @@ pub async fn save_all_attachments(
     let Some(folder) = pick_folder(&app).await? else {
         return Ok(0);
     };
-    ensure_message_content(&account_id, message_id, &state).await?;
+    ensure_message_content_for(&account_id, message_id, &state, Need::Full).await?;
     let detail = state.db.message_detail(message_id, &account_id)?;
     let raw = state.db.raw_message(message_id, &account_id)?;
     let mut used = HashSet::new();
@@ -324,7 +324,7 @@ pub async fn save_conversation_attachments(
     };
     let mut risky = Vec::new();
     for id in &ids {
-        ensure_message_content(&account_id, *id, &state).await?;
+        ensure_message_content_for(&account_id, *id, &state, Need::Full).await?;
         let detail = state.db.message_detail(*id, &account_id)?;
         risky.extend(risky_file_names(regular_file_names(&detail.attachments)));
     }
@@ -366,7 +366,7 @@ pub async fn save_messages_eml(
     let mut saved = 0u32;
     for id in &ids {
         // Only one message's source is held in memory at a time.
-        ensure_message_content(&account_id, *id, &state).await?;
+        ensure_message_content_for(&account_id, *id, &state, Need::Full).await?;
         let detail = state.db.message_detail(*id, &account_id)?;
         let raw = state.db.raw_message(*id, &account_id)?;
         write_message_eml(&folder, &detail.summary.subject, &raw, &mut used).await?;
@@ -561,7 +561,7 @@ pub async fn preview_attachment(
     attachment_id: String,
     state: State<'_, AppState>,
 ) -> CommandResult<AttachmentPreview> {
-    ensure_message_content(&account_id, message_id, &state).await?;
+    ensure_message_content_for(&account_id, message_id, &state, Need::Full).await?;
     let detail = state.db.message_detail(message_id, &account_id)?;
     let attachment = detail
         .attachments
@@ -655,7 +655,7 @@ pub async fn prepare_forwarded_message(
     message_id: i64,
     state: State<'_, AppState>,
 ) -> CommandResult<ComposeAttachment> {
-    ensure_message_content(&account_id, message_id, &state).await?;
+    ensure_message_content_for(&account_id, message_id, &state, Need::Full).await?;
     let detail = state.db.message_detail(message_id, &account_id)?;
     let raw = state.db.raw_message(message_id, &account_id)?;
     if raw.is_empty() {
@@ -708,7 +708,7 @@ async fn prepare_message_attachments(
     files_only: bool,
     state: State<'_, AppState>,
 ) -> CommandResult<Vec<ComposeAttachment>> {
-    ensure_message_content(&account_id, message_id, &state).await?;
+    ensure_message_content_for(&account_id, message_id, &state, Need::Full).await?;
     let detail = state.db.message_detail(message_id, &account_id)?;
     let raw = state.db.raw_message(message_id, &account_id)?;
     let account_dir = managed_account_dir(&state.attachment_dir, &account_id)?;
@@ -968,7 +968,7 @@ pub async fn read_message_inline_image(
     attachment_id: String,
     state: State<'_, AppState>,
 ) -> CommandResult<String> {
-    ensure_message_content(&account_id, message_id, &state).await?;
+    ensure_message_content_for(&account_id, message_id, &state, Need::Full).await?;
     let detail = state.db.message_detail(message_id, &account_id)?;
     let attachment = detail
         .attachments

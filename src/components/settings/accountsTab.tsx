@@ -1,4 +1,10 @@
-import { useState, type Dispatch, type SetStateAction } from "react";
+import {
+  lazy,
+  Suspense,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 import { api } from "../../api";
 import { Mail } from "lucide-react";
 import { strings } from "../../i18n";
@@ -9,6 +15,12 @@ import { AccountDownloadPanel } from "./accountDownload";
 import { ConnectionPanel, FoldersPanel } from "./connectionPanel";
 import { BodyFormatControl } from "./bodyFormatControl";
 import { SettingsPanel, SettingsSection } from "./primitives";
+
+const SignatureEditor = lazy(() =>
+  import("./SignatureEditor").then((module) => ({
+    default: module.SignatureEditor,
+  })),
+);
 
 function ruleFieldLabel(field: string): string {
   if (field === "subject") return strings.settings.matchSubject;
@@ -83,9 +95,15 @@ interface AccountsTabProps {
   handleSaveReplyTo: (accountId: string) => Promise<void>;
   signatureInputs: Record<string, string>;
   setSignatureInputs: Dispatch<SetStateAction<Record<string, string>>>;
+  signatureHtmlInputs: Record<string, string>;
+  setSignatureHtmlInputs: Dispatch<SetStateAction<Record<string, string>>>;
   signatureStatus: Record<string, string>;
   savingSignatureId?: string;
-  handleSaveSignature: (accountId: string, fallback: string) => Promise<void>;
+  handleSaveSignature: (
+    accountId: string,
+    fallback: string,
+    fallbackHtml: string,
+  ) => Promise<void>;
   filterRules: Record<string, FilterRule[]>;
   ruleInput: (accountId: string) => AccountRuleDraft;
   setRuleField: (accountId: string, patch: Record<string, string>) => void;
@@ -141,6 +159,8 @@ export function AccountsTab({
   handleSaveReplyTo,
   signatureInputs,
   setSignatureInputs,
+  signatureHtmlInputs,
+  setSignatureHtmlInputs,
   signatureStatus,
   savingSignatureId,
   handleSaveSignature,
@@ -561,28 +581,43 @@ export function AccountsTab({
                     ) : null}
                   </div>
                   <div className="account-password-section">
-                    <label htmlFor={`account-signature-${account.id}`}>
-                      {strings.settings.signature}
-                    </label>
-                    <p className="settings-note">
-                      {strings.settings.signatureHelp}
-                    </p>
-                    <div className="add-alias-form signature-form">
-                      <textarea
-                        id={`account-signature-${account.id}`}
-                        rows={3}
-                        maxLength={2000}
-                        placeholder={strings.settings.signaturePlaceholder}
-                        value={
+                    <Suspense
+                      fallback={
+                        <p className="signature-rich-help">
+                          {strings.settings.signatureEditorHelp}
+                        </p>
+                      }
+                    >
+                      <SignatureEditor
+                        key={account.id}
+                        accountId={account.id}
+                        plainText={
                           signatureInputs[account.id] ?? account.signature ?? ""
                         }
-                        onChange={(event) =>
+                        html={
+                          signatureHtmlInputs[account.id] ??
+                          account.signatureHtml ??
+                          ""
+                        }
+                        onPlainTextChange={(value) =>
                           setSignatureInputs((prev) => ({
                             ...prev,
-                            [account.id]: event.target.value,
+                            [account.id]: value,
                           }))
                         }
+                        onHtmlChange={(plainText, value) => {
+                          setSignatureInputs((prev) => ({
+                            ...prev,
+                            [account.id]: plainText,
+                          }));
+                          setSignatureHtmlInputs((prev) => ({
+                            ...prev,
+                            [account.id]: value,
+                          }));
+                        }}
                       />
+                    </Suspense>
+                    <div className="add-alias-form signature-form">
                       <button
                         type="button"
                         className="secondary-button"
@@ -591,21 +626,22 @@ export function AccountsTab({
                           void handleSaveSignature(
                             account.id,
                             account.signature ?? "",
+                            account.signatureHtml ?? "",
                           )
                         }
                       >
                         {strings.common.save}
                       </button>
+                      {signatureStatus[account.id] ? (
+                        <div
+                          className="alias-status-message"
+                          role="status"
+                          aria-live="polite"
+                        >
+                          {signatureStatus[account.id]}
+                        </div>
+                      ) : null}
                     </div>
-                    {signatureStatus[account.id] ? (
-                      <div
-                        className="alias-status-message"
-                        role="status"
-                        aria-live="polite"
-                      >
-                        {signatureStatus[account.id]}
-                      </div>
-                    ) : null}
                   </div>
 
                   <BodyFormatControl account={account} />

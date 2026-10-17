@@ -1,8 +1,10 @@
+pub mod connect;
 pub mod failure;
 pub mod flowed;
 pub mod folders;
 pub mod icloud;
 pub mod ics;
+pub mod list_status;
 pub mod list_unsubscribe;
 pub mod parse;
 pub mod pool;
@@ -12,6 +14,7 @@ pub mod send;
 pub mod source;
 pub mod sync;
 pub mod utf7;
+pub mod watch;
 
 use std::time::Duration;
 
@@ -108,14 +111,17 @@ pub use send::{
     send_prepared, SendFailure,
 };
 #[cfg(test)]
+pub use sync::sync_account;
+#[cfg(test)]
 pub use sync::Uncontended;
 pub use sync::{
     download_message, idle_inbox, load_older_messages, probe_mail_login, refresh_mailbox_envelopes,
-    server_search, sync_account, test_account, IdleOutcome, SyncHooks, SyncOutcome,
+    server_search, test_account, IdleOutcome, SyncHooks, SyncOutcome,
 };
 
 #[cfg(test)]
 mod tests {
+    use super::connect::connect_imap;
     use super::icloud::{
         extract_tag_value, icloud_follow_up_url, is_allowed_icloud_principal_host,
     };
@@ -124,7 +130,7 @@ mod tests {
         validate_mime_resource_shape,
     };
     use super::remote_drafts::parse_remote_draft;
-    use super::send::{build_message, connect_imap, message_envelope};
+    use super::send::{build_message, message_envelope};
     use super::*;
     use crate::db::{CachedMessage, Database};
     use crate::models::{
@@ -174,6 +180,7 @@ mod tests {
                 aliases: vec![],
                 auth_method: "password".into(),
                 signature: String::new(),
+                signature_html: String::new(),
                 reply_to: String::new(),
                 color: None,
                 default_body_format: crate::models::BodyFormat::Plain,
@@ -1187,6 +1194,7 @@ mod tests {
                 aliases: vec![],
                 auth_method: "password".into(),
                 signature: String::new(),
+                signature_html: String::new(),
                 reply_to: String::new(),
                 color: None,
             },
@@ -1286,6 +1294,7 @@ mod tests {
                 aliases: vec![],
                 auth_method: "password".into(),
                 signature: String::new(),
+                signature_html: String::new(),
                 reply_to: String::new(),
                 color: None,
             },
@@ -1468,6 +1477,7 @@ mod tests {
                 aliases: vec![],
                 auth_method: "password".into(),
                 signature: String::new(),
+                signature_html: String::new(),
                 reply_to: String::new(),
                 color: None,
             },
@@ -1538,6 +1548,7 @@ mod tests {
                 aliases: vec![],
                 auth_method: "password".into(),
                 signature: String::new(),
+                signature_html: String::new(),
                 reply_to: String::new(),
                 color: None,
             },
@@ -1600,6 +1611,7 @@ mod tests {
                 aliases: vec![],
                 auth_method: "password".into(),
                 signature: String::new(),
+                signature_html: String::new(),
                 reply_to: String::new(),
                 color: None,
             },
@@ -1651,6 +1663,72 @@ mod tests {
             .any(|address| address.to_string() == "hidden@example.com"));
     }
 
+    // The TLS fixture advertises LIST-STATUS and ID. A real checkout must see
+    // both, and one LIST-STATUS reply must carry every folder's STATUS.
+    #[tokio::test]
+    #[ignore = "requires npm run test:mail-integration"]
+    async fn bridge_list_status_protocol_integration() {
+        let pem = std::fs::read_to_string(
+            std::env::var("POSTAL_SNAP_MAIL_TEST_CA_CERT").expect("fixture certificate required"),
+        )
+        .unwrap();
+        let endpoint = |name: &str| ServerConfig {
+            host: "127.0.0.1".into(),
+            port: std::env::var(name)
+                .unwrap_or_else(|_| panic!("missing fixture port {name}"))
+                .parse()
+                .unwrap(),
+            tls_mode: TlsMode::Tls,
+            username: "fixture@example.test".into(),
+            trusted_certificate: Some(pem.clone()),
+        };
+        let account = AccountRecord {
+            summary: AccountSummary {
+                id: "bridge-list-status-fixture".into(),
+                provider: ProviderKind::Manual,
+                email: "fixture@example.test".into(),
+                display_name: "Fixture".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+                signature_html: String::new(),
+                reply_to: String::new(),
+                color: None,
+                default_body_format: crate::models::BodyFormat::Plain,
+            },
+            imap: endpoint("POSTAL_SNAP_BRIDGE_IMAP_TLS"),
+            smtp: endpoint("POSTAL_SNAP_BRIDGE_SMTP_TLS"),
+        };
+        let mut lease = super::pool::checkout(&account, "fixture-password")
+            .await
+            .expect("fixture checkout");
+        assert!(
+            lease.capabilities.list_status,
+            "fixture must advertise LIST-STATUS"
+        );
+        assert!(lease.capabilities.id, "fixture must advertise ID");
+        let special_use = lease.capabilities.special_use;
+        let reply = super::list_status::fetch(
+            &mut lease,
+            "(MESSAGES UNSEEN UIDNEXT UIDVALIDITY)",
+            special_use,
+        )
+        .await
+        .expect("LIST-STATUS reply");
+        assert!(reply.names.iter().any(|name| name.wire_name == "INBOX"));
+        assert_eq!(
+            reply.statuses.len(),
+            reply.names.len(),
+            "every selectable folder needs a STATUS"
+        );
+        let inbox = &reply.statuses["INBOX"];
+        assert!(inbox.uid_validity.is_some() && inbox.uid_next.is_some());
+        assert!(inbox.unseen.is_some());
+        lease.release();
+    }
+
     // Live protocol scenarios: matching pins, TLS modes, rejected auth,
     // replacement/hostname mismatch before credentials, required STARTTLS,
     // missing/rejected extensions, expired/private-key imports, hierarchy,
@@ -1684,6 +1762,7 @@ mod tests {
                 aliases: vec![],
                 auth_method: "password".into(),
                 signature: String::new(),
+                signature_html: String::new(),
                 reply_to: String::new(),
                 color: None,
                 default_body_format: crate::models::BodyFormat::Plain,
@@ -1958,6 +2037,7 @@ mod tests {
                 aliases: vec![],
                 auth_method: "password".into(),
                 signature: String::new(),
+                signature_html: String::new(),
                 reply_to: String::new(),
                 color: None,
             },
@@ -2321,6 +2401,122 @@ mod tests {
     /// Download policy, backfill, prefetch, expunge and pool behaviour against
     /// a real IMAP server. Covers E2, E3, E5, S2, S4, S5, S8, W1, W6 and W10
     /// from docs/SYNC_FAILURE_MODES.md.
+    // Watcher failure mode: a second client's APPEND never reaches the actor,
+    // so new mail waits for the IDLE refresh instead of a prompt INBOX pass.
+    #[tokio::test]
+    #[ignore = "requires npm run test:mail-integration"]
+    async fn greenmail_watcher_requests_inbox_wake_on_append() {
+        use super::watch::{run_with_secret, SecretSource};
+        use crate::commands::{wait_for, wake, AccountActor};
+        use std::sync::Arc;
+        assert_eq!(
+            std::env::var("POSTAL_SNAP_MAIL_INTEGRATION").as_deref(),
+            Ok("1")
+        );
+        let password = "mail-test-password";
+        let account = AccountRecord {
+            summary: AccountSummary {
+                default_body_format: crate::models::BodyFormat::Html,
+                id: "77777777-7777-4777-8777-777777777777".into(),
+                provider: ProviderKind::Manual,
+                email: "user@example.test".into(),
+                display_name: "Watcher".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+                signature_html: String::new(),
+                reply_to: String::new(),
+                color: None,
+            },
+            imap: ServerConfig {
+                trusted_certificate: None,
+                host: "localhost".into(),
+                port: 3993,
+                tls_mode: TlsMode::Tls,
+                username: "user@example.test".into(),
+            },
+            smtp: ServerConfig {
+                trusted_certificate: None,
+                host: "localhost".into(),
+                port: 3465,
+                tls_mode: TlsMode::Tls,
+                username: "user@example.test".into(),
+            },
+        };
+        let db = Database::memory();
+        db.insert_account(&account).unwrap();
+        let actor = Arc::new(AccountActor::new());
+        let watcher = tokio::spawn(run_with_secret(
+            account.summary.id.clone(),
+            db.clone(),
+            actor.clone(),
+            SecretSource::Fixed(password.into()),
+        ));
+        // Activation requests a catch-up INBOX pass; drop it before the append.
+        let mut active = false;
+        for _ in 0..200 {
+            if actor.watch().active() {
+                active = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(active, "watcher never reached IDLE");
+        // Active is set just before IDLE starts; let the session settle.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        actor.take_reasons();
+
+        let mut second = connect_imap(&account.imap, password).await.unwrap();
+        second
+            .append(
+                "INBOX",
+                None,
+                None,
+                "From: sender@example.test\r\nTo: user@example.test\r\nSubject: watch\r\nMessage-ID: <watch-1@example.test>\r\n\r\nWatcher body\r\n",
+            )
+            .await
+            .unwrap();
+        second.logout().await.unwrap();
+
+        let woke =
+            tokio::time::timeout(Duration::from_secs(10), wait_for(&actor, wake::INBOX)).await;
+        watcher.abort();
+        assert!(woke.is_ok(), "watcher did not request an INBOX wake");
+        assert_ne!(actor.take_reasons() & wake::INBOX, 0);
+
+        // Remove the probe so the shared fixture mailbox keeps its counts.
+        let mut cleaner = connect_imap(&account.imap, password).await.unwrap();
+        cleaner.select("INBOX").await.unwrap();
+        let uids = cleaner
+            .uid_search("HEADER Message-ID <watch-1@example.test>")
+            .await
+            .unwrap();
+        if !uids.is_empty() {
+            let set = uids
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(",");
+            let _: Vec<_> = cleaner
+                .uid_store(&set, "+FLAGS.SILENT (\\Deleted)")
+                .await
+                .unwrap()
+                .try_collect()
+                .await
+                .unwrap();
+            let _: Vec<_> = cleaner
+                .expunge()
+                .await
+                .unwrap()
+                .try_collect()
+                .await
+                .unwrap();
+        }
+        cleaner.logout().await.ok();
+    }
+
     #[tokio::test]
     #[ignore = "requires npm run test:mail-integration"]
     async fn greenmail_protocol_integration_history() {
@@ -2341,6 +2537,7 @@ mod tests {
                 aliases: vec![],
                 auth_method: "password".into(),
                 signature: String::new(),
+                signature_html: String::new(),
                 reply_to: String::new(),
                 color: None,
             },
@@ -2649,6 +2846,7 @@ mod tests {
                 aliases: vec![],
                 auth_method: "password".into(),
                 signature: String::new(),
+                signature_html: String::new(),
                 reply_to: String::new(),
                 color: None,
             },
@@ -2788,6 +2986,7 @@ mod tests {
                 aliases: vec![],
                 auth_method: "password".into(),
                 signature: String::new(),
+                signature_html: String::new(),
                 reply_to: String::new(),
                 color: None,
             },
@@ -2954,6 +3153,7 @@ mod tests {
                 aliases: vec![],
                 auth_method: "password".into(),
                 signature: String::new(),
+                signature_html: String::new(),
                 reply_to: String::new(),
                 color: None,
             },
@@ -3036,6 +3236,118 @@ mod tests {
         let (answered, forwarded) = super::parse::reply_flags(&archived[0]);
         assert!(answered, "archive copy lost the queued \\Answered");
         assert!(!forwarded);
+        verify.logout().await.unwrap();
+    }
+
+    // Batched replay moves a whole UID set with one MOVE. Each message must
+    // land in the destination exactly once and leave the source.
+    #[tokio::test]
+    #[ignore = "requires npm run test:mail-integration"]
+    async fn greenmail_batch_move_lands_every_message_once() {
+        assert_eq!(
+            std::env::var("POSTAL_SNAP_MAIL_INTEGRATION").as_deref(),
+            Ok("1")
+        );
+        let password = "mail-test-password";
+        let account = AccountRecord {
+            summary: AccountSummary {
+                default_body_format: crate::models::BodyFormat::Html,
+                id: "99999999-9999-4999-8999-999999999999".into(),
+                provider: ProviderKind::Manual,
+                email: "user@example.test".into(),
+                display_name: "Postal Snap Test".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+                signature_html: String::new(),
+                reply_to: String::new(),
+                color: None,
+            },
+            imap: ServerConfig {
+                trusted_certificate: None,
+                host: "localhost".into(),
+                port: 3993,
+                tls_mode: TlsMode::Tls,
+                username: "user@example.test".into(),
+            },
+            smtp: ServerConfig {
+                trusted_certificate: None,
+                host: "localhost".into(),
+                port: 3465,
+                tls_mode: TlsMode::Tls,
+                username: "user@example.test".into(),
+            },
+        };
+        // A unique suffix keeps reruns against a persistent server independent.
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let source = format!("AuditBatchSource{suffix}");
+        let destination = format!("AuditBatchDestination{suffix}");
+        let count = 50usize;
+        let mut session = connect_imap(&account.imap, password).await.unwrap();
+        session.create(&source).await.unwrap();
+        session.create(&destination).await.unwrap();
+        for index in 0..count {
+            session
+                .append(
+                    &source,
+                    None,
+                    None,
+                    format!("Message-ID: <batch-{index}-{suffix}@example.test>\r\n\r\nBATCH-{index}\r\n"),
+                )
+                .await
+                .unwrap();
+        }
+        let selected = session.select(&source).await.unwrap();
+        let validity = selected.uid_validity;
+        let mut uids: Vec<u32> = session
+            .uid_search("ALL")
+            .await
+            .unwrap()
+            .into_iter()
+            .collect();
+        uids.sort_unstable();
+        assert_eq!(uids.len(), count);
+        assert!(
+            session.capabilities().await.unwrap().has_str("MOVE"),
+            "batched replay needs the MOVE capability on this server"
+        );
+        session.logout().await.unwrap();
+
+        super::move_remote_uids(&account, password, &source, &destination, &uids, validity)
+            .await
+            .expect("batch move should succeed");
+        pool::forget(&account.summary.id);
+
+        let mut verify = connect_imap(&account.imap, password).await.unwrap();
+        assert_eq!(
+            verify.status(&source, "(MESSAGES)").await.unwrap().exists,
+            0,
+            "the batch move must remove every source message"
+        );
+        assert_eq!(
+            verify
+                .status(&destination, "(MESSAGES)")
+                .await
+                .unwrap()
+                .exists,
+            count as u32,
+            "the batch move must land every message"
+        );
+        verify.select(&destination).await.unwrap();
+        for index in 0..count {
+            let found = verify
+                .uid_search(&format!(
+                    "HEADER Message-ID \"<batch-{index}-{suffix}@example.test>\""
+                ))
+                .await
+                .unwrap();
+            assert_eq!(found.len(), 1, "message {index} must land exactly once");
+        }
         verify.logout().await.unwrap();
     }
 }

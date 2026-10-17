@@ -1,10 +1,16 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 
 use super::sync::account_policy;
-use super::{command_result, emit_folder_counts, emit_message_change, AppState, CommandResult};
+use super::{
+    command_result, emit_folder_counts, emit_message_change, wake, AppState, CommandResult,
+};
+use crate::mail::sync::{body_fetch_for, BodyFetch, FetchedBody};
 use crate::{
+    db::{BodyState, CachedMessage, Database},
     mail::{
         self,
         failure::{FailureKind, MailError},
@@ -14,6 +20,12 @@ use crate::{
         MessageSummary, SearchQuery,
     },
 };
+
+// Must match `BULK_LIMIT` in src/bulk.ts.
+const MAX_BULK_MESSAGES: usize = 200;
+/// Longest an undo-window move waits without a commit. The frontend commits
+/// when its window closes; this only covers a commit that never arrives.
+const UNDO_HOLD_SECONDS: i64 = 60;
 
 #[tauri::command]
 pub async fn list_messages(
@@ -50,89 +62,165 @@ pub async fn list_messages(
 pub(crate) const QUARANTINED: &str =
     "Postal Snap could not read this message safely, so it will not open it again. Read it in another mail app or delete it.";
 
-pub(crate) async fn ensure_message_content(
-    account_id: &str,
-    message_id: i64,
+/// What a caller needs from a stored body. `Text` accepts a stored prefix;
+/// `Full` never does, so attachments, source and export see every byte.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Need {
+    Text,
+    Full,
+}
+
+/// Decision made from stored state before any network access.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ContentPlan {
+    Ready,
+    Download(BodyFetch),
+    /// Show the stored text, and upgrade to the whole message when online.
+    UpgradeCid,
+}
+
+pub(crate) fn content_plan(
+    need: Need,
+    state: BodyState,
+    size: u64,
+    keep_attachments_offline: bool,
+) -> ContentPlan {
+    match (need, state.has_raw, state.body_partial) {
+        (_, true, false) => ContentPlan::Ready,
+        (Need::Full, _, _) => ContentPlan::Download(BodyFetch::Full),
+        (Need::Text, _, true) if state.html_has_cid => ContentPlan::UpgradeCid,
+        (Need::Text, _, true) => ContentPlan::Ready,
+        (Need::Text, _, false) => {
+            ContentPlan::Download(body_fetch_for(size, keep_attachments_offline))
+        }
+    }
+}
+
+/// Settles the parse count after a download that may have parsed.
+fn settle_parse<T>(
     state: &AppState,
+    mailbox_id: i64,
+    uid: u32,
+    parsing: bool,
+    result: &Result<T, MailError>,
 ) -> Result<(), MailError> {
-    let storage = MailError::local_storage;
-    let (owner_id, ..) = state.db.message_fetch_location(message_id)?;
-    if owner_id != account_id {
-        return Err("Message does not belong to this account."
-            .to_string()
-            .into());
-    }
-    if state
-        .db
-        .message_content_cached(message_id, account_id)
-        .map_err(storage)?
-    {
+    if !parsing {
         return Ok(());
     }
-    let _guard = state.lock_account(account_id).await?;
-    let (owner_id, mailbox_id, mailbox, uid, size) = state.db.message_fetch_location(message_id)?;
-    if owner_id != account_id {
-        return Err("Message does not belong to this account."
-            .to_string()
-            .into());
-    }
-    if state
-        .db
-        .message_content_cached(message_id, account_id)
-        .map_err(storage)?
-    {
-        return Ok(());
-    }
-    if state
-        .db
-        .parse_quarantined(message_id, account_id)
-        .map_err(storage)?
-    {
+    if matches!(result, Err(error) if error.kind == FailureKind::Unreadable) {
+        state
+            .db
+            .quarantine_parse(mailbox_id, uid)
+            .map_err(MailError::local_storage)?;
         return Err(MailError::new(FailureKind::Unreadable, QUARANTINED));
     }
-    let uid_validity = state
+    state
         .db
-        .mailbox_uid_validity(account_id, &mailbox)
-        .map_err(storage)?;
+        .end_parse(mailbox_id, uid)
+        .map_err(MailError::local_storage)
+}
+
+/// The message's download location, read under the account lock.
+struct Location {
+    message_id: i64,
+    mailbox_id: i64,
+    mailbox: String,
+    uid: u32,
+    size: u64,
+}
+
+async fn download_full_once(
+    state: &AppState,
+    account_id: &str,
+    location: &Location,
+    uid_validity: u32,
+    cached_received_at: Option<&str>,
+) -> Result<CachedMessage, MailError> {
     let account = state.db.account(account_id)?;
     let password = crate::oauth::session_secret(&account)
         .await
-        .map_err(storage)?;
-    let cached_received_at = state.db.message_received_at(message_id).ok().flatten();
-    let parsing = std::sync::atomic::AtomicBool::new(false);
-    let downloaded = mail::download_message(
+        .map_err(MailError::local_storage)?;
+    let parsing = AtomicBool::new(false);
+    let result = mail::download_message(
         &account,
         &password,
-        &mailbox,
-        uid,
-        size,
-        uid_validity,
-        cached_received_at.as_deref(),
+        &location.mailbox,
+        location.uid,
+        location.size,
+        Some(uid_validity),
+        cached_received_at,
         || {
-            parsing.store(true, std::sync::atomic::Ordering::SeqCst);
-            state.db.begin_parse(mailbox_id, uid)
+            parsing.store(true, Ordering::SeqCst);
+            state.db.begin_parse(location.mailbox_id, location.uid)
         },
     )
     .await;
-    if parsing.load(std::sync::atomic::Ordering::SeqCst) {
-        if matches!(&downloaded, Err(error) if error.kind == FailureKind::Unreadable) {
-            state
-                .db
-                .quarantine_parse(mailbox_id, uid)
-                .map_err(storage)?;
-            return Err(MailError::new(FailureKind::Unreadable, QUARANTINED));
-        }
-        state.db.end_parse(mailbox_id, uid).map_err(storage)?;
+    settle_parse(
+        state,
+        location.mailbox_id,
+        location.uid,
+        parsing.load(Ordering::SeqCst),
+        &result,
+    )?;
+    result
+}
+
+async fn download_partial_once(
+    state: &AppState,
+    account_id: &str,
+    location: &Location,
+    uid_validity: u32,
+    cached_received_at: Option<&str>,
+) -> Result<FetchedBody, MailError> {
+    let account = state.db.account(account_id)?;
+    let password = crate::oauth::session_secret(&account)
+        .await
+        .map_err(MailError::local_storage)?;
+    let parsing = AtomicBool::new(false);
+    let result = mail::sync::download_partial_message(
+        &account,
+        &password,
+        &location.mailbox,
+        location.uid,
+        location.size,
+        Some(uid_validity),
+        cached_received_at,
+        || {
+            parsing.store(true, Ordering::SeqCst);
+            state.db.begin_parse(location.mailbox_id, location.uid)
+        },
+    )
+    .await;
+    settle_parse(
+        state,
+        location.mailbox_id,
+        location.uid,
+        parsing.load(Ordering::SeqCst),
+        &result,
+    )?;
+    result
+}
+
+/// Store a body only if the row still belongs to the same mailbox generation.
+fn store_body(
+    state: &AppState,
+    account_id: &str,
+    location: &Location,
+    uid_validity: u32,
+    message: &CachedMessage,
+    partial: bool,
+) -> Result<(), MailError> {
+    let stored = if partial {
+        state
+            .db
+            .attach_partial_body_if_current(location.mailbox_id, uid_validity, message)
+    } else {
+        state
+            .db
+            .attach_body_if_current(location.mailbox_id, uid_validity, message)
     }
-    let message = downloaded?;
-    let uid_validity = uid_validity.ok_or_else(|| {
-        MailError::from("Mailbox identity is unavailable; refresh mail and try again.".to_string())
-    })?;
-    if !state
-        .db
-        .attach_body_if_current(mailbox_id, uid_validity, &message)
-        .map_err(storage)?
-    {
+    .map_err(MailError::local_storage)?;
+    if !stored {
         return Err("This message is no longer available on the server."
             .to_string()
             .into());
@@ -140,9 +228,137 @@ pub(crate) async fn ensure_message_content(
     let id = message
         .message_id
         .clone()
-        .unwrap_or_else(|| crate::db::synthetic_thread_id(mailbox_id, message.uid));
+        .unwrap_or_else(|| crate::db::synthetic_thread_id(location.mailbox_id, message.uid));
     let _ = state.db.repair_thread_roots(account_id, &[id]);
     Ok(())
+}
+
+async fn fetch_and_store(
+    state: &AppState,
+    account_id: &str,
+    location: &Location,
+    uid_validity: u32,
+    plan: ContentPlan,
+) -> Result<(), MailError> {
+    let cached_received_at = state
+        .db
+        .message_received_at(location.message_id)
+        .ok()
+        .flatten();
+    if !matches!(plan, ContentPlan::Download(BodyFetch::Partial)) {
+        let message = download_full_once(
+            state,
+            account_id,
+            location,
+            uid_validity,
+            cached_received_at.as_deref(),
+        )
+        .await?;
+        return store_body(state, account_id, location, uid_validity, &message, false);
+    }
+    match download_partial_once(
+        state,
+        account_id,
+        location,
+        uid_validity,
+        cached_received_at.as_deref(),
+    )
+    .await?
+    {
+        FetchedBody::Partial(message) => {
+            store_body(state, account_id, location, uid_validity, &message, true)
+        }
+        FetchedBody::Full(message) => {
+            store_body(state, account_id, location, uid_validity, &message, false)
+        }
+        FetchedBody::Fallback => {
+            let message = download_full_once(
+                state,
+                account_id,
+                location,
+                uid_validity,
+                cached_received_at.as_deref(),
+            )
+            .await?;
+            store_body(state, account_id, location, uid_validity, &message, false)
+        }
+    }
+}
+
+/// Make the stored body satisfy `need`, downloading it when required.
+pub(crate) async fn ensure_message_content_for(
+    account_id: &str,
+    message_id: i64,
+    state: &AppState,
+    need: Need,
+) -> Result<(), MailError> {
+    let storage = MailError::local_storage;
+    let keep = state.db.keep_attachments_offline();
+    let plan_now = || -> Result<ContentPlan, MailError> {
+        let (owner_id, _, _, _, size) = state.db.message_fetch_location(message_id)?;
+        if owner_id != account_id {
+            return Err("Message does not belong to this account."
+                .to_string()
+                .into());
+        }
+        let body = state
+            .db
+            .body_state(message_id, account_id)
+            .map_err(storage)?;
+        Ok(content_plan(need, body, size, keep))
+    };
+    let plan = plan_now()?;
+    if plan == ContentPlan::Ready {
+        return Ok(());
+    }
+    let _guard = state.lock_account(account_id).await?;
+    let plan = plan_now()?;
+    if plan == ContentPlan::Ready {
+        return Ok(());
+    }
+    if state
+        .db
+        .parse_quarantined(message_id, account_id)
+        .map_err(storage)?
+    {
+        // A quarantined upgrade keeps the stored text; a body download cannot.
+        return if plan == ContentPlan::UpgradeCid {
+            Ok(())
+        } else {
+            Err(MailError::new(FailureKind::Unreadable, QUARANTINED))
+        };
+    }
+    let (_, mailbox_id, mailbox, uid, size) = state.db.message_fetch_location(message_id)?;
+    let uid_validity = state
+        .db
+        .mailbox_uid_validity(account_id, &mailbox)
+        .map_err(storage)?
+        .ok_or_else(|| {
+            MailError::from(
+                "Mailbox identity is unavailable; refresh mail and try again.".to_string(),
+            )
+        })?;
+    let location = Location {
+        message_id,
+        mailbox_id,
+        mailbox,
+        uid,
+        size,
+    };
+    let outcome = fetch_and_store(state, account_id, &location, uid_validity, plan).await;
+    if plan == ContentPlan::UpgradeCid && outcome.is_err() {
+        return Ok(());
+    }
+    outcome
+}
+
+/// Shorthand for callers that need the whole message.
+pub(crate) async fn ensure_message_content(
+    account_id: &str,
+    message_id: i64,
+    state: &AppState,
+) -> Result<(), MailError> {
+    ensure_message_content_for(account_id, message_id, state, Need::Full).await
 }
 
 #[tauri::command]
@@ -154,13 +370,34 @@ pub async fn get_message(
     // When the body cannot be downloaded right now (offline, sign-in needed,
     // too large), still open the envelope and say why the body is missing
     // instead of failing the whole message.
-    let body_status = match ensure_message_content(&account_id, message_id, &state).await {
-        Ok(()) => "available",
-        Err(error) => match mail::failure::body_status(&error) {
-            Some(status) => status,
-            None => return Err(error.into()),
-        },
-    };
+    let body_status =
+        match ensure_message_content_for(&account_id, message_id, &state, Need::Text).await {
+            Ok(()) => "available",
+            Err(error) => match mail::failure::body_status(&error) {
+                Some(status) => status,
+                None => return Err(error.into()),
+            },
+        };
+    message_detail_with_status(&state, account_id, message_id, body_status).await
+}
+
+/// Fetch the whole message, even when a prefix is stored, and return it.
+#[tauri::command]
+pub async fn download_full_message(
+    account_id: String,
+    message_id: i64,
+    state: State<'_, AppState>,
+) -> CommandResult<MessageDetail> {
+    ensure_message_content_for(&account_id, message_id, &state, Need::Full).await?;
+    message_detail_with_status(&state, account_id, message_id, "available").await
+}
+
+async fn message_detail_with_status(
+    state: &AppState,
+    account_id: String,
+    message_id: i64,
+    body_status: &str,
+) -> CommandResult<MessageDetail> {
     let db = state.db.clone();
     let account_id_for_detail = account_id.clone();
     let mut detail =
@@ -213,7 +450,7 @@ pub async fn get_message_source(
     message_id: i64,
     state: State<'_, AppState>,
 ) -> CommandResult<mail::source::MessageSource> {
-    ensure_message_content(&account_id, message_id, &state).await?;
+    ensure_message_content_for(&account_id, message_id, &state, Need::Full).await?;
     let raw = state.db.raw_message(message_id, &account_id)?;
     Ok(mail::source::build_source(&raw))
 }
@@ -226,7 +463,7 @@ pub async fn save_message_eml(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<()> {
-    ensure_message_content(&account_id, message_id, &state).await?;
+    ensure_message_content_for(&account_id, message_id, &state, Need::Full).await?;
     let raw = state.db.raw_message(message_id, &account_id)?;
     let picker = app.clone();
     let destination = tokio::task::spawn_blocking(move || {
@@ -400,11 +637,15 @@ pub async fn move_message(
     account_id: String,
     message_id: i64,
     role: String,
+    undo_token: Option<String>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<Option<i64>> {
     if !matches!(role.as_str(), "archive" | "trash" | "junk") {
         return Err("Unsupported destination.".into());
+    }
+    if let Some(token) = undo_token.as_deref() {
+        validate_undo_token(token)?;
     }
     let _guard = state.lock_account(&account_id).await?;
     let (owner_id, source, uid) = state.db.message_location(message_id)?;
@@ -416,6 +657,19 @@ pub async fn move_message(
         .mailbox_for_role(&account_id, &role)?
         .ok_or_else(|| format!("This account does not have a {role} mailbox."))?;
     if source == destination {
+        return Ok(None);
+    }
+    if let Some(token) = undo_token.as_deref() {
+        let operation =
+            move_operation_for(&state, &account_id, message_id, &source, uid, &destination)?;
+        state.db.defer_moves(
+            &account_id,
+            &[(message_id, operation, destination_id)],
+            token,
+            undo_not_before(),
+        )?;
+        emit_message_change(&app, &account_id, Some(message_id), "moved");
+        emit_folder_counts(&app, &account_id);
         return Ok(None);
     }
     command_result(
@@ -438,9 +692,13 @@ pub async fn move_message_to_mailbox(
     account_id: String,
     message_id: i64,
     destination_mailbox_id: i64,
+    undo_token: Option<String>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<()> {
+    if let Some(token) = undo_token.as_deref() {
+        validate_undo_token(token)?;
+    }
     let _guard = state.lock_account(&account_id).await?;
     let (owner_id, source, uid) = state.db.message_location(message_id)?;
     if owner_id != account_id {
@@ -451,6 +709,19 @@ pub async fn move_message_to_mailbox(
         return Err("Messages cannot be moved between accounts.".into());
     }
     if source == destination {
+        return Ok(());
+    }
+    if let Some(token) = undo_token.as_deref() {
+        let operation =
+            move_operation_for(&state, &account_id, message_id, &source, uid, &destination)?;
+        state.db.defer_moves(
+            &account_id,
+            &[(message_id, operation, destination_mailbox_id)],
+            token,
+            undo_not_before(),
+        )?;
+        emit_message_change(&app, &account_id, Some(message_id), "moved");
+        emit_folder_counts(&app, &account_id);
         return Ok(());
     }
     command_result(
@@ -563,6 +834,48 @@ async fn copy_message_inner(
     Ok(())
 }
 
+/// Builds the replayable move for one message, including the source identity.
+fn move_operation_for(
+    state: &AppState,
+    account_id: &str,
+    message_id: i64,
+    source: &str,
+    uid: u32,
+    destination: &str,
+) -> Result<MoveOperation, String> {
+    Ok(MoveOperation {
+        message_id,
+        uid,
+        source: source.to_string(),
+        destination: destination.to_string(),
+        uid_validity: Some(
+            state
+                .db
+                .mailbox_uid_validity(account_id, source)?
+                .ok_or_else(|| {
+                    "Mailbox identity is unavailable; refresh mail and try again.".to_string()
+                })?,
+        ),
+    })
+}
+
+fn undo_not_before() -> chrono::DateTime<chrono::Utc> {
+    chrono::Utc::now() + chrono::TimeDelta::seconds(UNDO_HOLD_SECONDS)
+}
+
+/// Undo tokens come from the frontend. Keep them short and plain.
+fn validate_undo_token(token: &str) -> Result<(), String> {
+    if token.is_empty()
+        || token.len() > 64
+        || !token
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    {
+        return Err("This undo request is no longer valid.".into());
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn move_message_inner(
     message_id: i64,
@@ -574,20 +887,7 @@ async fn move_message_inner(
     app: &AppHandle,
     state: &AppState,
 ) -> Result<Option<i64>, String> {
-    let operation = MoveOperation {
-        message_id,
-        uid,
-        source: source.clone(),
-        destination: destination.clone(),
-        uid_validity: Some(
-            state
-                .db
-                .mailbox_uid_validity(&account_id, &source)?
-                .ok_or_else(|| {
-                    "Mailbox identity is unavailable; refresh mail and try again.".to_string()
-                })?,
-        ),
-    };
+    let operation = move_operation_for(state, &account_id, message_id, &source, uid, &destination)?;
     let account = state.db.account(&account_id)?;
     let password = crate::oauth::session_secret(&account).await?;
     let remote_message_id = state.db.message_rfc_id(message_id).ok().flatten();
@@ -765,7 +1065,7 @@ pub async fn set_messages_flags(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<BulkOutcome> {
-    if message_ids.len() > 200 {
+    if message_ids.len() > MAX_BULK_MESSAGES {
         return Err("Select up to 200 messages at a time.".into());
     }
     let _guard = state.lock_account(&account_id).await?;
@@ -790,11 +1090,15 @@ pub async fn move_messages_to_mailbox(
     account_id: String,
     message_ids: Vec<i64>,
     destination_mailbox_id: i64,
+    undo_token: Option<String>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<BulkOutcome> {
-    if message_ids.len() > 200 {
+    if message_ids.len() > MAX_BULK_MESSAGES {
         return Err("Select up to 200 messages at a time.".into());
+    }
+    if let Some(token) = undo_token.as_deref() {
+        validate_undo_token(token)?;
     }
     let _guard = state.lock_account(&account_id).await?;
     // Resolve the destination inside the lock so a concurrent folder rename
@@ -819,6 +1123,19 @@ pub async fn move_messages_to_mailbox(
     }
     let mut sources: Vec<_> = groups.into_iter().collect();
     sources.sort_by(|left, right| left.0.cmp(&right.0));
+    if let Some(token) = undo_token.as_deref() {
+        let outcome = defer_bulk_moves(
+            &state.db,
+            &account_id,
+            &sources,
+            destination_mailbox_id,
+            &destination,
+            token,
+        );
+        emit_message_change(&app, &account_id, None, "moved");
+        emit_folder_counts(&app, &account_id);
+        return Ok(outcome);
+    }
     let account = state.db.account(&account_id)?;
     let password = crate::oauth::session_secret(&account).await?;
     let mut updated = 0usize;
@@ -894,6 +1211,92 @@ pub async fn move_messages_to_mailbox(
     })
 }
 
+/// Queue a bulk move behind the undo window. Nothing touches the network, and
+/// one transaction covers the whole group.
+fn defer_bulk_moves(
+    db: &Database,
+    account_id: &str,
+    sources: &[(String, Vec<(i64, u32)>)],
+    destination_mailbox_id: i64,
+    destination: &str,
+    undo_token: &str,
+) -> BulkOutcome {
+    let mut failed = 0usize;
+    let mut entries = Vec::new();
+    for (source, messages) in sources {
+        let Ok(Some(validity)) = db.mailbox_uid_validity(account_id, source) else {
+            failed += messages.len();
+            continue;
+        };
+        for (id, uid) in messages {
+            let operation = MoveOperation {
+                message_id: *id,
+                uid: *uid,
+                source: source.clone(),
+                destination: destination.to_string(),
+                uid_validity: Some(validity),
+            };
+            entries.push((*id, operation, destination_mailbox_id));
+        }
+    }
+    let total = entries.len();
+    match db.defer_moves(account_id, &entries, undo_token, undo_not_before()) {
+        Ok(()) => BulkOutcome {
+            updated: 0,
+            queued: total,
+            failed,
+        },
+        Err(_) => BulkOutcome {
+            updated: 0,
+            queued: 0,
+            failed: failed + total,
+        },
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UndoDeferredOutcome {
+    pub restored: usize,
+    pub already_committed: bool,
+}
+
+/// Cancel a queued move from its undo window. Works offline: it only edits
+/// the local queue and the local row.
+#[tauri::command]
+pub async fn undo_deferred(
+    account_id: String,
+    undo_token: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<UndoDeferredOutcome> {
+    validate_undo_token(&undo_token)?;
+    let _guard = state.lock_account(&account_id).await?;
+    let (restored, already_committed) = state.db.undo_deferred(&account_id, &undo_token)?;
+    if restored > 0 {
+        emit_message_change(&app, &account_id, None, "moved");
+        emit_folder_counts(&app, &account_id);
+    }
+    Ok(UndoDeferredOutcome {
+        restored,
+        already_committed,
+    })
+}
+
+/// Make a window's moves due now and wake the worker to replay them.
+#[tauri::command]
+pub async fn commit_deferred(
+    account_id: String,
+    undo_token: String,
+    state: State<'_, AppState>,
+) -> CommandResult<()> {
+    validate_undo_token(&undo_token)?;
+    let _guard = state.lock_account(&account_id).await?;
+    state.db.commit_deferred(&account_id, &undo_token)?;
+    state.request(&account_id, wake::REPLAY)?;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn copy_messages_to_mailbox(
     account_id: String,
@@ -902,7 +1305,7 @@ pub async fn copy_messages_to_mailbox(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<BulkOutcome> {
-    if message_ids.len() > 200 {
+    if message_ids.len() > MAX_BULK_MESSAGES {
         return Err("Select up to 200 messages at a time.".into());
     }
     let _guard = state.lock_account(&account_id).await?;
@@ -1155,4 +1558,69 @@ impl mail::SyncHooks for SearchHooks {
     }
 
     fn progress(&mut self, _folder: &str) {}
+}
+
+#[cfg(test)]
+mod content_plan_tests {
+    use super::{content_plan, ContentPlan, Need};
+    use crate::db::BodyState;
+    use crate::mail::sync::BodyFetch;
+
+    const LARGE: u64 = 3 * 1024 * 1024;
+
+    fn state(has_raw: bool, body_partial: bool, html_has_cid: bool) -> BodyState {
+        BodyState {
+            has_raw,
+            body_partial,
+            html_has_cid,
+        }
+    }
+
+    // Failure modes for lazy attachments:
+    // 1. An attachment or source action reads a prefix (E6).
+    // 2. A partial message with inline images never upgrades when online (E10).
+    // 3. A row with a complete body downloads again.
+    #[test]
+    fn full_need_on_a_partial_row_downloads_the_whole_message() {
+        assert_eq!(
+            content_plan(Need::Full, state(false, true, false), LARGE, false),
+            ContentPlan::Download(BodyFetch::Full)
+        );
+        assert_eq!(
+            content_plan(Need::Full, state(false, false, false), LARGE, false),
+            ContentPlan::Download(BodyFetch::Full)
+        );
+        assert_eq!(
+            content_plan(Need::Full, state(true, false, false), LARGE, false),
+            ContentPlan::Ready
+        );
+    }
+
+    #[test]
+    fn text_need_is_ready_for_a_partial_row_without_inline_images() {
+        assert_eq!(
+            content_plan(Need::Text, state(false, true, false), LARGE, false),
+            ContentPlan::Ready
+        );
+        assert_eq!(
+            content_plan(Need::Text, state(false, true, true), LARGE, false),
+            ContentPlan::UpgradeCid
+        );
+    }
+
+    #[test]
+    fn text_need_on_an_envelope_fetches_a_prefix_only_for_large_messages() {
+        assert_eq!(
+            content_plan(Need::Text, state(false, false, false), LARGE, false),
+            ContentPlan::Download(BodyFetch::Partial)
+        );
+        assert_eq!(
+            content_plan(Need::Text, state(false, false, false), 4096, false),
+            ContentPlan::Download(BodyFetch::Full)
+        );
+        assert_eq!(
+            content_plan(Need::Text, state(false, false, false), LARGE, true),
+            ContentPlan::Download(BodyFetch::Full)
+        );
+    }
 }

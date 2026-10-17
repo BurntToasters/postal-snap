@@ -7,11 +7,9 @@ import {
   useState,
   type SetStateAction,
 } from "react";
-import { Extension } from "@tiptap/core";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Underline from "@tiptap/extension-underline";
-import Link from "@tiptap/extension-link";
 import Image from "@tiptap/extension-image";
 import TextAlign from "@tiptap/extension-text-align";
 import Highlight from "@tiptap/extension-highlight";
@@ -49,7 +47,7 @@ import { AddressFields } from "./composer/addressFields";
 import { ConfirmDialog } from "./composer/confirmDialog";
 import { ComposerHeader } from "./composer/composerHeader";
 import { FormatToolbar } from "./composer/formatToolbar";
-import { clipboardImages, readPastedImage } from "./composer/pasteImage";
+import { clipboardImages } from "./composer/pasteImage";
 import { SendBar } from "./composer/sendBar";
 import {
   htmlToQuotedPlainText,
@@ -58,6 +56,10 @@ import {
   plainTextToHtml,
 } from "./composer/plainText";
 import { useComposerPlacement } from "./composer/useComposerPlacement";
+import { FontSize, Indentation, SafeLink } from "./composer/extensions";
+import { useComposerAttachments } from "./composer/useComposerAttachments";
+import { useComposerSend } from "./composer/useComposerSend";
+import { useComposerWarnings } from "./composer/useComposerWarnings";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { MEDIA_QUERIES } from "../breakpoints";
 import {
@@ -71,132 +73,11 @@ import {
   seedSource,
   seedSubject,
 } from "./composer/composerSeed";
-import {
-  LARGE_RECIPIENT_COUNT,
-  authoredText,
-  hasDraftContent,
-  mentionsAttachment,
-  splitAddresses,
-  isMailbox,
-  firstNoreplyRecipient,
-  repeatedRecipient,
-  uniqueRecipientCount,
-  validateRecipientFields,
-  validateSubject,
-} from "./composer/composerValidate";
-
-declare module "@tiptap/core" {
-  interface Commands<ReturnType> {
-    fontSize: {
-      setFontSize: (fontSize: string) => ReturnType;
-      unsetFontSize: () => ReturnType;
-    };
-  }
-}
-
-const SafeLink = Link.extend({
-  addAttributes() {
-    return {
-      ...this.parent?.(),
-      href: {
-        default: null,
-        parseHTML: (element) =>
-          element.getAttribute("data-external-href") ||
-          element.getAttribute("href"),
-        renderHTML: (attributes) => {
-          const href = String(attributes.href ?? "");
-          if (/^https?:/i.test(href)) {
-            return {
-              href: "#",
-              "data-external-href": href,
-              rel: "noopener noreferrer",
-            };
-          }
-          if (/^mailto:/i.test(href)) {
-            return { href, rel: "noopener noreferrer" };
-          }
-          return {};
-        },
-      },
-      target: {
-        default: null,
-        renderHTML: () => ({}),
-      },
-    };
-  },
-}).configure({
-  openOnClick: false,
-  protocols: ["http", "https", "mailto"],
-  HTMLAttributes: {
-    rel: "noopener noreferrer",
-    target: null,
-  },
-});
-
-const FontSize = Extension.create({
-  name: "fontSize",
-  addGlobalAttributes() {
-    return [
-      {
-        types: ["textStyle"],
-        attributes: {
-          fontSize: {
-            default: null,
-            parseHTML: (element) => element.style.fontSize || null,
-            renderHTML: (attributes) =>
-              attributes.fontSize
-                ? { style: `font-size: ${attributes.fontSize}` }
-                : {},
-          },
-        },
-      },
-    ];
-  },
-  addCommands() {
-    return {
-      setFontSize:
-        (fontSize) =>
-        ({ chain }) =>
-          chain().setMark("textStyle", { fontSize }).run(),
-      unsetFontSize:
-        () =>
-        ({ chain }) =>
-          chain()
-            .setMark("textStyle", { fontSize: null })
-            .removeEmptyTextStyle()
-            .run(),
-    };
-  },
-});
-
-const Indentation = Extension.create({
-  name: "indentation",
-  addGlobalAttributes() {
-    return [
-      {
-        types: ["paragraph", "heading"],
-        attributes: {
-          indent: {
-            default: 0,
-            parseHTML: (element) => {
-              const rem = Number.parseFloat(element.style.marginLeft);
-              return Number.isFinite(rem)
-                ? Math.min(6, Math.round(rem / 2))
-                : 0;
-            },
-            renderHTML: (attributes) =>
-              attributes.indent
-                ? { style: `margin-left: ${attributes.indent * 2}rem` }
-                : {},
-          },
-        },
-      },
-    ];
-  },
-});
+import { hasDraftContent, splitAddresses } from "./composer/composerValidate";
 
 interface Props {
   accountId: string;
+  onDraftSaved?: (id: string) => void;
 }
 
 const linkDialogFocusable =
@@ -209,7 +90,20 @@ function composeImageFile(item: ComposeAttachment): boolean {
   return /\.(png|jpe?g|gif|webp)$/i.test(item.filename);
 }
 
-export function Composer({ accountId }: Props) {
+function signaturePreviewHtml(input: string): string {
+  const doc = new DOMParser().parseFromString(
+    sanitizeComposeHtml(input),
+    "text/html",
+  );
+  for (const image of doc.querySelectorAll("img")) image.remove();
+  for (const link of doc.querySelectorAll("a")) {
+    link.removeAttribute("href");
+    link.removeAttribute("data-external-href");
+  }
+  return doc.body.innerHTML;
+}
+
+export function Composer({ accountId, onDraftSaved }: Props) {
   const seed = useAppStore((state) => state.composeSeed);
   const mailboxes = useAppStore((state) => state.mailboxes);
   const account = useAppStore((state) =>
@@ -325,9 +219,6 @@ export function Composer({ accountId }: Props) {
         ),
   );
   const [subject, setSubject] = useState(seedSubject(seed));
-  const [attachments, setAttachments] = useState<ComposeAttachment[]>(
-    seed?.draft?.attachments ?? seed?.prefill?.attachments ?? [],
-  );
   const [draftId, setDraftId] = useState<string | undefined>(seed?.draft?.id);
   // A saved draft keeps its own format; new messages use the account default.
   const [includeSignature, setIncludeSignature] = useState(
@@ -346,7 +237,6 @@ export function Composer({ accountId }: Props) {
       ? (seed.draft.replyTo ?? "")
       : (account?.replyTo ?? ""),
   );
-  const [replyToError, setReplyToError] = useState<string>();
   const [bodyFormat, setBodyFormat] = useState<BodyFormat>(
     seed?.draft
       ? (seed.draft.bodyFormat ?? "html")
@@ -360,59 +250,33 @@ export function Composer({ accountId }: Props) {
       : "",
   );
   const [confirmPlain, setConfirmPlain] = useState(false);
-  const [attachmentWarning, setAttachmentWarning] = useState<{
-    sendAt?: string;
-    archiveSource?: boolean;
-  } | null>(null);
-  const [subjectWarning, setSubjectWarning] = useState<{
-    sendAt?: string;
-    archiveSource?: boolean;
-  } | null>(null);
-  const [bodyWarning, setBodyWarning] = useState<{
-    sendAt?: string;
-    archiveSource?: boolean;
-  } | null>(null);
-  const [audienceWarning, setAudienceWarning] = useState<{
-    sendAt?: string;
-    archiveSource?: boolean;
-    count: number;
-  } | null>(null);
-  const [noreplyWarning, setNoreplyWarning] = useState<{
-    sendAt?: string;
-    archiveSource?: boolean;
-    address: string;
-  } | null>(null);
-  const [duplicateWarning, setDuplicateWarning] = useState<{
-    sendAt?: string;
-    archiveSource?: boolean;
-    address: string;
-  } | null>(null);
-  const focusSubjectAfterWarning = useRef(false);
-  const focusBodyAfterWarning = useRef(false);
-  const focusToAfterWarning = useRef(false);
-  const [dropActive, setDropActive] = useState(false);
-  const [dropNote, setDropNote] = useState("");
+  const {
+    attachmentWarning,
+    subjectWarning,
+    bodyWarning,
+    audienceWarning,
+    noreplyWarning,
+    duplicateWarning,
+    setAttachmentWarning,
+    setSubjectWarning,
+    setBodyWarning,
+    setAudienceWarning,
+    setNoreplyWarning,
+    setDuplicateWarning,
+    focusSubjectAfterWarning,
+    focusBodyAfterWarning,
+    focusToAfterWarning,
+    warningOpen,
+    setters: warningSetters,
+  } = useComposerWarnings();
   const plainRef = useRef<HTMLTextAreaElement>(null);
-  const [inlineImages, setInlineImages] = useState(
-    new Map<string, { dataUrl: string; contentId: string }>(),
-  );
   const [sending, setSending] = useState(false);
   const [linkDialogOpen, setLinkDialogOpen] = useState(false);
-  const [attachmentPreview, setAttachmentPreview] = useState<{
-    filename: string;
-    src: string;
-  } | null>(null);
   const [linkValue, setLinkValue] = useState("https://");
   const [linkCanRemove, setLinkCanRemove] = useState(false);
   const [showCc, setShowCc] = useState(Boolean(cc));
   const [showBcc, setShowBcc] = useState(Boolean(bcc));
   const [formattingOpen, setFormattingOpen] = useState(false);
-  const [sendMenuOpen, setSendMenuOpen] = useState(false);
-  const [scheduleOpen, setScheduleOpen] = useState(false);
-  const [scheduleValue, setScheduleValue] = useState("");
-  const sendMenuRef = useRef<HTMLDivElement>(null);
-  const [recipientError, setRecipientError] = useState<string>();
-  const [subjectError, setSubjectError] = useState<string>();
   const [saveState, setSaveState] = useState<"unsaved" | "saving" | "saved">(
     seed?.draft ? "saved" : "unsaved",
   );
@@ -425,8 +289,8 @@ export function Composer({ accountId }: Props) {
   const [draftSyncDetail, setDraftSyncDetail] = useState(
     seed?.draftSummary?.syncDetail,
   );
-  const restoredInlineImages = useRef(new Set<string>());
   const isDiscarding = useRef(false);
+  const isDiscardingNow = useCallback(() => isDiscarding.current, []);
   const isSending = useRef(false);
   const draftRevision = useRef(0);
   const saveInFlight = useRef(false);
@@ -583,70 +447,38 @@ export function Composer({ accountId }: Props) {
     [],
   );
 
-  const canSend = useMemo(
-    () =>
-      Boolean(
-        editor &&
-        !sending &&
-        !isDiscarding.current &&
-        saveState !== "saving" &&
-        [...splitAddresses(to), ...splitAddresses(cc), ...splitAddresses(bcc)]
-          .length > 0 &&
-        validateRecipientFields(to, cc, bcc) === undefined &&
-        validateSubject(subject) === undefined,
-      ),
-    [bcc, cc, editor, saveState, sending, subject, to],
-  );
-
-  useEffect(() => {
-    if (!editor) return;
-    const inline = attachments.filter(
-      (attachment) =>
-        attachment.inline &&
-        attachment.contentId &&
-        !restoredInlineImages.current.has(attachment.token),
-    );
-    if (inline.length === 0) return;
-    let cancelled = false;
-    void Promise.allSettled(
-      inline.map(async (attachment) => ({
-        attachment,
-        dataUrl: await api.readComposeImage(accountId, attachment.token),
-      })),
-    ).then((results) => {
-      if (cancelled) return;
-      const loaded = results.flatMap((result) =>
-        result.status === "fulfilled" ? [result.value] : [],
-      );
-      for (const { attachment } of loaded)
-        restoredInlineImages.current.add(attachment.token);
-      if (loaded.length > 0) {
-        let html = editor.getHTML();
-        for (const { attachment, dataUrl } of loaded) {
-          const contentId = attachment.contentId!;
-          html = html.split(`cid:${contentId}`).join(dataUrl);
-        }
-        setInlineImages((items) => {
-          const next = new Map(items);
-          for (const { attachment, dataUrl } of loaded) {
-            next.set(attachment.token, {
-              dataUrl,
-              contentId: attachment.contentId!,
-            });
-          }
-          return next;
-        });
-        editor.commands.setContent(sanitizeComposeHtml(html), {
-          emitUpdate: false,
-        });
-      }
-      const failed = results.length - loaded.length;
-      if (failed > 0) setError(strings.composer.inlineImageFailed(failed));
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [accountId, attachments, editor, setError]);
+  const {
+    attachments,
+    inlineImages,
+    dropActive,
+    dropNote,
+    attachmentPreview,
+    setAttachmentPreview,
+    totalAttachmentBytes,
+    isAttachmentSizeWarning,
+    addAttachments,
+    addInlineImage,
+    removeAttachment,
+    removeAllAttachments,
+    previewComposeImage,
+    pasteImage,
+    stripInlineImages,
+  } = useComposerAttachments({
+    accountId,
+    initialAttachments:
+      seed?.draft?.attachments ?? seed?.prefill?.attachments ?? [],
+    editor,
+    editorRef,
+    bodyFormatRef,
+    sending,
+    saveState,
+    minimized,
+    dialogRef,
+    isSendingRef: isSending,
+    markUnsaved,
+    setError,
+  });
+  pasteImageRef.current = pasteImage;
 
   const buildDraft = useCallback((): ComposeDraft => {
     const plain = bodyFormat === "plain";
@@ -709,6 +541,7 @@ export function Composer({ accountId }: Props) {
 
   const { saveDraft } = useComposerDraftPersistence({
     accountId,
+    onDraftSaved,
     editor,
     sending,
     buildDraft,
@@ -832,217 +665,52 @@ export function Composer({ accountId }: Props) {
     }
   }
 
-  const totalAttachmentBytes = useMemo(
-    () => attachments.reduce((sum, item) => sum + (item.size ?? 0), 0),
-    [attachments],
-  );
-  const isAttachmentSizeWarning = totalAttachmentBytes > 25 * 1024 * 1024;
-
-  const sendMessage = useCallback(
-    async (
-      sendAt?: string,
-      attachmentChecked = false,
-      archiveAfterSend = false,
-      subjectChecked = false,
-      audienceChecked = false,
-      bodyChecked = false,
-      noreplyChecked = false,
-      duplicatesChecked = false,
-    ) => {
-      const validation = validateRecipientFields(to, cc, bcc);
-      const subjectValidation = validateSubject(subject);
-      setRecipientError(validation);
-      setSubjectError(subjectValidation);
-      const replyToValidation =
-        !redirecting && replyTo.trim() && !isMailbox(replyTo.trim())
-          ? strings.settings.replyToAddressInvalid
-          : undefined;
-      setReplyToError(replyToValidation);
-      if (
-        !canSend ||
-        validation ||
-        subjectValidation ||
-        replyToValidation ||
-        isSending.current ||
-        isDiscarding.current
-      )
-        return;
-      if (sendAt) {
-        const when = new Date(sendAt).getTime();
-        const limit = Date.now() + 365 * 24 * 60 * 60 * 1000;
-        if (!Number.isFinite(when) || when <= Date.now() || when > limit) {
-          setError(strings.composer.invalidSchedule);
-          return;
-        }
-      }
-      const noreply = firstNoreplyRecipient(to, cc, bcc);
-      if (!noreplyChecked && noreply) {
-        setNoreplyWarning({
-          sendAt,
-          archiveSource: archiveAfterSend,
-          address: noreply,
-        });
-        return;
-      }
-      const repeated = repeatedRecipient(to, cc, bcc);
-      if (!duplicatesChecked && repeated) {
-        setDuplicateWarning({
-          sendAt,
-          archiveSource: archiveAfterSend,
-          address: repeated,
-        });
-        return;
-      }
-      if (!subjectChecked && subject.trim().length === 0) {
-        setSubjectWarning({ sendAt, archiveSource: archiveAfterSend });
-        return;
-      }
-      const recipientCount = uniqueRecipientCount(to, cc, bcc);
-      if (!audienceChecked && recipientCount >= LARGE_RECIPIENT_COUNT) {
-        setAudienceWarning({
-          sendAt,
-          archiveSource: archiveAfterSend,
-          count: recipientCount,
-        });
-        return;
-      }
-      if (
-        !attachmentChecked &&
-        attachments.length === 0 &&
-        mentionsAttachment(
-          bodyFormat === "plain" ? plainBody : (editor?.getHTML() ?? ""),
-          bodyFormat,
-          includeSignature ? account?.signature : undefined,
-        )
-      ) {
-        setAttachmentWarning({ sendAt, archiveSource: archiveAfterSend });
-        return;
-      }
-      if (
-        !bodyChecked &&
-        !redirecting &&
-        !authoredText(
-          bodyFormat === "plain" ? plainBody : (editor?.getHTML() ?? ""),
-          bodyFormat,
-          includeSignature ? account?.signature : undefined,
-        ).trim()
-      ) {
-        setBodyWarning({ sendAt, archiveSource: archiveAfterSend });
-        return;
-      }
-      pendingClose.current = false;
-      isSending.current = true;
-      setSending(true);
-      try {
-        // An autosave may still be creating the draft. Wait so the sent
-        // message carries its id and backend cleanup removes that draft.
-        await savePromiseRef.current?.catch(() => undefined);
-        const draft = buildDraft();
-        const payload = { ...draft, id: draftIdRef.current ?? draft.id };
-        const sendPayload = sendAt ? { ...payload, sendAt } : payload;
-        const outcome =
-          archiveAfterSend && sourceArchive
-            ? await api.sendMessage(sendPayload, sourceArchive)
-            : await api.sendMessage(sendPayload);
-        announceLocalMailChanged(accountId);
-        // Uncertain, or queued after a real attempt: never let it look sent.
-        // An offline account queues on purpose and needs no warning.
-        const current = useAppStore.getState();
-        const offline =
-          current.accounts.find((item) => item.id === accountId)?.syncState ===
-            "offline" || current.sync[accountId]?.phase === "offline";
-        if (
-          (outcome.state === "needs_attention" ||
-            (outcome.state === "queued" && !offline) ||
-            outcome.state === "sent" ||
-            outcome.state === "sent_copy_pending" ||
-            outcome.state === "archive_pending") &&
-          outcome.detail
-        ) {
-          setError(outcome.detail);
-        }
-        if (outcome.state === "scheduled") {
-          useAppStore.getState().setLastSent({
-            outboxId: outcome.id,
-            accountId,
-            scheduled: Boolean(sendAt),
-            undoSeconds: sendAt
-              ? undefined
-              : Math.min(
-                  useAppStore.getState().settings.undoSendSeconds ?? 10,
-                  30,
-                ),
-          });
-        }
-        close();
-      } catch (cause) {
-        announceLocalMailChanged(accountId);
-        setError(String(cause));
-      } finally {
-        isSending.current = false;
-        setSending(false);
-      }
-    },
-    [
-      account?.signature,
-      includeSignature,
-      accountId,
-      attachments.length,
-      bcc,
-      bodyFormat,
-      buildDraft,
-      canSend,
-      redirecting,
-      replyTo,
-      cc,
-      close,
-      editor,
-      plainBody,
-      setError,
-      sourceArchive,
-      subject,
-      to,
-    ],
-  );
-
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.isComposing || event.keyCode === 229) return;
-      if (minimized) return;
-      if (document.querySelector(".settings-window")) return;
-      if (
-        attachmentWarning ||
-        subjectWarning ||
-        audienceWarning ||
-        bodyWarning ||
-        noreplyWarning ||
-        duplicateWarning ||
-        confirmPlain
-      )
-        return;
-      if (!(event.metaKey || event.ctrlKey)) return;
-      if (event.key === "Enter") {
-        event.preventDefault();
-        void sendMessage();
-      } else if (event.key.toLowerCase() === "s") {
-        event.preventDefault();
-        void saveDraft(false);
-      }
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [
-    attachmentWarning,
-    audienceWarning,
-    bodyWarning,
-    noreplyWarning,
-    duplicateWarning,
-    confirmPlain,
-    minimized,
-    saveDraft,
+  const {
+    canSend,
     sendMessage,
-    subjectWarning,
-  ]);
+    sendMenuRef,
+    sendMenuOpen,
+    setSendMenuOpen,
+    scheduleOpen,
+    setScheduleOpen,
+    scheduleValue,
+    setScheduleValue,
+    recipientError,
+    setRecipientError,
+    subjectError,
+    setSubjectError,
+    replyToError,
+    setReplyToError,
+  } = useComposerSend({
+    accountId,
+    editor,
+    to,
+    cc,
+    bcc,
+    subject,
+    replyTo,
+    redirecting,
+    bodyFormat,
+    plainBody,
+    includeSignature,
+    signature: account?.signature,
+    attachmentCount: attachments.length,
+    sourceArchive,
+    sending,
+    setSending,
+    saveState,
+    isSendingRef: isSending,
+    isDiscarding: isDiscardingNow,
+    pendingCloseRef: pendingClose,
+    savePromiseRef,
+    draftIdRef,
+    buildDraft,
+    close,
+    saveDraft,
+    setError,
+    warningSetters,
+    shortcutsPaused: minimized || warningOpen || confirmPlain,
+  });
 
   useLayoutEffect(() => {
     if (minimized) return;
@@ -1073,63 +741,9 @@ export function Composer({ accountId }: Props) {
     setMinimized(next);
   }
 
-  useEffect(() => {
-    if (subjectWarning || !focusSubjectAfterWarning.current) return;
-    focusSubjectAfterWarning.current = false;
-    document.getElementById("composer-subject")?.focus();
-  }, [subjectWarning]);
-
-  useEffect(() => {
-    if (bodyWarning || !focusBodyAfterWarning.current) return;
-    focusBodyAfterWarning.current = false;
-    document
-      .querySelector<HTMLElement>(".composer-plain-editor, .composer-editor")
-      ?.focus();
-  }, [bodyWarning]);
-
-  useEffect(() => {
-    if (
-      audienceWarning ||
-      noreplyWarning ||
-      duplicateWarning ||
-      !focusToAfterWarning.current
-    )
-      return;
-    focusToAfterWarning.current = false;
-    document.getElementById("composer-to")?.focus();
-  }, [audienceWarning, noreplyWarning, duplicateWarning]);
-
-  useEffect(() => {
-    if (!sendMenuOpen) return;
-    const onPointerDown = (event: PointerEvent) => {
-      if (!sendMenuRef.current?.contains(event.target as Node)) {
-        setSendMenuOpen(false);
-        setScheduleOpen(false);
-      }
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setSendMenuOpen(false);
-        setScheduleOpen(false);
-      }
-    };
-    document.addEventListener("pointerdown", onPointerDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [sendMenuOpen]);
-
   function switchToPlain() {
     setPlainBody(htmlToQuotedPlainText(editor?.getHTML() ?? ""));
-    // No HTML remains to show a picture, so pictures travel as files.
-    setInlineImages(new Map());
-    setAttachments((items) =>
-      items.map((item) =>
-        item.inline ? { ...item, inline: false, contentId: undefined } : item,
-      ),
-    );
+    stripInlineImages();
     setBodyFormat("plain");
     setConfirmPlain(false);
     markUnsaved();
@@ -1160,133 +774,6 @@ export function Composer({ accountId }: Props) {
     if (bodyFormat === "plain") plainRef.current?.focus();
     else editorRef.current?.commands.focus();
   }, [bodyFormat]);
-
-  // Native drop: Rust holds the paths and reports only a position. Attach
-  // only when the drop lands on this open composer.
-  useEffect(() => {
-    if (minimized) return;
-    let active = true;
-    let unlisten: (() => void) | undefined;
-    const overComposer = (x: number, y: number) => {
-      const box = dialogRef.current?.getBoundingClientRect();
-      return Boolean(
-        box &&
-        !isSending.current &&
-        !dialogRef.current?.querySelector('[role="alertdialog"]') &&
-        x >= box.left &&
-        x <= box.right &&
-        y >= box.top &&
-        y <= box.bottom,
-      );
-    };
-    void api
-      .onComposeDrag((event) => {
-        if (event.phase === "leave") {
-          setDropActive(false);
-          return;
-        }
-        const over = overComposer(event.x, event.y);
-        setDropActive(event.phase === "over" && over);
-        if (event.phase !== "drop" || !over) return;
-        void api
-          .attachDroppedFiles(accountId)
-          .then((dropped) => {
-            if (dropped.length === 0) return;
-            setAttachments((items) => [...items, ...dropped]);
-            setDropNote(strings.composer.dropAttached(dropped.length));
-            markUnsaved();
-          })
-          .catch((cause) => setError(String(cause)));
-      })
-      .then((stop) => {
-        if (active) unlisten = stop;
-        else stop();
-      });
-    return () => {
-      active = false;
-      unlisten?.();
-      setDropActive(false);
-    };
-  }, [accountId, dialogRef, markUnsaved, minimized, setError]);
-
-  async function addAttachments() {
-    try {
-      const selected = await api.chooseAttachments(accountId, false);
-      setAttachments((items) => [...items, ...selected]);
-      if (selected.length) markUnsaved();
-    } catch (cause) {
-      setError(String(cause));
-    }
-  }
-
-  pasteImageRef.current = async (files, tooLarge) => {
-    if (tooLarge) {
-      setError(strings.composer.pastedImageTooLarge);
-      if (files.length === 0) return;
-    }
-    for (const file of files) {
-      let selectedToken: string | undefined;
-      try {
-        const dataUrl = await readPastedImage(file);
-        const selected = await api.stagePastedImage(accountId, dataUrl);
-        selectedToken = selected.token;
-        if (bodyFormatRef.current === "plain") {
-          setAttachments((items) => [...items, { ...selected, inline: false }]);
-        } else {
-          const contentId = `postal-${crypto.randomUUID()}@inline`;
-          editorRef.current
-            ?.chain()
-            .focus()
-            .setImage({ src: dataUrl, alt: strings.composer.inlineImage })
-            .run();
-          setInlineImages((items) =>
-            new Map(items).set(selected.token, { dataUrl, contentId }),
-          );
-          setAttachments((items) => [
-            ...items,
-            { ...selected, inline: true, contentId },
-          ]);
-        }
-        markUnsaved();
-      } catch (cause) {
-        if (selectedToken)
-          void api
-            .releaseComposeAttachments(accountId, [selectedToken])
-            .catch(() => undefined);
-        setError(String(cause));
-      }
-    }
-  };
-
-  async function addInlineImage() {
-    let selectedToken: string | undefined;
-    try {
-      const [selected] = await api.chooseAttachments(accountId, true);
-      if (!selected) return;
-      selectedToken = selected.token;
-      const dataUrl = await api.readComposeImage(accountId, selected.token);
-      const contentId = `postal-${crypto.randomUUID()}@inline`;
-      editor
-        ?.chain()
-        .focus()
-        .setImage({ src: dataUrl, alt: strings.composer.inlineImage })
-        .run();
-      setInlineImages((items) =>
-        new Map(items).set(selected.token, { dataUrl, contentId }),
-      );
-      setAttachments((items) => [
-        ...items,
-        { ...selected, inline: true, contentId },
-      ]);
-      markUnsaved();
-    } catch (cause) {
-      if (selectedToken)
-        void api
-          .releaseComposeAttachments(accountId, [selectedToken])
-          .catch(() => undefined);
-      setError(String(cause));
-    }
-  }
 
   function addLink() {
     const current = editor?.getAttributes("link").href as string | undefined;
@@ -1322,75 +809,6 @@ export function Composer({ accountId }: Props) {
     });
     if (transaction.docChanged) editor.view.dispatch(transaction);
     editor.commands.focus();
-  }
-
-  function removeAllAttachments() {
-    if (sending || saveState === "saving" || attachments.length < 2) return;
-    const current = attachments;
-    if (editor) {
-      const sources = new Set(
-        current
-          .map((item) => inlineImages.get(item.token)?.dataUrl)
-          .filter((src): src is string => Boolean(src)),
-      );
-      if (sources.size > 0) {
-        const ranges: Array<{ from: number; to: number }> = [];
-        editor.state.doc.descendants((node, position) => {
-          if (
-            node.type.name === "image" &&
-            sources.has(String(node.attrs.src))
-          ) {
-            ranges.push({ from: position, to: position + node.nodeSize });
-          }
-        });
-        const transaction = editor.state.tr;
-        for (const range of ranges.reverse())
-          transaction.delete(range.from, range.to);
-        if (transaction.docChanged) editor.view.dispatch(transaction);
-      }
-    }
-    setInlineImages(new Map());
-    setAttachments([]);
-    markUnsaved();
-    void api
-      .releaseComposeAttachments(
-        accountId,
-        current.map((item) => item.token),
-      )
-      .catch((cause) => setError(String(cause)));
-  }
-
-  async function previewComposeImage(item: ComposeAttachment) {
-    try {
-      const src = await api.readComposeImage(accountId, item.token);
-      setAttachmentPreview({ filename: item.filename, src });
-    } catch (cause) {
-      setError(String(cause));
-    }
-  }
-
-  function removeAttachment(index: number) {
-    const item = attachments[index];
-    const inline = item ? inlineImages.get(item.token) : undefined;
-    if (inline && editor) {
-      const transaction = editor.state.tr;
-      editor.state.doc.descendants((node, position) => {
-        if (node.type.name === "image" && node.attrs.src === inline.dataUrl)
-          transaction.delete(position, position + node.nodeSize);
-      });
-      if (transaction.docChanged) editor.view.dispatch(transaction);
-      setInlineImages((items) => {
-        const next = new Map(items);
-        next.delete(item.token);
-        return next;
-      });
-    }
-    setAttachments((all) => all.filter((_, itemIndex) => itemIndex !== index));
-    markUnsaved();
-    if (item)
-      void api
-        .releaseComposeAttachments(accountId, [item.token])
-        .catch((cause) => setError(String(cause)));
   }
 
   async function pastePlainText() {
@@ -1715,13 +1133,24 @@ export function Composer({ accountId }: Props) {
             />
           </div>
         )}
-        {account?.signature &&
+        {((bodyFormat === "html" &&
+          (account?.signatureHtml || account?.signature)) ||
+          (bodyFormat === "plain" && account?.signature)) &&
         includeSignature &&
         !seed?.draft &&
         !redirecting ? (
           <aside className="composer-signature-preview">
             <strong>{strings.composer.signaturePreview}</strong>
-            <pre>{account.signature}</pre>
+            {bodyFormat === "html" && account.signatureHtml ? (
+              <div
+                className="composer-signature-html"
+                dangerouslySetInnerHTML={{
+                  __html: signaturePreviewHtml(account.signatureHtml),
+                }}
+              />
+            ) : (
+              <pre>{account.signature}</pre>
+            )}
           </aside>
         ) : null}
         {attachments.length > 0 ? (

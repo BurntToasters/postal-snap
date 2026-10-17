@@ -56,6 +56,8 @@ export async function createCompatibilityFixture({
   const counts = {
     connections: 0,
     authenticated: 0,
+    listStatusReplies: 0,
+    idCommands: 0,
     rejectedAuthentication: 0,
     messagesAccepted: 0,
     restarts: 0,
@@ -185,6 +187,17 @@ export async function createCompatibilityFixture({
       const value = encodeMailbox(name);
       return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
     };
+    const sendStatus = (mailbox) => {
+      const rows = selectedMessages(mailbox);
+      const unseen = rows.filter(
+        (message) => !message.flags?.includes("\\Seen"),
+      ).length;
+      sendMailboxResponse(
+        "* STATUS ",
+        mailbox,
+        ` (MESSAGES ${rows.length} UNSEEN ${unseen} UIDNEXT ${nextUid(mailbox)} UIDVALIDITY ${currentUidValidity} HIGHESTMODSEQ ${currentUidValidity})`,
+      );
+    };
     const sendMailboxResponse = (prefix, name, suffix = "") => {
       if (!utf8AcceptEnabled) {
         send(`${prefix}${wireMailbox(name)}${suffix}`);
@@ -282,10 +295,22 @@ export async function createCompatibilityFixture({
         }
       } else if (command === "NOOP") {
         send(`${tag} OK noop`);
+      } else if (command === "ID") {
+        // Only counted: the reply is ignored by clients.
+        counts.idCommands++;
+        send("* ID NIL");
+        send(`${tag} OK id`);
       } else if (command === "LIST" || command === "LSUB") {
+        // LIST-STATUS (RFC 5819): STATUS follows each LIST entry.
+        const withStatus =
+          command === "LIST" &&
+          capabilities.includes("LIST-STATUS") &&
+          /\bRETURN\s*\(/i.test(args);
+        if (withStatus) counts.listStatusReplies++;
         for (const name of mailboxes.keys()) {
           const flags = name === "All Mail" ? "(\\All)" : "()";
           sendMailboxResponse(`* ${command} ${flags} "/" `, name);
+          if (withStatus) sendStatus(name);
         }
         send(`${tag} OK listed`);
       } else if (command === "STATUS") {
@@ -296,15 +321,7 @@ export async function createCompatibilityFixture({
             .replaceAll('\\"', '"')
             .replaceAll("\\\\", "\\"),
         );
-        const rows = selectedMessages(mailbox);
-        const unseen = rows.filter(
-          (message) => !message.flags?.includes("\\Seen"),
-        ).length;
-        sendMailboxResponse(
-          "* STATUS ",
-          mailbox,
-          ` (MESSAGES ${rows.length} UNSEEN ${unseen} UIDNEXT ${nextUid(mailbox)} UIDVALIDITY ${currentUidValidity} HIGHESTMODSEQ ${currentUidValidity})`,
-        );
+        sendStatus(mailbox);
         send(`${tag} OK status`);
       } else if (
         (command === "UID" && /^FETCH\b/i.test(args)) ||

@@ -458,17 +458,21 @@ pub(crate) async fn deliver_outbox_locked(
             }
         } else {
             // The queue keeps the unsigned draft for Undo; sign what goes out.
-            let signature = if draft.include_signature {
-                account.summary.signature.as_str()
-            } else {
-                ""
-            };
             let above_quote = state
                 .settings
                 .get()
                 .map(|settings| settings.signature_above_quote)
                 .unwrap_or(true);
-            let signed = mail::apply_signature(draft.clone(), signature, above_quote);
+            let signed = if draft.include_signature {
+                mail::send::apply_signature_with_html(
+                    draft.clone(),
+                    &account.summary.signature,
+                    &account.summary.signature_html,
+                    above_quote,
+                )
+            } else {
+                draft.clone()
+            };
             let resolved = match resolve_draft_files(&state.db, &signed) {
                 Ok(draft) => draft,
                 Err(error) => {

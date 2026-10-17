@@ -875,9 +875,9 @@ describe("message list states and keyboard", () => {
     const expandedItems = screen.getAllByRole("treeitem");
     expect(expandedItems).toHaveLength(3);
     expect(header).toHaveAttribute("aria-expanded", "true");
-    expect(header.getAttribute("aria-owns")).toBe(
-      document.querySelector(".thread-children")?.id,
-    );
+    // Children are flat rows; the level says which conversation they belong to.
+    expect(header).not.toHaveAttribute("aria-owns");
+    expect(expandedItems[1]).toHaveAttribute("aria-level", "2");
     fireEvent.keyDown(header, { key: "ArrowDown" });
     expect(expandedItems[1]).toHaveFocus();
     expect(onChoose).toHaveBeenLastCalledWith(threaded[1]);
@@ -1061,16 +1061,29 @@ describe("message list states and keyboard", () => {
     const { rerender } = render(
       <MessageList {...props} messages={[morning, earlier, previous, older]} />,
     );
-    const today = screen.getByRole("group", { name: strings.mail.today });
-    expect(today).toHaveTextContent("Morning note");
-    expect(today).toHaveTextContent("Earlier today");
-    expect(today).not.toHaveTextContent("Yesterday note");
-    expect(
-      screen.getByRole("group", { name: strings.mail.yesterday }),
-    ).toHaveTextContent("Yesterday note");
-    expect(
-      screen.getByRole("group", { name: messageListDay(olderAt) }),
-    ).toHaveTextContent("Older note");
+    // Day headings are presentational; each row must follow its heading.
+    const heading = (label: string) =>
+      screen.getByText(label, { selector: ".list-day > span" });
+    const row = (subject: RegExp) =>
+      screen.getByRole("option", { name: subject });
+    const after = (first: Node, second: Node) =>
+      Boolean(
+        first.compareDocumentPosition(second) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+      );
+    expect(after(heading(strings.mail.today), row(/Morning note/))).toBe(true);
+    expect(after(row(/Earlier today/), heading(strings.mail.yesterday))).toBe(
+      true,
+    );
+    expect(after(heading(strings.mail.yesterday), row(/Yesterday note/))).toBe(
+      true,
+    );
+    expect(after(row(/Yesterday note/), heading(messageListDay(olderAt)))).toBe(
+      true,
+    );
+    expect(after(heading(messageListDay(olderAt)), row(/Older note/))).toBe(
+      true,
+    );
     expect(screen.getAllByRole("option")).toHaveLength(4);
 
     rerender(

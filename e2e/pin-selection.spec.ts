@@ -40,7 +40,7 @@ test("pin selected keeps the checked messages at the top", async ({ page }) => {
   await page
     .getByRole("menuitem", { name: "Pin selected", exact: true })
     .click();
-  await expect(page.getByRole("group", { name: "Pinned" })).toBeVisible();
+  await expect(page.locator(".list-day", { hasText: "Pinned" })).toBeVisible();
   await expect(page.getByRole("option").first()).toHaveAccessibleName(
     /Pinned[\s\S]*Library hours/,
   );
@@ -63,7 +63,7 @@ test("pin selected keeps the checked messages at the top", async ({ page }) => {
   await page
     .getByRole("menuitem", { name: "Unpin selected", exact: true })
     .click();
-  await expect(page.getByRole("group", { name: "Pinned" })).toHaveCount(0);
+  await expect(page.locator(".list-day", { hasText: "Pinned" })).toHaveCount(0);
   await expect(page.getByRole("option").first()).toHaveAccessibleName(
     /Weekend plans/,
   );

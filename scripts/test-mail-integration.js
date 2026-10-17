@@ -81,6 +81,23 @@ async function protocolTest(name, env) {
     { env },
   );
 }
+async function deferredReplayTest(name, env) {
+  await recordedRun(
+    "cargo",
+    [
+      "test",
+      "--locked",
+      "--manifest-path",
+      "src-tauri/Cargo.toml",
+      `commands::deferred_integration_tests::${name}`,
+      "--",
+      "--ignored",
+      "--exact",
+      "--nocapture",
+    ],
+    { env },
+  );
+}
 
 try {
   await recordedRun("openssl", ["version"]);
@@ -215,7 +232,9 @@ try {
       capabilities:
         name === "STARTTLS"
           ? ["IMAP4rev1", "QRESYNC", "CONDSTORE"]
-          : ["IMAP4rev1"],
+          : name === "TLS"
+            ? ["IMAP4rev1", "LIST-STATUS", "ID"]
+            : ["IMAP4rev1"],
       advertiseStartTls: name !== "NO_STARTTLS",
       rejectStartTls: name === "NO_STARTTLS",
       allowRestartCommand: name === "STARTTLS",
@@ -378,6 +397,8 @@ try {
   environment.POSTAL_SNAP_BRIDGE_SMTP_UTF8 = String(utf8Ports.smtp);
   stage = "bridge-protocol-integration";
   await protocolTest("bridge_tls_protocol_integration", environment);
+  stage = "bridge-list-status-protocol-integration";
+  await protocolTest("bridge_list_status_protocol_integration", environment);
   stage = "bridge-recovery-protocol-integration";
   await protocolTest("bridge_recovery_protocol_integration", environment);
   for (const { name, fixture } of fixtures) {
@@ -457,6 +478,13 @@ try {
       continue;
     }
     const positive = ["TLS", "STARTTLS"].includes(name);
+    if (name === "TLS") {
+      assert.ok(
+        counters.listStatusReplies > 0,
+        "LIST-STATUS fixture reply was not used.",
+      );
+      assert.ok(counters.idCommands > 0, "IMAP ID was not sent.");
+    }
     assert.equal(
       counters.messagesAccepted,
       positive ? 1 : 0,
@@ -521,6 +549,17 @@ try {
       status: "skipped",
       reason: "Bridge-only mode excludes GreenMail.",
     });
+    for (const name of [
+      "greenmail-deferred-move-undo-window",
+      "greenmail-deferred-move-commit-once",
+      "greenmail-dropped-operation-notification",
+    ]) {
+      report.results.push({
+        name,
+        status: "skipped",
+        reason: "Bridge-only mode excludes GreenMail.",
+      });
+    }
     report.results.push({
       name: "greenmail-protocol-integration-history",
       status: "skipped",
@@ -594,6 +633,57 @@ try {
     });
     report.results.push({
       name: "greenmail-archive-keeps-answered",
+      status: "passed",
+    });
+    stage = "greenmail-watcher-inbox-wake";
+    await protocolTest("greenmail_watcher_requests_inbox_wake_on_append", {
+      ...environment,
+      POSTAL_SNAP_MAIL_INTEGRATION: "1",
+    });
+    report.results.push({
+      name: "greenmail-watcher-inbox-wake",
+      status: "passed",
+    });
+    stage = "greenmail-batch-move-once";
+    await protocolTest("greenmail_batch_move_lands_every_message_once", {
+      ...environment,
+      POSTAL_SNAP_MAIL_INTEGRATION: "1",
+    });
+    report.results.push({
+      name: "greenmail-batch-move-once",
+      status: "passed",
+    });
+    stage = "greenmail-deferred-move-undo-window";
+    await deferredReplayTest(
+      "greenmail_deferred_move_waits_for_commit_and_undo_cancels_it",
+      {
+        ...environment,
+        POSTAL_SNAP_MAIL_INTEGRATION: "1",
+      },
+    );
+    report.results.push({
+      name: "greenmail-deferred-move-undo-window",
+      status: "passed",
+    });
+    stage = "greenmail-deferred-move-commit-once";
+    await deferredReplayTest("greenmail_committed_deferred_move_replays_once", {
+      ...environment,
+      POSTAL_SNAP_MAIL_INTEGRATION: "1",
+    });
+    report.results.push({
+      name: "greenmail-deferred-move-commit-once",
+      status: "passed",
+    });
+    stage = "greenmail-dropped-operation-notification";
+    await deferredReplayTest(
+      "greenmail_replay_keeps_dropped_operation_notification_contract",
+      {
+        ...environment,
+        POSTAL_SNAP_MAIL_INTEGRATION: "1",
+      },
+    );
+    report.results.push({
+      name: "greenmail-dropped-operation-notification",
       status: "passed",
     });
   }

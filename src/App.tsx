@@ -9,6 +9,7 @@ import {
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { AppMark } from "./components/AppMark";
 import { ContextMenuHost } from "./components/ContextMenu";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { WindowChrome } from "./components/WindowChrome";
 import {
   isPermissionGranted,
@@ -21,6 +22,7 @@ import { parseMailto } from "./mailto";
 import { SetupWizard } from "./components/SetupWizard";
 import { SetupFlow } from "./components/SetupFlow";
 import { MailShell } from "./components/MailShell";
+import { NoticeRegion } from "./components/NoticeRegion";
 import {
   SettingsDialog,
   type RuleSeed,
@@ -29,7 +31,8 @@ import {
 import { useAppStore } from "./store";
 import { useSettingsSave } from "./components/settings/useSettingsSave";
 import { applySettings } from "./settings";
-import { mailboxWindowTitle, unreadBadgeCount } from "./windowTitle";
+import { mailboxWindowTitle } from "./windowTitle";
+import { useUnreadBadge } from "./hooks/useUnreadBadge";
 import {
   checkUpdateInteractive,
   checksUpdatesOnStartup,
@@ -41,6 +44,12 @@ import {
 } from "./update";
 
 type SetupScreen = "flow" | "wizard";
+
+interface SavedComposerDraft {
+  accountId: string;
+  composeNonce: number;
+  draftId: string;
+}
 
 const Composer = lazy(() =>
   import("./components/Composer").then((module) => ({
@@ -59,7 +68,6 @@ export default function App() {
   const setSettings = useAppStore((state) => state.setSettings);
   const setSync = useAppStore((state) => state.setSync);
   const setError = useAppStore((state) => state.setError);
-  const error = useAppStore((state) => state.error);
   const composerOpen = useAppStore((state) => state.composerOpen);
   const composerAccountId = useAppStore((state) => state.composerAccountId);
   const composeSeed = useAppStore((state) => state.composeSeed);
@@ -80,6 +88,73 @@ export default function App() {
   const setupScreen: SetupScreen | null =
     setupSession ??
     (accounts.length > 0 ? null : settings.setupCompleted ? "wizard" : "flow");
+  const savedComposerDraft = useRef<SavedComposerDraft | undefined>(undefined);
+
+  useUnreadBadge();
+
+  const onComposerDraftSaved = useCallback(
+    (draftId: string) => {
+      const current = useAppStore.getState();
+      if (
+        !composerAccountId ||
+        !current.composerOpen ||
+        current.composerAccountId !== composerAccountId ||
+        current.composeNonce !== composeNonce
+      )
+        return;
+      savedComposerDraft.current = {
+        accountId: composerAccountId,
+        composeNonce,
+        draftId,
+      };
+    },
+    [composerAccountId, composeNonce],
+  );
+
+  const retryComposer = useCallback(async () => {
+    const accountId = composerAccountId;
+    const current = useAppStore.getState();
+    if (
+      !accountId ||
+      !current.composerOpen ||
+      current.composerAccountId !== accountId ||
+      current.composeNonce !== composeNonce
+    )
+      return;
+
+    const identity = savedComposerDraft.current;
+    const seed = current.composeSeed;
+    const draftId =
+      identity?.accountId === accountId &&
+      identity.composeNonce === composeNonce
+        ? identity.draftId
+        : (seed?.draft?.id ?? seed?.draftSummary?.id);
+    if (!draftId) return;
+
+    const [summaries, draft] = await Promise.all([
+      api.listDrafts(accountId),
+      api.getDraft(draftId, accountId),
+    ]);
+    const summary = summaries.find(
+      (item) => item.id === draftId && item.accountId === accountId,
+    );
+    if (!summary) throw new Error("The saved draft could not be reopened.");
+
+    const latest = useAppStore.getState();
+    if (
+      !latest.composerOpen ||
+      latest.composerAccountId !== accountId ||
+      latest.composeNonce !== composeNonce
+    )
+      return;
+    useAppStore.setState((state) => ({
+      composeSeed: {
+        ...(state.composeSeed ?? {}),
+        draft,
+        draftSummary: summary,
+      },
+    }));
+  }, [composerAccountId, composeNonce]);
 
   const claimAccountlessSetup = useCallback(() => {
     const setupCompleted = useAppStore.getState().settings.setupCompleted;
@@ -172,8 +247,6 @@ export default function App() {
       accountLabel: account?.displayName || account?.email,
       severalAccounts: accounts.length > 1,
     });
-    const badge = unreadBadgeCount(unread);
-    void api.setUnreadBadge(badge ?? 0).catch(() => undefined);
   }, [accounts, activeAccountId, mailboxes]);
 
   useEffect(() => {
@@ -383,6 +456,7 @@ export default function App() {
         <div className="splash" role="status">
           {strings.app.starting}
         </div>
+        <NoticeRegion />
       </>
     );
 
@@ -440,7 +514,15 @@ export default function App() {
       <ContextMenuHost />
       <div className="app-viewport" inert={settingsOpen || undefined}>
         {mainContent}
-        {composerOpen && composerAccountId ? (
+      </div>
+      {composerOpen && composerAccountId ? (
+        <ErrorBoundary
+          className="modal-layer composer-recovery crash-recovery"
+          modal
+          resetKey={`${composerAccountId}:${composeNonce}`}
+          onReset={retryComposer}
+          focusSelector="#composer-subject"
+        >
           <Suspense
             fallback={
               <div className="splash overlay-splash" role="status">
@@ -451,32 +533,29 @@ export default function App() {
             <Composer
               key={`${composerAccountId}:${composeSeed?.draft?.id ?? composeSeed?.sourceMessage?.id ?? "new"}:${composeSeed?.composeMode ?? ""}:${composeNonce}`}
               accountId={composerAccountId}
+              onDraftSaved={onComposerDraftSaved}
             />
           </Suspense>
-        ) : null}
-      </div>
+        </ErrorBoundary>
+      ) : null}
       {settingsOpen ? (
-        <SettingsDialog
-          key={`${settingsTab}:${settingsRouteRequest}`}
-          initialTab={settingsTab}
-          initialAccountId={settingsAccountId}
-          initialRuleSeed={settingsRuleSeed}
+        <ErrorBoundary
+          className="modal-layer settings-recovery crash-recovery"
+          modal
           onClose={() => setSettingsOpen(false)}
-          onLastAccountRemoved={claimAccountlessSetup}
-        />
+          focusSelector=".settings-layer button:not([disabled])"
+        >
+          <SettingsDialog
+            key={`${settingsTab}:${settingsRouteRequest}`}
+            initialTab={settingsTab}
+            initialAccountId={settingsAccountId}
+            initialRuleSeed={settingsRuleSeed}
+            onClose={() => setSettingsOpen(false)}
+            onLastAccountRemoved={claimAccountlessSetup}
+          />
+        </ErrorBoundary>
       ) : null}
-      {error ? (
-        <div className="toast error-toast" role="alert">
-          <span>{error}</span>
-          <button
-            type="button"
-            onClick={() => setError(undefined)}
-            aria-label={strings.app.dismissError}
-          >
-            ×
-          </button>
-        </div>
-      ) : null}
+      <NoticeRegion />
       <WindowChrome />
     </>
   );

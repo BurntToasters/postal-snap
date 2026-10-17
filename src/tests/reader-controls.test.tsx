@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AttachmentList } from "../components/reader/attachmentList";
 import { MessageHeader } from "../components/reader/messageHeader";
+import type { ReaderToolbarActions } from "../components/reader/readerActions";
 import { ReaderToolbar } from "../components/reader/readerToolbar";
 import { SnoozePanel } from "../components/reader/snoozePanel";
 import { laterTodayIso } from "../components/reader/snoozeTimes";
@@ -280,12 +281,28 @@ describe("reader toolbar", () => {
     for (const callback of Object.values(callbacks)) callback.mockReset();
   });
 
-  function toolbar(
-    overrides: Partial<Parameters<typeof ReaderToolbar>[0]> = {},
-  ) {
+  type ToolbarProps = Parameters<typeof ReaderToolbar>[0];
+  type ToolbarOverrides = Partial<ReaderToolbarActions> &
+    Partial<Omit<ToolbarProps, "actions">>;
+
+  function toolbar({
+    message = messageDetail(makeMessage()),
+    readingPane = "hidden",
+    moreOpen = true,
+    preparingForward = false,
+    isArchiveMailbox = false,
+    isTrashMailbox = false,
+    isJunkMailbox = false,
+    senderBlocked,
+    domainBlocked,
+    canViewPlain,
+    viewingPlain,
+    ...actions
+  }: ToolbarOverrides = {}) {
     return (
       <ReaderToolbar
-        message={messageDetail(makeMessage())}
+        actions={{ ...callbacks, ...actions }}
+        message={message}
         mailboxes={[
           makeMailbox(),
           makeMailbox({
@@ -296,16 +313,18 @@ describe("reader toolbar", () => {
           }),
           makeMailbox({ id: 3, accountId: "other", displayName: "Other" }),
         ]}
-        readingPane="hidden"
-        moreOpen
+        readingPane={readingPane}
+        moreOpen={moreOpen}
         moreMenuRef={createRef()}
         moreTriggerRef={createRef()}
-        preparingForward={false}
-        isArchiveMailbox={false}
-        isTrashMailbox={false}
-        isJunkMailbox={false}
-        {...callbacks}
-        {...overrides}
+        preparingForward={preparingForward}
+        isArchiveMailbox={isArchiveMailbox}
+        isTrashMailbox={isTrashMailbox}
+        isJunkMailbox={isJunkMailbox}
+        senderBlocked={senderBlocked}
+        domainBlocked={domainBlocked}
+        canViewPlain={canViewPlain}
+        viewingPlain={viewingPlain}
       />
     );
   }

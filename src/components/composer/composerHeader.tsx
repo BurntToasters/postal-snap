@@ -12,7 +12,7 @@ import {
   Maximize2,
   Minimize2,
   Minus,
-  MoreHorizontal,
+  Ellipsis,
   TriangleAlert,
   Type,
   X,
@@ -119,7 +119,7 @@ export function ComposerHeader({
               aria-label={strings.composer.messageOptions}
               title={strings.composer.messageOptions}
             >
-              <MoreHorizontal />
+              <Ellipsis />
             </button>
           )}
           <button

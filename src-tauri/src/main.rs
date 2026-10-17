@@ -320,7 +320,7 @@ fn main() {
             for account in accounts {
                 let state = app.state::<AppState>();
                 if state
-                    .ensure_watcher(account.id.clone(), handle.clone())
+                    .ensure_worker(account.id.clone(), handle.clone())
                     .is_err()
                 {
                     let _ = state.db.set_account_state(
@@ -375,8 +375,10 @@ fn main() {
             commands::accounts::erase_all_data,
             commands::sync::list_mailboxes,
             commands::sync::sync_account,
+            commands::sync::set_visible_folder,
             commands::messages::list_messages,
             commands::messages::get_message,
+            commands::messages::download_full_message,
             commands::messages::find_cached_message,
             commands::messages::get_message_source,
             commands::messages::save_message_eml,
@@ -389,6 +391,8 @@ fn main() {
             commands::messages::copy_message_to_mailbox,
             commands::messages::copy_messages_to_mailbox,
             commands::messages::move_messages_to_mailbox,
+            commands::messages::undo_deferred,
+            commands::messages::commit_deferred,
             commands::messages::mark_mailbox_read,
             commands::folders::suggest_recipients,
             commands::folders::create_folder,

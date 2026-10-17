@@ -9,8 +9,11 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { createPortal } from "react-dom";
+import { api } from "../../api";
+import { accountSyncPhase } from "../../accountStatus";
 import { formatBytes } from "../../format";
 import { strings } from "../../i18n";
+import { useAppStore } from "../../store";
 import type { Attachment, AttachmentPreview, MessageDetail } from "../../types";
 import { useDialogFocus } from "../useDialogFocus";
 import { useInertBackground } from "../useInertBackground";
@@ -242,6 +245,37 @@ export function AttachmentList({
   }>({ messageId: message.id, ids: [] });
   const chosenIds = chosen.messageId === message.id ? chosen.ids : [];
 
+  const account = useAppStore((state) =>
+    state.accounts.find((item) => item.id === message.accountId),
+  );
+  const liveSync = useAppStore((state) => state.sync[message.accountId]);
+  const setError = useAppStore((state) => state.setError);
+  const offline = accountSyncPhase(account, liveSync) === "offline";
+  // Partial attachments need the server, so they stay disabled offline.
+  const partialOffline = message.bodyPartial === true && offline;
+  const [fullDownload, setFullDownload] = useState<{
+    messageId: number;
+    busy: boolean;
+  }>();
+  const fullBusy = fullDownload?.messageId === message.id && fullDownload.busy;
+
+  async function downloadFull() {
+    const { id, accountId } = message;
+    setFullDownload({ messageId: id, busy: true });
+    try {
+      const detail = await api.downloadFullMessage(accountId, id);
+      const store = useAppStore.getState();
+      const current = store.selectedMessage;
+      if (current?.id === id && current.accountId === accountId) {
+        store.selectMessage(detail);
+      }
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setFullDownload(undefined);
+    }
+  }
+
   function toggleChosen(attachmentId: string) {
     const current = chosen.messageId === message.id ? chosen.ids : [];
     const ids = current.includes(attachmentId)
@@ -256,7 +290,8 @@ export function AttachmentList({
         const regularAttachments = message.attachments.filter(
           (item) => !item.inline,
         );
-        if (regularAttachments.length === 0) return null;
+        const partial = message.bodyPartial === true;
+        if (regularAttachments.length === 0 && !partial) return null;
         const fileBytes = regularAttachments.reduce(
           (total, item) => total + item.size,
           0,
@@ -277,7 +312,9 @@ export function AttachmentList({
                 <button
                   type="button"
                   className="secondary-button"
-                  disabled={downloadingAttachmentId !== undefined}
+                  disabled={
+                    downloadingAttachmentId !== undefined || partialOffline
+                  }
                   onClick={onSaveAll}
                 >
                   <Download aria-hidden="true" />
@@ -288,7 +325,9 @@ export function AttachmentList({
                 <button
                   type="button"
                   className="secondary-button"
-                  disabled={downloadingAttachmentId !== undefined}
+                  disabled={
+                    downloadingAttachmentId !== undefined || partialOffline
+                  }
                   onClick={() => onSaveChosen(chosenIds)}
                 >
                   <Download aria-hidden="true" />
@@ -296,6 +335,28 @@ export function AttachmentList({
                 </button>
               ) : null}
             </div>
+            {partial ? (
+              <div className="attachment-partial">
+                <p>
+                  {strings.reader.attachmentsNotDownloaded(
+                    formatBytes(message.size),
+                  )}
+                </p>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={offline || fullBusy}
+                  aria-busy={fullBusy}
+                  onClick={() => void downloadFull()}
+                >
+                  <Download aria-hidden="true" />
+                  {fullBusy
+                    ? strings.reader.downloadingFullMessage
+                    : strings.reader.downloadFullMessage}
+                </button>
+                {offline ? <p>{strings.reader.attachmentsOnlineOnly}</p> : null}
+              </div>
+            ) : null}
             {regularAttachments.map((attachment) => (
               <div
                 key={attachment.id}
@@ -323,7 +384,8 @@ export function AttachmentList({
                     className="attachment-preview-button"
                     disabled={
                       downloadingAttachmentId !== undefined ||
-                      previewAttachmentId !== undefined
+                      previewAttachmentId !== undefined ||
+                      partialOffline
                     }
                     onClick={() => void onPreview(attachment.id)}
                     aria-label={`${strings.reader.preview}: ${attachment.filename}`}
@@ -335,7 +397,9 @@ export function AttachmentList({
                 <button
                   type="button"
                   className="attachment-download-button"
-                  disabled={downloadingAttachmentId !== undefined}
+                  disabled={
+                    downloadingAttachmentId !== undefined || partialOffline
+                  }
                   onClick={() =>
                     void onDownload(attachment.id, attachment.filename)
                   }
@@ -345,8 +409,10 @@ export function AttachmentList({
                   <span>
                     <strong>{attachment.filename}</strong>
                     <small>
-                      {fileKind(attachment.contentType)} ·{" "}
-                      {formatBytes(attachment.size)}
+                      {fileKind(attachment.contentType)}
+                      {partial && attachment.size === 0
+                        ? ""
+                        : ` · ${formatBytes(attachment.size)}`}
                     </small>
                   </span>
                 </button>

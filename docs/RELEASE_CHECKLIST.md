@@ -1,8 +1,10 @@
-# Postal Snap 0.4.0 release checklist
+# Postal Snap 0.5.0 release checklist
 
-Record the build commit, tester, date, operating-system version, and result for every manual item. A GitHub 0.4.0 release is blocked by any unchecked **required** item. Store items are listed separately and are not a GitHub-train go/no-go.
+Record the build commit, tester, date, operating-system version, and result for every manual item. A GitHub 0.5.0 release is blocked by any unchecked **required** item. Store items are listed separately and are not a GitHub-train go/no-go.
 
 Mocked frontend, Playwright, and unit tests do not by themselves mean the release is ready.
+
+At the 2026-10-16 audit, npm audit reported zero vulnerabilities. The pinned GreenMail 2.1.11 full integration run passed all 20 scenarios, including watcher, batched-move, and deferred-move coverage; see the [GreenMail report](../artifacts/mail-integration/results.json). The final local `npm run test:all` gate passed all 15 phases, including 690 tests across 42 files and 1,214 expected E2E runs with zero unexpected, flaky, or skipped tests. Badge scope, received-sender suggestions, and SettingsDialog integration passed this gate; see the [verification report](../artifacts/0.5.0/verification.json). Manual and release-commit checkboxes below remain unchecked. Cargo audit reports four `rustls 0.23.45` advisories (`RUSTSEC-2026-0346` through `RUSTSEC-2026-0349`); refreshed crates.io metadata confirms `zip 4.6.1` is not yanked and it is not part of the current blocker. The fixed `rustls 0.23.46` was published 2026-10-14 09:54:15 UTC and reaches the 72-hour age threshold at 2026-10-17 09:54:15 UTC (02:54 PDT). Do not broaden advisory ignores or update dependencies to bypass the result. Keep the RustSec gate open until the dependency path is eligible and the audit passes.
 
 ## Automated gates
 
@@ -13,11 +15,11 @@ Mocked frontend, Playwright, and unit tests do not by themselves mean the releas
 - [ ] CI on the release commit is green, including merged Vitest + Playwright coverage from `npm run test:cov`.
 - [ ] `npm run test:mail-integration` passes against pinned GreenMail 2.1.11 TLS services.
 - [ ] A copy of the oldest supported v1 database opens, migrates transactionally, and preserves referenced draft/outbox attachments.
-- [ ] Direct feature builds compile. Store (`mas` / `msstore`) compile checks are optional for GitHub-only 0.4.0.
+- [ ] Direct feature builds compile. Store (`mas` / `msstore`) compile checks are optional for GitHub-only 0.5.0.
 - [ ] Generated npm and Cargo notices are present in every package.
 - [ ] `src-tauri/tauri.conf.json` updater pubkey is a real minisign key. `TAURI_UPDATER_PUBLIC_KEY` is not required in `.env`; if it is set, it matches the committed key.
 
-## 0.4.0 compatibility and UI evidence
+## 0.5.0 compatibility and UI evidence
 
 - [ ] `npm run test:bridge-integration` passes with both TLS modes and negative certificate/authentication fixtures; preserve `artifacts/mail-integration/results.json`.
 - [ ] `npm run test:all` and `npm run test:mail-integration` pass on the release commit. Preserve HTML results, synthetic screenshots, and failure traces.
@@ -27,6 +29,9 @@ Mocked frontend, Playwright, and unit tests do not by themselves mean the releas
 - [ ] Incoming-server identity changes preserve drafts and managed attachments, refuse queued work/unsent mail, and invalidate pooled connections.
 - [ ] Folder assignments stay account-scoped, follow rename, and show missing targets without silent fallback.
 - [ ] Settings search and account forms retain keyboard focus, save rollback, and dirty-form confirmation.
+- [ ] All-inboxes badge counts match the existing Inbox unread semantics for each account; non-Inbox folders and removed accounts do not contribute.
+- [ ] Recipient suggestions exclude junk/trash, blocked or muted senders, no-reply addresses, the user's own addresses and aliases, and addresses from other accounts.
+- [ ] Rich signatures save and render safely with a plain-text alternative; existing plain signatures remain intact through settings changes and message replies.
 - [ ] Comfortable and compact density work at 100% and 200% text, light/dark themes, narrow/wide windows, forced colors, and reduced motion.
 - [ ] Real Proton Bridge smoke passes on Windows, macOS, and Linux, including Flatpak loopback access, combined-address and split-address modes, certificate replacement, and Bridge restart. **Pending: keep support experimental until recorded.**
 
@@ -34,7 +39,7 @@ See [mail compatibility](MAIL_COMPATIBILITY.md). Automated fixtures remain separ
 
 ## Mail behavior
 
-Required for GitHub 0.4.0. The live iCloud smoke is a signing-host gate; do not treat it as done because CI passed.
+Required for GitHub 0.5.0. The live iCloud smoke is a signing-host gate; do not treat it as done because CI passed.
 
 - [ ] `npm run test:icloud` passes on a signing host with a dedicated iCloud account and app-specific password.
 - [ ] IMAP local-part fallback and full-address fallback both have coverage.
@@ -43,6 +48,10 @@ Required for GitHub 0.4.0. The live iCloud smoke is a signing-host gate; do not 
 - [ ] HTML and plain-text compose, inline images, and attachments arrive correctly.
 - [ ] Local and server-created drafts round-trip; a simultaneous edit preserves both versions and labels the recovered copy.
 - [ ] Sent-folder deduplication finds the stable Message-ID; a failed Sent copy retries without another SMTP submission.
+- [ ] Partial messages show their full size and offer a Download full message action; offline readers clearly say when content or attachments are available when online.
+- [ ] Source view, `.eml` export, forwarding as an attachment, and CID images use the complete message after a partial fetch; `keepAttachmentsOffline` follows its selected setting across restart and offline use.
+- [ ] Exercise Undo during online and offline moves, while sync is active, and across shutdown/restart; the operation either restores the message or commits once without duplicate or missing mail.
+- [ ] When the server permits only one connection, verify push falls back to in-actor IDLE; after sleep or a network change, the watcher reconnects and new mail is found.
 - [ ] Cached Inbox opens after an offline restart.
 - [ ] Offline changes replay after reconnect.
 - [ ] An uncertain SMTP result stays in Needs attention and is never automatically resent.
@@ -69,9 +78,9 @@ Required for GitHub 0.4.0. The live iCloud smoke is a signing-host gate; do not 
 - [ ] Native macOS and Windows titlebars drag from empty toolbar/heading space; controls, search and menus never initiate dragging. Double click, resize, fullscreen, minimize/restore and close follow platform behavior.
 - [ ] On macOS (menu bar) and Windows (notification area), left click on the icon toggles the main window, right click opens the Open/Quit menu, Quit works, and clicking a notification while closed to the tray reopens the window. Native hosts only; mocked tests cannot click the real menu bar.
 - [ ] Window controls remain usable through startup, setup, settings, maximized compose, and reader overlays. Check macOS traffic lights and Windows edge/keyboard snapping on native hosts; Chromium IPC tests do not prove native hit testing or Snap Layout flyouts.
-- [ ] VoiceOver and Narrator complete setup, read, reply, attachment, and send flows with understandable announcements.
+- [ ] VoiceOver and NVDA/Narrator complete setup, read, reply, attachment, and send flows; virtualized message lists announce row position/count and keep focus during scrolling.
 
-## GitHub packages (required for 0.4.0)
+## GitHub packages (required for 0.5.0)
 
 Windows creates the GitHub draft. Mac and Linux wait for that draft and never create a second one. Run `release:linux` on the x64 signing host (required). An arm64 Linux host is optional. Each continue path uploads only that host's artifacts; do not run complete-set verification until the required architectures are present.
 
@@ -93,7 +102,7 @@ Windows creates the GitHub draft. Mac and Linux wait for that draft and never cr
 - [ ] Microsoft Store, Mac App Store, and Flatpak builds show no Update channel picker.
 - [ ] Install, upgrade, and uninstall preserve or remove user data exactly as documented.
 
-## Later: store packages (not a GitHub 0.4.0 gate)
+## Later: store packages (not a GitHub 0.5.0 gate)
 
 - [ ] Store builds expose no self-updater and report store-managed updates.
 - [ ] Microsoft x64/arm64 MSIX bundle passes Windows App Certification Kit and clean Windows 10/11 VM tests.

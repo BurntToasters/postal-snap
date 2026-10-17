@@ -200,7 +200,7 @@ legend {
 }
 
 .settings-row select {
-  width: min(220px, 48%);
+  width: min(var(--settings-control-width), 48%);
 }
 
 .switch-row > span.quiet-hours-times {

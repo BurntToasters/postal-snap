@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { CircleHelp } from "lucide-react";
+import { CircleQuestionMark } from "lucide-react";
 import { strings } from "../../i18n";
 
 /** Operator cheat sheet. Escape or an outside click closes it. */
@@ -60,7 +60,7 @@ export function SearchTips() {
         title={strings.mail.searchTips}
         onClick={() => setOpen((value) => !value)}
       >
-        <CircleHelp aria-hidden="true" />
+        <CircleQuestionMark aria-hidden="true" />
       </button>
       {open
         ? createPortal(

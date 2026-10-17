@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Copy, Square, Minus, X } from "lucide-react";
-import { inTauri } from "../api";
+import { api, inTauri } from "../api";
 import { strings } from "../i18n";
 import { closesToTrayOnClose } from "../settings";
 import { useAppStore } from "../store";
@@ -88,12 +87,14 @@ export function WindowChrome() {
         maximizeButton.offsetParent !== null &&
         bounds.width > 0 &&
         bounds.height > 0;
-      void invoke("set_snap_overlay_bounds", {
-        x: visible ? Math.round(bounds.left * scale) : 0,
-        y: visible ? Math.round(bounds.top * scale) : 0,
-        width: visible ? Math.round(bounds.width * scale) : 0,
-        height: visible ? Math.round(bounds.height * scale) : 0,
-      }).catch(() => undefined);
+      void api
+        .setSnapOverlayBounds({
+          x: visible ? Math.round(bounds.left * scale) : 0,
+          y: visible ? Math.round(bounds.top * scale) : 0,
+          width: visible ? Math.round(bounds.width * scale) : 0,
+          height: visible ? Math.round(bounds.height * scale) : 0,
+        })
+        .catch(() => undefined);
     };
     const scheduleBounds = () => {
       if (frame) return;
@@ -121,12 +122,9 @@ export function WindowChrome() {
       observer.disconnect();
       window.removeEventListener("resize", scheduleBounds);
       if (frame) cancelAnimationFrame(frame);
-      void invoke("set_snap_overlay_bounds", {
-        x: 0,
-        y: 0,
-        width: 0,
-        height: 0,
-      }).catch(() => undefined);
+      void api
+        .setSnapOverlayBounds({ x: 0, y: 0, width: 0, height: 0 })
+        .catch(() => undefined);
     };
   }, []);
 
