@@ -42,7 +42,9 @@ function npmPackages(text, file) {
   try {
     parsed = JSON.parse(text);
   } catch (error) {
-    throw new Error(`${file} is not valid JSON: ${error.message}`);
+    throw new Error(`${file} is not valid JSON: ${error.message}`, {
+      cause: error,
+    });
   }
   const packages = new Map();
   for (const [key, entry] of Object.entries(parsed?.packages ?? {})) {
