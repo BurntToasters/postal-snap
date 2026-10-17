@@ -11,6 +11,10 @@ use crate::models::{ComposeDraft, FilterMatchPreview, FilterRule, OutboxSummary,
 /// stored MIME) need attention, new sends queue behind a user decision.
 const MAX_NEEDS_ATTENTION_OUTBOX_MESSAGES: i64 = 25;
 const MAX_NEEDS_ATTENTION_OUTBOX_BYTES: i64 = 256 * 1024 * 1024;
+/// Bytes of stored MIME one account may have waiting to go out across queued,
+/// scheduled, and needs-attention rows. The stricter needs-attention caps
+/// cover the parked subset; this bounds the whole waiting backlog.
+const MAX_PENDING_OUTBOX_BYTES: i64 = 1024 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug)]
 pub struct OutboxArchiveSource {
@@ -18,6 +22,28 @@ pub struct OutboxArchiveSource {
     pub source_mailbox_id: i64,
     pub current_mailbox_id: Option<i64>,
     pub pending_move_to: Option<i64>,
+}
+
+/// A snooze about to lose its message row, kept keyed by the row id it was
+/// touching. `message_id_header` is the durable Message-ID the wiring needs
+/// to rebind after a replayed move.
+///
+/// Wiring for the deferred-move replay wave in `commands.rs`:
+/// `Database::capture_snoozes(&self, message_ids: &[i64])
+/// -> Result<Vec<CapturedSnooze>, String>` reads snoozes by row id after a
+/// move op is queued and before replay retires the rows; `Database::
+/// restore_snooze_for_message(&self, account_id: &str, message_id_header:
+/// &str, snoozed_until: &str, created_at: &str) -> Result<(), String>`
+/// rebinds each capture to the landed row once the moved copy has synced in.
+/// Zip captures to move ops by row id, and restore per capture in input
+/// order.
+#[derive(Clone, Debug)]
+pub struct CapturedSnooze {
+    pub source_message_row_id: i64,
+    pub account_id: String,
+    pub message_id_header: Option<String>,
+    pub snoozed_until: String,
+    pub created_at: String,
 }
 
 enum StoredDetail<'a> {
@@ -127,6 +153,15 @@ impl Database {
         {
             return Err(
                 "Messages in the outbox need attention. Retry or delete them before sending more."
+                    .into(),
+            );
+        }
+        // Same backlog idea across every waiting state, so nothing parked does
+        // not mean nothing bounded: the queued and scheduled stores still stop
+        // growing once this many MIME bytes already wait to leave.
+        if pending_sends_denied(pending_outbox_bytes(&transaction, &draft.account_id)?) {
+            return Err(
+                "The sending queue is at its size limit. Retry or delete waiting messages before sending more."
                     .into(),
             );
         }
@@ -334,6 +369,8 @@ impl Database {
 
     /// Record a definite "try later" reply and wait 1, 2, 4… up to 60 minutes
     /// before the next automatic try. False once `max_attempts` is spent.
+    /// SQLite evaluates the SET expressions against the pre-update row, so the
+    /// first try reads `retry_attempts=0` and waits one minute.
     pub fn defer_outbox_retry(
         &self,
         id: &str,
@@ -476,6 +513,82 @@ impl Database {
             )
             .map_err(db_error)?;
         Ok(())
+    }
+
+    /// Read the snooze rows touching these message row ids, in input order.
+    /// Wiring queues the offline move and captures the snooze before the row
+    /// id dies; ids without a snooze simply produce no capture.
+    pub fn capture_snoozes(&self, message_ids: &[i64]) -> Result<Vec<CapturedSnooze>, String> {
+        if message_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.read_conn()?;
+        let placeholders = std::iter::repeat_n("?", message_ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT s.message_id, s.account_id, m.message_id, s.snoozed_until, s.created_at
+             FROM snoozed_messages s JOIN messages m ON m.id=s.message_id AND m.account_id=s.account_id
+             WHERE s.message_id IN ({placeholders})"
+        );
+        let values: Vec<&dyn rusqlite::ToSql> =
+            message_ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
+        let mut statement = conn.prepare(&sql).map_err(db_error)?;
+        let mut captures: Vec<CapturedSnooze> = statement
+            .query_map(values.as_slice(), |row| {
+                Ok(CapturedSnooze {
+                    source_message_row_id: row.get(0)?,
+                    account_id: row.get(1)?,
+                    message_id_header: row.get(2)?,
+                    snoozed_until: row.get(3)?,
+                    created_at: row.get(4)?,
+                })
+            })
+            .map_err(db_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_error)?;
+        captures.sort_by_key(|capture| {
+            message_ids
+                .iter()
+                .position(|id| *id == capture.source_message_row_id)
+                .unwrap_or(usize::MAX)
+        });
+        Ok(captures)
+    }
+
+    /// Put a captured snooze back after a replayed move landed the message in
+    /// its new folder. The row id changed, so rebind by Message-ID header.
+    /// Missing mail (moved on, deleted) and rows still under a pending move
+    /// are skipped: the move that owns them handles its own snooze.
+    pub fn restore_snooze_for_message(
+        &self,
+        account_id: &str,
+        message_id_header: &str,
+        snoozed_until: &str,
+        created_at: &str,
+    ) -> Result<(), String> {
+        let mut conn = self.conn()?;
+        let transaction = conn.transaction().map_err(db_error)?;
+        let landing: Option<i64> = transaction
+            .query_row(
+                "SELECT id FROM messages WHERE account_id=?1 AND message_id=?2 AND pending_move_to IS NULL
+                 ORDER BY received_at DESC, uid DESC LIMIT 1",
+                params![account_id, message_id_header],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?;
+        let Some(landing) = landing else {
+            return Ok(());
+        };
+        transaction
+            .execute(
+                "INSERT OR IGNORE INTO snoozed_messages(account_id,message_id,snoozed_until,created_at)
+                 VALUES(?1,?2,?3,?4)",
+                params![account_id, landing, snoozed_until, created_at],
+            )
+            .map_err(db_error)?;
+        transaction.commit().map_err(db_error)
     }
 
     pub fn list_filter_rules(&self, account_id: &str) -> Result<Vec<FilterRule>, String> {
@@ -752,7 +865,7 @@ impl Database {
         conn.pragma_update(None, "synchronous", "FULL")
             .map_err(db_error)?;
         let changed = conn.execute(
-            "UPDATE outbox SET state='sending',attempt_started_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP,
+            "UPDATE outbox SET state='sending',updated_at=CURRENT_TIMESTAMP,
                  retry_after=NULL,
                  retry_attempts=CASE WHEN ?3='needs_attention' THEN 0 ELSE retry_attempts END
                  WHERE id=?1 AND account_id=?2 AND state=?3",
@@ -774,8 +887,12 @@ impl Database {
         let changed = self
             .conn()?
             .execute(
+                // Only rows with nothing to send yet are touched; a retry of
+                // prepared content must neither clobber nor regenerate the
+                // exact MIME that already reached SMTP once.
                 "UPDATE outbox SET message_id=?3,mime_bytes=?4,updated_at=CURRENT_TIMESTAMP
-                 WHERE id=?1 AND account_id=?2 AND state='queued'
+                 WHERE id=?1 AND account_id=?2
+                 AND state IN ('queued','scheduled','needs_attention')
                  AND (message_id IS NULL OR message_id='' OR mime_bytes IS NULL OR LENGTH(mime_bytes)=0)",
                 params![id, account_id, message_id, mime_bytes],
             )
@@ -894,6 +1011,25 @@ impl Database {
 }
 }
 
+/// Stored MIME bytes waiting to leave one account: queued, scheduled, or
+/// parked for attention. Pure accounting over the outbox table.
+fn pending_outbox_bytes(conn: &rusqlite::Connection, account_id: &str) -> Result<i64, String> {
+    conn.query_row(
+        "SELECT COALESCE(SUM(LENGTH(mime_bytes)),0) FROM outbox
+         WHERE account_id=?1 AND state IN ('queued','scheduled','needs_attention')",
+        [account_id],
+        |row| row.get(0),
+    )
+    .map_err(db_error)
+}
+
+/// Only an already-at-cap backlog blocks a new send. The incoming message is
+/// not charged: parking normal-sized sends for a byte test would strand mail
+/// behind the limits in queue_outbox_with_archive.
+fn pending_sends_denied(pending_bytes: i64) -> bool {
+    pending_bytes >= MAX_PENDING_OUTBOX_BYTES
+}
+
 fn rule_match_pattern(rule: &FilterRule) -> Option<(&'static str, String, String)> {
     let needle: String = rule
         .contains
@@ -965,4 +1101,353 @@ fn preview_subject(value: String) -> String {
         subject.push(character);
     }
     subject
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::CachedMessage;
+    use crate::models::{
+        AccountRecord, AccountSummary, BodyFormat, ComposeDraft, MailboxRole, ProviderKind,
+        ServerConfig, TlsMode,
+    };
+
+    fn account() -> AccountRecord {
+        AccountRecord {
+            summary: AccountSummary {
+                default_body_format: BodyFormat::Html,
+                id: "account-1".into(),
+                provider: ProviderKind::Manual,
+                email: "sam@example.com".into(),
+                display_name: "Sam".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+                signature_html: String::new(),
+                reply_to: String::new(),
+                color: None,
+            },
+            imap: ServerConfig {
+                trusted_certificate: None,
+                host: "imap.example.com".into(),
+                port: 993,
+                tls_mode: TlsMode::Tls,
+                username: "sam@example.com".into(),
+            },
+            smtp: ServerConfig {
+                trusted_certificate: None,
+                host: "smtp.example.com".into(),
+                port: 587,
+                tls_mode: TlsMode::StartTls,
+                username: "sam@example.com".into(),
+            },
+        }
+    }
+
+    fn with_account() -> (Database, String) {
+        let database = Database::memory();
+        let account = account();
+        database.insert_account(&account).unwrap();
+        (database, account.summary.id.clone())
+    }
+
+    fn message(uid: u32, received_at: &str) -> CachedMessage {
+        CachedMessage {
+            uid,
+            internal_at: None,
+            message_id: Some(format!("<{uid}@example.com>")),
+            subject: "Checking in".into(),
+            sender_name: "Jane".into(),
+            sender_address: "jane@example.com".into(),
+            recipients: "sam@example.com".into(),
+            received_at: received_at.into(),
+            preview: "Hello".into(),
+            is_read: false,
+            is_starred: false,
+            size: 32,
+            to: vec!["sam@example.com".into()],
+            cc: vec![],
+            bcc: vec![],
+            reply_to: None,
+            thread_parent: None,
+            text_body: "Hello".into(),
+            html_body: None,
+            attachments: vec![],
+            raw_message: b"Subject: Checking in\r\n\r\nHello".to_vec(),
+            has_attachments: false,
+            is_answered: false,
+            is_forwarded: false,
+            has_calendar: false,
+            calendar_json: None,
+            list_unsubscribe: None,
+            list_unsubscribe_post: None,
+            importance: String::new(),
+            disposition_to: String::new(),
+        }
+    }
+
+    fn draft() -> ComposeDraft {
+        ComposeDraft {
+            body_format: BodyFormat::Html,
+            source_message_id: None,
+            source_kind: None,
+            include_signature: true,
+            importance: String::new(),
+            request_receipt: false,
+            reply_to: None,
+            id: None,
+            account_id: "account-1".into(),
+            from: None,
+            to: vec!["jane@example.com".into()],
+            cc: vec![],
+            bcc: vec![],
+            subject: "Family update".into(),
+            html_body: "<p>Hello</p>".into(),
+            text_body: "Hello".into(),
+            attachments: vec![],
+            in_reply_to: None,
+            references: None,
+            send_at: None,
+        }
+    }
+
+    fn mailbox(db: &Database, name: &str, role: &MailboxRole) -> i64 {
+        // Server counts stay None so the cached-row SUM branches run.
+        db.upsert_mailbox("account-1", name, role, Some(1), Some(2), None, 0)
+            .unwrap()
+    }
+
+    fn list_ids(db: &Database, mailbox_id: i64) -> Vec<i64> {
+        db.list_messages(mailbox_id, None, 10)
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|message| message.id)
+            .collect()
+    }
+
+    #[test]
+    fn capture_snoozes_skips_ids_without_a_snooze() {
+        let (db, account_id) = with_account();
+        let inbox = mailbox(&db, "INBOX", &MailboxRole::Inbox);
+        db.upsert_message(&account_id, inbox, &message(1, "2026-08-18T12:00:00Z"))
+            .unwrap();
+        db.upsert_message(&account_id, inbox, &message(2, "2026-08-18T13:00:00Z"))
+            .unwrap();
+        let ids = list_ids(&db, inbox);
+        let (first, second) = (ids[0], ids[1]);
+        db.snooze_message(&account_id, second, "2999-01-01T00:00:00+00:00")
+            .unwrap();
+
+        let captures = db.capture_snoozes(&[first, second]).unwrap();
+        assert_eq!(captures.len(), 1);
+        assert_eq!(captures[0].source_message_row_id, second);
+        assert_eq!(captures[0].account_id, account_id);
+        // Newest first: ids[1] is the older UID 1 row.
+        assert_eq!(
+            captures[0].message_id_header.as_deref(),
+            Some("<1@example.com>")
+        );
+        assert_eq!(captures[0].snoozed_until, "2999-01-01T00:00:00+00:00");
+        assert!(!captures[0].created_at.is_empty());
+
+        // Both snoozed: input order defines capture order.
+        db.snooze_message(&account_id, first, "2999-02-01T00:00:00+00:00")
+            .unwrap();
+        let captures = db.capture_snoozes(&[second, first]).unwrap();
+        assert_eq!(
+            captures
+                .iter()
+                .map(|capture| capture.source_message_row_id)
+                .collect::<Vec<_>>(),
+            vec![second, first]
+        );
+        assert_eq!(
+            captures[0].message_id_header,
+            Some("<1@example.com>".into())
+        );
+        assert!(db.capture_snoozes(&[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn restore_snooze_rebinds_after_a_move_and_skips_missing_mail() {
+        let (db, account_id) = with_account();
+        let inbox = mailbox(&db, "INBOX", &MailboxRole::Inbox);
+        let archive = mailbox(&db, "Archive", &MailboxRole::Archive);
+        db.upsert_message(&account_id, inbox, &message(9, "2026-08-18T12:00:00Z"))
+            .unwrap();
+        let source = list_ids(&db, inbox)[0];
+        db.snooze_message(&account_id, source, "2999-01-01T00:00:00+00:00")
+            .unwrap();
+        let mut captures = db.capture_snoozes(&[source]).unwrap();
+        let capture = captures.remove(0);
+        let header = capture.message_id_header.clone().unwrap();
+
+        // The move deleted the source row. No landing row yet: restore is a
+        // no-op, not an error.
+        db.remove_message(source).unwrap();
+        db.restore_snooze_for_message(
+            &account_id,
+            &header,
+            &capture.snoozed_until,
+            &capture.created_at,
+        )
+        .unwrap();
+        assert!(db
+            .list_snoozed(&account_id, "2026-01-01T00:00:00+00:00")
+            .unwrap()
+            .is_empty());
+
+        // Replayed move: the same Message-ID lands in Archive under a new row.
+        db.upsert_message(&account_id, archive, &message(9, "2026-08-18T12:00:00Z"))
+            .unwrap();
+        let landing = list_ids(&db, archive)[0];
+        assert_ne!(landing, source);
+        assert!(db.list_messages(inbox, None, 10).unwrap().items.is_empty());
+
+        db.restore_snooze_for_message(
+            &account_id,
+            &header,
+            &capture.snoozed_until,
+            &capture.created_at,
+        )
+        .unwrap();
+        let snoozed = db
+            .list_snoozed(&account_id, "2026-01-01T00:00:00+00:00")
+            .unwrap();
+        assert_eq!(snoozed.len(), 1);
+        assert_eq!(snoozed[0].message.id, landing);
+        assert_eq!(snoozed[0].snoozed_until, "2999-01-01T00:00:00+00:00");
+
+        // Restoring again keeps the existing snooze instead of duplicating it.
+        db.restore_snooze_for_message(
+            &account_id,
+            &header,
+            "2999-03-01T00:00:00+00:00",
+            &capture.created_at,
+        )
+        .unwrap();
+        let again = db
+            .list_snoozed(&account_id, "2026-01-01T00:00:00+00:00")
+            .unwrap();
+        assert_eq!(again.len(), 1);
+        assert_eq!(again[0].snoozed_until, "2999-01-01T00:00:00+00:00");
+    }
+
+    #[test]
+    fn prepare_queued_outbox_repairs_any_waiting_state_but_never_overwrites() {
+        let (db, account_id) = with_account();
+        for state in ["queued", "scheduled", "needs_attention"] {
+            let id = db
+                .queue_outbox(&draft(), state, None, "", b"", None)
+                .unwrap();
+            db.prepare_queued_outbox(
+                &id,
+                &account_id,
+                &format!("<repaired-{state}@example.com>"),
+                b"Subject: repaired\r\n\r\nbody",
+            )
+            .unwrap();
+            let (_, prepared_state, message_id, mime) =
+                db.outbox_delivery(&id, &account_id).unwrap();
+            assert_eq!(prepared_state, state);
+            assert_eq!(message_id, format!("<repaired-{state}@example.com>"));
+            assert_eq!(mime, b"Subject: repaired\r\n\r\nbody");
+        }
+
+        // A row that already carries content is guarded, not clobbered.
+        let filled = db
+            .queue_outbox(
+                &draft(),
+                "needs_attention",
+                None,
+                "<filled@example.com>",
+                b"already attempted",
+                None,
+            )
+            .unwrap();
+        assert!(db
+            .prepare_queued_outbox(
+                &filled,
+                &account_id,
+                "<must-not-send@example.com>",
+                b"multiple versions of the same mail",
+            )
+            .is_err());
+        let (_, _, message_id, mime) = db.outbox_delivery(&filled, &account_id).unwrap();
+        assert_eq!(message_id, "<filled@example.com>");
+        assert_eq!(mime, b"already attempted");
+    }
+
+    #[test]
+    fn pending_backlog_bytes_count_every_waiting_state() {
+        let (db, account_id) = with_account();
+        db.queue_outbox(&draft(), "queued", None, "<q@e>", &[0u8; 100], None)
+            .unwrap();
+        db.queue_outbox(&draft(), "scheduled", None, "<s@e>", &[0u8; 50], None)
+            .unwrap();
+        db.queue_outbox(
+            &draft(),
+            "needs_attention",
+            None,
+            "<a@e>",
+            &[0u8; 500],
+            None,
+        )
+        .unwrap();
+        db.queue_outbox(&draft(), "sent", None, "<t@e>", &[0u8; 900], None)
+            .unwrap();
+        let conn = db.conn().unwrap();
+        assert_eq!(pending_outbox_bytes(&conn, &account_id).unwrap(), 650);
+        assert_eq!(pending_outbox_bytes(&conn, "other-account").unwrap(), 0);
+
+        // Boundary: denial starts once the backlog IS the cap, not before it.
+        assert!(!pending_sends_denied(MAX_PENDING_OUTBOX_BYTES - 1));
+        assert!(pending_sends_denied(MAX_PENDING_OUTBOX_BYTES));
+    }
+
+    fn retry_wait_seconds(db: &Database, id: &str) -> i64 {
+        let retry_after: String = db
+            .conn()
+            .unwrap()
+            .query_row("SELECT retry_after FROM outbox WHERE id=?1", [id], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let due = chrono::DateTime::parse_from_rfc3339(&retry_after).unwrap();
+        (due.with_timezone(&chrono::Utc) - chrono::Utc::now()).num_seconds()
+    }
+
+    #[test]
+    fn defer_outbox_retry_ladder_waits_one_two_four_minutes_then_caps() {
+        let (db, account_id) = with_account();
+        let id = db
+            .queue_outbox(&draft(), "queued", None, "<l@e>", b"mail", None)
+            .unwrap();
+        // SQLite evaluates the SET against the pre-update row: the k-th try
+        // reads retry_attempts=k-1, so the waits are 1, 2, 4… minutes.
+        for (index, minutes) in [1i64, 2, 4, 8, 16, 32, 60, 60].iter().enumerate() {
+            assert!(db.defer_outbox_retry(&id, &account_id, 100).unwrap());
+            let wait = retry_wait_seconds(&db, &id);
+            let expected = minutes * 60;
+            assert!(
+                (expected - 10..=expected + 20).contains(&wait),
+                "try {} waited {}s, expected ~{} min",
+                index + 1,
+                wait,
+                minutes
+            );
+        }
+        // The call that reaches max_attempts reports exhaustion, so the
+        // caller parks instead of assuming another automatic try.
+        assert!(!db.defer_outbox_retry(&id, &account_id, 8).unwrap());
+        let fresh = db
+            .queue_outbox(&draft(), "queued", None, "<m@e>", b"mail", None)
+            .unwrap();
+        assert!(db.defer_outbox_retry(&fresh, &account_id, 3).unwrap());
+        assert!(db.defer_outbox_retry(&fresh, &account_id, 3).unwrap());
+        assert!(!db.defer_outbox_retry(&fresh, &account_id, 3).unwrap());
+    }
 }

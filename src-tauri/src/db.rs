@@ -46,7 +46,7 @@ use crate::models::{
 };
 use crate::models::{Attachment, ComposeDraft, MailboxRole, MessageSummary, ProviderKind, TlsMode};
 
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 39;
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 40;
 
 /// Hot write and read paths reuse prepared statements; rusqlite's default of 16 evicts them.
 const STATEMENT_CACHE_CAPACITY: usize = 64;
@@ -268,10 +268,11 @@ impl Database {
 
     /// Copy the live frontend session before taking a database read lock.
     pub(crate) fn current_undo_session(&self) -> Result<String, String> {
-        self.undo_session
+        Ok(self
+            .undo_session
             .lock()
-            .map(|session| session.clone())
-            .map_err(|_| "The undo session is unavailable.".to_string())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone())
     }
 }
 }
@@ -4260,6 +4261,7 @@ mod tests {
         assert_eq!(message_id, "<stable@example.com>");
         assert!(!mime.is_empty());
 
+        // An empty needs_attention row (legacy migration) may repair its MIME.
         let uncertain = db
             .queue_outbox(
                 &draft(&account.summary.id),
@@ -4270,11 +4272,19 @@ mod tests {
                 None,
             )
             .unwrap();
+        db.prepare_queued_outbox(
+            &uncertain,
+            &account.summary.id,
+            "<must-not-send@example.com>",
+            b"Subject: repaired\r\n\r\nbody",
+        )
+        .unwrap();
+        // A row that already holds prepared MIME is never rewritten.
         assert!(db
             .prepare_queued_outbox(
                 &uncertain,
                 &account.summary.id,
-                "<must-not-send@example.com>",
+                "<rewritten@example.com>",
                 b"Subject: unsafe\r\n\r\nbody",
             )
             .is_err());
@@ -7311,7 +7321,7 @@ mod tests {
         let version: u32 = connection
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 39);
+        assert_eq!(version, crate::db::CURRENT_SCHEMA_VERSION);
         let index: String = connection
             .query_row(
                 "SELECT sql FROM sqlite_master WHERE type='index' AND name='messages_account_sender_address'",

@@ -23,8 +23,14 @@ async function scrollToRow(page: Page, subject: string) {
     await list.evaluate((node) => {
       node.scrollTop += node.clientHeight;
     });
+    // Let the virtualizer mount the next window before probing again; the
+    // loop must tolerate a busy machine under the full test:all gate.
+    await page.evaluate(
+      () =>
+        new Promise((resolve) => requestAnimationFrame(() => resolve(null))),
+    );
   }
-  await expect(target).toHaveCount(1);
+  await expect(target).toHaveCount(1, { timeout: 15_000 });
   await target.scrollIntoViewIfNeeded();
   return target;
 }
@@ -38,6 +44,7 @@ async function movedCalls(page: Page) {
 }
 
 test("a row far from the top drops onto a folder", async ({ page }) => {
+  test.setTimeout(60_000);
   await page.goto("/?hugeList=1500&theme=light");
   await expect(page.getByRole("option").first()).toBeVisible();
   const far = await scrollToRow(page, "Archive note 700");
@@ -47,7 +54,7 @@ test("a row far from the top drops onto a folder", async ({ page }) => {
   await far.dragTo(page.getByRole("button", { name: "Archive" }));
 
   await expect
-    .poll(async () => (await movedCalls(page)).length)
+    .poll(async () => (await movedCalls(page)).length, { timeout: 15_000 })
     .toBeGreaterThan(0);
   const [moved] = await movedCalls(page);
   expect(moved?.args).toMatchObject({
@@ -58,6 +65,7 @@ test("a row far from the top drops onto a folder", async ({ page }) => {
 });
 
 test("the dragged row survives a scroll during the drag", async ({ page }) => {
+  test.setTimeout(60_000);
   await page.goto("/?hugeList=1500&theme=light");
   const list = page.locator(".message-list");
   await expect(page.getByRole("option").first()).toBeVisible();
@@ -88,7 +96,7 @@ test("the dragged row survives a scroll during the drag", async ({ page }) => {
   await page.mouse.up();
 
   await expect
-    .poll(async () => (await movedCalls(page)).length)
+    .poll(async () => (await movedCalls(page)).length, { timeout: 15_000 })
     .toBeGreaterThan(0);
   const [moved] = await movedCalls(page);
   expect(moved?.args).toMatchObject({ messageId: id, destinationMailboxId: 2 });

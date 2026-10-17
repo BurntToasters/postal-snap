@@ -91,6 +91,14 @@ fn suggestion_domain_matches(address: &str, blocked_domains: &[String]) -> bool 
     })
 }
 
+/// Rows snoozed until later hide from lists, folder counts, and searches
+/// alike. Times compare as text; until values are canonical RFC 3339
+/// (+00:00) at write, and expired rows surf again without a prune. `m` must
+/// be the outer `messages` alias. Shared by `db::messages` and `db::mailboxes`
+/// so counts and search never drift from what lists show.
+pub(crate) const NOT_SNOOZED_SQL: &str = "NOT EXISTS (SELECT 1 FROM snoozed_messages s WHERE s.account_id=m.account_id AND s.message_id=m.id \
+          AND s.snoozed_until>strftime('%Y-%m-%dT%H:%M:%S+00:00','now'))";
+
 /// Unfinished parses in a row before a message is quarantined. One is
 /// forgiven: the app may simply have quit mid-parse.
 pub(crate) const PARSE_QUARANTINE_AT: u32 = 2;
@@ -533,8 +541,7 @@ impl Database {
         let mut statement = conn
             .prepare(&format!(
                 "{} WHERE mailbox_id = ?1 AND pending_move_to IS NULL
-                 AND NOT EXISTS (SELECT 1 FROM snoozed_messages s WHERE s.account_id=m.account_id AND s.message_id=m.id
-                   AND s.snoozed_until>strftime('%Y-%m-%dT%H:%M:%S+00:00','now'))
+                 AND {NOT_SNOOZED_SQL}
                  {filter_sql}
                  {cursor_sql}
                  {order_sql} LIMIT ?4",
@@ -986,9 +993,9 @@ impl Database {
     }
 
     pub fn unread_message_ids(&self, mailbox_id: i64) -> Result<Vec<(i64, u32)>, String> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut statement = conn
-            .prepare("SELECT id,uid FROM messages WHERE mailbox_id=?1 AND is_read=0 AND pending_move_to IS NULL ORDER BY uid")
+            .prepare_cached("SELECT id,uid FROM messages WHERE mailbox_id=?1 AND is_read=0 AND pending_move_to IS NULL ORDER BY uid")
             .map_err(db_error)?;
         let rows = statement
             .query_map([mailbox_id], |row| Ok((row.get(0)?, row.get(1)?)))
@@ -999,9 +1006,9 @@ impl Database {
     }
 
     pub fn pending_move_uids(&self, mailbox_id: i64) -> Result<Vec<u32>, String> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut statement = conn
-            .prepare("SELECT uid FROM messages WHERE mailbox_id=?1 AND pending_move_to IS NOT NULL ORDER BY uid DESC")
+            .prepare_cached("SELECT uid FROM messages WHERE mailbox_id=?1 AND pending_move_to IS NOT NULL ORDER BY uid DESC")
             .map_err(db_error)?;
         let rows = statement
             .query_map([mailbox_id], |row| row.get(0))
@@ -1298,7 +1305,7 @@ impl Database {
     }
 
     pub fn message_location(&self, id: i64) -> Result<(String, String, u32), String> {
-        self.conn()?
+        self.read_conn()?
             .prepare_cached("SELECT m.account_id, f.name, m.uid FROM messages m JOIN mailboxes f ON f.id=m.mailbox_id WHERE m.id=?1")
             .map_err(db_error)?
             .query_row([id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
@@ -1445,7 +1452,8 @@ impl Database {
         if expression.is_some() {
             sql.push_str(" JOIN message_fts fts ON fts.rowid=m.id");
         }
-        sql.push_str(" WHERE m.account_id=?1 AND m.pending_move_to IS NULL");
+        sql.push_str(" WHERE m.account_id=?1 AND m.pending_move_to IS NULL AND ");
+        sql.push_str(NOT_SNOOZED_SQL);
         if let Some(expression) = expression.clone() {
             values.push(Value::from(expression));
             sql.push_str(&format!(" AND message_fts MATCH ?{}", values.len()));
@@ -1611,7 +1619,7 @@ impl Database {
     /// Attachment names stored with a downloaded message. Empty when only the
     /// envelope is cached.
     pub fn attachment_filenames(&self, mailbox_id: i64, uid: u32) -> Result<Vec<String>, String> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut statement = conn
             .prepare(
                 "SELECT json_extract(attachment.value, '$.filename')
@@ -1642,7 +1650,7 @@ impl Database {
             return Ok(Vec::new());
         }
         let sql = format!(
-            "{} JOIN message_fts fts ON fts.rowid=m.id WHERE m.pending_move_to IS NULL AND message_fts MATCH ?1 ORDER BY bm25(message_fts, 10.0, 6.0, 3.0, 1.0), m.received_at DESC LIMIT ?2",
+            "{} JOIN message_fts fts ON fts.rowid=m.id WHERE m.pending_move_to IS NULL AND {NOT_SNOOZED_SQL} AND message_fts MATCH ?1 ORDER BY bm25(message_fts, 10.0, 6.0, 3.0, 1.0), m.received_at DESC LIMIT ?2",
             MESSAGE_SUMMARY_SELECT,
         );
         let mut statement = conn.prepare(&sql).map_err(db_error)?;
@@ -2359,5 +2367,136 @@ fn list_cursor(sort: MessageListSort, last: &MessageSummary) -> MessageCursor {
         sort,
         key,
         pinned: last.pinned,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::db::{CachedMessage, Database};
+    use crate::models::{
+        AccountRecord, AccountSummary, MailboxRole, ProviderKind, SearchQuery, ServerConfig,
+        TlsMode,
+    };
+
+    fn with_account() -> (Database, String, i64) {
+        let database = Database::memory();
+        let account = AccountRecord {
+            summary: AccountSummary {
+                default_body_format: crate::models::BodyFormat::Html,
+                id: "account-1".into(),
+                provider: ProviderKind::Manual,
+                email: "sam@example.com".into(),
+                display_name: "Sam".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+                signature_html: String::new(),
+                reply_to: String::new(),
+                color: None,
+            },
+            imap: ServerConfig {
+                trusted_certificate: None,
+                host: "imap.example.com".into(),
+                port: 993,
+                tls_mode: TlsMode::Tls,
+                username: "sam@example.com".into(),
+            },
+            smtp: ServerConfig {
+                trusted_certificate: None,
+                host: "smtp.example.com".into(),
+                port: 587,
+                tls_mode: TlsMode::StartTls,
+                username: "sam@example.com".into(),
+            },
+        };
+        database.insert_account(&account).unwrap();
+        let account_id = account.summary.id;
+        let inbox = database
+            .upsert_mailbox(
+                &account_id,
+                "INBOX",
+                &MailboxRole::Inbox,
+                Some(1),
+                Some(2),
+                None,
+                0,
+            )
+            .unwrap();
+        (database, account_id, inbox)
+    }
+
+    fn dictionary_email(uid: u32) -> CachedMessage {
+        CachedMessage {
+            uid,
+            internal_at: None,
+            message_id: Some(format!("<dictionary-{uid}@example.com>")),
+            subject: "Discount dictionary offer".into(),
+            sender_name: "Jane".into(),
+            sender_address: "jane@example.com".into(),
+            recipients: "sam@example.com".into(),
+            received_at: format!("2026-08-{uid:02}T12:00:00Z"),
+            preview: "Hello".into(),
+            is_read: false,
+            is_starred: false,
+            size: 32,
+            to: vec!["sam@example.com".into()],
+            cc: vec![],
+            bcc: vec![],
+            reply_to: None,
+            thread_parent: None,
+            text_body: "Hello".into(),
+            html_body: None,
+            attachments: vec![],
+            raw_message: b"Subject: Discount dictionary offer\r\n\r\nHello".to_vec(),
+            has_attachments: false,
+            is_answered: false,
+            is_forwarded: false,
+            has_calendar: false,
+            calendar_json: None,
+            list_unsubscribe: None,
+            list_unsubscribe_post: None,
+            importance: String::new(),
+            disposition_to: String::new(),
+        }
+    }
+
+    /// Search must match what lists show: a snoozed row answers nothing until
+    /// it surfaces again.
+    #[test]
+    fn search_hides_snoozed_messages_until_they_return() {
+        let (db, account_id, inbox) = with_account();
+        db.upsert_message(&account_id, inbox, &dictionary_email(18))
+            .unwrap();
+        let message_id = db.list_messages(inbox, None, 10).unwrap().items[0].id;
+        let query = SearchQuery {
+            account_id: account_id.clone(),
+            mailbox_id: None,
+            text: "dictionary".into(),
+            limit: 10,
+            all_folders: true,
+        };
+        assert_eq!(db.search(&query).unwrap().len(), 1);
+
+        db.snooze_message(&account_id, message_id, "2999-01-01T00:00:00+00:00")
+            .unwrap();
+        assert_eq!(db.search(&query).unwrap().len(), 0);
+
+        db.unsnooze_message(&account_id, message_id).unwrap();
+        assert_eq!(db.search(&query).unwrap().len(), 1);
+    }
+
+    /// Server search answers for any account; the snooze filter rides along.
+    #[test]
+    fn all_account_search_skips_snoozed_messages() {
+        let (db, _account_id, inbox) = with_account();
+        db.upsert_message("account-1", inbox, &dictionary_email(21))
+            .unwrap();
+        let message_id = db.list_messages(inbox, None, 10).unwrap().items[0].id;
+        assert_eq!(db.search_all_accounts("dictionary", 10).unwrap().len(), 1);
+        db.snooze_message("account-1", message_id, "2999-01-01T00:00:00+00:00")
+            .unwrap();
+        assert!(db.search_all_accounts("dictionary", 10).unwrap().is_empty());
     }
 }

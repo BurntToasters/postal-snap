@@ -9,7 +9,7 @@ import { api } from "../../api";
 import { Mail } from "lucide-react";
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
-import type { FilterRule, MailboxSummary } from "../../types";
+import type { AccountSummary, FilterRule, MailboxSummary } from "../../types";
 import { SyncStatus } from "../mail/syncStatus";
 import { AccountDownloadPanel } from "./accountDownload";
 import { ConnectionPanel, FoldersPanel } from "./connectionPanel";
@@ -55,6 +55,41 @@ function ruleActionLabel(
     default:
       return rule.action;
   }
+}
+
+// Identity saves run through IPC; a button repeats only a real edit.
+function nameChanged(
+  account: AccountSummary,
+  nameInputs: Record<string, string>,
+): boolean {
+  return (
+    (nameInputs[account.id] ?? account.displayName).trim() !==
+    account.displayName
+  );
+}
+
+function replyToChanged(
+  account: AccountSummary,
+  replyToInputs: Record<string, string>,
+): boolean {
+  return (
+    (replyToInputs[account.id] ?? account.replyTo ?? "").trim() !==
+    (account.replyTo ?? "")
+  );
+}
+
+// An auto-populated plain fallback counts as an edit of its own.
+function signatureChanged(
+  account: AccountSummary,
+  signatureInputs: Record<string, string>,
+  signatureHtmlInputs: Record<string, string>,
+): boolean {
+  return (
+    (signatureInputs[account.id] ?? account.signature ?? "") !==
+      (account.signature ?? "") ||
+    (signatureHtmlInputs[account.id] ?? account.signatureHtml ?? "") !==
+      (account.signatureHtml ?? "")
+  );
 }
 
 export interface AccountRuleDraft {
@@ -517,7 +552,10 @@ export function AccountsTab({
                       <button
                         type="button"
                         className="secondary-button"
-                        disabled={savingNameId === account.id}
+                        disabled={
+                          savingNameId === account.id ||
+                          !nameChanged(account, nameInputs)
+                        }
                         onClick={() => void handleSaveName(account.id)}
                       >
                         {strings.settings.saveAccountName}
@@ -559,7 +597,10 @@ export function AccountsTab({
                       <button
                         type="button"
                         className="secondary-button"
-                        disabled={savingReplyToId === account.id}
+                        disabled={
+                          savingReplyToId === account.id ||
+                          !replyToChanged(account, replyToInputs)
+                        }
                         onClick={() => void handleSaveReplyTo(account.id)}
                       >
                         {strings.settings.saveReplyTo}
@@ -621,7 +662,14 @@ export function AccountsTab({
                       <button
                         type="button"
                         className="secondary-button"
-                        disabled={savingSignatureId === account.id}
+                        disabled={
+                          savingSignatureId === account.id ||
+                          !signatureChanged(
+                            account,
+                            signatureInputs,
+                            signatureHtmlInputs,
+                          )
+                        }
                         onClick={() =>
                           void handleSaveSignature(
                             account.id,

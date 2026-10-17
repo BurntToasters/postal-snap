@@ -135,10 +135,11 @@ pub fn verify_peer_certificate(pem: &str, peer_der: &[u8]) -> Result<(), String>
 pub fn stage_certificate(pem: String) -> Result<CertificateMetadata, String> {
     let mut metadata = certificate_metadata(&pem)?;
     metadata.reference = uuid::Uuid::new_v4().to_string();
+    // Plain recoverable state, so poisoning must not block Bridge setup.
     let mut pending = PENDING
         .get_or_init(Mutex::default)
         .lock()
-        .map_err(|_| "Certificate storage is unavailable.")?;
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     pending.retain(|_, item| item.created.elapsed() < Duration::from_secs(600));
     if pending.len() >= 16 {
         return Err("Too many pending certificates. Try again later.".into());
@@ -158,7 +159,7 @@ pub fn approve_pending(reference: &str) -> Result<(), String> {
     let mut pending = PENDING
         .get_or_init(Mutex::default)
         .lock()
-        .map_err(|_| "Certificate storage is unavailable.")?;
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let item = pending
         .get_mut(reference)
         .ok_or("Certificate permission has expired. Import it again.")?;
@@ -174,7 +175,7 @@ pub fn approved_pem(reference: &str) -> Result<String, String> {
     let pending = PENDING
         .get_or_init(Mutex::default)
         .lock()
-        .map_err(|_| "Certificate storage is unavailable.")?;
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let item = pending
         .get(reference)
         .filter(|item| item.approved && item.created.elapsed() < Duration::from_secs(600))
@@ -184,9 +185,12 @@ pub fn approved_pem(reference: &str) -> Result<String, String> {
 }
 
 pub fn consume(reference: &str) {
-    if let Ok(mut pending) = PENDING.get_or_init(Mutex::default).lock() {
-        pending.remove(reference);
-    }
+    // Plain state; staged certificates are dropped even after a panic.
+    PENDING
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .remove(reference);
 }
 
 pub fn apply_setup_trust(

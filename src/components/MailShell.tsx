@@ -53,7 +53,10 @@ import { SnoozePanel } from "./reader/snoozePanel";
 import { PaneSplitter } from "./mail/paneSplitter";
 import { useSettingsSave } from "./settings/useSettingsSave";
 import { useOverlayFocus } from "./mail/useOverlayFocus";
-import { handleContextAction } from "./mail/mailContextActions";
+import {
+  handleContextAction,
+  type ContextActionCtx,
+} from "./mail/mailContextActions";
 import { useLocalListActions } from "./mail/useLocalListActions";
 import { useMailEvents } from "./mail/useMailEvents";
 import { useMessageSelection } from "./mail/useMessageSelection";
@@ -792,56 +795,64 @@ export function MailShell({ onOpenSettings }: Props) {
     setError,
   });
 
+  // One shared context-menu listener; the context is refreshed every render.
+  const contextActionRef = useRef<ContextActionCtx | null>(null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- holds setters; never called here.
   useEffect(() => {
-    const onAction = (event: Event) =>
-      handleContextAction(event, {
-        activeAccountId,
-        refreshAccount,
-        selectAccount,
-        onOpenSettings,
-        openComposer,
-        searchAddress,
-        searchFromSender,
-        searchSubject,
-        chooseMessage,
-        selectMessage,
-        openEarlierMessage,
-        selectionAnchor,
-        setSelecting,
-        setSelectedIds,
-        setError,
-        messageRequest,
-        searchRequest,
-        clearQuery,
-        resetListState,
-        selectMailbox,
-        selectLocalView,
-        setSidebarOpen,
-        loadMessages,
-        markMailboxReadById,
-        emptyTrashFolders,
-        emptyJunkFolders,
-        updateSettings,
-        openFolderDialog,
-        setMoveFolderId,
-        deleteFolderById,
-        openDraft,
-        duplicateDraft,
-        discardListedDraft,
-        previewQueued,
-        editQueued,
-        retryQueued,
-        retrySentCopy,
-        retryArchiveAfterSend,
-        sendScheduledNow,
-        scheduledSendInFlight,
-        discardQueued,
-        chooseSnoozed,
-        unsnoozeById,
-      });
+    contextActionRef.current = {
+      refreshAccount,
+      selectAccount,
+      onOpenSettings,
+      openComposer,
+      searchAddress,
+      searchFromSender,
+      searchSubject,
+      chooseMessage,
+      selectMessage,
+      openEarlierMessage,
+      selectionAnchor,
+      setSelecting,
+      setSelectedIds,
+      setError,
+      messageRequest,
+      searchRequest,
+      clearQuery,
+      resetListState,
+      selectMailbox,
+      selectLocalView,
+      setSidebarOpen,
+      loadMessages,
+      markMailboxReadById,
+      emptyTrashFolders,
+      emptyJunkFolders,
+      updateSettings,
+      openFolderDialog,
+      setMoveFolderId,
+      deleteFolderById,
+      openDraft,
+      duplicateDraft,
+      discardListedDraft,
+      previewQueued,
+      editQueued,
+      retryQueued,
+      retrySentCopy,
+      retryArchiveAfterSend,
+      sendScheduledNow,
+      scheduledSendInFlight,
+      discardQueued,
+      chooseSnoozed,
+      unsnoozeById,
+    };
+  });
+
+  useEffect(() => {
+    const onAction = (event: Event) => {
+      const context = contextActionRef.current;
+      if (context) handleContextAction(event, context);
+    };
     window.addEventListener(CONTEXT_ACTION_EVENT, onAction);
     return () => window.removeEventListener(CONTEXT_ACTION_EVENT, onAction);
-  });
+  }, []);
 
   useOverlayFocus({
     sidebarOpen,

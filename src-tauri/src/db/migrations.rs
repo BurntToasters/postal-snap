@@ -42,6 +42,7 @@ const MIGRATIONS: &[(u32, Migration)] = &[
     (37, step_v37),
     (38, step_v38),
     (39, step_v39),
+    (40, step_v40),
 ];
 
 pub(super) fn migrate_schema(connection: &mut Connection) -> Result<(), String> {
@@ -920,6 +921,22 @@ fn step_v39(transaction: &rusqlite::Transaction<'_>) -> Result<(), String> {
     Ok(())
 }
 
+fn step_v40(transaction: &rusqlite::Transaction<'_>) -> Result<(), String> {
+    // attempt_started_at was written at send claim but never read: the
+    // uncertain-send retention instead comes from state/reason handling, so
+    // the column goes. Keep the historical ensure_column add in step_v2; older
+    // databases pass through it on the way here.
+    if column_exists(transaction, "outbox", "attempt_started_at")? {
+        transaction
+            .execute("ALTER TABLE outbox DROP COLUMN attempt_started_at", [])
+            .map_err(db_error)?;
+    }
+    transaction
+        .pragma_update(None, "user_version", 40)
+        .map_err(db_error)?;
+    Ok(())
+}
+
 /// Schema v23: convert cached IMAP4rev1 mailbox names from modified UTF-7.
 fn migrate_v23_mailbox_names(transaction: &rusqlite::Transaction) -> Result<(), String> {
     let rows = {
@@ -1050,7 +1067,7 @@ fn migrate_v23_mailbox_names(transaction: &rusqlite::Transaction) -> Result<(), 
     let operations = {
         let mut statement = transaction
             .prepare(
-                "SELECT id,kind,payload FROM offline_ops WHERE kind IN ('flags','keyword','move')",
+                "SELECT id,kind,payload FROM offline_ops WHERE kind IN ('flags','keyword','move','copy')",
             )
             .map_err(db_error)?;
         let rows = statement
@@ -1073,7 +1090,7 @@ fn migrate_v23_mailbox_names(transaction: &rusqlite::Transaction) -> Result<(), 
         })?;
         let keys: &[&str] = match kind.as_str() {
             "flags" | "keyword" => &["mailbox"],
-            "move" => &["source", "destination"],
+            "move" | "copy" => &["source", "destination"],
             _ => &[],
         };
         let mut changed = false;
@@ -1266,4 +1283,48 @@ fn migrate_v20(transaction: &rusqlite::Transaction) -> Result<(), String> {
         ensure_column(transaction, "messages", column, sql)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn v40_drops_attempt_started_at_keeping_outbox_rows() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("mail.sqlite3");
+        {
+            let _database = Database::open(&path).unwrap();
+        }
+        {
+            // Rebuild the v39 shape: the column still existed and one queued
+            // row carried no value for it.
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(
+                    "PRAGMA foreign_keys=OFF;
+                     ALTER TABLE outbox ADD COLUMN attempt_started_at TEXT;
+                     INSERT INTO outbox(id,account_id,draft_json,state,created_at)
+                       VALUES('o1','a1','{}','queued',CURRENT_TIMESTAMP);
+                     PRAGMA user_version=39;",
+                )
+                .unwrap();
+        }
+
+        let reopened = Database::open(&path).unwrap();
+        let conn = reopened.conn().unwrap();
+        let version: u32 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
+        assert!(!column_exists(&conn, "outbox", "attempt_started_at").unwrap());
+        let (count, state): (i64, String) = conn
+            .query_row(
+                "SELECT COUNT(*), state FROM outbox WHERE id='o1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((count, state.as_str()), (1, "queued"));
+    }
 }

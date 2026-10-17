@@ -43,7 +43,6 @@ type Scheduled = ReturnType<typeof useScheduledOutbox>;
 type OutboxState = AppState["outbox"][number]["state"];
 
 export interface ContextActionCtx {
-  activeAccountId: AppState["activeAccountId"];
   refreshAccount: (accountId: string) => Promise<void>;
   selectAccount: AppState["selectAccount"];
   onOpenSettings: (tab?: "accounts", accountId?: string) => void;
@@ -94,7 +93,6 @@ export interface ContextActionCtx {
 
 export function handleContextAction(event: Event, ctx: ContextActionCtx) {
   const {
-    activeAccountId,
     refreshAccount,
     selectAccount,
     onOpenSettings,
@@ -148,7 +146,8 @@ export function handleContextAction(event: Event, ctx: ContextActionCtx) {
     if (id === "get-mail") void refreshAccount(target.accountId);
     if (id === "account-settings") {
       selectAccount(target.accountId);
-      onOpenSettings("accounts", activeAccountId);
+      // Anchor the dialog to the account that was clicked, not the one open.
+      onOpenSettings("accounts", target.accountId);
     }
     return;
   }

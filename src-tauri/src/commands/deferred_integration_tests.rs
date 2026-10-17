@@ -413,3 +413,138 @@ async fn greenmail_replay_keeps_dropped_operation_notification_contract() {
     drop(db);
     drop(directory);
 }
+
+/// A snooze rides along with a replayed move: capture (by row id) before the
+/// replay, rebind (by Message-ID header) after the moved copy lands, and the
+/// snooze list points at the new row only.
+#[tokio::test]
+#[ignore = "requires npm run test:mail-integration"]
+async fn greenmail_replayed_deferred_move_keeps_the_snooze() {
+    let fixture = fixture().await;
+    let account_id = &fixture.account.summary.id;
+
+    let snoozed_until = (Utc::now() + ChronoDuration::minutes(60)).to_rfc3339();
+    let inbox_id = fixture
+        .db
+        .mailbox_id_for_name(account_id, "INBOX")
+        .expect("look up Inbox")
+        .expect("Inbox is cached");
+    assert!(
+        fixture
+            .db
+            .list_messages(inbox_id, None, 100)
+            .expect("list cached Inbox")
+            .items
+            .iter()
+            .any(|item| item.id == fixture.message_row_id),
+        "the fixture message is visible before snoozing"
+    );
+    fixture
+        .db
+        .snooze_message(account_id, fixture.message_row_id, &snoozed_until)
+        .expect("snooze the fixture message");
+    assert!(
+        !fixture
+            .db
+            .list_messages(inbox_id, None, 100)
+            .expect("list cached Inbox")
+            .items
+            .iter()
+            .any(|item| item.id == fixture.message_row_id),
+        "snoozing hides the message from its folder"
+    );
+
+    let mut captures = fixture
+        .db
+        .capture_snoozes(&[fixture.message_row_id])
+        .expect("capture the snooze under the doomed row id");
+    assert_eq!(captures.len(), 1, "exactly one snooze was captured");
+    let capture = captures.remove(0);
+    assert_eq!(
+        capture.message_id_header.as_deref(),
+        Some(fixture.message_id.as_str()),
+        "the capture carries the rebind header"
+    );
+    assert_eq!(capture.snoozed_until, snoozed_until);
+
+    defer_move(&fixture, "snooze-after-move");
+    fixture
+        .db
+        .commit_deferred(account_id, "snooze-after-move")
+        .unwrap();
+    let (pending, notifications) = replay(&fixture).await;
+    assert!(!pending, "successful replay drains the operation queue");
+    assert!(notifications.is_empty());
+    assert_eq!(
+        matching_message_count(&fixture.account, PASSWORD, "INBOX", &fixture.message_id).await,
+        0,
+        "committed move removes the source from GreenMail"
+    );
+    assert_eq!(
+        matching_message_count(&fixture.account, PASSWORD, "Archive", &fixture.message_id,).await,
+        1,
+        "committed move creates exactly one destination copy"
+    );
+
+    // Wait for the moved copy to appear in the local Archive cache.
+    for _ in 0..20 {
+        let found = fixture
+            .db
+            .find_message_by_header_id_in_mailbox(
+                account_id,
+                fixture.archive_id,
+                &fixture.message_id,
+            )
+            .expect("look up the moved message");
+        if found.is_some() {
+            break;
+        }
+        mail::sync::sync_account(
+            &fixture.db,
+            &fixture.account,
+            PASSWORD,
+            &CachePolicy::default(),
+            &mut mail::sync::Uncontended,
+        )
+        .await
+        .expect("sync GreenMail into the Archive cache");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let landed = fixture
+        .db
+        .find_message_by_header_id_in_mailbox(account_id, fixture.archive_id, &fixture.message_id)
+        .expect("look up the moved message")
+        .expect("the moved message landed in the Archive cache");
+    assert_ne!(landed.id, fixture.message_row_id, "the row id changed");
+
+    fixture
+        .db
+        .restore_snooze_for_message(
+            account_id,
+            capture.message_id_header.as_deref().expect("header"),
+            &capture.snoozed_until,
+            &capture.created_at,
+        )
+        .expect("rebind the captured snooze");
+
+    let archived = fixture
+        .db
+        .list_messages(fixture.archive_id, None, 100)
+        .expect("list cached Archive after restore");
+    assert!(
+        !archived.items.iter().any(|item| item.id == landed.id),
+        "the re-snoozed message hides from its new folder"
+    );
+    let snoozed = fixture
+        .db
+        .list_snoozed(account_id, &Utc::now().to_rfc3339())
+        .expect("list snoozed mail");
+    assert_eq!(
+        snoozed
+            .iter()
+            .map(|entry| (entry.message.id, entry.snoozed_until.clone()))
+            .collect::<Vec<_>>(),
+        vec![(landed.id, snoozed_until)],
+        "exactly the re-bound row is snoozed"
+    );
+}

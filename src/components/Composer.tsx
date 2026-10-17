@@ -844,8 +844,20 @@ export function Composer({ accountId, onDraftSaved }: Props) {
   }
   pastePlainRef.current = pastePlainText;
 
+  // One listener for the composer's life; editor state stays fresh via a ref.
+  const composerActionRef = useRef({
+    bodyFormat,
+    editor,
+    removeAttachment,
+  });
+  useEffect(() => {
+    composerActionRef.current = { bodyFormat, editor, removeAttachment };
+  });
+
   useEffect(() => {
     const onAction = (event: Event) => {
+      const { bodyFormat, editor, removeAttachment } =
+        composerActionRef.current;
       const detail = (event as CustomEvent<ContextMenuActionDetail>).detail;
       if (!detail) return;
       if (detail.target.kind === "composer" && bodyFormat === "plain") {
@@ -873,7 +885,7 @@ export function Composer({ accountId, onDraftSaved }: Props) {
     };
     window.addEventListener(CONTEXT_ACTION_EVENT, onAction);
     return () => window.removeEventListener(CONTEXT_ACTION_EVENT, onAction);
-  });
+  }, []);
 
   if (minimized) {
     return (

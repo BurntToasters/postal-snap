@@ -49,8 +49,9 @@ fn main() {
     let builder = tauri::Builder::default()
         .on_menu_event(|app, event| {
             let action = event.id().as_ref();
-            if action == "tray-quit" {
-                let _ = app.emit("tray-quit", ());
+            // The tray icon owns these ids; its own handler already ran for
+            // the same event, so the app-level handler must not act twice.
+            if matches!(action, "tray-open" | "tray-quit") {
                 return;
             }
             if action == "app-quit" {
@@ -792,10 +793,7 @@ fn set_mail_menu_items_enabled<R: Runtime>(menu: &Menu<R>, enabled: bool) -> Res
 
 pub fn update_mail_menu_or_warn<R: Runtime>(app: &tauri::AppHandle<R>, enabled: bool) {
     if set_mail_menu_enabled(app, enabled).is_err() {
-        let _ = app.emit(
-            "app-warning",
-            "Postal Snap could not update menu commands. Restart Postal Snap to restore them.",
-        );
+        let _ = app.emit("app-warning", crate::strings::warnings::MENU_COMMANDS_STALE);
     }
 }
 

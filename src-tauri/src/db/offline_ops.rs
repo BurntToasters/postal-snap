@@ -21,11 +21,18 @@ fn token_session(undo_token: &str) -> Option<&str> {
 database_operations! {
 impl Database {
     /// Rotate the live frontend session and release holds from the old one.
+    ///
+    /// Scoping invariant: every hold can only have been created through
+    /// defer_moves by the single live frontend session, sessions rotate only
+    /// at frontend boot when all existing holds belong to dead sessions, and
+    /// defer_moves rejects a token from the previous session. So no hold from
+    /// a live session exists when this runs, and this release-all UPDATE can
+    /// never clear one — including holds from a different account.
     pub fn begin_undo_session(&self) -> Result<String, String> {
         let mut active_session = self
             .undo_session
             .lock()
-            .map_err(|_| "The undo session is unavailable.".to_string())?;
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let next_session = uuid::Uuid::new_v4().simple().to_string();
         let mut conn = self.conn()?;
         let transaction = conn.transaction().map_err(db_error)?;
@@ -255,7 +262,7 @@ impl Database {
         let active_session = self
             .undo_session
             .lock()
-            .map_err(|_| "The undo session is unavailable.".to_string())?;
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if token_session(undo_token).is_some_and(|session| session != active_session.as_str()) {
             return Err("This undo request is no longer valid.".into());
         }

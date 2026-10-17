@@ -4,7 +4,7 @@ import { api } from "../../api";
 import { sanitizeComposeHtml } from "../../security";
 import { strings } from "../../i18n";
 import type { BodyFormat, ComposeAttachment } from "../../types";
-import { readPastedImage } from "./pasteImage";
+import { readPastedImage, PASTED_IMAGE_UNREADABLE } from "./pasteImage";
 
 type SaveState = "unsaved" | "saving" | "saved";
 
@@ -199,7 +199,11 @@ export function useComposerAttachments({
           void api
             .releaseComposeAttachments(accountId, [selectedToken])
             .catch(() => undefined);
-        setError(String(cause));
+        setError(
+          cause === PASTED_IMAGE_UNREADABLE
+            ? strings.composer.pastedImageUnreadable
+            : String(cause),
+        );
       }
     }
   };

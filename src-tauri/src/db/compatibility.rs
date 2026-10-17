@@ -18,7 +18,7 @@ impl Database {
         &self,
         mailbox_id: i64,
     ) -> Result<crate::models::MailboxRole, String> {
-        self.conn()?
+        self.read_conn()?
             .query_row(
                 "SELECT role FROM mailboxes WHERE id=?1",
                 [mailbox_id],
@@ -30,7 +30,7 @@ impl Database {
 
     pub fn folder_assignments(&self, account_id: &str) -> Result<Vec<FolderAssignment>, String> {
         self.account(account_id)?;
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         ASSIGNABLE_ROLES.into_iter().map(|role| {
             let selected: Option<(i64, bool)> = conn.query_row(
                 "SELECT a.mailbox_id, NOT EXISTS(SELECT 1 FROM mailboxes m WHERE m.id=a.mailbox_id AND m.account_id=a.account_id AND m.server_available=1) FROM folder_assignments a WHERE a.account_id=?1 AND a.role=?2",
@@ -102,14 +102,14 @@ impl Database {
     }
 
     pub fn identity_change_blocked(&self, account_id: &str) -> Result<bool, String> {
-        self.conn()?.query_row("SELECT EXISTS(SELECT 1 FROM offline_ops WHERE account_id=?1) OR EXISTS(SELECT 1 FROM outbox WHERE account_id=?1 AND state NOT IN ('sent','cancelled'))", [account_id], |row| row.get(0)).map_err(db_error)
+        self.read_conn()?.query_row("SELECT EXISTS(SELECT 1 FROM offline_ops WHERE account_id=?1) OR EXISTS(SELECT 1 FROM outbox WHERE account_id=?1 AND state NOT IN ('sent','cancelled'))", [account_id], |row| row.get(0)).map_err(db_error)
     }
 
     pub fn connection_blockers(
         &self,
         account_id: &str,
     ) -> Result<crate::models::ConnectionBlockers, String> {
-        self.conn()?
+        self.read_conn()?
             .query_row(
                 "SELECT
                    (SELECT COUNT(*) FROM offline_ops WHERE account_id=?1),

@@ -21,7 +21,6 @@ import { useInertBackground } from "../useInertBackground";
 const PREVIEW_ZOOM = [1, 1.5, 2, 3];
 
 const FILE_KINDS: Record<string, string> = {
-  plain: "Text",
   html: "HTML",
   jpeg: "JPEG",
   jpg: "JPEG",
@@ -30,17 +29,18 @@ const FILE_KINDS: Record<string, string> = {
   webp: "WebP",
   pdf: "PDF",
   zip: "ZIP",
-  rfc822: "Message",
 };
 
 function fileKind(contentType: string): string {
   const subtype =
     contentType.split("/")[1]?.split(";")[0]?.split("+")[0]?.toLowerCase() ??
     "";
+  if (subtype === "plain") return strings.reader.fileKindText;
+  if (subtype === "rfc822") return strings.reader.fileKindMessage;
   if (FILE_KINDS[subtype]) return FILE_KINDS[subtype];
   if (subtype.length > 0 && subtype.length <= 5 && subtype !== "octet-stream")
     return subtype.toUpperCase();
-  return "File";
+  return strings.reader.fileKindFile;
 }
 
 function nextPreviewZoom(current: number, direction: 1 | -1): number {

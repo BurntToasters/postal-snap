@@ -6,10 +6,10 @@ import { attachArtifacts } from "./ipc-artifact";
 import { installMockIpc } from "./mock-ipc";
 
 // Failure modes covered here (docs/0.5.0-FAILURE-INVENTORY.md, A19):
-// - hover or focus lets a visible Undo action expire past the native deadline;
 // - boot does not initialize the durable undo session before the first move;
 // - the move token is not scoped to the session that owns its notice;
-// - Undo after the long pause commits instead of restoring the message.
+// - a paused notice outlives the backend's 60-second hold and then fails;
+// - the pause cap hides Undo before its deadline or skips the commit.
 
 const VIEWPORT = { width: 1280, height: 900 };
 const combos = [
@@ -27,7 +27,7 @@ for (const { density, scale } of combos) {
   const label = `${density} ${scale * 100}%`;
   const slug = `${density}-${scale * 100}`;
 
-  test(`Undo stays available beyond the native deadline while hovered or focused, ${label}`, async ({
+  test(`Undo pauses stay usable but never outlive the native hold, ${label}`, async ({
     page,
   }, testInfo: TestInfo) => {
     test.setTimeout(60_000);
@@ -71,23 +71,15 @@ for (const { density, scale } of combos) {
       bootCalls.findIndex((call) => call.command === "begin_undo_session"),
     ).toBeLessThan(moveIndex);
 
+    // Hovering under the cap keeps a usable Undo: the backend hold is live.
     await notice.hover();
-    await page.clock.fastForward(61_000);
+    await page.clock.fastForward(20_000);
     await expect(notice).toBeVisible();
     expect(
       (await calls(page)).filter((call) => call.command === "commit_deferred"),
     ).toHaveLength(0);
 
-    await page.mouse.move(0, 0);
-    const undo = notice.getByRole("button", { name: "Undo" });
-    await undo.focus();
-    await page.clock.fastForward(61_000);
-    await expect(notice).toBeVisible();
-    expect(
-      (await calls(page)).filter((call) => call.command === "commit_deferred"),
-    ).toHaveLength(0);
-
-    await undo.click();
+    await notice.getByRole("button", { name: "Undo" }).click();
     await expect(row).toBeVisible();
     const undoCall = (await calls(page)).find(
       (call) => call.command === "undo_deferred",
@@ -102,6 +94,23 @@ for (const { density, scale } of combos) {
     expect(
       (await calls(page)).filter((call) => call.command === "commit_deferred"),
     ).toHaveLength(0);
+
+    // A second move stays hovered past the cap: the notice must end and
+    // commit, because the backend hold has expired by then.
+    await row.focus();
+    await page.keyboard.press("e");
+    await expect(row).toBeHidden();
+    const cappedNotice = page.locator(".notice", {
+      has: page.getByRole("button", { name: "Undo" }),
+    });
+    await expect(cappedNotice).toBeVisible();
+    await cappedNotice.hover();
+    await page.clock.fastForward(61_000);
+    await expect(cappedNotice).toBeHidden();
+    await expect(row).toBeHidden();
+    expect(
+      (await calls(page)).filter((call) => call.command === "commit_deferred"),
+    ).toHaveLength(1);
 
     const artifactDirectory = join(
       testInfo.config.rootDir,

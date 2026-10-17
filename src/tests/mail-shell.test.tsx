@@ -3994,13 +3994,69 @@ describe("mail shell", () => {
     fireEvent.click(screen.getByRole("option", { name: /First message/i }));
     await screen.findByRole("heading", { name: "First message" });
 
-    expect(document.getElementById("message-pane")).toHaveAttribute("inert");
-    expect(document.querySelector(".app-toolbar")).toHaveAttribute("inert");
-    expect(document.getElementById("reader-pane")).not.toHaveAttribute("inert");
+    // jsdom has no `inert`, so the overlay falls back to aria-hidden plus a
+    // focus trap; Chromium and WebKit exercise the real inert attribute.
+    expect(document.getElementById("message-pane")).toHaveAttribute(
+      "aria-hidden",
+      "true",
+    );
+    expect(document.querySelector(".app-toolbar")).toHaveAttribute(
+      "aria-hidden",
+      "true",
+    );
+    expect(document.getElementById("reader-pane")).not.toHaveAttribute(
+      "aria-hidden",
+    );
     expect(screen.getByTitle("Message content")).toHaveAttribute(
       "tabindex",
       "0",
     );
+  });
+
+  it("cycles reader-overlay focus with Tab when inert is unavailable", async () => {
+    // jsdom has no layout, so focusability checks need the stub used by the
+    // dialog tests; restore it after this test to keep other assertions raw.
+    const originalCheckVisibility = HTMLElement.prototype.checkVisibility;
+    Object.defineProperty(HTMLElement.prototype, "checkVisibility", {
+      configurable: true,
+      value: function checkVisibility(this: HTMLElement) {
+        return !this.hidden;
+      },
+    });
+    try {
+      useAppStore.setState({
+        settings: { ...defaultSettings, readingPane: "hidden" },
+      });
+      mockedGetMessage.mockResolvedValue({
+        ...detail(firstMessage),
+        htmlBody: "<p>Hello from the overlay.</p>",
+      });
+      renderShell();
+      await screen.findByRole("option", { name: /First message/i });
+      fireEvent.click(screen.getByRole("option", { name: /First message/i }));
+      await screen.findByRole("heading", { name: "First message" });
+
+      const overlay = document.getElementById("reader-pane");
+      if (!overlay) throw new Error("reader overlay is missing");
+      const focusable = [
+        ...overlay.querySelectorAll<HTMLElement>(
+          "button:not([disabled]), input:not([disabled]), textarea:not([disabled]), iframe, [href], [tabindex]:not([tabindex='-1'])",
+        ),
+      ].filter((item) => !item.hidden);
+      expect(focusable.length).toBeGreaterThan(1);
+
+      // Cycle across the last stop, and back across the first.
+      focusable[focusable.length - 1]?.focus();
+      fireEvent.keyDown(window, { key: "Tab" });
+      expect(document.activeElement).toBe(focusable[0]);
+      fireEvent.keyDown(window, { key: "Tab", shiftKey: true });
+      expect(document.activeElement).toBe(focusable[focusable.length - 1]);
+    } finally {
+      Object.defineProperty(HTMLElement.prototype, "checkVisibility", {
+        configurable: true,
+        value: originalCheckVisibility,
+      });
+    }
   });
 
   it("rolls pane width back when saving the new size fails", async () => {
@@ -5331,10 +5387,17 @@ describe("mail shell", () => {
     const toggle = screen.getByRole("button", { name: "Show mailboxes" });
     fireEvent.click(toggle);
     expect(container.querySelector(".mail-shell")).toHaveClass("sidebar-open");
-    expect(document.getElementById("message-pane")).toHaveAttribute("inert");
+    // jsdom lacks `inert`; the drawer falls back to aria-hidden plus a trap.
+    expect(document.getElementById("message-pane")).toHaveAttribute(
+      "aria-hidden",
+      "true",
+    );
     fireEvent.keyDown(window, { key: "Escape" });
     expect(container.querySelector(".mail-shell")).not.toHaveClass(
       "sidebar-open",
+    );
+    expect(document.getElementById("message-pane")).not.toHaveAttribute(
+      "aria-hidden",
     );
 
     unmount();

@@ -74,6 +74,32 @@ test("offers account actions from the product context menu", async ({
   );
 });
 
+test("anchors account settings to the right-clicked account", async ({
+  page,
+}) => {
+  await page.goto("/?multiAccount=1");
+  // Sam stays active; Work is reached only through its account row.
+  await page.getByRole("button", { name: /Sam.*sam@icloud\.com/i }).click();
+  await page
+    .getByRole("menu", { name: "Email accounts" })
+    .getByRole("menuitemradio", { name: /Work/ })
+    .click({ button: "right" });
+
+  const menu = page.locator(".context-menu");
+  await expect(
+    menu.getByRole("menuitem", { name: "Account settings" }),
+  ).toBeVisible();
+  await menu.getByRole("menuitem", { name: "Account settings" }).click();
+  await expect(page.getByRole("tab", { name: "Accounts" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  // The dialog opens on the account that was clicked, not the open one.
+  await expect(
+    page.locator(".account-card-header").getByText("Work"),
+  ).toBeVisible();
+});
+
 test("remembers the open folder separately for each account", async ({
   page,
 }) => {

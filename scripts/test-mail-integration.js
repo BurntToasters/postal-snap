@@ -735,6 +735,18 @@ try {
       name: "greenmail-dropped-operation-notification",
       status: "passed",
     });
+    stage = "greenmail-replayed-move-keeps-snooze";
+    await deferredReplayTest(
+      "greenmail_replayed_deferred_move_keeps_the_snooze",
+      {
+        ...environment,
+        POSTAL_SNAP_MAIL_INTEGRATION: "1",
+      },
+    );
+    report.results.push({
+      name: "greenmail-replayed-move-keeps-snooze",
+      status: "passed",
+    });
     stage = "greenmail-undo-session-restart-recovery";
     await undoSessionTest(
       "greenmail_undo_session_holds_expired_move_then_recovers_once_on_restart",

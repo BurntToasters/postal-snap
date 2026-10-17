@@ -285,7 +285,7 @@ impl AppState {
         *self
             .startup_error
             .lock()
-            .map_err(|_| "Application startup status is unavailable.".to_string())? = error;
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = error;
         Ok(())
     }
 
@@ -293,7 +293,7 @@ impl AppState {
         let mut error = self
             .startup_error
             .lock()
-            .map_err(|_| "Application startup status is unavailable.".to_string())?;
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // A storage failure lasts the whole launch, including window reloads.
         if self.storage_unavailable.load(Ordering::SeqCst) {
             return Ok(error.clone());
@@ -340,7 +340,7 @@ impl AppState {
         let mut actors = self
             .account_actors
             .lock()
-            .map_err(|_| "Account worker is unavailable.".to_string())?;
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // Checked under the map lock: removal retires the actor while holding
         // the same lock after deleting the row, so a racing caller cannot
         // recreate a worker for a removed account.
@@ -367,8 +367,10 @@ impl AppState {
         let actors = self
             .account_actors
             .lock()
-            .map(|actors| actors.values().cloned().collect::<Vec<_>>())
-            .unwrap_or_default();
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
         for actor in actors {
             actor.request(wake::OUTBOX);
         }
@@ -397,17 +399,15 @@ impl AppState {
         let mut workers = self
             .workers
             .lock()
-            .map_err(|_| "Account watcher is unavailable.".to_string())?;
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if !workers.insert(account_id.clone()) {
             return Ok(());
         }
         drop(workers);
+        // run_account_worker retires the registration itself on every exit,
+        // including a panic mid-await; see WorkerCleanup.
         tauri::async_runtime::spawn(async move {
             run_account_worker(&account_id, &app).await;
-            let state = app.state::<AppState>();
-            if let Ok(mut workers) = state.workers.lock() {
-                workers.remove(&account_id);
-            };
         });
         Ok(())
     }
@@ -418,15 +418,19 @@ impl AppState {
     }
 
     fn retire_actor(&self, account_id: &str) {
+        // Poison-tolerant so the retirement still happens, and no stale actor
+        // becomes reachable again, after a panic while the lock was held.
         let retired = self
             .account_actors
             .lock()
-            .ok()
-            .and_then(|mut actors| actors.remove(account_id));
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(account_id);
         mail::pool::forget(account_id);
-        if let Ok(mut folders) = self.visible_folders.lock() {
-            folders.remove(account_id);
-        }
+        let mut folders = self
+            .visible_folders
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        folders.remove(account_id);
         // Wake a parked or idle worker so it notices the removal and exits.
         if let Some(actor) = retired {
             actor.watch().signal_restart();
@@ -479,9 +483,53 @@ fn leaves_auth_pause(reasons: u16) -> bool {
     reasons & (wake::CREDENTIALS | wake::SYNC | wake::RESUME) != 0
 }
 
+/// Retires a worker task on every exit, including a panic mid-await. The
+/// ensure_worker registration must not outlive the task or the account stays
+/// registered forever (every later ensure_worker call short-circuits), and
+/// the spawned INBOX watcher must not keep IDLE-ing with no worker to serve.
+struct WorkerCleanup<'a, R: tauri::Runtime = tauri::Wry> {
+    app: &'a tauri::AppHandle<R>,
+    account_id: String,
+    watcher: Option<tauri::async_runtime::JoinHandle<()>>,
+}
+
+impl<'a, R: tauri::Runtime> WorkerCleanup<'a, R> {
+    fn for_account(app: &'a tauri::AppHandle<R>, account_id: &str) -> Self {
+        Self {
+            app,
+            account_id: account_id.to_string(),
+            watcher: None,
+        }
+    }
+
+    fn watch(&mut self, watcher: tauri::async_runtime::JoinHandle<()>) {
+        self.watcher = Some(watcher);
+    }
+}
+
+impl<R: tauri::Runtime> Drop for WorkerCleanup<'_, R> {
+    fn drop(&mut self) {
+        // Abort before retiring: on either a clean exit or a panic unwind, no
+        // watcher may keep watching an account nobody is serving. The lock is
+        // poison-tolerant so cleanup itself never fails while unwinding.
+        if let Some(watcher) = self.watcher.take() {
+            watcher.abort();
+        }
+        self.app
+            .state::<AppState>()
+            .workers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&self.account_id);
+    }
+}
+
 /// Long-lived loop for one account: sync passes, targeted jobs, IDLE, and
 /// the outbox timer. Exits when the account is removed.
 async fn run_account_worker(account_id: &str, app: &AppHandle) {
+    // Created first so the `else return` below still retires the
+    // registration; the watcher handle is registered right after the spawn.
+    let mut cleanup = WorkerCleanup::for_account(app, account_id);
     let mut backoff = 2u64;
     let mut attempt = 0u32;
     let mut first_pass = true;
@@ -492,12 +540,12 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
         return;
     };
     // The watcher only wakes this worker; it never touches the database.
-    let watcher = tauri::async_runtime::spawn(mail::watch::run_with_secret(
+    cleanup.watch(tauri::async_runtime::spawn(mail::watch::run_with_secret(
         account_id.to_string(),
         app.state::<AppState>().db.clone(),
         initial,
         mail::watch::SecretSource::Vault,
-    ));
+    )));
     loop {
         let state = app.state::<AppState>();
         let Ok(actor) = state.actor(account_id) else {
@@ -701,7 +749,6 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
             }
         }
     }
-    watcher.abort();
 }
 
 /// Resolve once a wake-up carrying one of `mask` arrives. Other reasons are
@@ -1473,6 +1520,9 @@ async fn replay_offline_operations_with_notification(
                             db.remove_operation(account_id, flag_id)?;
                             flag_state.handled.insert(flag_id);
                         }
+                        // Carry a snooze across the row-id change the move
+                        // causes; the FK cascade would otherwise drop it.
+                        let snoozes = db.capture_snoozes(&[operation.message_id])?;
                         db.remove_message(operation.message_id)?;
                         let _ = mail::refresh_mailbox_envelopes(
                             account,
@@ -1482,6 +1532,16 @@ async fn replay_offline_operations_with_notification(
                             policy,
                         )
                         .await;
+                        for snooze in snoozes {
+                            if let Some(header) = snooze.message_id_header.as_deref() {
+                                let _ = db.restore_snooze_for_message(
+                                    &snooze.account_id,
+                                    header,
+                                    &snooze.snoozed_until,
+                                    &snooze.created_at,
+                                );
+                            }
+                        }
                     }
                     Err(error) => {
                         if error.terminal {
@@ -1908,6 +1968,84 @@ mod tests {
             1,
             "an INBOX wake must not restart the watcher"
         );
+    }
+
+    // A worker panic must not permanently disable the account. Failure modes,
+    // written before the guard:
+    // 1. The panicked task leaves its ensure_worker registration in place, so
+    //    every later ensure_worker call short-circuits the account forever.
+    // 2. The INBOX watcher the task spawned keeps running; nobody else holds
+    //    its handle once the worker task is gone.
+    // 3. Cleanup runs while the panic unwinds, so it must not panic itself.
+    #[test]
+    fn panicking_worker_retires_its_registration_and_aborts_its_watcher() {
+        use super::{AppState, WorkerCleanup};
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        use tauri::Manager;
+
+        let watcher_aborted = Arc::new(AtomicBool::new(false));
+        let (watcher_ready_tx, watcher_ready_rx) = tokio::sync::oneshot::channel::<()>();
+        let app = tauri::test::mock_app();
+        let directory = tempfile::tempdir().unwrap();
+        let db = Database::memory();
+        let settings =
+            crate::settings::SettingsStore::load(directory.path().join("settings.json"), &db)
+                .unwrap();
+        let handle = app.app_handle().clone();
+        handle.manage(AppState::new(db, settings, directory.path().to_path_buf()));
+
+        let account_id = uuid::Uuid::new_v4().to_string();
+        let state = handle.state::<AppState>();
+        state.workers.lock().unwrap().insert(account_id.clone());
+
+        let worker = tauri::async_runtime::spawn({
+            let handle = handle.clone();
+            let worker_account_id = account_id.clone();
+            let aborted = watcher_aborted.clone();
+            async move {
+                // A real watcher parks on IDLE; this parked future records
+                // cancellation in Drop, ending cleanly only from the guard.
+                struct ParkedWatcher(Arc<AtomicBool>);
+                impl Drop for ParkedWatcher {
+                    fn drop(&mut self) {
+                        self.0.store(true, Ordering::SeqCst);
+                    }
+                }
+                let mut cleanup = WorkerCleanup::for_account(&handle, &worker_account_id);
+                let ready = watcher_ready_tx;
+                cleanup.watch(tauri::async_runtime::spawn(async move {
+                    let _parked = ParkedWatcher(aborted);
+                    let _ = ready.send(());
+                    std::future::pending::<()>().await;
+                }));
+                // The watcher has polled and is parked, so the only way its
+                // future can end is the guard's abort while the bug unwinds.
+                watcher_ready_rx.await.unwrap();
+                panic!("simulated bug in the worker loop");
+            }
+        });
+        let panicked = matches!(
+            tauri::async_runtime::block_on(worker),
+            Err(tauri::Error::JoinError(error)) if error.is_panic()
+        );
+        assert!(panicked);
+        // The watcher future is dropped by cancellation on a runtime worker;
+        // wait briefly rather than asserting on the same instant.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !watcher_aborted.load(Ordering::SeqCst) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "watcher was not aborted"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(
+            !state.workers.lock().unwrap().contains(&account_id),
+            "cleanup must run while the panic unwinds so ensure_worker can re-spawn"
+        );
+        // The registration is gone, so ensure_worker's insert succeeds again.
+        assert!(state.workers.lock().unwrap().insert(account_id.clone()));
     }
 
     #[test]

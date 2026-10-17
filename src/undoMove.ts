@@ -1,7 +1,11 @@
 import { api } from "./api";
 import { strings } from "./i18n";
 import { folderLabel } from "./i18n/mail";
-import { DEFAULT_NOTICE_TIMEOUT_MS, type NoticeEndReason } from "./notices";
+import {
+  DEFAULT_NOTICE_TIMEOUT_MS,
+  UNDO_NOTICE_MAX_MS,
+  type NoticeEndReason,
+} from "./notices";
 import { useAppStore } from "./store";
 import type { MailboxSummary } from "./types";
 
@@ -74,6 +78,8 @@ function offerUndo(
     severity: "info",
     message: movedMessage(count, target),
     timeoutMs: DEFAULT_NOTICE_TIMEOUT_MS,
+    // A paused notice may not outlive the backend's 60-second hold.
+    maxVisibleMs: UNDO_NOTICE_MAX_MS,
     actions: [
       {
         id: UNDO_ACTION_ID,

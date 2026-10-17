@@ -51,6 +51,7 @@ export const reader = {
   unpin: "Unpin",
   pinConversation: "Pin conversation",
   unpinConversation: "Unpin conversation",
+  pinFailed: "That message could not be pinned.",
   starConversation: "Star conversation",
   unstarConversation: "Remove stars",
   selectConversation: "Select conversation",
@@ -71,6 +72,7 @@ export const reader = {
   junkConversation: "Mark conversation as junk",
   blockSender: "Block sender",
   blockDomain: "Block domain",
+  blockDomainRuleName: (domain: string) => `Block ${domain}`,
   blockDomainQuestion: (domain: string) =>
     `Move this message to Junk. Unread messages already in Inbox from ${domain}, including its subdomains, and new ones, will go to Junk too.`,
   blockDomainFuture: (domain: string) =>
@@ -146,6 +148,8 @@ export const reader = {
   showDetails: "Details",
   hideDetails: "Hide details",
   loadImages: "Load images",
+  blockedImageAlt: "Remote image blocked",
+  inlineImageAlt: "Inline image",
   filteredImage: "Advertising or tracking image blocked",
   filteredImages: (count: number) =>
     `${count} advertising or tracking image${count === 1 ? "" : "s"} kept blocked for privacy.`,
@@ -155,6 +159,9 @@ export const reader = {
   retryImages: "Retry loading images",
   messageContent: "Message content",
   attachments: "Attachments",
+  fileKindText: "Text",
+  fileKindMessage: "Message",
+  fileKindFile: "File",
   attachmentsNotDownloaded: (size: string) =>
     `Attachments are not downloaded yet (${size} message).`,
   downloadFullMessage: "Download full message",

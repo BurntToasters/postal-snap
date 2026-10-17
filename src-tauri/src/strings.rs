@@ -51,6 +51,12 @@ pub mod notify {
     }
 }
 
+pub mod warnings {
+    pub const TRAY_ICON_UNAVAILABLE: &str = "Postal Snap could not show the background icon.";
+    pub const MENU_COMMANDS_STALE: &str =
+        "Postal Snap could not update menu commands. Restart Postal Snap to restore them.";
+}
+
 pub mod files {
     pub const RISKY_TITLE: &str = "These files can run programs";
     pub const RISKY_SAVE: &str = "Save Anyway";

@@ -1,9 +1,11 @@
+use std::collections::HashSet;
 use std::path::Path;
 
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 use super::{command_result, refresh_mail_menu, AppState, CommandResult};
+use crate::db::Database;
 use crate::models::{
     AppSettings, CacheUsage, DistributionChannel, LicenseCredit, LicenseCredits, LicensePackage,
 };
@@ -22,9 +24,38 @@ pub fn save_settings(
 ) -> CommandResult<AppSettings> {
     let current = state.settings.get()?;
     crate::settings::require_threat_off_confirm(&current, &settings, confirm_token.as_deref())?;
+    // The client round-trips everything it loaded, so keys can race an
+    // account removal and resurrect entries the client never saw. Prune
+    // server-side; the frontend prune stays as fast feedback only.
+    let mut settings = settings;
+    prune_removed_account_keys(&mut settings, &state.db)?;
     let saved = state.settings.save(settings)?;
     crate::tray::sync(&app, saved.close_to_tray);
     Ok(saved)
+}
+
+/// Server-side prune: drop remembered From addresses, mailbox views, pins,
+/// hides, and collapsed folders whose account no longer exists in the mail
+/// database.
+fn prune_removed_account_keys(settings: &mut AppSettings, db: &Database) -> Result<(), String> {
+    let live: HashSet<String> = db.list_accounts()?.into_iter().map(|a| a.id).collect();
+    let live_account = |account_id: &String| live.contains(account_id);
+    settings
+        .last_from_addresses
+        .retain(|entry| live_account(&entry.account_id));
+    settings
+        .mailbox_views
+        .retain(|entry| live_account(&entry.account_id));
+    settings
+        .pinned_mailboxes
+        .retain(|entry| live_account(&entry.account_id));
+    settings
+        .hidden_mailboxes
+        .retain(|entry| live_account(&entry.account_id));
+    settings
+        .collapsed_mailboxes
+        .retain(|entry| live_account(&entry.account_id));
+    Ok(())
 }
 
 #[tauri::command]
@@ -565,5 +596,136 @@ mod attachment_cleanup_tests {
         assert!(!retry_attachment_sweep(&db, root.clone(), &marker).await);
         assert!(!marker.exists());
         assert!(!leftover.exists());
+    }
+}
+
+#[cfg(test)]
+mod save_prune_tests {
+    use super::prune_removed_account_keys;
+    use crate::db::Database;
+    use crate::models::{
+        AccountRecord, AccountSummary, AppSettings, BodyFormat, LastFromAddress, MailboxView,
+        PinnedMailbox, ProviderKind, ServerConfig, TlsMode,
+    };
+    use crate::settings::SettingsStore;
+
+    // Save-side prune failure modes, written before the code:
+    // 1. A save that raced an account removal must not persist From address,
+    //    view, pin, hide, or collapsed-folder entries for the removed account.
+    // 2. Entries for a live account must survive the pruning unchanged.
+    #[test]
+    fn save_drops_keys_of_removed_accounts_but_keeps_live_ones() {
+        let live = uuid::Uuid::new_v4().to_string();
+        let removed = uuid::Uuid::new_v4().to_string();
+        let db = Database::memory();
+        db.insert_account(&stand_in_account(&live)).unwrap();
+
+        let mut settings = AppSettings {
+            last_from_addresses: vec![
+                LastFromAddress {
+                    account_id: live.clone(),
+                    address: "sam@example.test".into(),
+                },
+                LastFromAddress {
+                    account_id: removed.clone(),
+                    address: "old@example.test".into(),
+                },
+            ],
+            mailbox_views: vec![
+                MailboxView {
+                    account_id: live.clone(),
+                    mailbox_id: 1,
+                    sort: "date".into(),
+                    filter: "all".into(),
+                },
+                MailboxView {
+                    account_id: removed.clone(),
+                    mailbox_id: 2,
+                    sort: "date".into(),
+                    filter: "unread".into(),
+                },
+            ],
+            pinned_mailboxes: vec![
+                PinnedMailbox {
+                    account_id: live.clone(),
+                    mailbox_id: 3,
+                },
+                PinnedMailbox {
+                    account_id: removed.clone(),
+                    mailbox_id: 4,
+                },
+            ],
+            hidden_mailboxes: vec![
+                PinnedMailbox {
+                    account_id: removed.clone(),
+                    mailbox_id: 5,
+                },
+                PinnedMailbox {
+                    account_id: live.clone(),
+                    mailbox_id: 6,
+                },
+            ],
+            collapsed_mailboxes: vec![PinnedMailbox {
+                account_id: removed.clone(),
+                mailbox_id: 7,
+            }],
+            ..AppSettings::default()
+        };
+
+        prune_removed_account_keys(&mut settings, &db).unwrap();
+
+        let directory = tempfile::tempdir().unwrap();
+        let store = SettingsStore::load(directory.path().join("settings.json"), &db).unwrap();
+        let saved = store.save(settings).unwrap();
+        assert_eq!(saved.last_from_addresses.len(), 1);
+        assert_eq!(saved.last_from_addresses[0].account_id, live);
+        assert_eq!(saved.mailbox_views.len(), 1);
+        assert_eq!(saved.mailbox_views[0].mailbox_id, 1);
+        assert_eq!(saved.pinned_mailboxes.len(), 1);
+        assert_eq!(saved.pinned_mailboxes[0].mailbox_id, 3);
+        assert_eq!(saved.hidden_mailboxes.len(), 1);
+        assert_eq!(saved.hidden_mailboxes[0].mailbox_id, 6);
+        assert!(saved.collapsed_mailboxes.is_empty());
+
+        let loaded = store.get().unwrap();
+        assert_eq!(loaded.last_from_addresses, saved.last_from_addresses);
+        assert_eq!(loaded.mailbox_views, saved.mailbox_views);
+        assert_eq!(loaded.pinned_mailboxes, saved.pinned_mailboxes);
+        assert_eq!(loaded.hidden_mailboxes, saved.hidden_mailboxes);
+        assert!(loaded.collapsed_mailboxes.is_empty());
+    }
+
+    fn stand_in_account(id: &str) -> AccountRecord {
+        AccountRecord {
+            summary: AccountSummary {
+                default_body_format: BodyFormat::Html,
+                id: id.into(),
+                provider: ProviderKind::Manual,
+                email: "sam@example.com".into(),
+                display_name: "Sam".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+                signature_html: String::new(),
+                reply_to: String::new(),
+                color: None,
+            },
+            imap: ServerConfig {
+                trusted_certificate: None,
+                host: "imap.example.com".into(),
+                port: 993,
+                tls_mode: TlsMode::Tls,
+                username: "sam@example.com".into(),
+            },
+            smtp: ServerConfig {
+                trusted_certificate: None,
+                host: "smtp.example.com".into(),
+                port: 587,
+                tls_mode: TlsMode::StartTls,
+                username: "sam@example.com".into(),
+            },
+        }
     }
 }

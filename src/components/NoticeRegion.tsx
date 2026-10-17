@@ -79,6 +79,17 @@ function NoticeItem({ notice }: { notice: Notice }) {
     };
   }, [notice, paused]);
 
+  // A capped notice does not lose time to a hover or focus pause: the pause
+  // delay can be held, but the total visible time may not pass the cap.
+  useEffect(() => {
+    if (notice.maxVisibleMs === undefined) return;
+    const timer = window.setTimeout(
+      () => endIfCurrent(notice, "timeout"),
+      notice.maxVisibleMs,
+    );
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
   async function runAction(action: NoticeAction) {
     setRunning(true);
     try {

@@ -913,7 +913,23 @@ fn parse_postal_draft_message_id(value: &str) -> Option<(String, u32)> {
     Some((id.to_string(), revision.parse().ok()?))
 }
 
+/// Same signal `send_scheduled_outbox` uses: a parked account replays
+/// nothing, so an offline wake cannot burn retry waits against a network that
+/// is not there.
+fn offline_for_delivery(sync_state: &str) -> bool {
+    sync_state == "offline"
+}
+
 pub(crate) async fn replay_outbox_locked(account_id: &str, app: &AppHandle, state: &AppState) {
+    // Offline accounts leave their rows parked; reconnect triggers a full
+    // sync, which replays.
+    if state
+        .db
+        .account(account_id)
+        .is_ok_and(|account| offline_for_delivery(&account.summary.sync_state))
+    {
+        return;
+    }
     // `archive_pending` records a confirmed SMTP send. It is deliberately
     // excluded here so background replay cannot send it again.
     if let Ok(ids) = state
@@ -939,7 +955,9 @@ pub(crate) async fn replay_outbox_locked(account_id: &str, app: &AppHandle, stat
 
 #[cfg(test)]
 mod tests {
-    use super::{folder_poll_due, scope_for_wake, VisibleFolder, FOLDER_POLL};
+    use super::{
+        folder_poll_due, offline_for_delivery, scope_for_wake, VisibleFolder, FOLDER_POLL,
+    };
     use crate::commands::wake;
     use crate::mail::sync::SyncScope;
     use std::time::{Duration, Instant};
@@ -988,5 +1006,16 @@ mod tests {
             scope_for_wake(wake::INBOX | wake::FOLDER, Some("Archive")),
             Some(SyncScope::Folders(vec!["INBOX".into(), "Archive".into()]))
         );
+    }
+
+    #[test]
+    fn offline_wake_replays_nothing_until_reconnect() {
+        assert!(offline_for_delivery("offline"));
+        for sync_state in ["idle", "syncing", "downloading", "", "error"] {
+            assert!(
+                !offline_for_delivery(sync_state),
+                "state {sync_state:?} must keep replaying"
+            );
+        }
     }
 }

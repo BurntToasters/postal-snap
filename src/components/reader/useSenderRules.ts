@@ -112,7 +112,7 @@ export function useSenderRules({
       const created = await api.createFilterRule({
         id: "",
         accountId: message.accountId,
-        name: `Block ${domain}`.slice(0, 80),
+        name: strings.reader.blockDomainRuleName(domain).slice(0, 80),
         field: "domain",
         contains: domain,
         action: "move_junk",

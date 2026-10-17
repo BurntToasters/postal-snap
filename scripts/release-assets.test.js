@@ -604,6 +604,12 @@ test("direct updater is GitHub-only and notices are bundled", async () => {
   assert.match(hooks, /NSIS_HOOK_PREUNINSTALL/);
   assert.match(hooks, /POSTAL_SNAP_MIN_WINDOWS_BUILD 19045/);
   assert.match(hooks, /--cleanup-credentials/);
+  // Windows direct installs must appear under Default apps by protocol.
+  assert.match(
+    hooks,
+    /WriteRegStr HKCU "Software\\Classes\\mailto\\shell\\open\\command"/,
+  );
+  assert.match(hooks, /DeleteRegKey HKCU "Software\\Classes\\mailto"/);
 });
 
 test("secret scanning ignores only TweetFeed IOC snapshots", async () => {

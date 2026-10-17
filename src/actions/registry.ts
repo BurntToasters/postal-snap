@@ -117,7 +117,8 @@ const ACTIONS: readonly ActionDefinition[] = [
   },
   {
     id: "reply",
-    run: viaBus("reply"),
+    // Palette and Cmd+R agree on the reply the reader prefers.
+    run: viaBus("reply-preferred"),
     available: hasSelection,
     label: () => strings.reader.reply,
     scope: "reader",

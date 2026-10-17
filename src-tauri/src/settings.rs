@@ -98,7 +98,7 @@ impl SettingsStore {
         let settings = self
             .current
             .lock()
-            .map_err(|_| "Application settings are unavailable.".to_string())?;
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         Ok(settings.clone())
     }
 
@@ -106,11 +106,11 @@ impl SettingsStore {
         let _write_guard = self
             .write_lock
             .lock()
-            .map_err(|_| "Application settings are unavailable.".to_string())?;
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if *self
             .migration_pending
             .lock()
-            .map_err(|_| "Application settings are unavailable.".to_string())?
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
         {
             return Err(
                 "Saved application settings could not be migrated. Restart Postal Snap or import/reset settings."
@@ -134,14 +134,14 @@ impl SettingsStore {
         *self
             .current
             .lock()
-            .map_err(|_| "Application settings are unavailable.".to_string())? = settings.clone();
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = settings.clone();
         if let Some(db) = &self.db {
             db.set_keep_attachments_offline(settings.keep_attachments_offline);
         }
         *self
             .migration_pending
             .lock()
-            .map_err(|_| "Application settings are unavailable.".to_string())? = false;
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = false;
         Ok(settings)
     }
 
@@ -149,7 +149,7 @@ impl SettingsStore {
         let notice = self
             .startup_notice
             .lock()
-            .map_err(|_| "Application settings are unavailable.".to_string())?
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
         Ok(notice)
     }
@@ -158,7 +158,7 @@ impl SettingsStore {
         let _write_guard = self
             .write_lock
             .lock()
-            .map_err(|_| "Application settings are unavailable.".to_string())?;
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let current = self.get()?;
         let portable = PortableSettingsFile {
             application: PORTABLE_APPLICATION.into(),
@@ -174,7 +174,7 @@ impl SettingsStore {
         let _write_guard = self
             .write_lock
             .lock()
-            .map_err(|_| "Application settings are unavailable.".to_string())?;
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let raw = read_bounded(path)?.ok_or_else(|| "Settings file was not found.".to_string())?;
         let portable: PortableSettingsFile = serde_json::from_str(&raw)
             .map_err(|_| "Settings export is invalid or unsupported.".to_string())?;
@@ -195,7 +195,7 @@ impl SettingsStore {
         let _write_guard = self
             .write_lock
             .lock()
-            .map_err(|_| "Application settings are unavailable.".to_string())?;
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let current = self.get()?;
         let next = PortableSettings::default().apply_to(&current);
         self.save_locked(next)

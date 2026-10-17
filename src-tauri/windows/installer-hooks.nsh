@@ -19,9 +19,22 @@
     MessageBox MB_OK|MB_ICONSTOP "Postal Snap requires Windows 10 22H2 (build 19045) or newer."
     Abort
   ${EndIf}
+  ; Register the mailto: protocol for this user, so Windows lists Postal Snap
+  ; under Default apps by protocol and opens its prefilled composer. Windows
+  ; keeps the user's own choice above this fallback registration.
+  WriteRegStr HKCU "Software\Classes\mailto" "" "URL:MailTo Protocol"
+  WriteRegStr HKCU "Software\Classes\mailto" "URL Protocol" ""
+  WriteRegStr HKCU "Software\Classes\mailto\DefaultIcon" "" "$INSTDIR\${MAINBINARYNAME}.exe,0"
+  WriteRegStr HKCU "Software\Classes\mailto\shell\open\command" "" '"$INSTDIR\${MAINBINARYNAME}.exe" "%1"'
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
+  ; Drop the mailto registration only when it still points at this install,
+  ; so another client's later registration is never removed.
+  ReadRegStr $0 HKCU "Software\Classes\mailto\shell\open\command" ""
+  ${If} $0 == '"$INSTDIR\${MAINBINARYNAME}.exe" "%1"'
+    DeleteRegKey HKCU "Software\Classes\mailto"
+  ${EndIf}
   ; Delete mailbox passwords only on a real uninstall that also removes app
   ; data. In-place upgrades reuse the uninstaller with /UPDATE, and users who
   ; keep app data keep their saved accounts. The binary call is guarded so a

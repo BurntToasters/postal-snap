@@ -160,6 +160,11 @@ pub fn tray_click_action(
 }
 
 pub fn show_main<R: Runtime>(app: &AppHandle<R>) {
+    // A Windows shell restart drops notification-area icons without telling
+    // the process. Reinstall on the next interaction so close-to-tray cannot
+    // strand a hidden window with no icon.
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    native::reinstall_if_missing(app);
     HIDDEN_TO_TRAY.store(false, Ordering::Relaxed);
     #[cfg(target_os = "macos")]
     {
@@ -188,6 +193,13 @@ mod native {
         TRAY_ACTIVE.load(Ordering::Relaxed)
     }
 
+    /// Reinstall a lost icon (Windows Explorer restart) on next interaction.
+    pub(super) fn reinstall_if_missing<R: Runtime>(app: &AppHandle<R>) {
+        if TRAY_ACTIVE.load(Ordering::Relaxed) && app.tray_by_id(TRAY_ID).is_none() {
+            let _ = install(app);
+        }
+    }
+
     pub fn sync<R: Runtime>(app: &AppHandle<R>, close_to_tray: bool) {
         if !close_to_tray {
             remove(app);
@@ -203,7 +215,7 @@ mod native {
                 TRAY_ACTIVE.store(false, Ordering::Relaxed);
                 let _ = app.emit(
                     "app-warning",
-                    "Postal Snap could not show the background icon.",
+                    crate::strings::warnings::TRAY_ICON_UNAVAILABLE,
                 );
             }
         }
