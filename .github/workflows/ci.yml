@@ -108,6 +108,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
         with:
           toolchain: ${{ env.RUST_VERSION }}
+          components: clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri
@@ -117,6 +118,10 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run licenses
       - run: cargo check --locked --manifest-path src-tauri/Cargo.toml --all-targets
+      - if: matrix.name != 'linux'
+        run: npm run lint:rust
+      - if: matrix.name != 'linux'
+        run: npm run test:cargo-safe-update
       # test-linux covers Linux; platform-only Rust tests (credential vault,
       # Zone.Identifier, window chrome) only run on their own OS.
       - if: matrix.name != 'linux'

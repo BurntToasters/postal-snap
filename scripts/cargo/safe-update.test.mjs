@@ -185,14 +185,14 @@ function runSafeCargoUpdate(fixture, args = []) {
 function runSafeCargoUpdateAsync(
   fixture,
   args = [],
-  { preloadPath, env = {} },
+  { preloadPath, env = {}, timeout = 120_000 },
 ) {
   return new Promise((resolve, reject) => {
     const child = spawn(
       process.execPath,
       [
         "--import",
-        preloadPath,
+        pathToFileURL(preloadPath).href,
         fileURLToPath(new URL("../cargo-safe-update.mjs", import.meta.url)),
         "--manifest-path",
         fixture.manifest,
@@ -207,6 +207,8 @@ function runSafeCargoUpdateAsync(
           ...env,
         },
         stdio: ["ignore", "pipe", "pipe"],
+        timeout,
+        killSignal: "SIGKILL",
       },
     );
     let stdout = "";
@@ -300,7 +302,10 @@ function createRegistryRaceFixture() {
       '    return new Response(JSON.stringify({ dl: process.env.POSTAL_SNAP_RACE_DOWNLOAD_URL }), { headers: { "content-type": "application/json" } });',
       "  }",
       '  if (url === "https://index.crates.io/ra/ce/race-dep") {',
-      '    if (new Error().stack?.includes("readRegistryRecord")) appendFileSync(process.env.POSTAL_SNAP_RACE_MANIFEST, "\\n# concurrent manifest edit during age verification\\n");',
+      '    if (new Error().stack?.includes("readRegistryRecord") || process.env.POSTAL_SNAP_RACE_PHASE === "resolution") {',
+      '      appendFileSync(process.env.POSTAL_SNAP_RACE_TARGET ?? process.env.POSTAL_SNAP_RACE_MANIFEST, "\\n# concurrent manifest edit during age verification\\n");',
+      '      if (process.env.POSTAL_SNAP_RACE_REJECT === "1") throw new Error("injected registry failure");',
+      "    }",
       '    return new Response(`${JSON.stringify(indexRecord)}\\n`, { headers: { "content-type": "application/json" } });',
       "  }",
       "  return originalFetch(input, init);",
@@ -839,33 +844,35 @@ test("17. blocks alternate registry even when it claims an old pubtime", async (
   );
 });
 
-test("18. unit: restoreRealLock preserves lockfile byte-for-byte on failure or drift", () => {
+// Failure modes: unowned edits/creation/deletion are lost; owned rollback is skipped.
+test("18. unit: rollback preserves concurrent lockfile edits, creation, and deletion", () => {
   const tempDir = mkdtempSync(path.join(os.tmpdir(), "cargo-test-restore-"));
   try {
     const lockPath = path.join(tempDir, "Cargo.lock");
-    const originalBytes = Buffer.from(
-      "# EXACT_ORIGINAL_LOCKFILE_BYTES\nversion = 4\n",
-    );
-    writeFileSync(lockPath, originalBytes);
-
-    writeFileSync(
-      lockPath,
-      Buffer.from("# TAMPERED_LOCKFILE_BYTES\nversion = 4\n"),
-    );
-    restoreRealLock(lockPath, {
-      path: lockPath,
-      existed: true,
-      bytes: originalBytes,
-    });
-    assert.deepEqual(readFileSync(lockPath), originalBytes);
-
-    rmSync(lockPath, { force: true });
-    restoreRealLock(lockPath, {
-      path: lockPath,
-      existed: true,
-      bytes: originalBytes,
-    });
-    assert.deepEqual(readFileSync(lockPath), originalBytes);
+    const original = Buffer.from("original lock\n");
+    const installed = Buffer.from("installed candidate\n");
+    const concurrent = Buffer.from("concurrent edit\n");
+    for (const existed of [false, true]) {
+      const snapshot = {
+        path: lockPath,
+        existed,
+        bytes: existed ? original : null,
+      };
+      for (const present of [false, true]) {
+        rmSync(lockPath, { force: true });
+        if (present) writeFileSync(lockPath, concurrent);
+        if (!existed && !present) {
+          restoreRealLock(lockPath, snapshot, installed);
+        } else {
+          assert.throws(
+            () => restoreRealLock(lockPath, snapshot, installed),
+            /Cargo\.lock changed/,
+          );
+        }
+        assert.equal(existsSync(lockPath), present);
+        if (present) assert.deepEqual(readFileSync(lockPath), concurrent);
+      }
+    }
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -935,20 +942,25 @@ test("20. transaction: installValidatedLock rolls back to original lockfile when
   }
 });
 
-test("21. unit: detects and restores real lockfile modification drift during resolution", () => {
+test("21. unit: rollback restores only the exact installed candidate", () => {
   const tempDir = mkdtempSync(path.join(os.tmpdir(), "cargo-test-drift-"));
   try {
     const realLock = path.join(tempDir, "Cargo.lock");
-    const originalBytes = Buffer.from("original lock bytes");
-    writeFileSync(realLock, originalBytes);
-
-    writeFileSync(realLock, Buffer.from("unexpectedly mutated lock bytes"));
+    const original = Buffer.from("original lock bytes");
+    const installed = Buffer.from("installed candidate bytes");
+    writeFileSync(realLock, installed);
+    restoreRealLock(
+      realLock,
+      { path: realLock, existed: true, bytes: original },
+      installed,
+    );
+    assert.deepEqual(readFileSync(realLock), original);
     restoreRealLock(realLock, {
       path: realLock,
       existed: true,
-      bytes: originalBytes,
+      bytes: original,
     });
-    assert.deepEqual(readFileSync(realLock), originalBytes);
+    assert.deepEqual(readFileSync(realLock), original);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -1100,15 +1112,19 @@ test("26. unit: no-lock workspace generates candidate in temp, leaves real lock 
   }
 });
 
-test("27. unit: no-lock workspace restores absence on policy rejection or resolution failure", () => {
+test("27. unit: no-lock workspace removes only the installed candidate on rollback", () => {
   const tempWs = mkdtempSync(path.join(os.tmpdir(), "cargo-int-reject-"));
   try {
     const realLock = path.join(tempWs, "Cargo.lock");
     assert.equal(existsSync(realLock), false);
 
-    // If realLock was unexpectedly created during dirty resolution:
-    writeFileSync(realLock, Buffer.from("dirty resolution bytes"));
-    restoreRealLock(realLock, { path: realLock, existed: false, bytes: null });
+    const installed = Buffer.from("installed candidate bytes");
+    writeFileSync(realLock, installed);
+    restoreRealLock(
+      realLock,
+      { path: realLock, existed: false, bytes: null },
+      installed,
+    );
 
     assert.equal(
       existsSync(realLock),
@@ -2204,82 +2220,145 @@ test(
 );
 
 test(
-  "57. concurrent manifest edits during async registry validation reject dry-run and installation",
+  "57. concurrent workspace edits survive resolution and validation failures in dry-run and installation",
   { skip: SKIP_CARGO_INTEGRATION },
   async () => {
-    for (const args of [[], ["--dry-run"]]) {
-      const fixture = createRegistryRaceFixture();
-      const server = createServer((request, response) => {
-        if (request.method !== "GET") {
-          response.writeHead(404).end();
-          return;
-        }
-        if (request.url === "/config.json") {
-          response.writeHead(200, { "content-type": "application/json" });
-          response.end(
-            JSON.stringify({
-              dl: `http://127.0.0.1:${server.address().port}/crates/{crate}/{version}/download`,
-            }),
-          );
-          return;
-        }
-        if (request.url === "/ra/ce/race-dep") {
-          response.writeHead(200, { "content-type": "application/json" });
-          response.end(`${JSON.stringify(fixture.record)}\n`);
-          return;
-        }
-        if (request.url !== "/crates/race-dep/1.0.0/download") {
-          response.writeHead(404).end();
-          return;
-        }
-        response.writeHead(200, {
-          "content-type": "application/octet-stream",
-          "content-length": fixture.archiveBytes.length,
+    const scenarios = [
+      { target: "manifest", phase: "validation", reject: false },
+      { target: "lock", phase: "validation", reject: false },
+      { target: "lock", phase: "validation", reject: true },
+      { target: "lock", phase: "resolution", reject: false },
+      { target: "lock", phase: "resolution", reject: true },
+    ];
+    for (const scenario of scenarios) {
+      for (const args of [[], ["--dry-run"]]) {
+        const fixture = createRegistryRaceFixture();
+        const server = createServer((request, response) => {
+          if (request.method !== "GET") {
+            response.writeHead(404).end();
+            return;
+          }
+          if (request.url === "/config.json") {
+            response.writeHead(200, { "content-type": "application/json" });
+            response.end(
+              JSON.stringify({
+                dl: `http://127.0.0.1:${server.address().port}/crates/{crate}/{version}/download`,
+              }),
+            );
+            return;
+          }
+          if (request.url === "/ra/ce/race-dep") {
+            response.writeHead(200, { "content-type": "application/json" });
+            response.end(`${JSON.stringify(fixture.record)}\n`);
+            return;
+          }
+          if (request.url !== "/crates/race-dep/1.0.0/download") {
+            response.writeHead(404).end();
+            return;
+          }
+          response.writeHead(200, {
+            "content-type": "application/octet-stream",
+            "content-length": fixture.archiveBytes.length,
+          });
+          response.end(fixture.archiveBytes);
         });
-        response.end(fixture.archiveBytes);
-      });
 
-      try {
-        await new Promise((resolve, reject) => {
-          server.once("error", reject);
-          server.listen(0, "127.0.0.1", resolve);
-        });
-        const address = server.address();
-        assert.ok(address && typeof address !== "string");
-        const cargoConfig = path.join(fixture.workspace, ".cargo");
-        mkdirSync(cargoConfig, { recursive: true });
-        writeFileSync(
-          path.join(cargoConfig, "config.toml"),
-          `[source.crates-io]\nreplace-with = "race-test-registry"\n\n[source.race-test-registry]\nregistry = "sparse+http://127.0.0.1:${address.port}/"\n`,
-        );
-        const downloadUrl = `http://127.0.0.1:${address.port}/crates/{crate}/{version}/download`;
-        const result = await runSafeCargoUpdateAsync(
-          fixture,
-          ["--baseline-manifest-path", fixture.baselineManifest, ...args],
-          {
-            preloadPath: fixture.preloadPath,
-            env: {
-              POSTAL_SNAP_RACE_MANIFEST: fixture.manifest,
-              POSTAL_SNAP_RACE_INDEX_RECORD: JSON.stringify(fixture.record),
-              POSTAL_SNAP_RACE_DOWNLOAD_URL: downloadUrl,
+        try {
+          await new Promise((resolve, reject) => {
+            server.once("error", reject);
+            server.listen(0, "127.0.0.1", resolve);
+          });
+          const address = server.address();
+          assert.ok(address && typeof address !== "string");
+          const cargoConfig = path.join(fixture.workspace, ".cargo");
+          mkdirSync(cargoConfig, { recursive: true });
+          writeFileSync(
+            path.join(cargoConfig, "config.toml"),
+            `[source.crates-io]\nreplace-with = "race-test-registry"\n\n[source.race-test-registry]\nregistry = "sparse+http://127.0.0.1:${address.port}/"\n`,
+          );
+          const downloadUrl = `http://127.0.0.1:${address.port}/crates/{crate}/{version}/download`;
+          const result = await runSafeCargoUpdateAsync(
+            fixture,
+            ["--baseline-manifest-path", fixture.baselineManifest, ...args],
+            {
+              preloadPath: fixture.preloadPath,
+              env: {
+                CARGO_NET_RETRY: "0",
+                POSTAL_SNAP_RACE_MANIFEST: fixture.manifest,
+                POSTAL_SNAP_RACE_TARGET:
+                  scenario.target === "lock"
+                    ? fixture.lockPath
+                    : fixture.manifest,
+                POSTAL_SNAP_RACE_PHASE: scenario.phase,
+                POSTAL_SNAP_RACE_REJECT: scenario.reject ? "1" : "0",
+                POSTAL_SNAP_RACE_INDEX_RECORD: JSON.stringify(fixture.record),
+                POSTAL_SNAP_RACE_DOWNLOAD_URL: downloadUrl,
+              },
             },
-          },
-        );
-        assert.notEqual(result.status, 0, result.stdout);
-        assert.match(
-          `${result.stdout}\n${result.stderr}`,
-          /Cargo\.toml changed during dependency update; Cargo\.lock was not modified/,
-        );
-        assert.match(
-          readFileSync(fixture.manifest, "utf8"),
-          /concurrent manifest edit during age verification/,
-        );
-        assert.deepEqual(readFileSync(fixture.lockPath), fixture.originalLock);
-      } finally {
-        server.closeAllConnections?.();
-        await new Promise((resolve) => server.close(resolve));
-        fixture.cleanup();
+          );
+          assert.notEqual(result.status, 0, result.stdout);
+          assert.match(
+            `${result.stdout}\n${result.stderr}`,
+            scenario.reject
+              ? /injected registry failure/
+              : scenario.target === "manifest"
+                ? /Cargo\.toml changed during dependency update; Cargo\.lock was not modified/
+                : /Cargo\.lock changed/,
+          );
+          const marker =
+            "\n# concurrent manifest edit during age verification\n";
+          if (scenario.target === "lock") {
+            const current = readFileSync(fixture.lockPath);
+            assert.ok(
+              current
+                .subarray(0, fixture.originalLock.length)
+                .equals(fixture.originalLock),
+            );
+            assert.ok(current.length > fixture.originalLock.length);
+            assert.equal(
+              current
+                .subarray(fixture.originalLock.length)
+                .toString()
+                .replaceAll(marker, ""),
+              "",
+            );
+          } else {
+            assert.match(
+              readFileSync(fixture.manifest, "utf8"),
+              /concurrent manifest edit during age verification/,
+            );
+            assert.deepEqual(
+              readFileSync(fixture.lockPath),
+              fixture.originalLock,
+            );
+          }
+        } finally {
+          server.closeAllConnections?.();
+          await new Promise((resolve) => server.close(resolve));
+          fixture.cleanup();
+        }
       }
     }
   },
 );
+
+// Failure mode: a stuck preload keeps the child and test server alive forever.
+test("58. async Cargo test child is killed at its deadline", async () => {
+  const workspace = mkdtempSync(path.join(os.tmpdir(), "cargo-child-timeout-"));
+  try {
+    const preloadPath = path.join(workspace, "stuck-hook.mjs");
+    writeFileSync(
+      preloadPath,
+      "setTimeout(() => process.exit(0), 1500); await new Promise(() => {});\n",
+    );
+    const result = await runSafeCargoUpdateAsync(
+      { workspace, manifest: path.join(workspace, "Cargo.toml") },
+      [],
+      { preloadPath, timeout: 200 },
+    );
+    assert.equal(result.signal, "SIGKILL");
+    assert.equal(result.status, null);
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});

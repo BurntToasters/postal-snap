@@ -52,6 +52,7 @@ pub mod notify {
 }
 
 pub mod warnings {
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     pub const TRAY_ICON_UNAVAILABLE: &str = "Postal Snap could not show the background icon.";
     pub const MENU_COMMANDS_STALE: &str =
         "Postal Snap could not update menu commands. Restart Postal Snap to restore them.";
