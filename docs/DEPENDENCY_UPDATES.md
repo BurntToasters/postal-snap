@@ -12,7 +12,7 @@ The command requires Node.js `^22.22.2 || ^24.15.0 || >=26.0.0`, npm 12.0.1 or n
 4. Reject releases younger than 72 hours, unknown registries, unapproved Git revisions, concurrent lock edits, and unverifiable publication metadata.
 5. Atomically install only the validated lockfile and remove temporary caches.
 
-Both updaters serialize their own runs. npm rollback and final Cargo lock installation compare expected bytes, preserving a concurrent process's lockfile edit instead of overwriting it.
+Both updaters serialize their own runs. Lock installation and rollback compare expected bytes, preserving a concurrent process's lockfile edit instead of overwriting it. Cargo resolution and validation failures leave the real lockfile untouched; rollback after installation restores the original only when the file still matches the exact candidate bytes written by the updater.
 
 Review both lockfile diffs before committing. Local validation after a lockfile change is allowed: run `npm ci --ignore-scripts`, then the usual checks (`npm run test:all`, Cargo checks, and builds).
 

@@ -1256,3 +1256,17 @@ test("Linux release paths run the baseline and WebKit preflight", async () => {
   });
   assert.equal(allowed.glibcVersion, "2.40");
 });
+
+test("platform CI runs Clippy and Cargo update integration tests on Windows and macOS", async () => {
+  const ci = await readFile(join(root, ".github/workflows/ci.yml"), "utf8");
+  const compile = ci.split("\n  compile:\n")[1].split("\n  flatpak-lint:")[0];
+  assert.match(compile, /components: clippy/);
+  assert.match(
+    compile,
+    /- if: matrix\.name != 'linux'\s*\n\s*run: npm run lint:rust/,
+  );
+  assert.match(
+    compile,
+    /- if: matrix\.name != 'linux'\s*\n\s*run: npm run test:cargo-safe-update/,
+  );
+});

@@ -918,15 +918,23 @@ export function installValidatedLock(
         ? readFileSync(targetPath)
         : null;
 
+  const installedBytes = readFileSync(candidateLock);
   assertOriginalLockUnchanged(targetPath, existed, previousBytes);
-  writeBytesAtomically(targetPath, readFileSync(candidateLock));
+  writeBytesAtomically(targetPath, installedBytes);
   try {
     finalMetadata(cargoArgs, cwd, env);
   } catch (error) {
-    if (existed && previousBytes !== null) {
-      writeBytesAtomically(targetPath, previousBytes);
-    } else {
-      rmSync(targetPath, { force: true });
+    try {
+      restoreRealLock(
+        targetPath,
+        { path: targetPath, existed, bytes: previousBytes },
+        installedBytes,
+      );
+    } catch (rollbackError) {
+      throw new Error(
+        `Final Cargo.lock verification failed; ${rollbackError.message}; concurrent changes preserved.\n${error.message}`,
+        { cause: rollbackError },
+      );
     }
     throw new Error(
       `Final Cargo.lock verification failed; original lock restored.\n${error.message}`,
@@ -935,7 +943,7 @@ export function installValidatedLock(
   }
 }
 
-export function restoreRealLock(realLock, original) {
+export function restoreRealLock(realLock, original, installedBytes) {
   if (!realLock && (!original || !original.path)) return;
   const targetPath = realLock || original.path;
   const existed =
@@ -947,14 +955,22 @@ export function restoreRealLock(realLock, original) {
       ? original.bytes
       : original;
 
+  const present = existsSync(targetPath);
+  if (
+    existed &&
+    present &&
+    bytes !== null &&
+    readFileSync(targetPath).equals(bytes)
+  )
+    return;
+  if (!existed && !present) return;
+
+  // Only undo bytes installed by this updater.
+  assertOriginalLockUnchanged(targetPath, true, installedBytes ?? null);
   if (existed && bytes !== null) {
-    if (!existsSync(targetPath) || !readFileSync(targetPath).equals(bytes)) {
-      writeBytesAtomically(targetPath, bytes);
-    }
+    writeBytesAtomically(targetPath, bytes);
   } else {
-    if (existsSync(targetPath)) {
-      rmSync(targetPath, { force: true });
-    }
+    rmSync(targetPath, { force: true });
   }
 }
 
@@ -1031,32 +1047,17 @@ async function main() {
           env: candidate.env,
         },
       );
-    } catch (error) {
-      restoreRealLock(originalLock.path, originalLock);
-      throw error;
     } finally {
       await ageFilter.close();
     }
     if (updateResult.stdout) process.stdout.write(updateResult.stdout);
     if (updateResult.stderr) process.stderr.write(updateResult.stderr);
 
-    // Verify real workspace lock was not created or modified before approval
-    if (!originalLock.existed) {
-      if (existsSync(originalLock.path)) {
-        restoreRealLock(originalLock.path, originalLock);
-        throw new Error("Cargo created real Cargo.lock before age approval");
-      }
-    } else {
-      if (
-        !existsSync(originalLock.path) ||
-        !readFileSync(originalLock.path).equals(originalLock.bytes)
-      ) {
-        restoreRealLock(originalLock.path, originalLock);
-        throw new Error(
-          "Cargo modified real Cargo.lock despite temporary-lockfile policy",
-        );
-      }
-    }
+    assertOriginalLockUnchanged(
+      originalLock.path,
+      originalLock.existed,
+      originalLock.bytes,
+    );
 
     const candidateMetadata = cargoMetadata(
       candidate.args,
@@ -1072,17 +1073,16 @@ async function main() {
       throw new Error(`Candidate Cargo.lock not found: ${candidateLock}`);
     }
 
-    let validation;
-    try {
-      validation = await validateCandidate(
-        baseline,
-        selectedPackages(candidateMetadata),
-        parsed,
-      );
-    } catch (validationError) {
-      restoreRealLock(originalLock.path, originalLock);
-      throw validationError;
-    }
+    const validation = await validateCandidate(
+      baseline,
+      selectedPackages(candidateMetadata),
+      parsed,
+    );
+    assertOriginalLockUnchanged(
+      originalLock.path,
+      originalLock.existed,
+      originalLock.bytes,
+    );
 
     if (validation.newlySelected.length === 0) {
       console.log("No new dependency versions selected.");
