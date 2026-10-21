@@ -258,14 +258,14 @@
 
 .settings-empty-state {
   place-items: center;
-  padding: 32px 16px;
+  padding: var(--settings-empty-padding-block) var(--space-4);
   text-align: center;
   color: var(--text-muted);
 }
 
 .settings-empty-state > svg {
-  width: 1.875rem;
-  height: 1.875rem;
+  width: var(--settings-empty-icon-size);
+  height: var(--settings-empty-icon-size);
 }
 
 .settings-empty-state p {
@@ -349,7 +349,71 @@
 .signature-form textarea {
   flex: 1 1 200px;
   min-width: 0;
-  min-height: 88px;
+  min-height: var(--settings-signature-min-height);
+  resize: vertical;
+}
+
+.signature-editor {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.signature-editor-label {
+  font-weight: 650;
+}
+
+.signature-editor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.signature-editor-toolbar button {
+  min-width: var(--target-size);
+  min-height: var(--target-size);
+  padding-inline: var(--space-3);
+}
+
+.signature-rich-content,
+.signature-editor .tiptap {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: var(--settings-signature-min-height);
+  padding: var(--space-3);
+  overflow-wrap: anywhere;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.signature-rich-content:focus-visible,
+.signature-editor .tiptap:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.signature-rich-help,
+.signature-rich-help-fallback {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.signature-fallback {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.signature-fallback textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: var(--settings-signature-min-height);
   resize: vertical;
 }
 
@@ -412,7 +476,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-height: 36px;
+  min-height: var(--settings-chip-height);
   padding: 4px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -486,8 +550,8 @@
 }
 
 .update-ready-icon svg {
-  width: 2rem;
-  height: 2rem;
+  width: var(--settings-update-icon-size);
+  height: var(--settings-update-icon-size);
   color: var(--accent);
 }
 
@@ -598,7 +662,7 @@
 
 .rule-item-text {
   display: grid;
-  min-width: 12rem;
+  min-width: var(--settings-field-min-width);
   flex: 1 1 16rem;
 }
 
@@ -835,5 +899,18 @@ html[data-text-scale="large"] .connection-fields .server-grid {
   .account-overview-row:focus-visible {
     border-color: Highlight;
     outline: 2px solid Highlight;
+  }
+
+  .signature-rich-content,
+  .signature-editor .tiptap {
+    border-color: CanvasText;
+    background: Canvas;
+    color: CanvasText;
+  }
+
+  .signature-rich-content:focus-visible,
+  .signature-editor .tiptap:focus-visible,
+  .signature-editor-toolbar button:focus-visible {
+    outline-color: Highlight;
   }
 }

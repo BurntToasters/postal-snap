@@ -81,6 +81,7 @@ export interface MockState {
   printCalls: number;
   updateCalls: Array<{ command: string; args: Record<string, unknown> }>;
   ipcCalls: Array<{ command: string; args: Record<string, unknown> }>;
+  undoSession?: string | null;
   backgroundUpdateAllowed: boolean;
   rules: Array<Record<string, unknown>>;
   callbacks: Map<number, (...args: unknown[]) => void>;

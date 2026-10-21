@@ -7,7 +7,7 @@ use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 use tokio::io::AsyncWriteExt;
 
-use super::messages::ensure_message_content;
+use super::messages::{ensure_message_content_for, Need};
 use super::{
     managed_account_dir, release_attachment_tokens, write_managed_file, AppState, CommandResult,
 };
@@ -26,6 +26,7 @@ pub async fn save_attachment(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<()> {
+    let cached = state.db.message_detail(message_id, &account_id)?;
     let suggested = security::safe_filename(&suggested_filename);
     let picker = app.clone();
     let destination = tokio::task::spawn_blocking(move || {
@@ -43,14 +44,12 @@ pub async fn save_attachment(
     let destination = destination
         .into_path()
         .map_err(|_| "Choose a valid save location.".to_string())?;
-    ensure_message_content(&account_id, message_id, &state).await?;
-    let detail = state.db.message_detail(message_id, &account_id)?;
-    let stored = detail
-        .attachments
-        .iter()
-        .find(|item| item.id == attachment_id)
-        .map(|item| item.filename.clone())
+    ensure_message_content_for(&account_id, message_id, &state, Need::Full).await?;
+    let raw = state.db.raw_message(message_id, &account_id)?;
+    let (aliases, current) = mail::parse::attachment_id_variants(&raw)?;
+    let attachment = resolve_attachment_id(&cached.attachments, &aliases, &current, &attachment_id)
         .ok_or_else(|| "Attachment not found.".to_string())?;
+    let stored = attachment.filename.clone();
     // Judge the name the message gives and the name the user typed; the
     // frontend's suggestion is never trusted for this.
     let chosen = destination
@@ -62,8 +61,7 @@ pub async fn save_attachment(
     if !confirm_risky_files(&app, risky).await? {
         return Ok(());
     }
-    let raw = state.db.raw_message(message_id, &account_id)?;
-    let (_, bytes) = mail::extract_attachment(&raw, &attachment_id)?;
+    let (_, bytes) = mail::extract_attachment(&raw, &attachment.id)?;
     tokio::fs::write(&destination, bytes)
         .await
         .map_err(|_| "Could not save the attachment at that location.".to_string())?;
@@ -214,6 +212,8 @@ fn regular_file_names(attachments: &[Attachment]) -> impl Iterator<Item = &str> 
 }
 
 fn chosen_message_files(
+    cached: &[Attachment],
+    aliases: &[Attachment],
     attachments: &[Attachment],
     attachment_ids: &[String],
 ) -> Result<Vec<Attachment>, String> {
@@ -226,15 +226,52 @@ fn chosen_message_files(
             return Err("Choose a file from this message.".into());
         }
     }
-    let chosen: Vec<Attachment> = attachments
-        .iter()
-        .filter(|item| !item.inline && seen.contains(item.id.as_str()))
-        .cloned()
-        .collect();
-    if chosen.len() != seen.len() {
-        return Err("Choose a file from this message.".into());
+    let mut chosen = Vec::with_capacity(seen.len());
+    let mut resolved = HashSet::new();
+    for id in attachment_ids {
+        let Some(item) = resolve_attachment_id(cached, aliases, attachments, id) else {
+            return Err("Choose a file from this message.".into());
+        };
+        if item.inline || !resolved.insert(item.id.as_str()) {
+            return Err("Choose a file from this message.".into());
+        }
+        chosen.push(item.clone());
     }
     Ok(chosen)
+}
+
+/// Resolve an ID against the same ordered MIME parts after a partial upgrade.
+/// Ignore size because prefix metadata may declare it while full parsing measures decoded bytes.
+fn resolve_attachment_id<'a>(
+    cached: &[Attachment],
+    aliases: &[Attachment],
+    attachments: &'a [Attachment],
+    requested_id: &str,
+) -> Option<&'a Attachment> {
+    if let Some(item) = attachments.iter().find(|item| item.id == requested_id) {
+        return Some(item);
+    }
+
+    for candidates in [cached, aliases] {
+        let Some((index, previous)) = candidates.iter().enumerate().find(|(index, item)| {
+            item.id == requested_id
+                || crate::mail::parse::legacy_attachment_id(*index, &item.filename) == requested_id
+        }) else {
+            continue;
+        };
+        let current = attachments.get(index)?;
+        if same_attachment_part(previous, current) {
+            return Some(current);
+        }
+    }
+    None
+}
+
+fn same_attachment_part(previous: &Attachment, current: &Attachment) -> bool {
+    previous.filename == current.filename
+        && previous.content_type == current.content_type
+        && previous.content_id == current.content_id
+        && previous.inline == current.inline
 }
 
 /// Save the chosen regular attachments into one folder the user picks.
@@ -247,18 +284,20 @@ pub async fn save_chosen_attachments(
     state: State<'_, AppState>,
 ) -> CommandResult<u32> {
     state.db.account(&account_id)?;
-    ensure_message_content(&account_id, message_id, &state).await?;
-    let detail = state.db.message_detail(message_id, &account_id)?;
-    let chosen = chosen_message_files(&detail.attachments, &attachment_ids)?;
+    let cached = state.db.message_detail(message_id, &account_id)?;
+    ensure_message_content_for(&account_id, message_id, &state, Need::Full).await?;
+    let raw = state.db.raw_message(message_id, &account_id)?;
+    let (aliases, current) = mail::parse::attachment_id_variants(&raw)?;
+    let chosen = chosen_message_files(&cached.attachments, &aliases, &current, &attachment_ids)?;
     if !confirm_risky_files(&app, risky_file_names(regular_file_names(&chosen))).await? {
         return Ok(0);
     }
     let Some(folder) = pick_folder(&app).await? else {
         return Ok(0);
     };
-    let detail = state.db.message_detail(message_id, &account_id)?;
-    let chosen = chosen_message_files(&detail.attachments, &attachment_ids)?;
     let raw = state.db.raw_message(message_id, &account_id)?;
+    let (aliases, current) = mail::parse::attachment_id_variants(&raw)?;
+    let chosen = chosen_message_files(&cached.attachments, &aliases, &current, &attachment_ids)?;
     let mut used = HashSet::new();
     let saved = write_message_files(&folder, &raw, &chosen, &mut used).await?;
     Ok(saved)
@@ -288,7 +327,7 @@ pub async fn save_all_attachments(
     let Some(folder) = pick_folder(&app).await? else {
         return Ok(0);
     };
-    ensure_message_content(&account_id, message_id, &state).await?;
+    ensure_message_content_for(&account_id, message_id, &state, Need::Full).await?;
     let detail = state.db.message_detail(message_id, &account_id)?;
     let raw = state.db.raw_message(message_id, &account_id)?;
     let mut used = HashSet::new();
@@ -324,7 +363,7 @@ pub async fn save_conversation_attachments(
     };
     let mut risky = Vec::new();
     for id in &ids {
-        ensure_message_content(&account_id, *id, &state).await?;
+        ensure_message_content_for(&account_id, *id, &state, Need::Full).await?;
         let detail = state.db.message_detail(*id, &account_id)?;
         risky.extend(risky_file_names(regular_file_names(&detail.attachments)));
     }
@@ -366,7 +405,7 @@ pub async fn save_messages_eml(
     let mut saved = 0u32;
     for id in &ids {
         // Only one message's source is held in memory at a time.
-        ensure_message_content(&account_id, *id, &state).await?;
+        ensure_message_content_for(&account_id, *id, &state, Need::Full).await?;
         let detail = state.db.message_detail(*id, &account_id)?;
         let raw = state.db.raw_message(*id, &account_id)?;
         write_message_eml(&folder, &detail.summary.subject, &raw, &mut used).await?;
@@ -561,18 +600,17 @@ pub async fn preview_attachment(
     attachment_id: String,
     state: State<'_, AppState>,
 ) -> CommandResult<AttachmentPreview> {
-    ensure_message_content(&account_id, message_id, &state).await?;
-    let detail = state.db.message_detail(message_id, &account_id)?;
-    let attachment = detail
-        .attachments
-        .iter()
-        .find(|item| item.id == attachment_id && !item.inline)
+    let cached = state.db.message_detail(message_id, &account_id)?;
+    ensure_message_content_for(&account_id, message_id, &state, Need::Full).await?;
+    let raw = state.db.raw_message(message_id, &account_id)?;
+    let (aliases, current) = mail::parse::attachment_id_variants(&raw)?;
+    let attachment = resolve_attachment_id(&cached.attachments, &aliases, &current, &attachment_id)
+        .filter(|item| !item.inline)
         .ok_or_else(|| "Attachment not found.".to_string())?;
     if attachment.size > MAX_PREVIEW_BYTES as u64 {
         return Err("This attachment is too large to preview.".into());
     }
-    let raw = state.db.raw_message(message_id, &account_id)?;
-    let (filename, bytes) = mail::extract_attachment(&raw, &attachment_id)?;
+    let (filename, bytes) = mail::extract_attachment(&raw, &attachment.id)?;
     if bytes.len() > MAX_PREVIEW_BYTES {
         return Err("This attachment is too large to preview.".into());
     }
@@ -655,7 +693,7 @@ pub async fn prepare_forwarded_message(
     message_id: i64,
     state: State<'_, AppState>,
 ) -> CommandResult<ComposeAttachment> {
-    ensure_message_content(&account_id, message_id, &state).await?;
+    ensure_message_content_for(&account_id, message_id, &state, Need::Full).await?;
     let detail = state.db.message_detail(message_id, &account_id)?;
     let raw = state.db.raw_message(message_id, &account_id)?;
     if raw.is_empty() {
@@ -708,7 +746,7 @@ async fn prepare_message_attachments(
     files_only: bool,
     state: State<'_, AppState>,
 ) -> CommandResult<Vec<ComposeAttachment>> {
-    ensure_message_content(&account_id, message_id, &state).await?;
+    ensure_message_content_for(&account_id, message_id, &state, Need::Full).await?;
     let detail = state.db.message_detail(message_id, &account_id)?;
     let raw = state.db.raw_message(message_id, &account_id)?;
     let account_dir = managed_account_dir(&state.attachment_dir, &account_id)?;
@@ -968,12 +1006,12 @@ pub async fn read_message_inline_image(
     attachment_id: String,
     state: State<'_, AppState>,
 ) -> CommandResult<String> {
-    ensure_message_content(&account_id, message_id, &state).await?;
-    let detail = state.db.message_detail(message_id, &account_id)?;
-    let attachment = detail
-        .attachments
-        .iter()
-        .find(|item| item.id == attachment_id && item.inline && item.content_id.is_some())
+    let cached = state.db.message_detail(message_id, &account_id)?;
+    ensure_message_content_for(&account_id, message_id, &state, Need::Full).await?;
+    let raw = state.db.raw_message(message_id, &account_id)?;
+    let (aliases, current) = mail::parse::attachment_id_variants(&raw)?;
+    let attachment = resolve_attachment_id(&cached.attachments, &aliases, &current, &attachment_id)
+        .filter(|item| item.inline && item.content_id.is_some())
         .ok_or_else(|| "Inline image not found.".to_string())?;
     if !matches!(
         attachment.content_type.as_str(),
@@ -984,8 +1022,7 @@ pub async fn read_message_inline_image(
     if attachment.size > 20 * 1024 * 1024 {
         return Err("This inline image is too large.".into());
     }
-    let raw = state.db.raw_message(message_id, &account_id)?;
-    let (_, bytes) = mail::extract_attachment(&raw, &attachment_id)?;
+    let (_, bytes) = mail::extract_attachment(&raw, &attachment.id)?;
     if bytes.len() > 20 * 1024 * 1024 {
         return Err("This inline image is too large.".into());
     }
@@ -1038,6 +1075,145 @@ pub async fn release_compose_attachments(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mail::parse::{attachment_id_variants, parse_message, parse_partial_message};
+
+    // Failure modes: stale prefix IDs stop resolving after a full fetch;
+    // duplicate filenames select the wrong part; or unrelated IDs are accepted.
+    #[test]
+    fn resolves_partial_and_legacy_ids_to_the_same_full_message_parts() {
+        let long_payload = "QUJD\r\n".repeat(4000);
+        let raw = format!(
+            "From: Jane <jane@example.test>\r\nSubject: Synthetic attachments\r\nContent-Type: multipart/mixed; boundary=\"bnd\"\r\n\r\n\
+             --bnd\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello\r\n\
+             --bnd\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=\"report.pdf\"; size=99\r\nContent-ID: <first@example.test>\r\nContent-Transfer-Encoding: base64\r\n\r\nQUJD\r\n\
+             --bnd\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=\"report.pdf\"\r\nContent-ID: <second@example.test>\r\nContent-Transfer-Encoding: base64\r\n\r\n{long_payload}\r\n--bnd--\r\n"
+        );
+        let marker = b"QUJD\r\nQUJD\r\n";
+        let cut = raw
+            .as_bytes()
+            .windows(marker.len())
+            .position(|window| window == marker)
+            .unwrap()
+            + marker.len();
+        let partial = parse_partial_message(
+            7,
+            &raw.as_bytes()[..cut],
+            raw.len() as u64,
+            true,
+            false,
+            None,
+        )
+        .unwrap()
+        .expect("synthetic partial message is usable");
+        let full = parse_message(7, raw.as_bytes(), true, false, None).unwrap();
+
+        assert_eq!(partial.attachments.len(), 2);
+        assert_eq!(full.attachments.len(), 2);
+        assert_eq!(partial.attachments[0].size, 99);
+        assert_eq!(partial.attachments[1].size, 0);
+        assert!(full.attachments.iter().all(|item| item.size > 0));
+        assert_ne!(partial.attachments[0].id, full.attachments[0].id);
+        assert_ne!(partial.attachments[0].size, full.attachments[0].size);
+        assert_eq!(
+            partial.attachments[0].filename,
+            partial.attachments[1].filename
+        );
+        let (aliases, parsed_full) = attachment_id_variants(raw.as_bytes())
+            .expect("full MIME can reproduce prefix and current attachment IDs");
+        assert_eq!(
+            parsed_full
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            full.attachments
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            aliases
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            partial
+                .attachments
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(aliases[0].size, 99);
+        assert_eq!(aliases[1].size, 0);
+
+        let requested = partial
+            .attachments
+            .iter()
+            .map(|item| item.id.clone())
+            .collect::<Vec<_>>();
+        let chosen = chosen_message_files(
+            &partial.attachments,
+            &aliases,
+            &full.attachments,
+            &requested,
+        )
+        .expect("both prefix IDs map to their exact full parts");
+        assert_eq!(
+            chosen
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            full.attachments
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(chosen[0].content_id, partial.attachments[0].content_id);
+        assert_eq!(chosen[1].content_id, partial.attachments[1].content_id);
+
+        let first_operation = resolve_attachment_id(
+            &partial.attachments,
+            &aliases,
+            &full.attachments,
+            &partial.attachments[0].id,
+        )
+        .expect("the first operation resolves the prefix ID after full fetch");
+        assert_eq!(
+            first_operation.content_id,
+            partial.attachments[0].content_id
+        );
+
+        let later_operation = resolve_attachment_id(
+            &full.attachments,
+            &aliases,
+            &full.attachments,
+            &partial.attachments[0].id,
+        )
+        .expect(
+            "the original prefix ID still resolves after another operation cached full metadata",
+        );
+        assert_eq!(
+            later_operation.content_id,
+            partial.attachments[0].content_id
+        );
+
+        let mut legacy = partial.attachments.clone();
+        legacy[0].id = crate::mail::parse::legacy_attachment_id(0, "report.pdf");
+        let resolved = resolve_attachment_id(&legacy, &aliases, &full.attachments, &legacy[0].id)
+            .expect("legacy cached ID maps by its original part position");
+        assert_eq!(resolved.content_id, partial.attachments[0].content_id);
+
+        let mut unrelated = partial.attachments.clone();
+        unrelated[0].filename = "different.pdf".into();
+        unrelated[0].id = crate::mail::parse::attachment_id(
+            &unrelated[0].filename,
+            unrelated[0].content_id.as_deref(),
+            unrelated[0].size as usize,
+            0,
+        );
+        assert!(
+            resolve_attachment_id(&unrelated, &aliases, &full.attachments, &unrelated[0].id)
+                .is_none()
+        );
+    }
 
     // Failure modes for the risky-file warning:
     // 1. A double extension (invoice.pdf.exe) is judged by its first part.
@@ -1198,17 +1374,20 @@ mod tests {
             file("budget", false),
         ];
         assert_eq!(
-            chosen_message_files(&files, &["budget".into()])
+            chosen_message_files(&files, &files, &files, &["budget".into()])
                 .unwrap()
                 .iter()
                 .map(|item| item.id.as_str())
                 .collect::<Vec<_>>(),
             vec!["budget"]
         );
-        assert!(chosen_message_files(&files, &[]).is_err());
-        assert!(chosen_message_files(&files, &["photo".into()]).is_err());
-        assert!(chosen_message_files(&files, &["missing".into()]).is_err());
-        assert!(chosen_message_files(&files, &["notes".into(), "notes".into()]).is_err());
+        assert!(chosen_message_files(&files, &files, &files, &[]).is_err());
+        assert!(chosen_message_files(&files, &files, &files, &["photo".into()]).is_err());
+        assert!(chosen_message_files(&files, &files, &files, &["missing".into()]).is_err());
+        assert!(
+            chosen_message_files(&files, &files, &files, &["notes".into(), "notes".into()])
+                .is_err()
+        );
     }
 
     fn file(id: &str, inline: bool) -> Attachment {

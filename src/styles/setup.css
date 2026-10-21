@@ -3,7 +3,7 @@
 .setup-page {
   display: grid;
   min-height: 100%;
-  padding: 28px;
+  padding: var(--setup-page-padding);
 }
 
 .app-loading {
@@ -73,7 +73,7 @@
 
 .setup-progress {
   display: grid;
-  grid-template-columns: 1.875rem 1fr 1.875rem;
+  grid-template-columns: var(--setup-step-size) 1fr var(--setup-step-size);
   align-items: center;
   margin: 28px 0 24px;
   color: var(--text-muted);
@@ -81,8 +81,8 @@
 
 .setup-progress > span {
   display: grid;
-  width: 1.875rem;
-  height: 1.875rem;
+  width: var(--setup-step-size);
+  height: var(--setup-step-size);
   place-items: center;
   border: 1px solid var(--border);
   border-radius: 50%;
@@ -127,7 +127,7 @@
 }
 
 .setup-progress.compact {
-  width: 180px;
+  width: var(--setup-progress-width);
   margin: 0;
 }
 
@@ -150,7 +150,7 @@
   display: grid;
   width: 100%;
   min-height: var(--provider-button-height);
-  grid-template-columns: 50px 1fr auto;
+  grid-template-columns: var(--provider-symbol-size) 1fr auto;
   align-items: center;
   gap: 14px;
   padding: 14px;
@@ -217,8 +217,8 @@
 
 .provider-arrow {
   display: grid;
-  width: 34px;
-  height: 34px;
+  width: var(--provider-arrow-size);
+  height: var(--provider-arrow-size);
   place-items: center;
   border-radius: 50%;
   color: var(--accent);
@@ -439,8 +439,8 @@
 }
 
 .first-sync-spinner {
-  width: 34px;
-  height: 34px;
+  width: var(--setup-icon-size);
+  height: var(--setup-icon-size);
   color: var(--accent);
   animation: setup-spin 1.2s linear infinite;
 }
@@ -496,8 +496,8 @@
   position: relative;
   z-index: 1;
   display: grid;
-  width: 1.875rem;
-  height: 1.875rem;
+  width: var(--setup-step-size);
+  height: var(--setup-step-size);
   place-items: center;
   border: 1px solid var(--border);
   border-radius: 50%;
@@ -608,13 +608,13 @@
 
 .setup-preview-mail {
   display: grid;
-  grid-template-columns: 110px 1fr 1fr;
+  grid-template-columns: var(--setup-preview-list-width) 1fr 1fr;
   gap: 8px;
-  min-height: 132px;
+  min-height: var(--setup-preview-min-height);
 }
 
 .setup-preview[data-reading-pane="bottom"] .setup-preview-mail {
-  grid-template-columns: 110px 1fr;
+  grid-template-columns: var(--setup-preview-list-width) 1fr;
   grid-template-rows: 1fr auto;
 }
 
@@ -623,7 +623,7 @@
 }
 
 .setup-preview[data-reading-pane="hidden"] .setup-preview-mail {
-  grid-template-columns: 110px 1fr;
+  grid-template-columns: var(--setup-preview-list-width) 1fr;
 }
 
 .setup-preview-folders,
@@ -671,7 +671,7 @@
 }
 
 .setup-preview-row.muted {
-  opacity: 0.75;
+  background: var(--surface);
 }
 
 .setup-preview-row strong {

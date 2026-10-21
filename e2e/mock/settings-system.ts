@@ -91,7 +91,12 @@ export async function registerMockSettingsSystem(page: Page): Promise<void> {
       markRead: "open",
       notifyNewMail: true,
       closeToTray: true,
+      keepAttachmentsOffline: false,
       updateCheckInterval: "startupAnd6h",
+      badgeScope:
+        params.get("badgeScope") === "allInboxes"
+          ? "allInboxes"
+          : "activeInbox",
       updateChannel: params.get("channel") ?? savedChannel ?? "auto",
       setupCompleted:
         !location.search.includes("firstRun") && !params.has("setupIncomplete"),
@@ -198,7 +203,9 @@ export async function registerMockSettingsSystem(page: Page): Promise<void> {
           quietHoursStart: "",
           quietHoursEnd: "",
           closeToTray: true,
+          keepAttachmentsOffline: false,
           updateCheckInterval: "startupAnd6h",
+          badgeScope: "activeInbox",
           updateChannel: "auto",
           setupCompleted: true,
           setupStep: null,

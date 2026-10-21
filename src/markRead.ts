@@ -1,9 +1,10 @@
 import { api } from "./api";
+import { createOptimisticGate } from "./bulk";
 import { useAppStore } from "./store";
 
 export type MarkReadMode = "open" | "after2s" | "manual";
 
-const listedReadGeneration = new Map<number, number>();
+const listedRead = createOptimisticGate<number>();
 
 function applyListedRead(
   messageId: number,
@@ -42,8 +43,7 @@ export async function toggleListedRead(messageId: number): Promise<void> {
       : undefined);
   if (!summary) return;
   const next = !summary.isRead;
-  const generation = (listedReadGeneration.get(messageId) ?? 0) + 1;
-  listedReadGeneration.set(messageId, generation);
+  const generation = listedRead.begin(messageId);
   const viewMailboxId = store.activeMailboxId;
   const viewLocal = store.activeLocalView;
   const previousUnread = store.mailboxes.find(
@@ -59,7 +59,7 @@ export async function toggleListedRead(messageId: number): Promise<void> {
   } catch (cause) {
     const current = useAppStore.getState();
     if (
-      listedReadGeneration.get(messageId) !== generation ||
+      !listedRead.isLatest(messageId, generation) ||
       current.activeAccountId !== summary.accountId ||
       current.activeMailboxId !== viewMailboxId ||
       current.activeLocalView !== viewLocal

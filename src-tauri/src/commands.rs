@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU16, AtomicUsize, Ordering},
         Arc, Mutex,
     },
     time::Duration,
@@ -23,6 +23,10 @@ pub mod security_net;
 pub mod settings_system;
 pub mod snooze_filters;
 pub mod sync;
+
+#[cfg(test)]
+#[path = "commands/deferred_integration_tests.rs"]
+mod deferred_integration_tests;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
@@ -92,7 +96,7 @@ pub struct AppState {
     pub settings: SettingsStore,
     attachment_dir: PathBuf,
     account_actors: Mutex<HashMap<String, Arc<AccountActor>>>,
-    watchers: Mutex<HashSet<String>>,
+    workers: Mutex<HashSet<String>>,
     startup_error: Mutex<Option<String>>,
     mail_shortcut_guard: AtomicBool,
     /// The mail database or settings file did not open; the stand-ins must
@@ -100,6 +104,8 @@ pub struct AppState {
     storage_unavailable: AtomicBool,
     app_nap: crate::app_nap::ActivityHolds,
     update_gate: UpdateInstallGate,
+    /// Folder the mailbox has open per account, polled while it is not INBOX.
+    visible_folders: Mutex<HashMap<String, sync::VisibleFolder>>,
 }
 
 /// Prevent update installation from racing mail delivery.
@@ -163,43 +169,75 @@ impl UpdateInstallGate {
 /// takes them, so a wake-up sent while IDLE is starting is never lost.
 pub(crate) mod wake {
     /// A user action needs the account; resume IDLE afterwards without a sync.
-    pub const OPERATION: u8 = 1;
+    pub const OPERATION: u16 = 1;
     /// Run a full sync pass (Get Mail, rule changes, folder changes).
-    pub const SYNC: u8 = 2;
+    pub const SYNC: u16 = 2;
     /// Push local draft changes to the server.
-    pub const DRAFTS: u8 = 4;
+    pub const DRAFTS: u16 = 4;
     /// Deliver queued or due outbox items.
-    pub const OUTBOX: u8 = 8;
+    pub const OUTBOX: u16 = 8;
     /// Credentials changed; leave the sign-in-failed pause and sync.
-    pub const CREDENTIALS: u8 = 16;
+    pub const CREDENTIALS: u16 = 16;
     /// The download policy changed; backfill or evict and sync.
-    pub const POLICY: u8 = 32;
+    pub const POLICY: u16 = 32;
     /// A manual sync succeeded; leave the sign-in-failed pause without
     /// another pass.
-    pub const RESUME: u8 = 64;
+    pub const RESUME: u16 = 64;
     /// The computer woke from sleep: sync like SYNC, but a worker paused for
     /// a rejected password stays paused.
-    pub const SLEEP: u8 = 128;
+    pub const SLEEP: u16 = 128;
+    /// Replay offline operations that came due (undo-window moves) without a
+    /// full pass.
+    pub const REPLAY: u16 = 256;
+    /// The INBOX watcher saw new mail: scan INBOX only.
+    pub const INBOX: u16 = 512;
+    /// The visible non-INBOX folder is due for its poll: scan it only.
+    pub const FOLDER: u16 = 1024;
 }
 
 pub(crate) struct AccountActor {
     operation: Arc<AsyncMutex<()>>,
     wake: Notify,
-    reasons: AtomicU8,
+    reasons: AtomicU16,
     /// Callers queued for the account lock. Background sync yields between
     /// folders and batches while this is non-zero.
     waiting: AtomicUsize,
+    /// Read-only INBOX watcher state and its restart signal.
+    watch: crate::mail::watch::WatchLink,
 }
 
 impl AccountActor {
-    pub(crate) fn request(&self, reason: u8) {
+    pub(crate) fn new() -> Self {
+        Self {
+            operation: Arc::new(AsyncMutex::new(())),
+            wake: Notify::new(),
+            reasons: AtomicU16::new(0),
+            waiting: AtomicUsize::new(0),
+            watch: crate::mail::watch::WatchLink::new(),
+        }
+    }
+
+    pub(crate) fn request(&self, reason: u16) {
         self.reasons.fetch_or(reason, Ordering::SeqCst);
+        // Sleep and credential changes also restart the watcher's session.
+        if reason & (wake::SLEEP | wake::CREDENTIALS) != 0 {
+            self.watch.signal_restart();
+        }
         // notify_one stores a permit when IDLE is between setup and waiting,
         // avoiding a lost wake-up.
         self.wake.notify_one();
     }
 
-    fn take_reasons(&self) -> u8 {
+    /// Wake the worker to re-check its timers without a reason.
+    pub(crate) fn nudge(&self) {
+        self.wake.notify_one();
+    }
+
+    pub(crate) fn watch(&self) -> &crate::mail::watch::WatchLink {
+        &self.watch
+    }
+
+    pub(crate) fn take_reasons(&self) -> u16 {
         self.reasons.swap(0, Ordering::SeqCst)
     }
 
@@ -233,12 +271,13 @@ impl AppState {
             settings,
             attachment_dir,
             account_actors: Mutex::new(HashMap::new()),
-            watchers: Mutex::new(HashSet::new()),
+            workers: Mutex::new(HashSet::new()),
             startup_error: Mutex::new(None),
             mail_shortcut_guard: AtomicBool::new(false),
             storage_unavailable: AtomicBool::new(false),
             app_nap: crate::app_nap::ActivityHolds::new("Postal Snap is keeping mail in sync"),
             update_gate: UpdateInstallGate::new(),
+            visible_folders: Mutex::new(HashMap::new()),
         }
     }
 
@@ -246,7 +285,7 @@ impl AppState {
         *self
             .startup_error
             .lock()
-            .map_err(|_| "Application startup status is unavailable.".to_string())? = error;
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = error;
         Ok(())
     }
 
@@ -254,7 +293,7 @@ impl AppState {
         let mut error = self
             .startup_error
             .lock()
-            .map_err(|_| "Application startup status is unavailable.".to_string())?;
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // A storage failure lasts the whole launch, including window reloads.
         if self.storage_unavailable.load(Ordering::SeqCst) {
             return Ok(error.clone());
@@ -301,27 +340,20 @@ impl AppState {
         let mut actors = self
             .account_actors
             .lock()
-            .map_err(|_| "Account worker is unavailable.".to_string())?;
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // Checked under the map lock: removal retires the actor while holding
         // the same lock after deleting the row, so a racing caller cannot
         // recreate a worker for a removed account.
         self.db.account(account_id)?;
         let actor = actors
             .entry(account_id.to_string())
-            .or_insert_with(|| {
-                Arc::new(AccountActor {
-                    operation: Arc::new(AsyncMutex::new(())),
-                    wake: Notify::new(),
-                    reasons: AtomicU8::new(0),
-                    waiting: AtomicUsize::new(0),
-                })
-            })
+            .or_insert_with(|| Arc::new(AccountActor::new()))
             .clone();
         Ok(actor)
     }
 
     /// Wake the account worker for `reason` without taking the account.
-    pub(crate) fn request(&self, account_id: &str, reason: u8) -> Result<(), String> {
+    pub(crate) fn request(&self, account_id: &str, reason: u16) -> Result<(), String> {
         self.actor(account_id)?.request(reason);
         Ok(())
     }
@@ -335,8 +367,10 @@ impl AppState {
         let actors = self
             .account_actors
             .lock()
-            .map(|actors| actors.values().cloned().collect::<Vec<_>>())
-            .unwrap_or_default();
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
         for actor in actors {
             actor.request(wake::OUTBOX);
         }
@@ -361,21 +395,19 @@ impl AppState {
         Ok(actor.acquire().await)
     }
 
-    pub fn ensure_watcher(&self, account_id: String, app: AppHandle) -> Result<(), String> {
-        let mut watchers = self
-            .watchers
+    pub fn ensure_worker(&self, account_id: String, app: AppHandle) -> Result<(), String> {
+        let mut workers = self
+            .workers
             .lock()
-            .map_err(|_| "Account watcher is unavailable.".to_string())?;
-        if !watchers.insert(account_id.clone()) {
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !workers.insert(account_id.clone()) {
             return Ok(());
         }
-        drop(watchers);
+        drop(workers);
+        // run_account_worker retires the registration itself on every exit,
+        // including a panic mid-await; see WorkerCleanup.
         tauri::async_runtime::spawn(async move {
             run_account_worker(&account_id, &app).await;
-            let state = app.state::<AppState>();
-            if let Ok(mut watchers) = state.watchers.lock() {
-                watchers.remove(&account_id);
-            };
         });
         Ok(())
     }
@@ -386,14 +418,22 @@ impl AppState {
     }
 
     fn retire_actor(&self, account_id: &str) {
+        // Poison-tolerant so the retirement still happens, and no stale actor
+        // becomes reachable again, after a panic while the lock was held.
         let retired = self
             .account_actors
             .lock()
-            .ok()
-            .and_then(|mut actors| actors.remove(account_id));
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(account_id);
         mail::pool::forget(account_id);
+        let mut folders = self
+            .visible_folders
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        folders.remove(account_id);
         // Wake a parked or idle worker so it notices the removal and exits.
         if let Some(actor) = retired {
+            actor.watch().signal_restart();
             actor.request(wake::SYNC);
         }
     }
@@ -415,7 +455,7 @@ pub(crate) fn orphan_marker_for(attachment_dir: &Path) -> PathBuf {
         .join("orphan-attachments-pending")
 }
 
-fn reconnect_delay(account_id: &str, seconds: u64, attempt: u32) -> Duration {
+pub(crate) fn reconnect_delay(account_id: &str, seconds: u64, attempt: u32) -> Duration {
     let clock = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs() << 20 ^ u64::from(elapsed.subsec_nanos()))
@@ -439,19 +479,73 @@ const DRAFT_PUSH_DELAY: Duration = Duration::from_secs(60);
 
 /// Only the user (new password, Get Mail) ends a rejected-password pause;
 /// waking from sleep must not retry the sign-in.
-fn leaves_auth_pause(reasons: u8) -> bool {
+fn leaves_auth_pause(reasons: u16) -> bool {
     reasons & (wake::CREDENTIALS | wake::SYNC | wake::RESUME) != 0
+}
+
+/// Retires a worker task on every exit, including a panic mid-await. The
+/// ensure_worker registration must not outlive the task or the account stays
+/// registered forever (every later ensure_worker call short-circuits), and
+/// the spawned INBOX watcher must not keep IDLE-ing with no worker to serve.
+struct WorkerCleanup<'a, R: tauri::Runtime = tauri::Wry> {
+    app: &'a tauri::AppHandle<R>,
+    account_id: String,
+    watcher: Option<tauri::async_runtime::JoinHandle<()>>,
+}
+
+impl<'a, R: tauri::Runtime> WorkerCleanup<'a, R> {
+    fn for_account(app: &'a tauri::AppHandle<R>, account_id: &str) -> Self {
+        Self {
+            app,
+            account_id: account_id.to_string(),
+            watcher: None,
+        }
+    }
+
+    fn watch(&mut self, watcher: tauri::async_runtime::JoinHandle<()>) {
+        self.watcher = Some(watcher);
+    }
+}
+
+impl<R: tauri::Runtime> Drop for WorkerCleanup<'_, R> {
+    fn drop(&mut self) {
+        // Abort before retiring: on either a clean exit or a panic unwind, no
+        // watcher may keep watching an account nobody is serving. The lock is
+        // poison-tolerant so cleanup itself never fails while unwinding.
+        if let Some(watcher) = self.watcher.take() {
+            watcher.abort();
+        }
+        self.app
+            .state::<AppState>()
+            .workers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&self.account_id);
+    }
 }
 
 /// Long-lived loop for one account: sync passes, targeted jobs, IDLE, and
 /// the outbox timer. Exits when the account is removed.
 async fn run_account_worker(account_id: &str, app: &AppHandle) {
+    // Created first so the `else return` below still retires the
+    // registration; the watcher handle is registered right after the spawn.
+    let mut cleanup = WorkerCleanup::for_account(app, account_id);
     let mut backoff = 2u64;
     let mut attempt = 0u32;
     let mut first_pass = true;
     let mut parked = false;
     let mut pending_full = true;
     let mut more_work = false;
+    let Ok(initial) = app.state::<AppState>().actor(account_id) else {
+        return;
+    };
+    // The watcher only wakes this worker; it never touches the database.
+    cleanup.watch(tauri::async_runtime::spawn(mail::watch::run_with_secret(
+        account_id.to_string(),
+        app.state::<AppState>().db.clone(),
+        initial,
+        mail::watch::SecretSource::Vault,
+    )));
     loop {
         let state = app.state::<AppState>();
         let Ok(actor) = state.actor(account_id) else {
@@ -468,6 +562,17 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
         if reasons & (wake::SYNC | wake::POLICY | wake::CREDENTIALS | wake::SLEEP) != 0 {
             pending_full = true;
         }
+        if reasons & wake::FOLDER != 0 {
+            state.mark_visible_folder_polled(account_id);
+        }
+        let scope = if pending_full || more_work {
+            Some(mail::sync::SyncScope::All)
+        } else {
+            let visible = (reasons & wake::FOLDER != 0)
+                .then(|| state.visible_folder_name(account_id))
+                .flatten();
+            sync::scope_for_wake(reasons, visible.as_deref())
+        };
         let guard = actor.acquire_for_worker().await;
         let work = state.hold_activity();
         if reasons & wake::OUTBOX != 0 && (pending_full || more_work) {
@@ -475,9 +580,12 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
             // out before a long pass.
             sync::run_targeted_jobs(account_id, app, &state, wake::OUTBOX).await;
         }
-        if pending_full || more_work {
+        if let Some(scope) = scope {
+            // Only a full pass is the complete Get Mail; a scoped pass stays
+            // quick and leaves backfill to the next full pass.
+            let quick = scope != mail::sync::SyncScope::All;
             let previous_message_id = state.db.inbox_high_water(account_id).ok().flatten();
-            match sync::run_sync_pass(account_id, app, &state, &actor, guard, false).await {
+            match sync::run_sync_pass(account_id, app, &state, &actor, guard, quick, scope).await {
                 Ok(outcome) => {
                     backoff = 2;
                     attempt = 0;
@@ -508,11 +616,10 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
                 // Keep downloading history, but let queued user actions and
                 // other accounts run between passes.
                 tokio::time::sleep(Duration::from_millis(250)).await;
-                continue;
             }
             continue;
         }
-        if reasons & (wake::DRAFTS | wake::OUTBOX) != 0 {
+        if reasons & (wake::DRAFTS | wake::OUTBOX | wake::REPLAY) != 0 {
             sync::run_targeted_jobs(account_id, app, &state, reasons).await;
         }
         let Ok(account) = state.db.account(account_id) else {
@@ -560,10 +667,17 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
             .db
             .pending_draft_sync(account_id)
             .is_ok_and(|records| !records.is_empty());
-        let next_job = [next_send, drafts_pending.then_some(DRAFT_PUSH_DELAY)]
-            .into_iter()
-            .flatten()
-            .min();
+        let deferred_due = state.db.next_deferred_due(account_id).ok().flatten();
+        let folder_due = state.visible_folder_due(account_id);
+        let next_job = [
+            next_send,
+            drafts_pending.then_some(DRAFT_PUSH_DELAY),
+            deferred_due,
+            folder_due,
+        ]
+        .into_iter()
+        .flatten()
+        .min();
         let limit = next_job.map_or(IDLE_REFRESH, |due| {
             due.max(Duration::from_millis(200)).min(IDLE_REFRESH)
         });
@@ -573,13 +687,25 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
         if next_job.is_none() {
             drop(work);
         }
+        let watching = actor.watch().active();
+        let mut held = Some(guard);
         if actor.contended() {
             // A user action or a yielded pass is queued: IDLE would hold the
             // account from it until the next wake-up.
-            drop(guard);
+            held.take();
             continue;
         }
-        match mail::idle_inbox(&account, &password, &actor.wake, limit).await {
+        let outcome = if watching {
+            // The watcher owns INBOX IDLE, so wait without the account.
+            held.take();
+            tokio::select! {
+                _ = actor.wake.notified() => Ok(mail::IdleOutcome::Interrupted),
+                _ = tokio::time::sleep(limit) => Ok(mail::IdleOutcome::Timeout),
+            }
+        } else {
+            mail::idle_inbox(&account, &password, &actor.wake, limit).await
+        };
+        match outcome {
             Ok(mail::IdleOutcome::Changed) => pending_full = true,
             Ok(mail::IdleOutcome::Timeout) if job_due_first => {
                 let mut jobs = 0;
@@ -589,12 +715,18 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
                 if drafts_pending {
                     jobs |= wake::DRAFTS;
                 }
+                if deferred_due.is_some_and(|due| due <= limit) {
+                    jobs |= wake::REPLAY;
+                }
+                if folder_due.is_some_and(|due| due <= limit) {
+                    jobs |= wake::FOLDER;
+                }
                 actor.reasons.fetch_or(jobs, Ordering::SeqCst);
             }
             Ok(mail::IdleOutcome::Timeout) => pending_full = true,
             Ok(mail::IdleOutcome::Interrupted) => {}
             Err(_) => {
-                drop(guard);
+                held.take();
                 let _ = state.db.set_account_state(
                     account_id,
                     "offline",
@@ -621,7 +753,7 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
 
 /// Resolve once a wake-up carrying one of `mask` arrives. Other reasons are
 /// kept for the worker loop.
-async fn wait_for(actor: &AccountActor, mask: u8) {
+pub(crate) async fn wait_for(actor: &AccountActor, mask: u16) {
     loop {
         if actor.reasons.load(Ordering::SeqCst) & mask != 0 {
             return;
@@ -885,6 +1017,322 @@ fn validate_queued_operation(
     }
 }
 
+/// Largest UID set sent in one replay command.
+const MAX_REPLAY_BATCH_UIDS: usize = 100;
+
+/// What batch planning needs to know about one queued op.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ReplayPlanKind {
+    Flags {
+        mailbox: String,
+        uid_validity: Option<u32>,
+        is_read: Option<bool>,
+        is_starred: Option<bool>,
+    },
+    Move {
+        source: String,
+        destination: String,
+        uid_validity: Option<u32>,
+        attempts: i64,
+        /// A queued flag change for the same message replays first.
+        has_flag_dependencies: bool,
+    },
+    Other,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ReplayCandidate {
+    id: i64,
+    message_id: i64,
+    kind: ReplayPlanKind,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ReplayBatchCaps {
+    move_supported: bool,
+}
+
+/// Builds planner input from queued payloads. Unreadable payloads become
+/// `Other` and keep the per-op path.
+fn replay_candidates(operations: &[(i64, String, String, i64)]) -> Vec<ReplayCandidate> {
+    let flagged_messages: HashSet<i64> = operations
+        .iter()
+        .filter(|(_, kind, _, _)| kind == "flags")
+        .filter_map(|(_, _, payload, _)| serde_json::from_str::<FlagOperation>(payload).ok())
+        .map(|operation| operation.message_id)
+        .collect();
+    operations
+        .iter()
+        .map(|(id, kind, payload, attempts)| {
+            let (message_id, plan) = match kind.as_str() {
+                "flags" => match serde_json::from_str::<FlagOperation>(payload) {
+                    Ok(operation) => (
+                        operation.message_id,
+                        ReplayPlanKind::Flags {
+                            mailbox: operation.mailbox,
+                            uid_validity: operation.uid_validity,
+                            is_read: operation.is_read,
+                            is_starred: operation.is_starred,
+                        },
+                    ),
+                    Err(_) => (0, ReplayPlanKind::Other),
+                },
+                "move" => match serde_json::from_str::<MoveOperation>(payload) {
+                    Ok(operation) => (
+                        operation.message_id,
+                        ReplayPlanKind::Move {
+                            has_flag_dependencies: flagged_messages.contains(&operation.message_id),
+                            source: operation.source,
+                            destination: operation.destination,
+                            uid_validity: operation.uid_validity,
+                            attempts: *attempts,
+                        },
+                    ),
+                    Err(_) => (0, ReplayPlanKind::Other),
+                },
+                _ => (0, ReplayPlanKind::Other),
+            };
+            ReplayCandidate {
+                id: *id,
+                message_id,
+                kind: plan,
+            }
+        })
+        .collect()
+}
+
+/// Whether an op may share an IMAP command. Retried moves and moves that
+/// would only clear a pending mark stay on the per-op path.
+fn replay_batchable(candidate: &ReplayCandidate, caps: ReplayBatchCaps) -> bool {
+    match &candidate.kind {
+        ReplayPlanKind::Flags { uid_validity, .. } => uid_validity.is_some(),
+        ReplayPlanKind::Move {
+            source,
+            destination,
+            uid_validity,
+            attempts,
+            has_flag_dependencies,
+        } => {
+            caps.move_supported
+                && uid_validity.is_some()
+                && source != destination
+                && *attempts == 0
+                && !has_flag_dependencies
+        }
+        ReplayPlanKind::Other => false,
+    }
+}
+
+/// Groups queued ops into contiguous runs that share one IMAP command. Every
+/// index appears once, in queue order; a group of one keeps the per-op path.
+fn plan_replay_batches(candidates: &[ReplayCandidate], caps: ReplayBatchCaps) -> Vec<Vec<usize>> {
+    let mut plan: Vec<Vec<usize>> = Vec::new();
+    let mut run: Vec<usize> = Vec::new();
+    let mut run_messages: HashSet<i64> = HashSet::new();
+    for (index, candidate) in candidates.iter().enumerate() {
+        let batchable = replay_batchable(candidate, caps);
+        let joins = batchable
+            && run
+                .first()
+                .is_some_and(|&first| candidates[first].kind == candidate.kind)
+            && !run_messages.contains(&candidate.message_id)
+            && run.len() < MAX_REPLAY_BATCH_UIDS;
+        if !joins && !run.is_empty() {
+            plan.push(std::mem::take(&mut run));
+            run_messages.clear();
+        }
+        if batchable {
+            run.push(index);
+            run_messages.insert(candidate.message_id);
+        } else {
+            plan.push(vec![index]);
+        }
+    }
+    if !run.is_empty() {
+        plan.push(run);
+    }
+    plan
+}
+
+/// Flag outcomes shared by the batched and per-op replay paths.
+#[derive(Default)]
+struct ReplayFlagState {
+    /// Flag ops already applied as a move's dependency.
+    handled: HashSet<i64>,
+    failed_messages: HashSet<i64>,
+    terminal_messages: HashSet<i64>,
+}
+
+/// Replays one planned group in one IMAP command. Returns `false` with no
+/// state changed when the group must fall back to per-op replay.
+async fn replay_planned_batch(
+    db: &Database,
+    account: &AccountRecord,
+    password: &str,
+    policy: &CachePolicy,
+    group: &[(i64, String, String)],
+    flag_state: &mut ReplayFlagState,
+) -> Result<bool, String> {
+    match group.first().map(|(_, kind, _)| kind.as_str()) {
+        Some("flags") => replay_flag_batch(db, account, password, group, flag_state).await,
+        Some("move") => replay_move_batch(db, account, password, policy, group, flag_state).await,
+        _ => Ok(false),
+    }
+}
+
+async fn replay_flag_batch(
+    db: &Database,
+    account: &AccountRecord,
+    password: &str,
+    group: &[(i64, String, String)],
+    flag_state: &mut ReplayFlagState,
+) -> Result<bool, String> {
+    let account_id = &account.summary.id;
+    let mut operations = Vec::with_capacity(group.len());
+    for (id, kind, payload) in group {
+        if flag_state.handled.contains(id) {
+            return Ok(false);
+        }
+        let ValidatedReplay::Flags(operation) =
+            validate_queued_operation(db, account_id, kind, payload)?
+        else {
+            return Ok(false);
+        };
+        operations.push((*id, operation));
+    }
+    let Some((_, first)) = operations.first() else {
+        return Ok(false);
+    };
+    let mailbox = first.mailbox.clone();
+    let (is_read, is_starred) = (first.is_read, first.is_starred);
+    let Some(uid_validity) = first.uid_validity else {
+        return Ok(false);
+    };
+    // One STORE applies one value, so a mixed group must not share it.
+    if operations.iter().any(|(_, operation)| {
+        operation.mailbox != mailbox
+            || operation.uid_validity != Some(uid_validity)
+            || operation.is_read != is_read
+            || operation.is_starred != is_starred
+    }) {
+        return Ok(false);
+    }
+    let uids: Vec<u32> = operations
+        .iter()
+        .map(|(_, operation)| operation.uid)
+        .collect();
+    if mail::set_remote_uid_flags(
+        account,
+        password,
+        &mailbox,
+        &uids,
+        Some(uid_validity),
+        is_read,
+        is_starred,
+    )
+    .await
+    .is_err()
+    {
+        return Ok(false);
+    }
+    for (id, operation) in &operations {
+        db.set_flags(
+            operation.message_id,
+            operation.is_read,
+            operation.is_starred,
+        )?;
+        flag_state.failed_messages.remove(&operation.message_id);
+        db.remove_operation(account_id, *id)?;
+    }
+    Ok(true)
+}
+
+async fn replay_move_batch(
+    db: &Database,
+    account: &AccountRecord,
+    password: &str,
+    policy: &CachePolicy,
+    group: &[(i64, String, String)],
+    flag_state: &mut ReplayFlagState,
+) -> Result<bool, String> {
+    let account_id = &account.summary.id;
+    let queued = db.queued_operations(account_id)?;
+    let mut operations = Vec::with_capacity(group.len());
+    for (id, kind, payload) in group {
+        let ValidatedReplay::Move(operation) =
+            validate_queued_operation(db, account_id, kind, payload)?
+        else {
+            return Ok(false);
+        };
+        if flag_state.failed_messages.contains(&operation.message_id)
+            || flag_state.terminal_messages.contains(&operation.message_id)
+            || !move_replay_flag_dependencies(&queued, &operation)
+                .operation_ids
+                .is_empty()
+        {
+            return Ok(false);
+        }
+        operations.push((*id, operation));
+    }
+    let Some((_, first)) = operations.first() else {
+        return Ok(false);
+    };
+    let source = first.source.clone();
+    let destination = first.destination.clone();
+    let Some(uid_validity) = first.uid_validity else {
+        return Ok(false);
+    };
+    if operations.iter().any(|(_, operation)| {
+        operation.source != source
+            || operation.destination != destination
+            || operation.uid_validity != Some(uid_validity)
+    }) {
+        return Ok(false);
+    }
+    let uids: Vec<u32> = operations
+        .iter()
+        .map(|(_, operation)| operation.uid)
+        .collect();
+    if mail::move_remote_uids(
+        account,
+        password,
+        &source,
+        &destination,
+        &uids,
+        Some(uid_validity),
+    )
+    .await
+    .is_err()
+    {
+        return Ok(false);
+    }
+    let row_ids: Vec<i64> = operations
+        .iter()
+        .map(|(_, operation)| operation.message_id)
+        .collect();
+    // Only a database failure lands here; the per-op path dedupes and retries it.
+    if db
+        .remove_moved_messages(account_id, &row_ids, &destination)
+        .is_err()
+    {
+        return Ok(false);
+    }
+    for (id, _) in &operations {
+        db.remove_operation(account_id, *id)?;
+    }
+    let _ = mail::refresh_mailbox_envelopes(account, password, &destination, db, policy).await;
+    land_pending_snoozes(db, account_id, &destination);
+    Ok(true)
+}
+
+/// Land snoozes waiting on a destination the refresh just synced. Best effort:
+/// the transfer rows are durable, so a later sync lands whatever this misses.
+fn land_pending_snoozes(db: &Database, account_id: &str, destination: &str) {
+    if let Ok(Some(mailbox_id)) = db.mailbox_id_for_name(account_id, destination) {
+        let _ = db.apply_pending_snooze_transfers(account_id, mailbox_id);
+    }
+}
+
 async fn replay_offline_operations(
     app: &AppHandle,
     db: &Database,
@@ -892,14 +1340,55 @@ async fn replay_offline_operations(
     password: &str,
     policy: &CachePolicy,
 ) -> Result<bool, String> {
+    replay_offline_operations_with_notification(db, account, password, policy, |event, payload| {
+        let _ = app.emit(event, payload);
+    })
+    .await
+}
+
+async fn replay_offline_operations_with_notification(
+    db: &Database,
+    account: &AccountRecord,
+    password: &str,
+    policy: &CachePolicy,
+    mut notify: impl FnMut(&'static str, OfflineOperationsDropped) + Send,
+) -> Result<bool, String> {
     let account_id = &account.summary.id;
     let mut dropped = 0u32;
-    let operations = db.queued_operations(account_id)?;
-    let mut handled_flags = std::collections::HashSet::new();
-    let mut failed_flag_messages = std::collections::HashSet::new();
-    let mut terminal_flag_messages = std::collections::HashSet::new();
-    for (id, kind, payload) in operations {
-        if kind == "flags" && handled_flags.contains(&id) {
+    let queued = db.queued_operations_with_attempts(account_id)?;
+    let operations: Vec<(i64, String, String)> = queued
+        .iter()
+        .map(|(id, kind, payload, _)| (*id, kind.clone(), payload.clone()))
+        .collect();
+    let caps = ReplayBatchCaps {
+        move_supported: operations.iter().any(|(_, kind, _)| kind == "move")
+            && mail::folders::server_supports_move(account, password)
+                .await
+                .unwrap_or(false),
+    };
+    let mut batch_starts: HashMap<usize, Vec<usize>> =
+        plan_replay_batches(&replay_candidates(&queued), caps)
+            .into_iter()
+            .filter(|group| group.len() > 1)
+            .map(|group| (group[0], group))
+            .collect();
+    let mut batched: HashSet<usize> = HashSet::new();
+    let mut flag_state = ReplayFlagState::default();
+    for (index, (id, kind, payload)) in operations.clone().into_iter().enumerate() {
+        if batched.contains(&index) {
+            continue;
+        }
+        if let Some(members) = batch_starts.remove(&index) {
+            let group: Vec<_> = members
+                .iter()
+                .map(|&member| operations[member].clone())
+                .collect();
+            if replay_planned_batch(db, account, password, policy, &group, &mut flag_state).await? {
+                batched.extend(members);
+                continue;
+            }
+        }
+        if kind == "flags" && flag_state.handled.contains(&id) {
             continue;
         }
         match validate_queued_operation(db, account_id, &kind, &payload)? {
@@ -929,11 +1418,11 @@ async fn replay_offline_operations(
                     if error.terminal {
                         db.remove_operation(account_id, id)?;
                         dropped = dropped.saturating_add(1);
-                        failed_flag_messages.insert(operation.message_id);
-                        terminal_flag_messages.insert(operation.message_id);
+                        flag_state.failed_messages.insert(operation.message_id);
+                        flag_state.terminal_messages.insert(operation.message_id);
                         continue;
                     }
-                    failed_flag_messages.insert(operation.message_id);
+                    flag_state.failed_messages.insert(operation.message_id);
                 }
                 // Initial sync restored server flags. Keep queued intent only
                 // while replay can still succeed.
@@ -943,9 +1432,10 @@ async fn replay_offline_operations(
                     operation.is_starred,
                 )?;
                 if result.is_err() {
+                    let _ = db.record_operation_attempt(account_id, id);
                     continue;
                 }
-                failed_flag_messages.remove(&operation.message_id);
+                flag_state.failed_messages.remove(&operation.message_id);
             }
             ValidatedReplay::Keyword(operation) => {
                 let result = mail::set_remote_keyword(
@@ -961,12 +1451,14 @@ async fn replay_offline_operations(
                     if error.terminal {
                         db.remove_operation(account_id, id)?;
                         dropped = dropped.saturating_add(1);
+                    } else {
+                        let _ = db.record_operation_attempt(account_id, id);
                     }
                     continue;
                 }
             }
             ValidatedReplay::Move(operation) => {
-                if terminal_flag_messages.contains(&operation.message_id) {
+                if flag_state.terminal_messages.contains(&operation.message_id) {
                     let _ = db.clear_pending_move(operation.message_id);
                     db.remove_operation(account_id, id)?;
                     dropped = dropped.saturating_add(1);
@@ -998,14 +1490,14 @@ async fn replay_offline_operations(
                                 dependencies.is_starred,
                             )?;
                             for flag_id in &dependencies.operation_ids {
-                                handled_flags.insert(*flag_id);
+                                flag_state.handled.insert(*flag_id);
                             }
-                            failed_flag_messages.remove(&operation.message_id);
+                            flag_state.failed_messages.remove(&operation.message_id);
                         }
                         Err(error) if error.terminal => {
                             for flag_id in dependencies.operation_ids {
                                 db.remove_operation(account_id, flag_id)?;
-                                handled_flags.insert(flag_id);
+                                flag_state.handled.insert(flag_id);
                                 dropped = dropped.saturating_add(1);
                             }
                             let _ = db.clear_pending_move(operation.message_id);
@@ -1014,15 +1506,16 @@ async fn replay_offline_operations(
                             continue;
                         }
                         Err(_) => {
-                            failed_flag_messages.insert(operation.message_id);
+                            flag_state.failed_messages.insert(operation.message_id);
                             for flag_id in &dependencies.operation_ids {
-                                handled_flags.insert(*flag_id);
+                                flag_state.handled.insert(*flag_id);
                             }
+                            let _ = db.record_operation_attempt(account_id, id);
                             continue;
                         }
                     }
                 }
-                if failed_flag_messages.contains(&operation.message_id) {
+                if flag_state.failed_messages.contains(&operation.message_id) {
                     continue;
                 }
                 let remote_message_id = db.message_rfc_id(operation.message_id).ok().flatten();
@@ -1044,9 +1537,23 @@ async fn replay_offline_operations(
                     Ok(()) => {
                         for flag_id in dependencies.operation_ids {
                             db.remove_operation(account_id, flag_id)?;
-                            handled_flags.insert(flag_id);
+                            flag_state.handled.insert(flag_id);
                         }
-                        db.remove_message(operation.message_id)?;
+                        // Durable transfer: the snooze survives the row-id
+                        // change and lands once the destination caches the copy.
+                        // Source row and transfer commit together; a database
+                        // failure retries the dedupe-safe move on the next replay.
+                        if db
+                            .remove_moved_messages(
+                                account_id,
+                                &[operation.message_id],
+                                &operation.destination,
+                            )
+                            .is_err()
+                        {
+                            let _ = db.record_operation_attempt(account_id, id);
+                            continue;
+                        }
                         let _ = mail::refresh_mailbox_envelopes(
                             account,
                             password,
@@ -1055,23 +1562,25 @@ async fn replay_offline_operations(
                             policy,
                         )
                         .await;
+                        land_pending_snoozes(db, account_id, &operation.destination);
                     }
                     Err(error) => {
                         if error.terminal {
                             for flag_id in dependencies.operation_ids {
                                 db.remove_operation(account_id, flag_id)?;
-                                handled_flags.insert(flag_id);
+                                flag_state.handled.insert(flag_id);
                             }
                             let _ = db.clear_pending_move(operation.message_id);
                             db.remove_operation(account_id, id)?;
                             dropped = dropped.saturating_add(1);
                         } else {
                             for flag_id in &dependencies.operation_ids {
-                                handled_flags.insert(*flag_id);
+                                flag_state.handled.insert(*flag_id);
                             }
                         }
                         // Transient failure: keep the queued op and the
                         // pending-move hiding so a later sync retries it.
+                        let _ = db.record_operation_attempt(account_id, id);
                         continue;
                     }
                 }
@@ -1095,6 +1604,8 @@ async fn replay_offline_operations(
                     if error.terminal {
                         db.remove_operation(account_id, id)?;
                         dropped = dropped.saturating_add(1);
+                    } else {
+                        let _ = db.record_operation_attempt(account_id, id);
                     }
                     continue;
                 }
@@ -1111,7 +1622,7 @@ async fn replay_offline_operations(
         db.remove_operation(account_id, id)?;
     }
     if dropped > 0 {
-        let _ = app.emit(
+        notify(
             "offline-operations-dropped",
             OfflineOperationsDropped {
                 account_id: account_id.clone(),
@@ -1402,14 +1913,9 @@ mod tests {
     // - a user action queued behind the worker is not seen as contention.
     #[tokio::test]
     async fn worker_lock_wait_is_not_contention_but_user_waits_are() {
-        use super::{AccountActor, AsyncMutex, AtomicU8, AtomicUsize, Notify};
+        use super::AccountActor;
         use std::sync::Arc;
-        let actor = Arc::new(AccountActor {
-            operation: Arc::new(AsyncMutex::new(())),
-            wake: Notify::new(),
-            reasons: AtomicU8::new(0),
-            waiting: AtomicUsize::new(0),
-        });
+        let actor = Arc::new(AccountActor::new());
         let pass = actor.acquire().await;
         let worker = tokio::spawn({
             let actor = actor.clone();
@@ -1431,6 +1937,136 @@ mod tests {
         worker.await.unwrap();
         user.await.unwrap();
         assert!(!actor.contended());
+    }
+
+    #[test]
+    fn replay_wake_bit_is_distinct_from_existing_reasons() {
+        use super::wake;
+        let existing = wake::OPERATION
+            | wake::SYNC
+            | wake::DRAFTS
+            | wake::OUTBOX
+            | wake::CREDENTIALS
+            | wake::POLICY
+            | wake::RESUME
+            | wake::SLEEP;
+        assert_eq!(wake::REPLAY, 256);
+        assert_eq!(wake::REPLAY & existing, 0);
+    }
+
+    // Watch wake failure modes (G3, D4):
+    // 1. Two new bits alias an existing reason, so a watcher wake runs a full pass.
+    // 2. A SLEEP wake is consumed by the watcher check and never reaches the worker.
+    // 3. An ordinary INBOX wake restarts the watcher's session.
+    #[test]
+    fn watch_wake_bits_are_distinct_from_existing_reasons() {
+        use super::wake;
+        let existing = wake::OPERATION
+            | wake::SYNC
+            | wake::DRAFTS
+            | wake::OUTBOX
+            | wake::CREDENTIALS
+            | wake::POLICY
+            | wake::RESUME
+            | wake::SLEEP
+            | wake::REPLAY;
+        assert_eq!(wake::INBOX, 512);
+        assert_eq!(wake::FOLDER, 1024);
+        assert_eq!((wake::INBOX | wake::FOLDER) & existing, 0);
+        assert_eq!(wake::INBOX & wake::FOLDER, 0);
+    }
+
+    #[test]
+    fn sleep_wake_restarts_the_watcher_and_stays_for_the_worker() {
+        use super::{wake, AccountActor};
+        let actor = AccountActor::new();
+        actor.request(wake::SLEEP | wake::OUTBOX);
+        assert_eq!(actor.watch().epoch(), 1);
+        assert_eq!(actor.take_reasons() & wake::SLEEP, wake::SLEEP);
+        actor.request(wake::INBOX);
+        assert_eq!(
+            actor.watch().epoch(),
+            1,
+            "an INBOX wake must not restart the watcher"
+        );
+    }
+
+    // A worker panic must not permanently disable the account. Failure modes,
+    // written before the guard:
+    // 1. The panicked task leaves its ensure_worker registration in place, so
+    //    every later ensure_worker call short-circuits the account forever.
+    // 2. The INBOX watcher the task spawned keeps running; nobody else holds
+    //    its handle once the worker task is gone.
+    // 3. Cleanup runs while the panic unwinds, so it must not panic itself.
+    #[test]
+    fn panicking_worker_retires_its_registration_and_aborts_its_watcher() {
+        use super::{AppState, WorkerCleanup};
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        use tauri::Manager;
+
+        let watcher_aborted = Arc::new(AtomicBool::new(false));
+        let (watcher_ready_tx, watcher_ready_rx) = tokio::sync::oneshot::channel::<()>();
+        let app = tauri::test::mock_app();
+        let directory = tempfile::tempdir().unwrap();
+        let db = Database::memory();
+        let settings =
+            crate::settings::SettingsStore::load(directory.path().join("settings.json"), &db)
+                .unwrap();
+        let handle = app.app_handle().clone();
+        handle.manage(AppState::new(db, settings, directory.path().to_path_buf()));
+
+        let account_id = uuid::Uuid::new_v4().to_string();
+        let state = handle.state::<AppState>();
+        state.workers.lock().unwrap().insert(account_id.clone());
+
+        let worker = tauri::async_runtime::spawn({
+            let handle = handle.clone();
+            let worker_account_id = account_id.clone();
+            let aborted = watcher_aborted.clone();
+            async move {
+                // A real watcher parks on IDLE; this parked future records
+                // cancellation in Drop, ending cleanly only from the guard.
+                struct ParkedWatcher(Arc<AtomicBool>);
+                impl Drop for ParkedWatcher {
+                    fn drop(&mut self) {
+                        self.0.store(true, Ordering::SeqCst);
+                    }
+                }
+                let mut cleanup = WorkerCleanup::for_account(&handle, &worker_account_id);
+                let ready = watcher_ready_tx;
+                cleanup.watch(tauri::async_runtime::spawn(async move {
+                    let _parked = ParkedWatcher(aborted);
+                    let _ = ready.send(());
+                    std::future::pending::<()>().await;
+                }));
+                // The watcher has polled and is parked, so the only way its
+                // future can end is the guard's abort while the bug unwinds.
+                watcher_ready_rx.await.unwrap();
+                panic!("simulated bug in the worker loop");
+            }
+        });
+        let panicked = matches!(
+            tauri::async_runtime::block_on(worker),
+            Err(tauri::Error::JoinError(error)) if error.is_panic()
+        );
+        assert!(panicked);
+        // The watcher future is dropped by cancellation on a runtime worker;
+        // wait briefly rather than asserting on the same instant.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !watcher_aborted.load(Ordering::SeqCst) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "watcher was not aborted"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(
+            !state.workers.lock().unwrap().contains(&account_id),
+            "cleanup must run while the panic unwinds so ensure_worker can re-spawn"
+        );
+        // The registration is gone, so ensure_worker's insert succeeds again.
+        assert!(state.workers.lock().unwrap().insert(account_id.clone()));
     }
 
     #[test]
@@ -1555,6 +2191,7 @@ mod tests {
                 aliases: vec![],
                 auth_method: "password".into(),
                 signature: String::new(),
+                signature_html: String::new(),
                 reply_to: String::new(),
                 color: None,
             },
@@ -2648,5 +3285,235 @@ mod tests {
         assert_eq!(dependencies.operation_ids.len(), 2);
         assert_eq!(dependencies.is_read, Some(false));
         assert_eq!(dependencies.is_starred, Some(true));
+    }
+
+    // Batched replay failure modes (W15):
+    // 1. Flags with different values share one STORE and apply the wrong value.
+    // 2. A move batches without MOVE, or retries a move that may have landed.
+    // 3. A batch reorders ops for one message or puts one message twice in a command.
+    // 4. An unbounded run builds an IMAP command line the server rejects.
+    use super::{
+        plan_replay_batches, replay_candidates, ReplayBatchCaps, ReplayCandidate, ReplayPlanKind,
+    };
+
+    const MOVE_CAPABLE: ReplayBatchCaps = ReplayBatchCaps {
+        move_supported: true,
+    };
+    const NO_MOVE: ReplayBatchCaps = ReplayBatchCaps {
+        move_supported: false,
+    };
+
+    fn flag_candidate(
+        id: i64,
+        message_id: i64,
+        mailbox: &str,
+        uid_validity: Option<u32>,
+        is_read: Option<bool>,
+        is_starred: Option<bool>,
+    ) -> ReplayCandidate {
+        ReplayCandidate {
+            id,
+            message_id,
+            kind: ReplayPlanKind::Flags {
+                mailbox: mailbox.into(),
+                uid_validity,
+                is_read,
+                is_starred,
+            },
+        }
+    }
+
+    fn move_candidate(
+        id: i64,
+        message_id: i64,
+        source: &str,
+        destination: &str,
+        attempts: i64,
+    ) -> ReplayCandidate {
+        ReplayCandidate {
+            id,
+            message_id,
+            kind: ReplayPlanKind::Move {
+                source: source.into(),
+                destination: destination.into(),
+                uid_validity: Some(7),
+                attempts,
+                has_flag_dependencies: false,
+            },
+        }
+    }
+
+    #[test]
+    fn replay_plan_groups_flags_by_mailbox_validity_and_values() {
+        let candidates = vec![
+            flag_candidate(1, 10, "INBOX", Some(7), Some(true), None),
+            flag_candidate(2, 11, "INBOX", Some(7), Some(true), None),
+            flag_candidate(3, 12, "INBOX", Some(7), Some(false), None),
+            flag_candidate(4, 13, "Archive", Some(7), Some(true), None),
+            flag_candidate(5, 14, "INBOX", Some(8), Some(true), None),
+            flag_candidate(6, 15, "INBOX", Some(8), Some(true), Some(true)),
+        ];
+        assert_eq!(
+            plan_replay_batches(&candidates, NO_MOVE),
+            vec![vec![0, 1], vec![2], vec![3], vec![4], vec![5]]
+        );
+    }
+
+    #[test]
+    fn replay_plan_caps_each_batch_at_the_uid_limit() {
+        let total = super::MAX_REPLAY_BATCH_UIDS * 2 + 1;
+        let candidates: Vec<_> = (0..total)
+            .map(|index| {
+                let id = index as i64 + 1;
+                flag_candidate(id, id, "INBOX", Some(7), Some(true), None)
+            })
+            .collect();
+        let sizes: Vec<usize> = plan_replay_batches(&candidates, NO_MOVE)
+            .iter()
+            .map(Vec::len)
+            .collect();
+        assert_eq!(
+            sizes,
+            vec![
+                super::MAX_REPLAY_BATCH_UIDS,
+                super::MAX_REPLAY_BATCH_UIDS,
+                1
+            ]
+        );
+    }
+
+    #[test]
+    fn replay_plan_batches_moves_only_with_move_capability() {
+        let candidates = vec![
+            move_candidate(1, 10, "INBOX", "Archive", 0),
+            move_candidate(2, 11, "INBOX", "Archive", 0),
+        ];
+        assert_eq!(
+            plan_replay_batches(&candidates, NO_MOVE),
+            vec![vec![0], vec![1]]
+        );
+        assert_eq!(
+            plan_replay_batches(&candidates, MOVE_CAPABLE),
+            vec![vec![0, 1]]
+        );
+    }
+
+    #[test]
+    fn replay_plan_keeps_retried_moves_on_the_per_op_path() {
+        let candidates = vec![
+            move_candidate(1, 10, "INBOX", "Archive", 0),
+            move_candidate(2, 11, "INBOX", "Archive", 1),
+            move_candidate(3, 12, "INBOX", "Archive", 0),
+        ];
+        assert_eq!(
+            plan_replay_batches(&candidates, MOVE_CAPABLE),
+            vec![vec![0], vec![1], vec![2]]
+        );
+    }
+
+    #[test]
+    fn replay_plan_never_batches_moves_that_only_clear_pending() {
+        let mut no_validity = move_candidate(2, 11, "INBOX", "Archive", 0);
+        if let ReplayPlanKind::Move { uid_validity, .. } = &mut no_validity.kind {
+            *uid_validity = None;
+        }
+        let candidates = vec![
+            move_candidate(1, 10, "INBOX", "INBOX", 0),
+            no_validity,
+            flag_candidate(3, 12, "INBOX", None, Some(true), None),
+        ];
+        assert_eq!(
+            plan_replay_batches(&candidates, MOVE_CAPABLE),
+            vec![vec![0], vec![1], vec![2]]
+        );
+    }
+
+    #[test]
+    fn replay_plan_keeps_per_message_order_across_kinds() {
+        let candidates = vec![
+            flag_candidate(1, 10, "INBOX", Some(7), Some(true), None),
+            move_candidate(2, 10, "INBOX", "Archive", 0),
+            flag_candidate(3, 10, "Archive", Some(7), None, Some(true)),
+        ];
+        assert_eq!(
+            plan_replay_batches(&candidates, MOVE_CAPABLE),
+            vec![vec![0], vec![1], vec![2]]
+        );
+    }
+
+    #[test]
+    fn replay_plan_never_puts_one_message_twice_in_a_batch() {
+        let candidates = vec![
+            flag_candidate(1, 10, "INBOX", Some(7), Some(true), None),
+            flag_candidate(2, 10, "INBOX", Some(7), Some(true), None),
+            flag_candidate(3, 11, "INBOX", Some(7), Some(true), None),
+        ];
+        assert_eq!(
+            plan_replay_batches(&candidates, NO_MOVE),
+            vec![vec![0], vec![1, 2]]
+        );
+    }
+
+    #[test]
+    fn replay_plan_splits_mixed_runs_in_queue_order() {
+        let candidates = vec![
+            flag_candidate(1, 10, "INBOX", Some(7), Some(true), None),
+            flag_candidate(2, 11, "INBOX", Some(7), Some(true), None),
+            move_candidate(3, 12, "INBOX", "Archive", 0),
+            move_candidate(4, 13, "INBOX", "Archive", 0),
+            move_candidate(5, 14, "INBOX", "Archive", 2),
+            flag_candidate(6, 15, "INBOX", Some(7), Some(true), None),
+            ReplayCandidate {
+                id: 7,
+                message_id: 0,
+                kind: ReplayPlanKind::Other,
+            },
+        ];
+        assert_eq!(
+            plan_replay_batches(&candidates, MOVE_CAPABLE),
+            vec![vec![0, 1], vec![2, 3], vec![4], vec![5], vec![6]]
+        );
+    }
+
+    #[test]
+    fn replay_candidates_mark_moves_that_have_queued_flags() {
+        let move_payload = |message_id: i64| {
+            format!(
+                r#"{{"messageId":{message_id},"uid":1,"source":"INBOX","destination":"Archive","uidValidity":7}}"#
+            )
+        };
+        let operations = vec![
+            (1, "move".to_string(), move_payload(10), 0),
+            (
+                2,
+                "flags".to_string(),
+                r#"{"messageId":10,"uid":1,"mailbox":"INBOX","uidValidity":7,"isRead":true,"isStarred":null}"#
+                    .to_string(),
+                0,
+            ),
+            (3, "move".to_string(), move_payload(11), 0),
+            (4, "move".to_string(), "not json".to_string(), 0),
+        ];
+        let candidates = replay_candidates(&operations);
+        assert!(matches!(
+            candidates[0].kind,
+            ReplayPlanKind::Move {
+                has_flag_dependencies: true,
+                ..
+            }
+        ));
+        assert!(matches!(
+            candidates[2].kind,
+            ReplayPlanKind::Move {
+                has_flag_dependencies: false,
+                attempts: 0,
+                ..
+            }
+        ));
+        assert_eq!(candidates[3].kind, ReplayPlanKind::Other);
+        assert_eq!(
+            plan_replay_batches(&candidates, MOVE_CAPABLE),
+            vec![vec![0], vec![1], vec![2], vec![3]]
+        );
     }
 }

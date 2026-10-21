@@ -1,11 +1,11 @@
 import { api } from "./api";
+import { BULK_LIMIT, createOptimisticGate } from "./bulk";
 import { strings } from "./i18n";
 import { useAppStore } from "./store";
 import { conversationMessages } from "./threads";
 import type { MessageSummary } from "./types";
 
-const BULK_LIMIT = 200;
-const listedStarGeneration = new Map<number, number>();
+const listedStar = createOptimisticGate<number>();
 
 function applyListedStar(messageId: number, starred: boolean): void {
   const store = useAppStore.getState();
@@ -32,8 +32,7 @@ export async function toggleListedStar(messageId: number): Promise<void> {
       : undefined);
   if (!summary) return;
   const next = !summary.isStarred;
-  const generation = (listedStarGeneration.get(messageId) ?? 0) + 1;
-  listedStarGeneration.set(messageId, generation);
+  const generation = listedStar.begin(messageId);
   const viewMailboxId = store.activeMailboxId;
   const viewLocal = store.activeLocalView;
   applyListedStar(messageId, next);
@@ -42,7 +41,7 @@ export async function toggleListedStar(messageId: number): Promise<void> {
   } catch (cause) {
     const current = useAppStore.getState();
     if (
-      listedStarGeneration.get(messageId) !== generation ||
+      !listedStar.isLatest(messageId, generation) ||
       current.activeAccountId !== summary.accountId ||
       current.activeMailboxId !== viewMailboxId ||
       current.activeLocalView !== viewLocal

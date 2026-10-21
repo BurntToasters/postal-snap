@@ -51,6 +51,12 @@ export const settingsSearchEntries: SettingsSearchEntry[] = [
   },
   {
     section: "appearance",
+    title: s.badgeScope,
+    help: s.badgeScopeHelp,
+    keywords: "unread badge taskbar dock inbox accounts",
+  },
+  {
+    section: "appearance",
     title: s.readingPane,
     help: s.readingPaneHelp,
     keywords: "right bottom hidden layout",
@@ -218,6 +224,12 @@ export const settingsSearchEntries: SettingsSearchEntry[] = [
     title: s.cacheLimit,
     help: s.cachePolicyHelp,
     keywords: "disk space size",
+  },
+  {
+    section: "storage",
+    title: s.keepAttachmentsOffline,
+    help: s.keepAttachmentsOfflineHelp,
+    keywords: "attachments files offline download keep open without connection",
   },
   {
     section: "shortcuts",

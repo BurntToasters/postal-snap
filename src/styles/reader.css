@@ -1005,3 +1005,22 @@ html[data-reduce-transparency="true"] .reader-actions {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+.attachment-partial {
+  display: grid;
+  width: 100%;
+  gap: 6px;
+  padding: var(--control-pad-block) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+}
+
+.attachment-partial p {
+  margin: 0;
+}
+
+.attachment-partial button {
+  justify-self: start;
+  min-height: var(--target-size);
+}

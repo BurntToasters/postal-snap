@@ -1,0 +1,20 @@
+// English source catalog namespace: command palette and shortcut overlay.
+export const palette = {
+  openPalette: "Command palette",
+  paletteTitle: "Command palette",
+  inputLabel: "Search commands, folders, and accounts",
+  placeholder: "Type to search",
+  keysHint: "Arrow keys move. Enter runs. Escape closes.",
+  resultsLabel: "Results",
+  actionsGroup: "Actions",
+  foldersGroup: "Folders",
+  accountsGroup: "Accounts",
+  noResults: "No matches. Try fewer letters.",
+  closePalette: "Close command palette",
+  shortcutsTitle: "Keyboard shortcuts",
+  shortcutsIntro: "Shortcuts work when you are not typing in a field.",
+  scopeGlobal: "General",
+  scopeList: "Message list",
+  scopeReader: "Message",
+  scopeComposer: "Composer",
+} as const;

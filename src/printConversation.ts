@@ -8,8 +8,7 @@ import { sanitizeReceivedHtml } from "./security";
 import { useAppStore } from "./store";
 import { conversationMessages } from "./threads";
 import type { MessageDetail, MessageSummary } from "./types";
-
-const BULK_LIMIT = 200;
+import { BULK_LIMIT } from "./bulk";
 
 function printHtml(
   detail: MessageDetail,

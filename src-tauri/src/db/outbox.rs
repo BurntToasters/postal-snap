@@ -11,6 +11,10 @@ use crate::models::{ComposeDraft, FilterMatchPreview, FilterRule, OutboxSummary,
 /// stored MIME) need attention, new sends queue behind a user decision.
 const MAX_NEEDS_ATTENTION_OUTBOX_MESSAGES: i64 = 25;
 const MAX_NEEDS_ATTENTION_OUTBOX_BYTES: i64 = 256 * 1024 * 1024;
+/// Bytes of stored MIME one account may have waiting to go out across queued,
+/// scheduled, and needs-attention rows. The stricter needs-attention caps
+/// cover the parked subset; this bounds the whole waiting backlog.
+const MAX_PENDING_OUTBOX_BYTES: i64 = 1024 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug)]
 pub struct OutboxArchiveSource {
@@ -127,6 +131,15 @@ impl Database {
         {
             return Err(
                 "Messages in the outbox need attention. Retry or delete them before sending more."
+                    .into(),
+            );
+        }
+        // Same backlog idea across every waiting state, so nothing parked does
+        // not mean nothing bounded: the queued and scheduled stores still stop
+        // growing once this many MIME bytes already wait to leave.
+        if pending_sends_denied(pending_outbox_bytes(&transaction, &draft.account_id)?) {
+            return Err(
+                "The sending queue is at its size limit. Retry or delete waiting messages before sending more."
                     .into(),
             );
         }
@@ -334,6 +347,8 @@ impl Database {
 
     /// Record a definite "try later" reply and wait 1, 2, 4… up to 60 minutes
     /// before the next automatic try. False once `max_attempts` is spent.
+    /// SQLite evaluates the SET expressions against the pre-update row, so the
+    /// first try reads `retry_attempts=0` and waits one minute.
     pub fn defer_outbox_retry(
         &self,
         id: &str,
@@ -752,7 +767,7 @@ impl Database {
         conn.pragma_update(None, "synchronous", "FULL")
             .map_err(db_error)?;
         let changed = conn.execute(
-            "UPDATE outbox SET state='sending',attempt_started_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP,
+            "UPDATE outbox SET state='sending',updated_at=CURRENT_TIMESTAMP,
                  retry_after=NULL,
                  retry_attempts=CASE WHEN ?3='needs_attention' THEN 0 ELSE retry_attempts END
                  WHERE id=?1 AND account_id=?2 AND state=?3",
@@ -774,8 +789,12 @@ impl Database {
         let changed = self
             .conn()?
             .execute(
+                // Only rows with nothing to send yet are touched; a retry of
+                // prepared content must neither clobber nor regenerate the
+                // exact MIME that already reached SMTP once.
                 "UPDATE outbox SET message_id=?3,mime_bytes=?4,updated_at=CURRENT_TIMESTAMP
-                 WHERE id=?1 AND account_id=?2 AND state='queued'
+                 WHERE id=?1 AND account_id=?2
+                 AND state IN ('queued','scheduled','needs_attention')
                  AND (message_id IS NULL OR message_id='' OR mime_bytes IS NULL OR LENGTH(mime_bytes)=0)",
                 params![id, account_id, message_id, mime_bytes],
             )
@@ -894,6 +913,25 @@ impl Database {
 }
 }
 
+/// Stored MIME bytes waiting to leave one account: queued, scheduled, or
+/// parked for attention. Pure accounting over the outbox table.
+fn pending_outbox_bytes(conn: &rusqlite::Connection, account_id: &str) -> Result<i64, String> {
+    conn.query_row(
+        "SELECT COALESCE(SUM(LENGTH(mime_bytes)),0) FROM outbox
+         WHERE account_id=?1 AND state IN ('queued','scheduled','needs_attention')",
+        [account_id],
+        |row| row.get(0),
+    )
+    .map_err(db_error)
+}
+
+/// Only an already-at-cap backlog blocks a new send. The incoming message is
+/// not charged: parking normal-sized sends for a byte test would strand mail
+/// behind the limits in queue_outbox_with_archive.
+fn pending_sends_denied(pending_bytes: i64) -> bool {
+    pending_bytes >= MAX_PENDING_OUTBOX_BYTES
+}
+
 fn rule_match_pattern(rule: &FilterRule) -> Option<(&'static str, String, String)> {
     let needle: String = rule
         .contains
@@ -965,4 +1003,194 @@ fn preview_subject(value: String) -> String {
         subject.push(character);
     }
     subject
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{
+        AccountRecord, AccountSummary, BodyFormat, ComposeDraft, ProviderKind, ServerConfig,
+        TlsMode,
+    };
+
+    fn account() -> AccountRecord {
+        AccountRecord {
+            summary: AccountSummary {
+                default_body_format: BodyFormat::Html,
+                id: "account-1".into(),
+                provider: ProviderKind::Manual,
+                email: "sam@example.com".into(),
+                display_name: "Sam".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+                signature_html: String::new(),
+                reply_to: String::new(),
+                color: None,
+            },
+            imap: ServerConfig {
+                trusted_certificate: None,
+                host: "imap.example.com".into(),
+                port: 993,
+                tls_mode: TlsMode::Tls,
+                username: "sam@example.com".into(),
+            },
+            smtp: ServerConfig {
+                trusted_certificate: None,
+                host: "smtp.example.com".into(),
+                port: 587,
+                tls_mode: TlsMode::StartTls,
+                username: "sam@example.com".into(),
+            },
+        }
+    }
+
+    fn with_account() -> (Database, String) {
+        let database = Database::memory();
+        let account = account();
+        database.insert_account(&account).unwrap();
+        (database, account.summary.id.clone())
+    }
+
+    fn draft() -> ComposeDraft {
+        ComposeDraft {
+            body_format: BodyFormat::Html,
+            source_message_id: None,
+            source_kind: None,
+            include_signature: true,
+            importance: String::new(),
+            request_receipt: false,
+            reply_to: None,
+            id: None,
+            account_id: "account-1".into(),
+            from: None,
+            to: vec!["jane@example.com".into()],
+            cc: vec![],
+            bcc: vec![],
+            subject: "Family update".into(),
+            html_body: "<p>Hello</p>".into(),
+            text_body: "Hello".into(),
+            attachments: vec![],
+            in_reply_to: None,
+            references: None,
+            send_at: None,
+        }
+    }
+
+    #[test]
+    fn prepare_queued_outbox_repairs_any_waiting_state_but_never_overwrites() {
+        let (db, account_id) = with_account();
+        for state in ["queued", "scheduled", "needs_attention"] {
+            let id = db
+                .queue_outbox(&draft(), state, None, "", b"", None)
+                .unwrap();
+            db.prepare_queued_outbox(
+                &id,
+                &account_id,
+                &format!("<repaired-{state}@example.com>"),
+                b"Subject: repaired\r\n\r\nbody",
+            )
+            .unwrap();
+            let (_, prepared_state, message_id, mime) =
+                db.outbox_delivery(&id, &account_id).unwrap();
+            assert_eq!(prepared_state, state);
+            assert_eq!(message_id, format!("<repaired-{state}@example.com>"));
+            assert_eq!(mime, b"Subject: repaired\r\n\r\nbody");
+        }
+
+        // A row that already carries content is guarded, not clobbered.
+        let filled = db
+            .queue_outbox(
+                &draft(),
+                "needs_attention",
+                None,
+                "<filled@example.com>",
+                b"already attempted",
+                None,
+            )
+            .unwrap();
+        assert!(db
+            .prepare_queued_outbox(
+                &filled,
+                &account_id,
+                "<must-not-send@example.com>",
+                b"multiple versions of the same mail",
+            )
+            .is_err());
+        let (_, _, message_id, mime) = db.outbox_delivery(&filled, &account_id).unwrap();
+        assert_eq!(message_id, "<filled@example.com>");
+        assert_eq!(mime, b"already attempted");
+    }
+
+    #[test]
+    fn pending_backlog_bytes_count_every_waiting_state() {
+        let (db, account_id) = with_account();
+        db.queue_outbox(&draft(), "queued", None, "<q@e>", &[0u8; 100], None)
+            .unwrap();
+        db.queue_outbox(&draft(), "scheduled", None, "<s@e>", &[0u8; 50], None)
+            .unwrap();
+        db.queue_outbox(
+            &draft(),
+            "needs_attention",
+            None,
+            "<a@e>",
+            &[0u8; 500],
+            None,
+        )
+        .unwrap();
+        db.queue_outbox(&draft(), "sent", None, "<t@e>", &[0u8; 900], None)
+            .unwrap();
+        let conn = db.conn().unwrap();
+        assert_eq!(pending_outbox_bytes(&conn, &account_id).unwrap(), 650);
+        assert_eq!(pending_outbox_bytes(&conn, "other-account").unwrap(), 0);
+
+        // Boundary: denial starts once the backlog IS the cap, not before it.
+        assert!(!pending_sends_denied(MAX_PENDING_OUTBOX_BYTES - 1));
+        assert!(pending_sends_denied(MAX_PENDING_OUTBOX_BYTES));
+    }
+
+    fn retry_wait_seconds(db: &Database, id: &str) -> i64 {
+        let retry_after: String = db
+            .conn()
+            .unwrap()
+            .query_row("SELECT retry_after FROM outbox WHERE id=?1", [id], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let due = chrono::DateTime::parse_from_rfc3339(&retry_after).unwrap();
+        (due.with_timezone(&chrono::Utc) - chrono::Utc::now()).num_seconds()
+    }
+
+    #[test]
+    fn defer_outbox_retry_ladder_waits_one_two_four_minutes_then_caps() {
+        let (db, account_id) = with_account();
+        let id = db
+            .queue_outbox(&draft(), "queued", None, "<l@e>", b"mail", None)
+            .unwrap();
+        // SQLite evaluates the SET against the pre-update row: the k-th try
+        // reads retry_attempts=k-1, so the waits are 1, 2, 4… minutes.
+        for (index, minutes) in [1i64, 2, 4, 8, 16, 32, 60, 60].iter().enumerate() {
+            assert!(db.defer_outbox_retry(&id, &account_id, 100).unwrap());
+            let wait = retry_wait_seconds(&db, &id);
+            let expected = minutes * 60;
+            assert!(
+                (expected - 10..=expected + 20).contains(&wait),
+                "try {} waited {}s, expected ~{} min",
+                index + 1,
+                wait,
+                minutes
+            );
+        }
+        // The call that reaches max_attempts reports exhaustion, so the
+        // caller parks instead of assuming another automatic try.
+        assert!(!db.defer_outbox_retry(&id, &account_id, 8).unwrap());
+        let fresh = db
+            .queue_outbox(&draft(), "queued", None, "<m@e>", b"mail", None)
+            .unwrap();
+        assert!(db.defer_outbox_retry(&fresh, &account_id, 3).unwrap());
+        assert!(db.defer_outbox_retry(&fresh, &account_id, 3).unwrap());
+        assert!(!db.defer_outbox_retry(&fresh, &account_id, 3).unwrap());
+    }
 }

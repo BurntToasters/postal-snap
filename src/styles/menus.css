@@ -88,13 +88,13 @@
   z-index: 30;
   top: calc(100% + 6px);
   right: 0;
-  min-width: 15rem;
+  min-width: var(--mailbox-more-menu-min-width);
 }
 
 .mailbox-filter-menu {
   position: fixed;
   z-index: 30;
-  min-width: 12rem;
+  min-width: var(--mailbox-filter-menu-min-width);
   max-width: calc(100vw - 16px);
   overflow-y: auto;
 }
@@ -104,7 +104,7 @@
   z-index: 20;
   top: calc(100% + 6px);
   right: 0;
-  min-width: 16rem;
+  min-width: var(--reader-more-menu-min-width);
   /* Long folder lists scroll inside the menu instead of off screen. */
   max-height: min(70vh, 34rem);
   overflow-y: auto;
@@ -144,6 +144,10 @@
   background: var(--surface-hover);
 }
 
+.recipient-suggestions li.active .suggestion-address {
+  color: var(--text);
+}
+
 .recipient-suggestions .suggestion-name {
   font-weight: 600;
   overflow: hidden;
@@ -164,7 +168,7 @@
   z-index: 20;
   bottom: calc(100% + 6px);
   left: 0;
-  min-width: 250px;
+  min-width: var(--menu-search-min-width);
 }
 
 .schedule-form {
@@ -186,7 +190,7 @@
   position: fixed;
   z-index: 1100;
   display: block;
-  min-width: 200px;
+  min-width: var(--context-menu-min-width);
   /* em-based so the menu widens with text size instead of clipping labels. */
   max-width: min(24em, calc(100vw - 16px));
   max-height: min(80vh, calc(100dvh - 16px));

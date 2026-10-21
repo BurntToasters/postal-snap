@@ -23,6 +23,8 @@ pub struct SettingsStore {
     startup_notice: Mutex<Option<String>>,
     write_lock: Mutex<()>,
     migration_pending: Mutex<bool>,
+    /// Mirrors `keepAttachmentsOffline` into the sync path, which only sees the database.
+    db: Option<Database>,
 }
 
 impl SettingsStore {
@@ -67,12 +69,14 @@ impl SettingsStore {
                 settings
             }
         };
+        db.set_keep_attachments_offline(settings.keep_attachments_offline);
         Ok(Self {
             path,
             current: Mutex::new(settings),
             startup_notice: Mutex::new(startup_notice),
             write_lock: Mutex::new(()),
             migration_pending: Mutex::new(migration_pending),
+            db: Some(db.clone()),
         })
     }
 
@@ -86,6 +90,7 @@ impl SettingsStore {
             startup_notice: Mutex::new(None),
             write_lock: Mutex::new(()),
             migration_pending: Mutex::new(true),
+            db: None,
         }
     }
 
@@ -93,7 +98,7 @@ impl SettingsStore {
         let settings = self
             .current
             .lock()
-            .map_err(|_| "Application settings are unavailable.".to_string())?;
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         Ok(settings.clone())
     }
 
@@ -101,11 +106,11 @@ impl SettingsStore {
         let _write_guard = self
             .write_lock
             .lock()
-            .map_err(|_| "Application settings are unavailable.".to_string())?;
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if *self
             .migration_pending
             .lock()
-            .map_err(|_| "Application settings are unavailable.".to_string())?
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
         {
             return Err(
                 "Saved application settings could not be migrated. Restart Postal Snap or import/reset settings."
@@ -129,11 +134,14 @@ impl SettingsStore {
         *self
             .current
             .lock()
-            .map_err(|_| "Application settings are unavailable.".to_string())? = settings.clone();
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = settings.clone();
+        if let Some(db) = &self.db {
+            db.set_keep_attachments_offline(settings.keep_attachments_offline);
+        }
         *self
             .migration_pending
             .lock()
-            .map_err(|_| "Application settings are unavailable.".to_string())? = false;
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = false;
         Ok(settings)
     }
 
@@ -141,7 +149,7 @@ impl SettingsStore {
         let notice = self
             .startup_notice
             .lock()
-            .map_err(|_| "Application settings are unavailable.".to_string())?
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
         Ok(notice)
     }
@@ -150,7 +158,7 @@ impl SettingsStore {
         let _write_guard = self
             .write_lock
             .lock()
-            .map_err(|_| "Application settings are unavailable.".to_string())?;
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let current = self.get()?;
         let portable = PortableSettingsFile {
             application: PORTABLE_APPLICATION.into(),
@@ -166,7 +174,7 @@ impl SettingsStore {
         let _write_guard = self
             .write_lock
             .lock()
-            .map_err(|_| "Application settings are unavailable.".to_string())?;
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let raw = read_bounded(path)?.ok_or_else(|| "Settings file was not found.".to_string())?;
         let portable: PortableSettingsFile = serde_json::from_str(&raw)
             .map_err(|_| "Settings export is invalid or unsupported.".to_string())?;
@@ -187,7 +195,7 @@ impl SettingsStore {
         let _write_guard = self
             .write_lock
             .lock()
-            .map_err(|_| "Application settings are unavailable.".to_string())?;
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let current = self.get()?;
         let next = PortableSettings::default().apply_to(&current);
         self.save_locked(next)
@@ -234,6 +242,8 @@ impl From<&AppSettings> for PortableSettings {
             mark_read: settings.mark_read.clone(),
             notify_new_mail: settings.notify_new_mail,
             close_to_tray: settings.close_to_tray,
+            badge_scope: settings.badge_scope.clone(),
+            keep_attachments_offline: settings.keep_attachments_offline,
             update_check_interval: settings.update_check_interval.clone(),
         }
     }
@@ -282,6 +292,8 @@ impl PortableSettings {
             mark_read: self.mark_read.clone(),
             notify_new_mail: self.notify_new_mail,
             close_to_tray: self.close_to_tray,
+            badge_scope: self.badge_scope.clone(),
+            keep_attachments_offline: self.keep_attachments_offline,
             update_check_interval: self.update_check_interval.clone(),
             update_channel: current.update_channel.clone(),
             setup_completed: current.setup_completed,
@@ -455,6 +467,7 @@ fn validate(settings: &AppSettings) -> Result<(), String> {
             "startupAnd6h" | "startupAnd12h" | "startupAnd24h" | "startup" | "manual"
         )
         || !matches!(settings.update_channel.as_str(), "auto" | "stable" | "beta")
+        || !matches!(settings.badge_scope.as_str(), "activeInbox" | "allInboxes")
         || !(210..=420).contains(&settings.folder_pane_width)
         || !(300..=720).contains(&settings.message_pane_width)
         || !(240..=800).contains(&settings.reader_pane_height)
@@ -1204,6 +1217,44 @@ mod tests {
     }
 
     #[test]
+    fn badge_scope_defaults_validates_and_round_trips_portably() {
+        assert_eq!(AppSettings::default().badge_scope, "activeInbox");
+
+        let mut legacy = serde_json::to_value(AppSettings::default()).unwrap();
+        legacy.as_object_mut().unwrap().remove("badgeScope");
+        let parsed = parse_and_validate(&legacy.to_string()).unwrap();
+        assert_eq!(parsed.badge_scope, "activeInbox");
+
+        let mut portable = serde_json::to_value(PortableSettings::default()).unwrap();
+        portable.as_object_mut().unwrap().remove("badgeScope");
+        let parsed: PortableSettings = serde_json::from_value(portable).unwrap();
+        assert_eq!(parsed.badge_scope, "activeInbox");
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let export_path = directory.path().join("export.json");
+        let store = SettingsStore::load(path, &Database::memory()).unwrap();
+        store
+            .save(AppSettings {
+                badge_scope: "allInboxes".into(),
+                ..AppSettings::default()
+            })
+            .unwrap();
+        store.export_to(&export_path).unwrap();
+        store.save(AppSettings::default()).unwrap();
+        assert_eq!(
+            store.import_from(&export_path).unwrap().badge_scope,
+            "allInboxes"
+        );
+
+        let invalid = store.save(AppSettings {
+            badge_scope: "allMail".into(),
+            ..AppSettings::default()
+        });
+        assert_eq!(invalid.unwrap_err(), "Invalid application settings.");
+    }
+
+    #[test]
     fn portable_export_excludes_account_selection_and_round_trips_preferences() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.json");
@@ -1486,6 +1537,37 @@ mod tests {
         assert_eq!(legacy.setup_step, None);
         assert_eq!(legacy.update_check_interval, "startupAnd6h");
         assert!(legacy.close_to_tray);
+    }
+
+    // Failure modes for keepAttachmentsOffline:
+    // 1. Old settings files default to partial prefetch instead of off.
+    // 2. Export drops the flag, so an imported backup silently loses it.
+    // 3. Import leaks the flag into a non-boolean value that fails validation.
+    #[test]
+    fn keep_attachments_offline_defaults_off_and_round_trips() {
+        assert!(!AppSettings::default().keep_attachments_offline);
+        let legacy_raw = "{\"schemaVersion\":2,\"readingPane\":\"right\",\"textScale\":1,\"privateNotifications\":false,\"theme\":\"system\",\"density\":\"comfortable\",\"cachePolicy\":{\"mode\":\"recent\",\"days\":90,\"maxBytes\":1073741824},\"lastAccountId\":null,\"lastMailboxId\":null,\"folderPaneWidth\":264,\"messagePaneWidth\":400,\"readerPaneHeight\":360}";
+        let parsed: AppSettings = serde_json::from_str(legacy_raw).unwrap();
+        assert!(!parsed.keep_attachments_offline);
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let export_path = directory.path().join("export.json");
+        let store = SettingsStore::load(path, &Database::memory()).unwrap();
+        store
+            .save(AppSettings {
+                keep_attachments_offline: true,
+                ..AppSettings::default()
+            })
+            .unwrap();
+        assert!(store.get().unwrap().keep_attachments_offline);
+        assert!(store.db.as_ref().unwrap().keep_attachments_offline());
+        store.export_to(&export_path).unwrap();
+        let raw = fs::read_to_string(&export_path).unwrap();
+        assert!(raw.contains("keepAttachmentsOffline"));
+        store.save(AppSettings::default()).unwrap();
+        let imported = store.import_from(&export_path).unwrap();
+        assert!(imported.keep_attachments_offline);
     }
 
     #[test]

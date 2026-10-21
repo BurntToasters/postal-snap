@@ -7,7 +7,7 @@ import {
   Inbox,
   MailPlus,
   ShieldAlert,
-  Trash2,
+  Trash,
   TriangleAlert,
   X,
 } from "lucide-react";
@@ -329,7 +329,7 @@ export function Sidebar({
             className="add-account-button"
             onClick={onEmptyTrash}
           >
-            <Trash2 aria-hidden="true" /> {strings.mail.emptyTrash}
+            <Trash aria-hidden="true" /> {strings.mail.emptyTrash}
           </button>
         ) : null}
         {!activeLocalView &&

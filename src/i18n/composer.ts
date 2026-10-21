@@ -81,6 +81,7 @@ export const composer = {
   clearFormatting: "Clear formatting",
   inlineImage: "Inline image",
   pastedImageTooLarge: "That image is too large.",
+  pastedImageUnreadable: "Could not read that image.",
   imagePrefix: "Image: ",
   removeAttachment: (name: string) => `Remove ${name}`,
   previewAttachment: (name: string) => `Preview ${name}`,

@@ -3,8 +3,7 @@ import { strings } from "./i18n";
 import { useAppStore } from "./store";
 import { conversationMessages } from "./threads";
 import type { MessageSummary } from "./types";
-
-const BULK_LIMIT = 200;
+import { BULK_LIMIT } from "./bulk";
 
 function paintPins(ids: ReadonlySet<number>, pinned: boolean): void {
   const store = useAppStore.getState();
@@ -32,12 +31,8 @@ async function applyPin(
   const viewMailboxId = view.activeMailboxId;
   const viewLocal = view.activeLocalView;
   paintPins(idSet, pinned);
-  try {
-    const updated = await api.setMessagesPinned(accountId, ids, pinned);
-    if (updated !== ids.length) {
-      throw new Error("That message could not be pinned.");
-    }
-  } catch (cause) {
+
+  function fail(error: string): void {
     const current = useAppStore.getState();
     if (
       current.activeAccountId !== accountId ||
@@ -53,7 +48,15 @@ async function applyPin(
       }),
     );
     paintPins(revert, !pinned);
-    current.setError(String(cause));
+    current.setError(error);
+  }
+
+  try {
+    const updated = await api.setMessagesPinned(accountId, ids, pinned);
+    if (updated === ids.length) return;
+    fail(strings.reader.pinFailed);
+  } catch (cause) {
+    fail(String(cause));
   }
 }
 

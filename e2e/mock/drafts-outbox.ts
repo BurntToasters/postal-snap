@@ -717,7 +717,28 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
           imageDataUrl: "data:image/png;base64,iVBORw0KGgo=",
         };
       },
-      suggest_recipients() {
+      suggest_recipients(args: Record<string, unknown>) {
+        if (params.has("receivedSuggestions")) {
+          if (args.accountId !== account.id)
+            return [
+              {
+                address: "private@work.example.test",
+                name: "Private Work Sender",
+                useCount: 1,
+              },
+            ];
+          return String(args.prefix ?? "")
+            .toLowerCase()
+            .startsWith("ja")
+            ? [
+                {
+                  address: "jane@example.test",
+                  name: "Jane Received",
+                  useCount: 0,
+                },
+              ]
+            : [];
+        }
         return [
           {
             address: "jane@example.com",

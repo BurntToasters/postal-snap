@@ -24,7 +24,7 @@ test("pin moves an older message above newer mail", async ({ page }) => {
   await expect(page.getByRole("treeitem").first()).toHaveAccessibleName(
     /Pinned[\s\S]*Library hours/,
   );
-  await expect(page.getByRole("group", { name: "Pinned" })).toBeVisible();
+  await expect(page.locator(".list-day", { hasText: "Pinned" })).toBeVisible();
   const pinned = await page.evaluate(() =>
     window.__POSTAL_SNAP_TEST__?.ipcCalls.find(
       (call) => call.command === "set_messages_pinned",
@@ -39,7 +39,7 @@ test("pin moves an older message above newer mail", async ({ page }) => {
 
 test("a pinned message is already at the top of the list", async ({ page }) => {
   await page.goto("/?threadGap=1&pinned=1");
-  await expect(page.getByRole("group", { name: "Pinned" })).toBeVisible();
+  await expect(page.locator(".list-day", { hasText: "Pinned" })).toBeVisible();
   await expect(page.getByRole("treeitem").first()).toHaveAccessibleName(
     /Library hours/,
   );

@@ -418,6 +418,20 @@ pub async fn copy_remote_uids(
     Ok(())
 }
 
+/// Whether the server advertises MOVE. Batched replay only moves in bulk
+/// when it does, because MOVE is atomic per UID set.
+pub async fn server_supports_move(
+    account: &AccountRecord,
+    password: &str,
+) -> Result<bool, MailboxOperationError> {
+    let session = super::pool::checkout(account, password)
+        .await
+        .map_err(|error| MailboxOperationError::transient(error.into()))?;
+    let supported = session.capabilities.mv;
+    session.release();
+    Ok(supported)
+}
+
 pub async fn move_remote_uids(
     account: &AccountRecord,
     password: &str,

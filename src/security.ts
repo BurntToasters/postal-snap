@@ -1,5 +1,7 @@
 import DOMPurify from "dompurify";
 
+import { strings } from "./i18n";
+
 const REMOTE_IMAGE = /^(?:https?:)?\/\//i;
 
 export interface SanitizedMail {
@@ -68,7 +70,7 @@ export function sanitizeReceivedHtml(input: string): SanitizedMail {
     if (REMOTE_IMAGE.test(src)) {
       image.dataset.remoteSrc = src.startsWith("//") ? `https:${src}` : src;
       image.removeAttribute("src");
-      image.alt = image.alt || "Remote image blocked";
+      image.alt = image.alt || strings.reader.blockedImageAlt;
       image.classList.add("remote-image-blocked");
       noteBlockedImage(image.dataset.remoteSrc);
     } else if (/^cid:/i.test(src)) {
@@ -78,19 +80,19 @@ export function sanitizeReceivedHtml(input: string): SanitizedMail {
         .replace(/^<|>$/g, "")
         .slice(0, 512);
       image.removeAttribute("src");
-      image.alt = image.alt || "Inline image";
+      image.alt = image.alt || strings.reader.inlineImageAlt;
     } else if (REMOTE_IMAGE.test(markedRemote)) {
       image.dataset.remoteSrc = markedRemote.startsWith("//")
         ? `https:${markedRemote}`
         : markedRemote;
       image.removeAttribute("src");
-      image.alt = image.alt || "Remote image blocked";
+      image.alt = image.alt || strings.reader.blockedImageAlt;
       image.classList.add("remote-image-blocked");
       noteBlockedImage(image.dataset.remoteSrc);
     } else if (markedCid) {
       image.dataset.inlineCid = markedCid.replace(/^<|>$/g, "").slice(0, 512);
       image.removeAttribute("src");
-      image.alt = image.alt || "Inline image";
+      image.alt = image.alt || strings.reader.inlineImageAlt;
     } else if (
       src &&
       !/^data:image\/(?:png|jpeg|gif|webp);base64,/i.test(src)

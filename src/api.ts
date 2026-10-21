@@ -113,6 +113,7 @@ export type NativeCommand =
   | "sync_all_accounts"
   | "list_messages"
   | "get_message"
+  | "download_full_message"
   | "set_message_flags"
   | "move_message"
   | "move_message_to_mailbox"
@@ -121,6 +122,10 @@ export type NativeCommand =
   | "set_messages_flags"
   | "set_messages_pinned"
   | "move_messages_to_mailbox"
+  | "begin_undo_session"
+  | "undo_deferred"
+  | "commit_deferred"
+  | "set_visible_folder"
   | "mark_mailbox_read"
   | "suggest_recipients"
   | "create_folder"
@@ -224,6 +229,7 @@ export type NativeCommand =
   | "mark_update_checked"
   | "supports_workspace_window_fx"
   | "accessibility_reduce_transparency"
+  | "set_snap_overlay_bounds"
   | "set_workspace_window_fx";
 
 async function call<T>(
@@ -242,6 +248,8 @@ async function call<T>(
 }
 
 export const api = {
+  /** Starts or rotates the durable native Undo session for this window. */
+  beginUndoSession: () => call<string>("begin_undo_session", {}),
   getAccountConnection: (accountId: string) =>
     call<AccountConnection>("get_account_connection", { accountId }),
   updateAccountConnection: (
@@ -318,8 +326,16 @@ export const api = {
     }),
   updateAccountReplyTo: (accountId: string, replyTo: string) =>
     call<AccountSummary>("update_account_reply_to", { accountId, replyTo }),
-  updateAccountSignature: (accountId: string, signature: string) =>
-    call<AccountSummary>("update_account_signature", { accountId, signature }),
+  updateAccountSignature: (
+    accountId: string,
+    signature: string,
+    signatureHtml?: string,
+  ) =>
+    call<AccountSummary>("update_account_signature", {
+      accountId,
+      signature,
+      ...(signatureHtml === undefined ? {} : { signatureHtml }),
+    }),
   updateAccountDefaultBodyFormat: (accountId: string, format: BodyFormat) =>
     call<AccountSummary>("update_account_default_body_format", {
       accountId,
@@ -355,6 +371,8 @@ export const api = {
     }),
   getMessage: (accountId: string, messageId: number) =>
     call<MessageDetail>("get_message", { accountId, messageId }),
+  downloadFullMessage: (accountId: string, messageId: number) =>
+    call<MessageDetail>("download_full_message", { accountId, messageId }),
   findCachedMessage: (accountId: string, headerId: string) =>
     call<MessageSummary | null>("find_cached_message", { accountId, headerId }),
   getMessageSource: (accountId: string, messageId: number) =>
@@ -375,22 +393,41 @@ export const api = {
       isRead,
       isStarred,
     }),
-  moveMessage: (accountId: string, messageId: number, role: string) =>
+  moveMessage: (
+    accountId: string,
+    messageId: number,
+    role: string,
+    undoToken?: string,
+  ) =>
     call<number | null | undefined>("move_message", {
       accountId,
       messageId,
       role,
+      undoToken,
     }),
   moveMessageToMailbox: (
     accountId: string,
     messageId: number,
     destinationMailboxId: number,
+    undoToken?: string,
   ) =>
     call<void>("move_message_to_mailbox", {
       accountId,
       messageId,
       destinationMailboxId,
+      undoToken,
     }),
+  /** Cancels a move still inside its undo window. */
+  undoDeferred: (accountId: string, undoToken: string) =>
+    call<{ restored: number; alreadyCommitted: boolean }>("undo_deferred", {
+      accountId,
+      undoToken,
+    }),
+  /** Sends a move from its undo window to the server now. */
+  commitDeferred: (accountId: string, undoToken: string) =>
+    call<void>("commit_deferred", { accountId, undoToken }),
+  setVisibleFolder: (accountId: string, mailboxId: number | null) =>
+    call<void>("set_visible_folder", { accountId, mailboxId }),
   copyMessageToMailbox: (
     accountId: string,
     messageId: number,
@@ -437,11 +474,13 @@ export const api = {
     accountId: string,
     messageIds: number[],
     destinationMailboxId: number,
+    undoToken?: string,
   ) =>
     call<BulkOutcome>("move_messages_to_mailbox", {
       accountId,
       messageIds,
       destinationMailboxId,
+      undoToken,
     }),
   markMailboxRead: (accountId: string, mailboxId: number) =>
     call<BulkOutcome>("mark_mailbox_read", { accountId, mailboxId }),
@@ -733,6 +772,13 @@ export const api = {
       ({ payload }) => handler(payload),
     );
   },
+  /** Maximize-overlay hit area in physical pixels. Zero size hides it. */
+  setSnapOverlayBounds: (bounds: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }) => call<void>("set_snap_overlay_bounds", bounds),
   discoverAccountAliases: (accountId: string) =>
     call<AccountSummary>("discover_account_aliases", { accountId }),
   updateAccountAliases: (accountId: string, aliases: string[]) =>

@@ -11,6 +11,8 @@ import {
 import { useMailboxMessages } from "../hooks/useMailboxMessages";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useMailShortcuts } from "../hooks/useMailShortcuts";
+import { CommandPalette } from "./palette/CommandPalette";
+import { ShortcutOverlay } from "./palette/ShortcutOverlay";
 import { useScheduledOutbox } from "../hooks/useScheduledOutbox";
 import { api } from "../api";
 import {
@@ -51,7 +53,10 @@ import { SnoozePanel } from "./reader/snoozePanel";
 import { PaneSplitter } from "./mail/paneSplitter";
 import { useSettingsSave } from "./settings/useSettingsSave";
 import { useOverlayFocus } from "./mail/useOverlayFocus";
-import { handleContextAction } from "./mail/mailContextActions";
+import {
+  handleContextAction,
+  type ContextActionCtx,
+} from "./mail/mailContextActions";
 import { useLocalListActions } from "./mail/useLocalListActions";
 import { useMailEvents } from "./mail/useMailEvents";
 import { useMessageSelection } from "./mail/useMessageSelection";
@@ -179,6 +184,10 @@ export function MailShell({ onOpenSettings }: Props) {
   const [addAccountOpen, setAddAccountOpen] = useState(false);
   const [outboxPreview, setOutboxPreview] = useState<ComposeDraft | null>(null);
   const [accountSwitcherOpen, setAccountSwitcherOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const openCommandPalette = useCallback(() => setPaletteOpen(true), []);
+  const openShortcutOverlay = useCallback(() => setShortcutsOpen(true), []);
   const [accountCounts, setAccountCounts] = useState<AccountInboxCount[]>([]);
   const [syncingAllAccounts, setSyncingAllAccounts] = useState(false);
   const [syncingAccountIds, setSyncingAccountIds] = useState<Set<string>>(
@@ -694,6 +703,8 @@ export function MailShell({ onOpenSettings }: Props) {
     searchInput,
     chooseMessage,
     relativeMessage,
+    openCommandPalette,
+    openShortcutOverlay,
   });
 
   useEffect(() => {
@@ -784,56 +795,64 @@ export function MailShell({ onOpenSettings }: Props) {
     setError,
   });
 
+  // One shared context-menu listener; the context is refreshed every render.
+  const contextActionRef = useRef<ContextActionCtx | null>(null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- holds setters; never called here.
   useEffect(() => {
-    const onAction = (event: Event) =>
-      handleContextAction(event, {
-        activeAccountId,
-        refreshAccount,
-        selectAccount,
-        onOpenSettings,
-        openComposer,
-        searchAddress,
-        searchFromSender,
-        searchSubject,
-        chooseMessage,
-        selectMessage,
-        openEarlierMessage,
-        selectionAnchor,
-        setSelecting,
-        setSelectedIds,
-        setError,
-        messageRequest,
-        searchRequest,
-        clearQuery,
-        resetListState,
-        selectMailbox,
-        selectLocalView,
-        setSidebarOpen,
-        loadMessages,
-        markMailboxReadById,
-        emptyTrashFolders,
-        emptyJunkFolders,
-        updateSettings,
-        openFolderDialog,
-        setMoveFolderId,
-        deleteFolderById,
-        openDraft,
-        duplicateDraft,
-        discardListedDraft,
-        previewQueued,
-        editQueued,
-        retryQueued,
-        retrySentCopy,
-        retryArchiveAfterSend,
-        sendScheduledNow,
-        scheduledSendInFlight,
-        discardQueued,
-        chooseSnoozed,
-        unsnoozeById,
-      });
+    contextActionRef.current = {
+      refreshAccount,
+      selectAccount,
+      onOpenSettings,
+      openComposer,
+      searchAddress,
+      searchFromSender,
+      searchSubject,
+      chooseMessage,
+      selectMessage,
+      openEarlierMessage,
+      selectionAnchor,
+      setSelecting,
+      setSelectedIds,
+      setError,
+      messageRequest,
+      searchRequest,
+      clearQuery,
+      resetListState,
+      selectMailbox,
+      selectLocalView,
+      setSidebarOpen,
+      loadMessages,
+      markMailboxReadById,
+      emptyTrashFolders,
+      emptyJunkFolders,
+      updateSettings,
+      openFolderDialog,
+      setMoveFolderId,
+      deleteFolderById,
+      openDraft,
+      duplicateDraft,
+      discardListedDraft,
+      previewQueued,
+      editQueued,
+      retryQueued,
+      retrySentCopy,
+      retryArchiveAfterSend,
+      sendScheduledNow,
+      scheduledSendInFlight,
+      discardQueued,
+      chooseSnoozed,
+      unsnoozeById,
+    };
+  });
+
+  useEffect(() => {
+    const onAction = (event: Event) => {
+      const context = contextActionRef.current;
+      if (context) handleContextAction(event, context);
+    };
     window.addEventListener(CONTEXT_ACTION_EVENT, onAction);
     return () => window.removeEventListener(CONTEXT_ACTION_EVENT, onAction);
-  });
+  }, []);
 
   useOverlayFocus({
     sidebarOpen,
@@ -999,116 +1018,124 @@ export function MailShell({ onOpenSettings }: Props) {
         aria-label={strings.mail.closeMailboxes}
         onClick={() => setSidebarOpen(false)}
       />
-      <Sidebar
-        folderPaneRef={folderPaneRef}
-        accounts={accounts}
-        activeAccount={activeAccount}
-        accountCounts={accountCounts}
-        syncByAccount={syncByAccount}
-        activeSync={sync}
-        accountSwitcherOpen={accountSwitcherOpen}
-        syncingAllAccounts={syncingAllAccounts}
-        onAccountSwitcherOpenChange={setAccountSwitcherOpen}
-        onSelectAccount={selectAccount}
-        onRefreshAllAccounts={() => void refreshAllAccounts()}
-        onAddAccount={() => setAddAccountOpen(true)}
-        onOpenSettings={onOpenSettings}
-        onCloseSidebar={() => setSidebarOpen(false)}
-        activeLocalView={activeLocalView}
-        draftsCount={drafts.length}
-        outboxCount={outbox.length}
-        snoozedCount={snoozed.length}
-        onSelectLocalView={(view) => {
-          messageRequest.current += 1;
-          searchRequest.current += 1;
-          clearQuery();
-          resetListState();
-          selectLocalView(view);
-          setSidebarOpen(false);
-        }}
-        mailboxes={mailboxes}
-        pinnedMailboxes={settings.pinnedMailboxes ?? []}
-        hiddenMailboxes={settings.hiddenMailboxes ?? []}
-        collapsedMailboxIds={(settings.collapsedMailboxes ?? [])
-          .filter((entry) => entry.accountId === activeAccountId)
-          .map((entry) => entry.mailboxId)}
-        unreadFoldersOnly={settings.unreadFoldersOnly}
-        onUnreadFoldersOnlyChange={(unreadOnly) =>
-          void updateSettings({ unreadFoldersOnly: unreadOnly })
-        }
-        onCollapseFolders={() => {
-          if (!activeAccountId) return;
-          const next = collapseFolders(
-            settings.collapsedMailboxes ?? [],
-            activeAccountId,
-            parentMailboxIds(mailboxes),
-          );
-          if (next) void updateSettings({ collapsedMailboxes: next });
-        }}
-        onExpandFolders={() => {
-          if (!activeAccountId) return;
-          const next = expandFolders(
-            settings.collapsedMailboxes ?? [],
-            activeAccountId,
-            parentMailboxIds(mailboxes),
-          );
-          if (next) void updateSettings({ collapsedMailboxes: next });
-        }}
-        onToggleCollapsed={(mailboxId, collapsed) => {
-          if (!activeAccountId) return;
-          const current = settings.collapsedMailboxes ?? [];
-          if (
-            collapsed &&
-            mailboxIsPinned(current, activeAccountId, mailboxId)
-          ) {
-            return;
+      <ErrorBoundary
+        className="folder-pane crash-recovery"
+        id="folder-pane"
+        resetKey={activeAccountId}
+        onReset={loadAccountData}
+        focusSelector="#folder-pane .folder-list button:not([disabled])"
+      >
+        <Sidebar
+          folderPaneRef={folderPaneRef}
+          accounts={accounts}
+          activeAccount={activeAccount}
+          accountCounts={accountCounts}
+          syncByAccount={syncByAccount}
+          activeSync={sync}
+          accountSwitcherOpen={accountSwitcherOpen}
+          syncingAllAccounts={syncingAllAccounts}
+          onAccountSwitcherOpenChange={setAccountSwitcherOpen}
+          onSelectAccount={selectAccount}
+          onRefreshAllAccounts={() => void refreshAllAccounts()}
+          onAddAccount={() => setAddAccountOpen(true)}
+          onOpenSettings={onOpenSettings}
+          onCloseSidebar={() => setSidebarOpen(false)}
+          activeLocalView={activeLocalView}
+          draftsCount={drafts.length}
+          outboxCount={outbox.length}
+          snoozedCount={snoozed.length}
+          onSelectLocalView={(view) => {
+            messageRequest.current += 1;
+            searchRequest.current += 1;
+            clearQuery();
+            resetListState();
+            selectLocalView(view);
+            setSidebarOpen(false);
+          }}
+          mailboxes={mailboxes}
+          pinnedMailboxes={settings.pinnedMailboxes ?? []}
+          hiddenMailboxes={settings.hiddenMailboxes ?? []}
+          collapsedMailboxIds={(settings.collapsedMailboxes ?? [])
+            .filter((entry) => entry.accountId === activeAccountId)
+            .map((entry) => entry.mailboxId)}
+          unreadFoldersOnly={settings.unreadFoldersOnly}
+          onUnreadFoldersOnlyChange={(unreadOnly) =>
+            void updateSettings({ unreadFoldersOnly: unreadOnly })
           }
-          const next = collapsed
-            ? pinMailbox(current, activeAccountId, mailboxId, 200)
-            : unpinMailbox(current, activeAccountId, mailboxId);
-          if (!next) return;
-          void updateSettings({ collapsedMailboxes: next });
-        }}
-        activeMailboxId={activeMailboxId}
-        folderIcons={folderIcons}
-        folderDialog={folderDialog}
-        folderName={folderName}
-        folderBusy={folderBusy}
-        newFolderButtonRef={newFolderButtonRef}
-        onFolderClick={(mailbox) => {
-          const sameMailbox =
-            mailbox.id === activeMailboxId && !activeLocalView;
-          if (!sameMailbox) messageRequest.current += 1;
-          searchRequest.current += 1;
-          clearQuery();
-          resetListState();
-          selectMailbox(mailbox.id);
-          setSidebarOpen(false);
-          if (sameMailbox) void loadMessages();
-        }}
-        onFolderRename={(mailbox) => {
-          openFolderDialog({
-            mode: "rename",
-            id: mailbox.id,
-            name: folderLabel(mailbox),
-            parentLabel: folderParentLabel(mailbox),
-          });
-        }}
-        onFolderDelete={(mailbox) => {
-          void deleteFolderById(mailbox.id, mailbox.displayName);
-        }}
-        onFolderDialogKeyDown={folderDialogKeyDown}
-        onFolderNameChange={setFolderName}
-        onFolderDialogSubmit={() => void submitFolderDialog()}
-        onFolderDialogClose={closeFolderDialog}
-        onOpenFolderDialog={openFolderDialog}
-        activeMailbox={activeMailbox}
-        onEmptyTrash={() => void emptyTrashFolders()}
-        onEmptyJunk={() => void emptyJunkFolders()}
-        onDropMessages={(mailboxId, payload) => {
-          void dropMessages(mailboxId, payload);
-        }}
-      />
+          onCollapseFolders={() => {
+            if (!activeAccountId) return;
+            const next = collapseFolders(
+              settings.collapsedMailboxes ?? [],
+              activeAccountId,
+              parentMailboxIds(mailboxes),
+            );
+            if (next) void updateSettings({ collapsedMailboxes: next });
+          }}
+          onExpandFolders={() => {
+            if (!activeAccountId) return;
+            const next = expandFolders(
+              settings.collapsedMailboxes ?? [],
+              activeAccountId,
+              parentMailboxIds(mailboxes),
+            );
+            if (next) void updateSettings({ collapsedMailboxes: next });
+          }}
+          onToggleCollapsed={(mailboxId, collapsed) => {
+            if (!activeAccountId) return;
+            const current = settings.collapsedMailboxes ?? [];
+            if (
+              collapsed &&
+              mailboxIsPinned(current, activeAccountId, mailboxId)
+            ) {
+              return;
+            }
+            const next = collapsed
+              ? pinMailbox(current, activeAccountId, mailboxId, 200)
+              : unpinMailbox(current, activeAccountId, mailboxId);
+            if (!next) return;
+            void updateSettings({ collapsedMailboxes: next });
+          }}
+          activeMailboxId={activeMailboxId}
+          folderIcons={folderIcons}
+          folderDialog={folderDialog}
+          folderName={folderName}
+          folderBusy={folderBusy}
+          newFolderButtonRef={newFolderButtonRef}
+          onFolderClick={(mailbox) => {
+            const sameMailbox =
+              mailbox.id === activeMailboxId && !activeLocalView;
+            if (!sameMailbox) messageRequest.current += 1;
+            searchRequest.current += 1;
+            clearQuery();
+            resetListState();
+            selectMailbox(mailbox.id);
+            setSidebarOpen(false);
+            if (sameMailbox) void loadMessages();
+          }}
+          onFolderRename={(mailbox) => {
+            openFolderDialog({
+              mode: "rename",
+              id: mailbox.id,
+              name: folderLabel(mailbox),
+              parentLabel: folderParentLabel(mailbox),
+            });
+          }}
+          onFolderDelete={(mailbox) => {
+            void deleteFolderById(mailbox.id, mailbox.displayName);
+          }}
+          onFolderDialogKeyDown={folderDialogKeyDown}
+          onFolderNameChange={setFolderName}
+          onFolderDialogSubmit={() => void submitFolderDialog()}
+          onFolderDialogClose={closeFolderDialog}
+          onOpenFolderDialog={openFolderDialog}
+          activeMailbox={activeMailbox}
+          onEmptyTrash={() => void emptyTrashFolders()}
+          onEmptyJunk={() => void emptyJunkFolders()}
+          onDropMessages={(mailboxId, payload) => {
+            void dropMessages(mailboxId, payload);
+          }}
+        />
+      </ErrorBoundary>
 
       <PaneSplitter
         className="folder-splitter"
@@ -1123,330 +1150,344 @@ export function MailShell({ onOpenSettings }: Props) {
         }
       />
 
-      <section
-        className={`message-pane${selecting ? " selecting" : ""}`}
+      <ErrorBoundary
+        className="message-pane crash-recovery"
         id="message-pane"
-        aria-label={heading}
-        data-list={activeLocalView ? "local" : undefined}
+        resetKey={`${activeAccountId ?? ""}:${activeMailboxId ?? ""}:${activeLocalView ?? ""}:${submittedQuery}:${listFilter}:${listSort}`}
+        onReset={async () => {
+          await loadAccountData();
+          await refreshList();
+        }}
+        focusSelector="#message-pane [role=option][tabindex]"
       >
-        <MessagePaneHeader
-          heading={heading}
-          accountLabel={accountLabel || undefined}
-          shownCount={shownCount}
-          folderTotal={
-            !activeLocalView && !submittedQuery && listFilter === "all"
-              ? activeMailbox?.totalCount
-              : undefined
-          }
-          unreadCount={
-            !activeLocalView && !submittedQuery && listFilter === "all"
-              ? activeMailbox?.unreadCount
-              : undefined
-          }
-          activeLocalView={activeLocalView}
-          query={query}
-          submittedQuery={submittedQuery}
-          selecting={selecting}
-          bulkBusy={bulkBusy}
-          mailboxMoreOpen={mailboxMoreOpen}
-          mailboxMoreRef={mailboxMoreRef}
-          onToggleSelecting={() => {
-            selectionAnchor.current = undefined;
-            setSelecting((value) => !value);
-            setSelectedIds([]);
-            setSelectionSnoozeOpen(false);
-          }}
-          onOpenMore={setMailboxMoreOpen}
-          onMarkAllRead={() => {
-            closeMailboxMore();
-            void markAllRead();
-          }}
-          onExpandConversations={
-            canFoldConversations
-              ? () => {
-                  closeMailboxMore();
-                  window.dispatchEvent(
-                    new Event("postal:expand-conversations"),
-                  );
-                }
-              : undefined
-          }
-          onCollapseConversations={
-            canFoldConversations
-              ? () => {
-                  closeMailboxMore();
-                  window.dispatchEvent(
-                    new Event("postal:collapse-conversations"),
-                  );
-                }
-              : undefined
-          }
-          onGoToInbox={() => openRoleMailbox("inbox")}
-          goToInboxDisabled={roleMailboxOpen("inbox")}
-          onGoToSent={() => openRoleMailbox("sent")}
-          goToSentDisabled={roleMailboxOpen("sent")}
-          onNextUnread={() => {
-            closeMailboxMore();
-            const next = unreadStep(
-              listedMessages,
-              settings.groupThreads && listSort === "date",
-              selectedMessage?.id,
-              1,
-            );
-            if (next) void chooseMessage(next);
-          }}
-          nextUnreadDisabled={
-            !listedMessages.some((message) => !message.isRead)
-          }
-          onNextUnreadMailbox={() => {
-            closeMailboxMore();
-            const next = nextUnreadMailbox(mailboxes, activeMailboxId);
-            if (!next) {
-              setError(strings.mail.noOtherUnreadMailbox);
-              return;
-            }
-            selectMailbox(next.id);
-          }}
-          nextUnreadMailboxDisabled={
-            !nextUnreadMailbox(mailboxes, activeMailboxId)
-          }
-          onPreviousUnreadMailbox={() => {
-            closeMailboxMore();
-            const previous = previousUnreadMailbox(mailboxes, activeMailboxId);
-            if (!previous) {
-              setError(strings.mail.noOtherUnreadMailbox);
-              return;
-            }
-            selectMailbox(previous.id);
-          }}
-          previousUnreadMailboxDisabled={
-            !previousUnreadMailbox(mailboxes, activeMailboxId)
-          }
-          listFilter={listFilter}
-          onListFilter={(filter) => {
-            setPendingFilter(filter);
-            if (!activeAccountId || activeMailboxId == null) return;
-            void updateSettings({
-              mailboxViews: rememberMailboxView(
-                useAppStore.getState().settings.mailboxViews,
-                activeAccountId,
-                activeMailboxId,
-                listSort,
-                filter,
-              ),
-            });
-          }}
-          listSort={listSort}
-          onListSort={(sort) => {
-            closeMailboxMore();
-            setPendingSort(sort);
-            useAppStore.setState({ mailboxSort: sort });
-            if (!activeAccountId || activeMailboxId == null) return;
-            void updateSettings({
-              mailboxViews: rememberMailboxView(
-                useAppStore.getState().settings.mailboxViews,
-                activeAccountId,
-                activeMailboxId,
-                sort,
-                listFilter,
-              ),
-            });
-          }}
-          selection={selection}
-          onClearSearch={() => {
-            messageRequest.current += 1;
-            searchRequest.current += 1;
-            clearQuery();
-            void loadMessages();
-          }}
-        />
-        {selecting && !activeLocalView ? (
-          <BulkBar
-            selectedCount={selectedIds.length}
-            busy={bulkBusy}
-            onArchive={() =>
-              void (activeMailbox?.role === "archive"
-                ? bulkMove("inbox")
-                : bulkMove("archive"))
-            }
-            archiveLabel={
-              activeMailbox?.role === "archive"
-                ? strings.reader.moveToInbox
+        <section
+          className={`message-pane${selecting ? " selecting" : ""}`}
+          id="message-pane"
+          aria-label={heading}
+          data-list={activeLocalView ? "local" : undefined}
+        >
+          <MessagePaneHeader
+            heading={heading}
+            accountLabel={accountLabel || undefined}
+            shownCount={shownCount}
+            folderTotal={
+              !activeLocalView && !submittedQuery && listFilter === "all"
+                ? activeMailbox?.totalCount
                 : undefined
             }
-            onTrash={() =>
-              void (activeMailbox?.role === "trash"
-                ? deleteSelectedTrash()
-                : bulkMove("trash"))
-            }
-            trashLabel={
-              activeMailbox?.role === "trash"
-                ? strings.mail.deleteForever
+            unreadCount={
+              !activeLocalView && !submittedQuery && listFilter === "all"
+                ? activeMailbox?.unreadCount
                 : undefined
             }
-          />
-        ) : null}
-        {selectionSnoozeOpen && selecting && !activeLocalView ? (
-          <SnoozePanel
-            label={strings.mail.snoozeSelected}
-            onSnooze={(untilIso) => void snoozeSelection(untilIso)}
-            onClose={() => setSelectionSnoozeOpen(false)}
-          />
-        ) : null}
-        {activeLocalView === "drafts" ? (
-          <DraftList
-            drafts={drafts.filter((draft) =>
-              matchesLocalQuery(
-                `${draft.subject} ${draft.recipients} ${draft.preview ?? ""} ${draft.fromAddress ?? ""} ${
-                  draft.sourceKind === "forward"
-                    ? strings.mail.draftForward
-                    : draft.sourceKind === "redirect"
-                      ? strings.mail.draftRedirect
-                      : draft.sourceKind === "reply" ||
-                          draft.sourceKind === "reply_all"
-                        ? strings.mail.draftReply
-                        : ""
-                }`,
-                query,
-              ),
-            )}
-            accountEmail={
-              accounts.find((account) => account.id === activeAccountId)
-                ?.email ?? ""
-            }
-            emptyLabel={
-              query.trim() && drafts.length > 0
-                ? strings.mail.noDraftMatch
-                : undefined
-            }
-            onOpen={openDraft}
-          />
-        ) : activeLocalView === "snoozed" ? (
-          <SnoozedList
-            items={snoozed.filter((item) =>
-              matchesLocalQuery(
-                `${item.message.subject} ${item.message.senderName} ${item.message.senderAddress}`,
-                query,
-              ),
-            )}
-            emptyLabel={
-              query.trim() && snoozed.length > 0
-                ? strings.mail.noSnoozedMatch
-                : undefined
-            }
-            onOpen={chooseSnoozed}
-            onUnsnooze={unsnoozeById}
-          />
-        ) : activeLocalView === "outbox" ? (
-          <OutboxList
-            items={outbox.filter((item) =>
-              matchesLocalQuery(
-                `${item.subject} ${item.recipients} ${item.preview ?? ""} ${outboxDetail(item) ?? ""}`,
-                query,
-              ),
-            )}
-            emptyLabel={
-              query.trim() && outbox.length > 0
-                ? strings.mail.noOutboxMatch
-                : undefined
-            }
-            sendingIds={scheduledSendInFlight}
-            onOpen={previewQueued}
-            onRetry={retryQueued}
-            onRetryAll={retryAllQueued}
-            onRetryCopy={retrySentCopy}
-            onRetryArchive={retryArchiveAfterSend}
-            onSendNow={sendScheduledNow}
-            onEdit={editQueued}
-            onDiscard={discardQueued}
-          />
-        ) : (
-          <MessageList
-            key={`${activeAccountId}:${activeMailboxId ?? ""}:${activeLocalView ?? ""}:${submittedQuery}:${listFilter}:${listSort}`}
-            scrollKey={`${activeAccountId}:${activeMailboxId ?? ""}:${activeLocalView ?? ""}:${submittedQuery}:${listFilter}:${listSort}`}
-            messages={listedMessages}
-            chronological={listSort === "date" || listSort === "dateOldest"}
-            oldestFirst={listSort === "dateOldest"}
-            emptyLabel={
-              listFilter === "unread"
-                ? strings.mail.noUnread
-                : listFilter === "starred"
-                  ? strings.mail.noStarred
-                  : listFilter === "attachments"
-                    ? strings.mail.noAttachments
-                    : listFilter === "pinned"
-                      ? strings.mail.noPinned
-                      : listFilter === "toMe"
-                        ? strings.mail.noToMe
-                        : listFilter === "invitations"
-                          ? strings.mail.noInvitations
-                          : undefined
-            }
-            selectedId={selectedMessage?.id}
-            loading={loadingMessages}
-            loadingMessageId={loadingMessageId}
-            onChoose={async (summary) => {
-              await chooseMessage(summary);
-            }}
-            hasMore={hasMoreMessages || canDownloadOlder}
-            onLoadMore={loadMoreMessages}
-            loadMoreLabel={
-              hasMoreMessages ? undefined : strings.mail.loadOlderFromServer
-            }
-            searchQuery={submittedQuery}
-            showFolders={Boolean(submittedQuery) && allFolders}
+            activeLocalView={activeLocalView}
+            query={query}
+            submittedQuery={submittedQuery}
             selecting={selecting}
-            selectedIds={selectedIds}
-            onToggleSelect={toggleSelectMessage}
-            onCheckFocused={toggleSelectIds}
-            onArchiveFocused={archiveFocused}
-            onTrashFocused={trashFocused}
-            onJunkFocused={junkFocused}
-            onReplyFocused={(message, mode) => {
-              void replyFocused(message, mode);
+            bulkBusy={bulkBusy}
+            mailboxMoreOpen={mailboxMoreOpen}
+            mailboxMoreRef={mailboxMoreRef}
+            onToggleSelecting={() => {
+              selectionAnchor.current = undefined;
+              setSelecting((value) => !value);
+              setSelectedIds([]);
+              setSelectionSnoozeOpen(false);
             }}
-            onSelectDay={(ids) => {
-              if (ids.length === 0) return;
-              selectionAnchor.current = ids[0];
-              setSelecting(true);
-              if (ids.length > 200) {
-                setError(strings.mail.bulkTooMany);
-                setSelectedIds(ids.slice(0, 200));
-                return;
-              }
-              setSelectedIds(ids);
+            onOpenMore={setMailboxMoreOpen}
+            onMarkAllRead={() => {
+              closeMailboxMore();
+              void markAllRead();
             }}
-            onRangeSelect={selectMessageRange}
-            onToggleStar={(message) => {
-              void toggleListedStar(message.id);
-            }}
-            onToggleConversationStar={(message, starred) => {
-              void starLoadedConversation(message, starred);
-            }}
-            onToggleRead={(message) => {
-              void toggleListedRead(message.id);
-            }}
-            onToggleConversationRead={(message, isRead) => {
-              void (isRead
-                ? markLoadedConversationRead(message)
-                : markLoadedConversationUnread(message));
-            }}
-            onClearSearch={() => {
-              clearQuery();
-              void loadMessages();
-            }}
-            onSearchAllFolders={
-              submittedQuery && !allFolders
+            onExpandConversations={
+              canFoldConversations
                 ? () => {
-                    allFoldersRef.current = true;
-                    setAllFolders(true);
-                    void runSearch();
+                    closeMailboxMore();
+                    window.dispatchEvent(
+                      new Event("postal:expand-conversations"),
+                    );
                   }
                 : undefined
             }
+            onCollapseConversations={
+              canFoldConversations
+                ? () => {
+                    closeMailboxMore();
+                    window.dispatchEvent(
+                      new Event("postal:collapse-conversations"),
+                    );
+                  }
+                : undefined
+            }
+            onGoToInbox={() => openRoleMailbox("inbox")}
+            goToInboxDisabled={roleMailboxOpen("inbox")}
+            onGoToSent={() => openRoleMailbox("sent")}
+            goToSentDisabled={roleMailboxOpen("sent")}
+            onNextUnread={() => {
+              closeMailboxMore();
+              const next = unreadStep(
+                listedMessages,
+                settings.groupThreads && listSort === "date",
+                selectedMessage?.id,
+                1,
+              );
+              if (next) void chooseMessage(next);
+            }}
+            nextUnreadDisabled={
+              !listedMessages.some((message) => !message.isRead)
+            }
+            onNextUnreadMailbox={() => {
+              closeMailboxMore();
+              const next = nextUnreadMailbox(mailboxes, activeMailboxId);
+              if (!next) {
+                setError(strings.mail.noOtherUnreadMailbox);
+                return;
+              }
+              selectMailbox(next.id);
+            }}
+            nextUnreadMailboxDisabled={
+              !nextUnreadMailbox(mailboxes, activeMailboxId)
+            }
+            onPreviousUnreadMailbox={() => {
+              closeMailboxMore();
+              const previous = previousUnreadMailbox(
+                mailboxes,
+                activeMailboxId,
+              );
+              if (!previous) {
+                setError(strings.mail.noOtherUnreadMailbox);
+                return;
+              }
+              selectMailbox(previous.id);
+            }}
+            previousUnreadMailboxDisabled={
+              !previousUnreadMailbox(mailboxes, activeMailboxId)
+            }
+            listFilter={listFilter}
+            onListFilter={(filter) => {
+              setPendingFilter(filter);
+              if (!activeAccountId || activeMailboxId == null) return;
+              void updateSettings({
+                mailboxViews: rememberMailboxView(
+                  useAppStore.getState().settings.mailboxViews,
+                  activeAccountId,
+                  activeMailboxId,
+                  listSort,
+                  filter,
+                ),
+              });
+            }}
+            listSort={listSort}
+            onListSort={(sort) => {
+              closeMailboxMore();
+              setPendingSort(sort);
+              useAppStore.setState({ mailboxSort: sort });
+              if (!activeAccountId || activeMailboxId == null) return;
+              void updateSettings({
+                mailboxViews: rememberMailboxView(
+                  useAppStore.getState().settings.mailboxViews,
+                  activeAccountId,
+                  activeMailboxId,
+                  sort,
+                  listFilter,
+                ),
+              });
+            }}
+            selection={selection}
+            onClearSearch={() => {
+              messageRequest.current += 1;
+              searchRequest.current += 1;
+              clearQuery();
+              void loadMessages();
+            }}
           />
-        )}
-      </section>
+          {selecting && !activeLocalView ? (
+            <BulkBar
+              selectedCount={selectedIds.length}
+              busy={bulkBusy}
+              onArchive={() =>
+                void (activeMailbox?.role === "archive"
+                  ? bulkMove("inbox")
+                  : bulkMove("archive"))
+              }
+              archiveLabel={
+                activeMailbox?.role === "archive"
+                  ? strings.reader.moveToInbox
+                  : undefined
+              }
+              onTrash={() =>
+                void (activeMailbox?.role === "trash"
+                  ? deleteSelectedTrash()
+                  : bulkMove("trash"))
+              }
+              trashLabel={
+                activeMailbox?.role === "trash"
+                  ? strings.mail.deleteForever
+                  : undefined
+              }
+            />
+          ) : null}
+          {selectionSnoozeOpen && selecting && !activeLocalView ? (
+            <SnoozePanel
+              label={strings.mail.snoozeSelected}
+              onSnooze={(untilIso) => void snoozeSelection(untilIso)}
+              onClose={() => setSelectionSnoozeOpen(false)}
+            />
+          ) : null}
+          {activeLocalView === "drafts" ? (
+            <DraftList
+              drafts={drafts.filter((draft) =>
+                matchesLocalQuery(
+                  `${draft.subject} ${draft.recipients} ${draft.preview ?? ""} ${draft.fromAddress ?? ""} ${
+                    draft.sourceKind === "forward"
+                      ? strings.mail.draftForward
+                      : draft.sourceKind === "redirect"
+                        ? strings.mail.draftRedirect
+                        : draft.sourceKind === "reply" ||
+                            draft.sourceKind === "reply_all"
+                          ? strings.mail.draftReply
+                          : ""
+                  }`,
+                  query,
+                ),
+              )}
+              accountEmail={
+                accounts.find((account) => account.id === activeAccountId)
+                  ?.email ?? ""
+              }
+              emptyLabel={
+                query.trim() && drafts.length > 0
+                  ? strings.mail.noDraftMatch
+                  : undefined
+              }
+              onOpen={openDraft}
+            />
+          ) : activeLocalView === "snoozed" ? (
+            <SnoozedList
+              items={snoozed.filter((item) =>
+                matchesLocalQuery(
+                  `${item.message.subject} ${item.message.senderName} ${item.message.senderAddress}`,
+                  query,
+                ),
+              )}
+              emptyLabel={
+                query.trim() && snoozed.length > 0
+                  ? strings.mail.noSnoozedMatch
+                  : undefined
+              }
+              onOpen={chooseSnoozed}
+              onUnsnooze={unsnoozeById}
+            />
+          ) : activeLocalView === "outbox" ? (
+            <OutboxList
+              items={outbox.filter((item) =>
+                matchesLocalQuery(
+                  `${item.subject} ${item.recipients} ${item.preview ?? ""} ${outboxDetail(item) ?? ""}`,
+                  query,
+                ),
+              )}
+              emptyLabel={
+                query.trim() && outbox.length > 0
+                  ? strings.mail.noOutboxMatch
+                  : undefined
+              }
+              sendingIds={scheduledSendInFlight}
+              onOpen={previewQueued}
+              onRetry={retryQueued}
+              onRetryAll={retryAllQueued}
+              onRetryCopy={retrySentCopy}
+              onRetryArchive={retryArchiveAfterSend}
+              onSendNow={sendScheduledNow}
+              onEdit={editQueued}
+              onDiscard={discardQueued}
+            />
+          ) : (
+            <MessageList
+              key={`${activeAccountId}:${activeMailboxId ?? ""}:${activeLocalView ?? ""}:${submittedQuery}:${listFilter}:${listSort}`}
+              scrollKey={`${activeAccountId}:${activeMailboxId ?? ""}:${activeLocalView ?? ""}:${submittedQuery}:${listFilter}:${listSort}`}
+              messages={listedMessages}
+              chronological={listSort === "date" || listSort === "dateOldest"}
+              oldestFirst={listSort === "dateOldest"}
+              emptyLabel={
+                listFilter === "unread"
+                  ? strings.mail.noUnread
+                  : listFilter === "starred"
+                    ? strings.mail.noStarred
+                    : listFilter === "attachments"
+                      ? strings.mail.noAttachments
+                      : listFilter === "pinned"
+                        ? strings.mail.noPinned
+                        : listFilter === "toMe"
+                          ? strings.mail.noToMe
+                          : listFilter === "invitations"
+                            ? strings.mail.noInvitations
+                            : undefined
+              }
+              selectedId={selectedMessage?.id}
+              loading={loadingMessages}
+              loadingMessageId={loadingMessageId}
+              onChoose={async (summary) => {
+                await chooseMessage(summary);
+              }}
+              hasMore={hasMoreMessages || canDownloadOlder}
+              onLoadMore={loadMoreMessages}
+              loadMoreLabel={
+                hasMoreMessages ? undefined : strings.mail.loadOlderFromServer
+              }
+              searchQuery={submittedQuery}
+              showFolders={Boolean(submittedQuery) && allFolders}
+              selecting={selecting}
+              selectedIds={selectedIds}
+              onToggleSelect={toggleSelectMessage}
+              onCheckFocused={toggleSelectIds}
+              onArchiveFocused={archiveFocused}
+              onTrashFocused={trashFocused}
+              onJunkFocused={junkFocused}
+              onReplyFocused={(message, mode) => {
+                void replyFocused(message, mode);
+              }}
+              onSelectDay={(ids) => {
+                if (ids.length === 0) return;
+                selectionAnchor.current = ids[0];
+                setSelecting(true);
+                if (ids.length > 200) {
+                  setError(strings.mail.bulkTooMany);
+                  setSelectedIds(ids.slice(0, 200));
+                  return;
+                }
+                setSelectedIds(ids);
+              }}
+              onRangeSelect={selectMessageRange}
+              onToggleStar={(message) => {
+                void toggleListedStar(message.id);
+              }}
+              onToggleConversationStar={(message, starred) => {
+                void starLoadedConversation(message, starred);
+              }}
+              onToggleRead={(message) => {
+                void toggleListedRead(message.id);
+              }}
+              onToggleConversationRead={(message, isRead) => {
+                void (isRead
+                  ? markLoadedConversationRead(message)
+                  : markLoadedConversationUnread(message));
+              }}
+              onClearSearch={() => {
+                clearQuery();
+                void loadMessages();
+              }}
+              onSearchAllFolders={
+                submittedQuery && !allFolders
+                  ? () => {
+                      allFoldersRef.current = true;
+                      setAllFolders(true);
+                      void runSearch();
+                    }
+                  : undefined
+              }
+            />
+          )}
+        </section>
+      </ErrorBoundary>
 
       {settings.readingPane === "right" ? (
         <PaneSplitter
@@ -1481,6 +1522,10 @@ export function MailShell({ onOpenSettings }: Props) {
         id="reader-pane"
         help={strings.app.readerCrashHelp}
         resetKey={selectedMessage?.id}
+        onReset={async () => {
+          if (selectedMessage) await chooseMessage(selectedMessage);
+        }}
+        focusSelector='#reader-pane [role="toolbar"] button'
       >
         <MessageReader
           onSnoozed={handleSnoozedMessage}
@@ -1580,6 +1625,12 @@ export function MailShell({ onOpenSettings }: Props) {
           onMove={(parentId) => void submitMoveFolder(parentId)}
           onClose={() => setMoveFolderId(null)}
         />
+      ) : null}
+      {paletteOpen ? (
+        <CommandPalette onClose={() => setPaletteOpen(false)} />
+      ) : null}
+      {shortcutsOpen ? (
+        <ShortcutOverlay onClose={() => setShortcutsOpen(false)} />
       ) : null}
       {addAccountOpen ? (
         <AddAccountDialog

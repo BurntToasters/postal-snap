@@ -14,7 +14,7 @@ Postal Snap is an open-source, MPL-2.0-licensed desktop email client with a calm
 
 Large readable defaults (comfortable density, adjustable text up to 200%) are an accessibility feature for low vision and eye strain, not an age-branded product tier. Never use "senior" in UI copy, docs, or fixtures.
 
-The current (0.4.x) scope is deliberately focused:
+The current (0.5.x) scope is deliberately focused:
 
 - Guided iCloud Mail setup using an app-specific password.
 - Secure manual IMAP/SMTP setup, with provider presets and HTTPS autoconfig discovery.
@@ -25,7 +25,7 @@ The current (0.4.x) scope is deliberately focused:
 - No telemetry, analytics, licensing server, trial logic, or Postal Snap cloud.
 - English-US first, with UI strings kept central for later localization.
 
-Do not add Gmail/Outlook OAuth setup UI, POP, plaintext transport, contacts, templates, calendar, or a cloud backend unless the user expands scope. OAuth sign-in is wired in Rust (loopback `http://127.0.0.1`, PKCE, keychain, XOAUTH2) and hidden from setup. User-facing OAuth is not a 0.4.0 requirement; it can wait until 0.5.0. Do not register `run.rosie.snap://oauth/callback`. Client IDs come from the build, never a client secret. Registration steps are in `docs/OAUTH.md`. Parked cross-account search APIs stay unused by the mailbox UI.
+Do not add Gmail/Outlook OAuth setup UI, POP, plaintext transport, contacts, templates, calendar, or a cloud backend unless the user expands scope. OAuth sign-in is wired in Rust (loopback `http://127.0.0.1`, PKCE, keychain, XOAUTH2) and hidden from setup. User-facing OAuth is deferred to 0.6.0. Do not register `run.rosie.snap://oauth/callback`. Client IDs come from the build, never a client secret. Registration steps are in `docs/OAUTH.md`. Parked cross-account search APIs stay unused by the mailbox UI.
 
 ## Stack and layout
 
@@ -43,14 +43,14 @@ Do not add Gmail/Outlook OAuth setup UI, POP, plaintext transport, contacts, tem
 
 Important files:
 
-- `src/components/MailShell.tsx`: main mailbox UI.
+- `src/components/MailShell.tsx`: mailbox shell; sidebar, list, selection, and toolbar modules live in `src/components/mail/`.
 - `src/components/ContextMenu.tsx`: HTML product context menus (Windows has no native app menubar).
-- `src/components/MessageReader.tsx`: safe received-mail reader.
-- `src/components/Composer.tsx`: rich composer and draft behavior.
+- `src/components/MessageReader.tsx`: reader composition and safe received-mail display; reader actions and notices live in `src/components/reader/`.
+- `src/components/Composer.tsx`: composer shell; editor extensions and draft, attachment, and send hooks live in `src/components/composer/`.
 - `src/components/SetupWizard.tsx`: iCloud/manual account setup.
-- `src/root.css`: responsive accessible design system (modularized in `src/styles/`).
+- `src/root.css`: stylesheet import hub; design tokens and modular rules live in `src/styles/`.
 - `src-tauri/src/commands.rs`: typed IPC boundary and account serialization.
-- `src-tauri/src/mail.rs`: IMAP, SMTP, MIME, sync, and server search.
+- `src-tauri/src/mail.rs`: IMAP/SMTP facade; connection, parsing, pooling, sync, and watcher modules live in `src-tauri/src/mail/`.
 - `src-tauri/src/db.rs`: SQLite, FTS, offline queue, drafts, and outbox.
 - `src-tauri/src/html_sanitize.rs`: ammonia first-pass sanitizer for received and draft HTML.
 - `src-tauri/src/security.rs`: remote-image SSRF defenses, redaction, and shared external-link inspection.
@@ -107,7 +107,7 @@ These are release blockers. Do not weaken them for convenience.
 
 ## Mail and storage behavior
 
-- One async serialized actor/lock per account. Interrupt IMAP IDLE for operations, then resume.
+- One async serialized actor/lock per account owns all mutations and the pooled session. An optional read-only watcher session may EXAMINE and IDLE on INBOX and only wakes the actor; without it, interrupt in-actor IMAP IDLE for operations, then resume.
 - Sync by UID and UIDVALIDITY. UIDs are mailbox-scoped; never reuse a moved source UID as the destination UID.
 - Database schema changes use transactional `PRAGMA user_version` migrations. Preserve referenced managed attachments when upgrading legacy databases.
 - IMAP `STATUS` totals/unread are authoritative; optimistic local count deltas must reset on the next successful status refresh.

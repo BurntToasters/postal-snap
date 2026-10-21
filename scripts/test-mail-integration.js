@@ -35,7 +35,7 @@ const report = {
     }).trim().length > 0,
   mode: bridgeOnly ? "bridge-only" : "full",
   startedAt: new Date().toISOString(),
-  fixtureVersions: { greenmail: "2.1.11", compatibility: "7" },
+  fixtureVersions: { greenmail: "2.1.11", compatibility: "8" },
   commands: [],
   results: [],
   status: "running",
@@ -73,6 +73,57 @@ async function protocolTest(name, env) {
       "--manifest-path",
       "src-tauri/Cargo.toml",
       `mail::tests::${name}`,
+      "--",
+      "--ignored",
+      "--exact",
+      "--nocapture",
+    ],
+    { env },
+  );
+}
+async function watcherTest(name, env) {
+  await recordedRun(
+    "cargo",
+    [
+      "test",
+      "--locked",
+      "--manifest-path",
+      "src-tauri/Cargo.toml",
+      `mail::watch::tests::${name}`,
+      "--",
+      "--ignored",
+      "--exact",
+      "--nocapture",
+    ],
+    { env },
+  );
+}
+async function deferredReplayTest(name, env) {
+  await recordedRun(
+    "cargo",
+    [
+      "test",
+      "--locked",
+      "--manifest-path",
+      "src-tauri/Cargo.toml",
+      `commands::deferred_integration_tests::${name}`,
+      "--",
+      "--ignored",
+      "--exact",
+      "--nocapture",
+    ],
+    { env },
+  );
+}
+async function undoSessionTest(name, env) {
+  await recordedRun(
+    "cargo",
+    [
+      "test",
+      "--locked",
+      "--manifest-path",
+      "src-tauri/Cargo.toml",
+      `commands::messages::undo_session_tls_tests::${name}`,
       "--",
       "--ignored",
       "--exact",
@@ -215,7 +266,9 @@ try {
       capabilities:
         name === "STARTTLS"
           ? ["IMAP4rev1", "QRESYNC", "CONDSTORE"]
-          : ["IMAP4rev1"],
+          : name === "TLS"
+            ? ["IMAP4rev1", "LIST-STATUS", "ID"]
+            : ["IMAP4rev1"],
       advertiseStartTls: name !== "NO_STARTTLS",
       rejectStartTls: name === "NO_STARTTLS",
       allowRestartCommand: name === "STARTTLS",
@@ -376,8 +429,24 @@ try {
   const utf8Ports = await utf8Fixture.start();
   environment.POSTAL_SNAP_BRIDGE_IMAP_UTF8 = String(utf8Ports.imap);
   environment.POSTAL_SNAP_BRIDGE_SMTP_UTF8 = String(utf8Ports.smtp);
+  stage = "no-idle-watcher-fixture-start";
+  const watcherEvents = join(temporary, "watcher-events.txt");
+  const watcherFixture = await createCompatibilityFixture({
+    certificatePath: certificate,
+    keyPath: key,
+    tlsMode: "tls",
+    capabilities: ["IMAP4rev1", "UIDPLUS"],
+    maxImapConnections: 1,
+    statePath: watcherEvents,
+  });
+  fixtures.push({ name: "NO-IDLE-WATCHER-CAP", fixture: watcherFixture });
+  const watcherPorts = await watcherFixture.start();
+  environment.POSTAL_SNAP_WATCH_NO_IDLE_PORT = String(watcherPorts.imap);
+  environment.POSTAL_SNAP_WATCH_EVENTS = watcherEvents;
   stage = "bridge-protocol-integration";
   await protocolTest("bridge_tls_protocol_integration", environment);
+  stage = "bridge-list-status-protocol-integration";
+  await protocolTest("bridge_list_status_protocol_integration", environment);
   stage = "bridge-recovery-protocol-integration";
   await protocolTest("bridge_recovery_protocol_integration", environment);
   for (const { name, fixture } of fixtures) {
@@ -456,7 +525,15 @@ try {
       });
       continue;
     }
+    if (name === "NO-IDLE-WATCHER-CAP") continue;
     const positive = ["TLS", "STARTTLS"].includes(name);
+    if (name === "TLS") {
+      assert.ok(
+        counters.listStatusReplies > 0,
+        "LIST-STATUS fixture reply was not used.",
+      );
+      assert.ok(counters.idCommands > 0, "IMAP ID was not sent.");
+    }
     assert.equal(
       counters.messagesAccepted,
       positive ? 1 : 0,
@@ -521,6 +598,20 @@ try {
       status: "skipped",
       reason: "Bridge-only mode excludes GreenMail.",
     });
+    for (const name of [
+      "greenmail-deferred-move-undo-window",
+      "greenmail-deferred-move-commit-once",
+      "greenmail-dropped-operation-notification",
+      "greenmail-batched-move-keeps-snoozes",
+      "greenmail-live-single-move-keeps-snooze",
+      "greenmail-live-bulk-move-keeps-snoozes",
+    ]) {
+      report.results.push({
+        name,
+        status: "skipped",
+        reason: "Bridge-only mode excludes GreenMail.",
+      });
+    }
     report.results.push({
       name: "greenmail-protocol-integration-history",
       status: "skipped",
@@ -595,6 +686,121 @@ try {
     report.results.push({
       name: "greenmail-archive-keeps-answered",
       status: "passed",
+    });
+    stage = "greenmail-watcher-inbox-wake";
+    await protocolTest("greenmail_watcher_requests_inbox_wake_on_append", {
+      ...environment,
+      POSTAL_SNAP_MAIL_INTEGRATION: "1",
+    });
+    report.results.push({
+      name: "greenmail-watcher-inbox-wake",
+      status: "passed",
+    });
+    stage = "greenmail-batch-move-once";
+    await protocolTest("greenmail_batch_move_lands_every_message_once", {
+      ...environment,
+      POSTAL_SNAP_MAIL_INTEGRATION: "1",
+    });
+    report.results.push({
+      name: "greenmail-batch-move-once",
+      status: "passed",
+    });
+    stage = "greenmail-deferred-move-undo-window";
+    await deferredReplayTest(
+      "greenmail_deferred_move_waits_for_commit_and_undo_cancels_it",
+      {
+        ...environment,
+        POSTAL_SNAP_MAIL_INTEGRATION: "1",
+      },
+    );
+    report.results.push({
+      name: "greenmail-deferred-move-undo-window",
+      status: "passed",
+    });
+    stage = "greenmail-deferred-move-commit-once";
+    await deferredReplayTest("greenmail_committed_deferred_move_replays_once", {
+      ...environment,
+      POSTAL_SNAP_MAIL_INTEGRATION: "1",
+    });
+    report.results.push({
+      name: "greenmail-deferred-move-commit-once",
+      status: "passed",
+    });
+    stage = "greenmail-dropped-operation-notification";
+    await deferredReplayTest(
+      "greenmail_replay_keeps_dropped_operation_notification_contract",
+      {
+        ...environment,
+        POSTAL_SNAP_MAIL_INTEGRATION: "1",
+      },
+    );
+    report.results.push({
+      name: "greenmail-dropped-operation-notification",
+      status: "passed",
+    });
+    stage = "greenmail-replayed-move-keeps-snooze";
+    await deferredReplayTest(
+      "greenmail_replayed_deferred_move_keeps_the_snooze",
+      {
+        ...environment,
+        POSTAL_SNAP_MAIL_INTEGRATION: "1",
+      },
+    );
+    report.results.push({
+      name: "greenmail-replayed-move-keeps-snooze",
+      status: "passed",
+    });
+    stage = "greenmail-batched-move-keeps-snoozes";
+    await deferredReplayTest(
+      "greenmail_batched_move_replay_keeps_every_snooze",
+      {
+        ...environment,
+        POSTAL_SNAP_MAIL_INTEGRATION: "1",
+      },
+    );
+    report.results.push({
+      name: "greenmail-batched-move-keeps-snoozes",
+      status: "passed",
+    });
+    stage = "greenmail-live-single-move-keeps-snooze";
+    await deferredReplayTest("greenmail_live_single_move_keeps_the_snooze", {
+      ...environment,
+      POSTAL_SNAP_MAIL_INTEGRATION: "1",
+    });
+    report.results.push({
+      name: "greenmail-live-single-move-keeps-snooze",
+      status: "passed",
+    });
+    stage = "greenmail-live-bulk-move-keeps-snoozes";
+    await deferredReplayTest("greenmail_live_bulk_move_keeps_every_snooze", {
+      ...environment,
+      POSTAL_SNAP_MAIL_INTEGRATION: "1",
+    });
+    report.results.push({
+      name: "greenmail-live-bulk-move-keeps-snoozes",
+      status: "passed",
+    });
+    stage = "greenmail-undo-session-restart-recovery";
+    await undoSessionTest(
+      "greenmail_undo_session_holds_expired_move_then_recovers_once_on_restart",
+      {
+        ...environment,
+        POSTAL_SNAP_MAIL_INTEGRATION: "1",
+      },
+    );
+    report.results.push({
+      name: "greenmail-undo-session-restart-recovery",
+      status: "passed",
+    });
+    stage = "no-idle-watcher-cap";
+    await watcherTest(
+      "no_idle_watcher_releases_cap_and_restarts_in_both_connection_orders",
+      environment,
+    );
+    report.results.push({
+      name: "bridge-no-idle-watcher-cap",
+      status: "passed",
+      counters: watcherFixture.results(),
     });
   }
   report.status = "passed";

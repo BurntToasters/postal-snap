@@ -1,4 +1,4 @@
-use super::{db_error, parse_role, Database};
+use super::{db_error, messages::NOT_SNOOZED_SQL, parse_role, Database};
 
 #[derive(Clone, Debug, Default)]
 pub struct MailboxSyncMeta {
@@ -128,16 +128,18 @@ impl Database {
 
     pub fn list_mailboxes(&self, account_id: &str) -> Result<Vec<MailboxSummary>, String> {
         let conn = self.read_conn()?;
-        let mut statement = conn.prepare(
-            "SELECT f.id, f.account_id, f.name, f.display_name,
+        let mut statement = conn
+            .prepare_cached(&format!(
+                "SELECT f.id, f.account_id, f.name, f.display_name,
                     COALESCE((SELECT a.role FROM folder_assignments a WHERE a.account_id=f.account_id AND a.mailbox_id=f.id), CASE WHEN EXISTS(SELECT 1 FROM folder_assignments a WHERE a.account_id=f.account_id AND a.role=f.role) THEN 'other' ELSE f.role END),
-                    MAX(0, COALESCE(f.server_unread, SUM(CASE WHEN m.is_read = 0 AND m.pending_move_to IS NULL THEN 1 ELSE 0 END)) + f.local_unread_delta),
-                    MAX(0, COALESCE(f.server_total, SUM(CASE WHEN m.pending_move_to IS NULL AND m.id IS NOT NULL THEN 1 ELSE 0 END)) + f.local_total_delta),
+                    MAX(0, COALESCE(f.server_unread, SUM(CASE WHEN m.is_read = 0 AND m.pending_move_to IS NULL AND {NOT_SNOOZED_SQL} THEN 1 ELSE 0 END)) + f.local_unread_delta),
+                    MAX(0, COALESCE(f.server_total, SUM(CASE WHEN m.pending_move_to IS NULL AND m.id IS NOT NULL AND {NOT_SNOOZED_SQL} THEN 1 ELSE 0 END)) + f.local_total_delta),
                     f.delimiter
              FROM mailboxes f LEFT JOIN messages m ON m.mailbox_id = f.id
              WHERE f.account_id = ?1 GROUP BY f.id
-             ORDER BY CASE f.role WHEN 'inbox' THEN 0 WHEN 'starred' THEN 1 WHEN 'drafts' THEN 2 WHEN 'sent' THEN 3 WHEN 'archive' THEN 4 WHEN 'junk' THEN 5 WHEN 'trash' THEN 6 ELSE 7 END, f.display_name COLLATE NOCASE",
-        ).map_err(db_error)?;
+             ORDER BY CASE f.role WHEN 'inbox' THEN 0 WHEN 'starred' THEN 1 WHEN 'drafts' THEN 2 WHEN 'sent' THEN 3 WHEN 'archive' THEN 4 WHEN 'junk' THEN 5 WHEN 'trash' THEN 6 ELSE 7 END, f.display_name COLLATE NOCASE"
+            ))
+            .map_err(db_error)?;
         let rows = statement
             .query_map([account_id], |row| {
                 Ok(MailboxSummary {
@@ -156,17 +158,19 @@ impl Database {
     }
 
     pub fn list_all_mailboxes(&self) -> Result<Vec<MailboxSummary>, String> {
-        let conn = self.conn()?;
-        let mut statement = conn.prepare(
-            "SELECT f.id, f.account_id, f.name, f.display_name,
+        let conn = self.read_conn()?;
+        let mut statement = conn
+            .prepare_cached(&format!(
+                "SELECT f.id, f.account_id, f.name, f.display_name,
                     COALESCE((SELECT a.role FROM folder_assignments a WHERE a.account_id=f.account_id AND a.mailbox_id=f.id), CASE WHEN EXISTS(SELECT 1 FROM folder_assignments a WHERE a.account_id=f.account_id AND a.role=f.role) THEN 'other' ELSE f.role END),
-                    MAX(0, COALESCE(f.server_unread, SUM(CASE WHEN m.is_read = 0 AND m.pending_move_to IS NULL THEN 1 ELSE 0 END)) + f.local_unread_delta),
-                    MAX(0, COALESCE(f.server_total, SUM(CASE WHEN m.pending_move_to IS NULL AND m.id IS NOT NULL THEN 1 ELSE 0 END)) + f.local_total_delta),
+                    MAX(0, COALESCE(f.server_unread, SUM(CASE WHEN m.is_read = 0 AND m.pending_move_to IS NULL AND {NOT_SNOOZED_SQL} THEN 1 ELSE 0 END)) + f.local_unread_delta),
+                    MAX(0, COALESCE(f.server_total, SUM(CASE WHEN m.pending_move_to IS NULL AND m.id IS NOT NULL AND {NOT_SNOOZED_SQL} THEN 1 ELSE 0 END)) + f.local_total_delta),
                     f.delimiter
              FROM mailboxes f LEFT JOIN messages m ON m.mailbox_id = f.id
              GROUP BY f.id
-             ORDER BY f.account_id, CASE f.role WHEN 'inbox' THEN 0 WHEN 'starred' THEN 1 WHEN 'drafts' THEN 2 WHEN 'sent' THEN 3 WHEN 'archive' THEN 4 WHEN 'junk' THEN 5 WHEN 'trash' THEN 6 ELSE 7 END, f.display_name COLLATE NOCASE",
-        ).map_err(db_error)?;
+             ORDER BY f.account_id, CASE f.role WHEN 'inbox' THEN 0 WHEN 'starred' THEN 1 WHEN 'drafts' THEN 2 WHEN 'sent' THEN 3 WHEN 'archive' THEN 4 WHEN 'junk' THEN 5 WHEN 'trash' THEN 6 ELSE 7 END, f.display_name COLLATE NOCASE"
+            ))
+            .map_err(db_error)?;
         let rows = statement
             .query_map([], |row| {
                 Ok(MailboxSummary {
@@ -186,15 +190,25 @@ impl Database {
 
     pub fn list_account_inbox_counts(&self) -> Result<Vec<AccountInboxCount>, String> {
         let conn = self.read_conn()?;
-        let mut statement = conn.prepare(
-            "SELECT f.account_id,
-                    MAX(0, COALESCE(f.server_unread, SUM(CASE WHEN m.is_read = 0 AND m.pending_move_to IS NULL THEN 1 ELSE 0 END)) + f.local_unread_delta),
-                    MAX(0, COALESCE(f.server_total, SUM(CASE WHEN m.pending_move_to IS NULL AND m.id IS NOT NULL THEN 1 ELSE 0 END)) + f.local_total_delta)
-             FROM mailboxes f LEFT JOIN messages m ON m.mailbox_id = f.id
-             WHERE f.role = 'inbox'
-             GROUP BY f.id, f.account_id
-             ORDER BY f.account_id",
-        ).map_err(db_error)?;
+        // One row per account: recompute each inbox-role folder from cached
+        // rows, then sum across folders. The badge layer keeps only the first
+        // row per account, so multiple inbox-role folders must not surface
+        // separately here.
+        let mut statement = conn
+            .prepare_cached(&format!(
+                "SELECT per_folder.account_id, SUM(per_folder.unread), SUM(per_folder.total)
+              FROM (
+                SELECT f.account_id AS account_id,
+                    MAX(0, COALESCE(COALESCE(f.server_unread, SUM(CASE WHEN m.is_read = 0 AND m.pending_move_to IS NULL AND {NOT_SNOOZED_SQL} THEN 1 ELSE 0 END)) + f.local_unread_delta, 0)) AS unread,
+                    MAX(0, COALESCE(COALESCE(f.server_total, SUM(CASE WHEN m.pending_move_to IS NULL AND m.id IS NOT NULL AND {NOT_SNOOZED_SQL} THEN 1 ELSE 0 END)) + f.local_total_delta, 0)) AS total
+                FROM mailboxes f LEFT JOIN messages m ON m.mailbox_id = f.id
+                WHERE f.role = 'inbox'
+                GROUP BY f.id, f.account_id
+              ) per_folder
+              GROUP BY per_folder.account_id
+              ORDER BY per_folder.account_id"
+            ))
+            .map_err(db_error)?;
         let rows = statement
             .query_map([], |row| {
                 Ok(AccountInboxCount {
@@ -471,7 +485,7 @@ impl Database {
     }
 
     pub fn max_uid(&self, mailbox_id: i64) -> Result<u32, String> {
-        self.conn()?
+        self.read_conn()?
             .query_row(
                 "SELECT COALESCE(MAX(uid), 0) FROM messages WHERE mailbox_id = ?1",
                 [mailbox_id],
@@ -481,7 +495,7 @@ impl Database {
     }
 
     pub fn min_uid(&self, mailbox_id: i64) -> Result<Option<u32>, String> {
-        self.conn()?
+        self.read_conn()?
             .query_row(
                 "SELECT MIN(uid) FROM messages WHERE mailbox_id = ?1",
                 [mailbox_id],
@@ -491,9 +505,9 @@ impl Database {
     }
 
     pub fn cached_uids(&self, mailbox_id: i64) -> Result<Vec<u32>, String> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut statement = conn
-            .prepare("SELECT uid FROM messages WHERE mailbox_id=?1 ORDER BY uid")
+            .prepare_cached("SELECT uid FROM messages WHERE mailbox_id=?1 ORDER BY uid")
             .map_err(db_error)?;
         let rows = statement
             .query_map([mailbox_id], |row| row.get(0))
@@ -502,7 +516,7 @@ impl Database {
     }
 
     pub fn message_received_at(&self, id: i64) -> Result<Option<String>, String> {
-        self.conn()?
+        self.read_conn()?
             .query_row(
                 "SELECT received_at FROM messages WHERE id=?1",
                 [id],
@@ -513,7 +527,7 @@ impl Database {
     }
 
     pub fn mailbox_sync_meta(&self, mailbox_id: i64) -> Result<MailboxSyncMeta, String> {
-        self.conn()?
+        self.read_conn()?
             .query_row(
                 "SELECT uid_validity, uid_next, server_total, server_unread, highest_modseq,
                         backfill_state, last_flag_scan_at
@@ -628,14 +642,17 @@ impl Database {
             rows
         };
         let mut removed = 0u32;
+        let mut delete = transaction
+            .prepare_cached(
+                "DELETE FROM messages WHERE mailbox_id=?1 AND uid=?2 AND pending_move_to IS NULL",
+            )
+            .map_err(db_error)?;
         for uid in cached.into_iter().filter(|uid| !server_uids.contains(uid)) {
-            removed += transaction
-                .execute(
-                    "DELETE FROM messages WHERE mailbox_id=?1 AND uid=?2 AND pending_move_to IS NULL",
-                    params![mailbox_id, uid],
-                )
+            removed += delete
+                .execute(params![mailbox_id, uid])
                 .map_err(db_error)? as u32;
         }
+        drop(delete);
         transaction.commit().map_err(db_error)?;
         Ok(removed)
     }
@@ -646,20 +663,23 @@ impl Database {
         let mut conn = self.conn()?;
         let transaction = conn.transaction().map_err(db_error)?;
         let mut removed = 0u32;
+        let mut delete = transaction
+            .prepare_cached(
+                "DELETE FROM messages WHERE mailbox_id=?1 AND uid=?2 AND pending_move_to IS NULL",
+            )
+            .map_err(db_error)?;
         for uid in uids {
-            removed += transaction
-                .execute(
-                    "DELETE FROM messages WHERE mailbox_id=?1 AND uid=?2 AND pending_move_to IS NULL",
-                    params![mailbox_id, uid],
-                )
+            removed += delete
+                .execute(params![mailbox_id, uid])
                 .map_err(db_error)? as u32;
         }
+        drop(delete);
         transaction.commit().map_err(db_error)?;
         Ok(removed)
     }
 
     pub fn cached_message_count(&self, mailbox_id: i64) -> Result<u32, String> {
-        self.conn()?
+        self.read_conn()?
             .query_row(
                 "SELECT COUNT(*) FROM messages WHERE mailbox_id=?1",
                 [mailbox_id],
@@ -712,4 +732,197 @@ impl Database {
         })
     }
 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::{CachedMessage, Database};
+    use crate::models::{AccountRecord, AccountSummary, ProviderKind, ServerConfig, TlsMode};
+
+    fn account_with(id: &str, email: &str) -> AccountRecord {
+        AccountRecord {
+            summary: AccountSummary {
+                default_body_format: crate::models::BodyFormat::Html,
+                id: id.into(),
+                provider: ProviderKind::Manual,
+                email: email.into(),
+                display_name: email.into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+                signature_html: String::new(),
+                reply_to: String::new(),
+                color: None,
+            },
+            imap: ServerConfig {
+                trusted_certificate: None,
+                host: "imap.example.com".into(),
+                port: 993,
+                tls_mode: TlsMode::Tls,
+                username: email.into(),
+            },
+            smtp: ServerConfig {
+                trusted_certificate: None,
+                host: "smtp.example.com".into(),
+                port: 587,
+                tls_mode: TlsMode::StartTls,
+                username: email.into(),
+            },
+        }
+    }
+
+    fn message(uid: u32, received_at: &str) -> CachedMessage {
+        CachedMessage {
+            uid,
+            internal_at: None,
+            message_id: Some(format!("<{uid}@example.com>")),
+            subject: format!("Letter {uid}"),
+            sender_name: "Jane".into(),
+            sender_address: "jane@example.com".into(),
+            recipients: "sam@example.com".into(),
+            received_at: received_at.into(),
+            preview: "Hello".into(),
+            is_read: false,
+            is_starred: false,
+            size: 32,
+            to: vec!["sam@example.com".into()],
+            cc: vec![],
+            bcc: vec![],
+            reply_to: None,
+            thread_parent: None,
+            text_body: "Hello".into(),
+            html_body: None,
+            attachments: vec![],
+            raw_message: b"Subject: Letter\r\n\r\nHello".to_vec(),
+            has_attachments: false,
+            is_answered: false,
+            is_forwarded: false,
+            has_calendar: false,
+            calendar_json: None,
+            list_unsubscribe: None,
+            list_unsubscribe_post: None,
+            importance: String::new(),
+            disposition_to: String::new(),
+        }
+    }
+
+    /// Server unread stays None so unread comes from the cached-row SUM
+    /// branch the snooze exclusion touches; total stays STATUS-authoritative.
+    fn fixture_mailbox(db: &Database, account_id: &str, name: &str, total: u32) -> i64 {
+        db.upsert_mailbox(
+            account_id,
+            name,
+            &MailboxRole::Inbox,
+            Some(2),
+            Some(3),
+            None,
+            total,
+        )
+        .unwrap()
+    }
+
+    fn counts_for(db: &Database, account_id: &str, mailbox_id: i64) -> (u32, u32) {
+        let mailboxes = db.list_mailboxes(account_id).unwrap();
+        let mailbox = mailboxes
+            .iter()
+            .find(|item| item.id == mailbox_id)
+            .unwrap()
+            .clone();
+        (mailbox.unread_count, mailbox.total_count)
+    }
+
+    #[test]
+    fn mailbox_counts_exclude_snoozed_messages() {
+        let db = Database::memory();
+        let account = account_with("account-1", "sam@example.com");
+        db.insert_account(&account).unwrap();
+        let account_id = account.summary.id.clone();
+        let inbox = fixture_mailbox(&db, &account_id, "INBOX", 2);
+        db.upsert_message(&account_id, inbox, &message(1, "2026-08-18T12:00:00Z"))
+            .unwrap();
+        db.upsert_message(&account_id, inbox, &message(2, "2026-08-18T13:00:00Z"))
+            .unwrap();
+        assert_eq!(counts_for(&db, &account_id, inbox), (2, 2));
+
+        let first = db
+            .list_messages(inbox, None, 10)
+            .unwrap()
+            .items
+            .remove(0)
+            .id;
+        db.snooze_message(&account_id, first, "2999-01-01T00:00:00+00:00")
+            .unwrap();
+
+        // The list and the cached unread count hide the snoozed row. The
+        // total follows the server's STATUS value until the next refresh.
+        let visible = db.list_messages(inbox, None, 10).unwrap().items;
+        assert_eq!(visible.len(), 1);
+        assert_ne!(visible[0].id, first);
+        assert_eq!(counts_for(&db, &account_id, inbox), (1, 2));
+        let all = db
+            .list_all_mailboxes()
+            .unwrap()
+            .into_iter()
+            .find(|mailbox| mailbox.id == inbox)
+            .unwrap();
+        assert_eq!((all.unread_count, all.total_count), (1, 2));
+
+        // Expiry lets it count again.
+        db.unsnooze_message(&account_id, first).unwrap();
+        assert_eq!(counts_for(&db, &account_id, inbox), (2, 2));
+    }
+
+    #[test]
+    fn inbox_badge_counts_are_one_row_per_account_summed_over_folders() {
+        let db = Database::memory();
+        db.insert_account(&account_with("account-1", "sam@example.com"))
+            .unwrap();
+        db.insert_account(&account_with("account-2", "lee@example.com"))
+            .unwrap();
+        let first = fixture_mailbox(&db, "account-1", "INBOX", 2);
+        let second = fixture_mailbox(&db, "account-1", "Second Inbox", 1);
+        let third = fixture_mailbox(&db, "account-2", "INBOX", 2);
+        db.upsert_message("account-1", first, &message(1, "2026-08-18T12:00:00Z"))
+            .unwrap();
+        db.upsert_message("account-1", first, &message(2, "2026-08-18T13:00:00Z"))
+            .unwrap();
+        db.upsert_message("account-1", second, &message(3, "2026-08-18T14:00:00Z"))
+            .unwrap();
+        db.upsert_message("account-2", third, &message(4, "2026-08-18T15:00:00Z"))
+            .unwrap();
+        db.upsert_message("account-2", third, &message(5, "2026-08-18T16:00:00Z"))
+            .unwrap();
+
+        assert_eq!(
+            db.list_account_inbox_counts()
+                .unwrap()
+                .into_iter()
+                .map(|count| (count.account_id, count.unread_count, count.total_count))
+                .collect::<Vec<_>>(),
+            vec![("account-1".into(), 3, 3), ("account-2".into(), 2, 2),]
+        );
+
+        // A snoozed row leaves both the folder and the badge.
+        let fifth = db
+            .list_messages(third, None, 10)
+            .unwrap()
+            .items
+            .into_iter()
+            .find(|message| message.uid == 5)
+            .unwrap()
+            .id;
+        db.snooze_message("account-2", fifth, "2999-01-01T00:00:00+00:00")
+            .unwrap();
+        assert_eq!(
+            db.list_account_inbox_counts()
+                .unwrap()
+                .into_iter()
+                .map(|count| (count.account_id, count.unread_count, count.total_count))
+                .collect::<Vec<_>>(),
+            vec![("account-1".into(), 3, 3), ("account-2".into(), 1, 2),]
+        );
+    }
 }

@@ -95,6 +95,16 @@ pub async fn update_account_connection(
     state
         .db
         .save_account_connection(&account_id, &imap, &smtp, changed)?;
+    if changed {
+        // The reset dropped this account's cached mail; free its pages now or
+        // leave the same retry marker account removal uses.
+        let db = state.db.clone();
+        let marker = state.compact_marker();
+        let _ = tauri::async_runtime::spawn_blocking(move || {
+            super::accounts::compact_or_mark(&db, &marker)
+        })
+        .await;
+    }
     mail::pool::forget(&account_id);
     state.db.set_account_state(&account_id, "idle", None)?;
     state

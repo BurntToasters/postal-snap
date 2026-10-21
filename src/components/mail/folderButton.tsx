@@ -1,5 +1,5 @@
 import { useState, type DragEvent } from "react";
-import { Inbox, Pencil, Trash2 } from "lucide-react";
+import { Inbox, Pencil, Trash } from "lucide-react";
 import { strings } from "../../i18n";
 import {
   MESSAGE_DRAG_TYPE,
@@ -121,7 +121,7 @@ export function FolderButton({
           aria-label={strings.mail.deleteFolderNamed(label)}
           title={strings.mail.deleteFolderNamed(label)}
         >
-          <Trash2 aria-hidden="true" />
+          <Trash aria-hidden="true" />
         </button>
       ) : null}
     </div>

@@ -1,5 +1,5 @@
 import type { MouseEvent } from "react";
-import { Archive, Inbox, Mail, MailOpen, Star, Trash2 } from "lucide-react";
+import { Archive, Inbox, Mail, MailOpen, Star, Trash } from "lucide-react";
 import { strings } from "../../i18n";
 import type { MessageSummary } from "../../types";
 
@@ -147,7 +147,7 @@ export function RowActions({
           title={`${trashLabel} (Delete)`}
           onClick={once(() => onTrash(message, conversation))}
         >
-          <Trash2 aria-hidden="true" />
+          <Trash aria-hidden="true" />
         </button>
       ) : null}
     </div>

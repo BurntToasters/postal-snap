@@ -1,3 +1,6 @@
+/** Marks a clipboard picture whose bytes could not be read into a data URL. */
+export const PASTED_IMAGE_UNREADABLE = "pastedImageUnreadable";
+
 export function readPastedImage(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -5,9 +8,9 @@ export function readPastedImage(file: File): Promise<string> {
       const result = reader.result;
       if (typeof result === "string" && result.startsWith("data:image/"))
         resolve(result);
-      else reject(new Error("Could not read that image."));
+      else reject(PASTED_IMAGE_UNREADABLE);
     };
-    reader.onerror = () => reject(new Error("Could not read that image."));
+    reader.onerror = () => reject(PASTED_IMAGE_UNREADABLE);
     reader.readAsDataURL(file);
   });
 }

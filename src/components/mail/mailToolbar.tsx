@@ -2,6 +2,7 @@ import {
   useEffect,
   useId,
   useLayoutEffect,
+  useRef,
   useState,
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -158,6 +159,12 @@ export function SearchBox({
     else inputRef.current?.focus();
   }
 
+  // One forget listener for the SearchBox's life; forgetRecent stays fresh here.
+  const forgetRecentRef = useRef(forgetRecent);
+  useEffect(() => {
+    forgetRecentRef.current = forgetRecent;
+  });
+
   useEffect(() => {
     const onAction = (event: Event) => {
       const detail = (event as CustomEvent<ContextMenuActionDetail>).detail;
@@ -165,12 +172,12 @@ export function SearchBox({
         detail?.id === "forget-recent-search" &&
         detail.target?.kind === "recent-search"
       ) {
-        forgetRecent(detail.target.query);
+        forgetRecentRef.current(detail.target.query);
       }
     };
     window.addEventListener(CONTEXT_ACTION_EVENT, onAction);
     return () => window.removeEventListener(CONTEXT_ACTION_EVENT, onAction);
-  });
+  }, []);
 
   function onMenuKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
     if (event.key === "Escape") {

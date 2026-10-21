@@ -1,7 +1,19 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../api", () => ({ inTauri: vi.fn() }));
+vi.mock("../api", async (importOriginal) => {
+  const { invoke } = await import("@tauri-apps/api/core");
+  const actual = await importOriginal<typeof import("../api")>();
+  return {
+    ...actual,
+    inTauri: vi.fn(),
+    api: {
+      ...actual.api,
+      setSnapOverlayBounds: async (bounds: Record<string, number>) =>
+        invoke("set_snap_overlay_bounds", bounds),
+    },
+  };
+});
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: vi.fn() }));

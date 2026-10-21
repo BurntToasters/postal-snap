@@ -1,6 +1,6 @@
 [package]
 name = "postal-snap"
-version = "0.4.3"
+version = "0.5.0"
 description = "A calm, accessible desktop email client."
 authors = ["BurntToasters <code@rosie.run>"]
 edition = "2021"
@@ -12,7 +12,7 @@ direct-updater = ["dep:tauri-plugin-process", "dep:tauri-plugin-updater"]
 flatpak = []
 mas = []
 msstore = []
-# Gmail/Outlook sign-in. Off until it has setup UI and review (0.5.0).
+# Gmail/Outlook sign-in. Off until setup UI and review, deferred to 0.6.0.
 oauth = []
 
 [build-dependencies]
@@ -45,7 +45,8 @@ tauri-plugin-deep-link = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-process = { version = "2", optional = true }
-tauri-plugin-updater = { version = "2", optional = true }
+# Pinned to upstream v2's zip 9 security fix; the registry release still uses zip 4.
+tauri-plugin-updater = { git = "https://github.com/tauri-apps/plugins-workspace.git", rev = "f36ba7ba48695776bc11cce0bfdc45678ec24f72", package = "tauri-plugin-updater", optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "fs", "io-util"] }
 tokio-native-tls = "0.3"
 url = "2"

@@ -135,6 +135,19 @@ export function StorageTab({
           )}
         </select>
       </SettingRow>
+      <label className="switch-row">
+        <span>
+          <strong>{strings.settings.keepAttachmentsOffline}</strong>
+          <small>{strings.settings.keepAttachmentsOfflineHelp}</small>
+        </span>
+        <input
+          type="checkbox"
+          checked={settings.keepAttachmentsOffline === true}
+          onChange={(event) =>
+            void update({ keepAttachmentsOffline: event.target.checked })
+          }
+        />
+      </label>
       <button
         className="secondary-button"
         type="button"

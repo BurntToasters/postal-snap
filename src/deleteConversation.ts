@@ -3,8 +3,7 @@ import { strings } from "./i18n";
 import { useAppStore } from "./store";
 import { conversationMessages, messageAfterRemovals } from "./threads";
 import type { MailboxSummary, MessageSummary } from "./types";
-
-const BULK_LIMIT = 200;
+import { BULK_LIMIT } from "./bulk";
 
 function sameIds(left: number[], right: number[]): boolean {
   if (left.length !== right.length) return false;

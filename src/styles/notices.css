@@ -1,0 +1,86 @@
+/* Notice queue: toasts and live regions. */
+.notice-region {
+  position: fixed;
+  z-index: 60;
+  right: 1rem;
+  bottom: 1rem;
+  display: grid;
+  max-width: min(28rem, calc(100vw - 2rem));
+  gap: 0.5rem;
+  justify-items: end;
+  pointer-events: none;
+}
+
+.notice-stack {
+  display: grid;
+  gap: 0.5rem;
+  justify-items: end;
+}
+
+.notice-stack .toast {
+  position: static;
+  box-sizing: border-box;
+  flex-wrap: wrap;
+  max-width: 100%;
+  pointer-events: auto;
+}
+
+.notice-stack .toast > span {
+  flex: 1 1 14rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.notice-stack .toast:not(.error-toast) {
+  color: var(--text);
+  border-color: var(--border);
+  background: var(--surface-raised);
+}
+
+.notice-stack .toast.notice-success {
+  border-color: color-mix(in srgb, var(--success) 45%, var(--border));
+  background: color-mix(in srgb, var(--success-soft) 60%, var(--surface));
+}
+
+.notice-stack .toast.notice-warning {
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--border));
+  background: color-mix(in srgb, var(--warning-soft) 60%, var(--surface));
+}
+
+.notice-stack .toast .notice-action {
+  min-height: var(--target-size);
+  padding-inline: 0.5rem;
+  border: 0;
+  border-radius: var(--radius-md);
+  color: var(--accent);
+  background: transparent;
+  font-size: inherit;
+  font-weight: 650;
+}
+
+.notice-stack .toast .notice-dismiss {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  min-width: var(--target-size);
+  min-height: var(--target-size);
+  border: 0;
+  border-radius: var(--radius-md);
+  color: inherit;
+  background: transparent;
+  font-size: inherit;
+}
+
+.notice-stack .toast .notice-dismiss svg {
+  width: 1.25em;
+  height: 1.25em;
+}
+
+.notice-stack .toast button:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.notice-stack .toast button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}

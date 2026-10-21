@@ -16,7 +16,7 @@ use std::{
 
 use super::failure::MailError;
 use super::{
-    send::{connect_imap, connect_imap_auth},
+    connect::{connect_detailed, send_client_id, ConnectError},
     ImapSession, IMAP_COMMAND_TIMEOUT,
 };
 use crate::{models::AccountRecord, security::redact_error};
@@ -35,6 +35,27 @@ pub struct Capabilities {
     pub uidplus: bool,
     /// RFC 7162 QRESYNC advertised and `ENABLE QRESYNC` accepted.
     pub qresync: bool,
+    /// RFC 5819 LIST-STATUS: folders and statuses in one LIST.
+    pub list_status: bool,
+    /// RFC 6154 SPECIAL-USE: folder roles in LIST replies.
+    pub special_use: bool,
+    /// RFC 2971 ID.
+    pub id: bool,
+}
+
+/// Capability flags from a server's advertised names. Matching is exact:
+/// `IDLE` must not imply `ID`.
+pub(super) fn advertised_flags(advertises: impl Fn(&str) -> bool) -> Capabilities {
+    Capabilities {
+        condstore: advertises("CONDSTORE") || advertises("QRESYNC"),
+        idle: advertises("IDLE"),
+        mv: advertises("MOVE"),
+        uidplus: advertises("UIDPLUS"),
+        qresync: false,
+        list_status: advertises("LIST-STATUS"),
+        special_use: advertises("SPECIAL-USE"),
+        id: advertises("ID"),
+    }
 }
 
 struct Parked {
@@ -196,23 +217,19 @@ pub async fn checkout(account: &AccountRecord, password: &str) -> Result<Lease, 
             }
         }
     }
-    let mut session = if account.summary.auth_method == "oauth" {
-        connect_imap_auth(&account.imap, password, true).await?
-    } else {
-        connect_imap(&account.imap, password).await?
-    };
+    let mut session = connect_for(account, password)
+        .await
+        .map_err(|failure| failure.error)?;
     let capabilities = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.capabilities())
         .await
         .map_err(|_| MailError::connection("IMAP capability check timed out."))?
         .map_err(|error| MailError::connection(redact_error(&error, "IMAP capability check")))?;
     let advertises_qresync = capabilities.has_str("QRESYNC");
-    let mut capabilities = Capabilities {
-        condstore: capabilities.has_str("CONDSTORE") || advertises_qresync,
-        idle: capabilities.has_str("IDLE"),
-        mv: capabilities.has_str("MOVE"),
-        uidplus: capabilities.has_str("UIDPLUS"),
-        qresync: false,
-    };
+    let mut capabilities = advertised_flags(|name| capabilities.has_str(name));
+    if capabilities.id {
+        // Best effort: a refusal is ignored. Only a dead socket fails here.
+        send_client_id(&mut session).await?;
+    }
     if advertises_qresync {
         // Before any SELECT/EXAMINE. A refusal keeps the legacy sync path.
         match tokio::time::timeout(
@@ -241,10 +258,42 @@ pub async fn checkout(account: &AccountRecord, password: &str) -> Result<Lease, 
     })
 }
 
+async fn connect_for(account: &AccountRecord, password: &str) -> Result<ImapSession, ConnectError> {
+    let xoauth2 = account.summary.auth_method == "oauth";
+    connect_detailed(&account.imap, password, xoauth2).await
+}
+
+/// A second, never-parked session for the read-only INBOX watcher. The
+/// caller owns it and closes it by dropping it.
+pub(crate) async fn connect_dedicated(
+    account: &AccountRecord,
+    password: &str,
+) -> Result<(ImapSession, Capabilities), ConnectError> {
+    let mut session = connect_for(account, password).await?;
+    let advertised = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.capabilities())
+        .await
+        .map_err(|_| MailError::connection("IMAP capability check timed out."))?
+        .map_err(|error| MailError::connection(redact_error(&error, "IMAP capability check")))?;
+    let capabilities = advertised_flags(|name| advertised.has_str(name));
+    if capabilities.id {
+        send_client_id(&mut session).await?;
+    }
+    Ok((session, capabilities))
+}
+
 /// Time since parking, counting system sleep. `wall` is None when the clock
 /// moved backwards.
 fn parked_age(monotonic: Duration, wall: Option<Duration>) -> Duration {
     monotonic.max(wall.unwrap_or(Duration::ZERO))
+}
+
+/// Bumped by [`forget`]; a watcher compares it to know its credentials or
+/// server settings are stale.
+pub fn generation(account_id: &str) -> u64 {
+    POOL.lock()
+        .ok()
+        .and_then(|pool| pool.generation.get(account_id).copied())
+        .unwrap_or(0)
 }
 
 /// Drop any parked session for an account: its password changed, it was
@@ -276,6 +325,30 @@ mod tests {
             parked_age(Duration::from_secs(90), None),
             Duration::from_secs(90)
         );
+    }
+
+    #[test]
+    fn advertised_flags_set_list_status_special_use_and_id() {
+        let advertised = ["IMAP4rev1", "LIST-STATUS", "SPECIAL-USE", "ID", "CONDSTORE"];
+        let flags = super::advertised_flags(|name| advertised.contains(&name));
+        assert!(flags.list_status);
+        assert!(flags.special_use);
+        assert!(flags.id);
+        assert!(flags.condstore);
+        assert!(
+            !flags.qresync,
+            "QRESYNC needs ENABLE, not advertisement alone"
+        );
+    }
+
+    #[test]
+    fn idle_and_other_prefixes_do_not_imply_id_or_list_status() {
+        let advertised = ["IDLE", "LIST", "STATUS"];
+        let flags = super::advertised_flags(|name| advertised.contains(&name));
+        assert!(flags.idle);
+        assert!(!flags.id);
+        assert!(!flags.list_status);
+        assert!(!flags.special_use);
     }
 
     #[test]

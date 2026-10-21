@@ -4,7 +4,7 @@ Quick tracker for things wired into the app but not 100% yet. Full scope rules l
 
 ## Background groundwork (no UI yet)
 
-- **Gmail/Outlook OAuth** (`src-tauri/src/oauth.rs`, `connect_oauth_account`): loopback PKCE, token exchange and refresh, keychain, and XOAUTH2 on IMAP and SMTP. Hidden from setup UI. New sign-in is refused unless the `oauth` Cargo feature is enabled; token refresh remains available for existing accounts. Not a 0.4.0 ship item; user-facing sign-in can wait until 0.5.0. Before that UI ships, register the app and put client IDs in the build (`docs/OAUTH.md`). Do not register `run.rosie.snap://oauth/callback`.
+- **Gmail/Outlook OAuth** (`src-tauri/src/oauth.rs`, `connect_oauth_account`): loopback PKCE, token exchange and refresh, keychain, and XOAUTH2 on IMAP and SMTP. Hidden from setup UI. New sign-in is refused unless the `oauth` Cargo feature is enabled; token refresh remains available for existing accounts. User-facing sign-in is deferred to 0.6.0. Before that UI ships, register the app and put client IDs in the build (`docs/OAUTH.md`). Do not register `run.rosie.snap://oauth/callback`.
 - **`auth_method` account column** (schema v5): `password` or `oauth`. Password changes stay refused for OAuth accounts. `remove_account` deletes OAuth tokens.
 
 ## Registered but unused IPC

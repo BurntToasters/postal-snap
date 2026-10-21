@@ -1,6 +1,6 @@
 use chrono::{DateTime, SecondsFormat, Utc};
 use lettre::message::Mailbox;
-use mail_parser::{MessageParser, MimeHeaders};
+use mail_parser::{MessageParser, MessagePart, MimeHeaders, PartType};
 use sha2::{Digest, Sha256};
 
 use super::{MAX_ATTACHMENTS, MAX_MESSAGE_BYTES, MAX_MIME_PARTS, MAX_MULTIPART_DECLARATIONS};
@@ -313,9 +313,182 @@ pub(crate) fn parse_message(
     let message = MessageParser::default()
         .parse(raw)
         .ok_or_else(|| "A malformed message was skipped.".to_string())?;
-    if message.parts.len() > MAX_MIME_PARTS || message.attachment_count() > MAX_ATTACHMENTS {
-        return Err("A message exceeded safe MIME limits and was skipped.".into());
+    check_mime_limits(&message)?;
+    let invite = calendar_invite(&message);
+    let stored = Stored {
+        text_body: message
+            .body_text(0)
+            .map(|body| body.into_owned())
+            .unwrap_or_default(),
+        html_body: message
+            .body_html(0)
+            .map(|body| crate::html_sanitize::sanitize_received_html(&body).html),
+        preview: message
+            .body_preview(180)
+            .map(|body| body.split_whitespace().collect::<Vec<_>>().join(" "))
+            .unwrap_or_default(),
+        attachments: message
+            .attachments()
+            .take(MAX_ATTACHMENTS)
+            .enumerate()
+            .map(|(index, part)| attachment_from_part(part, index, part.len() as u64))
+            .collect(),
+        has_calendar: invite.is_some() || has_calendar_part(&message),
+        calendar_json: invite.and_then(|invite| serde_json::to_string(&invite).ok()),
+        raw_message: raw.to_vec(),
+        size: raw.len() as u64,
+    };
+    Ok(cached_message(
+        uid,
+        &message,
+        raw,
+        is_read,
+        is_starred,
+        fallback_received_at,
+        stored,
+    ))
+}
+
+/// Recreate full and prefix IDs from the exact full MIME message.
+/// Prefix parsing uses the sender-declared size, or zero when it is absent.
+pub(crate) fn attachment_id_variants(
+    raw: &[u8],
+) -> Result<(Vec<Attachment>, Vec<Attachment>), String> {
+    validate_mime_resource_shape(raw)?;
+    let message = MessageParser::default()
+        .parse(raw)
+        .ok_or_else(|| "A malformed message was skipped.".to_string())?;
+    check_mime_limits(&message)?;
+    let mut aliases = Vec::new();
+    let mut current = Vec::new();
+    for (index, part) in message.attachments().take(MAX_ATTACHMENTS).enumerate() {
+        aliases.push(attachment_from_part(
+            part,
+            index,
+            declared_attachment_size(part),
+        ));
+        current.push(attachment_from_part(part, index, part.len() as u64));
     }
+    Ok((aliases, current))
+}
+
+/// Parse the first bytes of a large message. Returns `Ok(None)` when the
+/// prefix cannot stand alone, so the caller fetches the whole message. Only
+/// text and HTML parts that end inside the prefix are kept; attachments are
+/// listed as metadata and never decoded, since a cut-off body is not a file.
+pub(crate) fn parse_partial_message(
+    uid: u32,
+    prefix: &[u8],
+    declared_size: u64,
+    is_read: bool,
+    is_starred: bool,
+    fallback_received_at: Option<&str>,
+) -> Result<Option<CachedMessage>, String> {
+    validate_mime_resource_shape(prefix)?;
+    if !has_blank_line(prefix) {
+        return Ok(None);
+    }
+    let Some(message) = MessageParser::default().parse(prefix) else {
+        return Ok(None);
+    };
+    check_mime_limits(&message)?;
+    let top_is_mixed = message
+        .part(0)
+        .and_then(|part| part.content_type())
+        .is_some_and(|value| {
+            value.ctype().eq_ignore_ascii_case("multipart")
+                && value
+                    .subtype()
+                    .is_some_and(|subtype| subtype.eq_ignore_ascii_case("mixed"))
+        });
+    if !top_is_mixed {
+        return Ok(None);
+    }
+    let complete = |id: u32| {
+        message
+            .part(id)
+            .is_some_and(|part| part_ends_inside(prefix, part))
+    };
+    let text = message
+        .text_body
+        .iter()
+        .copied()
+        .filter(|&id| complete(id))
+        .find_map(|id| match &message.part(id)?.body {
+            PartType::Text(text) => Some(text.to_string()),
+            _ => None,
+        });
+    let html = message
+        .html_body
+        .iter()
+        .copied()
+        .filter(|&id| complete(id))
+        .find_map(|id| match &message.part(id)?.body {
+            PartType::Html(html) => Some(crate::html_sanitize::sanitize_received_html(html).html),
+            _ => None,
+        });
+    if text.is_none() && html.is_none() {
+        return Ok(None);
+    }
+    let invite = message
+        .parts
+        .iter()
+        .enumerate()
+        .filter(|(id, part)| is_calendar_part(part) && complete(*id as u32))
+        .find_map(|(_, part)| super::ics::parse_invite(part.contents()));
+    let has_calendar = message
+        .parts
+        .iter()
+        .enumerate()
+        .any(|(id, part)| is_calendar_part(part) && complete(id as u32));
+    let attachments = message
+        .attachments()
+        .take(MAX_ATTACHMENTS)
+        .enumerate()
+        .map(|(index, part)| attachment_from_part(part, index, declared_attachment_size(part)))
+        .collect();
+    let stored = Stored {
+        preview: text.as_deref().map(preview_of).unwrap_or_default(),
+        text_body: text.unwrap_or_default(),
+        html_body: html,
+        attachments,
+        has_calendar,
+        calendar_json: invite.and_then(|invite| serde_json::to_string(&invite).ok()),
+        raw_message: Vec::new(),
+        size: declared_size,
+    };
+    Ok(Some(cached_message(
+        uid,
+        &message,
+        prefix,
+        is_read,
+        is_starred,
+        fallback_received_at,
+        stored,
+    )))
+}
+
+/// Body-derived fields from one parse, whether of a full message or a prefix.
+struct Stored {
+    text_body: String,
+    html_body: Option<String>,
+    preview: String,
+    attachments: Vec<Attachment>,
+    has_calendar: bool,
+    calendar_json: Option<String>,
+    raw_message: Vec<u8>,
+    size: u64,
+}
+
+fn cached_message(
+    uid: u32,
+    message: &mail_parser::Message<'_>,
+    headers_from: &[u8],
+    is_read: bool,
+    is_starred: bool,
+    fallback_received_at: Option<&str>,
+    stored: Stored,
+) -> CachedMessage {
     let sender = message.from().and_then(|address| address.first());
     let sender_name = sender
         .and_then(|address| address.name.as_deref())
@@ -329,60 +502,20 @@ pub(crate) fn parse_message(
     let cc = parsed_addresses(message.cc());
     let bcc = parsed_addresses(message.bcc());
     let reply_to = parsed_addresses(message.reply_to()).into_iter().next();
-    let text_body = message
-        .body_text(0)
-        .map(|body| body.into_owned())
-        .unwrap_or_default();
-    let html_body = message
-        .body_html(0)
-        .map(|body| crate::html_sanitize::sanitize_received_html(&body).html);
-    let preview = message
-        .body_preview(180)
-        .map(|body| body.split_whitespace().collect::<Vec<_>>().join(" "))
-        .unwrap_or_default();
     let received_at = message
         .date()
         .and_then(|date| DateTime::<Utc>::from_timestamp(date.to_timestamp(), 0))
         .map(canonical_time)
         .or_else(|| fallback_received_at.map(ToOwned::to_owned))
         .unwrap_or_else(|| canonical_time(Utc::now()));
-    let attachments = message
-        .attachments()
-        .take(MAX_ATTACHMENTS)
-        .enumerate()
-        .map(|(index, part)| {
-            let filename = safe_filename(part.attachment_name().unwrap_or("attachment"));
-            let content_type = part
-                .content_type()
-                .and_then(|value| {
-                    value
-                        .subtype()
-                        .map(|subtype| format!("{}/{subtype}", value.ctype()))
-                })
-                .unwrap_or_else(|| {
-                    mime_guess::from_path(&filename)
-                        .first_or_octet_stream()
-                        .to_string()
-                });
-            Attachment {
-                id: attachment_id(&filename, part.content_id(), part.len(), index),
-                filename,
-                content_type,
-                size: part.len() as u64,
-                content_id: part.content_id().map(ToOwned::to_owned),
-                inline: part_is_inline(part),
-            }
-        })
-        .collect::<Vec<_>>();
     let recipients = to
         .iter()
         .chain(cc.iter())
         .cloned()
         .collect::<Vec<_>>()
         .join(", ");
-    let (list_unsubscribe, list_unsubscribe_post) = unsubscribe_headers(&message);
-    let invite = calendar_invite(&message);
-    Ok(CachedMessage {
+    let (list_unsubscribe, list_unsubscribe_post) = unsubscribe_headers(message);
+    CachedMessage {
         internal_at: None,
         uid,
         message_id: message.message_id().and_then(normalize_rfc_message_id),
@@ -391,10 +524,10 @@ pub(crate) fn parse_message(
         sender_address,
         recipients,
         received_at,
-        preview,
+        preview: stored.preview,
         is_read,
         is_starred,
-        size: raw.len() as u64,
+        size: stored.size,
         to,
         cc,
         bcc,
@@ -411,20 +544,91 @@ pub(crate) fn parse_message(
                         .next_back()
                 })
             }),
-        text_body,
-        html_body,
-        has_attachments: !attachments.is_empty(),
-        attachments,
-        raw_message: raw.to_vec(),
+        text_body: stored.text_body,
+        html_body: stored.html_body,
+        has_attachments: !stored.attachments.is_empty(),
+        attachments: stored.attachments,
+        raw_message: stored.raw_message,
         is_answered: false,
         is_forwarded: false,
-        has_calendar: invite.is_some() || has_calendar_part(&message),
-        calendar_json: invite.and_then(|invite| serde_json::to_string(&invite).ok()),
+        has_calendar: stored.has_calendar,
+        calendar_json: stored.calendar_json,
         list_unsubscribe,
         list_unsubscribe_post,
-        importance: importance_from_headers(&header_block_text(raw)),
-        disposition_to: disposition_notification_address(&header_block_text(raw)),
-    })
+        importance: importance_from_headers(&header_block_text(headers_from)),
+        disposition_to: disposition_notification_address(&header_block_text(headers_from)),
+    }
+}
+
+fn check_mime_limits(message: &mail_parser::Message<'_>) -> Result<(), String> {
+    if message.parts.len() > MAX_MIME_PARTS || message.attachment_count() > MAX_ATTACHMENTS {
+        return Err("A message exceeded safe MIME limits and was skipped.".into());
+    }
+    Ok(())
+}
+
+/// A blank line ends the header block; without one the headers are cut short.
+fn has_blank_line(raw: &[u8]) -> bool {
+    raw.windows(2).any(|pair| pair == b"\n\n") || raw.windows(3).any(|run| run == b"\n\r\n")
+}
+
+/// True when the part's body ends at a boundary line inside `prefix`. A part
+/// that runs to the end of the prefix may be cut short.
+fn part_ends_inside(prefix: &[u8], part: &MessagePart<'_>) -> bool {
+    let end = part.offset_end as usize;
+    if end >= prefix.len() {
+        return false;
+    }
+    let rest = &prefix[end..];
+    let rest = rest
+        .strip_prefix(b"\r\n")
+        .or_else(|| rest.strip_prefix(b"\n"))
+        .unwrap_or(rest);
+    rest.starts_with(b"--") && rest.contains(&b'\n')
+}
+
+/// Size the sender declared in Content-Disposition, or 0. Never measured
+/// from a prefix, so a cut-off attachment cannot report a false size.
+fn declared_attachment_size(part: &MessagePart<'_>) -> u64 {
+    part.content_disposition()
+        .and_then(|disposition| disposition.attribute("size"))
+        .and_then(|size| size.parse::<u64>().ok())
+        .unwrap_or(0)
+        .min(MAX_MESSAGE_BYTES as u64)
+}
+
+fn attachment_from_part(part: &MessagePart<'_>, index: usize, size: u64) -> Attachment {
+    let filename = safe_filename(part.attachment_name().unwrap_or("attachment"));
+    let content_type = part
+        .content_type()
+        .and_then(|value| {
+            value
+                .subtype()
+                .map(|subtype| format!("{}/{subtype}", value.ctype()))
+        })
+        .unwrap_or_else(|| {
+            mime_guess::from_path(&filename)
+                .first_or_octet_stream()
+                .to_string()
+        });
+    Attachment {
+        id: attachment_id(&filename, part.content_id(), size as usize, index),
+        filename,
+        content_type,
+        size,
+        content_id: part.content_id().map(ToOwned::to_owned),
+        inline: part_is_inline(part),
+    }
+}
+
+/// Plain-text preview: whitespace collapsed, at most 180 characters.
+fn preview_of(text: &str) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(180)
+        .collect()
 }
 
 fn is_calendar_part(part: &mail_parser::MessagePart<'_>) -> bool {
@@ -704,7 +908,10 @@ pub(crate) fn normalize_rfc_message_id(value: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{importance_from_headers, normalize_rfc_message_id, parse_message};
+    use super::{
+        importance_from_headers, normalize_rfc_message_id, parse_message, parse_partial_message,
+    };
+    use crate::db::CachedMessage;
 
     // Failure modes for normalize_rfc_message_id:
     // 1. CR or LF inside the id would inject IMAP/SMTP lines.
@@ -863,5 +1070,176 @@ mod tests {
         assert_eq!(message.cc, vec!["copy@example.com"]);
         assert_eq!(message.bcc, vec!["hidden@example.com"]);
         assert!(!message.recipients.contains("hidden@example.com"));
+    }
+
+    const PARTIAL_HEAD: &str = "From: Jane <jane@example.com>\r\nTo: sam@example.com\r\nSubject: Big picnic\r\nMessage-ID: <big@example.com>\r\nDate: Tue, 04 Aug 2026 10:00:00 +0000\r\n";
+    const DECLARED: u64 = 2_000_000;
+
+    fn mixed_message(parts: &str) -> Vec<u8> {
+        format!("{PARTIAL_HEAD}Content-Type: multipart/mixed; boundary=\"bnd\"\r\n\r\n{parts}")
+            .into_bytes()
+    }
+
+    fn partial(prefix: &[u8]) -> Result<Option<CachedMessage>, String> {
+        parse_partial_message(7, prefix, DECLARED, true, false, None)
+    }
+
+    fn text_part(body: &str) -> String {
+        format!("--bnd\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n{body}\r\n")
+    }
+
+    fn html_part(body: &str) -> String {
+        format!("--bnd\r\nContent-Type: text/html; charset=utf-8\r\n\r\n{body}\r\n")
+    }
+
+    fn attachment_part(data: &str) -> String {
+        format!(
+            "--bnd\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=\"report.pdf\"\r\nContent-Transfer-Encoding: base64\r\n\r\n{data}\r\n"
+        )
+    }
+
+    /// Index just past the first occurrence of `marker`.
+    fn cut_after(raw: &[u8], marker: &[u8]) -> usize {
+        raw.windows(marker.len())
+            .position(|window| window == marker)
+            .expect("marker present")
+            + marker.len()
+    }
+
+    // Failure modes for partial bodies (a prefix of a large message):
+    // 1. A half-downloaded base64 attachment is decoded or stored.
+    // 2. A cut-off attachment disappears from the list instead of showing as metadata.
+    #[test]
+    fn partial_keeps_text_and_lists_truncated_attachment_as_metadata() {
+        let data = "QUJD\r\n".repeat(4000);
+        let raw = mixed_message(&format!(
+            "{}{}--bnd--\r\n",
+            text_part("Hello Jane"),
+            attachment_part(&data)
+        ));
+        let cut = cut_after(&raw, b"QUJD\r\nQUJD\r\n");
+        let message = partial(&raw[..cut]).unwrap().unwrap();
+        assert_eq!(message.text_body, "Hello Jane");
+        assert_eq!(message.html_body, None);
+        assert!(message.raw_message.is_empty());
+        assert_eq!(message.size, DECLARED);
+        assert_eq!(message.attachments.len(), 1);
+        assert_eq!(message.attachments[0].filename, "report.pdf");
+        assert_eq!(message.attachments[0].content_type, "application/pdf");
+        assert_eq!(message.attachments[0].size, 0);
+    }
+
+    // Failure modes for header truncation:
+    // 1. A prefix ending inside the header block stores missing headers.
+    // 2. A prefix that ends right before the blank line is accepted.
+    #[test]
+    fn partial_header_block_cut_short_falls_back() {
+        let raw = mixed_message(&format!("{}--bnd--\r\n", text_part("Hello")));
+        assert!(partial(&raw[..PARTIAL_HEAD.len() / 2]).unwrap().is_none());
+        let end_of_headers = raw
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .unwrap();
+        assert!(partial(&raw[..end_of_headers]).unwrap().is_none());
+    }
+
+    // Failure modes for UTF-8 splits:
+    // 1. A prefix ending inside a multibyte sequence decodes to U+FFFD.
+    // 2. A truncated text part is stored as if it were complete.
+    #[test]
+    fn prefix_inside_a_multibyte_character_never_yields_replacement_characters() {
+        let raw = mixed_message(&format!(
+            "{}{}--bnd--\r\n",
+            text_part("Grüße aus München"),
+            html_part("<p>Grüße aus München</p>")
+        ));
+        let cut = cut_after(&raw, "<p>Grü".as_bytes()) + 1;
+        let message = partial(&raw[..cut]).unwrap().unwrap();
+        assert_eq!(message.text_body, "Grüße aus München");
+        assert_eq!(message.html_body, None);
+        assert!(!message.text_body.contains('\u{FFFD}'));
+
+        let cut = cut_after(&raw, "Grü".as_bytes()) + 1;
+        assert!(partial(&raw[..cut]).unwrap().is_none());
+    }
+
+    // Failure modes for truncated HTML:
+    // 1. A cut-off HTML part is rendered in place of the complete text part.
+    // 2. A cut-off HTML part with no complete text is stored instead of a full fetch.
+    #[test]
+    fn truncated_html_is_dropped_and_complete_text_is_kept() {
+        let raw = mixed_message(&format!(
+            "{}{}--bnd--\r\n",
+            text_part("Plain copy"),
+            html_part(&"<p>long</p>".repeat(100))
+        ));
+        let cut = cut_after(&raw, b"<p>long</p><p>lo");
+        let message = partial(&raw[..cut]).unwrap().unwrap();
+        assert_eq!(message.text_body, "Plain copy");
+        assert_eq!(message.html_body, None);
+
+        let html_only = mixed_message(&format!("{}--bnd--\r\n", html_part(&"<p>x</p>".repeat(50))));
+        let cut = cut_after(&html_only, b"<p>x</p><p>x</p>");
+        assert!(partial(&html_only[..cut]).unwrap().is_none());
+    }
+
+    #[test]
+    fn complete_html_part_is_kept_sanitized() {
+        let raw = mixed_message(&format!(
+            "{}{}--bnd--\r\n",
+            text_part("Plain"),
+            html_part("<p onclick=\"x()\">Hi</p><script>bad()</script>")
+        ));
+        let message = partial(&raw).unwrap().unwrap();
+        let html = message.html_body.expect("complete html kept");
+        assert!(html.contains("Hi"));
+        assert!(!html.contains("script"));
+        assert!(!html.contains("onclick"));
+    }
+
+    // Failure modes for the top-level shape:
+    // 1. A multipart/alternative or plain prefix is stored with an unknown tail.
+    #[test]
+    fn only_multipart_mixed_is_accepted_for_partial_bodies() {
+        let alternative = format!(
+            "{PARTIAL_HEAD}Content-Type: multipart/alternative; boundary=\"bnd\"\r\n\r\n{}{}--bnd--\r\n",
+            text_part("Plain"),
+            html_part("<p>Hi</p>")
+        );
+        assert!(partial(alternative.as_bytes()).unwrap().is_none());
+        let plain =
+            format!("{PARTIAL_HEAD}Content-Type: text/plain\r\n\r\nHello there, a long body.\r\n");
+        assert!(partial(plain.as_bytes()).unwrap().is_none());
+    }
+
+    // Failure modes for the nesting limit:
+    // 1. A partial prefix with a hostile container tree skips the cap.
+    #[test]
+    fn partial_bodies_keep_the_nesting_limit() {
+        let nested = "--bnd\r\nContent-Type: multipart/mixed; boundary=\"bnd\"\r\n\r\n".repeat(70);
+        assert!(partial(&mixed_message(&nested)).is_err());
+    }
+
+    // Attachments without a declared size change IDs when full parsing learns
+    // the decoded length; command tests cover resolution against that part.
+    #[test]
+    fn partial_attachment_id_changes_after_full_fetch_without_declared_size() {
+        let data = "QUJD\r\n".repeat(4000);
+        let raw = mixed_message(&format!(
+            "{}{}--bnd--\r\n",
+            text_part("Hello Jane"),
+            attachment_part(&data)
+        ));
+        let cut = cut_after(&raw, b"QUJD\r\nQUJD\r\n");
+        let partial = partial(&raw[..cut]).unwrap().unwrap();
+        let full = parse_message(7, &raw, true, false, None).unwrap();
+        assert_eq!(
+            partial.attachments[0].filename,
+            full.attachments[0].filename
+        );
+        assert_ne!(
+            partial.attachments[0].id, full.attachments[0].id,
+            "decoded size participates in the full attachment ID"
+        );
     }
 }

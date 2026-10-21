@@ -1,7 +1,7 @@
 /* Shared dialog shell, header, and preview pattern (moved, no visual change) */
 .setup-card {
   width: min(640px, 100%);
-  padding: clamp(24px, 5vw, 42px);
+  padding: var(--setup-card-padding);
   border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
   border-radius: var(--radius-lg);
   background: linear-gradient(

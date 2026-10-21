@@ -93,6 +93,7 @@ beforeEach(() => {
   vi.spyOn(api, "setMessageFlags").mockResolvedValue(undefined);
   vi.spyOn(api, "listFilterRules").mockResolvedValue([]);
   vi.spyOn(api, "deleteFilterRule").mockResolvedValue(undefined);
+  vi.spyOn(api, "beginUndoSession").mockResolvedValue("c".repeat(32));
   vi.spyOn(api, "moveMessage").mockResolvedValue(undefined);
   vi.spyOn(api, "moveMessageToMailbox").mockResolvedValue(undefined);
   vi.spyOn(api, "prepareForwardAttachments").mockResolvedValue([]);
@@ -738,11 +739,15 @@ describe("MessageReader", () => {
         await waitFor(() =>
           expect(api.moveMessageToMailbox).toHaveBeenLastCalledWith(
             ...expected,
+            expect.any(String),
           ),
         );
       } else {
         await waitFor(() =>
-          expect(api.moveMessage).toHaveBeenLastCalledWith(...expected),
+          expect(api.moveMessage).toHaveBeenLastCalledWith(
+            ...expected,
+            expect.any(String),
+          ),
         );
       }
       expect(useAppStore.getState().selectedMessage).toBeUndefined();
@@ -796,6 +801,7 @@ describe("MessageReader", () => {
         "account-1",
         1,
         inbox.id,
+        expect.any(String),
       ),
     );
     view.unmount();
@@ -815,6 +821,7 @@ describe("MessageReader", () => {
         "account-1",
         archived.id,
         inbox.id,
+        expect.any(String),
       ),
     );
     expect(useAppStore.getState().selectedMessage).toBeUndefined();
@@ -1151,6 +1158,7 @@ describe("MessageReader", () => {
         "account-1",
         junked.id,
         inbox.id,
+        expect.any(String),
       ),
     );
   });
@@ -1980,6 +1988,7 @@ describe("MessageReader", () => {
         "account-1",
         [newer.id, older.id],
         5,
+        expect.any(String),
       ),
     );
     expect(api.moveMessageToMailbox).not.toHaveBeenCalled();
@@ -2512,7 +2521,12 @@ describe("MessageReader", () => {
     await waitFor(() =>
       expect(useAppStore.getState().selectedMessage?.id).toBe(2),
     );
-    expect(api.moveMessage).toHaveBeenCalledWith("account-1", 1, "archive");
+    expect(api.moveMessage).toHaveBeenCalledWith(
+      "account-1",
+      1,
+      "archive",
+      expect.any(String),
+    );
     expect(useAppStore.getState().messages.map((item) => item.id)).toEqual([2]);
   });
 
@@ -2567,7 +2581,12 @@ describe("MessageReader", () => {
       );
     });
     await waitFor(() =>
-      expect(api.moveMessage).toHaveBeenCalledWith("account-1", 2, "trash"),
+      expect(api.moveMessage).toHaveBeenCalledWith(
+        "account-1",
+        2,
+        "trash",
+        expect.any(String),
+      ),
     );
   });
 });

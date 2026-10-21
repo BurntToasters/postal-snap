@@ -8,6 +8,7 @@
   place-content: center;
   justify-items: center;
   gap: 8px;
+  overflow: auto;
   padding: 24px;
   text-align: center;
 }
@@ -17,6 +18,23 @@
   z-index: 35;
   inset: 0;
   background: color-mix(in srgb, var(--canvas) 88%, transparent);
+}
+
+.crash-recovery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2);
+}
+
+.crash-recovery-actions > button {
+  min-width: var(--target-size);
+  min-height: var(--target-size);
+}
+
+.crash-recovery.modal-layer {
+  height: auto;
+  background: var(--scrim);
 }
 
 .toast {

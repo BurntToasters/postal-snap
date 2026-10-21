@@ -38,6 +38,12 @@ const MIGRATIONS: &[(u32, Migration)] = &[
     (33, step_v33),
     (34, step_v34),
     (35, step_v35),
+    (36, step_v36),
+    (37, step_v37),
+    (38, step_v38),
+    (39, step_v39),
+    (40, step_v40),
+    (41, step_v41),
 ];
 
 pub(super) fn migrate_schema(connection: &mut Connection) -> Result<(), String> {
@@ -844,4 +850,537 @@ fn step_v35(transaction: &rusqlite::Transaction<'_>) -> Result<(), String> {
         ).map_err(db_error)?;
     }
     Ok(())
+}
+
+fn step_v36(transaction: &rusqlite::Transaction<'_>) -> Result<(), String> {
+    // Lets prefetch candidates read in order without a temp B-tree. The
+    // expression and WHERE must match PREFETCH_CANDIDATES_SQL.
+    transaction
+        .execute(
+            "CREATE INDEX IF NOT EXISTS messages_prefetch_order ON messages(mailbox_id, COALESCE(internal_at,received_at) DESC, uid DESC) WHERE body_bytes=0",
+            [],
+        )
+        .map_err(db_error)?;
+    Ok(())
+}
+
+fn step_v37(transaction: &rusqlite::Transaction<'_>) -> Result<(), String> {
+    // Undo-window moves wait in the queue until `not_before` passes or the
+    // frontend commits them. `attempts` counts transient replay failures.
+    ensure_column(
+        transaction,
+        "offline_ops",
+        "not_before",
+        "ALTER TABLE offline_ops ADD COLUMN not_before TEXT",
+    )?;
+    ensure_column(
+        transaction,
+        "offline_ops",
+        "undo_token",
+        "ALTER TABLE offline_ops ADD COLUMN undo_token TEXT",
+    )?;
+    ensure_column(
+        transaction,
+        "offline_ops",
+        "attempts",
+        "ALTER TABLE offline_ops ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0",
+    )?;
+    transaction
+        .execute(
+            "CREATE INDEX IF NOT EXISTS offline_ops_not_before ON offline_ops(account_id, not_before)",
+            [],
+        )
+        .map_err(db_error)?;
+    Ok(())
+}
+
+fn step_v38(transaction: &rusqlite::Transaction<'_>) -> Result<(), String> {
+    // Set when only the first part of a large message is stored. The full body
+    // downloads on demand and the flag clears when it is stored.
+    ensure_column(
+        transaction,
+        "messages",
+        "body_partial",
+        "ALTER TABLE messages ADD COLUMN body_partial INTEGER NOT NULL DEFAULT 0",
+    )
+}
+
+fn step_v39(transaction: &rusqlite::Transaction<'_>) -> Result<(), String> {
+    ensure_column(
+        transaction,
+        "accounts",
+        "signature_html",
+        "ALTER TABLE accounts ADD COLUMN signature_html TEXT NOT NULL DEFAULT ''",
+    )?;
+    transaction
+        .execute(
+            "CREATE INDEX IF NOT EXISTS messages_account_sender_address
+             ON messages(account_id, sender_address COLLATE NOCASE)",
+            [],
+        )
+        .map_err(db_error)?;
+    Ok(())
+}
+
+fn step_v40(transaction: &rusqlite::Transaction<'_>) -> Result<(), String> {
+    // attempt_started_at was written at send claim but never read: the
+    // uncertain-send retention instead comes from state/reason handling, so
+    // the column goes. Keep the historical ensure_column add in step_v2; older
+    // databases pass through it on the way here.
+    if column_exists(transaction, "outbox", "attempt_started_at")? {
+        transaction
+            .execute("ALTER TABLE outbox DROP COLUMN attempt_started_at", [])
+            .map_err(db_error)?;
+    }
+    transaction
+        .pragma_update(None, "user_version", 40)
+        .map_err(db_error)?;
+    Ok(())
+}
+
+fn step_v41(transaction: &rusqlite::Transaction<'_>) -> Result<(), String> {
+    // Snoozes that follow a server move wait here until the destination
+    // folder caches the copy. Rows go with the account or the folder.
+    transaction
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS pending_snooze_transfers (
+               account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+               mailbox_id INTEGER NOT NULL REFERENCES mailboxes(id) ON DELETE CASCADE,
+               message_id_header TEXT NOT NULL,
+               snoozed_until TEXT NOT NULL,
+               created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+               PRIMARY KEY(account_id, mailbox_id, message_id_header)
+             );",
+        )
+        .map_err(db_error)?;
+    transaction
+        .pragma_update(None, "user_version", 41)
+        .map_err(db_error)?;
+    Ok(())
+}
+
+/// Schema v23: convert cached IMAP4rev1 mailbox names from modified UTF-7.
+fn migrate_v23_mailbox_names(transaction: &rusqlite::Transaction) -> Result<(), String> {
+    let rows = {
+        let mut statement = transaction
+            .prepare("SELECT id,account_id,name,display_name FROM mailboxes ORDER BY account_id,id")
+            .map_err(db_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })
+            .map_err(db_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_error)?;
+        rows
+    };
+
+    let mut normalized = Vec::with_capacity(rows.len());
+    let mut final_names = std::collections::HashSet::with_capacity(rows.len());
+    for (id, account_id, name, display_name) in rows {
+        let decoded_name = crate::mail::utf7::decode(&name);
+        let decoded_display_name = crate::mail::utf7::decode(&display_name);
+        if !final_names.insert((account_id.clone(), decoded_name.clone())) {
+            return Err(
+                "Saved folder names conflict. Cached mail and queued changes were preserved."
+                    .into(),
+            );
+        }
+        normalized.push((
+            id,
+            account_id,
+            name,
+            display_name,
+            decoded_name,
+            decoded_display_name,
+        ));
+    }
+
+    // Move changed names aside first so swaps and nested names remain unique.
+    let mut reserved_names = final_names;
+    for (_, account_id, name, _, decoded_name, _) in &normalized {
+        reserved_names.insert((account_id.clone(), name.clone()));
+        reserved_names.insert((account_id.clone(), decoded_name.clone()));
+    }
+    for (id, account_id, name, _, decoded_name, _) in &normalized {
+        if name == decoded_name {
+            continue;
+        }
+        let mut temporary = format!("__postal_snap_v23_mailbox_{id}__");
+        let mut suffix = 0_u32;
+        while reserved_names.contains(&(account_id.clone(), temporary.clone())) {
+            suffix = suffix.saturating_add(1);
+            temporary = format!("__postal_snap_v23_mailbox_{id}_{suffix}__");
+        }
+        reserved_names.insert((account_id.clone(), temporary.clone()));
+        transaction
+            .execute(
+                "UPDATE mailboxes SET name=?2 WHERE id=?1 AND account_id=?3",
+                params![id, temporary, account_id],
+            )
+            .map_err(db_error)?;
+    }
+    for (id, account_id, name, display_name, decoded_name, decoded_display_name) in &normalized {
+        if name != decoded_name || display_name != decoded_display_name {
+            transaction
+                .execute(
+                    "UPDATE mailboxes SET name=?2,display_name=?3 WHERE id=?1 AND account_id=?4",
+                    params![id, decoded_name, decoded_display_name, account_id],
+                )
+                .map_err(db_error)?;
+        }
+    }
+
+    let drafts = {
+        let mut statement = transaction
+            .prepare("SELECT id,remote_mailbox FROM drafts WHERE remote_mailbox IS NOT NULL")
+            .map_err(db_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(db_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_error)?;
+        rows
+    };
+    for (id, name) in drafts {
+        let decoded = crate::mail::utf7::decode(&name);
+        if name != decoded {
+            transaction
+                .execute(
+                    "UPDATE drafts SET remote_mailbox=?2 WHERE id=?1",
+                    params![id, decoded],
+                )
+                .map_err(db_error)?;
+        }
+    }
+
+    let filter_targets = {
+        let mut statement = transaction
+            .prepare("SELECT id,target_mailbox FROM filter_rules WHERE target_mailbox IS NOT NULL")
+            .map_err(db_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(db_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_error)?;
+        rows
+    };
+    for (id, name) in filter_targets {
+        let decoded = crate::mail::utf7::decode(&name);
+        if name != decoded {
+            transaction
+                .execute(
+                    "UPDATE filter_rules SET target_mailbox=?2 WHERE id=?1",
+                    params![id, decoded],
+                )
+                .map_err(db_error)?;
+        }
+    }
+
+    let operations = {
+        let mut statement = transaction
+            .prepare(
+                "SELECT id,kind,payload FROM offline_ops WHERE kind IN ('flags','keyword','move','copy')",
+            )
+            .map_err(db_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(db_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_error)?;
+        rows
+    };
+    for (id, kind, payload) in operations {
+        let mut value: serde_json::Value = serde_json::from_str(&payload).map_err(|_| {
+            "Saved queued changes could not be migrated. Cached mail and queued changes were preserved."
+                .to_string()
+        })?;
+        let keys: &[&str] = match kind.as_str() {
+            "flags" | "keyword" => &["mailbox"],
+            "move" | "copy" => &["source", "destination"],
+            _ => &[],
+        };
+        let mut changed = false;
+        for key in keys {
+            let Some(name) = value.get(*key).and_then(serde_json::Value::as_str) else {
+                continue;
+            };
+            let decoded = crate::mail::utf7::decode(name);
+            if name != decoded {
+                value[*key] = serde_json::Value::String(decoded);
+                changed = true;
+            }
+        }
+        if changed {
+            let rewritten = serde_json::to_string(&value).map_err(|_| {
+                "Saved queued changes could not be migrated. Cached mail and queued changes were preserved."
+                    .to_string()
+            })?;
+            transaction
+                .execute(
+                    "UPDATE offline_ops SET payload=?2 WHERE id=?1",
+                    params![id, rewritten],
+                )
+                .map_err(db_error)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Schema v18: per-account download policy, account presentation, resumable
+/// backfill state, CONDSTORE bookkeeping, INTERNALDATE, body accounting and
+/// prefetch backoff. Nullable policy columns mean "inherit the app default"
+/// until startup seeds them once.
+fn migrate_v18(transaction: &rusqlite::Transaction) -> Result<(), String> {
+    for (table, column, sql) in [
+        (
+            "accounts",
+            "cache_mode",
+            "ALTER TABLE accounts ADD COLUMN cache_mode TEXT",
+        ),
+        (
+            "accounts",
+            "cache_days",
+            "ALTER TABLE accounts ADD COLUMN cache_days INTEGER",
+        ),
+        (
+            "accounts",
+            "cache_max_bytes",
+            "ALTER TABLE accounts ADD COLUMN cache_max_bytes INTEGER",
+        ),
+        (
+            "accounts",
+            "color",
+            "ALTER TABLE accounts ADD COLUMN color TEXT",
+        ),
+        (
+            "accounts",
+            "sort_order",
+            "ALTER TABLE accounts ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "mailboxes",
+            "highest_modseq",
+            "ALTER TABLE mailboxes ADD COLUMN highest_modseq INTEGER",
+        ),
+        (
+            "mailboxes",
+            "backfill_state",
+            "ALTER TABLE mailboxes ADD COLUMN backfill_state TEXT NOT NULL DEFAULT 'active'",
+        ),
+        (
+            "mailboxes",
+            "last_flag_scan_at",
+            "ALTER TABLE mailboxes ADD COLUMN last_flag_scan_at TEXT",
+        ),
+        (
+            "mailboxes",
+            "sync_error",
+            "ALTER TABLE mailboxes ADD COLUMN sync_error TEXT",
+        ),
+        (
+            "mailboxes",
+            "delimiter",
+            "ALTER TABLE mailboxes ADD COLUMN delimiter TEXT",
+        ),
+        (
+            "messages",
+            "internal_at",
+            "ALTER TABLE messages ADD COLUMN internal_at TEXT",
+        ),
+        (
+            "messages",
+            "body_bytes",
+            "ALTER TABLE messages ADD COLUMN body_bytes INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "messages",
+            "prefetch_failures",
+            "ALTER TABLE messages ADD COLUMN prefetch_failures INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "messages",
+            "prefetch_retry_at",
+            "ALTER TABLE messages ADD COLUMN prefetch_retry_at TEXT",
+        ),
+    ] {
+        ensure_column(transaction, table, column, sql)?;
+    }
+    transaction
+        .execute_batch(
+            "UPDATE mailboxes SET backfill_state='cutoff' WHERE backfill_uid=0;
+             UPDATE mailboxes SET backfill_uid=NULL WHERE backfill_uid=0;
+             UPDATE messages SET internal_at=received_at WHERE internal_at IS NULL;
+             UPDATE messages SET body_bytes=LENGTH(raw_message)+LENGTH(text_body)+LENGTH(COALESCE(html_body,''))
+               WHERE LENGTH(raw_message)>0 AND body_bytes=0;
+             UPDATE accounts SET sort_order=(SELECT COUNT(*) FROM accounts older WHERE older.created_at<accounts.created_at OR (older.created_at=accounts.created_at AND older.id<accounts.id))
+               WHERE sort_order=0;
+             CREATE INDEX IF NOT EXISTS messages_account_message_id ON messages(account_id,message_id);
+             CREATE INDEX IF NOT EXISTS messages_account_thread_parent ON messages(account_id,thread_parent);
+             CREATE INDEX IF NOT EXISTS messages_mailbox_internal ON messages(mailbox_id,internal_at DESC);
+             CREATE INDEX IF NOT EXISTS messages_account_bodies ON messages(account_id,body_bytes) WHERE body_bytes>0;",
+        )
+        .map_err(db_error)
+}
+
+/// Schema v19: draft reply/forward source and body format, per-account
+/// default body format, and List-Unsubscribe / calendar message metadata.
+/// Draft source ids are plain integers (no FK) so evicting the source message
+/// never touches the draft. Outbox rows carry these fields in `draft_json`.
+pub(super) fn migrate_v19(transaction: &rusqlite::Transaction) -> Result<(), String> {
+    for (table, column, sql) in [
+        (
+            "drafts",
+            "source_message_id",
+            "ALTER TABLE drafts ADD COLUMN source_message_id INTEGER",
+        ),
+        (
+            "drafts",
+            "source_kind",
+            "ALTER TABLE drafts ADD COLUMN source_kind TEXT",
+        ),
+        (
+            "drafts",
+            "body_format",
+            "ALTER TABLE drafts ADD COLUMN body_format TEXT NOT NULL DEFAULT 'html'",
+        ),
+        (
+            "accounts",
+            "default_body_format",
+            "ALTER TABLE accounts ADD COLUMN default_body_format TEXT NOT NULL DEFAULT 'html'",
+        ),
+        (
+            "messages",
+            "list_unsubscribe",
+            "ALTER TABLE messages ADD COLUMN list_unsubscribe TEXT",
+        ),
+        (
+            "messages",
+            "list_unsubscribe_post",
+            "ALTER TABLE messages ADD COLUMN list_unsubscribe_post TEXT",
+        ),
+        (
+            "messages",
+            "has_calendar",
+            "ALTER TABLE messages ADD COLUMN has_calendar INTEGER NOT NULL DEFAULT 0",
+        ),
+    ] {
+        ensure_column(transaction, table, column, sql)?;
+    }
+    Ok(())
+}
+
+/// Schema v20: replied/forwarded flags and the parsed calendar invite.
+fn migrate_v20(transaction: &rusqlite::Transaction) -> Result<(), String> {
+    for (column, sql) in [
+        (
+            "is_answered",
+            "ALTER TABLE messages ADD COLUMN is_answered INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "is_forwarded",
+            "ALTER TABLE messages ADD COLUMN is_forwarded INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "calendar_json",
+            "ALTER TABLE messages ADD COLUMN calendar_json TEXT",
+        ),
+    ] {
+        ensure_column(transaction, "messages", column, sql)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn v41_adds_pending_snooze_transfers_to_a_v40_database() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("mail.sqlite3");
+        {
+            let _database = Database::open(&path).unwrap();
+        }
+        {
+            // Rebuild the v40 shape: no transfer table yet.
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(
+                    "DROP TABLE pending_snooze_transfers;
+                     PRAGMA user_version=40;",
+                )
+                .unwrap();
+        }
+
+        let reopened = Database::open(&path).unwrap();
+        let conn = reopened.conn().unwrap();
+        let version: u32 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 41);
+        assert!(conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='pending_snooze_transfers'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|count| count == 1)
+            .unwrap());
+    }
+
+    #[test]
+    fn v40_drops_attempt_started_at_keeping_outbox_rows() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("mail.sqlite3");
+        {
+            let _database = Database::open(&path).unwrap();
+        }
+        {
+            // Rebuild the v39 shape: the column still existed and one queued
+            // row carried no value for it.
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(
+                    "PRAGMA foreign_keys=OFF;
+                     ALTER TABLE outbox ADD COLUMN attempt_started_at TEXT;
+                     INSERT INTO outbox(id,account_id,draft_json,state,created_at)
+                       VALUES('o1','a1','{}','queued',CURRENT_TIMESTAMP);
+                     PRAGMA user_version=39;",
+                )
+                .unwrap();
+        }
+
+        let reopened = Database::open(&path).unwrap();
+        let conn = reopened.conn().unwrap();
+        let version: u32 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
+        assert!(!column_exists(&conn, "outbox", "attempt_started_at").unwrap());
+        let (count, state): (i64, String) = conn
+            .query_row(
+                "SELECT COUNT(*), state FROM outbox WHERE id='o1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((count, state.as_str()), (1, "queued"));
+    }
 }

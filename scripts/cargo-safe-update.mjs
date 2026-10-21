@@ -51,9 +51,26 @@ export function parseArguments(argv) {
   const allowYoung = [];
   const allowGit = [];
   let reason = "";
+  let baselineManifestPath = null;
 
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
+    if (argument === "--baseline-manifest-path") {
+      const value = argv[++index];
+      if (!value) throw new Error("--baseline-manifest-path requires a file");
+      if (baselineManifestPath !== null)
+        throw new Error("--baseline-manifest-path may be provided only once");
+      baselineManifestPath = value;
+      continue;
+    }
+    if (argument.startsWith("--baseline-manifest-path=")) {
+      if (baselineManifestPath !== null)
+        throw new Error("--baseline-manifest-path may be provided only once");
+      baselineManifestPath = argument.slice("--baseline-manifest-path=".length);
+      if (!baselineManifestPath)
+        throw new Error("--baseline-manifest-path requires a file");
+      continue;
+    }
     if (argument === "--allow-young" || argument === "--allow-git") {
       const value = argv[++index];
       if (!value) throw new Error(`${argument} requires package@value`);
@@ -85,6 +102,7 @@ export function parseArguments(argv) {
 
   return {
     cargoArgs,
+    baselineManifestPath,
     allowYoung: new Set(
       allowYoung.map(parsePackageVersion).map((entry) => entry.key),
     ),
@@ -228,6 +246,99 @@ export function selectedPackages(metadata) {
   if (nodes.length === 0) return packages;
   const selected = new Set(nodes.map((node) => node.id));
   return packages.filter((pkg) => selected.has(pkg.id));
+}
+
+function workspacePackageIdentities(metadata) {
+  const members = new Set(metadata.workspace_members ?? []);
+  return (metadata.packages ?? [])
+    .filter((pkg) => members.has(pkg.id))
+    .map((pkg) => `${pkg.name}@${pkg.version}`)
+    .sort();
+}
+
+function assertMatchingWorkspacePackages(baselineMetadata, candidateMetadata) {
+  const baselineMembers = workspacePackageIdentities(baselineMetadata);
+  const candidateMembers = workspacePackageIdentities(candidateMetadata);
+  if (
+    baselineMembers.length === 0 ||
+    JSON.stringify(baselineMembers) !== JSON.stringify(candidateMembers)
+  ) {
+    throw new Error(
+      "Explicit baseline manifest workspace identity does not match the intended manifest",
+    );
+  }
+}
+
+function createExplicitBaselineMetadata({
+  baselineManifestPath,
+  manifest,
+  workspaceRoot,
+  originalLock,
+  tempRoot,
+  cargoEnv,
+}) {
+  const sourcePath = path.resolve(baselineManifestPath);
+  if (!existsSync(sourcePath) || !lstatSync(sourcePath).isFile()) {
+    throw new Error(`Baseline manifest not found: ${sourcePath}`);
+  }
+  if (sourcePath === manifest) {
+    throw new Error(
+      "Baseline manifest must be a separate copy of the previous Cargo.toml",
+    );
+  }
+  if (!originalLock.existed) {
+    throw new Error(
+      "--baseline-manifest-path requires an existing Cargo.lock to validate against",
+    );
+  }
+
+  const relativeManifest = path.relative(workspaceRoot, manifest);
+  const relativeLock = path.relative(workspaceRoot, originalLock.path);
+  if (
+    !relativeManifest ||
+    relativeManifest.startsWith("..") ||
+    path.isAbsolute(relativeManifest) ||
+    relativeLock.startsWith("..") ||
+    path.isAbsolute(relativeLock)
+  ) {
+    throw new Error(
+      "Baseline manifest and lockfile must belong to the Cargo workspace",
+    );
+  }
+
+  const baselineWorkspace = path.join(tempRoot, "baseline-workspace");
+  copyWorkspace(workspaceRoot, baselineWorkspace);
+  const copiedManifest = path.join(baselineWorkspace, relativeManifest);
+  const copiedLock = path.join(baselineWorkspace, relativeLock);
+  writeFileSync(copiedManifest, readFileSync(sourcePath));
+  writeFileSync(copiedLock, originalLock.bytes);
+
+  try {
+    return cargoMetadata(
+      ["--manifest-path", copiedManifest],
+      baselineWorkspace,
+      cargoEnv,
+    );
+  } catch (error) {
+    throw new Error(
+      "Baseline manifest is incompatible with the existing Cargo.lock or workspace; provide the matching prior manifest",
+      { cause: error },
+    );
+  }
+}
+
+function isLockedManifestMismatch(error) {
+  return /cannot update the lock file .* because --locked was passed/iu.test(
+    String(error?.message ?? error),
+  );
+}
+
+function assertManifestUnchanged(manifest, originalBytes) {
+  if (!existsSync(manifest) || !readFileSync(manifest).equals(originalBytes)) {
+    throw new Error(
+      "Cargo.toml changed during dependency update; Cargo.lock was not modified",
+    );
+  }
 }
 
 function packageKey(pkg) {
@@ -871,9 +982,28 @@ async function main() {
       existed: existsSync(destinationLock),
       bytes: existsSync(destinationLock) ? readFileSync(destinationLock) : null,
     };
-    const baselineMetadata = originalLock.existed
-      ? cargoMetadata(parsed.cargoArgs, cwd, cargoEnv)
-      : null;
+    const originalManifestBytes = readFileSync(manifest);
+    let baselineMetadata = null;
+    if (parsed.baselineManifestPath) {
+      baselineMetadata = createExplicitBaselineMetadata({
+        baselineManifestPath: path.resolve(cwd, parsed.baselineManifestPath),
+        manifest,
+        workspaceRoot,
+        originalLock,
+        tempRoot,
+        cargoEnv,
+      });
+    } else if (originalLock.existed) {
+      try {
+        baselineMetadata = cargoMetadata(parsed.cargoArgs, cwd, cargoEnv);
+      } catch (error) {
+        if (!isLockedManifestMismatch(error)) throw error;
+        throw new Error(
+          "Cargo.toml and Cargo.lock are out of sync. For an intentional manifest source transition, provide --baseline-manifest-path <previous Cargo.toml>; Cargo.lock was not modified",
+          { cause: error },
+        );
+      }
+    }
     const baseline = baselineMetadata ? selectedPackages(baselineMetadata) : [];
 
     const candidate = prepareCandidate({
@@ -933,6 +1063,10 @@ async function main() {
       candidate.cwd,
       candidate.env,
     );
+    assertManifestUnchanged(manifest, originalManifestBytes);
+    if (baselineMetadata) {
+      assertMatchingWorkspacePackages(baselineMetadata, candidateMetadata);
+    }
     const candidateLock = candidate.candidateLock;
     if (!existsSync(candidateLock)) {
       throw new Error(`Candidate Cargo.lock not found: ${candidateLock}`);
@@ -957,10 +1091,12 @@ async function main() {
     }
 
     if (parsed.dryRun) {
+      assertManifestUnchanged(manifest, originalManifestBytes);
       console.log("Dry run: real Cargo.lock was not modified.");
       return;
     }
 
+    assertManifestUnchanged(manifest, originalManifestBytes);
     installValidatedLock(
       candidateLock,
       originalLock,

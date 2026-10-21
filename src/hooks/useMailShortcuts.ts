@@ -8,8 +8,13 @@ import {
   previousUnreadMailbox,
 } from "../components/mail/folderTreeModel";
 import { strings } from "../i18n";
-import { navigationOrder, unreadStep } from "../threads";
+import { navigationOrder } from "../threads";
 import type { AccountSummary, MessageSummary, ReadingPane } from "../types";
+import { emitAction, onAction } from "../actions/bus";
+import { matchShortcut } from "../actions/match";
+import { unreadMessageStep } from "../actions/registry";
+import type { ActionId } from "../actions/types";
+import { hasUndoableMove, undoLastMove } from "../undoMove";
 
 export interface MailShortcutsOptions {
   accounts: AccountSummary[];
@@ -23,6 +28,8 @@ export interface MailShortcutsOptions {
   searchInput: RefObject<HTMLInputElement | null>;
   chooseMessage: (msg: MessageSummary) => Promise<unknown>;
   relativeMessage: (delta: number) => MessageSummary | undefined;
+  openCommandPalette: () => void;
+  openShortcutOverlay: () => void;
 }
 
 function archiveShortcutAction(): "archive" | "move-to-inbox" {
@@ -45,16 +52,54 @@ export function useMailShortcuts({
   searchInput,
   chooseMessage,
   relativeMessage,
+  openCommandPalette,
+  openShortcutOverlay,
 }: MailShortcutsOptions) {
   const pendingTextScale = useRef<number | null>(null);
 
   useEffect(() => {
-    const menuAction = (event: Event) => {
-      const action = (event as CustomEvent<string>).detail;
+    const menuAction = (action: ActionId) => {
       if (action === "compose") openComposer();
       if (action === "get-mail") void refresh();
       if (action === "get-mail-all") void refreshAll();
       if (action === "settings") onOpenSettings();
+      if (action === "open-command-palette") openCommandPalette();
+      if (action === "show-shortcuts") openShortcutOverlay();
+      if (action === "undo") undoLastMove();
+      if (action === "search") {
+        searchInput.current?.focus();
+        searchInput.current?.select();
+      }
+      if (action === "next-unread" || action === "previous-unread") {
+        const next = unreadMessageStep(action);
+        if (next) void chooseMessage(next);
+      }
+      if (action === "go-to-inbox") {
+        const state = useAppStore.getState();
+        const inbox = inboxMailbox(state.mailboxes);
+        if (!inbox) {
+          state.setError(strings.mail.noInbox);
+          return;
+        }
+        if (inbox.id === state.activeMailboxId && !state.activeLocalView)
+          return;
+        state.selectMailbox(inbox.id);
+      }
+      if (
+        action === "next-unread-mailbox" ||
+        action === "previous-unread-mailbox"
+      ) {
+        const state = useAppStore.getState();
+        const next =
+          action === "next-unread-mailbox"
+            ? nextUnreadMailbox(state.mailboxes, state.activeMailboxId)
+            : previousUnreadMailbox(state.mailboxes, state.activeMailboxId);
+        if (!next) {
+          state.setError(strings.mail.noOtherUnreadMailbox);
+          return;
+        }
+        state.selectMailbox(next.id);
+      }
       if (
         action === "text-larger" ||
         action === "text-smaller" ||
@@ -102,328 +147,150 @@ export function useMailShortcuts({
       }
     };
 
+    // The matcher applies the typing, dialog, and chrome-control guards.
     const keyboard = (event: KeyboardEvent) => {
-      if (event.isComposing || event.keyCode === 229) return;
-      if (document.querySelector(".modal-layer")) return;
+      const id = matchShortcut(event);
+      if (!id) return;
       const target = event.target instanceof HTMLElement ? event.target : null;
-      const isEditing = Boolean(
-        target?.matches(
-          "input,textarea,select,[contenteditable='true'],[role='combobox'],[role='textbox']",
-        ),
-      );
-      const onChromeControl = Boolean(
-        target?.closest(
-          "button, a, [role='menuitem'], .reader-actions, .format-toolbar, .settings-nav, .bulk-bar",
-        ) && !target?.closest(".message-list"),
-      );
-      // macOS: Control keys are text editing (Ctrl+E ends the line), so only
-      // Command is the shortcut modifier there.
-      const mod =
-        document.documentElement.dataset.platform === "macos"
-          ? event.metaKey
-          : event.metaKey || event.ctrlKey;
-      const key = event.key.toLowerCase();
-
-      if (
-        event.ctrlKey &&
-        !event.metaKey &&
-        !event.shiftKey &&
-        !event.altKey &&
-        /^[1-9]$/.test(event.key)
-      ) {
-        const account = accounts[Number(event.key) - 1];
-        if (account) {
-          event.preventDefault();
-          setAccountSwitcherOpen(false);
-          selectAccount(account.id);
-        }
-        return;
-      }
-
-      if (mod && !event.shiftKey && key === "n") {
-        event.preventDefault();
-        openComposer();
-        return;
-      }
-      if (event.key === "F5" && event.shiftKey && !mod && !event.altKey) {
-        event.preventDefault();
-        void refreshAll();
-        return;
-      }
-      if (
-        (mod && event.shiftKey && key === "m") ||
-        (mod && event.shiftKey && key === "n") ||
-        event.key === "F5"
-      ) {
-        event.preventDefault();
-        void refresh();
-        return;
-      }
-      if (mod && !event.shiftKey && key === "r") {
-        event.preventDefault();
-        window.dispatchEvent(
-          new CustomEvent("postal:menu-action", { detail: "reply-preferred" }),
-        );
-        return;
-      }
-      if (mod && event.shiftKey && key === "r") {
-        event.preventDefault();
-        window.dispatchEvent(
-          new CustomEvent("postal:menu-action", { detail: "reply-all" }),
-        );
-        return;
-      }
-      if (mod && event.shiftKey && key === "f") {
-        event.preventDefault();
-        window.dispatchEvent(
-          new CustomEvent("postal:menu-action", { detail: "forward" }),
-        );
-        return;
-      }
-      if (mod && !event.shiftKey && key === "e") {
-        event.preventDefault();
-        window.dispatchEvent(
-          new CustomEvent("postal:menu-action", {
-            detail: archiveShortcutAction(),
-          }),
-        );
-        return;
-      }
-      if (event.ctrlKey && event.metaKey && key === "a") {
-        event.preventDefault();
-        window.dispatchEvent(
-          new CustomEvent("postal:menu-action", {
-            detail: archiveShortcutAction(),
-          }),
-        );
-        return;
-      }
-      if (mod && event.shiftKey && key === "u") {
-        event.preventDefault();
-        window.dispatchEvent(
-          new CustomEvent("postal:menu-action", { detail: "toggle-read" }),
-        );
-        return;
-      }
-      if (mod && event.shiftKey && key === "l") {
-        event.preventDefault();
-        window.dispatchEvent(
-          new CustomEvent("postal:menu-action", { detail: "toggle-star" }),
-        );
-        return;
-      }
-      if (mod && event.shiftKey && key === "j") {
-        event.preventDefault();
-        window.dispatchEvent(
-          new CustomEvent("postal:menu-action", { detail: "junk" }),
-        );
-        return;
-      }
-      if (
-        mod &&
-        event.altKey &&
-        (event.key === "ArrowRight" || event.key === "Right")
-      ) {
-        event.preventDefault();
-        window.dispatchEvent(
-          new CustomEvent("postal:menu-action", {
-            detail: "reading-pane-right",
-          }),
-        );
-        return;
-      }
-      if (
-        mod &&
-        event.altKey &&
-        (event.key === "ArrowDown" || event.key === "Down")
-      ) {
-        event.preventDefault();
-        window.dispatchEvent(
-          new CustomEvent("postal:menu-action", {
-            detail: "reading-pane-bottom",
-          }),
-        );
-        return;
-      }
-      if (
-        mod &&
-        event.altKey &&
-        (event.key === "ArrowUp" || event.key === "Up")
-      ) {
-        event.preventDefault();
-        window.dispatchEvent(
-          new CustomEvent("postal:menu-action", {
-            detail: "reading-pane-hidden",
-          }),
-        );
-        return;
-      }
-      if (mod && event.altKey && key === "f") {
-        event.preventDefault();
-        window.dispatchEvent(new Event("postal:find-in-message"));
-        return;
-      }
-      if (
-        (event.key === "/" && !mod && !isEditing) ||
-        (mod && !event.shiftKey && !event.altKey && key === "f")
-      ) {
-        event.preventDefault();
-        searchInput.current?.focus();
-        searchInput.current?.select();
-        return;
-      }
-      if (isEditing || onChromeControl) return;
-      if (
-        !mod &&
-        !event.altKey &&
-        !event.shiftKey &&
-        (key === "n" || key === "p")
-      ) {
-        const state = useAppStore.getState();
-        const next = unreadStep(
-          state.messages,
-          state.settings.groupThreads &&
-            (state.mailboxSort ?? "date") === "date",
-          state.selectedMessage?.id,
-          key === "n" ? 1 : -1,
-        );
-        if (!next) return;
-        event.preventDefault();
-        void chooseMessage(next);
-        return;
-      }
-      if (!mod && !event.altKey && !event.shiftKey && key === "i") {
-        const state = useAppStore.getState();
-        const inbox = inboxMailbox(state.mailboxes);
-        event.preventDefault();
-        if (!inbox) {
-          state.setError(strings.mail.noInbox);
-          return;
-        }
-        if (inbox.id === state.activeMailboxId && !state.activeLocalView)
-          return;
-        state.selectMailbox(inbox.id);
-        return;
-      }
-      if (
-        !mod &&
-        !event.altKey &&
-        !event.shiftKey &&
-        (event.key === "]" || event.key === "[")
-      ) {
-        const state = useAppStore.getState();
-        const next =
-          event.key === "]"
-            ? nextUnreadMailbox(state.mailboxes, state.activeMailboxId)
-            : previousUnreadMailbox(state.mailboxes, state.activeMailboxId);
-        event.preventDefault();
-        if (!next) {
-          state.setError(strings.mail.noOtherUnreadMailbox);
-          return;
-        }
-        state.selectMailbox(next.id);
-        return;
-      }
       // List rows own arrows/Space/Home/End/j/k through roving tabindex.
-      // The global handler must not double-handle them when focus is in list.
       const inMessageList = Boolean(
         target?.closest('[role="listbox"], [role="tree"]'),
       );
 
-      if (
-        !mod &&
-        !event.altKey &&
-        !event.shiftKey &&
-        (key === "r" || key === "a") &&
-        !inMessageList
-      ) {
-        const selected = useAppStore.getState().selectedMessage;
-        if (selected) {
+      switch (id) {
+        case "select-account": {
+          const account = accounts[Number(event.key) - 1];
+          if (!account) return;
           event.preventDefault();
-          window.dispatchEvent(
-            new CustomEvent("postal:menu-action", {
-              detail: key === "a" ? "reply-all" : "reply-preferred",
-            }),
-          );
+          setAccountSwitcherOpen(false);
+          selectAccount(account.id);
+          return;
         }
-        return;
-      }
-      if (event.key === "Delete" || (mod && event.key === "Backspace")) {
-        const state = useAppStore.getState();
-        const currentMsg = state.selectedMessage;
-        if (currentMsg) {
+        case "new-message":
+          event.preventDefault();
+          openComposer();
+          return;
+        case "get-mail":
+          event.preventDefault();
+          void refresh();
+          return;
+        case "get-mail-all":
+          event.preventDefault();
+          void refreshAll();
+          return;
+        case "reply":
+          // Mod+R prefers the reply mode from settings, not plain Reply.
+          event.preventDefault();
+          emitAction("reply-preferred");
+          return;
+        case "reply-all":
+        case "forward":
+        case "junk":
+        case "toggle-read":
+        case "toggle-star":
+        case "reading-pane-right":
+        case "reading-pane-bottom":
+        case "reading-pane-hidden":
+          event.preventDefault();
+          emitAction(id);
+          return;
+        case "archive":
+          event.preventDefault();
+          emitAction(archiveShortcutAction());
+          return;
+        case "find-in-message":
+          event.preventDefault();
+          window.dispatchEvent(new Event("postal:find-in-message"));
+          return;
+        case "search":
+        case "open-command-palette":
+        case "show-shortcuts":
+        case "go-to-inbox":
+        case "next-unread-mailbox":
+        case "previous-unread-mailbox":
+          event.preventDefault();
+          emitAction(id);
+          return;
+        case "undo":
+          if (!hasUndoableMove()) return;
+          event.preventDefault();
+          emitAction("undo");
+          return;
+        case "next-unread":
+        case "previous-unread":
+          if (!unreadMessageStep(id)) return;
+          event.preventDefault();
+          emitAction(id);
+          return;
+        case "reply-focused":
+        case "reply-all-focused": {
+          if (inMessageList) return;
+          if (!useAppStore.getState().selectedMessage) return;
+          event.preventDefault();
+          emitAction(id === "reply-focused" ? "reply-preferred" : "reply-all");
+          return;
+        }
+        case "delete-msg":
+        case "trash": {
+          const state = useAppStore.getState();
+          const current = state.selectedMessage;
+          if (!current) return;
           const mailbox = state.mailboxes.find(
-            (item) => item.id === currentMsg.mailboxId,
+            (item) => item.id === current.mailboxId,
           );
           if (mailbox?.role === "trash") {
             event.preventDefault();
-            window.dispatchEvent(
-              new CustomEvent("postal:menu-action", {
-                detail: "delete-forever",
-              }),
-            );
-          } else {
-            const trashBox = state.mailboxes.find((m) => m.role === "trash");
-            if (trashBox && trashBox.id !== currentMsg.mailboxId) {
-              event.preventDefault();
-              window.dispatchEvent(
-                new CustomEvent("postal:menu-action", { detail: "trash" }),
-              );
-            }
+            emitAction("delete-forever");
+            return;
           }
+          const trashBox = state.mailboxes.find((m) => m.role === "trash");
+          if (trashBox && trashBox.id !== current.mailboxId) {
+            event.preventDefault();
+            emitAction("trash");
+          }
+          return;
         }
-      } else if (event.key === "ArrowDown" || event.key === "j") {
-        if (inMessageList) return;
-        const next = relativeMessage(1);
-        if (next) {
+        case "next-message":
+        case "prev-message": {
+          if (inMessageList) return;
+          const next = relativeMessage(id === "next-message" ? 1 : -1);
+          if (!next) return;
           event.preventDefault();
           void chooseMessage(next);
+          return;
         }
-      } else if (event.key === "ArrowUp" || event.key === "k") {
-        if (inMessageList) return;
-        const previous = relativeMessage(-1);
-        if (previous) {
+        case "first-last": {
+          if (inMessageList) return;
+          const state = useAppStore.getState();
+          const items = navigationOrder(
+            state.messages,
+            state.settings.groupThreads,
+          );
+          const edge =
+            event.key === "Home" ? items[0] : items[items.length - 1];
+          if (!edge) return;
           event.preventDefault();
-          void chooseMessage(previous);
+          void chooseMessage(edge);
+          return;
         }
-      } else if (event.key === "Home") {
-        if (inMessageList) return;
-        const state = useAppStore.getState();
-        const first = navigationOrder(
-          state.messages,
-          state.settings.groupThreads,
-        )[0];
-        if (first) {
+        case "scroll-reader":
+          if (inMessageList) return;
           event.preventDefault();
-          void chooseMessage(first);
-        }
-      } else if (event.key === "End") {
-        if (inMessageList) return;
-        const state = useAppStore.getState();
-        const items = navigationOrder(
-          state.messages,
-          state.settings.groupThreads,
-        );
-        const last = items[items.length - 1];
-        if (last) {
-          event.preventDefault();
-          void chooseMessage(last);
-        }
-      } else if (event.key === " " || event.code === "Space") {
-        if (inMessageList) return;
-        event.preventDefault();
-        window.dispatchEvent(
-          new CustomEvent("postal:scroll-reader", {
-            detail: event.shiftKey ? -1 : 1,
-          }),
-        );
+          window.dispatchEvent(
+            new CustomEvent("postal:scroll-reader", {
+              detail: event.shiftKey ? -1 : 1,
+            }),
+          );
+          return;
+        default:
+          return;
       }
     };
 
-    window.addEventListener("postal:menu-action", menuAction);
+    const unsubscribeAction = onAction(menuAction);
     window.addEventListener("keydown", keyboard);
     return () => {
-      window.removeEventListener("postal:menu-action", menuAction);
+      unsubscribeAction();
       window.removeEventListener("keydown", keyboard);
     };
   }, [
@@ -431,6 +298,8 @@ export function useMailShortcuts({
     chooseMessage,
     onOpenSettings,
     openComposer,
+    openCommandPalette,
+    openShortcutOverlay,
     refresh,
     refreshAll,
     relativeMessage,

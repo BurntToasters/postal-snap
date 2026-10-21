@@ -15,6 +15,19 @@ const ARCHIVE_SOURCE_UNAVAILABLE_DETAIL: OutboxReason = OutboxReason::ArchiveSou
 const CONFIRMED_SEND_STATUS_ERROR: &str =
     "Message sent. Postal Snap could not save its follow-up status. It will not resend automatically; check Sent and Outbox before retrying.";
 
+/// Next state and reason after a definite "not sent" reply, given the
+/// deferred-retry bookkeeping result. A failed retry-count write still parks
+/// the row in needs_attention with DeliveryUncertain: the row must never stay
+/// in `sending`, and the queue cannot honestly claim an automatic retry is
+/// scheduled when the wait was never recorded.
+fn not_sent_retry_state(defer: Result<bool, String>) -> (&'static str, OutboxReason) {
+    match defer {
+        Ok(true) => ("queued", OutboxReason::RetryPending),
+        Ok(false) => ("needs_attention", OutboxReason::RetryExhausted),
+        Err(_) => ("needs_attention", OutboxReason::RetryUnavailable),
+    }
+}
+
 fn persist_confirmed_send_state(
     state: &AppState,
     outbox_id: &str,
@@ -131,7 +144,13 @@ async fn archive_source_after_delivery(
         .await
         {
             Ok(()) => {
-                let _ = state.db.remove_message(message_id);
+                super::messages::record_live_moves(
+                    &state.db,
+                    account_id,
+                    &[message_id],
+                    destination_id,
+                    &destination,
+                );
                 let policy = super::sync::account_policy(state, account_id).unwrap_or_default();
                 let _ = mail::refresh_mailbox_envelopes(
                     account,
@@ -458,17 +477,21 @@ pub(crate) async fn deliver_outbox_locked(
             }
         } else {
             // The queue keeps the unsigned draft for Undo; sign what goes out.
-            let signature = if draft.include_signature {
-                account.summary.signature.as_str()
-            } else {
-                ""
-            };
             let above_quote = state
                 .settings
                 .get()
                 .map(|settings| settings.signature_above_quote)
                 .unwrap_or(true);
-            let signed = mail::apply_signature(draft.clone(), signature, above_quote);
+            let signed = if draft.include_signature {
+                mail::send::apply_signature_with_html(
+                    draft.clone(),
+                    &account.summary.signature,
+                    &account.summary.signature_html,
+                    above_quote,
+                )
+            } else {
+                draft.clone()
+            };
             let resolved = match resolve_draft_files(&state.db, &signed) {
                 Ok(draft) => draft,
                 Err(error) => {
@@ -609,19 +632,11 @@ pub(crate) async fn deliver_outbox_locked(
             // Only a definite "not accepted" may go back in the queue; an
             // uncertain send waits for the user so it is never sent twice.
             let (next_state, detail) = match error.kind {
-                // A failed retry-count write must not skip the state update
-                // below, or the row would stay in `sending`.
-                mail::SendFailure::NotSentRetry
-                    if state
+                mail::SendFailure::NotSentRetry => not_sent_retry_state(
+                    state
                         .db
-                        .defer_outbox_retry(outbox_id, account_id, MAX_AUTOMATIC_RETRIES)
-                        .unwrap_or(true) =>
-                {
-                    ("queued", OutboxReason::RetryPending)
-                }
-                mail::SendFailure::NotSentRetry => {
-                    ("needs_attention", OutboxReason::RetryExhausted)
-                }
+                        .defer_outbox_retry(outbox_id, account_id, MAX_AUTOMATIC_RETRIES),
+                ),
                 mail::SendFailure::NotSentRefused => ("needs_attention", OutboxReason::SendRefused),
                 mail::SendFailure::Uncertain => {
                     ("needs_attention", OutboxReason::DeliveryUncertain)
@@ -759,4 +774,25 @@ fn outbox_preparation_failed(
         emit_outbox_change(app, account_id, Some(outbox_id), Some("needs_attention"));
     }
     Err(error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn not_sent_retry_state_parks_when_the_retry_wait_cannot_be_recorded() {
+        assert_eq!(
+            not_sent_retry_state(Ok(true)),
+            ("queued", OutboxReason::RetryPending)
+        );
+        assert_eq!(
+            not_sent_retry_state(Ok(false)),
+            ("needs_attention", OutboxReason::RetryExhausted)
+        );
+        assert_eq!(
+            not_sent_retry_state(Err("A queued message failed to wait.".into())),
+            ("needs_attention", OutboxReason::RetryUnavailable)
+        );
+    }
 }

@@ -602,8 +602,150 @@ test("direct updater is GitHub-only and notices are bundled", async () => {
   );
   assert.match(hooks, /NSIS_HOOK_PREINSTALL/);
   assert.match(hooks, /NSIS_HOOK_PREUNINSTALL/);
+  assert.match(hooks, /NSIS_HOOK_POSTINSTALL/);
+  assert.match(hooks, /NSIS_HOOK_POSTUNINSTALL/);
   assert.match(hooks, /POSTAL_SNAP_MIN_WINDOWS_BUILD 19045/);
   assert.match(hooks, /--cleanup-credentials/);
+  assert.match(
+    hooks,
+    /!define POSTAL_SNAP_MAILTO_DEFAULT "URL:run\.rosie\.snap protocol"/,
+  );
+  // Returns one macro body, failing if it is missing.
+  const macroBody = (name) => {
+    const begin = hooks.indexOf(`!macro ${name}\n`);
+    assert.ok(begin >= 0, `${name} must exist`);
+    return hooks.slice(begin, hooks.indexOf("!macroend", begin));
+  };
+  const backup = macroBody("POSTAL_SNAP_BACKUP_MAILTO");
+  const restore = macroBody("POSTAL_SNAP_RESTORE_MAILTO");
+  const preinstall = macroBody("NSIS_HOOK_PREINSTALL");
+  const postinstall = macroBody("NSIS_HOOK_POSTINSTALL");
+  const preuninstall = macroBody("NSIS_HOOK_PREUNINSTALL");
+  const postuninstall = macroBody("NSIS_HOOK_POSTUNINSTALL");
+  // Default apps registration uses an app-specific ProgID and capabilities.
+  assert.match(
+    postinstall,
+    /WriteRegStr HKCU "Software\\Classes\\\$\{POSTAL_SNAP_PROGID\}\\shell\\open\\command" "" '"\$INSTDIR\\\$\{MAINBINARYNAME\}\.exe" "%1"'/,
+  );
+  assert.match(
+    postinstall,
+    /WriteRegStr HKCU "\$\{POSTAL_SNAP_CAPS_KEY\}\\URLAssociations" "mailto" "\$\{POSTAL_SNAP_PROGID\}"/,
+  );
+  assert.match(
+    postinstall,
+    /WriteRegStr HKCU "\$\{POSTAL_SNAP_REGISTERED_APPS\}" "\$\{POSTAL_SNAP_APP_NAME\}" "\$\{POSTAL_SNAP_CAPS_KEY\}"/,
+  );
+  assert.match(postinstall, /ApplicationName/);
+  assert.match(postinstall, /ApplicationIcon/);
+  // Backup runs in PREINSTALL and only for a handler that is not ours.
+  assert.match(preinstall, /!insertmacro POSTAL_SNAP_BACKUP_MAILTO/);
+  assert.match(
+    backup,
+    /ReadRegStr \$R0 HKCU "\$\{POSTAL_SNAP_LEGACY_MAILTO\}\\shell\\open\\command"/,
+  );
+  // "Ours" is decided by the command alone, from any install folder.
+  assert.match(
+    hooks,
+    /!define POSTAL_SNAP_COMMAND_SUFFIX '\$\{MAINBINARYNAME\}\.exe" "%1"'/,
+  );
+  const ours = macroBody("POSTAL_SNAP_IS_OURS_COMMAND");
+  assert.match(ours, /StrCpy \$R6 \$R0 "" "-\$R7"/);
+  assert.match(ours, /\$\{OrIf\} \$R6 == '\$\{POSTAL_SNAP_COMMAND_SUFFIX\}'/);
+  assert.match(ours, /StrCpy \$R8 "1"/);
+  assert.doesNotMatch(ours, /POSTAL_SNAP_MAILTO_DEFAULT/);
+  assert.match(backup, /!insertmacro POSTAL_SNAP_IS_OURS_COMMAND/);
+  assert.match(backup, /AndIf\} \$R8 != "1"/);
+  // The default value must not decide ownership; a command-only rewrite is another client.
+  assert.doesNotMatch(backup, /POSTAL_SNAP_MAILTO_DEFAULT/);
+  assert.doesNotMatch(preuninstall, /POSTAL_SNAP_MAILTO_DEFAULT/);
+  assert.match(
+    preuninstall,
+    /!insertmacro POSTAL_SNAP_IS_OURS_COMMAND\n\s+\$\{If\} \$R8 == "1"/,
+  );
+  assert.match(
+    backup,
+    /WriteRegStr HKCU "\$\{POSTAL_SNAP_BACKUP_KEY\}" "Captured" "1"/,
+  );
+  // Restore runs after Tauri's writes and only when a backup was captured.
+  assert.match(postinstall, /!insertmacro POSTAL_SNAP_RESTORE_MAILTO/);
+  assert.match(
+    restore,
+    /ReadRegStr \$R0 HKCU "\$\{POSTAL_SNAP_BACKUP_KEY\}" "Captured"/,
+  );
+  assert.match(restore, /\$\{If\} \$R0 == "1"/);
+  // Shared key writes live only in the restore path, so no other code can clobber another client.
+  assert.match(
+    restore,
+    /WriteRegStr HKCU "\$\{POSTAL_SNAP_LEGACY_MAILTO\}" "" \$R1/,
+  );
+  const outsideRestore = hooks.replace(restore, "");
+  assert.doesNotMatch(
+    outsideRestore,
+    /WriteRegStr HKCU "\$\{POSTAL_SNAP_LEGACY_MAILTO\}/,
+  );
+  assert.doesNotMatch(
+    backup,
+    /WriteRegStr HKCU "\$\{POSTAL_SNAP_LEGACY_MAILTO\}/,
+  );
+  // No partial delete of the shared command, which left stale skeletons.
+  assert.doesNotMatch(
+    hooks,
+    /DeleteRegKey HKCU "\$\{POSTAL_SNAP_LEGACY_MAILTO\}\\shell/,
+  );
+  assert.doesNotMatch(hooks, /DeleteRegKey HKCU "Software\\Classes\\mailto"/);
+  assert.doesNotMatch(
+    preinstall + postinstall + backup,
+    /DeleteRegKey HKCU "\$\{POSTAL_SNAP_BACKUP_KEY\}"/,
+  );
+  // Uninstall removals of app-owned keys must sit behind the upgrade guard.
+  const guard = preuninstall.indexOf("${If} $UpdateMode <> 1");
+  const removal = preuninstall.indexOf(
+    'DeleteRegKey HKCU "Software\\Classes\\${POSTAL_SNAP_PROGID}"',
+  );
+  assert.ok(guard >= 0 && removal > guard, "ProgID removal must be guarded");
+  assert.match(preuninstall, /DeleteRegKey HKCU "\$\{POSTAL_SNAP_CAPS_KEY\}"/);
+  assert.match(
+    preuninstall,
+    /DeleteRegValue HKCU "\$\{POSTAL_SNAP_REGISTERED_APPS\}" "\$\{POSTAL_SNAP_APP_NAME\}"/,
+  );
+  // Backup key is removed on a real uninstall only, after any restore.
+  const backupRemoval = preuninstall.indexOf(
+    'DeleteRegKey HKCU "${POSTAL_SNAP_BACKUP_KEY}"',
+  );
+  assert.ok(backupRemoval > guard, "backup key removal must be guarded");
+  assert.ok(
+    preuninstall.indexOf("!insertmacro POSTAL_SNAP_RESTORE_MAILTO") <
+      backupRemoval,
+    "restore must run before the backup key is removed",
+  );
+  // Skeleton from 0.5.0 prerelease hooks is removed after Tauri's own delete.
+  assert.match(postuninstall, /\$\{If\} \$UpdateMode <> 1/);
+  assert.match(
+    postuninstall,
+    /ReadRegStr \$R0 HKCU "\$\{POSTAL_SNAP_LEGACY_MAILTO\}\\shell\\open\\command"/,
+  );
+  assert.match(
+    postuninstall,
+    /\$\{AndIf\} \$R1 == "\$\{POSTAL_SNAP_MAILTO_DEFAULT\}"/,
+  );
+  assert.match(
+    postuninstall,
+    /DeleteRegKey HKCU "\$\{POSTAL_SNAP_LEGACY_MAILTO\}"\n/,
+  );
+  // A deep-link scheme makes Tauri write the shared key, so the hook must back it up and restore it.
+  const schemes = config.plugins?.["deep-link"]?.desktop?.schemes ?? [];
+  if (schemes.includes("mailto")) {
+    assert.match(
+      hooks,
+      /!insertmacro POSTAL_SNAP_BACKUP_MAILTO/,
+      "mailto deep-link scheme requires the backup hook",
+    );
+    assert.match(
+      hooks,
+      /!insertmacro POSTAL_SNAP_RESTORE_MAILTO/,
+      "mailto deep-link scheme requires the restore hook",
+    );
+  }
 });
 
 test("secret scanning ignores only TweetFeed IOC snapshots", async () => {

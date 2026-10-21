@@ -14,14 +14,14 @@ import {
   Forward,
   Mail,
   MailOpen,
-  MoreHorizontal,
+  Ellipsis,
   Pin,
   PinOff,
   Printer,
   Send,
   ShieldAlert,
   Star,
-  Trash2,
+  Trash,
 } from "lucide-react";
 import { strings } from "../../i18n";
 import type { MessageListFilter } from "../../listFilter";
@@ -243,7 +243,7 @@ export function MessagePaneHeader({
                   aria-label={strings.mail.moreMailboxActions}
                   title={strings.mail.moreMailboxActions}
                 >
-                  <MoreHorizontal aria-hidden="true" />
+                  <Ellipsis aria-hidden="true" />
                 </button>
                 {mailboxMoreOpen ? (
                   <div
@@ -722,7 +722,7 @@ export function BulkBar({
         <Archive aria-hidden="true" /> {archiveLabel}
       </button>
       <button type="button" disabled={disabled} onClick={onTrash}>
-        <Trash2 aria-hidden="true" /> {trashLabel}
+        <Trash aria-hidden="true" /> {trashLabel}
       </button>
     </div>
   );

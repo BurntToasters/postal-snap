@@ -158,6 +158,7 @@ mod tests {
                 aliases: vec![],
                 auth_method: "password".into(),
                 signature: String::new(),
+                signature_html: String::new(),
                 reply_to: String::new(),
                 color: None,
                 default_body_format: BodyFormat::Html,

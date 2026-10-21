@@ -1,12 +1,12 @@
 import { useState } from "react";
 import { api } from "../../api";
+import { mergeAccountFields } from "../../accountMerge";
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
 import type { AccountSummary, BodyFormat } from "../../types";
 
 /** Per-account default format for new messages. */
 export function BodyFormatControl({ account }: { account: AccountSummary }) {
-  const setAccounts = useAppStore((state) => state.setAccounts);
   const setError = useAppStore((state) => state.setError);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState("");
@@ -20,11 +20,9 @@ export function BodyFormatControl({ account }: { account: AccountSummary }) {
         account.id,
         format,
       );
-      setAccounts(
-        useAppStore
-          .getState()
-          .accounts.map((item) => (item.id === account.id ? updated : item)),
-      );
+      mergeAccountFields(account.id, {
+        defaultBodyFormat: updated.defaultBodyFormat,
+      });
       setStatus(strings.settings.newMessageFormatSaved);
     } catch (cause) {
       setError(String(cause));

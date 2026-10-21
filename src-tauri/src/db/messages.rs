@@ -1,18 +1,109 @@
 use super::{
     adjust_mailbox_counts, db_error, fts_query, has_remote_images, json_or_default,
-    map_message_summary, provisional_thread_root, references_from_raw, CachedMessage, Database,
-    MailboxSyncState, MESSAGE_DETAIL_SELECT, MESSAGE_SUMMARY_SELECT,
+    map_message_summary, provisional_thread_root, references_from_raw, BodyState, CachedMessage,
+    Database, MailboxSyncState, MESSAGE_DETAIL_SELECT, MESSAGE_SUMMARY_SELECT,
 };
 use rusqlite::{params, OptionalExtension};
+use std::collections::HashSet;
 
 use crate::models::{
     MessageCursor, MessageDetail, MessageListFilter, MessageListSort, MessagePage, MessageSummary,
     RecipientSuggestion, SearchQuery,
 };
 
+fn suggestion_domain_ok(domain: &str) -> bool {
+    let labels = domain.split('.').collect::<Vec<_>>();
+    labels.len() > 1
+        && labels.iter().all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && label.as_bytes()[0].is_ascii_alphanumeric()
+                && label.as_bytes()[label.len() - 1].is_ascii_alphanumeric()
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
+}
+
+fn suggestion_address(value: &str) -> Option<String> {
+    let address = crate::models::receipt_mailbox(value)?;
+    let (local, domain) = address.rsplit_once('@')?;
+    let local_valid = local.len() <= 64
+        && !local.starts_with('.')
+        && !local.ends_with('.')
+        && !local.contains("..")
+        && local.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'.' | b'!'
+                        | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'/'
+                        | b'='
+                        | b'?'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'{'
+                        | b'|'
+                        | b'}'
+                        | b'~'
+                )
+        });
+    (local_valid && suggestion_domain_ok(domain)).then_some(address)
+}
+
+fn suggestion_is_noreply(address: &str) -> bool {
+    let local = address
+        .split_once('@')
+        .map(|(local, _)| local.split('+').next().unwrap_or(local))
+        .unwrap_or_default();
+    let normalized = local
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "noreply" | "donotreply" | "mailerdaemon"
+    )
+}
+
+fn suggestion_domain_matches(address: &str, blocked_domains: &[String]) -> bool {
+    let Some((_, domain)) = address.rsplit_once('@') else {
+        return false;
+    };
+    if !suggestion_domain_ok(domain) {
+        return false;
+    }
+    blocked_domains.iter().any(|blocked| {
+        domain == blocked
+            || domain
+                .strip_suffix(blocked.as_str())
+                .is_some_and(|prefix| prefix.ends_with('.'))
+    })
+}
+
+/// Rows snoozed until later hide from lists, folder counts, and searches
+/// alike. Times compare as text; until values are canonical RFC 3339
+/// (+00:00) at write, and expired rows surf again without a prune. `m` must
+/// be the outer `messages` alias. Shared by `db::messages` and `db::mailboxes`
+/// so counts and search never drift from what lists show.
+pub(crate) const NOT_SNOOZED_SQL: &str = "NOT EXISTS (SELECT 1 FROM snoozed_messages s WHERE s.account_id=m.account_id AND s.message_id=m.id \
+          AND s.snoozed_until>strftime('%Y-%m-%dT%H:%M:%S+00:00','now'))";
+
 /// Unfinished parses in a row before a message is quarantined. One is
 /// forgiven: the app may simply have quit mid-parse.
 pub(crate) const PARSE_QUARANTINE_AT: u32 = 2;
+/// Subtree visits one thread repair may make for each arrived message.
+const THREAD_REPAIR_ROUNDS: usize = 2000;
 
 database_operations! {
 impl Database {
@@ -110,7 +201,7 @@ impl Database {
     ) -> Result<(), String> {
         let mut conn = self.conn()?;
         let transaction = conn.transaction().map_err(db_error)?;
-        write_full_message(&transaction, account_id, mailbox_id, message)?;
+        write_full_message(&transaction, account_id, mailbox_id, message, false)?;
         transaction.commit().map_err(db_error)
     }
 
@@ -122,6 +213,28 @@ impl Database {
         mailbox_id: i64,
         expected_uid_validity: u32,
         message: &CachedMessage,
+    ) -> Result<bool, String> {
+        self.attach_body(mailbox_id, expected_uid_validity, message, false)
+    }
+
+    /// Like `attach_body_if_current` for a prefix of a large message: the raw
+    /// bytes are not stored and the row stays out of prefetch until the full
+    /// body arrives.
+    pub fn attach_partial_body_if_current(
+        &self,
+        mailbox_id: i64,
+        expected_uid_validity: u32,
+        message: &CachedMessage,
+    ) -> Result<bool, String> {
+        self.attach_body(mailbox_id, expected_uid_validity, message, true)
+    }
+
+    fn attach_body(
+        &self,
+        mailbox_id: i64,
+        expected_uid_validity: u32,
+        message: &CachedMessage,
+        body_partial: bool,
     ) -> Result<bool, String> {
         let mut conn = self.conn()?;
         let transaction = conn.transaction().map_err(db_error)?;
@@ -140,7 +253,13 @@ impl Database {
         if uid_validity != Some(expected_uid_validity) {
             return Ok(false);
         }
-        write_full_message(&transaction, &account_id, mailbox_id, message)?;
+        write_full_message(
+            &transaction,
+            &account_id,
+            mailbox_id,
+            message,
+            body_partial,
+        )?;
         transaction.commit().map_err(db_error)?;
         Ok(true)
     }
@@ -233,6 +352,7 @@ impl Database {
         for message in messages {
             write_envelope(&transaction, account_id, mailbox_id, message)?;
         }
+        super::snooze_transfers::apply_in_transaction(&transaction, account_id, mailbox_id)?;
         transaction.commit().map_err(db_error)
     }
 
@@ -248,11 +368,11 @@ impl Database {
                 break;
             }
             let parent: Option<Option<String>> = transaction
-                .query_row(
+                .prepare_cached(
                     "SELECT thread_parent FROM messages WHERE account_id=?1 AND message_id=?2 LIMIT 1",
-                    params![account_id, current],
-                    |row| row.get(0),
                 )
+                .map_err(db_error)?
+                .query_row(params![account_id, current], |row| row.get(0))
                 .optional()
                 .map_err(db_error)?;
             match parent.flatten() {
@@ -268,6 +388,29 @@ impl Database {
     /// children), so every sync pass re-resolves the touched subtrees to a
     /// fixpoint instead of trusting provisional roots.
     pub fn repair_thread_roots(&self, account_id: &str, arrived: &[String]) -> Result<(), String> {
+        self.repair_thread_roots_within(account_id, arrived, THREAD_REPAIR_ROUNDS)
+    }
+
+    /// One call for a prefetch batch. Each id keeps its own round budget, so
+    /// the batch covers every subtree that separate calls would have covered.
+    pub fn repair_thread_roots_batch(
+        &self,
+        account_id: &str,
+        arrived: &[String],
+    ) -> Result<(), String> {
+        self.repair_thread_roots_within(
+            account_id,
+            arrived,
+            THREAD_REPAIR_ROUNDS.saturating_mul(arrived.len()),
+        )
+    }
+
+    fn repair_thread_roots_within(
+        &self,
+        account_id: &str,
+        arrived: &[String],
+        max_rounds: usize,
+    ) -> Result<(), String> {
         if arrived.is_empty() {
             return Ok(());
         }
@@ -277,19 +420,20 @@ impl Database {
         let mut seen: std::collections::HashSet<String> = stack.iter().cloned().collect();
         let mut rounds = 0usize;
         while let Some(id) = stack.pop() {
-            if rounds >= 2000 {
+            if rounds >= max_rounds {
                 break;
             }
             rounds += 1;
             let root = Self::resolve_thread_root(&transaction, account_id, &id)?;
             transaction
-                .execute(
+                .prepare_cached(
                     "UPDATE messages SET thread_root=?3 WHERE account_id=?1 AND message_id=?2 AND (thread_root IS NULL OR thread_root<>?3)",
-                    params![account_id, id, root],
                 )
+                .map_err(db_error)?
+                .execute(params![account_id, id, root])
                 .map_err(db_error)?;
             let mut statement = transaction
-                .prepare(
+                .prepare_cached(
                     "SELECT DISTINCT message_id FROM messages WHERE account_id=?1 AND message_id IS NOT NULL AND message_id<>?2 AND (thread_root=?2 OR thread_parent=?2)",
                 )
                 .map_err(db_error)?;
@@ -398,8 +542,7 @@ impl Database {
         let mut statement = conn
             .prepare(&format!(
                 "{} WHERE mailbox_id = ?1 AND pending_move_to IS NULL
-                 AND NOT EXISTS (SELECT 1 FROM snoozed_messages s WHERE s.account_id=m.account_id AND s.message_id=m.id
-                   AND s.snoozed_until>strftime('%Y-%m-%dT%H:%M:%S+00:00','now'))
+                 AND {NOT_SNOOZED_SQL}
                  {filter_sql}
                  {cursor_sql}
                  {order_sql} LIMIT ?4",
@@ -567,6 +710,7 @@ impl Database {
                             "declined" => "declined".to_string(),
                             _ => String::new(),
                         },
+                        body_partial: row.get("body_partial")?,
                     })
                 },
             )
@@ -696,6 +840,26 @@ impl Database {
         } else {
             Ok(raw)
         }
+    }
+
+    /// Stored-body facts that decide whether a download is needed.
+    pub fn body_state(&self, id: i64, account_id: &str) -> Result<BodyState, String> {
+        self.read_conn()?
+            .query_row(
+                "SELECT LENGTH(raw_message) > 0, body_partial != 0, COALESCE(html_body LIKE '%cid:%', 0)
+                 FROM messages WHERE id=?1 AND account_id=?2",
+                params![id, account_id],
+                |row| {
+                    Ok(BodyState {
+                        has_raw: row.get(0)?,
+                        body_partial: row.get(1)?,
+                        html_has_cid: row.get(2)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(db_error)?
+            .ok_or_else(|| "Message not found.".into())
     }
 
     pub fn message_content_cached(&self, id: i64, account_id: &str) -> Result<bool, String> {
@@ -830,9 +994,9 @@ impl Database {
     }
 
     pub fn unread_message_ids(&self, mailbox_id: i64) -> Result<Vec<(i64, u32)>, String> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut statement = conn
-            .prepare("SELECT id,uid FROM messages WHERE mailbox_id=?1 AND is_read=0 AND pending_move_to IS NULL ORDER BY uid")
+            .prepare_cached("SELECT id,uid FROM messages WHERE mailbox_id=?1 AND is_read=0 AND pending_move_to IS NULL ORDER BY uid")
             .map_err(db_error)?;
         let rows = statement
             .query_map([mailbox_id], |row| Ok((row.get(0)?, row.get(1)?)))
@@ -843,9 +1007,9 @@ impl Database {
     }
 
     pub fn pending_move_uids(&self, mailbox_id: i64) -> Result<Vec<u32>, String> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut statement = conn
-            .prepare("SELECT uid FROM messages WHERE mailbox_id=?1 AND pending_move_to IS NOT NULL ORDER BY uid DESC")
+            .prepare_cached("SELECT uid FROM messages WHERE mailbox_id=?1 AND pending_move_to IS NOT NULL ORDER BY uid DESC")
             .map_err(db_error)?;
         let rows = statement
             .query_map([mailbox_id], |row| row.get(0))
@@ -947,107 +1111,167 @@ impl Database {
             return Ok(Vec::new());
         }
         let like = format!("%{escaped}%");
+        let max_results = limit.clamp(1, 20) as usize;
         let conn = self.read_conn()?;
-        let mut statement = conn
+        let account: Option<(String, String)> = conn
+            .query_row(
+                "SELECT email,aliases_json FROM accounts WHERE id=?1",
+                [account_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(db_error)?;
+        let Some((email, aliases_json)) = account else {
+            return Ok(Vec::new());
+        };
+        let aliases = serde_json::from_str::<Vec<String>>(&aliases_json).unwrap_or_default();
+        let mut own_addresses = HashSet::new();
+        for address in std::iter::once(email.as_str()).chain(aliases.iter().map(String::as_str)) {
+            if let Some(address) = crate::models::receipt_mailbox(address) {
+                own_addresses.insert(address);
+            }
+        }
+
+        let mut blocked_senders = HashSet::new();
+        let mut blocked_domains = Vec::new();
+        {
+            let mut rules = conn
+                .prepare(
+                    "SELECT field,contains FROM filter_rules
+                     WHERE account_id=?1 AND enabled=1 AND action='move_junk'
+                       AND field IN ('from','domain')",
+                )
+                .map_err(db_error)?;
+            let rows = rules
+                .query_map([account_id], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(db_error)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(db_error)?;
+            for (field, value) in rows {
+                if field == "from" {
+                    if let Some(address) = crate::models::receipt_mailbox(&value) {
+                        blocked_senders.insert(address);
+                    }
+                } else {
+                    let domain = value.trim().to_ascii_lowercase();
+                    if suggestion_domain_ok(&domain) && !blocked_domains.contains(&domain) {
+                        blocked_domains.push(domain);
+                    }
+                }
+            }
+        }
+
+        let mut suggestions = Vec::with_capacity(max_results);
+        let mut seen = HashSet::new();
+        {
+            let mut history = conn
+                .prepare(
+                    "SELECT address,name,use_count FROM recipient_history
+                     WHERE account_id=?1 AND (address LIKE ?2 ESCAPE '\\' OR name LIKE ?2 ESCAPE '\\')
+                     ORDER BY use_count DESC, last_used DESC LIMIT 200",
+                )
+                .map_err(db_error)?;
+            let rows = history
+                .query_map(params![account_id, like], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                })
+                .map_err(db_error)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(db_error)?;
+            for (address, name, use_count) in rows {
+                let Some(address) = crate::models::receipt_mailbox(&address) else {
+                    continue;
+                };
+                if !seen.insert(address.clone()) {
+                    continue;
+                }
+                suggestions.push(RecipientSuggestion {
+                    address,
+                    name,
+                    use_count: use_count.max(0) as u32,
+                });
+                if suggestions.len() == max_results {
+                    return Ok(suggestions);
+                }
+            }
+        }
+
+        let remaining = max_results.saturating_sub(suggestions.len());
+        if remaining == 0 {
+            return Ok(suggestions);
+        }
+        let mut received = conn
             .prepare(
-                "SELECT address,name,use_count FROM recipient_history
-                 WHERE account_id=?1 AND (address LIKE ?2 ESCAPE '\\' OR name LIKE ?2 ESCAPE '\\')
-                 ORDER BY use_count DESC, last_used DESC LIMIT ?3",
+                "WITH effective_mailbox_roles AS (
+                   SELECT f.id,f.account_id,
+                     COALESCE(
+                       (SELECT a.role FROM folder_assignments a
+                        WHERE a.account_id=f.account_id AND a.mailbox_id=f.id),
+                       CASE WHEN EXISTS(
+                         SELECT 1 FROM folder_assignments a
+                         WHERE a.account_id=f.account_id AND a.role=f.role
+                       ) THEN 'other' ELSE f.role END
+                     ) AS effective_role
+                   FROM mailboxes f
+                 )
+                 SELECT m.sender_address,m.sender_name
+                 FROM messages m
+                 JOIN effective_mailbox_roles src ON src.id=m.mailbox_id
+                 LEFT JOIN effective_mailbox_roles dest ON dest.id=m.pending_move_to
+                 WHERE m.account_id=?1
+                   AND (LOWER(m.sender_address) LIKE ?2 ESCAPE '\\'
+                     OR LOWER(m.sender_name) LIKE ?2 ESCAPE '\\')
+                   AND CASE WHEN m.pending_move_to IS NULL
+                     THEN src.effective_role ELSE dest.effective_role END NOT IN ('junk','trash')
+                   AND NOT EXISTS (
+                     SELECT 1 FROM muted_ids mu
+                     WHERE mu.account_id=m.account_id
+                       AND (mu.message_id=m.message_id OR mu.message_id=m.thread_parent)
+                   )
+                 ORDER BY m.received_at DESC,m.id DESC LIMIT 500",
             )
             .map_err(db_error)?;
-        let rows = statement
-            .query_map(
-                params![account_id, like, limit.clamp(1, 20) as i64],
-                |row| {
-                    Ok(RecipientSuggestion {
-                        address: row.get(0)?,
-                        name: row.get(1)?,
-                        use_count: row.get::<_, i64>(2)? as u32,
-                    })
-                },
-            )
+        let rows = received
+            .query_map(params![account_id, like], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
             .map_err(db_error)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(db_error)?;
-        Ok(rows)
+        for (raw_address, raw_name) in rows {
+            let Some(address) = suggestion_address(&raw_address) else {
+                continue;
+            };
+            if own_addresses.contains(&address)
+                || blocked_senders.contains(&address)
+                || suggestion_is_noreply(&address)
+                || suggestion_domain_matches(&address, &blocked_domains)
+                || !seen.insert(address.clone())
+            {
+                continue;
+            }
+            suggestions.push(RecipientSuggestion {
+                address,
+                name: raw_name.chars().take(200).collect(),
+                use_count: 0,
+            });
+            if suggestions.len() == max_results {
+                break;
+            }
+        }
+        Ok(suggestions)
     }
 
     pub fn mark_pending_move(&self, id: i64, mailbox_id: i64) -> Result<(), String> {
         let mut conn = self.conn()?;
         let transaction = conn.transaction().map_err(db_error)?;
-        let (source_id, is_read, current_pending, source_overlay, destination_overlay):
-            (i64, bool, Option<i64>, Option<i64>, Option<i64>) = transaction
-            .query_row(
-                "SELECT mailbox_id,is_read != 0,pending_move_to,pending_source_generation,pending_destination_generation FROM messages WHERE id=?1",
-                [id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
-            )
-            .map_err(db_error)?;
-        let source_account: String = transaction
-            .query_row(
-                "SELECT account_id FROM mailboxes WHERE id=?1",
-                [source_id],
-                |row| row.get(0),
-            )
-            .map_err(db_error)?;
-        let dest_account: String = transaction
-            .query_row(
-                "SELECT account_id FROM mailboxes WHERE id=?1",
-                [mailbox_id],
-                |row| row.get(0),
-            )
-            .map_err(db_error)?;
-        if source_account != dest_account {
-            return Err("Messages cannot be moved between different accounts.".into());
-        }
-        let source_generation: i64 = transaction
-            .query_row(
-                "SELECT counts_generation FROM mailboxes WHERE id=?1",
-                [source_id],
-                |row| row.get(0),
-            )
-            .map_err(db_error)?;
-        let destination_generation: i64 = transaction
-            .query_row(
-                "SELECT counts_generation FROM mailboxes WHERE id=?1",
-                [mailbox_id],
-                |row| row.get(0),
-            )
-            .map_err(db_error)?;
-        match current_pending {
-            None => {
-                adjust_mailbox_counts(&transaction, source_id, -1, (!is_read).then_some(-1))?;
-                adjust_mailbox_counts(&transaction, mailbox_id, 1, (!is_read).then_some(1))?;
-            }
-            Some(previous_id) if previous_id != mailbox_id => {
-                let previous_generation: i64 = transaction
-                    .query_row(
-                        "SELECT counts_generation FROM mailboxes WHERE id=?1",
-                        [previous_id],
-                        |row| row.get(0),
-                    )
-                    .map_err(db_error)?;
-                if destination_overlay == Some(previous_generation) {
-                    adjust_mailbox_counts(&transaction, previous_id, -1, (!is_read).then_some(-1))?;
-                }
-                adjust_mailbox_counts(&transaction, mailbox_id, 1, (!is_read).then_some(1))?;
-            }
-            Some(_) => {}
-        }
-        let next_source_overlay = if current_pending.is_none() {
-            Some(source_generation)
-        } else {
-            source_overlay
-        };
-        let next_destination_overlay = if current_pending == Some(mailbox_id) {
-            destination_overlay
-        } else {
-            Some(destination_generation)
-        };
-        transaction.execute(
-            "UPDATE messages SET pending_move_to=?2,pending_source_generation=?3,pending_destination_generation=?4 WHERE id=?1",
-            params![id, mailbox_id, next_source_overlay, next_destination_overlay],
-        ).map_err(db_error)?;
+        mark_pending_move_in_transaction(&transaction, id, mailbox_id)?;
         transaction.commit().map_err(db_error)?;
         Ok(())
     }
@@ -1060,32 +1284,14 @@ impl Database {
         Ok(())
     }
 
-    pub fn remove_message(&self, id: i64) -> Result<(), String> {
-        let mut conn = self.conn()?;
-        let transaction = conn.transaction().map_err(db_error)?;
-        let row: Option<(i64, bool, Option<i64>)> = transaction
-            .query_row(
-                "SELECT mailbox_id,is_read != 0,pending_move_to FROM messages WHERE id=?1",
-                [id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .optional()
-            .map_err(db_error)?;
-        transaction
-            .execute("DELETE FROM messages WHERE id=?1", [id])
-            .map_err(db_error)?;
-        if let Some((mailbox_id, is_read, None)) = row {
-            adjust_mailbox_counts(&transaction, mailbox_id, -1, (!is_read).then_some(-1))?;
-        }
-        transaction.commit().map_err(db_error)?;
-        Ok(())
-    }
-
     pub fn message_location(&self, id: i64) -> Result<(String, String, u32), String> {
-        self.conn()?.query_row(
-            "SELECT m.account_id, f.name, m.uid FROM messages m JOIN mailboxes f ON f.id=m.mailbox_id WHERE m.id=?1",
-            [id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        ).optional().map_err(db_error)?.ok_or_else(|| "Message not found.".into())
+        self.read_conn()?
+            .prepare_cached("SELECT m.account_id, f.name, m.uid FROM messages m JOIN mailboxes f ON f.id=m.mailbox_id WHERE m.id=?1")
+            .map_err(db_error)?
+            .query_row([id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .optional()
+            .map_err(db_error)?
+            .ok_or_else(|| "Message not found.".into())
     }
 
     pub fn message_rfc_id(&self, id: i64) -> Result<Option<String>, String> {
@@ -1105,11 +1311,9 @@ impl Database {
     ) -> Result<Option<u32>, String> {
         let value: Option<Option<u32>> = self
             .conn()?
-            .query_row(
-                "SELECT uid_validity FROM mailboxes WHERE account_id=?1 AND name=?2",
-                params![account_id, mailbox],
-                |row| row.get(0),
-            )
+            .prepare_cached("SELECT uid_validity FROM mailboxes WHERE account_id=?1 AND name=?2")
+            .map_err(db_error)?
+            .query_row(params![account_id, mailbox], |row| row.get(0))
             .optional()
             .map_err(db_error)?;
         Ok(value.flatten())
@@ -1228,7 +1432,8 @@ impl Database {
         if expression.is_some() {
             sql.push_str(" JOIN message_fts fts ON fts.rowid=m.id");
         }
-        sql.push_str(" WHERE m.account_id=?1 AND m.pending_move_to IS NULL");
+        sql.push_str(" WHERE m.account_id=?1 AND m.pending_move_to IS NULL AND ");
+        sql.push_str(NOT_SNOOZED_SQL);
         if let Some(expression) = expression.clone() {
             values.push(Value::from(expression));
             sql.push_str(&format!(" AND message_fts MATCH ?{}", values.len()));
@@ -1394,7 +1599,7 @@ impl Database {
     /// Attachment names stored with a downloaded message. Empty when only the
     /// envelope is cached.
     pub fn attachment_filenames(&self, mailbox_id: i64, uid: u32) -> Result<Vec<String>, String> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut statement = conn
             .prepare(
                 "SELECT json_extract(attachment.value, '$.filename')
@@ -1425,7 +1630,7 @@ impl Database {
             return Ok(Vec::new());
         }
         let sql = format!(
-            "{} JOIN message_fts fts ON fts.rowid=m.id WHERE m.pending_move_to IS NULL AND message_fts MATCH ?1 ORDER BY bm25(message_fts, 10.0, 6.0, 3.0, 1.0), m.received_at DESC LIMIT ?2",
+            "{} JOIN message_fts fts ON fts.rowid=m.id WHERE m.pending_move_to IS NULL AND {NOT_SNOOZED_SQL} AND message_fts MATCH ?1 ORDER BY bm25(message_fts, 10.0, 6.0, 3.0, 1.0), m.received_at DESC LIMIT ?2",
             MESSAGE_SUMMARY_SELECT,
         );
         let mut statement = conn.prepare(&sql).map_err(db_error)?;
@@ -1644,6 +1849,89 @@ struct TrashRow {
     uid_validity: Option<u32>,
 }
 
+/// Mark a message as hidden in its source and counted in `mailbox_id`.
+/// Callers that need several writes atomically pass their own transaction.
+pub(crate) fn mark_pending_move_in_transaction(
+    transaction: &rusqlite::Transaction<'_>,
+    id: i64,
+    mailbox_id: i64,
+) -> Result<(), String> {
+    let (source_id, is_read, current_pending, source_overlay, destination_overlay):
+        (i64, bool, Option<i64>, Option<i64>, Option<i64>) = transaction
+        .query_row(
+            "SELECT mailbox_id,is_read != 0,pending_move_to,pending_source_generation,pending_destination_generation FROM messages WHERE id=?1",
+            [id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        )
+        .map_err(db_error)?;
+    let source_account: String = transaction
+        .query_row(
+            "SELECT account_id FROM mailboxes WHERE id=?1",
+            [source_id],
+            |row| row.get(0),
+        )
+        .map_err(db_error)?;
+    let dest_account: String = transaction
+        .query_row(
+            "SELECT account_id FROM mailboxes WHERE id=?1",
+            [mailbox_id],
+            |row| row.get(0),
+        )
+        .map_err(db_error)?;
+    if source_account != dest_account {
+        return Err("Messages cannot be moved between different accounts.".into());
+    }
+    let source_generation: i64 = transaction
+        .query_row(
+            "SELECT counts_generation FROM mailboxes WHERE id=?1",
+            [source_id],
+            |row| row.get(0),
+        )
+        .map_err(db_error)?;
+    let destination_generation: i64 = transaction
+        .query_row(
+            "SELECT counts_generation FROM mailboxes WHERE id=?1",
+            [mailbox_id],
+            |row| row.get(0),
+        )
+        .map_err(db_error)?;
+    match current_pending {
+        None => {
+            adjust_mailbox_counts(transaction, source_id, -1, (!is_read).then_some(-1))?;
+            adjust_mailbox_counts(transaction, mailbox_id, 1, (!is_read).then_some(1))?;
+        }
+        Some(previous_id) if previous_id != mailbox_id => {
+            let previous_generation: i64 = transaction
+                .query_row(
+                    "SELECT counts_generation FROM mailboxes WHERE id=?1",
+                    [previous_id],
+                    |row| row.get(0),
+                )
+                .map_err(db_error)?;
+            if destination_overlay == Some(previous_generation) {
+                adjust_mailbox_counts(transaction, previous_id, -1, (!is_read).then_some(-1))?;
+            }
+            adjust_mailbox_counts(transaction, mailbox_id, 1, (!is_read).then_some(1))?;
+        }
+        Some(_) => {}
+    }
+    let next_source_overlay = if current_pending.is_none() {
+        Some(source_generation)
+    } else {
+        source_overlay
+    };
+    let next_destination_overlay = if current_pending == Some(mailbox_id) {
+        destination_overlay
+    } else {
+        Some(destination_generation)
+    };
+    transaction.execute(
+        "UPDATE messages SET pending_move_to=?2,pending_source_generation=?3,pending_destination_generation=?4 WHERE id=?1",
+        params![id, mailbox_id, next_source_overlay, next_destination_overlay],
+    ).map_err(db_error)?;
+    Ok(())
+}
+
 fn trash_row(conn: &rusqlite::Connection, id: i64) -> Result<Option<TrashRow>, String> {
     conn.query_row(
         "SELECT m.account_id, m.mailbox_id, f.name, f.role, m.uid, m.pending_move_to, f.uid_validity
@@ -1679,17 +1967,19 @@ fn stable_message_id(
     uid: u32,
 ) -> Result<i64, String> {
     let existing = transaction
-        .query_row(
-            "SELECT id FROM messages WHERE mailbox_id=?1 AND uid=?2",
-            params![mailbox_id, uid],
-            |row| row.get(0),
-        )
+        .prepare_cached("SELECT id FROM messages WHERE mailbox_id=?1 AND uid=?2")
+        .map_err(db_error)?
+        .query_row(params![mailbox_id, uid], |row| row.get(0))
         .optional()
         .map_err(db_error)?;
     if let Some(id) = existing {
         return Ok(id);
     }
-    transaction.query_row("UPDATE message_id_sequence SET last_id=MAX(last_id,(SELECT COALESCE(MAX(id),0) FROM messages))+1 WHERE singleton=1 RETURNING last_id", [], |row| row.get(0)).map_err(db_error)
+    transaction
+        .prepare_cached("UPDATE message_id_sequence SET last_id=MAX(last_id,(SELECT COALESCE(MAX(id),0) FROM messages))+1 WHERE singleton=1 RETURNING last_id")
+        .map_err(db_error)?
+        .query_row([], |row| row.get(0))
+        .map_err(db_error)
 }
 
 fn write_full_message(
@@ -1697,6 +1987,7 @@ fn write_full_message(
     account_id: &str,
     mailbox_id: i64,
     message: &CachedMessage,
+    body_partial: bool,
 ) -> Result<i64, String> {
     let attachments = serde_json::to_string(&message.attachments)
         .map_err(|_| "Could not index attachments.".to_string())?;
@@ -1708,7 +1999,7 @@ fn write_full_message(
         .map_err(|_| "Could not index recipients.".to_string())?;
     // Bodies are cached as a unit with the raw MIME; without it nothing counts
     // toward the cache and the row stays a prefetch candidate.
-    let body_bytes = if message.raw_message.is_empty() {
+    let body_bytes = if message.raw_message.is_empty() && !body_partial {
         0
     } else {
         message.raw_message.len()
@@ -1718,16 +2009,16 @@ fn write_full_message(
     let (thread_parent, thread_root) =
         provisional_thread_root(transaction, account_id, mailbox_id, message)?;
     let stable_id = stable_message_id(transaction, mailbox_id, message.uid)?;
-    transaction.execute(
+    transaction.prepare_cached(
         "INSERT INTO messages (
             id, account_id, mailbox_id, uid, message_id, subject, sender_name, sender_address, recipients,
             received_at, preview, is_read, is_starred, has_attachments, size, to_json, cc_json, bcc_json,
             reply_to, thread_parent, thread_root, text_body, html_body, attachments_json, raw_message, accessed_at,
             internal_at, body_bytes, prefetch_failures, prefetch_retry_at,
             has_calendar, calendar_json, list_unsubscribe, list_unsubscribe_post, importance,
-            disposition_to
+            disposition_to, body_partial
          ) VALUES (?30,?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?33,?17,?18,?19,?20,?21,?22,?23,'1970-01-01 00:00:00',
-            COALESCE(?24,?9),?25,0,NULL,?26,?27,?28,?29,?31,?32)
+            COALESCE(?24,?9),?25,0,NULL,?26,?27,?28,?29,?31,?32,?34)
          ON CONFLICT(mailbox_id, uid) DO UPDATE SET
             message_id=excluded.message_id, subject=excluded.subject, sender_name=excluded.sender_name,
             sender_address=excluded.sender_address, recipients=excluded.recipients, received_at=excluded.received_at,
@@ -1742,8 +2033,11 @@ fn write_full_message(
             body_bytes=excluded.body_bytes, prefetch_failures=0, prefetch_retry_at=NULL,
             has_calendar=excluded.has_calendar, calendar_json=excluded.calendar_json,
             list_unsubscribe=excluded.list_unsubscribe, list_unsubscribe_post=excluded.list_unsubscribe_post,
-            importance=excluded.importance, disposition_to=excluded.disposition_to",
-        params![
+            importance=excluded.importance, disposition_to=excluded.disposition_to,
+            body_partial=excluded.body_partial",
+        )
+        .map_err(db_error)?
+        .execute(params![
             account_id, mailbox_id, message.uid, message.message_id, message.subject, message.sender_name,
             message.sender_address, message.recipients, message.received_at, message.preview,
             message.is_read as i32, message.is_starred as i32, (!message.attachments.is_empty()) as i32,
@@ -1756,28 +2050,50 @@ fn write_full_message(
             crate::models::canonical_importance(&message.importance),
             crate::models::receipt_mailbox(&message.disposition_to).unwrap_or_default(),
             bcc_json,
+            body_partial as i32,
         ],
     ).map_err(db_error)?;
     let id: i64 = transaction
-        .query_row(
-            "SELECT id FROM messages WHERE mailbox_id = ?1 AND uid = ?2",
-            params![mailbox_id, message.uid],
-            |row| row.get(0),
-        )
+        .prepare_cached("SELECT id FROM messages WHERE mailbox_id = ?1 AND uid = ?2")
+        .map_err(db_error)?
+        .query_row(params![mailbox_id, message.uid], |row| row.get(0))
         .map_err(db_error)?;
     transaction
-        .execute("DELETE FROM message_fts WHERE rowid = ?1", [id])
+        .prepare_cached("DELETE FROM message_fts WHERE rowid = ?1")
+        .map_err(db_error)?
+        .execute([id])
         .map_err(db_error)?;
-    transaction.execute(
+    transaction.prepare_cached(
         "INSERT INTO message_fts(rowid, subject, sender, recipients, body)
          SELECT id, subject, sender_name || ' ' || sender_address,
             recipients || ' ' || IFNULL((SELECT group_concat(j.value, ' ') FROM json_each(messages.bcc_json) AS j), ''),
             text_body
          FROM messages WHERE id=?1",
-        [id],
-    ).map_err(db_error)?;
+    ).map_err(db_error)?.execute([id]).map_err(db_error)?;
     super::refresh_list_columns(transaction, "id=?1", [id])?;
     Ok(id)
+}
+
+/// Delete one row and fix its folder counts. Snoozes cascade with the row.
+pub(crate) fn remove_message_in_transaction(
+    transaction: &rusqlite::Transaction<'_>,
+    id: i64,
+) -> Result<(), String> {
+    let row: Option<(i64, bool, Option<i64>)> = transaction
+        .query_row(
+            "SELECT mailbox_id,is_read != 0,pending_move_to FROM messages WHERE id=?1",
+            [id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
+        .map_err(db_error)?;
+    transaction
+        .execute("DELETE FROM messages WHERE id=?1", [id])
+        .map_err(db_error)?;
+    if let Some((mailbox_id, is_read, None)) = row {
+        adjust_mailbox_counts(transaction, mailbox_id, -1, (!is_read).then_some(-1))?;
+    }
+    Ok(())
 }
 
 fn write_envelope(
@@ -1795,7 +2111,7 @@ fn write_envelope(
     let (thread_parent, thread_root) =
         provisional_thread_root(transaction, account_id, mailbox_id, message)?;
     let stable_id = stable_message_id(transaction, mailbox_id, message.uid)?;
-    transaction.execute(
+    transaction.prepare_cached(
         "INSERT INTO messages (
             id, account_id, mailbox_id, uid, message_id, subject, sender_name, sender_address, recipients,
             received_at, preview, is_read, is_starred, has_attachments, size, to_json, cc_json, bcc_json,
@@ -1815,7 +2131,9 @@ fn write_envelope(
             internal_at=COALESCE(?19, messages.internal_at, excluded.received_at),
             importance=CASE WHEN excluded.importance != '' THEN excluded.importance ELSE messages.importance END,
             has_attachments=CASE WHEN excluded.has_attachments=1 THEN 1 ELSE has_attachments END",
-        params![
+        )
+        .map_err(db_error)?
+        .execute(params![
             account_id,
             mailbox_id,
             message.uid,
@@ -1843,23 +2161,22 @@ fn write_envelope(
         ],
     ).map_err(db_error)?;
     let id: i64 = transaction
-        .query_row(
-            "SELECT id FROM messages WHERE mailbox_id=?1 AND uid=?2",
-            params![mailbox_id, message.uid],
-            |row| row.get(0),
-        )
+        .prepare_cached("SELECT id FROM messages WHERE mailbox_id=?1 AND uid=?2")
+        .map_err(db_error)?
+        .query_row(params![mailbox_id, message.uid], |row| row.get(0))
         .map_err(db_error)?;
     transaction
-        .execute("DELETE FROM message_fts WHERE rowid=?1", [id])
+        .prepare_cached("DELETE FROM message_fts WHERE rowid=?1")
+        .map_err(db_error)?
+        .execute([id])
         .map_err(db_error)?;
-    transaction.execute(
+    transaction.prepare_cached(
         "INSERT INTO message_fts(rowid,subject,sender,recipients,body)
          SELECT id,subject,sender_name || ' ' || sender_address,
             recipients || ' ' || IFNULL((SELECT group_concat(j.value, ' ') FROM json_each(messages.bcc_json) AS j), ''),
             text_body
          FROM messages WHERE id=?1",
-        [id],
-    ).map_err(db_error)?;
+    ).map_err(db_error)?.execute([id]).map_err(db_error)?;
     super::refresh_list_columns(transaction, "id=?1", [id])?;
     Ok(id)
 }
@@ -2052,5 +2369,136 @@ fn list_cursor(sort: MessageListSort, last: &MessageSummary) -> MessageCursor {
         sort,
         key,
         pinned: last.pinned,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::db::{CachedMessage, Database};
+    use crate::models::{
+        AccountRecord, AccountSummary, MailboxRole, ProviderKind, SearchQuery, ServerConfig,
+        TlsMode,
+    };
+
+    fn with_account() -> (Database, String, i64) {
+        let database = Database::memory();
+        let account = AccountRecord {
+            summary: AccountSummary {
+                default_body_format: crate::models::BodyFormat::Html,
+                id: "account-1".into(),
+                provider: ProviderKind::Manual,
+                email: "sam@example.com".into(),
+                display_name: "Sam".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+                signature_html: String::new(),
+                reply_to: String::new(),
+                color: None,
+            },
+            imap: ServerConfig {
+                trusted_certificate: None,
+                host: "imap.example.com".into(),
+                port: 993,
+                tls_mode: TlsMode::Tls,
+                username: "sam@example.com".into(),
+            },
+            smtp: ServerConfig {
+                trusted_certificate: None,
+                host: "smtp.example.com".into(),
+                port: 587,
+                tls_mode: TlsMode::StartTls,
+                username: "sam@example.com".into(),
+            },
+        };
+        database.insert_account(&account).unwrap();
+        let account_id = account.summary.id;
+        let inbox = database
+            .upsert_mailbox(
+                &account_id,
+                "INBOX",
+                &MailboxRole::Inbox,
+                Some(1),
+                Some(2),
+                None,
+                0,
+            )
+            .unwrap();
+        (database, account_id, inbox)
+    }
+
+    fn dictionary_email(uid: u32) -> CachedMessage {
+        CachedMessage {
+            uid,
+            internal_at: None,
+            message_id: Some(format!("<dictionary-{uid}@example.com>")),
+            subject: "Discount dictionary offer".into(),
+            sender_name: "Jane".into(),
+            sender_address: "jane@example.com".into(),
+            recipients: "sam@example.com".into(),
+            received_at: format!("2026-08-{uid:02}T12:00:00Z"),
+            preview: "Hello".into(),
+            is_read: false,
+            is_starred: false,
+            size: 32,
+            to: vec!["sam@example.com".into()],
+            cc: vec![],
+            bcc: vec![],
+            reply_to: None,
+            thread_parent: None,
+            text_body: "Hello".into(),
+            html_body: None,
+            attachments: vec![],
+            raw_message: b"Subject: Discount dictionary offer\r\n\r\nHello".to_vec(),
+            has_attachments: false,
+            is_answered: false,
+            is_forwarded: false,
+            has_calendar: false,
+            calendar_json: None,
+            list_unsubscribe: None,
+            list_unsubscribe_post: None,
+            importance: String::new(),
+            disposition_to: String::new(),
+        }
+    }
+
+    /// Search must match what lists show: a snoozed row answers nothing until
+    /// it surfaces again.
+    #[test]
+    fn search_hides_snoozed_messages_until_they_return() {
+        let (db, account_id, inbox) = with_account();
+        db.upsert_message(&account_id, inbox, &dictionary_email(18))
+            .unwrap();
+        let message_id = db.list_messages(inbox, None, 10).unwrap().items[0].id;
+        let query = SearchQuery {
+            account_id: account_id.clone(),
+            mailbox_id: None,
+            text: "dictionary".into(),
+            limit: 10,
+            all_folders: true,
+        };
+        assert_eq!(db.search(&query).unwrap().len(), 1);
+
+        db.snooze_message(&account_id, message_id, "2999-01-01T00:00:00+00:00")
+            .unwrap();
+        assert_eq!(db.search(&query).unwrap().len(), 0);
+
+        db.unsnooze_message(&account_id, message_id).unwrap();
+        assert_eq!(db.search(&query).unwrap().len(), 1);
+    }
+
+    /// Server search answers for any account; the snooze filter rides along.
+    #[test]
+    fn all_account_search_skips_snoozed_messages() {
+        let (db, _account_id, inbox) = with_account();
+        db.upsert_message("account-1", inbox, &dictionary_email(21))
+            .unwrap();
+        let message_id = db.list_messages(inbox, None, 10).unwrap().items[0].id;
+        assert_eq!(db.search_all_accounts("dictionary", 10).unwrap().len(), 1);
+        db.snooze_message("account-1", message_id, "2999-01-01T00:00:00+00:00")
+            .unwrap();
+        assert!(db.search_all_accounts("dictionary", 10).unwrap().is_empty());
     }
 }

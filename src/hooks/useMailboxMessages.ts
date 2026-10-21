@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useEffect,
   useState,
   type Dispatch,
   type RefObject,
@@ -50,6 +51,16 @@ export function useMailboxMessages({
   const appendMessages = useAppStore((state) => state.appendMessages);
   const setError = useAppStore((state) => state.setError);
   const [loadingMessages, setLoadingMessages] = useState(false);
+
+  // The worker polls the open folder more often; tell it which one is open.
+  useEffect(() => {
+    if (!activeAccountId) return;
+    const mailboxId =
+      activeLocalView || !activeMailboxId ? null : activeMailboxId;
+    void Promise.resolve()
+      .then(() => api.setVisibleFolder(activeAccountId, mailboxId))
+      .catch(() => undefined);
+  }, [activeAccountId, activeLocalView, activeMailboxId]);
 
   const listMailboxPage = useCallback(
     (accountId: string, mailboxId: number, cursor?: MessageCursor) => {

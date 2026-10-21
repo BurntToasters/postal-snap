@@ -67,6 +67,8 @@ export const mail = {
       "Not sent yet. The mail server could not take it right now. Postal Snap will try again automatically.",
     retryExhausted:
       "Not sent. The mail server kept asking to try later. Check the message and account, then try again.",
+    retryUnavailable:
+      "Not sent. Postal Snap could not schedule an automatic retry. Check the message and account, then try again.",
     sendRefused:
       "Not sent. The mail server refused this message. Check the recipients and the account, then try again.",
     deliveryUncertain:

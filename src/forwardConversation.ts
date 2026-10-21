@@ -4,8 +4,7 @@ import { strings } from "./i18n";
 import { useAppStore } from "./store";
 import { conversationMessages } from "./threads";
 import type { MessageSummary } from "./types";
-
-const BULK_LIMIT = 200;
+import { BULK_LIMIT } from "./bulk";
 
 /**
  * Opens a forward that quotes every loaded message in this mailbox

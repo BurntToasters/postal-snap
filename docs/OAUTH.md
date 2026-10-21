@@ -1,6 +1,6 @@
 # Register Postal Snap for OAuth
 
-Do this when Postal Snap is ready to offer Gmail and Outlook sign-in. That is not a 0.4.0 requirement. User-facing OAuth can wait until 0.5.0. The Rust wiring stays in the tree until then: loopback PKCE, token refresh, the keychain, and XOAUTH2. The setup screen does not offer it yet.
+Do this when Postal Snap is ready to offer Gmail and Outlook sign-in. User-facing OAuth is deferred to 0.6.0. The Rust wiring stays in the tree until then: loopback PKCE, token refresh, the keychain, and XOAUTH2. The setup screen does not offer it yet.
 
 Postal Snap uses a public client, PKCE, and a loopback redirect on `http://127.0.0.1:<port>/oauth/callback`. It does not use a client secret and it does not use `run.rosie.snap://oauth/callback`.
 

@@ -49,8 +49,9 @@ fn main() {
     let builder = tauri::Builder::default()
         .on_menu_event(|app, event| {
             let action = event.id().as_ref();
-            if action == "tray-quit" {
-                let _ = app.emit("tray-quit", ());
+            // The tray icon owns these ids; its own handler already ran for
+            // the same event, so the app-level handler must not act twice.
+            if matches!(action, "tray-open" | "tray-quit") {
                 return;
             }
             if action == "app-quit" {
@@ -320,7 +321,7 @@ fn main() {
             for account in accounts {
                 let state = app.state::<AppState>();
                 if state
-                    .ensure_watcher(account.id.clone(), handle.clone())
+                    .ensure_worker(account.id.clone(), handle.clone())
                     .is_err()
                 {
                     let _ = state.db.set_account_state(
@@ -375,8 +376,10 @@ fn main() {
             commands::accounts::erase_all_data,
             commands::sync::list_mailboxes,
             commands::sync::sync_account,
+            commands::sync::set_visible_folder,
             commands::messages::list_messages,
             commands::messages::get_message,
+            commands::messages::download_full_message,
             commands::messages::find_cached_message,
             commands::messages::get_message_source,
             commands::messages::save_message_eml,
@@ -389,6 +392,9 @@ fn main() {
             commands::messages::copy_message_to_mailbox,
             commands::messages::copy_messages_to_mailbox,
             commands::messages::move_messages_to_mailbox,
+            commands::messages::begin_undo_session,
+            commands::messages::undo_deferred,
+            commands::messages::commit_deferred,
             commands::messages::mark_mailbox_read,
             commands::folders::suggest_recipients,
             commands::folders::create_folder,
@@ -787,10 +793,7 @@ fn set_mail_menu_items_enabled<R: Runtime>(menu: &Menu<R>, enabled: bool) -> Res
 
 pub fn update_mail_menu_or_warn<R: Runtime>(app: &tauri::AppHandle<R>, enabled: bool) {
     if set_mail_menu_enabled(app, enabled).is_err() {
-        let _ = app.emit(
-            "app-warning",
-            "Postal Snap could not update menu commands. Restart Postal Snap to restore them.",
-        );
+        let _ = app.emit("app-warning", crate::strings::warnings::MENU_COMMANDS_STALE);
     }
 }
 

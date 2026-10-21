@@ -1,14 +1,27 @@
-import { useState, type Dispatch, type SetStateAction } from "react";
+import {
+  lazy,
+  Suspense,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 import { api } from "../../api";
+import { mergeAccountFields } from "../../accountMerge";
 import { Mail } from "lucide-react";
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
-import type { FilterRule, MailboxSummary } from "../../types";
+import type { AccountSummary, FilterRule, MailboxSummary } from "../../types";
 import { SyncStatus } from "../mail/syncStatus";
 import { AccountDownloadPanel } from "./accountDownload";
 import { ConnectionPanel, FoldersPanel } from "./connectionPanel";
 import { BodyFormatControl } from "./bodyFormatControl";
 import { SettingsPanel, SettingsSection } from "./primitives";
+
+const SignatureEditor = lazy(() =>
+  import("./SignatureEditor").then((module) => ({
+    default: module.SignatureEditor,
+  })),
+);
 
 function ruleFieldLabel(field: string): string {
   if (field === "subject") return strings.settings.matchSubject;
@@ -43,6 +56,41 @@ function ruleActionLabel(
     default:
       return rule.action;
   }
+}
+
+// Identity saves run through IPC; a button repeats only a real edit.
+function nameChanged(
+  account: AccountSummary,
+  nameInputs: Record<string, string>,
+): boolean {
+  return (
+    (nameInputs[account.id] ?? account.displayName).trim() !==
+    account.displayName
+  );
+}
+
+function replyToChanged(
+  account: AccountSummary,
+  replyToInputs: Record<string, string>,
+): boolean {
+  return (
+    (replyToInputs[account.id] ?? account.replyTo ?? "").trim() !==
+    (account.replyTo ?? "")
+  );
+}
+
+// An auto-populated plain fallback counts as an edit of its own.
+function signatureChanged(
+  account: AccountSummary,
+  signatureInputs: Record<string, string>,
+  signatureHtmlInputs: Record<string, string>,
+): boolean {
+  return (
+    (signatureInputs[account.id] ?? account.signature ?? "") !==
+      (account.signature ?? "") ||
+    (signatureHtmlInputs[account.id] ?? account.signatureHtml ?? "") !==
+      (account.signatureHtml ?? "")
+  );
 }
 
 export interface AccountRuleDraft {
@@ -83,9 +131,15 @@ interface AccountsTabProps {
   handleSaveReplyTo: (accountId: string) => Promise<void>;
   signatureInputs: Record<string, string>;
   setSignatureInputs: Dispatch<SetStateAction<Record<string, string>>>;
+  signatureHtmlInputs: Record<string, string>;
+  setSignatureHtmlInputs: Dispatch<SetStateAction<Record<string, string>>>;
   signatureStatus: Record<string, string>;
   savingSignatureId?: string;
-  handleSaveSignature: (accountId: string, fallback: string) => Promise<void>;
+  handleSaveSignature: (
+    accountId: string,
+    fallback: string,
+    fallbackHtml: string,
+  ) => Promise<void>;
   filterRules: Record<string, FilterRule[]>;
   ruleInput: (accountId: string) => AccountRuleDraft;
   setRuleField: (accountId: string, patch: Record<string, string>) => void;
@@ -141,6 +195,8 @@ export function AccountsTab({
   handleSaveReplyTo,
   signatureInputs,
   setSignatureInputs,
+  signatureHtmlInputs,
+  setSignatureHtmlInputs,
   signatureStatus,
   savingSignatureId,
   handleSaveSignature,
@@ -199,9 +255,7 @@ export function AccountsTab({
     setColorError("");
     try {
       const updated = await api.updateAccountColor(accountId, color);
-      setAccounts(
-        accounts.map((item) => (item.id === accountId ? updated : item)),
-      );
+      mergeAccountFields(accountId, { color: updated.color });
     } catch {
       setColorError(strings.settings.accountColorFailed);
     }
@@ -497,7 +551,10 @@ export function AccountsTab({
                       <button
                         type="button"
                         className="secondary-button"
-                        disabled={savingNameId === account.id}
+                        disabled={
+                          savingNameId === account.id ||
+                          !nameChanged(account, nameInputs)
+                        }
                         onClick={() => void handleSaveName(account.id)}
                       >
                         {strings.settings.saveAccountName}
@@ -539,7 +596,10 @@ export function AccountsTab({
                       <button
                         type="button"
                         className="secondary-button"
-                        disabled={savingReplyToId === account.id}
+                        disabled={
+                          savingReplyToId === account.id ||
+                          !replyToChanged(account, replyToInputs)
+                        }
                         onClick={() => void handleSaveReplyTo(account.id)}
                       >
                         {strings.settings.saveReplyTo}
@@ -561,51 +621,74 @@ export function AccountsTab({
                     ) : null}
                   </div>
                   <div className="account-password-section">
-                    <label htmlFor={`account-signature-${account.id}`}>
-                      {strings.settings.signature}
-                    </label>
-                    <p className="settings-note">
-                      {strings.settings.signatureHelp}
-                    </p>
-                    <div className="add-alias-form signature-form">
-                      <textarea
-                        id={`account-signature-${account.id}`}
-                        rows={3}
-                        maxLength={2000}
-                        placeholder={strings.settings.signaturePlaceholder}
-                        value={
+                    <Suspense
+                      fallback={
+                        <p className="signature-rich-help">
+                          {strings.settings.signatureEditorHelp}
+                        </p>
+                      }
+                    >
+                      <SignatureEditor
+                        key={account.id}
+                        accountId={account.id}
+                        plainText={
                           signatureInputs[account.id] ?? account.signature ?? ""
                         }
-                        onChange={(event) =>
+                        html={
+                          signatureHtmlInputs[account.id] ??
+                          account.signatureHtml ??
+                          ""
+                        }
+                        onPlainTextChange={(value) =>
                           setSignatureInputs((prev) => ({
                             ...prev,
-                            [account.id]: event.target.value,
+                            [account.id]: value,
                           }))
                         }
+                        onHtmlChange={(plainText, value) => {
+                          setSignatureInputs((prev) => ({
+                            ...prev,
+                            [account.id]: plainText,
+                          }));
+                          setSignatureHtmlInputs((prev) => ({
+                            ...prev,
+                            [account.id]: value,
+                          }));
+                        }}
                       />
+                    </Suspense>
+                    <div className="add-alias-form signature-form">
                       <button
                         type="button"
                         className="secondary-button"
-                        disabled={savingSignatureId === account.id}
+                        disabled={
+                          savingSignatureId === account.id ||
+                          !signatureChanged(
+                            account,
+                            signatureInputs,
+                            signatureHtmlInputs,
+                          )
+                        }
                         onClick={() =>
                           void handleSaveSignature(
                             account.id,
                             account.signature ?? "",
+                            account.signatureHtml ?? "",
                           )
                         }
                       >
                         {strings.common.save}
                       </button>
+                      {signatureStatus[account.id] ? (
+                        <div
+                          className="alias-status-message"
+                          role="status"
+                          aria-live="polite"
+                        >
+                          {signatureStatus[account.id]}
+                        </div>
+                      ) : null}
                     </div>
-                    {signatureStatus[account.id] ? (
-                      <div
-                        className="alias-status-message"
-                        role="status"
-                        aria-live="polite"
-                      >
-                        {signatureStatus[account.id]}
-                      </div>
-                    ) : null}
                   </div>
 
                   <BodyFormatControl account={account} />

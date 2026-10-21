@@ -107,6 +107,9 @@ export async function registerMockFolders(page: Page): Promise<void> {
         if (index >= 0) mailboxes.splice(index, 1);
         return undefined;
       },
+      set_visible_folder() {
+        return null;
+      },
       delete_trash_messages() {
         return undefined;
       },

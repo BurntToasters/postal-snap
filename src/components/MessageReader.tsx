@@ -6,17 +6,10 @@ import {
   addressMailbox,
   earlierHeaderId,
   senderRuleNeedle,
-  subjectRuleNeedle,
 } from "../contextMenu";
 import { strings } from "../i18n";
 import {
-  markLoadedConversationRead,
-  markLoadedConversationUnread,
-} from "../markConversation";
-import {
   domainIsBlocked,
-  blockableDomain,
-  canBlockSender,
   rememberBlockedSenders,
   senderIsBlocked,
 } from "../blockedSenders";
@@ -25,31 +18,18 @@ import { beginMessageOpen } from "../messageOpen";
 import { forgetOpenMessage } from "../recentMessage";
 import { rememberedLetterScroll } from "../letterScroll";
 import { snoozeLoadedConversation } from "../snoozeConversation";
-import { starLoadedConversation } from "../starConversation";
 import { inspectAndOpenExternalLink } from "./externalLink";
 import { parseMailto } from "../mailto";
 import { hasAuthorColors, sanitizeReceivedHtml } from "../security";
 import { textHighlightTerms } from "../searchHighlight";
 import { useIsDark } from "../hooks/useColorScheme";
 import { useAppStore } from "../store";
-import { copyLoadedConversation } from "../copyConversation";
-import { rememberMoveMailboxId } from "../recentMailbox";
-import { copyLoadedConversationText } from "../copyMessageText";
-import { forwardLoadedConversation } from "../forwardConversation";
-import { pinLoadedMessages } from "../pinConversation";
-import { printLoadedConversation } from "../printConversation";
-import { saveLoadedConversationFiles } from "../saveConversation";
 import type { AttachmentPreview, MessageSummary } from "../types";
 import { useDialogFocus } from "./useDialogFocus";
 import { AttachmentList } from "./reader/attachmentList";
 import { MessageBody } from "./reader/messageBody";
 import { MessageHeader } from "./reader/messageHeader";
 import { OriginalDialog } from "./reader/originalDialog";
-import {
-  listPostAddress,
-  messageSelectionQuote,
-  preferredReplyMode,
-} from "./composer/composerSeed";
 import { ConversationIndex } from "./reader/conversationIndex";
 import {
   ContinueDraftNotice,
@@ -66,9 +46,10 @@ import { useReaderFind } from "./reader/useReaderFind";
 import { useReaderMenuActions } from "./reader/useReaderMenuActions";
 import { useReaderFlags } from "./reader/useReaderFlags";
 import { useReaderMoves } from "./reader/useReaderMoves";
-import { readerAccount, useSenderRules } from "./reader/useSenderRules";
+import { useSenderRules } from "./reader/useSenderRules";
 import { useReplyNotes } from "./reader/useReplyNotes";
 import { ReaderToolbar } from "./reader/readerToolbar";
+import { buildReaderActions } from "./reader/buildReaderActions";
 import { SnoozePanel } from "./reader/snoozePanel";
 import {
   buildPrintDocument,
@@ -653,6 +634,7 @@ export function MessageReader({
           .length,
         threatImages: doc.querySelectorAll("img[data-threat-blocked]").length,
       };
+      // eslint-disable-next-line react-hooks/preserve-manual-memoization -- memo kept as written
     }, [sanitized, currentLoadedHtml]);
   const inlineAttachments = useMemo(
     () => attachments?.filter((attachment) => attachment.inline) ?? [],
@@ -705,6 +687,66 @@ export function MessageReader({
     );
 
   const showDetails = detailsOpen;
+  // eslint-disable-next-line react-hooks/refs -- handlers read refs only when invoked
+  const readerActions = buildReaderActions({
+    message,
+    accounts,
+    mailboxes,
+    replyToAll: settings.replyToAll,
+    openComposer,
+    setError,
+    sanitizedHtml: sanitized?.html,
+    currentLoadedHtml,
+    showHtml,
+    isArchiveMailbox,
+    isTrashMailbox,
+    isJunkMailbox,
+    canMoveConversation,
+    canSaveConversationFiles,
+    canMarkConversationRead,
+    canMarkConversationUnread,
+    canStarConversation,
+    canUnstarConversation,
+    canPinConversation,
+    canUnpinConversation,
+    canSelectFromSender,
+    closeOpenMessage,
+    closeMoreMenu,
+    onPrevious,
+    onNext,
+    onOlderInConversation,
+    onNewerInConversation,
+    onUnreadInConversation,
+    onMessagesFromSender,
+    onMessagesWithSubject,
+    replyWithAttachments,
+    forwardMessage,
+    forwardAsAttachment,
+    redirectMessage,
+    editAsNewMessage,
+    printMessage,
+    copyReadableText,
+    copyRecipients,
+    setRead,
+    setStarred,
+    move,
+    deleteForever,
+    muteConversation,
+    deleteConversation,
+    moveConversation,
+    moveToMailbox,
+    copyToMailbox,
+    blockSender,
+    blockDomain,
+    unblockDomain,
+    unblockSender,
+    unsubscribe,
+    setSnoozeConversation,
+    setSnoozeOpen,
+    setOriginalOpen,
+    setPlainMessageId,
+    setMoreOpen,
+  });
 
   return (
     <article
@@ -716,6 +758,7 @@ export function MessageReader({
       aria-modal={treatAsOverlay ? "true" : undefined}
     >
       <ReaderToolbar
+        actions={readerActions}
         message={message}
         mailboxes={mailboxes}
         readingPane={settings.readingPane}
@@ -726,345 +769,11 @@ export function MessageReader({
         isArchiveMailbox={isArchiveMailbox}
         isTrashMailbox={isTrashMailbox}
         isJunkMailbox={isJunkMailbox}
-        onBack={closeOpenMessage}
-        onPrevious={onPrevious}
-        onNext={onNext}
         listPosition={listPosition}
-        onReply={() => {
-          const account = accounts.find(
-            (item) => item.id === message.accountId,
-          );
-          openComposer({
-            sourceMessage: message,
-            composeMode: preferredReplyMode(
-              message,
-              settings.replyToAll,
-              account?.email ?? "",
-              account?.aliases ?? [],
-            ),
-            quoteExcerpt: messageSelectionQuote(),
-          });
-        }}
-        onReplyAll={() =>
-          openComposer({
-            sourceMessage: message,
-            composeMode: "replyAll",
-            quoteExcerpt: messageSelectionQuote(),
-          })
-        }
-        onReplyWithoutQuoting={() =>
-          openComposer({
-            sourceMessage: message,
-            composeMode: "reply",
-            omitQuote: true,
-          })
-        }
-        onReplyAllWithoutQuoting={() =>
-          openComposer({
-            sourceMessage: message,
-            composeMode: "replyAll",
-            omitQuote: true,
-          })
-        }
-        onReplyToList={
-          listPostAddress(message.listPost)
-            ? () =>
-                openComposer({
-                  sourceMessage: message,
-                  composeMode: "replyList",
-                  quoteExcerpt: messageSelectionQuote(),
-                })
-            : undefined
-        }
-        onReplyWithAttachments={
-          message.attachments.some((item) => !item.inline)
-            ? () => void replyWithAttachments("reply")
-            : undefined
-        }
-        onReplyAllWithAttachments={
-          message.attachments.some((item) => !item.inline)
-            ? () => void replyWithAttachments("replyAll")
-            : undefined
-        }
-        onForward={() => void forwardMessage()}
-        onForwardConversation={
-          canMoveConversation
-            ? () => void forwardLoadedConversation(message)
-            : undefined
-        }
-        onForwardAsAttachment={() => void forwardAsAttachment()}
-        onRedirect={redirectMessage}
-        onEditAsNew={() => void editAsNewMessage()}
-        onArchive={() => void move("archive")}
-        onTrash={() => {
-          if (isTrashMailbox) void deleteForever();
-          else void move("trash");
-        }}
-        onPrint={printMessage}
-        onPrintConversation={
-          canMoveConversation
-            ? () =>
-                void printLoadedConversation(message, {
-                  messageId: message.id,
-                  html: showHtml
-                    ? (currentLoadedHtml ?? sanitized?.html)
-                    : undefined,
-                })
-            : undefined
-        }
-        onCopyMessageText={() => void copyReadableText()}
-        onCopySubject={
-          message.subject.trim()
-            ? () =>
-                void navigator.clipboard
-                  .writeText(message.subject.trim())
-                  .catch(() => undefined)
-            : undefined
-        }
-        onCopySenderAddress={
-          addressMailbox(message.senderAddress)
-            ? () =>
-                void navigator.clipboard
-                  .writeText(addressMailbox(message.senderAddress) ?? "")
-                  .catch(() => undefined)
-            : undefined
-        }
-        onCopyRecipients={
-          message && recipientLines(message.to, message.cc, message.bcc)
-            ? () => void copyRecipients()
-            : undefined
-        }
-        onCopyConversationText={
-          canMoveConversation
-            ? () => void copyLoadedConversationText(message)
-            : undefined
-        }
-        onSaveConversationFiles={
-          canSaveConversationFiles
-            ? () => void saveLoadedConversationFiles(message)
-            : undefined
-        }
-        onToggleRead={() => void setRead()}
-        onMarkConversationRead={
-          canMarkConversationRead
-            ? () => void markLoadedConversationRead(message)
-            : undefined
-        }
-        onMarkConversationUnread={
-          canMarkConversationUnread
-            ? () => void markLoadedConversationUnread(message)
-            : undefined
-        }
-        onArchiveConversation={
-          canMoveConversation && !isArchiveMailbox
-            ? () => moveConversation("archive")
-            : undefined
-        }
-        onTrashConversation={
-          canMoveConversation && !isTrashMailbox
-            ? () => moveConversation("trash")
-            : undefined
-        }
-        onDeleteConversation={
-          canMoveConversation && isTrashMailbox
-            ? () => deleteConversation()
-            : undefined
-        }
-        onJunkConversation={
-          canMoveConversation && !isJunkMailbox
-            ? () => moveConversation("junk")
-            : undefined
-        }
-        onMoveConversationToInbox={
-          canMoveConversation && (isArchiveMailbox || isJunkMailbox)
-            ? () => moveConversation("inbox")
-            : undefined
-        }
-        onToggleStar={() => void setStarred()}
-        onStarConversation={
-          canStarConversation
-            ? () => void starLoadedConversation(message, true)
-            : undefined
-        }
-        onUnstarConversation={
-          canUnstarConversation
-            ? () => void starLoadedConversation(message, false)
-            : undefined
-        }
-        onPin={() => void pinLoadedMessages(message, !message.pinned)}
-        onPinConversation={
-          canPinConversation
-            ? () => void pinLoadedMessages(message, true, true)
-            : undefined
-        }
-        onUnpinConversation={
-          canUnpinConversation
-            ? () => void pinLoadedMessages(message, false, true)
-            : undefined
-        }
-        onSelectConversation={
-          canMoveConversation
-            ? () =>
-                window.dispatchEvent(
-                  new CustomEvent(CONTEXT_ACTION_EVENT, {
-                    detail: {
-                      id: "select-conversation",
-                      target: { kind: "message", messageId: message.id },
-                    },
-                  }),
-                )
-            : undefined
-        }
-        onSelectFromSender={
-          canSelectFromSender
-            ? () =>
-                window.dispatchEvent(
-                  new CustomEvent(CONTEXT_ACTION_EVENT, {
-                    detail: {
-                      id: "select-from-sender",
-                      target: { kind: "message", messageId: message.id },
-                    },
-                  }),
-                )
-            : undefined
-        }
-        onOlderInConversation={onOlderInConversation}
-        onNewerInConversation={onNewerInConversation}
-        onUnreadInConversation={onUnreadInConversation}
-        onOpenEarlier={
-          earlierHeaderId(message)
-            ? () =>
-                window.dispatchEvent(
-                  new CustomEvent(CONTEXT_ACTION_EVENT, {
-                    detail: {
-                      id: "open-earlier",
-                      target: { kind: "message", messageId: message.id },
-                    },
-                  }),
-                )
-            : undefined
-        }
-        onMoveJunk={() => void move("junk")}
-        onBlockSender={
-          canBlockSender(
-            message.senderAddress,
-            readerAccount(message.accountId),
-          )
-            ? () => void blockSender()
-            : undefined
-        }
         senderBlocked={senderBlocked}
         domainBlocked={domainBlocked}
-        onBlockDomain={
-          blockableDomain(
-            message.senderAddress,
-            readerAccount(message.accountId),
-          )
-            ? () => void blockDomain()
-            : undefined
-        }
-        onUnblockDomain={() => void unblockDomain()}
-        onUnblockSender={() => void unblockSender()}
-        onMuteConversation={() => void muteConversation()}
-        onMoveToInbox={() => {
-          const inbox = mailboxes.find((box) => box.role === "inbox");
-          if (inbox) void moveToMailbox(inbox.id);
-        }}
-        onMoveToMailbox={(mailboxId) => void moveToMailbox(mailboxId)}
-        onMoveConversationToMailbox={
-          canMoveConversation
-            ? (mailboxId) => moveConversation(mailboxId)
-            : undefined
-        }
-        onCopyToMailbox={(mailboxId) => void copyToMailbox(mailboxId)}
-        onCopyConversationToMailbox={
-          canMoveConversation
-            ? (mailboxId) => {
-                rememberMoveMailboxId(mailboxes, mailboxId);
-                void copyLoadedConversation(message, mailboxId);
-              }
-            : undefined
-        }
-        onOpenSnooze={() => {
-          setSnoozeConversation(false);
-          setSnoozeOpen(true);
-        }}
-        onSnoozeConversation={
-          canMoveConversation
-            ? () => {
-                setSnoozeConversation(true);
-                setSnoozeOpen(true);
-              }
-            : undefined
-        }
-        onCreateRule={() => {
-          const contains = senderRuleNeedle(message.senderAddress);
-          if (!contains) return;
-          window.dispatchEvent(
-            new CustomEvent("postal:create-rule", {
-              detail: {
-                accountId: message.accountId,
-                contains,
-                field: "from",
-              },
-            }),
-          );
-        }}
-        onCreateSubjectRule={
-          subjectRuleNeedle(message.subject)
-            ? () => {
-                const contains = subjectRuleNeedle(message.subject);
-                if (!contains) return;
-                window.dispatchEvent(
-                  new CustomEvent("postal:create-rule", {
-                    detail: {
-                      accountId: message.accountId,
-                      contains,
-                      field: "subject",
-                    },
-                  }),
-                );
-              }
-            : undefined
-        }
-        onMessagesFromSender={
-          onMessagesFromSender
-            ? () => onMessagesFromSender(message.senderAddress)
-            : undefined
-        }
-        onComposeToSender={() => {
-          window.dispatchEvent(
-            new CustomEvent(CONTEXT_ACTION_EVENT, {
-              detail: {
-                id: "compose-to-sender",
-                target: { kind: "message", messageId: message.id },
-              },
-            }),
-          );
-        }}
-        onMessagesWithSubject={
-          onMessagesWithSubject
-            ? () => onMessagesWithSubject(message.subject)
-            : undefined
-        }
-        onUnsubscribe={() => void unsubscribe()}
-        onShowOriginal={() => setOriginalOpen(true)}
-        onSaveEml={() => {
-          void api
-            .saveMessageEml(message.accountId, message.id)
-            .catch((cause) => setError(String(cause)));
-        }}
         canViewPlain={canViewPlain}
         viewingPlain={viewingPlain}
-        onTogglePlain={() =>
-          setPlainMessageId((current) =>
-            message && current === message.id ? undefined : message?.id,
-          )
-        }
-        onToggleMore={() => setMoreOpen((value) => !value)}
-        onOpenMore={() => setMoreOpen(true)}
-        onCloseMore={closeMoreMenu}
-        onDismissMore={() => setMoreOpen(false)}
         windowDrag={treatAsOverlay}
       />
       {snoozeOpen ? (

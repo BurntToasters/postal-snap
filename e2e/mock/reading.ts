@@ -117,6 +117,47 @@ export async function registerMockReading(page: Page): Promise<void> {
     const invite = inviteFor(params.get("invite"));
     if (invite) summary.hasCalendar = true;
 
+    // A large multipart message stored without its attachment bodies. Its
+    // IDs change once download_full_message stores the full message.
+    const partialMessage = params.has("partialMessage");
+    let fullDownloaded = false;
+    const partialFiles = [
+      {
+        id: "partial-report",
+        filename: "Quarterly report.pdf",
+        contentType: "application/pdf",
+        size: 0,
+        contentId: null,
+        inline: false,
+      },
+      {
+        id: "partial-photo",
+        filename: "family.png",
+        contentType: "image/png",
+        size: 0,
+        contentId: null,
+        inline: false,
+      },
+    ];
+    const fullFiles = [
+      {
+        id: "full-report",
+        filename: "Quarterly report.pdf",
+        contentType: "application/pdf",
+        size: 12_400_000,
+        contentId: null,
+        inline: false,
+      },
+      {
+        id: "full-photo",
+        filename: "family.png",
+        contentType: "image/png",
+        size: 128,
+        contentId: null,
+        inline: false,
+      },
+    ];
+
     function emit(event: string, payload: unknown) {
       for (const handler of state.eventListeners.get(event) ?? []) {
         state.callbacks.get(handler)?.({ event, id: handler, payload });
@@ -149,9 +190,17 @@ export async function registerMockReading(page: Page): Promise<void> {
     Object.assign(mock.handlers, {
       get_message(args: Record<string, unknown>) {
         const detail = baseGetMessage(args) as Record<string, unknown>;
+        const partial = partialMessage && args.messageId === summary.id;
         return {
           ...detail,
           hasCalendar: Boolean(invite),
+          bodyPartial: partial && !fullDownloaded,
+          ...(partial
+            ? {
+                size: 13_002_342,
+                attachments: fullDownloaded ? fullFiles : partialFiles,
+              }
+            : {}),
           isAnswered: summary.isAnswered ?? false,
           isForwarded: summary.isForwarded ?? false,
           unsubscribe: unsubscribeFor(params.get("unsub")),
@@ -182,6 +231,10 @@ export async function registerMockReading(page: Page): Promise<void> {
         if (params.has("unsubFail"))
           throw new Error("The sender's server did not accept the request.");
         return undefined;
+      },
+      download_full_message(args: Record<string, unknown>) {
+        fullDownloaded = true;
+        return (mock.handlers.get_message as Handler)(args);
       },
       get_message_source() {
         return {

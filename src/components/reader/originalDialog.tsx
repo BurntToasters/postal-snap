@@ -45,12 +45,18 @@ export function OriginalDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accountId, messageId]);
 
+  // The copied flag clears after two seconds; a closed dialog cancels it.
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 2000);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+
   async function copySource() {
     if (!source) return;
     try {
       await navigator.clipboard.writeText(source.source);
       setCopied(true);
-      window.setTimeout(() => setCopied(false), 2000);
     } catch {
       // Clipboard can be unavailable; the text stays selectable.
     }

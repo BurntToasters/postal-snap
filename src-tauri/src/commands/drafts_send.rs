@@ -91,12 +91,28 @@ pub(crate) fn sign_for_outbox(
     signature: &str,
     above_quote: bool,
 ) -> (ComposeDraft, ComposeDraft) {
-    let signature = if draft.include_signature {
-        signature
+    let signed = if draft.include_signature {
+        mail::apply_signature(draft.clone(), signature, above_quote)
     } else {
-        ""
+        draft.clone()
     };
-    let signed = mail::apply_signature(draft.clone(), signature, above_quote);
+    (draft, signed)
+}
+
+pub(crate) fn sign_for_outbox_with_html(
+    draft: ComposeDraft,
+    signature: &str,
+    signature_html: &str,
+    above_quote: bool,
+) -> (ComposeDraft, ComposeDraft) {
+    if signature_html.trim().is_empty() {
+        return sign_for_outbox(draft, signature, above_quote);
+    }
+    let signed = if draft.include_signature {
+        mail::send::apply_signature_with_html(draft.clone(), signature, signature_html, above_quote)
+    } else {
+        draft.clone()
+    };
     (draft, signed)
 }
 
@@ -132,9 +148,10 @@ pub async fn send_message(
     // The queue stores the unsigned draft so Undo Send and editing never
     // repeat the signature; the prepared MIME carries it.
     let settings = state.settings.get()?;
-    let (draft, signed) = sign_for_outbox(
+    let (draft, signed) = sign_for_outbox_with_html(
         draft,
         &account.summary.signature,
+        &account.summary.signature_html,
         settings.signature_above_quote,
     );
     let archive_source = archive_source

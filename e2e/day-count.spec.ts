@@ -15,18 +15,38 @@ test.afterEach(async ({ page }, testInfo: TestInfo) => {
   await testInfo.attach("screenshot", { path, contentType: "image/png" });
 });
 
-test("a day heading counts the messages under it", async ({ page }) => {
+test("day headings count the messages in the list", async ({ page }) => {
   await page.goto("/?longList=1");
-  const groups = page.locator(".list-day-group");
-  await expect(groups.first()).toBeVisible();
-  const total = await groups.count();
-  expect(total).toBeGreaterThan(1);
-  for (let index = 0; index < total; index += 1) {
-    const group = groups.nth(index);
-    const rows = await group.locator(".message-row").count();
-    expect(rows).toBeGreaterThan(0);
-    await expect(group.locator(".list-day-count")).toHaveText(
-      rows === 1 ? "1 message" : `${rows} messages`,
+  const list = page.locator(".message-list");
+  const first = page.getByRole("option").first();
+  await expect(first).toBeVisible();
+  const setSize = Number(await first.getAttribute("aria-setsize"));
+  // Rows mount as they scroll into view, so collect headings along the way.
+  const counts = new Map<string, string>();
+  for (let step = 0; step < 20; step += 1) {
+    const found = await page
+      .locator(".list-day")
+      .evaluateAll((nodes) =>
+        nodes.map((node) => [
+          node.querySelector(":scope > span")?.textContent ?? "",
+          node.querySelector(".list-day-count")?.textContent ?? "",
+        ]),
+      );
+    for (const [label, count] of found) if (count) counts.set(label, count);
+    const atEnd = await list.evaluate(
+      (node) => node.scrollTop + node.clientHeight >= node.scrollHeight - 2,
     );
+    if (atEnd) break;
+    await list.evaluate((node) => {
+      node.scrollTop += node.clientHeight;
+    });
   }
+  expect(counts.size).toBeGreaterThan(1);
+  let total = 0;
+  for (const count of counts.values()) {
+    const match = /^(\d+) messages?$/.exec(count);
+    expect(match).not.toBeNull();
+    total += Number(match?.[1]);
+  }
+  expect(total).toBe(setSize);
 });

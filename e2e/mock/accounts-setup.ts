@@ -10,6 +10,15 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
     const mock = window.__POSTAL_SNAP_MOCK__ as MockShared;
     const state = window.__POSTAL_SNAP_TEST__ as MockState;
     const { account, accounts, params } = mock;
+    const badgeTestState = state as MockState & {
+      pendingBadgeCounts?: number;
+      releaseDelayedBadgeCounts?: () => void;
+    };
+    const delayedBadgeCounts: Array<() => void> = [];
+    badgeTestState.pendingBadgeCounts = 0;
+    badgeTestState.releaseDelayedBadgeCounts = () => {
+      for (const release of delayedBadgeCounts.splice(0)) release();
+    };
     type Certificate = {
       reference: string;
       fingerprint: string;
@@ -419,6 +428,12 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
       },
       update_account_signature(args: Record<string, unknown>) {
         (account as { signature?: string }).signature = String(args.signature);
+        if (typeof args.signatureHtml === "string") {
+          (account as { signatureHtml?: string }).signatureHtml =
+            args.signatureHtml;
+        } else {
+          (account as { signatureHtml?: string }).signatureHtml = "";
+        }
         return { ...account };
       },
       update_account_default_body_format(args: Record<string, unknown>) {
@@ -531,9 +546,10 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
         };
       },
       get_account_inbox_counts() {
+        if (state.accountRemoved) return [];
         // ?badgeCounts=0,1200 overrides unread per account, in order.
         const forced = params.get("badgeCounts")?.split(",").map(Number);
-        return accounts.map((item, index) => {
+        const counts = accounts.map((item, index) => {
           const inbox = mock.mailboxes.find(
             (mailbox) =>
               mailbox.accountId === item.id && mailbox.role === "inbox",
@@ -544,6 +560,20 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
             totalCount: inbox?.totalCount ?? 0,
           };
         });
+        if (params.has("delayBadgeCounts") && !state.accountRemoved) {
+          return new Promise<typeof counts>((resolve) => {
+            badgeTestState.pendingBadgeCounts =
+              (badgeTestState.pendingBadgeCounts ?? 0) + 1;
+            delayedBadgeCounts.push(() => {
+              badgeTestState.pendingBadgeCounts = Math.max(
+                0,
+                (badgeTestState.pendingBadgeCounts ?? 1) - 1,
+              );
+              resolve(counts);
+            });
+          });
+        }
+        return counts;
       },
       get_account_removal_impact() {
         return params.has("removalImpact")

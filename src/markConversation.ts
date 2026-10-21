@@ -3,8 +3,7 @@ import { strings } from "./i18n";
 import { useAppStore } from "./store";
 import { conversationRead, conversationUnread } from "./threads";
 import type { MessageSummary } from "./types";
-
-const BULK_LIMIT = 200;
+import { BULK_LIMIT } from "./bulk";
 
 /** Marks unread messages in the loaded conversation. Messages not yet loaded stay as they are. */
 export async function markLoadedConversationRead(

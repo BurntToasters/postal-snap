@@ -7,6 +7,7 @@
 // - Protocol transcripts must never enter result artifacts.
 
 import { readFile } from "node:fs/promises";
+import { appendFileSync } from "node:fs";
 import net from "node:net";
 import tls from "node:tls";
 import { once } from "node:events";
@@ -22,6 +23,8 @@ export async function createCompatibilityFixture({
   advertiseStartTls = true,
   rejectStartTls = false,
   allowRestartCommand = false,
+  maxImapConnections = Number.POSITIVE_INFINITY,
+  statePath,
   username = "fixture@example.test",
   password = "fixture-password",
   imapPort = 0,
@@ -55,7 +58,11 @@ export async function createCompatibilityFixture({
   const servers = [];
   const counts = {
     connections: 0,
+    activeImapConnections: 0,
+    connectionLimitRefusals: 0,
     authenticated: 0,
+    listStatusReplies: 0,
+    idCommands: 0,
     rejectedAuthentication: 0,
     messagesAccepted: 0,
     restarts: 0,
@@ -166,6 +173,7 @@ export async function createCompatibilityFixture({
     let socket = initialSocket;
     let secure = tlsMode === "tls";
     let authenticated = false;
+    let countedImap = false;
     let buffer = Buffer.alloc(0);
     let selectedMailbox = "";
     let literal = null;
@@ -174,16 +182,49 @@ export async function createCompatibilityFixture({
     let smtpUser = "";
     let smtpData = false;
     counts.connections++;
+    const mark = (event) => {
+      if (statePath) appendFileSync(statePath, `${event}\n`, "utf8");
+    };
     function track(current) {
       sockets.add(current);
       current.on("error", () => current.destroy());
-      current.on("close", () => sockets.delete(current));
+      current.on("close", () => {
+        sockets.delete(current);
+        if (current === socket && countedImap) {
+          countedImap = false;
+          counts.activeImapConnections--;
+          mark("imap-closed");
+        }
+      });
     }
     track(socket);
     const send = (line) => socket.write(`${line}\r\n`);
+    if (protocol === "imap") {
+      if (counts.activeImapConnections >= maxImapConnections) {
+        counts.connectionLimitRefusals++;
+        mark("imap-limit");
+        send("* BYE [LIMIT] Too many connections");
+        socket.end();
+        return;
+      }
+      counts.activeImapConnections++;
+      countedImap = true;
+      mark("imap-connected");
+    }
     const wireMailbox = (name) => {
       const value = encodeMailbox(name);
       return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+    };
+    const sendStatus = (mailbox) => {
+      const rows = selectedMessages(mailbox);
+      const unseen = rows.filter(
+        (message) => !message.flags?.includes("\\Seen"),
+      ).length;
+      sendMailboxResponse(
+        "* STATUS ",
+        mailbox,
+        ` (MESSAGES ${rows.length} UNSEEN ${unseen} UIDNEXT ${nextUid(mailbox)} UIDVALIDITY ${currentUidValidity} HIGHESTMODSEQ ${currentUidValidity})`,
+      );
     };
     const sendMailboxResponse = (prefix, name, suffix = "") => {
       if (!utf8AcceptEnabled) {
@@ -197,6 +238,7 @@ export async function createCompatibilityFixture({
     function authenticate(user, secret, prefix = "") {
       authenticated = user === username && secret === password;
       counts[authenticated ? "authenticated" : "rejectedAuthentication"]++;
+      if (authenticated && protocol === "imap") mark("imap-authenticated");
       send(
         protocol === "imap"
           ? `${prefix} ${authenticated ? "OK authenticated" : "NO authentication rejected"}`
@@ -282,10 +324,22 @@ export async function createCompatibilityFixture({
         }
       } else if (command === "NOOP") {
         send(`${tag} OK noop`);
+      } else if (command === "ID") {
+        // Only counted: the reply is ignored by clients.
+        counts.idCommands++;
+        send("* ID NIL");
+        send(`${tag} OK id`);
       } else if (command === "LIST" || command === "LSUB") {
+        // LIST-STATUS (RFC 5819): STATUS follows each LIST entry.
+        const withStatus =
+          command === "LIST" &&
+          capabilities.includes("LIST-STATUS") &&
+          /\bRETURN\s*\(/i.test(args);
+        if (withStatus) counts.listStatusReplies++;
         for (const name of mailboxes.keys()) {
           const flags = name === "All Mail" ? "(\\All)" : "()";
           sendMailboxResponse(`* ${command} ${flags} "/" `, name);
+          if (withStatus) sendStatus(name);
         }
         send(`${tag} OK listed`);
       } else if (command === "STATUS") {
@@ -296,15 +350,7 @@ export async function createCompatibilityFixture({
             .replaceAll('\\"', '"')
             .replaceAll("\\\\", "\\"),
         );
-        const rows = selectedMessages(mailbox);
-        const unseen = rows.filter(
-          (message) => !message.flags?.includes("\\Seen"),
-        ).length;
-        sendMailboxResponse(
-          "* STATUS ",
-          mailbox,
-          ` (MESSAGES ${rows.length} UNSEEN ${unseen} UIDNEXT ${nextUid(mailbox)} UIDVALIDITY ${currentUidValidity} HIGHESTMODSEQ ${currentUidValidity})`,
-        );
+        sendStatus(mailbox);
         send(`${tag} OK status`);
       } else if (
         (command === "UID" && /^FETCH\b/i.test(args)) ||

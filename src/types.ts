@@ -58,6 +58,7 @@ export interface AccountSummary {
   aliases?: string[];
   authMethod?: string;
   signature?: string;
+  signatureHtml?: string;
   /** Where replies to mail from this account should go. Blank uses From. */
   replyTo?: string;
   color?: string | null;
@@ -181,6 +182,8 @@ export interface MessageDetail extends MessageSummary {
   remoteImagesBlocked: boolean;
   attachments: Attachment[];
   references?: string[];
+  /** Attachment bodies are not stored yet; see downloadFullMessage. */
+  bodyPartial?: boolean;
   /** Why the body is missing when it could not be downloaded. */
   bodyStatus?:
     "available" | "offline" | "signInNeeded" | "tooLarge" | "unreadable";
@@ -476,6 +479,8 @@ export interface AppSettings {
   replyToAll: boolean;
   /** The folder list shows Inbox, the open folder, and folders with unread mail. */
   unreadFoldersOnly: boolean;
+  /** Which account Inboxes contribute to the operating-system unread badge. */
+  badgeScope?: "activeInbox" | "allInboxes";
   /** Floating compose window size. Zero uses the default layout. */
   composerWidth: number;
   composerHeight: number;
@@ -522,6 +527,8 @@ export interface AppSettings {
   markRead: "open" | "after2s" | "manual";
   notifyNewMail: boolean;
   closeToTray: boolean;
+  /** Download attachments with new mail so they open offline. */
+  keepAttachmentsOffline?: boolean;
   updateCheckInterval: UpdateCheckInterval;
   updateChannel: UpdateChannel;
   setupCompleted: boolean;
