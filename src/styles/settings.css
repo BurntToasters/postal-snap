@@ -114,19 +114,26 @@
   border: 0;
   border-radius: 0;
   background: transparent;
-  color: var(--accent);
+  color: var(--accent-ink);
   font: inherit;
   text-align: start;
   cursor: pointer;
 }
 
 .settings-link-row:hover {
-  background: var(--fill-hover);
+  background: var(--accent-soft);
 }
 
 .settings-link-row:disabled {
   cursor: default;
   opacity: 0.65;
+}
+
+@media (forced-colors: active) {
+  .settings-link-row:hover:not(:disabled) {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
 }
 
 .settings-group > p {

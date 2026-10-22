@@ -106,6 +106,7 @@ interface AccountsTabProps {
   selectedAccountId?: string;
   initialPage?: "connection" | "folders" | "identity" | "rules";
   onSelectAccount: (id?: string) => void;
+  onReturnToAccounts: (id: string) => void;
   onOpenOutbox: (accountId: string) => void;
   beforeNavigate: () => Promise<boolean>;
   onConnectionDirty: (dirty: boolean) => void;
@@ -170,6 +171,7 @@ export function AccountsTab({
   selectedAccountId,
   initialPage = "connection",
   onSelectAccount,
+  onReturnToAccounts,
   onOpenOutbox,
   beforeNavigate,
   onConnectionDirty,
@@ -287,6 +289,7 @@ export function AccountsTab({
                   <button
                     type="button"
                     className="account-overview-row"
+                    data-settings-account-id={account.id}
                     aria-label={strings.settings.manageAccount(name)}
                     onClick={() => {
                       setPage("connection");
@@ -339,7 +342,10 @@ export function AccountsTab({
             type="button"
             onClick={() => {
               void beforeNavigate().then((leave) => {
-                if (leave) onSelectAccount(undefined);
+                if (leave) {
+                  onReturnToAccounts(selectedAccountId);
+                  onSelectAccount(undefined);
+                }
               });
             }}
           >

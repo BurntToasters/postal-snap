@@ -71,6 +71,41 @@ const tabs: Array<{
   { id: "about", label: strings.settings.about, icon: Info },
 ];
 
+function revealFocusedSettingsRow(target: HTMLElement, content: HTMLElement) {
+  const row = target.closest<HTMLElement>(".settings-row, .switch-row");
+  const dialog = content.closest<HTMLElement>(".settings-window");
+  if (!row || !dialog || !content.contains(row)) return;
+
+  let scroller: HTMLElement | undefined;
+  for (
+    let ancestor = row.parentElement;
+    ancestor && dialog.contains(ancestor);
+    ancestor = ancestor.parentElement
+  ) {
+    const overflowY = window.getComputedStyle(ancestor).overflowY;
+    if (
+      (overflowY === "auto" || overflowY === "scroll") &&
+      ancestor.scrollHeight > ancestor.clientHeight
+    ) {
+      scroller = ancestor;
+      break;
+    }
+  }
+  if (!scroller) return;
+
+  const viewport = scroller.getBoundingClientRect();
+  const rowBounds = row.getBoundingClientRect();
+  if (rowBounds.height > scroller.clientHeight) return;
+
+  const visibleTop = viewport.top + scroller.clientTop;
+  const visibleBottom = visibleTop + scroller.clientHeight;
+  if (rowBounds.top < visibleTop) {
+    scroller.scrollTop -= visibleTop - rowBounds.top;
+  } else if (rowBounds.bottom > visibleBottom) {
+    scroller.scrollTop += rowBounds.bottom - visibleBottom;
+  }
+}
+
 export function SettingsDialog({
   onClose,
   initialTab = "general",
@@ -90,6 +125,9 @@ export function SettingsDialog({
   const [saveError, setSaveError] = useState("");
   const [searchTarget, setSearchTarget] = useState<string>();
   const discardBusy = useRef(false);
+  const accountFocusRequest = useRef<
+    { action: "detail" | "list"; accountId: string } | undefined
+  >(undefined);
   const { saving, update } = useSettingsSave((cause) =>
     setSaveError(String(cause)),
   );
@@ -178,6 +216,7 @@ export function SettingsDialog({
     confirmToken,
     setConfirmToken,
     confirmInputRef,
+    threatSwitchRef,
     cancelThreatOff,
     setAdvertisingBlocking,
     setThreatBlocking,
@@ -283,6 +322,10 @@ export function SettingsDialog({
             .includes(term),
         ),
     );
+  const settingsContentLabel = query.trim()
+    ? strings.settings.search
+    : (tabs.find((item) => item.id === tab)?.label ??
+      strings.settings.sections);
   async function openSearchResult(
     entry: (typeof settingsSearchEntries)[number],
   ) {
@@ -355,6 +398,70 @@ export function SettingsDialog({
   useEffect(() => {
     if (settingsContentRef.current) settingsContentRef.current.scrollTop = 0;
   }, [tab]);
+
+  useEffect(() => {
+    const content = settingsContentRef.current;
+    if (!content) return;
+    const contentElement: HTMLDivElement = content;
+    let frame = 0;
+    function revealRow(event: FocusEvent) {
+      const target = event.target;
+      if (
+        !(target instanceof HTMLElement) ||
+        !target.closest(".settings-row, .switch-row")
+      ) {
+        return;
+      }
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+        if (document.activeElement === target) {
+          revealFocusedSettingsRow(target, contentElement);
+        }
+      });
+    }
+    contentElement.addEventListener("focusin", revealRow);
+    return () => {
+      contentElement.removeEventListener("focusin", revealRow);
+      window.cancelAnimationFrame(frame);
+    };
+  }, []);
+
+  useEffect(() => {
+    const request = accountFocusRequest.current;
+    if (!request) return;
+    if (
+      tab !== "accounts" ||
+      query.trim() ||
+      searchTarget ||
+      (request.action === "detail" &&
+        selectedAccountId !== request.accountId) ||
+      (request.action === "list" && selectedAccountId)
+    ) {
+      accountFocusRequest.current = undefined;
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      if (accountFocusRequest.current !== request) return;
+      const content = settingsContentRef.current;
+      const target =
+        request.action === "detail"
+          ? content?.querySelector<HTMLElement>(
+              ".account-detail-nav button.active",
+            )
+          : Array.from(
+              content?.querySelectorAll<HTMLButtonElement>(
+                ".account-overview-row",
+              ) ?? [],
+            ).find(
+              (button) =>
+                button.dataset.settingsAccountId === request.accountId,
+            );
+      accountFocusRequest.current = undefined;
+      target?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [query, requestedAccountPage, searchTarget, selectedAccountId, tab]);
 
   function moveTab(event: KeyboardEvent<HTMLButtonElement>, index: number) {
     const directionKeys = horizontalTabs
@@ -473,7 +580,7 @@ export function SettingsDialog({
                 role="tab"
                 aria-label={label}
                 aria-selected={tab === id}
-                aria-controls={`settings-${id}`}
+                aria-controls={!query.trim() ? `settings-${id}` : undefined}
                 tabIndex={tab === id ? 0 : -1}
                 className={tab === id ? "active" : ""}
                 onClick={(event) => {
@@ -490,7 +597,13 @@ export function SettingsDialog({
               </button>
             ))}
           </nav>
-          <div className="settings-content" ref={settingsContentRef}>
+          <div
+            className="settings-content"
+            ref={settingsContentRef}
+            role="region"
+            aria-label={settingsContentLabel}
+            tabIndex={0}
+          >
             {query.trim() ? (
               <div className="settings-search-results">
                 {results.length ? (
@@ -549,8 +662,20 @@ export function SettingsDialog({
                     selectedAccountId={selectedAccountId}
                     initialPage={requestedAccountPage}
                     onSelectAccount={(id) => {
+                      if (id) {
+                        accountFocusRequest.current = {
+                          action: "detail",
+                          accountId: id,
+                        };
+                      }
                       setSelectedAccountId(id);
                       setRequestedAccountPage("connection");
+                    }}
+                    onReturnToAccounts={(accountId) => {
+                      accountFocusRequest.current = {
+                        action: "list",
+                        accountId,
+                      };
                     }}
                     onOpenOutbox={(accountId) => {
                       void openAccountOutbox(accountId);
@@ -622,6 +747,7 @@ export function SettingsDialog({
                     update={update}
                     setAdvertisingBlocking={setAdvertisingBlocking}
                     setThreatBlocking={setThreatBlocking}
+                    threatSwitchRef={threatSwitchRef}
                   />
                 ) : null}
                 {tab === "about" ? <AboutTab /> : null}

@@ -13,6 +13,7 @@ export function useSettingsThreatProtection({ update }: Options) {
   const [confirmThreatOff, setConfirmThreatOff] = useState(false);
   const [confirmToken, setConfirmToken] = useState("");
   const confirmInputRef = useRef<HTMLInputElement>(null);
+  const threatSwitchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!confirmThreatOff) return;
@@ -23,6 +24,7 @@ export function useSettingsThreatProtection({ update }: Options) {
   const cancelThreatOff = useCallback(() => {
     setConfirmThreatOff(false);
     setConfirmToken("");
+    window.requestAnimationFrame(() => threatSwitchRef.current?.focus());
   }, []);
 
   async function setAdvertisingBlocking(enabled: boolean) {
@@ -59,6 +61,7 @@ export function useSettingsThreatProtection({ update }: Options) {
     confirmToken,
     setConfirmToken,
     confirmInputRef,
+    threatSwitchRef,
     cancelThreatOff,
     setAdvertisingBlocking,
     setThreatBlocking,
