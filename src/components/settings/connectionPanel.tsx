@@ -11,6 +11,7 @@ import type {
 } from "../../types";
 import { ServerFields } from "../setup/serverFields";
 import { BridgeCertificateControl } from "./bridgeCertificate";
+import { SettingsGroup } from "./primitives";
 
 export function ConnectionPanel({
   account,
@@ -321,8 +322,9 @@ export function FoldersPanel({
           </button>
         </div>
       ) : null}
-      {loadState === "ready"
-        ? assignments.map((assignment) => (
+      {loadState === "ready" && assignments.length > 0 ? (
+        <SettingsGroup>
+          {assignments.map((assignment) => (
             <label className="settings-row" key={assignment.role}>
               <span>
                 <strong>
@@ -357,8 +359,9 @@ export function FoldersPanel({
                   ))}
               </select>
             </label>
-          ))
-        : null}
+          ))}
+        </SettingsGroup>
+      ) : null}
       {status ? <p role="status">{status}</p> : null}
       {saveError ? <p role="alert">{saveError}</p> : null}
     </div>

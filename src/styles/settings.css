@@ -4,27 +4,30 @@
   min-height: 0;
   flex: 1;
   grid-template-columns: minmax(0, var(--settings-nav-width)) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas:
+    "nav search"
+    "nav content";
 }
 
 .settings-nav {
+  grid-area: nav;
   display: grid;
   align-content: start;
-  gap: 3px;
+  gap: var(--settings-nav-gap);
   min-height: 0;
   padding: var(--space-3) var(--space-2);
   overflow-y: auto;
-  border-right: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
-  background: var(--surface-muted);
-  box-shadow: inset -1px 0 0
-    color-mix(in srgb, var(--surface-highlight) 50%, transparent);
+  border-right: 1px solid var(--border);
+  background: var(--sidebar-bg);
 }
 
 .settings-nav button {
   display: flex;
   min-height: var(--target-size);
   align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
+  gap: var(--space-2);
+  padding: var(--control-pad-block) var(--space-3);
   font-size: 0.92rem;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
@@ -40,8 +43,8 @@
 
 .settings-nav button.active {
   color: var(--text);
-  border-color: color-mix(in srgb, var(--accent) 26%, transparent);
-  background: var(--surface-muted);
+  border-color: transparent;
+  background: var(--sidebar-selection);
   font-weight: 650;
   box-shadow:
     inset 0 1px 0 var(--surface-highlight),
@@ -51,45 +54,93 @@
 .settings-nav svg {
   width: 1.1875rem;
   height: 1.1875rem;
-}
-
-.settings-nav button.active svg {
   color: var(--accent);
 }
 
 .settings-content {
+  grid-area: content;
   min-height: 0;
-  padding: var(--space-5) var(--space-6);
+  min-width: 0;
+  padding: var(--settings-page-pad-block) var(--settings-page-pad-inline);
   overflow-y: auto;
-  background: color-mix(in srgb, var(--surface) 84%, var(--surface-sunken));
+  background: var(--surface);
 }
 
 .settings-panel {
+  --settings-block-gap: var(--settings-stack-gap);
   display: grid;
-  gap: 18px;
+  gap: var(--settings-block-gap);
 }
 
 .settings-section {
+  --settings-block-gap: var(--settings-label-gap);
   display: grid;
-  gap: 12px;
+  gap: var(--settings-block-gap);
 }
 
-.settings-section
-  > :is(.settings-row, .switch-row)
-  + :is(.settings-row, .switch-row) {
-  margin-top: -13px;
-  border-top-left-radius: 0;
-  border-top-right-radius: 0;
+.settings-group {
+  display: grid;
+  border-radius: var(--radius-md);
+  background: var(--fill);
 }
 
-.settings-section
-  > :is(.settings-row, .switch-row):has(+ :is(.settings-row, .switch-row)) {
-  border-bottom-right-radius: 0;
-  border-bottom-left-radius: 0;
+.settings-group > :is(.settings-row, .switch-row, .shortcut-row) {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.settings-group > :first-child {
+  border-top-left-radius: var(--radius-md);
+  border-top-right-radius: var(--radius-md);
+}
+
+.settings-group > :last-child {
+  border-bottom-left-radius: var(--radius-md);
+  border-bottom-right-radius: var(--radius-md);
+}
+
+.settings-group > :not(:first-child) {
+  border-top: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
+}
+
+.settings-link-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: var(--target-size);
+  padding: var(--settings-row-pad-block) var(--settings-row-pad-inline);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.settings-link-row:hover {
+  background: var(--fill-hover);
+}
+
+.settings-link-row:disabled {
+  cursor: default;
+  opacity: 0.65;
+}
+
+.settings-group > p {
+  margin: 0;
+  padding: var(--settings-row-pad-block) var(--settings-row-pad-inline);
+}
+
+.settings-row-error {
+  color: var(--danger-ink);
+  font-weight: 650;
 }
 
 .settings-section > h3 {
-  margin: 4px 0 0;
+  margin: 0;
   font-size: 0.78rem;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -103,12 +154,18 @@
   line-height: 1.5;
 }
 
-.settings-warning {
-  padding: 14px 16px;
+.settings-warning,
+.security-summary.warning,
+.settings-data-card.danger-card,
+.account-error {
   border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
-  border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--danger) 10%, var(--surface));
   color: var(--danger-ink);
+}
+
+.settings-warning {
+  padding: var(--settings-row-pad-block) var(--settings-row-pad-inline);
+  border-radius: var(--radius-md);
   font-weight: 600;
   line-height: 1.45;
 }
@@ -122,7 +179,7 @@
 }
 
 .settings-panel h2 {
-  margin: 0 0 4px;
+  margin: 0;
   font-size: 1.15rem;
   letter-spacing: -0.02em;
 }
@@ -132,28 +189,20 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
-  padding: 16px;
-  border: 1px solid var(--border);
+  gap: var(--space-3);
+  padding: var(--settings-row-pad-block) var(--settings-row-pad-inline);
+  border: 0;
   border-radius: var(--radius-md);
-  background: var(--surface-muted);
-  box-shadow:
-    var(--shadow-card),
-    inset 0 1px 0 var(--surface-highlight);
+  background: var(--fill);
 }
 
 .security-summary > span,
 .storage-card > span {
-  flex: 1 1 220px;
+  flex: 1 1 var(--settings-control-width);
 }
 
 .security-summary svg {
   color: var(--success);
-}
-
-.security-summary.warning {
-  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
-  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
 }
 
 .security-summary.warning svg {
@@ -165,18 +214,19 @@
   inset: 0;
   z-index: 4;
   display: grid;
-  place-items: center;
-  padding: 20px;
+  place-items: safe center;
+  overflow: auto;
+  padding: var(--space-5);
   background: var(--scrim);
 }
 
 .settings-confirm-card {
   position: relative;
   z-index: 1;
-  width: min(440px, 100%);
+  width: min(var(--settings-confirm-width), 100%);
   display: grid;
-  gap: 12px;
-  padding: 20px;
+  gap: var(--space-3);
+  padding: var(--space-5);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--surface);
@@ -195,7 +245,7 @@
 
 .settings-confirm-field {
   display: grid;
-  gap: 6px;
+  gap: var(--space-2);
   font-weight: 600;
 }
 
@@ -206,43 +256,35 @@
 .settings-confirm-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--space-2);
   justify-content: flex-end;
 }
 
 .settings-data-card {
   display: grid;
-  gap: 12px;
-  padding: 16px;
-  border: 1px solid var(--border);
+  gap: var(--space-3);
+  padding: var(--settings-row-pad-block) var(--settings-row-pad-inline);
+  border: 0;
   border-radius: var(--radius-md);
-  background: var(--surface-muted);
-  box-shadow:
-    var(--shadow-card),
-    inset 0 1px 0 var(--surface-highlight);
-}
-
-.settings-data-card.danger-card {
-  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
-  background: color-mix(in srgb, var(--danger) 8%, var(--surface-muted));
+  background: var(--fill);
 }
 
 .settings-data-card > div:first-child,
 .settings-empty-state {
   display: grid;
-  gap: 4px;
+  gap: var(--space-1);
 }
 
 .settings-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .settings-actions button {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
 }
 
 .settings-actions svg,
@@ -251,8 +293,8 @@
   height: 1.0625rem;
 }
 
-.settings-data-status {
-  color: var(--success-ink) !important;
+.settings-panel .settings-data-status {
+  color: var(--success-ink);
   font-weight: 700;
 }
 
@@ -277,39 +319,46 @@
 }
 
 .settings-note {
-  margin: -8px 0 0;
+  margin: 0;
   font-size: 0.85rem;
   line-height: 1.45;
+}
+
+:is(.settings-panel, .account-settings-card) > * + .settings-note {
+  margin-top: calc(var(--settings-label-gap) - var(--settings-block-gap));
 }
 
 /* Account settings card and aliases */
 .account-settings-list {
   display: grid;
-  gap: 14px;
+  gap: var(--space-4);
 }
 
 .account-settings-card {
+  --settings-block-gap: var(--settings-stack-gap);
   display: grid;
-  gap: 12px;
-  padding: 16px;
-  border: 1px solid var(--border);
+  gap: var(--settings-block-gap);
+  padding: 0;
+  border: 0;
   border-radius: var(--radius-md);
-  background: var(--surface-muted);
-  box-shadow:
-    var(--shadow-card),
-    inset 0 1px 0 var(--surface-highlight);
+  background: var(--surface);
+  box-shadow: none;
+}
+
+.account-connection-healthy {
+  color: var(--success);
 }
 
 .account-card-header {
   display: flex;
   align-items: flex-start;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 .account-card-info {
   display: grid;
-  gap: 2px;
+  gap: var(--space-1);
   flex: 1;
   min-width: 0;
 }
@@ -318,15 +367,12 @@
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--space-2);
 }
 .account-error {
   margin: 0;
-  padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
+  padding: var(--settings-row-pad-block) var(--settings-row-pad-inline);
   border-radius: var(--radius-sm);
-  color: var(--danger);
-  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
   font-size: 0.86rem;
   font-weight: 600;
   line-height: 1.45;
@@ -334,7 +380,6 @@
 
 .account-password-section {
   display: grid;
-  gap: 6px;
 }
 
 .account-password-section > label {
@@ -347,7 +392,7 @@
 }
 
 .signature-form textarea {
-  flex: 1 1 200px;
+  flex: 1 1 var(--settings-field-min-width);
   min-width: 0;
   min-height: var(--settings-signature-min-height);
   resize: vertical;
@@ -419,23 +464,20 @@
 
 .account-aliases-section {
   display: grid;
-  gap: 10px;
-  padding-top: 14px;
-  border-top: 1px solid var(--border);
 }
 
 .aliases-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--space-3);
   flex-wrap: wrap;
 }
 
 .aliases-header > div {
   display: grid;
-  gap: 4px;
-  flex: 1 1 220px;
+  gap: var(--space-1);
+  flex: 1 1 var(--settings-field-min-width);
   min-width: 0;
 }
 
@@ -445,14 +487,10 @@
   line-height: 1.35;
 }
 
-.aliases-header .settings-note {
-  margin: 0;
-}
-
 .detect-aliases-button {
   font-size: 0.84rem;
   min-height: var(--target-size);
-  padding: 8px 14px;
+  padding: var(--space-2) var(--space-3);
   white-space: nowrap;
   flex-shrink: 0;
 }
@@ -469,15 +507,15 @@
 .aliases-list {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .alias-chip {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
   min-height: var(--settings-chip-height);
-  padding: 4px 10px;
+  padding: var(--space-1) var(--space-3);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface-muted);
@@ -509,10 +547,10 @@
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
-  padding: 0 4px;
+  padding: 0 var(--space-1);
   font-size: 1.15rem;
   line-height: 1;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
 }
 
 .alias-chip button:hover {
@@ -521,19 +559,19 @@
 
 .add-alias-form {
   display: flex;
-  gap: 8px;
+  gap: var(--space-2);
   align-items: center;
   flex-wrap: wrap;
 }
 
 .add-alias-form input {
-  flex: 1 1 200px;
+  flex: 1 1 var(--settings-field-min-width);
   min-width: 0;
 }
 
 .add-alias-form button {
   min-height: var(--target-size);
-  padding: 8px 16px;
+  padding: var(--space-2) var(--space-4);
   font-size: 0.88rem;
 }
 
@@ -541,12 +579,11 @@
 .update-ready-card {
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 16px 20px;
+  gap: var(--space-4);
+  padding: var(--settings-row-pad-block) var(--settings-row-pad-inline);
   border: 1px solid var(--accent);
   border-radius: var(--radius-md);
   background: var(--accent-soft);
-  margin-bottom: 16px;
 }
 
 .update-ready-icon svg {
@@ -557,19 +594,19 @@
 
 .update-ready-body {
   display: grid;
-  gap: 4px;
+  gap: var(--space-1);
   flex: 1;
 }
 
 .update-ready-body p {
-  margin: 0 0 8px;
+  margin: 0 0 var(--space-2);
   font-size: 0.88rem;
   color: var(--text);
 }
 
 .shortcuts-list {
   display: grid;
-  gap: 8px;
+  gap: 0;
 }
 
 .shortcut-row {
@@ -577,34 +614,34 @@
   min-height: var(--bar-height-sm);
   align-items: center;
   justify-content: space-between;
-  padding: 10px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-muted);
+  padding: var(--settings-row-pad-block) var(--settings-row-pad-inline);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .shortcut-row kbd {
   display: inline-flex;
-  min-height: 28px;
+  min-height: var(--settings-kbd-min-height);
   align-items: center;
-  padding: 2px 8px;
+  padding: var(--space-1) var(--space-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-xs);
   font-family: inherit;
   font-size: 0.85rem;
   font-weight: 600;
   background: var(--surface);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  box-shadow: var(--shadow-control);
 }
 
 /* Mail-rule form: label above each field, with room between fields. */
 .rule-form {
   display: grid;
-  gap: 6px;
+  gap: var(--space-2);
 }
 
 .rule-form > label {
-  margin-top: 10px;
+  margin-top: var(--settings-label-gap);
   font-weight: 650;
 }
 
@@ -612,42 +649,9 @@
   margin-top: 0;
 }
 
-.image-sender-panel {
-  flex-direction: column;
-  align-items: stretch;
-}
-
-.image-sender-panel .settings-note {
-  margin: 0;
-}
-
-.image-sender-list {
-  display: grid;
-  gap: 8px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.image-sender-list li {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.image-sender-list button {
-  min-height: var(--target-size);
-  padding-inline: 14px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-pill);
-  background: var(--surface);
-}
-
 .rule-list {
   display: grid;
-  gap: 8px;
+  gap: var(--space-2);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -657,7 +661,7 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .rule-item-text {
@@ -670,7 +674,7 @@
 .rule-form-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 /* One titled section per job in the account card: password, signature,
@@ -681,9 +685,10 @@
     .account-rules-section,
     .account-aliases-section
   ) {
+  --settings-block-gap: var(--settings-label-gap);
   display: grid;
-  gap: 8px;
-  padding-top: 14px;
+  gap: var(--settings-block-gap);
+  padding-top: var(--settings-row-pad-block);
   border-top: 1px solid var(--border);
 }
 
@@ -694,10 +699,13 @@
 }
 
 .settings-search {
+  grid-area: search;
   display: flex;
+  align-items: center;
   gap: var(--space-2);
-  padding: var(--space-3) var(--space-5);
-  border-bottom: 1px solid var(--border);
+  min-width: 0;
+  padding-block: var(--settings-search-pad-block) var(--settings-search-pad-end);
+  padding-inline: var(--settings-page-pad-inline);
 }
 .settings-search input {
   min-width: 0;
@@ -711,8 +719,9 @@
 }
 .settings-section-select {
   display: none;
+  grid-area: select;
   gap: var(--space-2);
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-3) var(--settings-page-pad-inline);
   border-bottom: 1px solid var(--border);
   min-width: 0;
 }
@@ -804,15 +813,11 @@
   border-color: var(--accent);
   color: var(--accent-ink);
 }
-.account-settings-card {
-  box-shadow: none;
-  background: var(--surface);
-}
 .connection-panel,
 .connection-panel form,
 .bridge-certificate-control {
   display: grid;
-  gap: var(--space-4);
+  gap: var(--settings-block-gap, var(--settings-stack-gap));
   min-width: 0;
 }
 .settings-load-error,
@@ -834,7 +839,7 @@
 }
 .connection-fields {
   display: grid;
-  gap: var(--space-4);
+  gap: var(--settings-block-gap, var(--settings-stack-gap));
   padding: 0;
   border: 0;
   min-width: 0;
@@ -842,12 +847,17 @@
 .connection-fields fieldset {
   min-width: 0;
   margin: 0;
-  padding: var(--space-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  padding: var(--settings-row-pad-block) var(--settings-row-pad-inline);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--fill);
+}
+.connection-fields legend {
+  padding: 0;
 }
 .connection-fields .server-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
 }
 .connection-fields input,
 .connection-fields select {
@@ -865,24 +875,7 @@
   overflow-wrap: anywhere;
   font-family: ui-monospace, monospace;
 }
-.settings-section > :is(.settings-row, .switch-row) {
-  box-shadow: none;
-  background: var(--surface);
-}
 @media (max-width: 760px) {
-  .settings-layout {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr);
-  }
-  .settings-nav {
-    display: none;
-  }
-  .settings-section-select {
-    display: grid;
-  }
-  .settings-content {
-    padding: var(--space-4);
-  }
   .settings-search-result {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -912,5 +905,14 @@ html[data-text-scale="large"] .connection-fields .server-grid {
   .signature-editor .tiptap:focus-visible,
   .signature-editor-toolbar button:focus-visible {
     outline-color: Highlight;
+  }
+
+  .settings-group {
+    border: 1px solid CanvasText;
+  }
+
+  .settings-row-error {
+    border: 1px solid Highlight;
+    color: Highlight;
   }
 }

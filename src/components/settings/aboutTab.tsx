@@ -5,7 +5,7 @@ import { version as appVersion } from "../../../package.json";
 import type { LicenseCredits } from "../../types";
 import { inspectAndOpenExternalLink } from "../externalLink";
 import { CreditsDialog } from "./creditsDialog";
-import { SettingsPanel } from "./primitives";
+import { SettingsGroup, SettingsPanel } from "./primitives";
 
 export function AboutTab() {
   const [credits, setCredits] = useState<LicenseCredits | null>(null);
@@ -29,12 +29,12 @@ export function AboutTab() {
 
   return (
     <SettingsPanel id="about" title={strings.settings.about}>
-      <p className="settings-lead">{strings.settings.aboutLead}</p>
-      <p>{strings.settings.aboutVersion(appVersion)}</p>
-      <p>
+      <SettingsGroup>
+        <p className="settings-lead">{strings.settings.aboutLead}</p>
+        <p>{strings.settings.aboutVersion(appVersion)}</p>
         <button
           type="button"
-          className="text-button"
+          className="settings-link-row"
           onClick={() =>
             void inspectAndOpenExternalLink(
               "https://github.com/BurntToasters/postal-snap",
@@ -43,20 +43,16 @@ export function AboutTab() {
         >
           {strings.settings.aboutSource}
         </button>
-      </p>
-      <p>
         <button
           type="button"
-          className="text-button"
+          className="settings-link-row"
           disabled={loadingCredits}
           onClick={() => void openCredits()}
         >
           {strings.settings.aboutLicense}
         </button>
-      </p>
-      <p>
-        <small>{strings.settings.aboutFilters}</small>
-      </p>
+      </SettingsGroup>
+      <p className="settings-note">{strings.settings.aboutFilters}</p>
       {credits ? (
         <CreditsDialog credits={credits} onClose={() => setCredits(null)} />
       ) : null}

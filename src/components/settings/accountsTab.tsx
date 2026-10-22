@@ -388,7 +388,7 @@ export function AccountsTab({
                     {account.email}
                   </small>
                   {testedHealthy === account.id ? (
-                    <small style={{ color: "var(--success)" }}>
+                    <small className="account-connection-healthy">
                       ✓ {strings.settings.connectionHealthy}
                     </small>
                   ) : null}

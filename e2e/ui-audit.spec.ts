@@ -160,12 +160,55 @@ test("account settings are split into titled sections", async ({ page }) => {
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("tab", { name: "Accounts" }).click();
   await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
+  const accountGroup = page
+    .locator(".account-settings-card .settings-group")
+    .first();
+  await expect(accountGroup).toBeVisible();
+  const aligned = await accountGroup.evaluate((group) => {
+    const content = group.closest(".settings-content");
+    const card = group.closest(".account-settings-card");
+    if (!content || !card) return null;
+    const pad = Number.parseFloat(getComputedStyle(content).paddingLeft);
+    return {
+      delta: Math.abs(
+        group.getBoundingClientRect().left -
+          (content.getBoundingClientRect().left + pad),
+      ),
+      cardPad: getComputedStyle(card).padding,
+    };
+  });
+  expect(aligned?.cardPad).toBe("0px");
+  expect(aligned?.delta).toBeLessThanOrEqual(1);
+  const incoming = page.locator(".connection-fields fieldset").first();
+  await expect(incoming).toBeVisible();
+  const rhythm = await incoming.evaluate((node) => {
+    const card = node.closest(".account-settings-card");
+    const panel = node.closest(".connection-panel");
+    if (!card || !panel) return null;
+    const css = getComputedStyle(node);
+    return {
+      sameGap: getComputedStyle(card).rowGap === getComputedStyle(panel).rowGap,
+      border: css.borderTopWidth,
+      image: css.backgroundImage,
+    };
+  });
+  expect(rhythm?.sameGap).toBe(true);
+  expect(rhythm?.border).toBe("0px");
+  expect(rhythm?.image).toBe("none");
   for (const name of ["Connection", "Folders", "Identity", "Rules"]) {
     await expect(page.getByRole("button", { name, exact: true })).toBeVisible();
   }
   await expect(
     page.getByRole("button", { name: "Back to accounts", exact: true }),
   ).toBeVisible();
+  await page.getByRole("button", { name: "Identity", exact: true }).click();
+  const aliasNote = page.locator(".aliases-header .settings-note");
+  await expect(aliasNote).toBeVisible();
+  expect(
+    await aliasNote.evaluate((node) =>
+      parseFloat(getComputedStyle(node).marginTop),
+    ),
+  ).toBeGreaterThanOrEqual(0);
   await page.getByRole("button", { name: "Rules", exact: true }).click();
   await expect(page.getByLabel("Rule name")).toBeVisible();
   await page.screenshot({ path: "test-results/ui-audit-accounts.png" });

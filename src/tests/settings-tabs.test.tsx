@@ -304,8 +304,14 @@ describe("small settings tabs", () => {
     expect(update.mock.calls).toEqual([
       [{ quietHoursStart: "22:00", quietHoursEnd: "07:00" }],
     ]);
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      strings.settings.quietHoursSame,
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent(strings.settings.quietHoursSame);
+    expect(alert).toHaveClass("settings-row-error");
+    expect(alert.previousElementSibling).toHaveTextContent(
+      strings.settings.quietHours,
+    );
+    expect(alert.nextElementSibling).toHaveTextContent(
+      strings.settings.privateNotifications,
     );
   });
 
@@ -317,6 +323,11 @@ describe("small settings tabs", () => {
         <ReadingTab update={update} />
       </>,
     );
+    expect(
+      screen.getAllByRole("heading", {
+        name: strings.settings.appearanceTitle,
+      }),
+    ).toHaveLength(1);
     fireEvent.change(
       screen.getByRole("combobox", { name: strings.settings.readingPane }),
       { target: { value: "bottom" } },
@@ -366,11 +377,11 @@ describe("small settings tabs", () => {
     });
     const update = vi.fn().mockResolvedValue(undefined);
     render(<ReadingTab update={update} />);
-    expect(
-      screen.getByText(
-        "Remote images load only when you choose Load images in a message.",
-      ),
-    ).toBeVisible();
+    const imagePolicy = screen.getByText(
+      "Remote images load only when you choose Load images in a message.",
+    );
+    expect(imagePolicy).toBeVisible();
+    expect(imagePolicy.closest(".settings-row")).toBeNull();
     expect(screen.queryByText("jane@example.test")).toBeNull();
     expect(update).not.toHaveBeenCalled();
   });

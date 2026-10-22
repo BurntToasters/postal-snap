@@ -6,7 +6,7 @@ export function ShortcutsTab() {
   const items = getShortcutsRegistry();
   return (
     <SettingsPanel id="shortcuts" title={strings.settings.shortcutsTitle}>
-      <div className="shortcuts-list">
+      <div className="shortcuts-list settings-group">
         {items.map((item) => (
           <div key={item.id} className="shortcut-row">
             <span>{item.label}</span>

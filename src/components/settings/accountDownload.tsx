@@ -3,7 +3,7 @@ import { api } from "../../api";
 import { formatBytes } from "../../format";
 import { strings } from "../../i18n";
 import type { CachePolicy, CacheUsage } from "../../types";
-import { SettingRow } from "./primitives";
+import { SettingRow, SettingsGroup } from "./primitives";
 
 const recentPolicy: CachePolicy = {
   mode: "recent",
@@ -87,72 +87,78 @@ export function AccountDownloadPanel({ accountId }: { accountId: string }) {
           ? `${formatBytes(usage.bytes)} ${strings.settings.used}`
           : strings.settings.calculating}
       </p>
-      <SettingRow
-        title={strings.settings.cacheMode}
-        help={strings.settings.accountDownloadHelp}
-      >
-        <select
-          aria-label={strings.settings.cacheMode}
-          disabled={busy}
-          value={policy.mode}
-          onChange={(event) => {
-            const mode = event.target.value;
-            void save(
-              mode === "full"
-                ? { mode: "full", days: 0, maxBytes: 0 }
-                : recentPolicy,
-            );
-          }}
-        >
-          <option value="recent">{strings.settings.cacheRecent}</option>
-          <option value="full">{strings.settings.cacheFull}</option>
-        </select>
-      </SettingRow>
-      {policy.mode === "recent" ? (
+      <SettingsGroup>
         <SettingRow
-          title={strings.settings.cacheDays}
+          title={strings.settings.cacheMode}
           help={strings.settings.accountDownloadHelp}
         >
           <select
-            aria-label={strings.settings.cacheDays}
+            aria-label={strings.settings.cacheMode}
             disabled={busy}
-            value={policy.days}
-            onChange={(event) =>
-              void save({ ...policy, days: Number(event.target.value) })
-            }
+            value={policy.mode}
+            onChange={(event) => {
+              const mode = event.target.value;
+              void save(
+                mode === "full"
+                  ? { mode: "full", days: 0, maxBytes: 0 }
+                  : recentPolicy,
+              );
+            }}
           >
-            <option value={30}>{strings.settings.cacheDaysOption(30)}</option>
-            <option value={90}>{strings.settings.cacheDaysOption(90)}</option>
-            <option value={180}>{strings.settings.cacheDaysOption(180)}</option>
-            <option value={365}>{strings.settings.cacheDaysOption(365)}</option>
+            <option value="recent">{strings.settings.cacheRecent}</option>
+            <option value="full">{strings.settings.cacheFull}</option>
           </select>
         </SettingRow>
-      ) : null}
-      <SettingRow
-        title={strings.settings.cacheLimit}
-        help={strings.settings.accountDownloadHelp}
-      >
-        <select
-          aria-label={strings.settings.cacheLimit}
-          disabled={busy || policy.mode === "full"}
-          value={policy.maxBytes}
-          onChange={(event) =>
-            void save({ ...policy, maxBytes: Number(event.target.value) })
-          }
+        {policy.mode === "recent" ? (
+          <SettingRow
+            title={strings.settings.cacheDays}
+            help={strings.settings.accountDownloadHelp}
+          >
+            <select
+              aria-label={strings.settings.cacheDays}
+              disabled={busy}
+              value={policy.days}
+              onChange={(event) =>
+                void save({ ...policy, days: Number(event.target.value) })
+              }
+            >
+              <option value={30}>{strings.settings.cacheDaysOption(30)}</option>
+              <option value={90}>{strings.settings.cacheDaysOption(90)}</option>
+              <option value={180}>
+                {strings.settings.cacheDaysOption(180)}
+              </option>
+              <option value={365}>
+                {strings.settings.cacheDaysOption(365)}
+              </option>
+            </select>
+          </SettingRow>
+        ) : null}
+        <SettingRow
+          title={strings.settings.cacheLimit}
+          help={strings.settings.accountDownloadHelp}
         >
-          {policy.mode === "full" ? (
-            <option value={0}>{strings.settings.cacheUnlimited}</option>
-          ) : (
-            <>
-              <option value={524_288_000}>500 MB</option>
-              <option value={1_073_741_824}>1 GB</option>
-              <option value={2_147_483_648}>2 GB</option>
-              <option value={5_368_709_120}>5 GB</option>
+          <select
+            aria-label={strings.settings.cacheLimit}
+            disabled={busy || policy.mode === "full"}
+            value={policy.maxBytes}
+            onChange={(event) =>
+              void save({ ...policy, maxBytes: Number(event.target.value) })
+            }
+          >
+            {policy.mode === "full" ? (
               <option value={0}>{strings.settings.cacheUnlimited}</option>
-            </>
-          )}
-        </select>
-      </SettingRow>
+            ) : (
+              <>
+                <option value={524_288_000}>500 MB</option>
+                <option value={1_073_741_824}>1 GB</option>
+                <option value={2_147_483_648}>2 GB</option>
+                <option value={5_368_709_120}>5 GB</option>
+                <option value={0}>{strings.settings.cacheUnlimited}</option>
+              </>
+            )}
+          </select>
+        </SettingRow>
+      </SettingsGroup>
       <button
         className="secondary-button"
         type="button"

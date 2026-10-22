@@ -123,13 +123,89 @@ test("settings dialog keeps restrained surfaces", async ({ page }) => {
     await dialog.evaluate((node) => getComputedStyle(node).boxShadow),
   ).not.toBe("none");
   const surfaces = await page.evaluate(() =>
-    [".settings-nav", ".settings-nav button.active"].map(
+    [
+      ".settings-nav",
+      ".settings-nav button.active",
+      ".settings-window > header",
+    ].map(
       (selector) =>
         getComputedStyle(document.querySelector(selector)!).backgroundImage,
     ),
   );
   for (const surface of surfaces) expect(surface).toBe("none");
+  const flatRow = await page.evaluate(() => {
+    const row = document.createElement("div");
+    row.className = "settings-row";
+    row.style.position = "absolute";
+    row.style.visibility = "hidden";
+    document.body.append(row);
+    const css = getComputedStyle(row);
+    const result = {
+      image: css.backgroundImage,
+      shadow: css.boxShadow,
+    };
+    row.remove();
+    return result;
+  });
+  expect(flatRow.image).toBe("none");
+  expect(flatRow.shadow).toBe("none");
   await page.screenshot({ path: "test-results/ui-polish-settings.png" });
+});
+
+test("settings search, groups, and rows fit each density", async ({ page }) => {
+  for (const query of [
+    "density=comfortable&scale=1",
+    "density=compact&scale=1",
+    "density=comfortable&scale=2",
+  ]) {
+    await page.goto(`/?${query}`);
+    await page.getByRole("button", { name: "Settings" }).first().click();
+    await expect(page.locator(".settings-window")).toBeVisible();
+    const placed = await page.evaluate(() => {
+      const nav = document.querySelector(".settings-nav");
+      const search = document.querySelector(".settings-search");
+      const content = document.querySelector(".settings-content");
+      if (!nav || !search || !content) return null;
+      const navBox = nav.getBoundingClientRect();
+      const searchBox = search.getBoundingClientRect();
+      const contentBox = content.getBoundingClientRect();
+      return {
+        searchBesideNav: searchBox.left >= navBox.right - 1,
+        columnsAlign: Math.abs(searchBox.left - contentBox.left) < 1,
+        contentFits: content.scrollWidth <= content.clientWidth + 1,
+      };
+    });
+    expect(placed, query).not.toBeNull();
+    expect(placed?.searchBesideNav, query).toBe(true);
+    expect(placed?.columnsAlign, query).toBe(true);
+    expect(placed?.contentFits, query).toBe(true);
+
+    await page.getByRole("tab", { name: "Reading & Sending" }).click();
+    const readingFits = await page.evaluate(() => {
+      const content = document.querySelector(".settings-content");
+      if (!content) return false;
+      const limit = content.getBoundingClientRect().right + 1;
+      const rows = [
+        ...content.querySelectorAll(
+          ".settings-group :is(.switch-row, .settings-row)",
+        ),
+      ];
+      return (
+        rows.length > 0 &&
+        rows.every((row) => row.getBoundingClientRect().right <= limit)
+      );
+    });
+    expect(readingFits, query).toBe(true);
+
+    await page.getByRole("tab", { name: "About" }).click();
+    await expect(
+      page.getByRole("button", { name: "Source code" }),
+    ).toBeVisible();
+    const slug = query.replaceAll(/[^a-z0-9]+/gi, "-");
+    await page.screenshot({
+      path: `test-results/ui-polish-settings-${slug}.png`,
+    });
+  }
 });
 
 // Failure modes for menus: each popup drifts to its own background, padding,

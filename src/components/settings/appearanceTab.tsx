@@ -7,7 +7,12 @@ import {
   READING_PANE_CHOICES,
   TEXT_SCALE_CHOICES,
 } from "./displayChoices";
-import { SettingRow, SettingsPanel, SettingsSection } from "./primitives";
+import {
+  SettingRow,
+  SettingsGroup,
+  SettingsPanel,
+  SettingsSection,
+} from "./primitives";
 import type { SettingsSaveUpdate } from "./useSettingsSave";
 
 export function AppearanceTab({
@@ -20,7 +25,7 @@ export function AppearanceTab({
   const settings = useAppStore((state) => state.settings);
   return (
     <SettingsPanel id="appearance" title={strings.settings.appearanceTitle}>
-      <SettingsSection title={strings.settings.appearanceTitle}>
+      <SettingsGroup>
         <SettingRow
           title={strings.settings.appearance}
           help={strings.settings.appearanceHelp}
@@ -29,7 +34,9 @@ export function AppearanceTab({
             aria-label={strings.settings.appearance}
             value={settings.theme}
             onChange={(event) =>
-              void update({ theme: event.target.value as AppSettings["theme"] })
+              void update({
+                theme: event.target.value as AppSettings["theme"],
+              })
             }
           >
             {THEME_CHOICES.map((choice) => (
@@ -100,56 +107,58 @@ export function AppearanceTab({
             </option>
           </select>
         </SettingRow>
-      </SettingsSection>
+      </SettingsGroup>
       <SettingsSection title={strings.settings.readingPane}>
-        <SettingRow
-          title={strings.settings.readingPane}
-          help={strings.settings.readingPaneHelp}
-        >
-          <select
-            aria-label={strings.settings.readingPane}
-            value={settings.readingPane}
-            onChange={(event) =>
-              void update({
-                readingPane: event.target.value as AppSettings["readingPane"],
-              })
-            }
+        <SettingsGroup>
+          <SettingRow
+            title={strings.settings.readingPane}
+            help={strings.settings.readingPaneHelp}
           >
-            {READING_PANE_CHOICES.map((choice) => (
-              <option key={choice.value} value={choice.value}>
-                {choice.label}
-              </option>
-            ))}
-          </select>
-        </SettingRow>
-        <label className="switch-row">
-          <span>
-            <strong>{strings.settings.sidebar}</strong>
-            <small>{strings.settings.sidebarHelp}</small>
-          </span>
-          <input
-            type="checkbox"
-            checked={settings.sidebarVisible !== false}
-            onChange={(event) =>
-              void update({ sidebarVisible: event.target.checked })
-            }
-          />
-        </label>
-        {windowFxSupported ? (
+            <select
+              aria-label={strings.settings.readingPane}
+              value={settings.readingPane}
+              onChange={(event) =>
+                void update({
+                  readingPane: event.target.value as AppSettings["readingPane"],
+                })
+              }
+            >
+              {READING_PANE_CHOICES.map((choice) => (
+                <option key={choice.value} value={choice.value}>
+                  {choice.label}
+                </option>
+              ))}
+            </select>
+          </SettingRow>
           <label className="switch-row">
             <span>
-              <strong>{strings.settings.windowEffects}</strong>
-              <small>{strings.settings.windowEffectsHelp}</small>
+              <strong>{strings.settings.sidebar}</strong>
+              <small>{strings.settings.sidebarHelp}</small>
             </span>
             <input
               type="checkbox"
-              checked={settings.windowEffects}
+              checked={settings.sidebarVisible !== false}
               onChange={(event) =>
-                void update({ windowEffects: event.target.checked })
+                void update({ sidebarVisible: event.target.checked })
               }
             />
           </label>
-        ) : null}
+          {windowFxSupported ? (
+            <label className="switch-row">
+              <span>
+                <strong>{strings.settings.windowEffects}</strong>
+                <small>{strings.settings.windowEffectsHelp}</small>
+              </span>
+              <input
+                type="checkbox"
+                checked={settings.windowEffects}
+                onChange={(event) =>
+                  void update({ windowEffects: event.target.checked })
+                }
+              />
+            </label>
+          ) : null}
+        </SettingsGroup>
       </SettingsSection>
     </SettingsPanel>
   );

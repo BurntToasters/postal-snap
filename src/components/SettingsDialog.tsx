@@ -13,6 +13,7 @@ import {
   Info,
   Keyboard,
   Monitor,
+  Palette,
   ShieldAlert,
   UserRound,
   X,
@@ -59,7 +60,7 @@ const tabs: Array<{
   icon: typeof Monitor;
 }> = [
   { id: "general", label: strings.settings.general, icon: Monitor },
-  { id: "appearance", label: strings.settings.appearanceTitle, icon: Monitor },
+  { id: "appearance", label: strings.settings.appearanceTitle, icon: Palette },
   { id: "reading", label: strings.settings.reading, icon: Eye },
   { id: "notifications", label: strings.settings.notifications, icon: Bell },
   { id: "storage", label: strings.settings.storage, icon: Database },
@@ -418,30 +419,30 @@ export function SettingsDialog({
             <X aria-hidden="true" />
           </button>
         </header>
-        <div className="settings-search" inert={confirmThreatOff || undefined}>
-          <input
-            type="search"
-            aria-label={strings.settings.search}
-            placeholder={strings.settings.search}
-            value={query}
-            onChange={(event) => void updateSearch(event.target.value)}
-          />
-          {query ? (
-            <button
-              type="button"
-              className="text-button"
-              onClick={() => setQuery("")}
-            >
-              {strings.settings.clearSearch}
-            </button>
-          ) : null}
-        </div>
         {saveError ? (
           <p className="settings-save-error" role="alert">
             {saveError}
           </p>
         ) : null}
         <div className="settings-layout" inert={confirmThreatOff || undefined}>
+          <div className="settings-search">
+            <input
+              type="search"
+              aria-label={strings.settings.search}
+              placeholder={strings.settings.search}
+              value={query}
+              onChange={(event) => void updateSearch(event.target.value)}
+            />
+            {query ? (
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => setQuery("")}
+              >
+                {strings.settings.clearSearch}
+              </button>
+            ) : null}
+          </div>
           <label className="settings-section-select">
             <span>{strings.settings.sectionSelector}</span>
             <select

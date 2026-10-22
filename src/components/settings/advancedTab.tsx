@@ -2,7 +2,7 @@ import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
 import type { DistributionChannel, UpdateChannel } from "../../types";
 import { onUpdateChannelChanged } from "../../update";
-import { SettingRow, SettingsPanel } from "./primitives";
+import { SettingRow, SettingsGroup, SettingsPanel } from "./primitives";
 import type { SettingsSaveUpdate } from "./useSettingsSave";
 
 interface AdvancedTabProps {
@@ -31,57 +31,59 @@ export function AdvancedTab({
         </span>
       </div>
       <p className="settings-lead">{strings.settings.advancedHelp}</p>
-      <label className="switch-row">
-        <span>
-          <strong>{strings.settings.blockAds}</strong>
-          <small>{strings.settings.blockAdsHelp}</small>
-        </span>
-        <input
-          type="checkbox"
-          checked={advertisingOn}
-          onChange={(event) =>
-            void setAdvertisingBlocking(event.target.checked)
-          }
-        />
-      </label>
-      <label className="switch-row">
-        <span>
-          <strong>{strings.settings.blockThreats}</strong>
-          <small>{strings.settings.blockThreatsHelp}</small>
-        </span>
-        <input
-          type="checkbox"
-          checked={threatsOn}
-          onChange={(event) => void setThreatBlocking(event.target.checked)}
-        />
-      </label>
-      {distribution?.updatesManagedBy === "postalSnap" ? (
-        <SettingRow
-          title={strings.settings.updateChannel}
-          help={strings.settings.updateChannelHelp}
-        >
-          <select
-            aria-label={strings.settings.updateChannel}
-            value={settings.updateChannel}
-            onChange={async (event) => {
-              const before = useAppStore.getState().settings.updateChannel;
-              await update({
-                updateChannel: event.target.value as UpdateChannel,
-              });
-              // A failed save rolls back; keep the downloaded update then.
-              if (useAppStore.getState().settings.updateChannel !== before) {
-                onUpdateChannelChanged();
-              }
-            }}
+      <SettingsGroup>
+        <label className="switch-row">
+          <span>
+            <strong>{strings.settings.blockAds}</strong>
+            <small>{strings.settings.blockAdsHelp}</small>
+          </span>
+          <input
+            type="checkbox"
+            checked={advertisingOn}
+            onChange={(event) =>
+              void setAdvertisingBlocking(event.target.checked)
+            }
+          />
+        </label>
+        <label className="switch-row">
+          <span>
+            <strong>{strings.settings.blockThreats}</strong>
+            <small>{strings.settings.blockThreatsHelp}</small>
+          </span>
+          <input
+            type="checkbox"
+            checked={threatsOn}
+            onChange={(event) => void setThreatBlocking(event.target.checked)}
+          />
+        </label>
+        {distribution?.updatesManagedBy === "postalSnap" ? (
+          <SettingRow
+            title={strings.settings.updateChannel}
+            help={strings.settings.updateChannelHelp}
           >
-            <option value="auto">{strings.settings.updateChannelAuto}</option>
-            <option value="stable">
-              {strings.settings.updateChannelStable}
-            </option>
-            <option value="beta">{strings.settings.updateChannelBeta}</option>
-          </select>
-        </SettingRow>
-      ) : null}
+            <select
+              aria-label={strings.settings.updateChannel}
+              value={settings.updateChannel}
+              onChange={async (event) => {
+                const before = useAppStore.getState().settings.updateChannel;
+                await update({
+                  updateChannel: event.target.value as UpdateChannel,
+                });
+                // A failed save rolls back; keep the downloaded update then.
+                if (useAppStore.getState().settings.updateChannel !== before) {
+                  onUpdateChannelChanged();
+                }
+              }}
+            >
+              <option value="auto">{strings.settings.updateChannelAuto}</option>
+              <option value="stable">
+                {strings.settings.updateChannelStable}
+              </option>
+              <option value="beta">{strings.settings.updateChannelBeta}</option>
+            </select>
+          </SettingRow>
+        ) : null}
+      </SettingsGroup>
       {threatsOn ? null : (
         <div className="settings-warning" role="status">
           {strings.settings.threatOffWarning}

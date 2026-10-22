@@ -79,6 +79,18 @@
   --settings-signature-min-height: 5.5rem;
   --settings-chip-height: 2.25rem;
   --settings-update-icon-size: 2rem;
+  --settings-stack-gap: var(--space-5);
+  --settings-label-gap: var(--space-2);
+  --settings-row-pad-block: var(--space-3);
+  --settings-row-pad-inline: var(--space-4);
+  --settings-copy-gap: var(--space-1);
+  --settings-nav-gap: var(--space-1);
+  --settings-page-pad-inline: var(--space-6);
+  --settings-page-pad-block: var(--space-5);
+  --settings-search-pad-block: var(--space-4);
+  --settings-search-pad-end: 0;
+  --settings-kbd-min-height: 1.75rem;
+  --settings-confirm-width: 27.5rem;
   --control-height: 2.75rem;
   --toolbar-height: 3.75rem;
   /* Density tokens: size UI with these, never literals, so compact
@@ -300,6 +312,11 @@
   --settings-signature-min-height: 4.5rem;
   --settings-chip-height: 2rem;
   --settings-update-icon-size: 1.75rem;
+  --settings-stack-gap: var(--space-4);
+  --settings-label-gap: var(--space-1);
+  --settings-row-pad-block: var(--space-2);
+  --settings-row-pad-inline: var(--space-3);
+  --settings-kbd-min-height: 1.5rem;
   --account-avatar-size: 30px;
   --account-avatar-font-size: min(
     0.9rem,

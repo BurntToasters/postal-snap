@@ -234,13 +234,21 @@
   .settings-layout {
     min-height: 0;
     flex: 1;
-    grid-template-columns: 1fr;
-    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr);
+    grid-template-areas:
+      "search"
+      "select"
+      "content";
   }
 
   .settings-window {
     display: flex;
     flex-direction: column;
+    --settings-page-pad-inline: var(--space-4);
+    --settings-page-pad-block: var(--space-2);
+    --settings-search-pad-block: var(--space-3);
+    --settings-search-pad-end: var(--space-3);
   }
 
   .settings-nav {
@@ -252,7 +260,6 @@
 
   .settings-content {
     max-height: none;
-    padding: 19px;
   }
 
   .format-toolbar {
@@ -297,7 +304,7 @@
   .switch-row {
     align-items: flex-start;
     flex-direction: column;
-    gap: 8px;
+    gap: var(--space-2);
   }
 
   .settings-row select {
@@ -440,7 +447,7 @@
 html[data-text-scale="large"] :is(.settings-row, .switch-row) {
   align-items: flex-start;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 html[data-text-scale="large"] .settings-row select {

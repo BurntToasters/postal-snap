@@ -1,8 +1,9 @@
 import { CloudDownload, Upload } from "lucide-react";
 import { strings } from "../../i18n";
+import { offersCloseToTray } from "../../settings";
 import { useAppStore } from "../../store";
 import { CloseToTraySwitch } from "./closeToTray";
-import { SettingsPanel, SettingsSection } from "./primitives";
+import { SettingsGroup, SettingsPanel, SettingsSection } from "./primitives";
 import type { SettingsSaveUpdate } from "./useSettingsSave";
 import type { SettingsTab } from "./primitives";
 
@@ -27,10 +28,14 @@ export function GeneralTab({
 
   return (
     <SettingsPanel id="general" title={strings.settings.general}>
-      <CloseToTraySwitch
-        checked={settings.closeToTray}
-        onChecked={(checked) => void update({ closeToTray: checked })}
-      />
+      {offersCloseToTray() ? (
+        <SettingsGroup>
+          <CloseToTraySwitch
+            checked={settings.closeToTray}
+            onChecked={(checked) => void update({ closeToTray: checked })}
+          />
+        </SettingsGroup>
+      ) : null}
       <SettingsSection title={strings.settings.settingsData}>
         <div className="settings-data-card">
           <div>

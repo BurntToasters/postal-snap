@@ -176,18 +176,12 @@ legend {
   min-height: var(--settings-row-height);
   align-items: center;
   justify-content: space-between;
-  gap: 18px;
-  padding: 10px 14px;
-  border: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
-  border-radius: var(--radius-sm);
-  background: linear-gradient(
-    145deg,
-    color-mix(in srgb, var(--surface-raised) 92%, var(--surface-highlight)),
-    color-mix(in srgb, var(--surface) 92%, var(--surface-muted))
-  );
-  box-shadow:
-    var(--shadow-card),
-    inset 0 1px 0 var(--surface-highlight);
+  gap: var(--space-4);
+  padding: var(--settings-row-pad-block) var(--settings-row-pad-inline);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .settings-row > span,
@@ -196,7 +190,7 @@ legend {
 .storage-card > span,
 .account-settings-list span {
   display: grid;
-  gap: 3px;
+  gap: var(--settings-copy-gap);
 }
 
 .settings-row select {

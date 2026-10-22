@@ -393,6 +393,18 @@ test("requires typing CONFIRM before reported-threat warnings can be disabled", 
 
   const dialog = page.getByRole("alertdialog");
   await expect(dialog).toBeVisible();
+  const confirmPad = await dialog.evaluate((node) => {
+    document.documentElement.style.fontSize = "32px";
+    const pad = parseFloat(getComputedStyle(node).paddingTop);
+    document.documentElement.style.fontSize = "";
+    return pad;
+  });
+  expect(confirmPad).toBeCloseTo(40, 0);
+  expect(
+    await page
+      .locator(".settings-confirm-overlay")
+      .evaluate((node) => getComputedStyle(node).overflowY),
+  ).toBe("auto");
   const disable = dialog.getByRole("button", { name: "Disable" });
   await expect(disable).toBeDisabled();
   await dialog.getByLabel("Type CONFIRM").fill("CONFIRM");

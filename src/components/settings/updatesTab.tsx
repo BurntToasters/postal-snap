@@ -4,7 +4,7 @@ import { useAppStore } from "../../store";
 import type { DistributionChannel, UpdateCheckInterval } from "../../types";
 import { applyPendingUpdate } from "../../update";
 import { editionName } from "./helpers";
-import { SettingRow, SettingsPanel } from "./primitives";
+import { SettingRow, SettingsGroup, SettingsPanel } from "./primitives";
 import type { SettingsSaveUpdate } from "./useSettingsSave";
 
 interface UpdatesTabProps {
@@ -65,37 +65,39 @@ export function UpdatesTab({
       </div>
       {postalSnapUpdates ? (
         <>
-          <SettingRow
-            title={strings.settings.updateCheckInterval}
-            help={strings.settings.updateCheckIntervalHelp}
-          >
-            <select
-              aria-label={strings.settings.updateCheckInterval}
-              value={settings.updateCheckInterval}
-              onChange={(event) =>
-                void update({
-                  updateCheckInterval: event.target
-                    .value as UpdateCheckInterval,
-                })
-              }
+          <SettingsGroup>
+            <SettingRow
+              title={strings.settings.updateCheckInterval}
+              help={strings.settings.updateCheckIntervalHelp}
             >
-              <option value="startupAnd6h">
-                {strings.settings.updateCheckStartupAnd6h}
-              </option>
-              <option value="startupAnd12h">
-                {strings.settings.updateCheckStartupAnd12h}
-              </option>
-              <option value="startupAnd24h">
-                {strings.settings.updateCheckStartupAnd24h}
-              </option>
-              <option value="startup">
-                {strings.settings.updateCheckStartup}
-              </option>
-              <option value="manual">
-                {strings.settings.updateCheckManual}
-              </option>
-            </select>
-          </SettingRow>
+              <select
+                aria-label={strings.settings.updateCheckInterval}
+                value={settings.updateCheckInterval}
+                onChange={(event) =>
+                  void update({
+                    updateCheckInterval: event.target
+                      .value as UpdateCheckInterval,
+                  })
+                }
+              >
+                <option value="startupAnd6h">
+                  {strings.settings.updateCheckStartupAnd6h}
+                </option>
+                <option value="startupAnd12h">
+                  {strings.settings.updateCheckStartupAnd12h}
+                </option>
+                <option value="startupAnd24h">
+                  {strings.settings.updateCheckStartupAnd24h}
+                </option>
+                <option value="startup">
+                  {strings.settings.updateCheckStartup}
+                </option>
+                <option value="manual">
+                  {strings.settings.updateCheckManual}
+                </option>
+              </select>
+            </SettingRow>
+          </SettingsGroup>
           <button
             className="secondary-button"
             type="button"
