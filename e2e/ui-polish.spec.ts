@@ -584,3 +584,109 @@ test("context menu ignores completed list scrolling and closes on new scrolling"
   await page.screenshot({ path });
   await testInfo.attach("screenshot", { path, contentType: "image/png" });
 });
+
+// Failure modes: time inputs styled as toggles, selects crushed by long
+// help text, full-width buttons, empty grid items, clipped legends,
+// and mixed section title weights.
+test("settings layout has no hijacked inputs, stretched actions, or gaps", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/?multiAccount=1");
+  await page.getByRole("button", { name: "Settings" }).first().click();
+  const report: Record<string, unknown> = {};
+
+  await page.getByRole("tab", { name: "Notifications", exact: true }).click();
+  const times = await page.evaluate(() =>
+    [
+      ...document.querySelectorAll<HTMLInputElement>(
+        ".quiet-hours-times input",
+      ),
+    ].map((node) => ({
+      appearance: getComputedStyle(node).appearance,
+      width: node.getBoundingClientRect().width,
+    })),
+  );
+  expect(times).toHaveLength(2);
+  for (const time of times) {
+    expect(time.appearance).not.toBe("none");
+    expect(time.width).toBeGreaterThanOrEqual(120);
+  }
+  report.quietHours = times;
+
+  const panelChecks = async (tab: string) => {
+    await page.getByRole("tab", { name: tab, exact: true }).click();
+    return page.evaluate(() => {
+      const panel = document.querySelector(".settings-panel");
+      if (!panel) return null;
+      const width = panel.getBoundingClientRect().width;
+      return {
+        selects: [
+          ...panel.querySelectorAll<HTMLElement>(".settings-row select"),
+        ].map((node) => node.getBoundingClientRect().width),
+        emptyChildren: [...panel.children].filter(
+          (node) => node.getBoundingClientRect().height === 0,
+        ).length,
+        stretched: [
+          ...panel.querySelectorAll<HTMLElement>(
+            ":scope > button, .settings-section > button",
+          ),
+        ].filter((node) => node.getBoundingClientRect().width > width * 0.6)
+          .length,
+      };
+    });
+  };
+  for (const tab of ["Storage", "Updates", "Advanced", "Accounts"]) {
+    const result = await panelChecks(tab);
+    expect(result, tab).not.toBeNull();
+    for (const w of result?.selects ?? [])
+      expect(w, tab).toBeGreaterThanOrEqual(180);
+    expect(result?.emptyChildren, tab).toBe(0);
+    expect(result?.stretched, tab).toBe(0);
+    report[tab] = result;
+  }
+
+  await expect(page.getByText("Reset everything")).toBeVisible();
+  await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
+  await expect(page.getByText("Reset everything")).toHaveCount(0);
+  const back = await page
+    .getByRole("button", { name: "Back to accounts" })
+    .boundingBox();
+  expect(back?.width ?? 999).toBeLessThan(300);
+
+  const legend = await page.evaluate(() => {
+    const node = document.querySelector<HTMLElement>(
+      ".connection-fields legend",
+    );
+    const card = node?.closest("fieldset");
+    if (!node || !card) return null;
+    return {
+      legendTop: node.getBoundingClientRect().top,
+      cardTop: card.getBoundingClientRect().top,
+    };
+  });
+  expect(legend).not.toBeNull();
+  expect(legend!.legendTop).toBeGreaterThanOrEqual(legend!.cardTop);
+  report.legend = legend;
+
+  await page.getByRole("button", { name: "Identity", exact: true }).click();
+  const titles = await page.evaluate(() =>
+    [
+      ".account-section-title",
+      ".account-password-section > label",
+      ".signature-editor-label",
+      ".signature-fallback > label",
+    ].flatMap((selector) =>
+      [...document.querySelectorAll(selector)].map((node) => {
+        const css = getComputedStyle(node);
+        return `${css.fontSize}/${css.fontWeight}`;
+      }),
+    ),
+  );
+  expect(new Set(titles).size).toBe(1);
+  report.titles = titles;
+
+  await testInfo.attach("settings-layout-report", {
+    body: JSON.stringify(report, null, 2),
+    contentType: "application/json",
+  });
+});

@@ -132,6 +132,37 @@ html[data-platform="windows"] .app-toolbar {
   top: var(--native-chrome-height);
 }
 
+/* Over the mailbox, the dim covers the title strip too, so the toolbar is
+   not cut across; the transparent strip still drags and holds the caption. */
+html:has(.mail-shell):has(.modal-layer):not(
+    :has(.composer-layer-maximized, .license-credits-layer)
+  )
+  .window-drag-strip {
+  background: transparent;
+}
+
+@media (max-width: 720px) {
+  html:has(.mail-shell):has(.modal-layer):has(
+      .composer-window,
+      .settings-window
+    ):not(:has(.composer-layer-followup))
+    .window-drag-strip {
+    background: var(--surface);
+  }
+}
+
+.modal-layer:not(.composer-layer-maximized, .license-credits-layer)
+  > .modal-backdrop {
+  top: calc(-1 * var(--native-chrome-height));
+  height: calc(100% + var(--native-chrome-height));
+}
+
+.modal-layer.settings-confirm-overlay {
+  position: fixed;
+  z-index: 30;
+  box-shadow: 0 calc(-1 * var(--native-chrome-height)) 0 0 var(--scrim);
+}
+
 .composer-layer-maximized {
   padding: 0;
 }

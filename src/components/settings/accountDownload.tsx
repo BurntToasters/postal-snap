@@ -82,7 +82,7 @@ export function AccountDownloadPanel({ accountId }: { accountId: string }) {
     <div className="settings-section">
       <h3>{strings.settings.accountDownload}</h3>
       <p className="settings-note">{strings.settings.accountDownloadHelp}</p>
-      <p>
+      <p className="settings-note">
         {usage
           ? `${formatBytes(usage.bytes)} ${strings.settings.used}`
           : strings.settings.calculating}
@@ -90,7 +90,7 @@ export function AccountDownloadPanel({ accountId }: { accountId: string }) {
       <SettingsGroup>
         <SettingRow
           title={strings.settings.cacheMode}
-          help={strings.settings.accountDownloadHelp}
+          help={strings.settings.cachePolicyHelp}
         >
           <select
             aria-label={strings.settings.cacheMode}
@@ -110,10 +110,7 @@ export function AccountDownloadPanel({ accountId }: { accountId: string }) {
           </select>
         </SettingRow>
         {policy.mode === "recent" ? (
-          <SettingRow
-            title={strings.settings.cacheDays}
-            help={strings.settings.accountDownloadHelp}
-          >
+          <SettingRow title={strings.settings.cacheDays}>
             <select
               aria-label={strings.settings.cacheDays}
               disabled={busy}
@@ -133,10 +130,7 @@ export function AccountDownloadPanel({ accountId }: { accountId: string }) {
             </select>
           </SettingRow>
         ) : null}
-        <SettingRow
-          title={strings.settings.cacheLimit}
-          help={strings.settings.accountDownloadHelp}
-        >
+        <SettingRow title={strings.settings.cacheLimit}>
           <select
             aria-label={strings.settings.cacheLimit}
             disabled={busy || policy.mode === "full"}

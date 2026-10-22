@@ -1454,8 +1454,9 @@ export function Composer({ accountId, onDraftSaved }: Props) {
             onMouseDown={() => setAttachmentPreview(null)}
           >
             <div
-              className="settings-confirm-dialog compose-image-preview"
+              className="settings-confirm-card compose-image-preview"
               role="dialog"
+              aria-modal="true"
               aria-label={attachmentPreview.filename}
               onMouseDown={(event) => event.stopPropagation()}
             >
@@ -1463,13 +1464,15 @@ export function Composer({ accountId, onDraftSaved }: Props) {
                 src={attachmentPreview.src}
                 alt={attachmentPreview.filename}
               />
-              <button
-                type="button"
-                className="toolbar-button"
-                onClick={() => setAttachmentPreview(null)}
-              >
-                {strings.common.close}
-              </button>
+              <div className="settings-confirm-actions">
+                <button
+                  type="button"
+                  className="toolbar-button"
+                  onClick={() => setAttachmentPreview(null)}
+                >
+                  {strings.common.close}
+                </button>
+              </div>
             </div>
           </div>
         ) : null}
@@ -1477,10 +1480,11 @@ export function Composer({ accountId, onDraftSaved }: Props) {
           <div
             className="settings-confirm-overlay"
             role="dialog"
+            aria-modal="true"
             aria-labelledby="composer-link-title"
           >
             <form
-              className="settings-confirm-dialog"
+              className="settings-confirm-card"
               onSubmit={(event) => {
                 event.preventDefault();
                 applyLink();
@@ -1517,7 +1521,7 @@ export function Composer({ accountId, onDraftSaved }: Props) {
               }}
             >
               <h2 id="composer-link-title">{strings.composer.insertLink}</h2>
-              <label>
+              <label className="settings-confirm-field">
                 <span>{strings.composer.webAddress}</span>
                 <input
                   autoFocus

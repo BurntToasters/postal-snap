@@ -736,7 +736,7 @@ export function SetupWizard({
         {provider === "manual" ? (
           <button
             type="button"
-            className="secondary-button full-button"
+            className="secondary-button setup-discover-button"
             disabled={discovering || !email.trim()}
             onClick={() => void discoverSettings()}
           >

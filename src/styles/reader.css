@@ -602,10 +602,13 @@ html[data-reduce-transparency="true"] .reader-actions {
   padding: 8px var(--reader-pad-inline);
   border-bottom: 1px solid var(--border);
   background: var(--surface-muted);
+  flex-wrap: wrap;
 }
 
 .message-find input {
-  flex: 1;
+  flex: 1 1 6rem;
+  width: auto;
+  min-width: 6rem;
   min-height: var(--target-size);
 }
 

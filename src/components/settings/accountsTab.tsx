@@ -273,59 +273,65 @@ export function AccountsTab({
         </div>
       ) : null}
       {!selectedAccountId ? (
-        <div className="account-overview">
-          {orderError ? <p role="alert">{orderError}</p> : null}
-          {accounts.map((account, index) => {
-            const name = account.displayName || account.email;
-            return (
-              <div key={account.id} className="account-overview-item">
-                <button
-                  type="button"
-                  className="account-overview-row"
-                  aria-label={strings.settings.manageAccount(name)}
-                  onClick={() => {
-                    setPage("connection");
-                    onSelectAccount(account.id);
-                  }}
-                >
-                  <Mail aria-hidden="true" />
-                  <span>
-                    <strong>{name}</strong>
-                    <small>{account.email}</small>
-                    {account.error ? (
-                      <small role="alert">{account.error}</small>
-                    ) : null}
-                  </span>
-                  <SyncStatus account={account} sync={undefined} />
-                </button>
-                {accounts.length > 1 ? (
-                  <div className="account-overview-order">
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      aria-label={strings.settings.moveAccountUp(name)}
-                      disabled={Boolean(movingId) || index === 0}
-                      onClick={() => void moveAccount(account.id, -1)}
-                    >
-                      {strings.settings.moveUp}
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      aria-label={strings.settings.moveAccountDown(name)}
-                      disabled={
-                        Boolean(movingId) || index === accounts.length - 1
-                      }
-                      onClick={() => void moveAccount(account.id, 1)}
-                    >
-                      {strings.settings.moveDown}
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-            );
-          })}
-        </div>
+        accounts.length > 0 ? (
+          <div className="account-overview">
+            {orderError ? (
+              <p className="settings-error-message" role="alert">
+                {orderError}
+              </p>
+            ) : null}
+            {accounts.map((account, index) => {
+              const name = account.displayName || account.email;
+              return (
+                <div key={account.id} className="account-overview-item">
+                  <button
+                    type="button"
+                    className="account-overview-row"
+                    aria-label={strings.settings.manageAccount(name)}
+                    onClick={() => {
+                      setPage("connection");
+                      onSelectAccount(account.id);
+                    }}
+                  >
+                    <Mail aria-hidden="true" />
+                    <span>
+                      <strong>{name}</strong>
+                      <small>{account.email}</small>
+                      {account.error ? (
+                        <small role="alert">{account.error}</small>
+                      ) : null}
+                    </span>
+                    <SyncStatus account={account} sync={undefined} />
+                  </button>
+                  {accounts.length > 1 ? (
+                    <div className="account-overview-order">
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        aria-label={strings.settings.moveAccountUp(name)}
+                        disabled={Boolean(movingId) || index === 0}
+                        onClick={() => void moveAccount(account.id, -1)}
+                      >
+                        {strings.settings.moveUp}
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        aria-label={strings.settings.moveAccountDown(name)}
+                        disabled={
+                          Boolean(movingId) || index === accounts.length - 1
+                        }
+                        onClick={() => void moveAccount(account.id, 1)}
+                      >
+                        {strings.settings.moveDown}
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        ) : null
       ) : (
         <>
           <button
@@ -365,676 +371,696 @@ export function AccountsTab({
           </nav>
         </>
       )}
-      <div className="account-settings-list">
-        {accounts
-          .filter((account) => account.id === selectedAccountId)
-          .map((account) => (
-            <div key={account.id} className="account-settings-card">
-              <div className="account-card-header">
-                <Mail />
-                <span className="account-card-info">
-                  <strong>{account.displayName || account.email}</strong>
-                  <small>
-                    {account.provider === "icloud"
-                      ? strings.setup.icloud
-                      : account.provider === "protonBridge"
-                        ? strings.setup.bridge
-                        : account.provider === "gmail"
-                          ? strings.setup.gmail
-                          : account.provider === "outlook"
-                            ? strings.setup.outlook
-                            : strings.setup.other}
-                    {" · "}
-                    {account.email}
-                  </small>
-                  {testedHealthy === account.id ? (
-                    <small className="account-connection-healthy">
-                      ✓ {strings.settings.connectionHealthy}
+      {selectedAccountId ? (
+        <div className="account-settings-list">
+          {accounts
+            .filter((account) => account.id === selectedAccountId)
+            .map((account) => (
+              <div key={account.id} className="account-settings-card">
+                <div className="account-card-header">
+                  <Mail />
+                  <span className="account-card-info">
+                    <strong>{account.displayName || account.email}</strong>
+                    <small>
+                      {account.provider === "icloud"
+                        ? strings.setup.icloud
+                        : account.provider === "protonBridge"
+                          ? strings.setup.bridge
+                          : account.provider === "gmail"
+                            ? strings.setup.gmail
+                            : account.provider === "outlook"
+                              ? strings.setup.outlook
+                              : strings.setup.other}
+                      {" · "}
+                      {account.email}
                     </small>
-                  ) : null}
-                </span>
-                <div className="account-card-actions">
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    onClick={() => void testAccount(account.id)}
-                    disabled={testingAccountId === account.id}
-                  >
-                    {testingAccountId === account.id
-                      ? strings.settings.testingConnection
-                      : strings.settings.testConnection}
-                  </button>
-                  <button
-                    type="button"
-                    className="danger-button"
-                    onClick={() =>
-                      void removeAccount(
-                        account.id,
-                        account.displayName || account.email,
-                      )
-                    }
-                  >
-                    {strings.common.remove}
-                  </button>
-                </div>
-              </div>
-
-              {account.error ? (
-                <p className="account-error" role="alert">
-                  {account.error}
-                </p>
-              ) : null}
-              {page === "connection" ? (
-                <>
-                  <ConnectionPanel
-                    account={account}
-                    onDirty={onConnectionDirty}
-                    onOpenOutbox={onOpenOutbox}
-                  />
-                  <AccountDownloadPanel
-                    key={account.id}
-                    accountId={account.id}
-                  />
-                </>
-              ) : null}
-              {page === "folders" ? (
-                <FoldersPanel accountId={account.id} mailboxes={mailboxes} />
-              ) : null}
-              {page === "connection" &&
-              (account.authMethod ?? "password") === "password" ? (
-                <div className="account-password-section">
-                  <label htmlFor={`account-password-${account.id}`}>
-                    {strings.settings.updatePassword}
-                  </label>
-                  <form
-                    className="add-alias-form"
-                    onSubmit={(event) => {
-                      event.preventDefault();
-                      void handleUpdatePassword(account.id);
-                    }}
-                  >
-                    <input
-                      id={`account-password-${account.id}`}
-                      type="password"
-                      autoComplete="new-password"
-                      spellCheck={false}
-                      placeholder={
-                        account.provider === "icloud"
-                          ? (strings.setup.appPasswordPlaceholder ??
-                            strings.settings.newPassword)
-                          : strings.settings.newPassword
-                      }
-                      value={passwordInputs[account.id] ?? ""}
-                      onChange={(event) =>
-                        setPasswordInputs((prev) => ({
-                          ...prev,
-                          [account.id]: event.target.value,
-                        }))
-                      }
-                    />
+                    {testedHealthy === account.id ? (
+                      <small className="account-connection-healthy">
+                        ✓ {strings.settings.connectionHealthy}
+                      </small>
+                    ) : null}
+                  </span>
+                  <div className="account-card-actions">
                     <button
-                      type="submit"
+                      type="button"
                       className="secondary-button"
-                      disabled={
-                        updatingPasswordId === account.id ||
-                        !(passwordInputs[account.id] ?? "").trim()
+                      onClick={() => void testAccount(account.id)}
+                      disabled={testingAccountId === account.id}
+                    >
+                      {testingAccountId === account.id
+                        ? strings.settings.testingConnection
+                        : strings.settings.testConnection}
+                    </button>
+                    <button
+                      type="button"
+                      className="danger-button"
+                      onClick={() =>
+                        void removeAccount(
+                          account.id,
+                          account.displayName || account.email,
+                        )
                       }
                     >
-                      {updatingPasswordId === account.id
-                        ? strings.settings.testingConnection
-                        : strings.settings.updatePassword}
+                      {strings.common.remove}
                     </button>
-                  </form>
-                </div>
-              ) : null}
-              {passwordStatus[account.id] ? (
-                <div
-                  className="alias-status-message"
-                  role="status"
-                  aria-live="polite"
-                >
-                  {passwordStatus[account.id]}
-                </div>
-              ) : null}
-              {page === "identity" ? (
-                <>
-                  <div className="account-password-section">
-                    <span id={`account-color-${account.id}`}>
-                      {strings.settings.accountColor}
-                    </span>
-                    <p className="settings-note">
-                      {strings.settings.accountColorHelp}
-                    </p>
-                    <div
-                      className="account-color-picker"
-                      role="radiogroup"
-                      aria-labelledby={`account-color-${account.id}`}
-                    >
-                      {(
-                        Object.keys(strings.settings.accountColors) as Array<
-                          keyof typeof strings.settings.accountColors
-                        >
-                      ).map((color) => (
-                        <button
-                          key={color}
-                          type="button"
-                          role="radio"
-                          className="account-color-swatch"
-                          data-color={color}
-                          aria-label={strings.settings.accountColors[color]}
-                          aria-checked={account.color === color}
-                          onClick={() => void chooseColor(account.id, color)}
-                        />
-                      ))}
-                    </div>
-                    {colorError ? <p role="alert">{colorError}</p> : null}
                   </div>
+                </div>
+
+                {account.error ? (
+                  <p className="account-error" role="alert">
+                    {account.error}
+                  </p>
+                ) : null}
+                {page === "connection" ? (
+                  <>
+                    <ConnectionPanel
+                      account={account}
+                      onDirty={onConnectionDirty}
+                      onOpenOutbox={onOpenOutbox}
+                    />
+                    <AccountDownloadPanel
+                      key={account.id}
+                      accountId={account.id}
+                    />
+                  </>
+                ) : null}
+                {page === "folders" ? (
+                  <FoldersPanel accountId={account.id} mailboxes={mailboxes} />
+                ) : null}
+                {page === "connection" &&
+                (account.authMethod ?? "password") === "password" ? (
                   <div className="account-password-section">
-                    <label htmlFor={`account-name-${account.id}`}>
-                      {strings.settings.accountName}
+                    <label htmlFor={`account-password-${account.id}`}>
+                      {strings.settings.updatePassword}
                     </label>
-                    <p className="settings-note">
-                      {strings.settings.accountNameHelp}
-                    </p>
-                    <div className="add-alias-form">
+                    <form
+                      className="add-alias-form"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        void handleUpdatePassword(account.id);
+                      }}
+                    >
                       <input
-                        id={`account-name-${account.id}`}
-                        maxLength={120}
-                        value={nameInputs[account.id] ?? account.displayName}
+                        id={`account-password-${account.id}`}
+                        type="password"
+                        autoComplete="new-password"
+                        spellCheck={false}
+                        placeholder={
+                          account.provider === "icloud"
+                            ? (strings.setup.appPasswordPlaceholder ??
+                              strings.settings.newPassword)
+                            : strings.settings.newPassword
+                        }
+                        value={passwordInputs[account.id] ?? ""}
                         onChange={(event) =>
-                          setNameInputs((prev) => ({
+                          setPasswordInputs((prev) => ({
                             ...prev,
                             [account.id]: event.target.value,
                           }))
                         }
                       />
                       <button
-                        type="button"
+                        type="submit"
                         className="secondary-button"
                         disabled={
-                          savingNameId === account.id ||
-                          !nameChanged(account, nameInputs)
+                          updatingPasswordId === account.id ||
+                          !(passwordInputs[account.id] ?? "").trim()
                         }
-                        onClick={() => void handleSaveName(account.id)}
                       >
-                        {strings.settings.saveAccountName}
+                        {updatingPasswordId === account.id
+                          ? strings.settings.testingConnection
+                          : strings.settings.updatePassword}
                       </button>
-                    </div>
-                    {nameStatus[account.id] ? (
+                    </form>
+                    {passwordStatus[account.id] ? (
                       <div
                         className="alias-status-message"
                         role="status"
                         aria-live="polite"
                       >
-                        {nameStatus[account.id]}
+                        {passwordStatus[account.id]}
                       </div>
                     ) : null}
                   </div>
-                  <div className="account-password-section">
-                    <label htmlFor={`account-reply-to-${account.id}`}>
-                      {strings.settings.replyToAddress}
-                    </label>
-                    <p className="settings-note">
-                      {strings.settings.replyToAddressHelp}
-                    </p>
-                    <div className="add-alias-form">
-                      <input
-                        id={`account-reply-to-${account.id}`}
-                        maxLength={320}
-                        autoComplete="off"
-                        spellCheck={false}
-                        value={
-                          replyToInputs[account.id] ?? account.replyTo ?? ""
-                        }
-                        onChange={(event) =>
-                          setReplyToInputs((prev) => ({
-                            ...prev,
-                            [account.id]: event.target.value,
-                          }))
-                        }
-                      />
-                      <button
-                        type="button"
-                        className="secondary-button"
-                        disabled={
-                          savingReplyToId === account.id ||
-                          !replyToChanged(account, replyToInputs)
-                        }
-                        onClick={() => void handleSaveReplyTo(account.id)}
+                ) : null}
+                {page === "identity" ? (
+                  <>
+                    <div className="account-password-section">
+                      <span
+                        className="account-section-title"
+                        id={`account-color-${account.id}`}
                       >
-                        {strings.settings.saveReplyTo}
-                      </button>
-                    </div>
-                    {replyToStatus[account.id] ? (
+                        {strings.settings.accountColor}
+                      </span>
+                      <p className="settings-note">
+                        {strings.settings.accountColorHelp}
+                      </p>
                       <div
-                        className="alias-status-message"
-                        role={
-                          replyToStatus[account.id] ===
-                          strings.settings.replyToAddressInvalid
-                            ? "alert"
-                            : "status"
-                        }
-                        aria-live="polite"
+                        className="account-color-picker"
+                        role="radiogroup"
+                        aria-labelledby={`account-color-${account.id}`}
                       >
-                        {replyToStatus[account.id]}
+                        {(
+                          Object.keys(strings.settings.accountColors) as Array<
+                            keyof typeof strings.settings.accountColors
+                          >
+                        ).map((color) => (
+                          <button
+                            key={color}
+                            type="button"
+                            role="radio"
+                            className="account-color-swatch"
+                            data-color={color}
+                            aria-label={strings.settings.accountColors[color]}
+                            aria-checked={account.color === color}
+                            onClick={() => void chooseColor(account.id, color)}
+                          />
+                        ))}
                       </div>
-                    ) : null}
-                  </div>
-                  <div className="account-password-section">
-                    <Suspense
-                      fallback={
-                        <p className="signature-rich-help">
-                          {strings.settings.signatureEditorHelp}
+                      {colorError ? (
+                        <p className="settings-error-message" role="alert">
+                          {colorError}
                         </p>
-                      }
-                    >
-                      <SignatureEditor
-                        key={account.id}
-                        accountId={account.id}
-                        plainText={
-                          signatureInputs[account.id] ?? account.signature ?? ""
-                        }
-                        html={
-                          signatureHtmlInputs[account.id] ??
-                          account.signatureHtml ??
-                          ""
-                        }
-                        onPlainTextChange={(value) =>
-                          setSignatureInputs((prev) => ({
-                            ...prev,
-                            [account.id]: value,
-                          }))
-                        }
-                        onHtmlChange={(plainText, value) => {
-                          setSignatureInputs((prev) => ({
-                            ...prev,
-                            [account.id]: plainText,
-                          }));
-                          setSignatureHtmlInputs((prev) => ({
-                            ...prev,
-                            [account.id]: value,
-                          }));
-                        }}
-                      />
-                    </Suspense>
-                    <div className="add-alias-form signature-form">
-                      <button
-                        type="button"
-                        className="secondary-button"
-                        disabled={
-                          savingSignatureId === account.id ||
-                          !signatureChanged(
-                            account,
-                            signatureInputs,
-                            signatureHtmlInputs,
-                          )
-                        }
-                        onClick={() =>
-                          void handleSaveSignature(
-                            account.id,
-                            account.signature ?? "",
-                            account.signatureHtml ?? "",
-                          )
-                        }
-                      >
-                        {strings.common.save}
-                      </button>
-                      {signatureStatus[account.id] ? (
+                      ) : null}
+                    </div>
+                    <div className="account-password-section">
+                      <label htmlFor={`account-name-${account.id}`}>
+                        {strings.settings.accountName}
+                      </label>
+                      <p className="settings-note">
+                        {strings.settings.accountNameHelp}
+                      </p>
+                      <div className="add-alias-form">
+                        <input
+                          id={`account-name-${account.id}`}
+                          maxLength={120}
+                          value={nameInputs[account.id] ?? account.displayName}
+                          onChange={(event) =>
+                            setNameInputs((prev) => ({
+                              ...prev,
+                              [account.id]: event.target.value,
+                            }))
+                          }
+                        />
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          disabled={
+                            savingNameId === account.id ||
+                            !nameChanged(account, nameInputs)
+                          }
+                          onClick={() => void handleSaveName(account.id)}
+                        >
+                          {strings.settings.saveAccountName}
+                        </button>
+                      </div>
+                      {nameStatus[account.id] ? (
                         <div
                           className="alias-status-message"
                           role="status"
                           aria-live="polite"
                         >
-                          {signatureStatus[account.id]}
+                          {nameStatus[account.id]}
                         </div>
                       ) : null}
                     </div>
-                  </div>
-
-                  <BodyFormatControl account={account} />
-                </>
-              ) : null}
-
-              {page === "rules" ? (
-                <div className="account-rules-section">
-                  <div className="aliases-header">
-                    <div>
-                      <strong>{strings.settings.rulesTitle}</strong>
+                    <div className="account-password-section">
+                      <label htmlFor={`account-reply-to-${account.id}`}>
+                        {strings.settings.replyToAddress}
+                      </label>
                       <p className="settings-note">
-                        {strings.settings.rulesHelp}
+                        {strings.settings.replyToAddressHelp}
                       </p>
-                    </div>
-                  </div>
-                  {ruleStatus[account.id] ? (
-                    <div
-                      className="alias-status-message"
-                      role="status"
-                      aria-live="polite"
-                    >
-                      {ruleStatus[account.id]}
-                    </div>
-                  ) : null}
-                  {(filterRules[account.id] ?? []).length > 0 ? (
-                    <ul className="rule-list">
-                      {(filterRules[account.id] ?? []).map(
-                        (rule, index, rules) => (
-                          <li className="rule-item" key={rule.id}>
-                            <div className="rule-item-text">
-                              <strong>{rule.name}</strong>
-                              <span>
-                                {strings.settings.describeRule(
-                                  ruleFieldLabel(rule.field),
-                                  rule.contains,
-                                  ruleActionLabel(rule, mailboxes),
-                                )}
-                              </span>
-                            </div>
-                            <div className="rule-order">
-                              <button
-                                type="button"
-                                className="secondary-button"
-                                disabled={index === 0}
-                                aria-label={strings.settings.moveRuleEarlier(
-                                  rule.name,
-                                )}
-                                onClick={() =>
-                                  void handleMoveRule(account.id, rule.id, -1)
-                                }
-                              >
-                                {strings.settings.moveEarlier}
-                              </button>
-                              <button
-                                type="button"
-                                className="secondary-button"
-                                disabled={index === rules.length - 1}
-                                aria-label={strings.settings.moveRuleLater(
-                                  rule.name,
-                                )}
-                                onClick={() =>
-                                  void handleMoveRule(account.id, rule.id, 1)
-                                }
-                              >
-                                {strings.settings.moveLater}
-                              </button>
-                            </div>
-                            <button
-                              type="button"
-                              className="rule-toggle"
-                              aria-pressed={rule.enabled}
-                              aria-label={`${rule.name}: ${
-                                rule.enabled
-                                  ? strings.common.on
-                                  : strings.common.off
-                              }`}
-                              onClick={() =>
-                                void handleToggleRule(account.id, rule)
-                              }
-                            >
-                              {rule.enabled
-                                ? strings.common.on
-                                : strings.common.off}
-                            </button>
-                            <button
-                              type="button"
-                              className="secondary-button rule-delete"
-                              onClick={() =>
-                                void handleDeleteRule(account.id, rule)
-                              }
-                            >
-                              {strings.common.remove}
-                            </button>
-                          </li>
-                        ),
-                      )}
-                    </ul>
-                  ) : null}
-                  <div className="rule-form">
-                    <label htmlFor={`rule-name-${account.id}`}>
-                      {strings.settings.ruleName}
-                    </label>
-                    <input
-                      id={`rule-name-${account.id}`}
-                      value={ruleInput(account.id).name}
-                      placeholder={strings.settings.ruleNamePlaceholder}
-                      onChange={(event) =>
-                        setRuleField(account.id, {
-                          name: event.target.value,
-                        })
-                      }
-                    />
-                    <label htmlFor={`rule-field-${account.id}`}>
-                      {strings.settings.matchBy}
-                    </label>
-                    <select
-                      id={`rule-field-${account.id}`}
-                      value={ruleInput(account.id).field}
-                      onChange={(event) =>
-                        setRuleField(account.id, {
-                          field: event.target.value,
-                        })
-                      }
-                    >
-                      <option value="from">{strings.settings.matchFrom}</option>
-                      <option value="to">{strings.settings.matchTo}</option>
-                      <option value="subject">
-                        {strings.settings.matchSubject}
-                      </option>
-                      <option value="domain">
-                        {strings.settings.matchDomain}
-                      </option>
-                    </select>
-                    <label htmlFor={`rule-contains-${account.id}`}>
-                      {strings.settings.ruleContains}
-                    </label>
-                    <input
-                      id={`rule-contains-${account.id}`}
-                      value={ruleInput(account.id).contains}
-                      placeholder={strings.settings.ruleMatchPlaceholder}
-                      onChange={(event) =>
-                        setRuleField(account.id, {
-                          contains: event.target.value,
-                        })
-                      }
-                    />
-                    <label htmlFor={`rule-action-${account.id}`}>
-                      {strings.settings.ruleAction}
-                    </label>
-                    <select
-                      id={`rule-action-${account.id}`}
-                      value={ruleInput(account.id).action}
-                      onChange={(event) =>
-                        setRuleField(account.id, {
-                          action: event.target.value,
-                        })
-                      }
-                    >
-                      <option value="mark_read">
-                        {strings.settings.actionMarkRead}
-                      </option>
-                      <option value="move_archive">
-                        {strings.settings.actionArchive}
-                      </option>
-                      <option value="move_trash">
-                        {strings.settings.actionTrash}
-                      </option>
-                      <option value="move_junk">
-                        {strings.settings.actionJunk}
-                      </option>
-                      <option value="move_mailbox">
-                        {strings.settings.actionFolder}
-                      </option>
-                    </select>
-                    {ruleInput(account.id).action === "move_mailbox" ? (
-                      <>
-                        <label htmlFor={`rule-target-${account.id}`}>
-                          {strings.settings.actionFolder}
-                        </label>
-                        <select
-                          id={`rule-target-${account.id}`}
-                          value={ruleInput(account.id).target}
+                      <div className="add-alias-form">
+                        <input
+                          id={`account-reply-to-${account.id}`}
+                          maxLength={320}
+                          autoComplete="off"
+                          spellCheck={false}
+                          value={
+                            replyToInputs[account.id] ?? account.replyTo ?? ""
+                          }
                           onChange={(event) =>
-                            setRuleField(account.id, {
-                              target: event.target.value,
-                            })
+                            setReplyToInputs((prev) => ({
+                              ...prev,
+                              [account.id]: event.target.value,
+                            }))
+                          }
+                        />
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          disabled={
+                            savingReplyToId === account.id ||
+                            !replyToChanged(account, replyToInputs)
+                          }
+                          onClick={() => void handleSaveReplyTo(account.id)}
+                        >
+                          {strings.settings.saveReplyTo}
+                        </button>
+                      </div>
+                      {replyToStatus[account.id] ? (
+                        <div
+                          className={
+                            replyToStatus[account.id] ===
+                            strings.settings.replyToAddressInvalid
+                              ? "settings-error-message"
+                              : "alias-status-message"
+                          }
+                          role={
+                            replyToStatus[account.id] ===
+                            strings.settings.replyToAddressInvalid
+                              ? "alert"
+                              : "status"
+                          }
+                          aria-live="polite"
+                        >
+                          {replyToStatus[account.id]}
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="account-password-section">
+                      <Suspense
+                        fallback={
+                          <p className="signature-rich-help">
+                            {strings.settings.signatureEditorHelp}
+                          </p>
+                        }
+                      >
+                        <SignatureEditor
+                          key={account.id}
+                          accountId={account.id}
+                          plainText={
+                            signatureInputs[account.id] ??
+                            account.signature ??
+                            ""
+                          }
+                          html={
+                            signatureHtmlInputs[account.id] ??
+                            account.signatureHtml ??
+                            ""
+                          }
+                          onPlainTextChange={(value) =>
+                            setSignatureInputs((prev) => ({
+                              ...prev,
+                              [account.id]: value,
+                            }))
+                          }
+                          onHtmlChange={(plainText, value) => {
+                            setSignatureInputs((prev) => ({
+                              ...prev,
+                              [account.id]: plainText,
+                            }));
+                            setSignatureHtmlInputs((prev) => ({
+                              ...prev,
+                              [account.id]: value,
+                            }));
+                          }}
+                        />
+                      </Suspense>
+                      <div className="add-alias-form signature-form">
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          disabled={
+                            savingSignatureId === account.id ||
+                            !signatureChanged(
+                              account,
+                              signatureInputs,
+                              signatureHtmlInputs,
+                            )
+                          }
+                          onClick={() =>
+                            void handleSaveSignature(
+                              account.id,
+                              account.signature ?? "",
+                              account.signatureHtml ?? "",
+                            )
                           }
                         >
-                          <option value="">
-                            {strings.settings.chooseFolder}
-                          </option>
-                          {mailboxes
-                            .filter(
-                              (box) =>
-                                box.accountId === account.id &&
-                                box.role !== "trash" &&
-                                box.role !== "junk" &&
-                                box.role !== "inbox",
-                            )
-                            .map((box) => (
-                              <option key={box.id} value={box.id}>
-                                {box.name}
-                              </option>
-                            ))}
-                        </select>
-                      </>
+                          {strings.common.save}
+                        </button>
+                        {signatureStatus[account.id] ? (
+                          <div
+                            className="alias-status-message"
+                            role="status"
+                            aria-live="polite"
+                          >
+                            {signatureStatus[account.id]}
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+
+                    <BodyFormatControl account={account} />
+                  </>
+                ) : null}
+
+                {page === "rules" ? (
+                  <div className="account-rules-section">
+                    <div className="aliases-header">
+                      <div>
+                        <strong>{strings.settings.rulesTitle}</strong>
+                        <p className="settings-note">
+                          {strings.settings.rulesHelp}
+                        </p>
+                      </div>
+                    </div>
+                    {ruleStatus[account.id] ? (
+                      <div
+                        className="alias-status-message"
+                        role="status"
+                        aria-live="polite"
+                      >
+                        {ruleStatus[account.id]}
+                      </div>
                     ) : null}
-                    <div className="rule-form-actions">
+                    {(filterRules[account.id] ?? []).length > 0 ? (
+                      <ul className="rule-list">
+                        {(filterRules[account.id] ?? []).map(
+                          (rule, index, rules) => (
+                            <li className="rule-item" key={rule.id}>
+                              <div className="rule-item-text">
+                                <strong>{rule.name}</strong>
+                                <span>
+                                  {strings.settings.describeRule(
+                                    ruleFieldLabel(rule.field),
+                                    rule.contains,
+                                    ruleActionLabel(rule, mailboxes),
+                                  )}
+                                </span>
+                              </div>
+                              <div className="rule-order">
+                                <button
+                                  type="button"
+                                  className="secondary-button"
+                                  disabled={index === 0}
+                                  aria-label={strings.settings.moveRuleEarlier(
+                                    rule.name,
+                                  )}
+                                  onClick={() =>
+                                    void handleMoveRule(account.id, rule.id, -1)
+                                  }
+                                >
+                                  {strings.settings.moveEarlier}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="secondary-button"
+                                  disabled={index === rules.length - 1}
+                                  aria-label={strings.settings.moveRuleLater(
+                                    rule.name,
+                                  )}
+                                  onClick={() =>
+                                    void handleMoveRule(account.id, rule.id, 1)
+                                  }
+                                >
+                                  {strings.settings.moveLater}
+                                </button>
+                              </div>
+                              <button
+                                type="button"
+                                className="rule-toggle"
+                                aria-pressed={rule.enabled}
+                                aria-label={`${rule.name}: ${
+                                  rule.enabled
+                                    ? strings.common.on
+                                    : strings.common.off
+                                }`}
+                                onClick={() =>
+                                  void handleToggleRule(account.id, rule)
+                                }
+                              >
+                                {rule.enabled
+                                  ? strings.common.on
+                                  : strings.common.off}
+                              </button>
+                              <button
+                                type="button"
+                                className="secondary-button rule-delete"
+                                onClick={() =>
+                                  void handleDeleteRule(account.id, rule)
+                                }
+                              >
+                                {strings.common.remove}
+                              </button>
+                            </li>
+                          ),
+                        )}
+                      </ul>
+                    ) : null}
+                    <div className="rule-form">
+                      <label htmlFor={`rule-name-${account.id}`}>
+                        {strings.settings.ruleName}
+                      </label>
+                      <input
+                        id={`rule-name-${account.id}`}
+                        value={ruleInput(account.id).name}
+                        placeholder={strings.settings.ruleNamePlaceholder}
+                        onChange={(event) =>
+                          setRuleField(account.id, {
+                            name: event.target.value,
+                          })
+                        }
+                      />
+                      <label htmlFor={`rule-field-${account.id}`}>
+                        {strings.settings.matchBy}
+                      </label>
+                      <select
+                        id={`rule-field-${account.id}`}
+                        value={ruleInput(account.id).field}
+                        onChange={(event) =>
+                          setRuleField(account.id, {
+                            field: event.target.value,
+                          })
+                        }
+                      >
+                        <option value="from">
+                          {strings.settings.matchFrom}
+                        </option>
+                        <option value="to">{strings.settings.matchTo}</option>
+                        <option value="subject">
+                          {strings.settings.matchSubject}
+                        </option>
+                        <option value="domain">
+                          {strings.settings.matchDomain}
+                        </option>
+                      </select>
+                      <label htmlFor={`rule-contains-${account.id}`}>
+                        {strings.settings.ruleContains}
+                      </label>
+                      <input
+                        id={`rule-contains-${account.id}`}
+                        value={ruleInput(account.id).contains}
+                        placeholder={strings.settings.ruleMatchPlaceholder}
+                        onChange={(event) =>
+                          setRuleField(account.id, {
+                            contains: event.target.value,
+                          })
+                        }
+                      />
+                      <label htmlFor={`rule-action-${account.id}`}>
+                        {strings.settings.ruleAction}
+                      </label>
+                      <select
+                        id={`rule-action-${account.id}`}
+                        value={ruleInput(account.id).action}
+                        onChange={(event) =>
+                          setRuleField(account.id, {
+                            action: event.target.value,
+                          })
+                        }
+                      >
+                        <option value="mark_read">
+                          {strings.settings.actionMarkRead}
+                        </option>
+                        <option value="move_archive">
+                          {strings.settings.actionArchive}
+                        </option>
+                        <option value="move_trash">
+                          {strings.settings.actionTrash}
+                        </option>
+                        <option value="move_junk">
+                          {strings.settings.actionJunk}
+                        </option>
+                        <option value="move_mailbox">
+                          {strings.settings.actionFolder}
+                        </option>
+                      </select>
+                      {ruleInput(account.id).action === "move_mailbox" ? (
+                        <>
+                          <label htmlFor={`rule-target-${account.id}`}>
+                            {strings.settings.actionFolder}
+                          </label>
+                          <select
+                            id={`rule-target-${account.id}`}
+                            value={ruleInput(account.id).target}
+                            onChange={(event) =>
+                              setRuleField(account.id, {
+                                target: event.target.value,
+                              })
+                            }
+                          >
+                            <option value="">
+                              {strings.settings.chooseFolder}
+                            </option>
+                            {mailboxes
+                              .filter(
+                                (box) =>
+                                  box.accountId === account.id &&
+                                  box.role !== "trash" &&
+                                  box.role !== "junk" &&
+                                  box.role !== "inbox",
+                              )
+                              .map((box) => (
+                                <option key={box.id} value={box.id}>
+                                  {box.name}
+                                </option>
+                              ))}
+                          </select>
+                        </>
+                      ) : null}
+                      <div className="rule-form-actions">
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          onClick={() => void handlePreviewRule(account.id)}
+                        >
+                          {strings.settings.checkRuleMatches}
+                        </button>
+                        <button
+                          type="button"
+                          className="primary-button add-rule-button"
+                          onClick={() => void handleAddRule(account.id)}
+                        >
+                          {strings.settings.addRule}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+
+                {page === "identity" ? (
+                  <div className="account-aliases-section">
+                    <div className="aliases-header">
+                      <div>
+                        <strong>{strings.settings.aliasesTitle}</strong>
+                        <p className="settings-note">
+                          {strings.settings.aliasesHelp}
+                        </p>
+                      </div>
+                      {account.provider === "icloud" ? (
+                        <button
+                          type="button"
+                          className="secondary-button detect-aliases-button"
+                          onClick={() => void handleDetectAliases(account.id)}
+                          disabled={detectingAliasesAccountId === account.id}
+                        >
+                          {detectingAliasesAccountId === account.id
+                            ? strings.settings.detectingAliases
+                            : strings.settings.detectIcloudAliases}
+                        </button>
+                      ) : null}
+                    </div>
+
+                    {aliasStatus[account.id] ? (
+                      <div
+                        className="alias-status-message"
+                        role="status"
+                        aria-live="polite"
+                      >
+                        {aliasStatus[account.id]}
+                      </div>
+                    ) : null}
+
+                    <div className="aliases-list">
+                      <div className="alias-chip primary">
+                        <span>{account.email}</span>
+                        <span className="alias-badge">
+                          {strings.settings.primaryAddress}
+                        </span>
+                      </div>
+                      {(account.aliases ?? []).map((alias) => (
+                        <div key={alias} className="alias-chip">
+                          <span>{alias}</span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void handleRemoveAlias(account.id, alias)
+                            }
+                            aria-label={`${strings.common.remove} ${alias}`}
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                    {(account.aliases ?? []).length === 0 ? (
+                      <p className="settings-note">
+                        {strings.settings.noAliasesConfigured}
+                      </p>
+                    ) : null}
+
+                    <div className="add-alias-form">
+                      <input
+                        type="email"
+                        placeholder={strings.settings.aliasPlaceholder}
+                        aria-label={strings.settings.aliasPlaceholder}
+                        value={newAliasInputs[account.id] ?? ""}
+                        onChange={(e) =>
+                          setNewAliasInputs((prev) => ({
+                            ...prev,
+                            [account.id]: e.target.value,
+                          }))
+                        }
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            void handleAddAlias(account.id);
+                          }
+                        }}
+                      />
                       <button
                         type="button"
                         className="secondary-button"
-                        onClick={() => void handlePreviewRule(account.id)}
+                        onClick={() => void handleAddAlias(account.id)}
                       >
-                        {strings.settings.checkRuleMatches}
-                      </button>
-                      <button
-                        type="button"
-                        className="primary-button add-rule-button"
-                        onClick={() => void handleAddRule(account.id)}
-                      >
-                        {strings.settings.addRule}
+                        {strings.settings.addAlias}
                       </button>
                     </div>
                   </div>
-                </div>
-              ) : null}
-
-              {page === "identity" ? (
-                <div className="account-aliases-section">
-                  <div className="aliases-header">
-                    <div>
-                      <strong>{strings.settings.aliasesTitle}</strong>
-                      <p className="settings-note">
-                        {strings.settings.aliasesHelp}
-                      </p>
-                    </div>
-                    {account.provider === "icloud" ? (
-                      <button
-                        type="button"
-                        className="secondary-button detect-aliases-button"
-                        onClick={() => void handleDetectAliases(account.id)}
-                        disabled={detectingAliasesAccountId === account.id}
-                      >
-                        {detectingAliasesAccountId === account.id
-                          ? strings.settings.detectingAliases
-                          : strings.settings.detectIcloudAliases}
-                      </button>
-                    ) : null}
-                  </div>
-
-                  {aliasStatus[account.id] ? (
-                    <div
-                      className="alias-status-message"
-                      role="status"
-                      aria-live="polite"
-                    >
-                      {aliasStatus[account.id]}
-                    </div>
-                  ) : null}
-
-                  <div className="aliases-list">
-                    <div className="alias-chip primary">
-                      <span>{account.email}</span>
-                      <span className="alias-badge">
-                        {strings.settings.primaryAddress}
-                      </span>
-                    </div>
-                    {(account.aliases ?? []).map((alias) => (
-                      <div key={alias} className="alias-chip">
-                        <span>{alias}</span>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            void handleRemoveAlias(account.id, alias)
-                          }
-                          aria-label={`${strings.common.remove} ${alias}`}
-                        >
-                          ×
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                  {(account.aliases ?? []).length === 0 ? (
-                    <p className="settings-note">
-                      {strings.settings.noAliasesConfigured}
-                    </p>
-                  ) : null}
-
-                  <div className="add-alias-form">
-                    <input
-                      type="email"
-                      placeholder={strings.settings.aliasPlaceholder}
-                      aria-label={strings.settings.aliasPlaceholder}
-                      value={newAliasInputs[account.id] ?? ""}
-                      onChange={(e) =>
-                        setNewAliasInputs((prev) => ({
-                          ...prev,
-                          [account.id]: e.target.value,
-                        }))
-                      }
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          void handleAddAlias(account.id);
-                        }
-                      }}
-                    />
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      onClick={() => void handleAddAlias(account.id)}
-                    >
-                      {strings.settings.addAlias}
-                    </button>
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          ))}
-      </div>
-      <SettingsSection title={strings.settings.dangerZone}>
-        <div className="settings-data-card danger-card">
-          <div>
-            <strong>{strings.settings.eraseTitle}</strong>
-            <small>{strings.settings.eraseHelp}</small>
-          </div>
-          <div className="settings-actions">
-            <button
-              className="danger-button"
-              type="button"
-              onClick={() => void eraseAllData()}
-              disabled={eraseBusy}
-            >
-              {eraseBusy
-                ? strings.settings.saving
-                : strings.settings.eraseButton}
-            </button>
-          </div>
-          {eraseStatus ? (
-            <small className="settings-data-status" role="status">
-              {eraseStatus}
-            </small>
-          ) : null}
+                ) : null}
+              </div>
+            ))}
         </div>
-      </SettingsSection>
+      ) : null}
+      {!selectedAccountId ? (
+        <SettingsSection title={strings.settings.dangerZone}>
+          <div className="settings-data-card danger-card">
+            <div>
+              <strong>{strings.settings.eraseTitle}</strong>
+              <small>{strings.settings.eraseHelp}</small>
+            </div>
+            <div className="settings-actions">
+              <button
+                className="danger-button"
+                type="button"
+                onClick={() => void eraseAllData()}
+                disabled={eraseBusy}
+              >
+                {eraseBusy
+                  ? strings.settings.saving
+                  : strings.settings.eraseButton}
+              </button>
+            </div>
+            {eraseStatus ? (
+              <small className="settings-data-status" role="status">
+                {eraseStatus}
+              </small>
+            ) : null}
+          </div>
+        </SettingsSection>
+      ) : null}
     </SettingsPanel>
   );
 }

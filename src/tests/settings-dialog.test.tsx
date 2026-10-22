@@ -1392,7 +1392,10 @@ describe("SettingsDialog component", () => {
     await waitFor(() =>
       expect(useAppStore.getState().error).toMatch(/remove failed/i),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Reset & Restart" }));
+    fireEvent.click(screen.getByRole("button", { name: "Back to accounts" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Reset & Restart" }),
+    );
     await waitFor(() =>
       expect(useAppStore.getState().error).toMatch(/erase failed/i),
     );

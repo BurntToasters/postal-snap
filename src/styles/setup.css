@@ -256,6 +256,10 @@
   margin-top: 0;
 }
 
+.setup-discover-button {
+  justify-self: start;
+}
+
 .account-form {
   display: grid;
   gap: 18px;

@@ -239,16 +239,26 @@ export function MessageBody({
             placeholder={strings.reader.findInMessage}
             aria-label={strings.reader.findInMessage}
           />
-          <button type="button" onClick={onFindPrevious}>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={onFindPrevious}
+          >
             {strings.reader.findPrevious}
           </button>
-          <button type="submit">{strings.reader.findNext}</button>
+          <button type="submit" className="secondary-button">
+            {strings.reader.findNext}
+          </button>
           {findStatus ? (
             <span className="message-find-status" role="status">
               {findStatus}
             </span>
           ) : null}
-          <button type="button" onClick={onCloseFind}>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={onCloseFind}
+          >
             {strings.common.close}
           </button>
         </form>
