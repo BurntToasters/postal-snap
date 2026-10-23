@@ -55,14 +55,23 @@ async function expectAxeClean(page: Page) {
   ).toEqual([]);
 }
 
+function row(page: Page, name: RegExp) {
+  return page
+    .getByRole("option", { name })
+    .or(page.getByRole("treeitem", { name }))
+    .first();
+}
+
 async function bulkArchive(page: Page, names: RegExp[]) {
   await page.getByRole("button", { name: "Select", exact: true }).click();
   for (const name of names) {
-    await page.getByRole("checkbox", { name }).check();
+    const target = await row(page, name);
+    await target.focus();
+    await page.keyboard.press("x");
   }
   await page.locator(".bulk-bar").getByRole("button").first().click();
   for (const name of names) {
-    await expect(page.getByRole("treeitem", { name })).toBeHidden();
+    await expect(await row(page, name)).toBeHidden();
   }
 }
 
@@ -83,7 +92,7 @@ for (const { density, scale } of combos) {
 
     await notice.getByRole("button", { name: "Undo" }).click();
     for (const name of BULK_PAIR) {
-      await expect(page.getByRole("treeitem", { name })).toBeVisible();
+      await expect(row(page, name)).toBeVisible();
     }
     await expect(
       page.locator(".notice", { hasText: "2 messages restored." }),
@@ -109,9 +118,7 @@ for (const { density, scale } of combos) {
       page.locator(".notice", { hasText: "Archived 2 messages." }),
     ).toBeVisible();
 
-    const next = page.getByRole("treeitem", {
-      name: /Team calendar invitation/i,
-    });
+    const next = row(page, /Team calendar invitation/i);
     await next.focus();
     await page.keyboard.press("e");
     await expect(next).toBeHidden();

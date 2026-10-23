@@ -1330,7 +1330,10 @@ export function MailShell({ onOpenSettings }: Props) {
             <SnoozePanel
               label={strings.mail.snoozeSelected}
               onSnooze={(untilIso) => void snoozeSelection(untilIso)}
-              onClose={() => setSelectionSnoozeOpen(false)}
+              onClose={() => {
+                setSelectionSnoozeOpen(false);
+                closeMailboxMore();
+              }}
             />
           ) : null}
           {activeLocalView === "drafts" ? (

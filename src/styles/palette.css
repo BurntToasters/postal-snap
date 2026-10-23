@@ -104,7 +104,9 @@
   padding: 0 6px;
   border: 1px solid var(--border);
   border-radius: var(--radius-xs);
-  color: var(--text-muted);
+  /* Muted but darker than text-muted, so the hint clears 4.6:1 in both
+     themes without a light-only color. */
+  color: color-mix(in srgb, var(--text-muted) 72%, var(--text));
   font: inherit;
   font-size: 0.85em;
   white-space: nowrap;

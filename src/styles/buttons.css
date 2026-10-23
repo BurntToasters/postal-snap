@@ -97,7 +97,8 @@
   padding: 0 6px;
   border: 0;
   border-radius: var(--radius-sm);
-  color: var(--accent);
+  /* Ink, not accent: readable on sidebar and dialog surfaces. */
+  color: var(--accent-ink);
   background: transparent;
 }
 

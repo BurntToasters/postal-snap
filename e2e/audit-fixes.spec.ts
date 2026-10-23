@@ -19,7 +19,9 @@ test("bulk archive closes the moved message in the reader", async ({
     page.getByRole("heading", { name: "Weekend plans", level: 1 }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Select", exact: true }).click();
-  await page.getByRole("checkbox", { name: /Weekend plans/ }).check();
+  await page
+    .locator('.message-select[aria-label="Select Weekend plans"]')
+    .check();
   await page
     .getByRole("toolbar", { name: /selected/i })
     .getByRole("button", { name: "Archive" })

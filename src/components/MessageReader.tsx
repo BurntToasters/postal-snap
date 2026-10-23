@@ -323,9 +323,13 @@ export function MessageReader({
     );
     first?.focus();
     const close = (event: MouseEvent) => {
-      if (!moreMenuRef.current?.contains(event.target as Node)) {
-        setMoreOpen(false);
-      }
+      const target = event.target as Node;
+      if (
+        moreMenuRef.current?.contains(target) ||
+        moreTriggerRef.current?.contains(target)
+      )
+        return;
+      setMoreOpen(false);
     };
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" && event.key !== "Tab") return;

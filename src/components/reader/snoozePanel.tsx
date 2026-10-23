@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { strings } from "../../i18n";
 import { laterTodayIso } from "./snoozeTimes";
 
@@ -12,6 +12,21 @@ export function SnoozePanel({
   label?: string;
 }) {
   const [custom, setCustom] = useState("");
+  // Escape closes from either call site; each onClose restores focus to its
+  // invoking trigger. The ref keeps the listener stable across renders.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      onCloseRef.current();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
   function atMorning(date: Date): string {
     date.setHours(8, 0, 0, 0);
     return date.toISOString();

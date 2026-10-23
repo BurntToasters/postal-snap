@@ -1080,12 +1080,17 @@ export function MessageList({
         className={`message-row-wrap${groupKey !== undefined ? " thread-child" : ""}${groupEnd ? " thread-end" : ""}${!selecting && isSelected ? " selected" : ""}`}
       >
         {selecting ? (
-          // A compact checkbox inside a full 44px click target.
-          <label className="message-select-hit">
+          // A compact checkbox inside a full 44px click target. The listbox
+          // owns only options, so the visual checkbox stays out of the
+          // accessibility tree; the row button keeps aria-selected and all
+          // keyboard selection behavior.
+          <label className="message-select-hit" aria-hidden="true">
             <input
               type="checkbox"
               className="message-select"
               checked={checked}
+              tabIndex={-1}
+              aria-hidden="true"
               onChange={(event) => {
                 // Preventing click would undo the native toggle in browsers.
                 const shift = (event.nativeEvent as MouseEvent).shiftKey;

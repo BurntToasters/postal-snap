@@ -1394,6 +1394,7 @@ describe("folder path names", () => {
       />,
     );
     const folder = screen.getByRole("button", { name: "Projects" });
-    expect(folder).not.toHaveAttribute("title");
+    // Truncated labels stay recoverable, so the title mirrors the label.
+    expect(folder).toHaveAttribute("title", "Projects");
   });
 });

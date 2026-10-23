@@ -19,7 +19,11 @@ test("renaming a nested folder keeps the folders above it", async ({
   page,
 }) => {
   await page.goto("/?nestedFolders=1");
-  await page.getByRole("button", { name: "Rename folder 2026" }).click();
+  // Nested rows use the context menu for Rename; inline actions are depth-0.
+  await page
+    .getByRole("button", { name: "Projects / 2026, 1 unread", exact: true })
+    .click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Rename", exact: true }).click();
   await expect(page.getByText("Inside Projects")).toBeVisible();
   const input = page.getByPlaceholder("Folder name");
   await expect(input).toHaveValue("2026");

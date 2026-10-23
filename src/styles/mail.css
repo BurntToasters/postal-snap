@@ -106,12 +106,13 @@
 .pane-splitter::before {
   position: absolute;
   content: "";
-  /* Wide enough to grab, narrow enough to leave nearby buttons clickable. */
-  inset: 0 -8px;
+  /* Wide enough to grab (a 32px+ hit strip), narrow enough to leave nearby
+     buttons clickable. The visual line stays 5px; only this hit area grows. */
+  inset: 0 -14px;
 }
 
 .reader-bottom-splitter::before {
-  inset: -8px 0;
+  inset: -14px 0;
 }
 
 .pane-splitter::after {

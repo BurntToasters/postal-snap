@@ -32,12 +32,12 @@ test("select conversation checks the loaded thread", async ({ page }) => {
   await page.getByRole("menuitem", { name: "Select conversation" }).click();
   await expect(page.getByRole("toolbar", { name: "2 selected" })).toBeVisible();
   await expect(
-    page.getByRole("checkbox", { name: "Select Weekend plans" }),
+    page.locator('.message-select[aria-label="Select Weekend plans"]'),
   ).toBeChecked();
   await expect(
-    page.getByRole("checkbox", { name: "Select Older family note" }),
+    page.locator('.message-select[aria-label="Select Older family note"]'),
   ).toBeChecked();
   await expect(
-    page.getByRole("checkbox", { name: "Select Library hours" }),
+    page.locator('.message-select[aria-label="Select Library hours"]'),
   ).not.toBeChecked();
 });

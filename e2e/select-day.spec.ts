@@ -21,7 +21,7 @@ test("a day heading selects that message", async ({ page }) => {
   await page.locator("button.list-day").click();
   await expect(page.getByRole("toolbar", { name: "1 selected" })).toBeVisible();
   await expect(
-    page.getByRole("checkbox", { name: "Select Weekend plans" }),
+    page.locator('.message-select[aria-label="Select Weekend plans"]'),
   ).toBeChecked();
 });
 
@@ -32,12 +32,12 @@ test("a day heading selects the conversation and leaves the other day", async ({
   await page.locator("button.list-day").first().click();
   await expect(page.getByRole("toolbar", { name: "2 selected" })).toBeVisible();
   await expect(
-    page.getByRole("checkbox", { name: "Select Weekend plans" }),
+    page.locator('.message-select[aria-label="Select Weekend plans"]'),
   ).toBeChecked();
   await expect(
-    page.getByRole("checkbox", { name: "Select Older family note" }),
+    page.locator('.message-select[aria-label="Select Older family note"]'),
   ).toBeChecked();
   await expect(
-    page.getByRole("checkbox", { name: "Select Library hours" }),
+    page.locator('.message-select[aria-label="Select Library hours"]'),
   ).not.toBeChecked();
 });

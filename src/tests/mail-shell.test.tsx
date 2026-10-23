@@ -926,32 +926,48 @@ describe("mail shell", () => {
 
     await screen.findByRole("option", { name: /Third message/i });
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: /First message/i }));
+    fireEvent.click(
+      screen.getByLabelText(/First message/i, {
+        selector: "input.message-select",
+      }),
+    );
     fireEvent.click(screen.getByRole("option", { name: /Third message/i }), {
       shiftKey: true,
     });
 
     expect(
-      screen.getByRole("checkbox", { name: /First message/i }),
+      screen.getByLabelText(/First message/i, {
+        selector: "input.message-select",
+      }),
     ).toBeChecked();
     expect(
-      screen.getByRole("checkbox", { name: /Second message/i }),
+      screen.getByLabelText(/Second message/i, {
+        selector: "input.message-select",
+      }),
     ).toBeChecked();
     expect(
-      screen.getByRole("checkbox", { name: /Third message/i }),
+      screen.getByLabelText(/Third message/i, {
+        selector: "input.message-select",
+      }),
     ).toBeChecked();
 
     fireEvent.click(screen.getByRole("option", { name: /Second message/i }), {
       shiftKey: true,
     });
     expect(
-      screen.getByRole("checkbox", { name: /First message/i }),
+      screen.getByLabelText(/First message/i, {
+        selector: "input.message-select",
+      }),
     ).toBeChecked();
     expect(
-      screen.getByRole("checkbox", { name: /Second message/i }),
+      screen.getByLabelText(/Second message/i, {
+        selector: "input.message-select",
+      }),
     ).toBeChecked();
     expect(
-      screen.getByRole("checkbox", { name: /Third message/i }),
+      screen.getByLabelText(/Third message/i, {
+        selector: "input.message-select",
+      }),
     ).not.toBeChecked();
   });
 
@@ -966,10 +982,14 @@ describe("mail shell", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Select all" }));
 
     expect(
-      screen.getByRole("checkbox", { name: /First message/i }),
+      screen.getByLabelText(/First message/i, {
+        selector: "input.message-select",
+      }),
     ).toBeChecked();
     expect(
-      screen.getByRole("checkbox", { name: /Second message/i }),
+      screen.getByLabelText(/Second message/i, {
+        selector: "input.message-select",
+      }),
     ).toBeChecked();
     expect(screen.getByRole("toolbar", { name: "2 selected" })).toBeVisible();
   });
@@ -1005,10 +1025,14 @@ describe("mail shell", () => {
     );
 
     expect(
-      screen.getByRole("checkbox", { name: "Select Unread note" }),
+      screen.getByLabelText("Select Unread note", {
+        selector: "input.message-select",
+      }),
     ).toBeChecked();
     expect(
-      screen.getByRole("checkbox", { name: "Select Read note" }),
+      screen.getByLabelText("Select Read note", {
+        selector: "input.message-select",
+      }),
     ).not.toBeChecked();
     expect(screen.getByRole("toolbar", { name: "1 selected" })).toBeVisible();
   });
@@ -1070,10 +1094,14 @@ describe("mail shell", () => {
     await screen.findByRole("heading", { name: "First note" });
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
     fireEvent.click(
-      screen.getByRole("checkbox", { name: "Select First note" }),
+      screen.getByLabelText("Select First note", {
+        selector: "input.message-select",
+      }),
     );
     fireEvent.click(
-      screen.getByRole("checkbox", { name: "Select Third note" }),
+      screen.getByLabelText("Select Third note", {
+        selector: "input.message-select",
+      }),
     );
     fireEvent.click(
       screen.getByRole("button", { name: "More mailbox actions" }),
@@ -1107,7 +1135,11 @@ describe("mail shell", () => {
 
     await screen.findByRole("option", { name: /First message/i });
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: /First message/i }));
+    fireEvent.click(
+      screen.getByLabelText(/First message/i, {
+        selector: "input.message-select",
+      }),
+    );
     fireEvent.click(
       screen.getByRole("button", { name: "More mailbox actions" }),
     );
@@ -1125,7 +1157,9 @@ describe("mail shell", () => {
       expect(useAppStore.getState().error).toBe("Error: disk full"),
     );
     expect(
-      screen.getByRole("checkbox", { name: /First message/i }),
+      screen.getByLabelText(/First message/i, {
+        selector: "input.message-select",
+      }),
     ).toBeChecked();
     expect(
       screen.getByRole("group", { name: strings.mail.snoozeSelected }),
@@ -1179,10 +1213,14 @@ describe("mail shell", () => {
     await screen.findByRole("option", { name: /Newer note/i });
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
     fireEvent.click(
-      screen.getByRole("checkbox", { name: "Select Middle note" }),
+      screen.getByLabelText("Select Middle note", {
+        selector: "input.message-select",
+      }),
     );
     fireEvent.click(
-      screen.getByRole("checkbox", { name: "Select Older note" }),
+      screen.getByLabelText("Select Older note", {
+        selector: "input.message-select",
+      }),
     );
     fireEvent.click(
       screen.getByRole("button", { name: "More mailbox actions" }),
@@ -1210,7 +1248,9 @@ describe("mail shell", () => {
       expect.stringMatching(/Newer note/),
     );
     expect(
-      screen.getByRole("checkbox", { name: "Select Middle note" }),
+      screen.getByLabelText("Select Middle note", {
+        selector: "input.message-select",
+      }),
     ).toBeChecked();
   });
 
@@ -1238,10 +1278,14 @@ describe("mail shell", () => {
     await screen.findByRole("option", { name: /Pinned[\s\S]*Older note/i });
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
     fireEvent.click(
-      screen.getByRole("checkbox", { name: "Select Older note" }),
+      screen.getByLabelText("Select Older note", {
+        selector: "input.message-select",
+      }),
     );
     fireEvent.click(
-      screen.getByRole("checkbox", { name: "Select Newer note" }),
+      screen.getByLabelText("Select Newer note", {
+        selector: "input.message-select",
+      }),
     );
     fireEvent.click(
       screen.getByRole("button", { name: "More mailbox actions" }),
@@ -1292,7 +1336,9 @@ describe("mail shell", () => {
     await screen.findByRole("option", { name: /Newer note/i });
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
     fireEvent.click(
-      screen.getByRole("checkbox", { name: "Select Older note" }),
+      screen.getByLabelText("Select Older note", {
+        selector: "input.message-select",
+      }),
     );
     fireEvent.click(
       screen.getByRole("button", { name: "More mailbox actions" }),
@@ -1312,7 +1358,9 @@ describe("mail shell", () => {
       useAppStore.getState().messages.find((item) => item.id === 2)?.pinned,
     ).toBe(false);
     expect(
-      screen.getByRole("checkbox", { name: "Select Older note" }),
+      screen.getByLabelText("Select Older note", {
+        selector: "input.message-select",
+      }),
     ).toBeChecked();
   });
 
@@ -1515,14 +1563,20 @@ describe("mail shell", () => {
 
     await waitFor(() =>
       expect(
-        screen.getByRole("checkbox", { name: /First message/i }),
+        screen.getByLabelText(/First message/i, {
+          selector: "input.message-select",
+        }),
       ).toBeChecked(),
     );
     expect(
-      screen.getByRole("checkbox", { name: /Second message/i }),
+      screen.getByLabelText(/Second message/i, {
+        selector: "input.message-select",
+      }),
     ).toBeChecked();
     expect(
-      screen.getByRole("checkbox", { name: /Other note/i }),
+      screen.getByLabelText(/Other note/i, {
+        selector: "input.message-select",
+      }),
     ).not.toBeChecked();
     expect(screen.getByRole("toolbar", { name: "2 selected" })).toBeVisible();
     expect(mockedGetMessage).not.toHaveBeenCalled();
@@ -1561,14 +1615,20 @@ describe("mail shell", () => {
 
     await waitFor(() =>
       expect(
-        screen.getByRole("checkbox", { name: /Weekend plans/i }),
+        screen.getByLabelText(/Weekend plans/i, {
+          selector: "input.message-select",
+        }),
       ).toBeChecked(),
     );
     expect(
-      screen.getByRole("checkbox", { name: /Saturday note/i }),
+      screen.getByLabelText(/Saturday note/i, {
+        selector: "input.message-select",
+      }),
     ).toBeChecked();
     expect(
-      screen.getByRole("checkbox", { name: /Library hours/i }),
+      screen.getByLabelText(/Library hours/i, {
+        selector: "input.message-select",
+      }),
     ).not.toBeChecked();
     expect(screen.getByRole("toolbar", { name: "2 selected" })).toBeVisible();
     expect(mockedGetMessage).not.toHaveBeenCalled();
@@ -1812,9 +1872,15 @@ describe("mail shell", () => {
 
     await screen.findByRole("option", { name: /With file/i });
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "Select With file" }));
     fireEvent.click(
-      screen.getByRole("checkbox", { name: "Select Plain note" }),
+      screen.getByLabelText("Select With file", {
+        selector: "input.message-select",
+      }),
+    );
+    fireEvent.click(
+      screen.getByLabelText("Select Plain note", {
+        selector: "input.message-select",
+      }),
     );
     fireEvent.click(
       screen.getByRole("button", { name: "More mailbox actions" }),
@@ -1830,7 +1896,9 @@ describe("mail shell", () => {
       ),
     );
     expect(
-      screen.getByRole("checkbox", { name: "Select With file" }),
+      screen.getByLabelText("Select With file", {
+        selector: "input.message-select",
+      }),
     ).toBeChecked();
     expect(useAppStore.getState().messages).toHaveLength(3);
   });
@@ -1846,7 +1914,9 @@ describe("mail shell", () => {
       screen.getByRole("menuitem", { name: strings.reader.saveSelectedFiles }),
     ).toBeDisabled();
     fireEvent.click(
-      screen.getByRole("checkbox", { name: "Select First message" }),
+      screen.getByLabelText("Select First message", {
+        selector: "input.message-select",
+      }),
     );
     expect(
       screen.getByRole("menuitem", { name: strings.reader.saveSelectedFiles }),
@@ -1872,7 +1942,11 @@ describe("mail shell", () => {
 
     await screen.findByRole("option", { name: /With file/i });
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "Select With file" }));
+    fireEvent.click(
+      screen.getByLabelText("Select With file", {
+        selector: "input.message-select",
+      }),
+    );
     fireEvent.click(
       screen.getByRole("button", { name: "More mailbox actions" }),
     );
@@ -1884,7 +1958,9 @@ describe("mail shell", () => {
       expect(useAppStore.getState().error).toBe("Error: disk full"),
     );
     expect(
-      screen.getByRole("checkbox", { name: "Select With file" }),
+      screen.getByLabelText("Select With file", {
+        selector: "input.message-select",
+      }),
     ).toBeChecked();
   });
 
@@ -1906,9 +1982,15 @@ describe("mail shell", () => {
 
     await screen.findByRole("option", { name: /With file/i });
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "Select With file" }));
     fireEvent.click(
-      screen.getByRole("checkbox", { name: "Select Plain note" }),
+      screen.getByLabelText("Select With file", {
+        selector: "input.message-select",
+      }),
+    );
+    fireEvent.click(
+      screen.getByLabelText("Select Plain note", {
+        selector: "input.message-select",
+      }),
     );
     fireEvent.click(
       screen.getByRole("button", { name: "More mailbox actions" }),
@@ -1923,7 +2005,9 @@ describe("mail shell", () => {
       expect(api.saveMessagesEml).toHaveBeenCalledWith("account-1", [1, 2]),
     );
     expect(
-      screen.getByRole("checkbox", { name: "Select Plain note" }),
+      screen.getByLabelText("Select Plain note", {
+        selector: "input.message-select",
+      }),
     ).toBeChecked();
     expect(useAppStore.getState().messages).toHaveLength(2);
   });
@@ -1942,7 +2026,9 @@ describe("mail shell", () => {
     await screen.findByRole("option", { name: /Plain note/i });
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
     fireEvent.click(
-      screen.getByRole("checkbox", { name: "Select Plain note" }),
+      screen.getByLabelText("Select Plain note", {
+        selector: "input.message-select",
+      }),
     );
     fireEvent.click(
       screen.getByRole("button", { name: "More mailbox actions" }),
@@ -1957,7 +2043,9 @@ describe("mail shell", () => {
       expect(useAppStore.getState().error).toBe("Error: disk full"),
     );
     expect(
-      screen.getByRole("checkbox", { name: "Select Plain note" }),
+      screen.getByLabelText("Select Plain note", {
+        selector: "input.message-select",
+      }),
     ).toBeChecked();
     expect(api.saveConversationAttachments).not.toHaveBeenCalled();
   });
@@ -2292,8 +2380,16 @@ describe("mail shell", () => {
 
     await screen.findByRole("option", { name: /First message/i });
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: /First message/i }));
-    fireEvent.click(screen.getByRole("checkbox", { name: /Second message/i }));
+    fireEvent.click(
+      screen.getByLabelText(/First message/i, {
+        selector: "input.message-select",
+      }),
+    );
+    fireEvent.click(
+      screen.getByLabelText(/Second message/i, {
+        selector: "input.message-select",
+      }),
+    );
     expect(screen.getByRole("toolbar", { name: "2 selected" })).toBeVisible();
     fireEvent.click(
       screen.getByRole("button", { name: "More mailbox actions" }),
@@ -2320,7 +2416,11 @@ describe("mail shell", () => {
 
     await screen.findByRole("option", { name: /First message/i });
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: /First message/i }));
+    fireEvent.click(
+      screen.getByLabelText(/First message/i, {
+        selector: "input.message-select",
+      }),
+    );
     fireEvent.click(
       screen.getByRole("button", { name: "More mailbox actions" }),
     );
@@ -2364,7 +2464,11 @@ describe("mail shell", () => {
       expect(mockedListMessages.mock.calls.length).toBeGreaterThan(listed),
     );
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: /First message/i }));
+    fireEvent.click(
+      screen.getByLabelText(/First message/i, {
+        selector: "input.message-select",
+      }),
+    );
     fireEvent.click(
       screen.getByRole("button", { name: strings.mail.deleteForever }),
     );
@@ -2512,7 +2616,11 @@ describe("mail shell", () => {
 
     await screen.findByRole("option", { name: /First message/i });
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: /First message/i }));
+    fireEvent.click(
+      screen.getByLabelText(/First message/i, {
+        selector: "input.message-select",
+      }),
+    );
     fireEvent.click(
       screen.getByRole("button", { name: strings.reader.moveToInbox }),
     );
@@ -2537,7 +2645,11 @@ describe("mail shell", () => {
 
     await screen.findByRole("option", { name: /First message/i });
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: /First message/i }));
+    fireEvent.click(
+      screen.getByLabelText(/First message/i, {
+        selector: "input.message-select",
+      }),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Move to trash" }));
 
     await waitFor(() =>
@@ -2575,7 +2687,11 @@ describe("mail shell", () => {
 
     await screen.findByRole("option", { name: /First message/i });
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: /First message/i }));
+    fireEvent.click(
+      screen.getByLabelText(/First message/i, {
+        selector: "input.message-select",
+      }),
+    );
     fireEvent.click(
       screen.getByRole("button", { name: "More mailbox actions" }),
     );
@@ -2616,7 +2732,11 @@ describe("mail shell", () => {
 
     await screen.findByRole("option", { name: /First message/i });
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: /First message/i }));
+    fireEvent.click(
+      screen.getByLabelText(/First message/i, {
+        selector: "input.message-select",
+      }),
+    );
     fireEvent.click(
       screen.getByRole("button", { name: "More mailbox actions" }),
     );
@@ -2630,7 +2750,9 @@ describe("mail shell", () => {
       ),
     );
     expect(
-      screen.getByRole("checkbox", { name: /First message/i }),
+      screen.getByLabelText(/First message/i, {
+        selector: "input.message-select",
+      }),
     ).toBeChecked();
   });
 
@@ -2721,10 +2843,14 @@ describe("mail shell", () => {
     await screen.findByRole("option", { name: /Newer note/i });
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
     fireEvent.click(
-      screen.getByRole("checkbox", { name: "Select Newer note" }),
+      screen.getByLabelText("Select Newer note", {
+        selector: "input.message-select",
+      }),
     );
     fireEvent.click(
-      screen.getByRole("checkbox", { name: "Select Older note" }),
+      screen.getByLabelText("Select Older note", {
+        selector: "input.message-select",
+      }),
     );
     fireEvent.click(
       screen.getByRole("button", { name: "More mailbox actions" }),
@@ -2745,7 +2871,9 @@ describe("mail shell", () => {
     expect(frame.srcdoc).not.toContain("Skipped note");
     expect(frame.srcdoc).not.toContain("alert(1)");
     expect(
-      screen.getByRole("checkbox", { name: "Select Newer note" }),
+      screen.getByLabelText("Select Newer note", {
+        selector: "input.message-select",
+      }),
     ).toBeChecked();
     frame.remove();
   });
@@ -2769,7 +2897,9 @@ describe("mail shell", () => {
     await screen.findByRole("option", { name: /Newer note/i });
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
     fireEvent.click(
-      screen.getByRole("checkbox", { name: "Select Older note" }),
+      screen.getByLabelText("Select Older note", {
+        selector: "input.message-select",
+      }),
     );
     fireEvent.click(
       screen.getByRole("button", { name: "More mailbox actions" }),
@@ -2784,7 +2914,9 @@ describe("mail shell", () => {
     );
     expect(document.querySelector("iframe")).toBeNull();
     expect(
-      screen.getByRole("checkbox", { name: "Select Older note" }),
+      screen.getByLabelText("Select Older note", {
+        selector: "input.message-select",
+      }),
     ).toBeChecked();
   });
 
@@ -2957,10 +3089,14 @@ describe("mail shell", () => {
     await screen.findByRole("option", { name: /Newer note/i });
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
     fireEvent.click(
-      screen.getByRole("checkbox", { name: "Select Newer note" }),
+      screen.getByLabelText("Select Newer note", {
+        selector: "input.message-select",
+      }),
     );
     fireEvent.click(
-      screen.getByRole("checkbox", { name: "Select Older note" }),
+      screen.getByLabelText("Select Older note", {
+        selector: "input.message-select",
+      }),
     );
     fireEvent.click(
       screen.getByRole("button", { name: "More mailbox actions" }),
@@ -2984,7 +3120,9 @@ describe("mail shell", () => {
     expect(quoted).not.toContain("Skipped note");
     expect(quoted).not.toContain("alert(1)");
     expect(
-      screen.getByRole("checkbox", { name: "Select Newer note" }),
+      screen.getByLabelText("Select Newer note", {
+        selector: "input.message-select",
+      }),
     ).toBeChecked();
   });
 
@@ -3007,7 +3145,9 @@ describe("mail shell", () => {
     await screen.findByRole("option", { name: /Newer note/i });
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
     fireEvent.click(
-      screen.getByRole("checkbox", { name: "Select Older note" }),
+      screen.getByLabelText("Select Older note", {
+        selector: "input.message-select",
+      }),
     );
     fireEvent.click(
       screen.getByRole("button", { name: "More mailbox actions" }),
@@ -3021,7 +3161,9 @@ describe("mail shell", () => {
     );
     expect(useAppStore.getState().composeSeed).toBeUndefined();
     expect(
-      screen.getByRole("checkbox", { name: "Select Older note" }),
+      screen.getByLabelText("Select Older note", {
+        selector: "input.message-select",
+      }),
     ).toBeChecked();
   });
 
@@ -3052,10 +3194,14 @@ describe("mail shell", () => {
     await screen.findByRole("option", { name: /Newer note/i });
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
     fireEvent.click(
-      screen.getByRole("checkbox", { name: "Select Newer note" }),
+      screen.getByLabelText("Select Newer note", {
+        selector: "input.message-select",
+      }),
     );
     fireEvent.click(
-      screen.getByRole("checkbox", { name: "Select Older note" }),
+      screen.getByLabelText("Select Older note", {
+        selector: "input.message-select",
+      }),
     );
     fireEvent.click(
       screen.getByRole("button", { name: "More mailbox actions" }),
@@ -3071,7 +3217,9 @@ describe("mail shell", () => {
     );
     expect(useAppStore.getState().composeSeed).toBeUndefined();
     expect(
-      screen.getByRole("checkbox", { name: "Select Newer note" }),
+      screen.getByLabelText("Select Newer note", {
+        selector: "input.message-select",
+      }),
     ).toBeChecked();
   });
 
@@ -3115,13 +3263,19 @@ describe("mail shell", () => {
     await screen.findByRole("option", { name: /Newer note/i });
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
     fireEvent.click(
-      screen.getByRole("checkbox", { name: "Select Newer note" }),
+      screen.getByLabelText("Select Newer note", {
+        selector: "input.message-select",
+      }),
     );
     fireEvent.click(
-      screen.getByRole("checkbox", { name: "Select Older note" }),
+      screen.getByLabelText("Select Older note", {
+        selector: "input.message-select",
+      }),
     );
     fireEvent.click(
-      screen.getByRole("checkbox", { name: "Select Skipped note" }),
+      screen.getByLabelText("Select Skipped note", {
+        selector: "input.message-select",
+      }),
     );
     fireEvent.click(
       screen.getByRole("button", { name: "More mailbox actions" }),
@@ -3140,7 +3294,9 @@ describe("mail shell", () => {
     expect(copied).not.toContain("Skipped");
     expect(copied).not.toContain("alert(1)");
     expect(
-      screen.getByRole("checkbox", { name: "Select Newer note" }),
+      screen.getByLabelText("Select Newer note", {
+        selector: "input.message-select",
+      }),
     ).toBeChecked();
   });
 
@@ -3162,7 +3318,9 @@ describe("mail shell", () => {
     await screen.findByRole("option", { name: /Newer note/i });
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
     fireEvent.click(
-      screen.getByRole("checkbox", { name: "Select Newer note" }),
+      screen.getByLabelText("Select Newer note", {
+        selector: "input.message-select",
+      }),
     );
     fireEvent.click(
       screen.getByRole("button", { name: "More mailbox actions" }),
@@ -3176,7 +3334,9 @@ describe("mail shell", () => {
     );
     expect(writeText).not.toHaveBeenCalled();
     expect(
-      screen.getByRole("checkbox", { name: "Select Newer note" }),
+      screen.getByLabelText("Select Newer note", {
+        selector: "input.message-select",
+      }),
     ).toBeChecked();
   });
 
@@ -3198,7 +3358,9 @@ describe("mail shell", () => {
     await screen.findByRole("option", { name: /Newer note/i });
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
     fireEvent.click(
-      screen.getByRole("checkbox", { name: "Select Newer note" }),
+      screen.getByLabelText("Select Newer note", {
+        selector: "input.message-select",
+      }),
     );
     fireEvent.click(
       screen.getByRole("button", { name: "More mailbox actions" }),
@@ -3211,7 +3373,9 @@ describe("mail shell", () => {
       expect(useAppStore.getState().error).toBe("Error: clipboard locked"),
     );
     expect(
-      screen.getByRole("checkbox", { name: "Select Newer note" }),
+      screen.getByLabelText("Select Newer note", {
+        selector: "input.message-select",
+      }),
     ).toBeChecked();
   });
 
@@ -3590,8 +3754,16 @@ describe("mail shell", () => {
     renderShell();
     await screen.findByRole("option", { name: /First message/i });
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: /First message/i }));
-    fireEvent.click(screen.getByRole("checkbox", { name: /Second message/i }));
+    fireEvent.click(
+      screen.getByLabelText(/First message/i, {
+        selector: "input.message-select",
+      }),
+    );
+    fireEvent.click(
+      screen.getByLabelText(/Second message/i, {
+        selector: "input.message-select",
+      }),
+    );
     const dataTransfer = messageDragTransfer();
     fireEvent.dragStart(
       screen.getByRole("option", { name: /First message/i }),
@@ -5080,7 +5252,11 @@ describe("mail shell", () => {
     await screen.findByRole("option", { name: /First message/i });
 
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: /First message/i }));
+    fireEvent.click(
+      screen.getByLabelText(/First message/i, {
+        selector: "input.message-select",
+      }),
+    );
     fireEvent.click(
       screen.getByRole("button", { name: "More mailbox actions" }),
     );
@@ -5090,7 +5266,11 @@ describe("mail shell", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: /First message/i }));
+    fireEvent.click(
+      screen.getByLabelText(/First message/i, {
+        selector: "input.message-select",
+      }),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Archive" }));
     expect(useAppStore.getState().error).toBe(strings.mail.noTargetFolder);
   });
@@ -5533,7 +5713,11 @@ describe("mail shell", () => {
     await screen.findByRole("option", { name: /First message/i });
 
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: /First message/i }));
+    fireEvent.click(
+      screen.getByLabelText(/First message/i, {
+        selector: "input.message-select",
+      }),
+    );
     fireEvent.click(
       screen.getByRole("button", { name: "More mailbox actions" }),
     );
@@ -6041,7 +6225,11 @@ describe("mail shell", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Junk" }));
     fireEvent.click(await screen.findByRole("button", { name: "Select" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: /First message/i }));
+    fireEvent.click(
+      screen.getByLabelText(/First message/i, {
+        selector: "input.message-select",
+      }),
+    );
     fireEvent.click(
       screen.getByRole("button", { name: "More mailbox actions" }),
     );

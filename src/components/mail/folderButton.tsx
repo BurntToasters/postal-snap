@@ -93,10 +93,9 @@ export function FolderButton({
         onClick={onClick}
         aria-current={active ? "page" : undefined}
         aria-label={accessibleName}
-        title={
-          [fullName, summary, insideUnread].filter(Boolean).join(", ") ||
-          undefined
-        }
+        title={[fullName ?? label, summary, insideUnread]
+          .filter(Boolean)
+          .join(", ")}
       >
         <Icon aria-hidden="true" />
         <span>{label}</span>

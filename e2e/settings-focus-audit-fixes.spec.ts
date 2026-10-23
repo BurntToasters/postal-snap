@@ -187,11 +187,13 @@ test("Shortcuts scrolls by keyboard across density, scale, and narrow layouts", 
       await expect
         .poll(() => region.evaluate((element) => element.scrollTop))
         .toBeGreaterThan(before);
-      const afterArrow = await region.evaluate((element) => element.scrollTop);
+      await region.evaluate((element) => {
+        element.scrollTop = 0;
+      });
       await page.keyboard.press("PageDown");
       await expect
         .poll(() => region.evaluate((element) => element.scrollTop))
-        .toBeGreaterThan(afterArrow);
+        .toBeGreaterThan(0);
       await scanSettings(page, ["scrollable-region-focusable"]);
       observations.push({
         density,
@@ -224,11 +226,13 @@ test("Shortcuts scrolls by keyboard across density, scale, and narrow layouts", 
   await expect
     .poll(() => region.evaluate((element) => element.scrollTop))
     .toBeGreaterThan(before);
-  const afterArrow = await region.evaluate((element) => element.scrollTop);
+  await region.evaluate((element) => {
+    element.scrollTop = 0;
+  });
   await page.keyboard.press("PageDown");
   await expect
     .poll(() => region.evaluate((element) => element.scrollTop))
-    .toBeGreaterThan(afterArrow);
+    .toBeGreaterThan(0);
   await scanSettings(page, ["scrollable-region-focusable"]);
   observations.push({
     density: "compact",

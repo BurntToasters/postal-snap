@@ -153,44 +153,46 @@ export function AddressFields({
             ariaDescribedBy={recipientError ? "recipient-error" : undefined}
           />
         </label>
-        <button
-          type="button"
-          className="cc-toggle"
-          aria-expanded={ccOpen}
-          aria-pressed={ccOpen}
-          onClick={(event) => {
-            event.preventDefault();
-            toggleCopyField(cc, ccOpen, setShowCc, "composer-cc");
-          }}
-        >
-          {withCount(strings.composer.cc, cc)}
-        </button>
-        <button
-          type="button"
-          className="cc-toggle"
-          aria-expanded={bccOpen}
-          aria-pressed={bccOpen}
-          onClick={(event) => {
-            event.preventDefault();
-            toggleCopyField(bcc, bccOpen, setShowBcc, "composer-bcc");
-          }}
-        >
-          {withCount(strings.composer.bcc, bcc)}
-        </button>
-        {setReplyTo ? (
+        <div className="to-field-toggles">
           <button
             type="button"
             className="cc-toggle"
-            aria-expanded={replyToOpen}
-            aria-pressed={replyToOpen}
+            aria-expanded={ccOpen}
+            aria-pressed={ccOpen}
             onClick={(event) => {
               event.preventDefault();
-              setShowReplyTo((value) => !value);
+              toggleCopyField(cc, ccOpen, setShowCc, "composer-cc");
             }}
           >
-            {strings.composer.replyTo}
+            {withCount(strings.composer.cc, cc)}
           </button>
-        ) : null}
+          <button
+            type="button"
+            className="cc-toggle"
+            aria-expanded={bccOpen}
+            aria-pressed={bccOpen}
+            onClick={(event) => {
+              event.preventDefault();
+              toggleCopyField(bcc, bccOpen, setShowBcc, "composer-bcc");
+            }}
+          >
+            {withCount(strings.composer.bcc, bcc)}
+          </button>
+          {setReplyTo ? (
+            <button
+              type="button"
+              className="cc-toggle"
+              aria-expanded={replyToOpen}
+              aria-pressed={replyToOpen}
+              onClick={(event) => {
+                event.preventDefault();
+                setShowReplyTo((value) => !value);
+              }}
+            >
+              {strings.composer.replyTo}
+            </button>
+          ) : null}
+        </div>
       </div>
       {ccOpen ? (
         <label>

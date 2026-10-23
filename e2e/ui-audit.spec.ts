@@ -41,7 +41,7 @@ test("select mode checkbox is compact with a full hit area", async ({
 }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Select", exact: true }).click();
-  const checkbox = page.getByRole("checkbox", { name: /Weekend plans/ });
+  const checkbox = page.locator(".message-select").first();
   const visual = await box(checkbox);
   expect(visual.width).toBeLessThanOrEqual(24);
   const hit = await box(page.locator(".message-select-hit").first());
@@ -110,7 +110,7 @@ test("select-mode actions fit one row and the rest sit in the menu", async ({
 }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Select", exact: true }).click();
-  await page.getByRole("checkbox", { name: /Weekend plans/ }).check();
+  await page.locator(".message-select").first().check();
   const bar = await box(page.getByRole("toolbar", { name: "1 selected" }));
   expect(bar.height).toBeLessThan(72);
   await page.getByRole("button", { name: "More mailbox actions" }).click();
@@ -223,11 +223,25 @@ test("nested folders fit the sidebar and actions appear on demand", async ({
     (node) => node.scrollWidth - node.clientWidth,
   );
   expect(overflow).toBeLessThanOrEqual(1);
-  const rename = page.getByRole("button", { name: "Rename folder Launch" });
+  // Nested labels keep their full width at the default pane.
+  for (const label of ["Projects", "2026", "Launch"]) {
+    const width = await page
+      .locator(".folder", { hasText: label })
+      .last()
+      .locator("span")
+      .first()
+      .evaluate((node) => node.getBoundingClientRect().width);
+    expect(width).toBeGreaterThan(0);
+  }
+  // Inline actions are depth-0 only; nested rows rely on the context menu.
+  await expect(
+    page.getByRole("button", { name: "Rename folder Launch" }),
+  ).toHaveCount(0);
+  const rename = page.getByRole("button", { name: "Rename folder Projects" });
   expect(await rename.evaluate((node) => getComputedStyle(node).opacity)).toBe(
     "0",
   );
-  await page.locator(".folder-row", { hasText: "Launch" }).hover();
+  await page.locator(".folder-row", { hasText: "Projects" }).first().hover();
   await expect
     .poll(() => rename.evaluate((node) => getComputedStyle(node).opacity))
     .toBe("1");

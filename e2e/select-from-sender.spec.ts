@@ -34,12 +34,12 @@ test("selects every loaded message from this sender", async ({ page }) => {
     .click();
   await expect(page.getByRole("toolbar", { name: "3 selected" })).toBeVisible();
   await expect(
-    page.getByRole("checkbox", { name: "Select Weekend plans" }),
+    page.locator('.message-select[aria-label="Select Weekend plans"]'),
   ).toBeChecked();
   await expect(
-    page.getByRole("checkbox", { name: "Select Older family note" }),
+    page.locator('.message-select[aria-label="Select Older family note"]'),
   ).toBeChecked();
   await expect(
-    page.getByRole("checkbox", { name: "Select Library hours" }),
+    page.locator('.message-select[aria-label="Select Library hours"]'),
   ).toBeChecked();
 });
