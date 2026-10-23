@@ -12,6 +12,7 @@ use super::{
     managed_account_dir, release_attachment_tokens, write_managed_file, AppState, CommandResult,
 };
 use crate::{
+    bounded_file::{self, BoundedFileError},
     mail,
     models::{Attachment, AttachmentPreview, ComposeAttachment},
     security,
@@ -911,31 +912,12 @@ pub async fn choose_attachments(
 /// Read one user-chosen file. Regular files only: no directories, no
 /// symlinks, and nothing over `max_bytes`. Errors never name the path.
 pub(crate) async fn read_attachment_source(path: &Path, max_bytes: u64) -> Result<Vec<u8>, String> {
-    let unavailable = || "That selected file is unavailable.".to_string();
-    let metadata = tokio::fs::symlink_metadata(path)
-        .await
-        .map_err(|_| unavailable())?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(unavailable());
+    let limit = usize::try_from(max_bytes).unwrap_or(usize::MAX);
+    match bounded_file::read_regular_file(path, limit).await {
+        Ok(bytes) => Ok(bytes),
+        Err(BoundedFileError::TooLarge) => Err("That attachment is too large.".into()),
+        Err(BoundedFileError::Unavailable) => Err("That selected file is unavailable.".into()),
     }
-    if metadata.len() > max_bytes {
-        return Err("That attachment is too large.".into());
-    }
-    // The file can grow after the size check; never read past the limit.
-    let file = tokio::fs::File::open(path)
-        .await
-        .map_err(|_| unavailable())?;
-    let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    tokio::io::AsyncReadExt::read_to_end(
-        &mut tokio::io::AsyncReadExt::take(file, max_bytes.saturating_add(1)),
-        &mut bytes,
-    )
-    .await
-    .map_err(|_| unavailable())?;
-    if bytes.len() as u64 > max_bytes {
-        return Err("That attachment is too large.".into());
-    }
-    Ok(bytes)
 }
 
 /// Copy chosen or dropped files into private storage and return opaque
@@ -1034,6 +1016,9 @@ pub async fn read_message_inline_image(
     Ok(format!("data:{sniffed};base64,{}", STANDARD.encode(bytes)))
 }
 
+/// Compose previews decode at most this many image bytes.
+const MAX_COMPOSE_IMAGE_BYTES: usize = 20 * 1024 * 1024;
+
 #[tauri::command]
 pub async fn read_compose_image(
     token: String,
@@ -1050,12 +1035,19 @@ pub async fn read_compose_image(
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err("Choose a valid image file.".into());
     }
-    let bytes = tokio::fs::read(&path)
-        .await
-        .map_err(|_| "Could not read that image.".to_string())?;
-    if bytes.len() > 20 * 1024 * 1024 {
+    if metadata.len() > MAX_COMPOSE_IMAGE_BYTES as u64 {
         return Err("That image is too large.".into());
     }
+    // The managed file can grow after the size check; never read past the limit.
+    let mut file = tokio::fs::File::open(&path)
+        .await
+        .map_err(|_| "Could not read that image.".to_string())?;
+    let bytes = bounded_file::read_bounded(&mut file, metadata.len(), MAX_COMPOSE_IMAGE_BYTES)
+        .await
+        .map_err(|error| match error {
+            BoundedFileError::TooLarge => "That image is too large.".to_string(),
+            BoundedFileError::Unavailable => "Could not read that image.".to_string(),
+        })?;
     let mime = security::detect_image_mime(&bytes)
         .ok_or_else(|| "Choose a PNG, JPEG, GIF, or WebP image.".to_string())?;
     Ok(format!("data:{mime};base64,{}", STANDARD.encode(bytes)))
@@ -1683,5 +1675,19 @@ mod tests {
         let path = dir.path().join("gone.txt");
         let error = read_attachment_source(&path, 1024).await.unwrap_err();
         assert!(!error.contains("gone.txt"));
+    }
+
+    #[tokio::test]
+    async fn sparse_oversized_sources_are_refused_before_allocation() {
+        // Failure modes: the metadata size is trusted into a buffer before
+        // the limit is checked; the stream is read without a cap, so a file
+        // that grew after admission exhausts memory; the error names the path.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sparse.bin");
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(128 * 1024 * 1024).unwrap();
+        let error = read_attachment_source(&path, 1024).await.unwrap_err();
+        assert_eq!(error, "That attachment is too large.");
+        assert!(!error.contains("sparse.bin"));
     }
 }

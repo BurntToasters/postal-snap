@@ -18,7 +18,7 @@ import {
   Send,
   Sunrise,
 } from "lucide-react";
-import { formatMessageDate, shortcutMod } from "../../format";
+import { formatMessageDate, shortcutChord } from "../../format";
 import { strings } from "../../i18n";
 import { moveMenuFocus } from "../toolbarNav";
 import { tonightAtNine, tomorrowAtEight } from "./schedule";
@@ -95,13 +95,13 @@ export function SendBar({
           aria-label={
             sending ? strings.composer.sending : strings.composer.send
           }
-          title={`${sending ? strings.composer.sending : strings.composer.send} (${shortcutMod()}↵)`}
+          title={`${sending ? strings.composer.sending : strings.composer.send} (${shortcutChord("↵")})`}
         >
           <Send />
           <span>
             {sending ? strings.composer.sending : strings.composer.send}
           </span>
-          <kbd className="send-kbd-hint">{`${shortcutMod()}↵`}</kbd>
+          <kbd className="send-kbd-hint">{shortcutChord("↵")}</kbd>
         </button>
         <button
           className="primary-button send-chevron"
@@ -233,7 +233,7 @@ export function SendBar({
         onClick={() => void saveDraft(false)}
         disabled={sending || saveState === "saving"}
         aria-keyshortcuts="Meta+S Control+S"
-        title={`${strings.composer.saveDraft} (${shortcutMod()}+S)`}
+        title={`${strings.composer.saveDraft} (${shortcutChord("S")})`}
       >
         <Save aria-hidden="true" />
         {saveState === "saving"

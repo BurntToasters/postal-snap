@@ -13,6 +13,13 @@ test.beforeEach(async ({ page }) => {
   await installMockIpc(page);
 });
 
+async function readClipboardText(page: import("@playwright/test").Page) {
+  return (await page.evaluate(() => navigator.clipboard.readText())).replace(
+    /\r\n/g,
+    "\n",
+  );
+}
+
 test.afterEach(async ({ page }, testInfo: TestInfo) => {
   const slug = testInfo.title.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
   const path = `test-results/copy-selection-text-${slug}.png`;
@@ -44,11 +51,11 @@ test("copy selected text copies the checked messages oldest first", async ({
     .click();
 
   await expect
-    .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+    .poll(() => readClipboardText(page))
     .toBe(
       "Older family note\n\nAre we still meeting on Saturday?\n\nLibrary hours\n\nAre we still meeting on Saturday?",
     );
-  const copied = await page.evaluate(() => navigator.clipboard.readText());
+  const copied = await readClipboardText(page);
   expect(copied).not.toContain("Weekend plans");
   expect(copied).not.toContain("<p>");
   await expect(

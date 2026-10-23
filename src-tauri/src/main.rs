@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app_nap;
+mod bounded_file;
 mod bridge;
 mod commands;
 mod content_blocking;

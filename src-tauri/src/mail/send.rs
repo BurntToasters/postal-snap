@@ -30,6 +30,7 @@ use super::{
     MAX_OUTGOING_BYTES,
 };
 use crate::{
+    bounded_file::{self, BoundedFileError},
     models::{
         validate_compose_sender, AccountRecord, BodyFormat, ComposeDraft, ServerConfig, TlsMode,
     },
@@ -966,12 +967,21 @@ async fn build_message_with_id(
         if metadata.file_type().is_symlink() || !metadata.is_file() {
             return Err("An attachment file is no longer available.".into());
         }
-        let bytes = tokio::fs::read(path)
-            .await
-            .map_err(|_| "Could not read an attachment file.".to_string())?;
-        if bytes.len() > MAX_MESSAGE_BYTES {
+        if metadata.len() > MAX_MESSAGE_BYTES as u64 {
             return Err("An attachment exceeds the maximum allowed size.".into());
         }
+        // The managed file can grow after the size check; never read past the limit.
+        let mut file = tokio::fs::File::open(path)
+            .await
+            .map_err(|_| "Could not read an attachment file.".to_string())?;
+        let bytes = bounded_file::read_bounded(&mut file, metadata.len(), MAX_MESSAGE_BYTES)
+            .await
+            .map_err(|error| match error {
+                BoundedFileError::TooLarge => {
+                    "An attachment exceeds the maximum allowed size.".to_string()
+                }
+                BoundedFileError::Unavailable => "Could not read an attachment file.".to_string(),
+            })?;
         // Base64 and MIME framing can inflate attachments by roughly a third;
         // the formatted-size check below is authoritative.
         total_bytes = total_bytes.saturating_add(bytes.len().saturating_mul(4) / 3);
@@ -1527,6 +1537,30 @@ mod plain_tests {
             .await
             .unwrap_err();
         assert!(error.contains("too large"));
+    }
+
+    #[tokio::test]
+    async fn oversized_managed_attachments_are_refused_before_reading() {
+        // Failure modes: the whole managed file is read into memory before
+        // the 50 MiB limit is checked; a symlink is followed; the error
+        // names the managed path. A sparse file makes the metadata check
+        // instant without allocating the declared size.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.bin");
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len((MAX_MESSAGE_BYTES + 1) as u64).unwrap();
+        let mut message_draft = draft(BodyFormat::Plain, "See file");
+        message_draft.attachments.push(ComposeAttachment {
+            token: path.to_string_lossy().into(),
+            filename: "big.bin".into(),
+            content_type: Some("application/octet-stream".into()),
+            inline: false,
+            content_id: None,
+            size: None,
+        });
+        let error = build_message(&account(), &message_draft).await.unwrap_err();
+        assert_eq!(error, "An attachment exceeds the maximum allowed size.");
+        assert!(!error.contains(path.to_str().unwrap()));
     }
 
     #[test]

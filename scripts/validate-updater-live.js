@@ -28,6 +28,37 @@ export function shouldSkipMissingTarget(platform, arch, status) {
   return status === 404 && isOptionalTarget(platform, arch);
 }
 
+export function isBetaManifestName(filename) {
+  return String(filename ?? "").includes("-beta-");
+}
+
+// Filename-aware shape check: the manifest must carry the expected
+// platform-arch key, and beta manifests must also carry the matching
+// platform-beta alias with the same payload. Signature content stays with
+// the dedicated Tauri verifier; this only checks presence and alias parity.
+export function validateLiveManifest(manifest, { platform, arch, filename }) {
+  validateManifest(manifest);
+  const key = `${platform}-${arch}`;
+  const entry = manifest.platforms[key];
+  if (!entry)
+    throw new Error(
+      `${filename} is missing the expected updater entry: ${key}`,
+    );
+  if (isBetaManifestName(filename)) {
+    const aliasKey = `${platform}-beta`;
+    const alias = manifest.platforms[aliasKey];
+    if (
+      !alias ||
+      alias.url !== entry.url ||
+      alias.signature !== entry.signature
+    )
+      throw new Error(
+        `${filename} is missing the matching updater entry: ${aliasKey}`,
+      );
+  }
+  return true;
+}
+
 export function isDirectRun(argv1) {
   return basename(argv1 ?? "").toLowerCase() === "validate-updater-live.js";
 }
@@ -49,7 +80,7 @@ async function main() {
         );
       }
       const manifest = await response.json();
-      validateManifest(manifest);
+      validateLiveManifest(manifest, { platform, arch, filename });
       if (expectedCurrent && manifest.version !== pkg.version)
         throw new Error(
           `${filename} points to ${manifest.version}; expected ${pkg.version}`,

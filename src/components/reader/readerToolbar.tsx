@@ -47,7 +47,7 @@ import {
   senderSearchQuery,
   subjectSearchQuery,
 } from "../../contextMenu";
-import { shortcutMod, shortcutShiftMod } from "../../format";
+import { shortcutChord } from "../../format";
 import { strings } from "../../i18n";
 import { folderPathLabel } from "../../i18n/mail";
 import type { MailboxSummary, MessageDetail, ReadingPane } from "../../types";
@@ -266,7 +266,7 @@ export function ReaderToolbar({
           <button
             type="button"
             onClick={onReply}
-            title={withShortcut(strings.reader.reply, `${shortcutMod()}R`)}
+            title={withShortcut(strings.reader.reply, shortcutChord("R"))}
             aria-keyshortcuts="Meta+R Control+R"
           >
             <Reply aria-hidden="true" />
@@ -277,7 +277,7 @@ export function ReaderToolbar({
             onClick={onReplyAll}
             title={withShortcut(
               strings.reader.replyAll,
-              `${shortcutShiftMod()}R`,
+              shortcutChord("R", { shift: true }),
             )}
             aria-keyshortcuts="Meta+Shift+R Control+Shift+R"
           >
@@ -298,7 +298,7 @@ export function ReaderToolbar({
               preparingForward
                 ? strings.reader.preparing
                 : strings.reader.forward,
-              `${shortcutShiftMod()}F`,
+              shortcutChord("F", { shift: true }),
             )}
             aria-keyshortcuts="Meta+Shift+F Control+Shift+F"
           >
@@ -322,7 +322,7 @@ export function ReaderToolbar({
               message.isStarred
                 ? strings.reader.removeStar
                 : strings.reader.addStar,
-              `${shortcutShiftMod()}L`,
+              shortcutChord("L", { shift: true }),
             )}
             aria-keyshortcuts="Meta+Shift+L Control+Shift+L"
           >
@@ -342,7 +342,7 @@ export function ReaderToolbar({
             title={
               isArchiveMailbox
                 ? strings.reader.moveToInbox
-                : withShortcut(strings.reader.archive, `${shortcutMod()}E`)
+                : withShortcut(strings.reader.archive, shortcutChord("E"))
             }
             aria-keyshortcuts={
               isArchiveMailbox ? undefined : "Meta+E Control+E"
@@ -364,7 +364,7 @@ export function ReaderToolbar({
               isTrashMailbox
                 ? strings.mail.deleteForever
                 : strings.reader.trash,
-              isTrashMailbox ? "Delete" : `${shortcutMod()}⌫`,
+              isTrashMailbox ? "Delete" : shortcutChord("⌫"),
             )}
             aria-keyshortcuts={
               isTrashMailbox ? "Delete" : "Meta+Backspace Control+Backspace"
@@ -622,7 +622,7 @@ export function ReaderToolbar({
                     message.isRead
                       ? strings.reader.markUnread
                       : strings.reader.markRead,
-                    `${shortcutShiftMod()}U`,
+                    shortcutChord("U", { shift: true }),
                   )}
                   aria-keyshortcuts="Meta+Shift+U Control+Shift+U"
                   onClick={() => {
@@ -638,7 +638,9 @@ export function ReaderToolbar({
                   {message.isRead
                     ? strings.reader.markUnread
                     : strings.reader.markRead}
-                  <kbd aria-hidden="true">{`${shortcutShiftMod()}U`}</kbd>
+                  <kbd aria-hidden="true">
+                    {shortcutChord("U", { shift: true })}
+                  </kbd>
                 </button>
                 {onMarkConversationRead ? (
                   <button

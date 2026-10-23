@@ -5,11 +5,13 @@ import test from "node:test";
 import { join } from "node:path";
 import { artifactArch, artifactPlatform } from "./lib/artifacts.js";
 import { root } from "./lib/paths.js";
+import { isSemVer } from "./lib/versions.js";
 import { validateManifest } from "./validate-updater-manifest.js";
 import {
   isDirectRun,
   shouldSkipMissingTarget,
   updaterManifestNames,
+  validateLiveManifest,
 } from "./validate-updater-live.js";
 import {
   assertReleaseWorktreeClean,
@@ -149,6 +151,260 @@ test("signed manifest accepts the platform-beta key", () => {
       version: "0.4.3",
       platforms: { "darwin-nightly": { signature: "a".repeat(80), url: "x" } },
     }),
+  );
+});
+
+const goodEntry = (overrides = {}) => ({
+  signature: "a".repeat(80),
+  url: "https://github.com/BurntToasters/postal-snap/releases/download/v0.4.3/Postal-Snap-Windows-x64.exe",
+  ...overrides,
+});
+
+const goodManifest = (overrides = {}) => ({
+  version: "0.4.3",
+  platforms: { "windows-x86_64": goodEntry() },
+  ...overrides,
+});
+
+test("updater manifest rejects malformed manifest and entry types", () => {
+  for (const manifest of [null, undefined, "v0.4.3", 42, ["windows-x86_64"]]) {
+    assert.throws(() => validateManifest(manifest), /object/i);
+  }
+  for (const platforms of [null, "windows-x86_64", 42, ["windows-x86_64"]]) {
+    assert.throws(() => validateManifest({ version: "0.4.3", platforms }));
+  }
+  assert.throws(() => validateManifest({ version: "0.4.3" }));
+  for (const entry of [null, "https://x", 42, [], {}]) {
+    assert.throws(() =>
+      validateManifest({
+        version: "0.4.3",
+        platforms: { "windows-x86_64": entry },
+      }),
+    );
+  }
+  assert.throws(() =>
+    validateManifest({
+      version: "0.4.3",
+      platforms: { "windows-x86_64": { signature: "a".repeat(80) } },
+    }),
+  );
+  assert.throws(() =>
+    validateManifest({
+      version: "0.4.3",
+      platforms: {
+        "windows-x86_64": goodEntry({ url: 42 }),
+      },
+    }),
+  );
+  assert.throws(() =>
+    validateManifest({
+      version: "0.4.3",
+      platforms: {
+        "windows-x86_64": goodEntry({ signature: 42 }),
+      },
+    }),
+  );
+  assert.throws(() =>
+    validateManifest({
+      version: "0.4.3",
+      platforms: {
+        "windows-x86_64": goodEntry({ signature: "short" }),
+      },
+    }),
+  );
+});
+
+test("updater manifest rejects empty platform maps", () => {
+  assert.throws(
+    () => validateManifest({ version: "0.4.3", platforms: {} }),
+    /platform/i,
+  );
+});
+
+test("updater manifest rejects invalid SemVer", () => {
+  for (const version of [
+    "",
+    "1.2",
+    "v0.4.3",
+    "0.4.3.1",
+    "0.4.3-",
+    " 0.4.3",
+    "0.4.3 ",
+    "0.4.3+build",
+    "latest",
+    null,
+    42,
+  ]) {
+    assert.throws(() => validateManifest(goodManifest({ version })), /SemVer/);
+  }
+  assert.equal(
+    validateManifest(goodManifest({ version: "0.4.4-beta.1" })),
+    true,
+  );
+});
+
+test("updater manifest rejects unsupported targets", () => {
+  for (const key of [
+    "win32-x86_64",
+    "darwin-arm64",
+    "windows-x64",
+    "linux",
+    "",
+    "windows-x86_64-beta",
+    "darwin-nightly",
+    "WINDOWS-X86_64",
+  ]) {
+    assert.throws(
+      () =>
+        validateManifest(goodManifest({ platforms: { [key]: goodEntry() } })),
+      /[Uu]nsupported/,
+    );
+  }
+});
+
+test("updater manifest rejects incomplete GitHub release URLs", () => {
+  for (const url of [
+    "https://github.com/BurntToasters/postal-snap/releases/download/",
+    "https://github.com/BurntToasters/postal-snap/releases/download",
+    "https://github.com/BurntToasters/postal-snap/releases/download/v0.4.3",
+    "https://github.com/BurntToasters/postal-snap/releases/download/v0.4.3/",
+    "https://github.com/BurntToasters/postal-snap/releases/tag/v0.4.3",
+    "http://github.com/BurntToasters/postal-snap/releases/download/v0.4.3/a.zip",
+    "https://evil.example/a",
+    "https://github.com/other/repo/releases/download/v0.4.3/a.zip",
+    "https://github.com/BurntToasters/postal-snap/releases/download/v0.4.3/a.zip?x=1",
+  ]) {
+    assert.throws(
+      () =>
+        validateManifest(
+          goodManifest({ platforms: { "windows-x86_64": goodEntry({ url }) } }),
+        ),
+      /GitHub release/,
+    );
+  }
+});
+
+test("updater manifest keeps stable and beta shapes, not signature content", () => {
+  assert.equal(validateManifest(goodManifest()), true);
+  const betaEntry = goodEntry({
+    url: "https://github.com/BurntToasters/postal-snap/releases/download/v0.4.3/Postal-Snap-Windows-x64.exe",
+  });
+  assert.equal(
+    validateManifest(
+      goodManifest({
+        platforms: {
+          "windows-x86_64": betaEntry,
+          "windows-beta": { ...betaEntry },
+        },
+      }),
+    ),
+    true,
+  );
+  // Structural validation accepts any well-formed signature; content equality
+  // with the payload stays with the dedicated Tauri signature verifier.
+  assert.equal(
+    validateManifest(
+      goodManifest({
+        platforms: {
+          "windows-x86_64": goodEntry({ signature: "b".repeat(80) }),
+        },
+      }),
+    ),
+    true,
+  );
+});
+
+test("isSemVer accepts strict release versions only", () => {
+  assert.equal(isSemVer("0.4.3"), true);
+  assert.equal(isSemVer("0.4.4-beta.1"), true);
+  assert.equal(isSemVer("10.20.30-rc.1"), true);
+  for (const bad of [
+    "",
+    "1.2",
+    "v0.4.3",
+    "0.4.3.1",
+    "0.4.3-",
+    "0.4.3+build",
+    "latest",
+    null,
+    undefined,
+    42,
+    {},
+  ]) {
+    assert.equal(isSemVer(bad), false);
+  }
+});
+
+test("live validation requires the expected platform and arch key", () => {
+  const manifest = goodManifest();
+  assert.equal(
+    validateLiveManifest(manifest, {
+      platform: "windows",
+      arch: "x86_64",
+      filename: "latest-windows-x86_64.json",
+    }),
+    true,
+  );
+  assert.throws(
+    () =>
+      validateLiveManifest(manifest, {
+        platform: "darwin",
+        arch: "aarch64",
+        filename: "latest-darwin-aarch64.json",
+      }),
+    /darwin-aarch64/,
+  );
+  assert.throws(
+    () =>
+      validateLiveManifest(goodManifest({ version: "not-semver" }), {
+        platform: "windows",
+        arch: "x86_64",
+        filename: "latest-windows-x86_64.json",
+      }),
+    /SemVer/,
+  );
+});
+
+test("live validation requires the beta alias on beta manifests", () => {
+  const entry = goodEntry();
+  const beta = goodManifest({
+    platforms: { "windows-x86_64": entry, "windows-beta": { ...entry } },
+  });
+  assert.equal(
+    validateLiveManifest(beta, {
+      platform: "windows",
+      arch: "x86_64",
+      filename: "latest-windows-beta-x86_64.json",
+    }),
+    true,
+  );
+  assert.throws(
+    () =>
+      validateLiveManifest(goodManifest(), {
+        platform: "windows",
+        arch: "x86_64",
+        filename: "latest-windows-beta-x86_64.json",
+      }),
+    /windows-beta/,
+  );
+  assert.throws(
+    () =>
+      validateLiveManifest(
+        goodManifest({
+          platforms: {
+            "windows-x86_64": entry,
+            "windows-beta": goodEntry({
+              url: "https://github.com/BurntToasters/postal-snap/releases/download/v0.4.3/other.exe",
+            }),
+          },
+        }),
+        {
+          platform: "windows",
+          arch: "x86_64",
+          filename: "latest-windows-beta-x86_64.json",
+        },
+      ),
+    /windows-beta/,
   );
 });
 

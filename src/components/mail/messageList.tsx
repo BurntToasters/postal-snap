@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type DragEvent,
@@ -22,12 +23,14 @@ import {
   Star,
 } from "lucide-react";
 import {
+  createListDateFormatters,
   formatBytes,
   formatFullMessageDate,
   formatMessageListWhen,
   groupByDayLabel,
   messageListDay,
   notableArrival,
+  type ListDateFormatters,
 } from "../../format";
 import { addressMailbox } from "../../contextMenu";
 import { strings } from "../../i18n";
@@ -50,16 +53,24 @@ import { useAppStore } from "../../store";
 import { groupThreads, pinnedFirst } from "../../threads";
 import type { MessageSummary } from "../../types";
 
-function MessageWhen({ message }: { message: MessageSummary }) {
+function MessageWhen({
+  message,
+  now,
+  formatters,
+}: {
+  message: MessageSummary;
+  now: Date;
+  formatters: ListDateFormatters;
+}) {
   const late = notableArrival(message.receivedAt, message.arrivedAt);
   return (
     <span className="message-when">
       <time
         className="message-date"
         dateTime={message.receivedAt}
-        title={formatFullMessageDate(message.receivedAt)}
+        title={formatFullMessageDate(message.receivedAt, now, formatters)}
       >
-        {formatMessageListWhen(message.receivedAt)}
+        {formatMessageListWhen(message.receivedAt, now, formatters)}
       </time>
       <span className="message-size">{formatBytes(message.size)}</span>
       {late ? (
@@ -287,6 +298,10 @@ export function MessageList({
   }
   const groupConversations =
     groupThreadsSetting && chronological && !oldestFirst;
+  // One batch of Intl formatters shared by every row and day label in this
+  // render; labels still recompute from a fresh `now` each render.
+  const dateFormatters = useMemo(() => createListDateFormatters(), []);
+  const listNow = new Date();
   const listRef = useRef<HTMLDivElement>(null);
   const restoredScroll = useRef(false);
   useLayoutEffect(() => {
@@ -435,7 +450,11 @@ export function MessageList({
             ? ""
             : group.items.some((item) => item.pinned)
               ? strings.mail.pinned
-              : messageListDay(group.newest.receivedAt),
+              : messageListDay(
+                  group.newest.receivedAt,
+                  listNow,
+                  dateFormatters,
+                ),
           ids: group.items.map((item) => item.id),
           options: threadOptions(group),
         }))
@@ -446,7 +465,7 @@ export function MessageList({
             : message.pinned
               ? strings.mail.pinned
               : chronological
-                ? messageListDay(message.receivedAt)
+                ? messageListDay(message.receivedAt, listNow, dateFormatters)
                 : "",
           ids: [message.id],
           options: [
@@ -1034,7 +1053,7 @@ export function MessageList({
       senderAddressTitle(message),
       message.subject || strings.common.noSubject,
       folder ? strings.mail.inFolder(folder) : null,
-      formatFullMessageDate(message.receivedAt),
+      formatFullMessageDate(message.receivedAt, listNow, dateFormatters),
       formatBytes(message.size),
       message.attachmentCount
         ? strings.mail.draftFiles(message.attachmentCount)
@@ -1111,7 +1130,11 @@ export function MessageList({
               terms={marks.correspondent}
             />
           </span>
-          <MessageWhen message={message} />
+          <MessageWhen
+            message={message}
+            now={listNow}
+            formatters={dateFormatters}
+          />
           <span className="message-subject">
             {message.isStarred ? (
               <Star
@@ -1245,7 +1268,11 @@ export function MessageList({
             strings.mail.threadMessages(group.items.length),
             group.unread > 0 ? strings.mail.threadUnread(group.unread) : null,
             headerFolder ? strings.mail.inFolder(headerFolder) : null,
-            formatFullMessageDate(group.newest.receivedAt),
+            formatFullMessageDate(
+              group.newest.receivedAt,
+              listNow,
+              dateFormatters,
+            ),
             formatBytes(group.newest.size),
           ]
             .filter(Boolean)
@@ -1267,7 +1294,11 @@ export function MessageList({
               terms={marks.correspondent}
             />
           </span>
-          <MessageWhen message={group.newest} />
+          <MessageWhen
+            message={group.newest}
+            now={listNow}
+            formatters={dateFormatters}
+          />
           <span className="message-subject">
             {conversationStarred ? (
               <Star

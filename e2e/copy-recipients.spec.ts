@@ -9,6 +9,13 @@ import { installMockIpc } from "./mock-ipc";
 
 test.beforeEach(async ({ page }) => installMockIpc(page));
 
+async function readClipboardText(page: import("@playwright/test").Page) {
+  return (await page.evaluate(() => navigator.clipboard.readText())).replace(
+    /\r\n/g,
+    "\n",
+  );
+}
+
 test.afterEach(async ({ page }, testInfo: TestInfo) => {
   const slug = testInfo.title.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
   const path = `test-results/copy-recipients-${slug}.png`;
@@ -25,6 +32,6 @@ test("the open message can copy its recipients", async ({ page, context }) => {
     .getByRole("menuitem", { name: "Copy recipients", exact: true })
     .click();
   await expect
-    .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+    .poll(() => readClipboardText(page))
     .toBe("jane@example.com\nlee@example.com\nsam@icloud.com");
 });

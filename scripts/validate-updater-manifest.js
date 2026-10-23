@@ -1,22 +1,38 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { process, releaseDir } from "./lib/paths.js";
+import { isSemVer } from "./lib/versions.js";
+
+const SUPPORTED_PLATFORM_PATTERN =
+  /^(windows|darwin|linux)-(x86_64|aarch64|beta)$/;
+const GITHUB_RELEASE_FILE_PATTERN =
+  /^https:\/\/github\.com\/BurntToasters\/postal-snap\/releases\/download\/[^/?#]+\/[^/?#]+$/;
+
+function isPlainObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 export function validateManifest(manifest) {
-  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(manifest.version ?? ""))
+  if (!isPlainObject(manifest))
+    throw new Error("Updater manifest must be an object.");
+  if (!isSemVer(manifest.version))
     throw new Error("Manifest version is not valid SemVer.");
-  if (!manifest.platforms || typeof manifest.platforms !== "object")
+  if (!isPlainObject(manifest.platforms))
     throw new Error("Manifest platforms object is required.");
+  const keys = Object.keys(manifest.platforms);
+  if (!keys.length)
+    throw new Error("Manifest platforms must list at least one target.");
   for (const [platform, entry] of Object.entries(manifest.platforms)) {
-    if (!/^(windows|darwin|linux)-(x86_64|aarch64|beta)$/.test(platform))
+    if (!SUPPORTED_PLATFORM_PATTERN.test(platform))
       throw new Error(`Unsupported updater platform: ${platform}`);
+    if (!isPlainObject(entry))
+      throw new Error(`${platform} entry must be an object.`);
     if (
-      !entry.url?.startsWith(
-        "https://github.com/BurntToasters/postal-snap/releases/download/",
-      )
+      typeof entry.url !== "string" ||
+      !GITHUB_RELEASE_FILE_PATTERN.test(entry.url)
     )
       throw new Error(
-        `${platform} must use the Postal Snap GitHub release host.`,
+        `${platform} must use a complete Postal Snap GitHub release URL.`,
       );
     if (
       typeof entry.signature !== "string" ||

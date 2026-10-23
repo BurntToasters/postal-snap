@@ -1,13 +1,73 @@
 import { strings } from "./i18n";
 
-export function formatMessageDate(value: string, now = new Date()): string {
+/** Formatters for one list-render batch. Construct once, reuse per row. */
+export interface ListDateFormatters {
+  time: Intl.DateTimeFormat;
+  weekdayShort: Intl.DateTimeFormat;
+  weekdayLong: Intl.DateTimeFormat;
+  sameYearShort: Intl.DateTimeFormat;
+  otherYearShort: Intl.DateTimeFormat;
+  sameYearLong: Intl.DateTimeFormat;
+  otherYearLong: Intl.DateTimeFormat;
+  full: Intl.DateTimeFormat;
+}
+
+export function createListDateFormatters(
+  locale?: Intl.LocalesArgument,
+): ListDateFormatters {
+  return {
+    time: new Intl.DateTimeFormat(locale, {
+      hour: "numeric",
+      minute: "2-digit",
+    }),
+    weekdayShort: new Intl.DateTimeFormat(locale, { weekday: "short" }),
+    weekdayLong: new Intl.DateTimeFormat(locale, { weekday: "long" }),
+    sameYearShort: new Intl.DateTimeFormat(locale, {
+      month: "short",
+      day: "numeric",
+    }),
+    otherYearShort: new Intl.DateTimeFormat(locale, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    }),
+    sameYearLong: new Intl.DateTimeFormat(locale, {
+      month: "long",
+      day: "numeric",
+    }),
+    otherYearLong: new Intl.DateTimeFormat(locale, {
+      month: "long",
+      day: "numeric",
+      year: "numeric",
+    }),
+    full: new Intl.DateTimeFormat(locale, {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      second: "2-digit",
+      timeZoneName: "short",
+    }),
+  };
+}
+
+export function formatMessageDate(
+  value: string,
+  now = new Date(),
+  formatters?: ListDateFormatters,
+): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   if (date.toDateString() === now.toDateString()) {
-    return new Intl.DateTimeFormat(undefined, {
-      hour: "numeric",
-      minute: "2-digit",
-    }).format(date);
+    return (
+      formatters?.time ??
+      new Intl.DateTimeFormat(undefined, {
+        hour: "numeric",
+        minute: "2-digit",
+      })
+    ).format(date);
   }
   const yesterday = new Date(now);
   yesterday.setDate(now.getDate() - 1);
@@ -18,34 +78,56 @@ export function formatMessageDate(value: string, now = new Date()): string {
     (now.getTime() - date.getTime()) / (24 * 60 * 60 * 1000),
   );
   if (diffDays >= 0 && diffDays < 6) {
-    return new Intl.DateTimeFormat(undefined, {
-      weekday: "short",
-    }).format(date);
+    return (
+      formatters?.weekdayShort ??
+      new Intl.DateTimeFormat(undefined, {
+        weekday: "short",
+      })
+    ).format(date);
   }
   const sameYear = date.getFullYear() === now.getFullYear();
-  return new Intl.DateTimeFormat(
-    undefined,
-    sameYear
-      ? { month: "short", day: "numeric" }
-      : { year: "numeric", month: "short", day: "numeric" },
+  if (sameYear) {
+    return (
+      formatters?.sameYearShort ??
+      new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" })
+    ).format(date);
+  }
+  return (
+    formatters?.otherYearShort ??
+    new Intl.DateTimeFormat(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    })
   ).format(date);
 }
 
 /** List row date, with the clock time when the label is not already a time. */
-export function formatMessageListWhen(value: string, now = new Date()): string {
+export function formatMessageListWhen(
+  value: string,
+  now = new Date(),
+  formatters?: ListDateFormatters,
+): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  const label = formatMessageDate(value, now);
+  const label = formatMessageDate(value, now, formatters);
   if (date.toDateString() === now.toDateString()) return label;
-  const time = new Intl.DateTimeFormat(undefined, {
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(date);
+  const time = (
+    formatters?.time ??
+    new Intl.DateTimeFormat(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+    })
+  ).format(date);
   return `${label}, ${time}`;
 }
 
 /** Calendar-day label for a date-ordered message list. */
-export function messageListDay(value: string, now = new Date()): string {
+export function messageListDay(
+  value: string,
+  now = new Date(),
+  formatters?: ListDateFormatters,
+): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
   if (date.toDateString() === now.toDateString()) return strings.mail.today;
@@ -59,14 +141,25 @@ export function messageListDay(value: string, now = new Date()): string {
     (dayIndex(now) - dayIndex(date)) / (24 * 60 * 60 * 1000),
   );
   if (diffDays > 1 && diffDays < 7) {
-    return new Intl.DateTimeFormat(undefined, { weekday: "long" }).format(date);
+    return (
+      formatters?.weekdayLong ??
+      new Intl.DateTimeFormat(undefined, { weekday: "long" })
+    ).format(date);
   }
   const sameYear = date.getFullYear() === now.getFullYear();
-  return new Intl.DateTimeFormat(
-    undefined,
-    sameYear
-      ? { month: "long", day: "numeric" }
-      : { month: "long", day: "numeric", year: "numeric" },
+  if (sameYear) {
+    return (
+      formatters?.sameYearLong ??
+      new Intl.DateTimeFormat(undefined, { month: "long", day: "numeric" })
+    ).format(date);
+  }
+  return (
+    formatters?.otherYearLong ??
+    new Intl.DateTimeFormat(undefined, {
+      month: "long",
+      day: "numeric",
+      year: "numeric",
+    })
   ).format(date);
 }
 
@@ -101,6 +194,23 @@ export function shortcutAltMod(): string {
     : "Ctrl+Alt";
 }
 
+/** Platform-aware chord: ⌘R on macOS, Ctrl+R elsewhere. */
+export function shortcutChord(
+  key: string,
+  options?: { shift?: boolean; alt?: boolean },
+): string {
+  const isMac = document.documentElement.dataset.platform === "macos";
+  if (isMac) {
+    const shift = options?.shift ? "⇧" : "";
+    const alt = options?.alt ? "⌥" : "";
+    return `${shift}${alt}⌘${key}`;
+  }
+  const parts = ["Ctrl"];
+  if (options?.alt) parts.push("Alt");
+  if (options?.shift) parts.push("Shift");
+  return `${parts.join("+")}+${key}`;
+}
+
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -108,20 +218,27 @@ export function formatBytes(bytes: number): string {
   return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
 }
 
-export function formatFullMessageDate(value: string, now = new Date()): string {
+export function formatFullMessageDate(
+  value: string,
+  now = new Date(),
+  formatters?: ListDateFormatters,
+): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
 
-  const fullDate = new Intl.DateTimeFormat(undefined, {
-    weekday: "long",
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-    second: "2-digit",
-    timeZoneName: "short",
-  }).format(date);
+  const fullDate = (
+    formatters?.full ??
+    new Intl.DateTimeFormat(undefined, {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      second: "2-digit",
+      timeZoneName: "short",
+    })
+  ).format(date);
 
   const diffMs = now.getTime() - date.getTime();
   const diffMinutes = Math.floor(diffMs / 60000);

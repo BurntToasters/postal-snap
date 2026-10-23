@@ -20,7 +20,7 @@ test("an existing link can be removed and the words stay", async ({ page }) => {
   await page.getByRole("button", { name: "Compose", exact: true }).click();
   const body = page.getByLabel("Message body");
   await body.pressSequentially("Library hours");
-  await body.press("Meta+a");
+  await body.press("ControlOrMeta+a");
   await page.getByRole("button", { name: "Show formatting" }).click();
   const more = page.getByRole("button", { name: "More formatting" });
   await more.click();
@@ -38,7 +38,7 @@ test("an existing link can be removed and the words stay", async ({ page }) => {
     "https://library.example.test/hours",
   );
 
-  await body.press("Meta+a");
+  await body.press("ControlOrMeta+a");
   if ((await more.getAttribute("aria-expanded")) !== "true") {
     await more.click();
   }
