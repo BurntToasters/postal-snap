@@ -172,12 +172,13 @@ html[data-reduce-transparency="true"] .reader-actions {
   margin-inline-start: auto;
 }
 
-/* One borderless capsule per group, on a system fill (HIG toolbars). */
+/* One borderless capsule per group, on a system fill (HIG toolbars).
+   No gap keeps all three groups on one row at desktop width. */
 .reader-action-group {
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 1px;
+  gap: 0;
   padding: 1px;
   border-radius: var(--radius-pill);
   background: var(--fill);

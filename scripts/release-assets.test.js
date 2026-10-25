@@ -243,6 +243,31 @@ test("updater manifest rejects invalid SemVer", () => {
   );
 });
 
+test("updater manifest rejects SemVer 2.0.0 violations", () => {
+  const admitted = [
+    "00.0.0",
+    "01.5.1",
+    "0.5.01",
+    "0.5.1-01",
+    "0.5.1-x.01",
+    "0.5.1-a..b",
+    "0.5.1-a.",
+  ].filter((version) => {
+    try {
+      validateManifest(goodManifest({ version }));
+      return true;
+    } catch (error) {
+      assert.match(error.message, /SemVer/);
+      return false;
+    }
+  });
+  assert.deepEqual(admitted, []);
+  assert.equal(
+    validateManifest(goodManifest({ version: "0.5.1-beta.1" })),
+    true,
+  );
+});
+
 test("updater manifest rejects unsupported targets", () => {
   for (const key of [
     "win32-x86_64",
@@ -333,6 +358,50 @@ test("isSemVer accepts strict release versions only", () => {
   ]) {
     assert.equal(isSemVer(bad), false);
   }
+});
+
+test("isSemVer rejects SemVer 2.0.0 violations", () => {
+  const admitted = [
+    "01.5.1",
+    "00.0.0",
+    "0.05.1",
+    "0.5.01",
+    "0.5.1-01",
+    "0.5.1-x.01",
+    "0.5.1-a..b",
+    "0.5.1-.a",
+    "0.5.1-a.",
+    "0.5.1-",
+    "-0.5.1",
+    "0.5.1-a+b",
+    "0.5.1+build",
+    "0.5.1-alpha_beta",
+    "v0.5.1",
+    "0.5",
+    "0.5.1.1",
+    "0.5.1\n",
+    "",
+    42,
+    null,
+    undefined,
+  ].filter((value) => isSemVer(value));
+  assert.deepEqual(admitted, []);
+});
+
+test("isSemVer accepts SemVer 2.0.0 release and prerelease forms", () => {
+  const refused = [
+    "0.5.1",
+    "0.0.0",
+    "10.20.30",
+    "0.5.1-beta.1",
+    "0.5.1-0",
+    "0.5.1-0a",
+    "1.0.0-alpha-1.2",
+    "0.5.1-rc.10",
+    "1.0.0-x-y-z.--",
+    "1.0.0-0A.is.legal",
+  ].filter((value) => !isSemVer(value));
+  assert.deepEqual(refused, []);
 });
 
 test("live validation requires the expected platform and arch key", () => {

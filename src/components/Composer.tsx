@@ -49,6 +49,7 @@ import { ComposerHeader } from "./composer/composerHeader";
 import { FormatToolbar } from "./composer/formatToolbar";
 import { clipboardImages } from "./composer/pasteImage";
 import { SendBar } from "./composer/sendBar";
+import { AttachmentPreview } from "./composer/attachmentPreview";
 import {
   htmlToQuotedPlainText,
   isPlainPasteShortcut,
@@ -479,6 +480,8 @@ export function Composer({ accountId, onDraftSaved }: Props) {
     setError,
   });
   pasteImageRef.current = pasteImage;
+  // The Preview button that opened the picture preview gets focus back on close.
+  const previewTriggerRef = useRef<HTMLButtonElement>(null);
 
   const buildDraft = useCallback((): ComposeDraft => {
     const plain = bodyFormat === "plain";
@@ -610,7 +613,8 @@ export function Composer({ accountId, onDraftSaved }: Props) {
   }, [accountId]);
 
   async function requestClose() {
-    if (isDiscarding.current) return;
+    // The picture preview owns Escape and close while it is open.
+    if (attachmentPreview || isDiscarding.current) return;
     if (sending || saveInFlight.current) {
       pendingClose.current = true;
       return;
@@ -709,7 +713,12 @@ export function Composer({ accountId, onDraftSaved }: Props) {
     saveDraft,
     setError,
     warningSetters,
-    shortcutsPaused: minimized || warningOpen || confirmPlain,
+    shortcutsPaused:
+      minimized ||
+      warningOpen ||
+      confirmPlain ||
+      linkDialogOpen ||
+      attachmentPreview !== null,
   });
 
   useLayoutEffect(() => {
@@ -1017,6 +1026,7 @@ export function Composer({ accountId, onDraftSaved }: Props) {
       role="dialog"
       aria-modal={keepSourceVisible ? "false" : "true"}
       aria-labelledby="composer-title"
+      inert={attachmentPreview ? true : undefined}
     >
       {keepSourceVisible ? null : (
         <button
@@ -1192,7 +1202,10 @@ export function Composer({ accountId, onDraftSaved }: Props) {
                     <button
                       type="button"
                       className="compose-attachment-preview"
-                      onClick={() => void previewComposeImage(item)}
+                      onClick={(event) => {
+                        previewTriggerRef.current = event.currentTarget;
+                        void previewComposeImage(item);
+                      }}
                       disabled={sending || saveState === "saving"}
                       aria-label={strings.composer.previewAttachment(
                         item.filename,
@@ -1459,33 +1472,11 @@ export function Composer({ accountId, onDraftSaved }: Props) {
           />
         ) : null}
         {attachmentPreview ? (
-          <div
-            className="settings-confirm-overlay"
-            role="presentation"
-            onMouseDown={() => setAttachmentPreview(null)}
-          >
-            <div
-              className="settings-confirm-card compose-image-preview"
-              role="dialog"
-              aria-modal="true"
-              aria-label={attachmentPreview.filename}
-              onMouseDown={(event) => event.stopPropagation()}
-            >
-              <img
-                src={attachmentPreview.src}
-                alt={attachmentPreview.filename}
-              />
-              <div className="settings-confirm-actions">
-                <button
-                  type="button"
-                  className="toolbar-button"
-                  onClick={() => setAttachmentPreview(null)}
-                >
-                  {strings.common.close}
-                </button>
-              </div>
-            </div>
-          </div>
+          <AttachmentPreview
+            preview={attachmentPreview}
+            onClose={() => setAttachmentPreview(null)}
+            triggerRef={previewTriggerRef}
+          />
         ) : null}
         {linkDialogOpen ? (
           <div

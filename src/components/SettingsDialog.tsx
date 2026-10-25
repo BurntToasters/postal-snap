@@ -71,38 +71,66 @@ const tabs: Array<{
   { id: "about", label: strings.settings.about, icon: Info },
 ];
 
+// Arrow step in whole pixels; matches the native line step.
+const KEYBOARD_SCROLL_STEP = 40;
+
+function nearestScroller(
+  start: HTMLElement | null,
+  boundary: HTMLElement,
+): HTMLElement | undefined {
+  for (
+    let node = start;
+    node && boundary.contains(node);
+    node = node.parentElement
+  ) {
+    const overflowY = window.getComputedStyle(node).overflowY;
+    if (
+      (overflowY === "auto" || overflowY === "scroll") &&
+      node.scrollHeight > node.clientHeight
+    ) {
+      return node;
+    }
+  }
+  return undefined;
+}
+
+// WebKit can drop the first native arrow press after focus moves in.
+// Only the region handles arrows; controls keep their native keys.
+function scrollRegionWithArrows(event: KeyboardEvent<HTMLDivElement>) {
+  const region = event.currentTarget;
+  const direction =
+    event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
+  if (!direction || event.target !== region || event.defaultPrevented) return;
+  if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+  const dialog = region.closest<HTMLElement>(".settings-window");
+  const scroller = dialog ? nearestScroller(region, dialog) : undefined;
+  if (!scroller) return;
+  event.preventDefault();
+  scroller.scrollTop += direction * KEYBOARD_SCROLL_STEP;
+}
+
 function revealFocusedSettingsRow(target: HTMLElement, content: HTMLElement) {
   const row = target.closest<HTMLElement>(".settings-row, .switch-row");
   const dialog = content.closest<HTMLElement>(".settings-window");
   if (!row || !dialog || !content.contains(row)) return;
 
-  let scroller: HTMLElement | undefined;
-  for (
-    let ancestor = row.parentElement;
-    ancestor && dialog.contains(ancestor);
-    ancestor = ancestor.parentElement
-  ) {
-    const overflowY = window.getComputedStyle(ancestor).overflowY;
-    if (
-      (overflowY === "auto" || overflowY === "scroll") &&
-      ancestor.scrollHeight > ancestor.clientHeight
-    ) {
-      scroller = ancestor;
-      break;
-    }
-  }
+  const scroller = nearestScroller(row.parentElement, dialog);
   if (!scroller) return;
 
   const viewport = scroller.getBoundingClientRect();
   const rowBounds = row.getBoundingClientRect();
   if (rowBounds.height > scroller.clientHeight) return;
 
+  // clientHeight is rounded; take the bottom edge from the exact box.
+  const bottomInset =
+    scroller.offsetHeight - scroller.clientTop - scroller.clientHeight;
   const visibleTop = viewport.top + scroller.clientTop;
-  const visibleBottom = visibleTop + scroller.clientHeight;
+  const visibleBottom = viewport.bottom - bottomInset;
+  // WebKit keeps whole-pixel scroll offsets; round moves up.
   if (rowBounds.top < visibleTop) {
-    scroller.scrollTop -= visibleTop - rowBounds.top;
+    scroller.scrollTop -= Math.ceil(visibleTop - rowBounds.top);
   } else if (rowBounds.bottom > visibleBottom) {
-    scroller.scrollTop += rowBounds.bottom - visibleBottom;
+    scroller.scrollTop += Math.ceil(rowBounds.bottom - visibleBottom);
   }
 }
 
@@ -403,28 +431,18 @@ export function SettingsDialog({
     const content = settingsContentRef.current;
     if (!content) return;
     const contentElement: HTMLDivElement = content;
-    let frame = 0;
+    // Reveal synchronously so the row is final when focus returns.
     function revealRow(event: FocusEvent) {
       const target = event.target;
       if (
-        !(target instanceof HTMLElement) ||
-        !target.closest(".settings-row, .switch-row")
+        target instanceof HTMLElement &&
+        target.closest(".settings-row, .switch-row")
       ) {
-        return;
+        revealFocusedSettingsRow(target, contentElement);
       }
-      window.cancelAnimationFrame(frame);
-      frame = window.requestAnimationFrame(() => {
-        frame = 0;
-        if (document.activeElement === target) {
-          revealFocusedSettingsRow(target, contentElement);
-        }
-      });
     }
     contentElement.addEventListener("focusin", revealRow);
-    return () => {
-      contentElement.removeEventListener("focusin", revealRow);
-      window.cancelAnimationFrame(frame);
-    };
+    return () => contentElement.removeEventListener("focusin", revealRow);
   }, []);
 
   useEffect(() => {
@@ -603,6 +621,7 @@ export function SettingsDialog({
             role="region"
             aria-label={settingsContentLabel}
             tabIndex={0}
+            onKeyDown={scrollRegionWithArrows}
           >
             {query.trim() ? (
               <div className="settings-search-results">

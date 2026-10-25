@@ -18,6 +18,26 @@ fn normalized_signature(signature: &str) -> Result<String, String> {
 
 database_operations! {
 impl Database {
+    /// Keep account creation and attachment deletion under the same writer lock.
+    pub(crate) fn remove_unowned_account_dir(&self, path: &std::path::Path) -> Result<(), String> {
+        let id = path.file_name().and_then(|name| name.to_str())
+            .ok_or_else(|| "Could not inspect unused attachments.".to_string())?;
+        let conn = self.conn()?;
+        let owned: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM accounts WHERE id = ?1)",
+            [id], |row| row.get(0),
+        ).map_err(db_error)?;
+        if !owned {
+            match std::fs::remove_dir_all(path) {
+                Ok(()) => {},
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound
+                    && !path.try_exists().unwrap_or(true) => {},
+                Err(_) => return Err("Could not remove unused attachments.".into()),
+            }
+        }
+        Ok(())
+    }
+
     pub fn list_accounts(&self) -> Result<Vec<AccountSummary>, String> {
         let conn = self.read_conn()?;
         let mut statement = conn.prepare(
