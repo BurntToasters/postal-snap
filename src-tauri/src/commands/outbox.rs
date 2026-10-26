@@ -187,9 +187,7 @@ async fn finalize_sent_outbox(
     app: &AppHandle,
     state: &AppState,
 ) -> Result<SendOutcome, String> {
-    if let Some(draft_id) = draft.id.as_deref() {
-        let _ = state.db.remove_draft(draft_id, account_id);
-    }
+    let _ = state.db.finalize_outbox_source_draft(outbox_id, account_id);
 
     let archive_requested = !matches!(&archive_source, Ok(None));
     if archive_requested {

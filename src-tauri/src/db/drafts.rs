@@ -1,7 +1,6 @@
 use super::{db_error, replace_attachment_refs, Database, DraftSyncRecord};
+use crate::models::{BodyFormat, ComposeDraft, DraftSummary};
 use rusqlite::{params, OptionalExtension};
-
-use crate::models::{ComposeDraft, DraftSummary};
 
 database_operations! {
 impl Database {
@@ -124,7 +123,7 @@ impl Database {
             .prepare(
                 "SELECT id,draft_json,remote_mailbox,remote_uid,remote_uid_validity,
                  COALESCE(remote_message_id,''),revision,deleted_at IS NOT NULL
-                 FROM drafts WHERE account_id=?1 AND sync_state IN ('localPending','deletePending','localOnly')
+                 FROM drafts WHERE account_id=?1 AND sync_state IN ('localPending','deletePending','outboxDeletePending','localOnly')
                  ORDER BY datetime(updated_at)",
             )
             .map_err(db_error)?;
@@ -224,6 +223,7 @@ impl Database {
     pub fn finish_remote_draft_delete(&self, id: &str, account_id: &str) -> Result<(), String> {
         let mut conn = self.conn()?;
         let transaction = conn.transaction().map_err(db_error)?;
+        let tombstone = reserved_draft_json(id, account_id)?;
         transaction
             .execute(
                 "DELETE FROM attachment_refs WHERE owner_kind='draft' AND owner_id=?1",
@@ -232,8 +232,12 @@ impl Database {
             .map_err(db_error)?;
         transaction
             .execute(
-                "DELETE FROM drafts WHERE id=?1 AND account_id=?2 AND deleted_at IS NOT NULL",
-                params![id, account_id],
+                "UPDATE drafts SET draft_json=?3,sync_state='reserved',sync_detail=NULL,
+                 remote_mailbox=NULL,remote_uid=NULL,remote_uid_validity=NULL,remote_message_id=NULL,
+                 deleted_at=COALESCE(deleted_at,CURRENT_TIMESTAMP),body_format='html',
+                 source_message_id=NULL,source_kind=NULL
+                 WHERE id=?1 AND account_id=?2 AND deleted_at IS NOT NULL",
+                params![id, account_id, tombstone],
             )
             .map_err(db_error)?;
         transaction.commit().map_err(db_error)
@@ -441,11 +445,11 @@ pub(crate) fn save_draft_in_transaction(
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let mut stored = draft.clone();
     stored.id = Some(id.clone());
-    let existing: Option<(String, u32)> = transaction
+    let existing: Option<(String, u32, Option<String>)> = transaction
         .query_row(
-            "SELECT account_id,revision FROM drafts WHERE id=?1",
+            "SELECT account_id,revision,deleted_at FROM drafts WHERE id=?1",
             [&id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .optional()
         .map_err(db_error)?;
@@ -456,6 +460,10 @@ pub(crate) fn save_draft_in_transaction(
     {
         return Err("Draft does not belong to this account.".into());
     }
+    if existing.as_ref().is_some_and(|value| value.2.is_some()) {
+        return Err("This draft is no longer available.".into());
+    }
+    ensure_draft_unreserved(transaction, &id, &draft.account_id, None)?;
     stored.html_body = crate::html_sanitize::sanitize_compose_html(&stored.html_body);
     let json = serde_json::to_string(&stored).map_err(|_| "Could not save draft.".to_string())?;
     let revision = existing.map_or(1, |value| value.1.saturating_add(1));
@@ -489,6 +497,152 @@ pub(crate) fn save_draft_in_transaction(
         &stored.attachments,
     )?;
     Ok(id)
+}
+
+pub(crate) fn ensure_draft_queueable(
+    transaction: &rusqlite::Transaction<'_>,
+    id: &str,
+    account_id: &str,
+) -> Result<(), String> {
+    ensure_draft_unreserved(transaction, id, account_id, None)?;
+    let source: Option<(String, Option<String>)> = transaction
+        .query_row(
+            "SELECT account_id,deleted_at FROM drafts WHERE id=?1",
+            [id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(db_error)?;
+    if let Some((owner, deleted_at)) = source {
+        if owner != account_id {
+            return Err("Draft does not belong to this account.".into());
+        }
+        if deleted_at.is_some() {
+            return Err("This draft is no longer available.".into());
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn ensure_draft_unreserved(
+    transaction: &rusqlite::Transaction<'_>,
+    id: &str,
+    account_id: &str,
+    except_outbox_id: Option<&str>,
+) -> Result<(), String> {
+    if let Some(owner) = draft_id_reservation_owner(transaction, id, except_outbox_id)? {
+        if owner != account_id {
+            return Err("Draft does not belong to this account.".into());
+        }
+        return Err("This draft is already queued.".into());
+    }
+    Ok(())
+}
+
+pub(crate) fn draft_id_reservation_owner(
+    transaction: &rusqlite::Transaction<'_>,
+    id: &str,
+    except_outbox_id: Option<&str>,
+) -> Result<Option<String>, String> {
+    let mut statement = transaction
+        .prepare("SELECT id,account_id,draft_json FROM outbox")
+        .map_err(db_error)?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(db_error)?;
+    for row in rows {
+        let (outbox_id, account_id, json) = row.map_err(db_error)?;
+        if except_outbox_id == Some(outbox_id.as_str()) {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&json) else {
+            continue;
+        };
+        if value.get("id").and_then(serde_json::Value::as_str) == Some(id) {
+            return Ok(Some(account_id));
+        }
+    }
+    Ok(None)
+}
+
+pub(crate) fn retire_outbox_source_draft_in_transaction(
+    transaction: &rusqlite::Transaction<'_>,
+    id: &str,
+    account_id: &str,
+) -> Result<bool, String> {
+    let source: Option<(String, Option<u32>)> = transaction
+        .query_row(
+            "SELECT account_id,remote_uid FROM drafts WHERE id=?1",
+            [id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(db_error)?;
+    let Some((owner, remote_uid)) = source else {
+        return Ok(false);
+    };
+    if owner != account_id {
+        return Err("Draft does not belong to this account.".into());
+    }
+    let tombstone = reserved_draft_json(id, account_id)?;
+    let sync_state = if remote_uid.is_some() {
+        "outboxDeletePending"
+    } else {
+        "reserved"
+    };
+    let changed = transaction
+        .execute(
+            "UPDATE drafts SET draft_json=?3,deleted_at=CURRENT_TIMESTAMP,sync_state=?4,
+             sync_detail=NULL,body_format='html',source_message_id=NULL,source_kind=NULL,
+             remote_mailbox=CASE WHEN remote_uid IS NULL THEN NULL ELSE remote_mailbox END,
+             remote_uid_validity=CASE WHEN remote_uid IS NULL THEN NULL ELSE remote_uid_validity END,
+             remote_message_id=CASE WHEN remote_uid IS NULL THEN NULL ELSE remote_message_id END
+             WHERE id=?1 AND account_id=?2 AND deleted_at IS NULL",
+            params![id, account_id, tombstone, sync_state],
+        )
+        .map_err(db_error)?;
+    if changed == 0 {
+        return Ok(false);
+    }
+    transaction
+        .execute(
+            "DELETE FROM attachment_refs WHERE owner_kind='draft' AND owner_id=?1",
+            [id],
+        )
+        .map_err(db_error)?;
+    Ok(true)
+}
+
+fn reserved_draft_json(id: &str, account_id: &str) -> Result<String, String> {
+    let draft = ComposeDraft {
+        id: Some(id.to_string()),
+        account_id: account_id.to_string(),
+        from: None,
+        to: Vec::new(),
+        cc: Vec::new(),
+        bcc: Vec::new(),
+        subject: String::new(),
+        html_body: String::new(),
+        text_body: String::new(),
+        attachments: Vec::new(),
+        in_reply_to: None,
+        references: None,
+        send_at: None,
+        body_format: BodyFormat::Html,
+        source_message_id: None,
+        source_kind: None,
+        include_signature: false,
+        importance: String::new(),
+        request_receipt: false,
+        reply_to: None,
+    };
+    serde_json::to_string(&draft).map_err(|_| "Could not retire draft.".to_string())
 }
 
 const PREVIEW_CHARS: usize = 180;

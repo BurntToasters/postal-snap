@@ -118,6 +118,13 @@ impl Database {
             serde_json::to_string(draft).map_err(|_| "Could not queue message.".to_string())?;
         let mut conn = self.conn()?;
         let transaction = conn.transaction().map_err(db_error)?;
+        if let Some(source_id) = draft.id.as_deref() {
+            super::drafts::ensure_draft_queueable(
+                &transaction,
+                source_id,
+                &draft.account_id,
+            )?;
+        }
         let (terminal_count, terminal_bytes): (i64, i64) = transaction
             .query_row(
                 "SELECT COUNT(*), COALESCE(SUM(LENGTH(mime_bytes)),0) FROM outbox
@@ -169,6 +176,13 @@ impl Database {
             &id,
             &draft.attachments,
         )?;
+        if let Some(source_id) = draft.id.as_deref() {
+            super::drafts::retire_outbox_source_draft_in_transaction(
+                &transaction,
+                source_id,
+                &draft.account_id,
+            )?;
+        }
         transaction.commit().map_err(db_error)?;
         Ok(id)
     }
@@ -303,6 +317,60 @@ impl Database {
         let draft = serde_json::from_str(&row.0)
             .map_err(|_| "This queued message could not be read.".to_string())?;
         Ok((draft, row.1, row.2, row.3))
+    }
+
+    /// Retire a legacy editable source only when its saved content still
+    /// matches the snapshot that was delivered.
+    pub fn finalize_outbox_source_draft(
+        &self,
+        id: &str,
+        account_id: &str,
+    ) -> Result<bool, String> {
+        let mut conn = self.conn()?;
+        let transaction = conn.transaction().map_err(db_error)?;
+        let queued_json: Option<String> = transaction
+            .query_row(
+                "SELECT draft_json FROM outbox WHERE id=?1 AND account_id=?2",
+                params![id, account_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?;
+        let Some(queued_json) = queued_json else {
+            return Ok(false);
+        };
+        let queued: ComposeDraft = serde_json::from_str(&queued_json)
+            .map_err(|_| "This queued message could not be read.".to_string())?;
+        if queued.account_id != account_id {
+            return Err("Queued message does not belong to this account.".into());
+        }
+        let Some(source_id) = queued.id.as_deref() else {
+            return Ok(false);
+        };
+        let source: Option<(String, String, Option<String>)> = transaction
+            .query_row(
+                "SELECT account_id,draft_json,deleted_at FROM drafts WHERE id=?1",
+                [source_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .map_err(db_error)?;
+        let Some((owner, current_json, deleted_at)) = source else {
+            return Ok(false);
+        };
+        if owner != account_id {
+            return Err("Draft does not belong to this account.".into());
+        }
+        if deleted_at.is_some() || !same_draft_content(&queued, &current_json)? {
+            return Ok(false);
+        }
+        let changed = super::drafts::retire_outbox_source_draft_in_transaction(
+            &transaction,
+            source_id,
+            account_id,
+        )?;
+        transaction.commit().map_err(db_error)?;
+        Ok(changed)
     }
 
     pub fn outbox_ids_in_state(
@@ -890,6 +958,38 @@ impl Database {
                 source_mailbox_id,
             )?;
         }
+        if let Some(source_id) = draft.id.as_deref() {
+            let source: Option<(String, String, Option<u32>, Option<String>)> = transaction
+                .query_row(
+                    "SELECT account_id,draft_json,remote_uid,deleted_at FROM drafts WHERE id=?1",
+                    [source_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+                .optional()
+                .map_err(db_error)?;
+            if let Some((owner, current_json, _, deleted_at)) = source {
+                if owner != account_id {
+                    return Err("Draft does not belong to this account.".into());
+                }
+                if deleted_at.is_none() {
+                    let current: ComposeDraft = serde_json::from_str(&current_json)
+                        .map_err(|_| "This saved draft could not be read.".to_string())?;
+                    if !same_draft_content(&draft, &current_json)? {
+                        let mut newer_copy = current;
+                        newer_copy.id = None;
+                        super::drafts::save_draft_in_transaction(&transaction, &newer_copy)?;
+                    }
+                    super::drafts::retire_outbox_source_draft_in_transaction(
+                        &transaction,
+                        source_id,
+                        account_id,
+                    )?;
+                }
+            }
+            // Restored content gets a fresh identity. The retired ID remains
+            // reserved so an in-flight autosave cannot overwrite Undo/Edit.
+            draft.id = None;
+        }
         let draft_id = super::drafts::save_draft_in_transaction(&transaction, &draft)?;
         transaction
             .execute(
@@ -911,6 +1011,16 @@ impl Database {
         Ok(draft)
     }
 }
+}
+
+fn same_draft_content(queued: &ComposeDraft, current_json: &str) -> Result<bool, String> {
+    let current: ComposeDraft = serde_json::from_str(current_json)
+        .map_err(|_| "This saved draft could not be read.".to_string())?;
+    let queued =
+        serde_json::to_value(queued).map_err(|_| "Could not read queued message.".to_string())?;
+    let current =
+        serde_json::to_value(current).map_err(|_| "Could not read saved draft.".to_string())?;
+    Ok(queued == current)
 }
 
 /// Stored MIME bytes waiting to leave one account: queued, scheduled, or
@@ -1077,6 +1187,350 @@ mod tests {
             references: None,
             send_at: None,
         }
+    }
+
+    fn draft_with_id(db: &Database, account_id: &str) -> ComposeDraft {
+        let mut draft = draft();
+        draft.account_id = account_id.to_string();
+        let id = db.save_draft(&draft).unwrap();
+        draft.id = Some(id);
+        draft
+    }
+
+    fn add_second_account(db: &Database) -> String {
+        let mut second = account();
+        second.summary.id = "account-2".into();
+        second.summary.email = "lee@example.com".into();
+        second.summary.display_name = "Lee".into();
+        second.imap.username = "lee@example.com".into();
+        second.smtp.username = "lee@example.com".into();
+        db.insert_account(&second).unwrap();
+        second.summary.id
+    }
+
+    fn add_attachment(db: &Database, account_id: &str, draft: &mut ComposeDraft, token: &str) {
+        db.conn()
+            .unwrap()
+            .execute(
+                "INSERT INTO file_grants(token,account_id,path,size) VALUES(?1,?2,'/tmp/attachment.txt',4)",
+                params![token, account_id],
+            )
+            .unwrap();
+        draft.attachments.push(crate::models::ComposeAttachment {
+            token: token.into(),
+            filename: "attachment.txt".into(),
+            content_type: Some("text/plain".into()),
+            inline: false,
+            content_id: None,
+            size: Some(4),
+        });
+    }
+
+    fn insert_legacy_outbox(db: &Database, draft: &ComposeDraft, state: &str) -> String {
+        let id = uuid::Uuid::new_v4().to_string();
+        let json = serde_json::to_string(draft).unwrap();
+        db.conn()
+            .unwrap()
+            .execute(
+                "INSERT INTO outbox(id,account_id,draft_json,state,message_id,mime_bytes,updated_at)
+                 VALUES(?1,?2,?3,?4,'<legacy@example.test>',X'6D696D65',CURRENT_TIMESTAMP)",
+                params![id, draft.account_id, json, state],
+            )
+            .unwrap();
+        id
+    }
+
+    #[test]
+    fn queue_atomically_owns_draft_and_rejects_stale_saves_or_requeues() {
+        let (db, account_id) = with_account();
+        for (index, state) in ["queued", "scheduled", "needs_attention"]
+            .into_iter()
+            .enumerate()
+        {
+            let mut source = draft_with_id(&db, &account_id);
+            source.subject = format!("Queued source {index}");
+            if state == "scheduled" {
+                source.send_at = Some("2099-01-01T00:00:00Z".into());
+            }
+            let id = source.id.clone().unwrap();
+            let token = format!("attachment-{index}");
+            add_attachment(&db, &account_id, &mut source, &token);
+            db.save_draft(&source).unwrap();
+
+            let outbox_id = db
+                .queue_outbox(&source, state, None, "<queued@example.test>", b"mime", None)
+                .unwrap();
+
+            assert!(
+                db.draft(&id, &account_id).is_err(),
+                "{state} left source editable"
+            );
+            assert!(!db
+                .list_drafts(&account_id)
+                .unwrap()
+                .iter()
+                .any(|item| item.id == id));
+            let mut stale = source.clone();
+            stale.subject = "Late autosave must not resurrect the source".into();
+            assert!(
+                db.save_draft(&stale).is_err(),
+                "{state} accepted stale autosave"
+            );
+            assert!(
+                db.queue_outbox(
+                    &stale,
+                    state,
+                    None,
+                    "<duplicate@example.test>",
+                    b"mime",
+                    None
+                )
+                .is_err(),
+                "{state} accepted duplicate queueing by source ID"
+            );
+
+            let owners = db
+                .conn()
+                .unwrap()
+                .prepare("SELECT owner_kind,owner_id FROM attachment_refs WHERE token=?1")
+                .unwrap()
+                .query_map([&token], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            assert_eq!(owners, vec![("outbox".into(), outbox_id)]);
+        }
+    }
+
+    #[test]
+    fn queue_rejects_a_draft_id_owned_by_another_account() {
+        let (db, account_id) = with_account();
+        let second_account = add_second_account(&db);
+        let source = draft_with_id(&db, &account_id);
+        let mut cross_account = source.clone();
+        cross_account.account_id = second_account.clone();
+
+        assert!(db
+            .queue_outbox(
+                &cross_account,
+                "scheduled",
+                None,
+                "<cross-account@example.test>",
+                b"mime",
+                Some("2099-01-01T00:00:00Z"),
+            )
+            .is_err());
+        assert!(db.draft(source.id.as_deref().unwrap(), &account_id).is_ok());
+        assert!(db.list_outbox(&second_account).unwrap().is_empty());
+    }
+
+    #[test]
+    fn restore_transfers_local_attachment_ownership_and_releases_source_reservation() {
+        let (db, account_id) = with_account();
+        let mut source = draft_with_id(&db, &account_id);
+        let token = "restore-attachment";
+        add_attachment(&db, &account_id, &mut source, token);
+        db.save_draft(&source).unwrap();
+        let source_id = source.id.clone().unwrap();
+        let outbox_id = db
+            .queue_outbox(
+                &source,
+                "scheduled",
+                None,
+                "<restore@example.test>",
+                b"mime",
+                Some("2099-01-01T00:00:00Z"),
+            )
+            .unwrap();
+
+        let restored = db.restore_outbox_as_draft(&outbox_id, &account_id).unwrap();
+        let restored_id = restored.id.clone().unwrap();
+        assert_ne!(restored_id, source_id);
+        assert!(db.outbox(&outbox_id, &account_id).is_err());
+        assert!(db.draft(&source_id, &account_id).is_err());
+        assert!(db.draft(&restored_id, &account_id).is_ok());
+        let owners = db
+            .conn()
+            .unwrap()
+            .prepare("SELECT owner_kind,owner_id FROM attachment_refs WHERE token=?1")
+            .unwrap()
+            .query_map([token], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(owners, vec![("draft".into(), restored_id.clone())]);
+
+        let mut edited = restored;
+        edited.subject = "Explicitly edited after Undo".into();
+        assert_eq!(db.save_draft(&edited).unwrap(), restored_id);
+        let mut stale = source;
+        stale.subject = "Stale autosave after restore".into();
+        assert!(db.save_draft(&stale).is_err());
+    }
+
+    #[test]
+    fn restoring_remote_source_preserves_delete_tombstone_and_attachment_refs() {
+        let (db, account_id) = with_account();
+        let mut source = draft_with_id(&db, &account_id);
+        let token = "remote-restore-attachment";
+        add_attachment(&db, &account_id, &mut source, token);
+        db.save_draft(&source).unwrap();
+        let source_id = source.id.clone().unwrap();
+        db.conn()
+            .unwrap()
+            .execute(
+                "UPDATE drafts SET sync_state='synced',remote_mailbox='Drafts',remote_uid=18,
+                 remote_uid_validity=7 WHERE id=?1 AND account_id=?2",
+                params![source_id, account_id],
+            )
+            .unwrap();
+        let outbox_id = db
+            .queue_outbox(
+                &source,
+                "queued",
+                None,
+                "<remote-restore@example.test>",
+                b"mime",
+                None,
+            )
+            .unwrap();
+
+        let pending = db.pending_draft_sync(&account_id).unwrap();
+        assert!(pending
+            .iter()
+            .any(|record| record.id == source_id && record.deleted));
+        let restored = db.restore_outbox_as_draft(&outbox_id, &account_id).unwrap();
+        let restored_id = restored.id.clone().unwrap();
+        assert_ne!(restored_id, source_id);
+        assert!(db.draft(&restored_id, &account_id).is_ok());
+        assert!(db
+            .pending_draft_sync(&account_id)
+            .unwrap()
+            .iter()
+            .any(|record| { record.id == source_id && record.deleted }));
+
+        let owners = db
+            .conn()
+            .unwrap()
+            .prepare("SELECT owner_kind,owner_id FROM attachment_refs WHERE token=?1 ORDER BY owner_kind")
+            .unwrap()
+            .query_map([token], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(owners, vec![("draft".into(), restored_id)]);
+        db.finish_remote_draft_delete(&source_id, &account_id)
+            .unwrap();
+        assert!(db.draft(&source_id, &account_id).is_err());
+        assert!(db.draft(&restored.id.unwrap(), &account_id).is_ok());
+    }
+
+    #[test]
+    fn legacy_restore_keeps_a_newer_draft_and_restores_queued_snapshot_separately() {
+        let (db, account_id) = with_account();
+        let source = draft_with_id(&db, &account_id);
+        let source_id = source.id.clone().unwrap();
+        let mut newer = source.clone();
+        newer.subject = "Newer draft must survive".into();
+        db.save_draft(&newer).unwrap();
+        let outbox_id = insert_legacy_outbox(&db, &source, "scheduled");
+
+        let restored = db.restore_outbox_as_draft(&outbox_id, &account_id).unwrap();
+        assert_ne!(restored.id.as_deref(), Some(source_id.as_str()));
+        assert!(db.draft(&source_id, &account_id).is_err());
+        assert_eq!(restored.subject, source.subject);
+        assert_eq!(
+            db.draft(restored.id.as_deref().unwrap(), &account_id)
+                .unwrap()
+                .subject,
+            source.subject
+        );
+        let drafts = db.list_drafts(&account_id).unwrap();
+        assert!(drafts
+            .iter()
+            .any(|item| item.subject == "Newer draft must survive"));
+        assert!(drafts.iter().any(|item| item.subject == source.subject));
+        let newer_copy = drafts
+            .iter()
+            .find(|item| item.subject == "Newer draft must survive")
+            .unwrap();
+        assert_ne!(newer_copy.id, source_id);
+        let mut stale = newer;
+        stale.subject = "Stale autosave after legacy restore".into();
+        assert!(db.save_draft(&stale).is_err());
+        assert!(db.outbox(&outbox_id, &account_id).is_err());
+    }
+
+    #[test]
+    fn failed_queue_keeps_source_and_draft_attachment_references() {
+        let (db, account_id) = with_account();
+        for index in 0..MAX_NEEDS_ATTENTION_OUTBOX_MESSAGES {
+            db.queue_outbox(
+                &draft(),
+                "needs_attention",
+                None,
+                &format!("<parked-{index}@example.test>"),
+                b"parked",
+                None,
+            )
+            .unwrap();
+        }
+        let mut source = draft_with_id(&db, &account_id);
+        add_attachment(&db, &account_id, &mut source, "failed-queue-attachment");
+        db.save_draft(&source).unwrap();
+        let source_id = source.id.clone().unwrap();
+
+        assert!(db
+            .queue_outbox(
+                &source,
+                "scheduled",
+                None,
+                "<blocked@example.test>",
+                b"mime",
+                Some("2099-01-01T00:00:00Z"),
+            )
+            .is_err());
+        assert!(db.draft(&source_id, &account_id).is_ok());
+        let owner: String = db
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT owner_kind FROM attachment_refs WHERE token='failed-queue-attachment'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(owner, "draft");
+    }
+
+    #[test]
+    fn legacy_delivery_cleanup_preserves_new_edits_and_removes_matching_source() {
+        let (db, account_id) = with_account();
+        let source = draft_with_id(&db, &account_id);
+        let source_id = source.id.clone().unwrap();
+        let mut newer = source.clone();
+        newer.subject = "Newer unsent edit".into();
+        db.save_draft(&newer).unwrap();
+        let outbox_id = insert_legacy_outbox(&db, &source, "queued");
+        assert!(!db
+            .finalize_outbox_source_draft(&outbox_id, &account_id)
+            .unwrap());
+        assert_eq!(
+            db.draft(&source_id, &account_id).unwrap().subject,
+            "Newer unsent edit"
+        );
+
+        let matching_outbox = insert_legacy_outbox(&db, &newer, "queued");
+        assert!(db
+            .finalize_outbox_source_draft(&matching_outbox, &account_id)
+            .unwrap());
+        assert!(db.draft(&source_id, &account_id).is_err());
     }
 
     #[test]
