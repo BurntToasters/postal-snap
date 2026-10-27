@@ -220,6 +220,7 @@ export function SettingsDialog({
     filterRules,
     ruleInput,
     ruleStatus,
+    savingRuleAccounts,
     setRuleField,
     handleAddRule,
     handlePreviewRule,
@@ -476,6 +477,15 @@ export function SettingsDialog({
                 button.dataset.settingsAccountId === request.accountId,
             );
       accountFocusRequest.current = undefined;
+      const active = document.activeElement;
+      if (
+        active instanceof HTMLElement &&
+        active !== target &&
+        content?.contains(active) &&
+        active.matches("input, select, textarea, button")
+      ) {
+        return;
+      }
       target?.focus();
     });
     return () => window.cancelAnimationFrame(frame);
@@ -733,6 +743,7 @@ export function SettingsDialog({
                     ruleInput={ruleInput}
                     setRuleField={setRuleField}
                     handleAddRule={handleAddRule}
+                    savingRuleAccounts={savingRuleAccounts}
                     handlePreviewRule={handlePreviewRule}
                     handleMoveRule={handleMoveRule}
                     handleToggleRule={handleToggleRule}

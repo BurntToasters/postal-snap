@@ -398,6 +398,33 @@ try {
   const recoveryPorts = await recoveryFixture.start();
   environment.POSTAL_SNAP_BRIDGE_IMAP_RECOVERY = String(recoveryPorts.imap);
   environment.POSTAL_SNAP_BRIDGE_SMTP_RECOVERY = String(recoveryPorts.smtp);
+  stage = "bridge-keyword-reject-fixture-start";
+  const keywordRejectFixture = await createCompatibilityFixture({
+    certificatePath: certificate,
+    keyPath: key,
+    tlsMode: "tls",
+    capabilities: ["IMAP4rev1"],
+    folderNames: ["INBOX", "KeywordReject"],
+    messages: {
+      KeywordReject: [
+        {
+          uid: 1,
+          messageId: "<keyword-reject@example.test>",
+          subject: "Keyword reject",
+          body: "KEYWORD-REJECT-CONTENT",
+        },
+      ],
+    },
+    rejectKeywordStoreMailboxes: ["KeywordReject"],
+  });
+  fixtures.push({ name: "KEYWORD-REJECT", fixture: keywordRejectFixture });
+  const keywordRejectPorts = await keywordRejectFixture.start();
+  environment.POSTAL_SNAP_BRIDGE_IMAP_KEYWORD_REJECT = String(
+    keywordRejectPorts.imap,
+  );
+  environment.POSTAL_SNAP_BRIDGE_SMTP_KEYWORD_REJECT = String(
+    keywordRejectPorts.smtp,
+  );
   stage = "bridge-utf8-fixture-start";
   const utf8Fixture = await createCompatibilityFixture({
     certificatePath: certificate,
@@ -449,6 +476,24 @@ try {
   await protocolTest("bridge_list_status_protocol_integration", environment);
   stage = "bridge-recovery-protocol-integration";
   await protocolTest("bridge_recovery_protocol_integration", environment);
+  stage = "bridge-keyword-reject-protocol-integration";
+  await protocolTest(
+    "bridge_rejected_keyword_store_is_not_silent_success",
+    environment,
+  );
+  assert.ok(
+    keywordRejectFixture.results().rejectedKeywordStores > 0,
+    "The keyword rejection scenario was not exercised.",
+  );
+  report.results.push({
+    name: "bridge-rejected-keyword-store",
+    status: "passed",
+  });
+  report.results.push({
+    name: "bridge-keyword-reject",
+    status: "passed",
+    counters: keywordRejectFixture.results(),
+  });
   for (const { name, fixture } of fixtures) {
     const counters = fixture.results();
     if (name === "UTF8") {
@@ -510,7 +555,7 @@ try {
       );
       assert.equal(
         counters.rejectedFlagStores,
-        2,
+        1,
         "destination flag failure scenario was not exercised.",
       );
       assert.equal(
@@ -526,6 +571,7 @@ try {
       continue;
     }
     if (name === "NO-IDLE-WATCHER-CAP") continue;
+    if (name === "KEYWORD-REJECT") continue;
     const positive = ["TLS", "STARTTLS"].includes(name);
     if (name === "TLS") {
       assert.ok(

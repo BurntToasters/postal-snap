@@ -20,6 +20,16 @@
 
 Postal Snap is a calm, accessible desktop email client. Mail stays on your computer. There is no Postal Snap cloud, telemetry, or account of mine to log into.
 
+## Changes in `v0.5.1:`
+
+- **FIX - macOS updates:** Later updates preserve the installed app's identity and avoid an extra Gatekeeper prompt. Updating to 0.5.1 from an older version still uses that version's updater.
+- **FIX - Update reliability:** Changing update channels during installation no longer causes a restart without installing. Failed downloads release their resources.
+- **FIX - Mail state:** A refused IMAP flag or keyword write now stays queued instead of being reported as success and discarded. The pinned `async-imap` parser is patched locally to surface the server's tagged response.
+- **FIX - Rules:** A pending rule save no longer clears newer text in the form, and a second click while the save is pending does not create a duplicate rule.
+- **FIX - Drafts and snoozed mail:** Queued drafts cannot be restored by stale saves, and snooze transfers stay tied to the correct destination mailbox.
+- **IMPROVED - Settings and accessibility:** Settings, composer, reader, message list, and folder controls have clearer layouts, keyboard focus, and behavior at larger text sizes and narrow widths.
+- **IMPROVED - Attachments and releases:** Attachment reads are bounded, and update manifests and release assets receive stricter validation.
+
 ## Changes in `v0.5.0:`
 
 - **NEW - Message downloads:** Mail opens with a partial body and fetches the full message when needed. The reader offers a clear download action, and attachments can optionally stay available offline.

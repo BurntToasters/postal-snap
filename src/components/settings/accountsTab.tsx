@@ -145,6 +145,7 @@ interface AccountsTabProps {
   ruleInput: (accountId: string) => AccountRuleDraft;
   setRuleField: (accountId: string, patch: Record<string, string>) => void;
   handleAddRule: (accountId: string) => Promise<void>;
+  savingRuleAccounts: Record<string, boolean>;
   handlePreviewRule: (accountId: string) => Promise<void>;
   handleMoveRule: (
     accountId: string,
@@ -206,6 +207,7 @@ export function AccountsTab({
   ruleInput,
   setRuleField,
   handleAddRule,
+  savingRuleAccounts,
   handlePreviewRule,
   handleMoveRule,
   handleToggleRule,
@@ -937,6 +939,7 @@ export function AccountsTab({
                         <button
                           type="button"
                           className="primary-button add-rule-button"
+                          disabled={savingRuleAccounts[account.id]}
                           onClick={() => void handleAddRule(account.id)}
                         >
                           {strings.settings.addRule}

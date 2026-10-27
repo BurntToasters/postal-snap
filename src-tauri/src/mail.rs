@@ -1104,6 +1104,92 @@ mod tests {
         );
     }
 
+    // A rejected STORE must surface as an error. Otherwise replay discards the
+    // keyword and the server never records the reply mark.
+    #[tokio::test]
+    #[ignore = "requires npm run test:mail-integration"]
+    async fn bridge_rejected_keyword_store_is_not_silent_success() {
+        let certificate = std::fs::read_to_string(
+            std::env::var("POSTAL_SNAP_MAIL_TEST_CA_CERT").expect("fixture certificate required"),
+        )
+        .unwrap();
+        let server = |name: &str| ServerConfig {
+            host: "127.0.0.1".into(),
+            port: std::env::var(name)
+                .unwrap_or_else(|_| panic!("missing fixture port {name}"))
+                .parse()
+                .unwrap(),
+            tls_mode: TlsMode::Tls,
+            username: "fixture@example.test".into(),
+            trusted_certificate: Some(certificate.clone()),
+        };
+        let account = AccountRecord {
+            summary: AccountSummary {
+                id: "bridge-keyword-reject-fixture".into(),
+                provider: ProviderKind::ProtonBridge,
+                email: "fixture@example.test".into(),
+                display_name: "Fixture".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+                signature_html: String::new(),
+                reply_to: String::new(),
+                color: None,
+                default_body_format: crate::models::BodyFormat::Plain,
+            },
+            imap: server("POSTAL_SNAP_BRIDGE_IMAP_KEYWORD_REJECT"),
+            smtp: server("POSTAL_SNAP_BRIDGE_SMTP_KEYWORD_REJECT"),
+        };
+        let password = "fixture-password";
+        let mut session = connect_imap(&account.imap, password).await.unwrap();
+        let selected = session.select("KeywordReject").await.unwrap();
+        let uid = *session
+            .uid_search("ALL")
+            .await
+            .unwrap()
+            .iter()
+            .next()
+            .unwrap();
+        let validity = selected.uid_validity;
+        session.logout().await.unwrap();
+
+        let error = super::set_remote_keyword(
+            &account,
+            password,
+            "KeywordReject",
+            uid,
+            validity,
+            super::SourceKeyword::Answered,
+        )
+        .await
+        .expect_err("a rejected STORE must not be reported as success");
+        assert!(
+            !error.terminal,
+            "a tagged NO must remain retryable: {error}"
+        );
+
+        let mut verify = connect_imap(&account.imap, password).await.unwrap();
+        let selected = verify.select("KeywordReject").await.unwrap();
+        assert_eq!(selected.uid_validity, validity);
+        let rows = verify
+            .uid_fetch(uid.to_string(), "(UID FLAGS)")
+            .await
+            .unwrap()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        verify.logout().await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(
+            !rows[0]
+                .flags()
+                .any(|flag| matches!(flag, async_imap::types::Flag::Answered)),
+            "the fixture must not store the rejected keyword"
+        );
+    }
+
     #[test]
     fn parses_and_decodes_mime_message() {
         let raw = b"From: Jane <jane@example.com>\r\nTo: Sam <sam@example.com>\r\nSubject: Hello\r\nMessage-ID: <one@example.com>\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello from Postal Snap";

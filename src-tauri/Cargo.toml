@@ -45,8 +45,8 @@ tauri-plugin-deep-link = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-process = { version = "2", optional = true }
-# Pinned to upstream v2's zip 9 security fix; the registry release still uses zip 4.
-tauri-plugin-updater = { git = "https://github.com/tauri-apps/plugins-workspace.git", rev = "f36ba7ba48695776bc11cce0bfdc45678ec24f72", package = "tauri-plugin-updater", optional = true }
+# Based on upstream f36ba7ba; local macOS installation preserves app identity.
+tauri-plugin-updater = { path = "vendor/tauri-plugin-updater", optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "fs", "io-util"] }
 tokio-native-tls = "0.3"
 url = "2"
@@ -94,6 +94,11 @@ proptest = "1"
 # Reviewed exceptions: Win32 Snap overlay (window_snap.rs), macOS App Nap
 # activity (app_nap.rs), and macOS activation observer (tray.rs).
 unsafe_code = "deny"
+
+# Local patch: surface tagged NO/BAD and connection loss from STORE/EXPUNGE.
+# See vendor/async-imap/POSTAL-SNAP.md.
+[patch.crates-io]
+async-imap = { path = "vendor/async-imap" }
 
 [profile.release]
 # Unwind so a panic fails one task (a sync pass, one message parse) instead of

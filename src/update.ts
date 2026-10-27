@@ -38,6 +38,8 @@ function releaseUpdate(update: DownloadedUpdate | null | undefined): void {
 let updateInFlight: Promise<UpdateCheckResult> | undefined;
 let interactiveInFlight: Promise<void> | undefined;
 let applyInFlight: Promise<void> | undefined;
+let installingPackage: DownloadedUpdate | undefined;
+let recheckAfterApply = false;
 const updateFoundListeners = new Set<UpdateFoundListener>();
 let updateFound = false;
 let updateVersion: string | undefined;
@@ -67,6 +69,8 @@ export function resetUpdateStateForTesting(): void {
   updateInFlight = undefined;
   interactiveInFlight = undefined;
   applyInFlight = undefined;
+  installingPackage = undefined;
+  recheckAfterApply = false;
   updateFoundListeners.clear();
   updateFound = false;
   updateVersion = undefined;
@@ -93,7 +97,7 @@ function markUpdateReady(update: DownloadedUpdate): void {
 
 /** Drops a downloaded update, e.g. after the update channel changes. */
 export function discardPendingUpdate(): void {
-  releaseUpdate(pendingPackage);
+  if (pendingPackage !== installingPackage) releaseUpdate(pendingPackage);
   pendingPackage = undefined;
   updateReadyVersion = undefined;
   useAppStore.getState().setUpdateReady(null);
@@ -103,6 +107,10 @@ export function discardPendingUpdate(): void {
 /** Drops the old channel's update and checks the new channel now. */
 export function onUpdateChannelChanged(): void {
   discardPendingUpdate();
+  if (applyInFlight) {
+    recheckAfterApply = true;
+    return;
+  }
   // A running interactive check re-runs itself on the new channel.
   if (interactiveInFlight) return;
   void runUpdateSingleFlight().catch(() => undefined);
@@ -185,7 +193,12 @@ export function runUpdateSingleFlight(
         return { available: false };
       }
       notifyUpdateFound(update.version);
-      await update.download();
+      try {
+        await update.download();
+      } catch (error) {
+        releaseUpdate(update);
+        throw error;
+      }
       if (currentChannel() !== channel) {
         releaseUpdate(update);
         continue;
@@ -213,6 +226,14 @@ export async function applyPendingUpdate(
   mode: UpdateApplyMode = "restart",
 ): Promise<void> {
   if (applyInFlight) return applyInFlight;
+  const packageToInstall = pendingPackage;
+  const readyVersion = getUpdateReadyVersion();
+  // An installed update can still need a restart after a relaunch failure.
+  const stillCurrent = () =>
+    packageToInstall
+      ? pendingPackage === packageToInstall
+      : Boolean(readyVersion && getUpdateReadyVersion() === readyVersion);
+  let leaving = false;
   const task = (async (): Promise<void> => {
     let updateGateHeld = false;
     const relaunch = mode !== "quit";
@@ -220,19 +241,49 @@ export async function applyPendingUpdate(
       // Older browser harnesses do not expose the native gate command.
       await (api.beginUpdateInstall?.() ?? Promise.resolve());
       updateGateHeld = true;
+      if (!stillCurrent()) {
+        await (api.releaseUpdateInstall?.() ?? Promise.resolve());
+        updateGateHeld = false;
+        if (mode === "quit") {
+          await api.quitApp();
+          leaving = true;
+        }
+        return;
+      }
       if (mode === "background") {
         // Without the marker the relaunch would open the window.
         await api.prepareUpdateRelaunch("background");
       } else if (mode === "restart") {
         await api.prepareUpdateRelaunch("window").catch(() => undefined);
       }
-      if (pendingPackage) {
-        // Windows exits here; its installer reopens the app only on relaunch.
-        await pendingPackage.install({ restartAfterInstall: relaunch });
-        pendingPackage = undefined;
+      if (!stillCurrent()) {
+        await api.clearUpdateRelaunch().catch(() => undefined);
+        await (api.releaseUpdateInstall?.() ?? Promise.resolve());
+        updateGateHeld = false;
+        if (mode === "quit") {
+          await api.quitApp();
+          leaving = true;
+        }
+        return;
+      }
+      if (packageToInstall) {
+        installingPackage = packageToInstall;
+        try {
+          // Windows exits here; its installer reopens the app only on relaunch.
+          await packageToInstall.install({ restartAfterInstall: relaunch });
+        } finally {
+          installingPackage = undefined;
+          if (pendingPackage !== packageToInstall)
+            releaseUpdate(packageToInstall);
+        }
+        if (pendingPackage === packageToInstall) {
+          pendingPackage = undefined;
+          releaseUpdate(packageToInstall);
+        }
       }
       if (relaunch) await api.relaunch();
       else await api.quitApp();
+      leaving = true;
     } catch {
       await api.clearUpdateRelaunch().catch(() => undefined);
       if (updateGateHeld) {
@@ -261,6 +312,10 @@ export async function applyPendingUpdate(
     await task;
   } finally {
     if (applyInFlight === task) applyInFlight = undefined;
+    if (recheckAfterApply) {
+      recheckAfterApply = false;
+      if (!leaving) void runUpdateSingleFlight().catch(() => undefined);
+    }
   }
 }
 
@@ -345,6 +400,7 @@ export async function checkUpdateInteractive(): Promise<void> {
             void api.markUpdateChecked().catch(() => undefined);
           }
         } catch {
+          releaseUpdate(update);
           await api.showNativeMessage(
             strings.update.downloadErrorTitle,
             strings.update.downloadErrorMessage,

@@ -30,6 +30,7 @@
     "test:mail-integration": "node scripts/test-mail-integration.js",
     "test:bridge-integration": "node scripts/test-mail-integration.js --bridge-only",
     "test:e2e": "node scripts/run-e2e.js",
+    "test:macos-updater": "sh scripts/verify-macos-updater.sh",
     "setup:e2e": "playwright install chromium webkit",
     "test:release-assets": "node scripts/run-release-asset-tests.js",
     "test:release-dry-run": "node scripts/release-dry-run.js",

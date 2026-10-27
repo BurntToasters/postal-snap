@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api } from "../../api";
 import { strings } from "../../i18n";
@@ -50,6 +50,10 @@ export function useSettingsFilterRules({ enabled, initialRuleSeed }: Options) {
     },
   );
   const [ruleStatus, setRuleStatus] = useState<Record<string, string>>({});
+  const [savingRuleAccounts, setSavingRuleAccounts] = useState<
+    Record<string, boolean>
+  >({});
+  const pendingRuleAccounts = useRef(new Set<string>());
 
   const hasDirtyForms = Object.values(newRuleInputs).some(
     (draft) =>
@@ -119,6 +123,7 @@ export function useSettingsFilterRules({ enabled, initialRuleSeed }: Options) {
   }
 
   async function handleAddRule(accountId: string) {
+    if (pendingRuleAccounts.current.has(accountId)) return;
     const input = ruleInput(accountId);
     const name = input.name.trim() || input.contains.trim();
     if (!name) {
@@ -129,6 +134,9 @@ export function useSettingsFilterRules({ enabled, initialRuleSeed }: Options) {
       setError(strings.settings.ruleMatchRequired);
       return;
     }
+    const submitted = { ...input };
+    pendingRuleAccounts.current.add(accountId);
+    setSavingRuleAccounts((prev) => ({ ...prev, [accountId]: true }));
     try {
       const created = await api.createFilterRule({
         id: "",
@@ -146,22 +154,25 @@ export function useSettingsFilterRules({ enabled, initialRuleSeed }: Options) {
         if (existing.some((item) => item.id === created.id)) return prev;
         return { ...prev, [accountId]: [...existing, created] };
       });
-      setNewRuleInputs((prev) => ({
-        ...prev,
-        [accountId]: {
-          name: "",
-          field: "from",
-          contains: "",
-          action: "mark_read",
-          target: "",
-        },
-      }));
+      setNewRuleInputs((prev) => {
+        const current = prev[accountId];
+        return current && ruleDraftEquals(current, submitted)
+          ? { ...prev, [accountId]: emptyRuleDraft() }
+          : prev;
+      });
       setRuleStatus((prev) => ({
         ...prev,
         [accountId]: strings.settings.ruleSaved,
       }));
     } catch (cause) {
       setError(String(cause));
+    } finally {
+      pendingRuleAccounts.current.delete(accountId);
+      setSavingRuleAccounts((prev) => {
+        const next = { ...prev };
+        delete next[accountId];
+        return next;
+      });
     }
   }
 
@@ -272,6 +283,7 @@ export function useSettingsFilterRules({ enabled, initialRuleSeed }: Options) {
     newRuleInputs,
     ruleInput,
     ruleStatus,
+    savingRuleAccounts,
     setNewRuleInputs,
     setRuleField,
     handleAddRule,
@@ -284,4 +296,24 @@ export function useSettingsFilterRules({ enabled, initialRuleSeed }: Options) {
 
 function seedField(field: RuleSeed["field"]): "from" | "to" | "subject" {
   return field === "to" || field === "subject" ? field : "from";
+}
+
+function emptyRuleDraft(): RuleDraft {
+  return {
+    name: "",
+    field: "from",
+    contains: "",
+    action: "mark_read",
+    target: "",
+  };
+}
+
+function ruleDraftEquals(left: RuleDraft, right: RuleDraft): boolean {
+  return (
+    left.name === right.name &&
+    left.field === right.field &&
+    left.contains === right.contains &&
+    left.action === right.action &&
+    left.target === right.target
+  );
 }

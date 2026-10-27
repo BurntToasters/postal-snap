@@ -46,6 +46,7 @@ export async function createCompatibilityFixture({
   fetchSizeMismatchMailboxes = [],
   uidValidityChangesAfterFetch = [],
   rejectFlagStoreMailboxes = [],
+  rejectKeywordStoreMailboxes = [],
 }) {
   if (!["tls", "startTls"].includes(tlsMode))
     throw new Error("Invalid fixture TLS mode.");
@@ -75,6 +76,7 @@ export async function createCompatibilityFixture({
     fetchItems: 0,
     flagStoreTargets: [],
     rejectedFlagStores: 0,
+    rejectedKeywordStores: 0,
     utf8AcceptRequested: 0,
     utf8AcceptEnabled: 0,
   };
@@ -519,6 +521,15 @@ export async function createCompatibilityFixture({
         const [, set = "", operation = ""] =
           /^STORE\s+(\S+)\s+([\s\S]+)$/i.exec(args) ?? [];
         const changesReadOrStar = /\\(?:Seen|Flagged)/i.test(operation);
+        const changesKeyword = /\\(?:Answered)\b|\$Forwarded\b/i.test(operation);
+        if (
+          changesKeyword &&
+          rejectKeywordStoreMailboxes.includes(selectedMailbox)
+        ) {
+          counts.rejectedKeywordStores++;
+          send(`${tag} NO keyword update rejected by fixture`);
+          return;
+        }
         if (changesReadOrStar) {
           counts.flagStoreTargets.push({
             mailbox: selectedMailbox,
