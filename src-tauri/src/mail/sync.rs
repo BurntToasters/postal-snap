@@ -4,7 +4,6 @@ use std::{
     time::Duration,
 };
 
-use async_imap::extensions::idle::IdleResponse;
 use chrono::{DateTime, Utc};
 use futures_util::TryStreamExt;
 use tokio::sync::Notify;
@@ -645,8 +644,7 @@ async fn sync_folder<H: SyncHooks>(
         let changed = previous
             .as_ref()
             .is_some_and(|meta| meta.server_total.is_some_and(|total| total > 0));
-        db.reconcile_expunged(mailbox_id, 0, u32::MAX, &HashSet::new())?;
-        db.set_backfill(mailbox_id, None, "complete")?;
+        reconcile_empty_mailbox(db, mailbox_id)?;
         db.set_highest_modseq(mailbox_id, status.highest_modseq)?;
         return Ok((false, changed));
     }
@@ -1215,6 +1213,60 @@ async fn parse_partial_off_runtime(
     .map_err(MailError::from)
 }
 
+/// What to do with `parse_pending` after one parser phase finishes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ParseSettleAction {
+    EndAttempt,
+    LeaveOpen,
+    Quarantine,
+}
+
+/// Prefix parse outcomes: a rejected prefix continues in the following full fetch.
+pub(crate) fn prefix_parse_action<T>(result: &Result<Option<T>, MailError>) -> ParseSettleAction {
+    match result {
+        Ok(Some(_)) => ParseSettleAction::EndAttempt,
+        Ok(None) => ParseSettleAction::LeaveOpen,
+        Err(error) if error.kind == FailureKind::Unreadable => ParseSettleAction::Quarantine,
+        Err(_) => ParseSettleAction::EndAttempt,
+    }
+}
+
+pub(crate) fn apply_parse_settle_action(
+    db: &Database,
+    mailbox_id: i64,
+    uid: u32,
+    action: ParseSettleAction,
+) -> Result<(), MailError> {
+    match action {
+        ParseSettleAction::LeaveOpen => Ok(()),
+        ParseSettleAction::EndAttempt => db
+            .end_parse(mailbox_id, uid)
+            .map_err(MailError::local_storage),
+        ParseSettleAction::Quarantine => db
+            .quarantine_parse(mailbox_id, uid)
+            .map_err(MailError::local_storage),
+    }
+}
+
+pub(crate) fn full_parse_action<T>(result: &Result<T, MailError>) -> ParseSettleAction {
+    match result {
+        Err(error) if error.kind == FailureKind::Unreadable => ParseSettleAction::Quarantine,
+        _ => ParseSettleAction::EndAttempt,
+    }
+}
+
+/// Finish a parse attempt that already called `begin_parse` (prefix continuation).
+pub(crate) async fn finish_open_parse<T>(
+    db: &Database,
+    mailbox_id: i64,
+    uid: u32,
+    parse: impl Future<Output = Result<T, MailError>>,
+) -> Result<T, MailError> {
+    let parsed = parse.await;
+    apply_parse_settle_action(db, mailbox_id, uid, full_parse_action(&parsed))?;
+    parsed
+}
+
 /// Runs one parse under the quarantine count. The attempt is counted before
 /// the parser starts, so an attempt that never returns still counts.
 pub(crate) async fn guard_parse<T>(
@@ -1226,14 +1278,28 @@ pub(crate) async fn guard_parse<T>(
     db.begin_parse(mailbox_id, uid)
         .map_err(MailError::local_storage)?;
     let parsed = parse.await;
-    if matches!(&parsed, Err(error) if error.kind == FailureKind::Unreadable) {
-        db.quarantine_parse(mailbox_id, uid)
-            .map_err(MailError::local_storage)?;
-    } else {
-        db.end_parse(mailbox_id, uid)
-            .map_err(MailError::local_storage)?;
-    }
+    apply_parse_settle_action(db, mailbox_id, uid, full_parse_action(&parsed))?;
     parsed
+}
+
+pub(crate) fn resolve_idle_outcome(
+    response: &async_imap::extensions::idle::IdleResponse,
+    mailbox_changed: bool,
+) -> IdleOutcome {
+    use async_imap::extensions::idle::IdleResponse;
+    match response {
+        IdleResponse::NewData(_) => IdleOutcome::Changed,
+        IdleResponse::Timeout if mailbox_changed => IdleOutcome::Changed,
+        IdleResponse::Timeout => IdleOutcome::Timeout,
+        IdleResponse::ManualInterrupt if mailbox_changed => IdleOutcome::Changed,
+        IdleResponse::ManualInterrupt => IdleOutcome::Interrupted,
+    }
+}
+
+fn reconcile_empty_mailbox(db: &Database, mailbox_id: i64) -> Result<(), String> {
+    db.reconcile_expunged(mailbox_id, 0, u32::MAX, &HashSet::new())?;
+    db.set_backfill(mailbox_id, None, "complete")?;
+    Ok(())
 }
 
 #[derive(Default)]
@@ -1277,6 +1343,7 @@ async fn download_body_batch(
         });
     let mut state = BatchState::default();
     let mut whole = full;
+    let mut continuing_parse = HashSet::new();
     if !partial.is_empty() {
         // A rejected prefix is fetched whole in the same batch.
         whole.extend(
@@ -1289,6 +1356,7 @@ async fn download_body_batch(
                 BodyFetch::Partial,
                 &rows,
                 &mut state,
+                &mut continuing_parse,
             )
             .await?,
         );
@@ -1303,6 +1371,7 @@ async fn download_body_batch(
             BodyFetch::Full,
             &rows,
             &mut state,
+            &mut continuing_parse,
         )
         .await?;
     }
@@ -1329,6 +1398,7 @@ async fn fetch_body_group(
     fetch: BodyFetch,
     rows: &HashMap<u32, BatchRow>,
     state: &mut BatchState,
+    continuing_parse: &mut HashSet<u32>,
 ) -> Result<Vec<u32>, String> {
     let range = uids
         .iter()
@@ -1373,12 +1443,24 @@ async fn fetch_body_group(
             .or_else(|| rows.get(&uid).map(|row| row.size))
             .unwrap_or(raw.len() as u64);
         let parsed = if partial {
-            guard_parse(
-                db,
-                mailbox_id,
-                uid,
-                parse_partial_off_runtime(uid, raw, declared_size, seen, flagged, fallback),
-            )
+            db.begin_parse(mailbox_id, uid)
+                .map_err(|error| error.to_string())?;
+            let parsed =
+                parse_partial_off_runtime(uid, raw, declared_size, seen, flagged, fallback).await;
+            let action = prefix_parse_action(&parsed);
+            apply_parse_settle_action(db, mailbox_id, uid, action)
+                .map_err(|error| error.to_string())?;
+            if action == ParseSettleAction::LeaveOpen {
+                continuing_parse.insert(uid);
+            }
+            parsed
+        } else if continuing_parse.contains(&uid) {
+            continuing_parse.remove(&uid);
+            finish_open_parse(db, mailbox_id, uid, async {
+                parse_full_off_runtime(uid, raw, seen, flagged, fallback)
+                    .await
+                    .map(Some)
+            })
             .await
         } else {
             guard_parse(db, mailbox_id, uid, async {
@@ -1406,7 +1488,11 @@ async fn fetch_body_group(
                     );
                 }
             }
-            Ok(None) => rejected.push(uid),
+            Ok(None) if partial => rejected.push(uid),
+            Ok(None) => {
+                state.delivered.insert(uid);
+                db.record_prefetch_failure(mailbox_id, uid)?;
+            }
             Err(_) => {
                 state.delivered.insert(uid);
                 db.record_prefetch_failure(mailbox_id, uid)?;
@@ -1521,6 +1607,7 @@ pub async fn refresh_mailbox_envelopes(
         )?;
         let max_uid = db.max_uid(mailbox_id)?;
         if selected.exists == 0 {
+            reconcile_empty_mailbox(db, mailbox_id)?;
             return Ok(());
         }
         if max_uid == 0 {
@@ -1633,6 +1720,16 @@ pub async fn idle_inbox(
         .await
         .map_err(|_| "Inbox monitoring initialization timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Inbox monitoring"))?;
+    if idle.take_mailbox_change() {
+        match tokio::time::timeout(Duration::from_secs(5), idle.done()).await {
+            Ok(Ok(session)) => {
+                lease.restore_session(session);
+                lease.release();
+            }
+            _ => lease.discard(),
+        }
+        return Ok(IdleOutcome::Changed);
+    }
     let response = {
         let (wait, interrupt) = idle.wait_with_timeout(limit);
         tokio::pin!(wait);
@@ -1644,15 +1741,16 @@ pub async fn idle_inbox(
             },
         }
     };
-    if let Ok(Ok(session)) = tokio::time::timeout(Duration::from_secs(5), idle.done()).await {
-        lease.restore_session(session);
-        lease.release();
+    let mut mailbox_changed = false;
+    match tokio::time::timeout(Duration::from_secs(5), idle.done()).await {
+        Ok(Ok(mut session)) => {
+            mailbox_changed = session.take_mailbox_change();
+            lease.restore_session(session);
+            lease.release();
+        }
+        _ => lease.discard(),
     }
-    Ok(match response {
-        IdleResponse::NewData(_) => IdleOutcome::Changed,
-        IdleResponse::Timeout => IdleOutcome::Timeout,
-        IdleResponse::ManualInterrupt => IdleOutcome::Interrupted,
-    })
+    Ok(resolve_idle_outcome(&response, mailbox_changed))
 }
 
 /// Search the server. Between mailboxes the account goes to any waiting user
@@ -1722,7 +1820,7 @@ pub async fn server_search<H: SyncHooks>(
             lease = yield_point(lease, hooks, account, password).await?;
         }
         match search_mailbox(
-            &mut lease, db, account, query, &criteria, &filter, mailbox_id, &name,
+            &mut lease, db, account, query, &criteria, &filter, mailbox_id, &name, deadline,
         )
         .await
         {
@@ -1753,8 +1851,13 @@ struct ServerHitFilter {
 }
 
 impl ServerHitFilter {
-    fn matches(&self, summary: &MessageSummary, names: &[String]) -> bool {
-        if self.require_attachment && !summary.has_attachments {
+    fn matches(
+        &self,
+        summary: &MessageSummary,
+        names: &[String],
+        attachment_uncertain: bool,
+    ) -> bool {
+        if self.require_attachment && !summary.has_attachments && !attachment_uncertain {
             return false;
         }
         if self
@@ -1770,7 +1873,7 @@ impl ServerHitFilter {
             return false;
         }
         // Names are empty when the body is not cached; keep the hit then.
-        if names.is_empty() && summary.has_attachments {
+        if names.is_empty() && (summary.has_attachments || attachment_uncertain) {
             return true;
         }
         self.filenames.iter().all(|needle| {
@@ -1780,6 +1883,8 @@ impl ServerHitFilter {
         })
     }
 }
+
+const SERVER_SEARCH_UID_CHUNK: usize = 50;
 
 #[allow(clippy::too_many_arguments)]
 async fn search_mailbox(
@@ -1791,8 +1896,10 @@ async fn search_mailbox(
     filter: &ServerHitFilter,
     mailbox_id: i64,
     name: &str,
+    deadline: tokio::time::Instant,
 ) -> Result<Vec<MessageSummary>, String> {
     let mut results = Vec::new();
+    let hit_limit = query.limit.min(500) as usize;
     let wire_name = lease.mailbox_name(name);
     let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.examine(&wire_name))
         .await
@@ -1820,63 +1927,80 @@ async fn search_mailbox(
         .into_iter()
         .collect::<Vec<_>>();
     uids.sort_unstable_by(|left, right| right.cmp(left));
-    uids.truncate(query.limit.min(500) as usize);
     if uids.is_empty() {
         return Ok(results);
     }
-    let set = uids
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join(",");
     let header_query = format!(
         "(UID FLAGS RFC822.SIZE INTERNALDATE ENVELOPE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID IN-REPLY-TO REFERENCES CONTENT-TYPE)]<0.{}>)",
         MAX_MESSAGE_BYTES + 1
     );
-    let fetched = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
-        lease
-            .uid_fetch(set, header_query)
-            .await?
-            .try_collect::<Vec<_>>()
-            .await
-    })
-    .await
-    .map_err(|_| "Server search timed out.".to_string())?
-    .map_err(|error| redact_error(&error, "Server search"))?;
-    let parsed = fetched
-        .iter()
-        .filter_map(|item| {
-            let (seen, flagged) = system_flags(item);
-            parse_envelope(item, seen, flagged).ok().map(|mut parsed| {
-                (parsed.is_answered, parsed.is_forwarded) = reply_flags(item);
-                parsed
-            })
+    let mut threaded = Vec::new();
+    for chunk in uids.chunks(SERVER_SEARCH_UID_CHUNK) {
+        if tokio::time::Instant::now() >= deadline || results.len() >= hit_limit {
+            break;
+        }
+        let set = chunk
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        let fetched = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
+            lease
+                .uid_fetch(set, header_query.clone())
+                .await?
+                .try_collect::<Vec<_>>()
+                .await
         })
-        .collect::<Vec<_>>();
-    db.upsert_envelopes(&account.summary.id, mailbox_id, &parsed)?;
-    for message in &parsed {
-        if let Some(summary) = db.message_summary_by_uid(mailbox_id, message.uid)? {
-            // Attachment names are not an IMAP key. Size and the
-            // envelope attachment hint are checked on the cached row.
-            let names = if filter.filenames.is_empty() {
-                Vec::new()
-            } else {
-                db.attachment_filenames(mailbox_id, message.uid)?
+        .await
+        .map_err(|_| "Server search timed out.".to_string())?
+        .map_err(|error| redact_error(&error, "Server search"))?;
+        let parsed = fetched
+            .iter()
+            .filter_map(|item| {
+                let (seen, flagged) = system_flags(item);
+                parse_envelope(item, seen, flagged).ok().map(|mut parsed| {
+                    (parsed.is_answered, parsed.is_forwarded) = reply_flags(item);
+                    parsed
+                })
+            })
+            .collect::<Vec<_>>();
+        db.upsert_envelopes(&account.summary.id, mailbox_id, &parsed)?;
+        for item in &fetched {
+            let Some(uid) = item.uid else {
+                continue;
             };
-            if filter.matches(&summary, &names) {
-                results.push(summary);
+            let header_media = item
+                .header()
+                .and_then(crate::mail::parse::header_bytes_top_media_type);
+            let body_cached = db.message_body_cached_by_uid(mailbox_id, uid)?;
+            let attachment_uncertain = crate::mail::parse::header_attachment_uncertain_for_search(
+                header_media.as_deref(),
+                body_cached,
+            );
+            if let Some(summary) = db.message_summary_by_uid(mailbox_id, uid)? {
+                if db.message_still_snoozed(&account.summary.id, summary.id)? {
+                    continue;
+                }
+                let names = if filter.filenames.is_empty() {
+                    Vec::new()
+                } else {
+                    db.attachment_filenames(mailbox_id, uid)?
+                };
+                if filter.matches(&summary, &names, attachment_uncertain) {
+                    results.push(summary);
+                    if results.len() >= hit_limit {
+                        break;
+                    }
+                }
             }
         }
-    }
-    let threaded: Vec<String> = parsed
-        .iter()
-        .map(|message| {
+        threaded.extend(parsed.iter().map(|message| {
             message
                 .message_id
                 .clone()
                 .unwrap_or_else(|| crate::db::synthetic_thread_id(mailbox_id, message.uid))
-        })
-        .collect();
+        }));
+    }
     let _ = db.repair_thread_roots(&account.summary.id, &threaded);
     Ok(results)
 }
@@ -1978,6 +2102,15 @@ pub(crate) enum FetchedBody {
     Partial(CachedMessage),
     Full(CachedMessage),
     Fallback,
+}
+
+pub(crate) fn prefix_download_action(result: &Result<FetchedBody, MailError>) -> ParseSettleAction {
+    match result {
+        Ok(FetchedBody::Fallback) => ParseSettleAction::LeaveOpen,
+        Ok(FetchedBody::Partial(_) | FetchedBody::Full(_)) => ParseSettleAction::EndAttempt,
+        Err(error) if error.kind == FailureKind::Unreadable => ParseSettleAction::Quarantine,
+        Err(_) => ParseSettleAction::EndAttempt,
+    }
 }
 
 /// Download the first bytes of a large message. A server that ignores the
@@ -2223,9 +2356,45 @@ mod tests {
             larger_than: None,
             smaller_than: None,
         };
-        assert!(filter.matches(&summary(true), &[]));
-        assert!(!filter.matches(&summary(true), &["notes.txt".into()]));
-        assert!(filter.matches(&summary(true), &["Invoice-2026.pdf".into()]));
+        assert!(filter.matches(&summary(true), &[], false));
+        assert!(!filter.matches(&summary(true), &["notes.txt".into()], false));
+        assert!(filter.matches(&summary(true), &["Invoice-2026.pdf".into()], false));
+        assert!(filter.matches(&summary(false), &[], true));
+        assert!(!filter.matches(&summary(false), &[], false));
+    }
+
+    #[test]
+    fn prefix_parse_settlement_keeps_one_attempt_open() {
+        use super::{full_parse_action, prefix_parse_action, ParseSettleAction};
+        use crate::mail::failure::{FailureKind, MailError};
+        let ok: Result<Option<()>, MailError> = Ok(Some(()));
+        assert_eq!(prefix_parse_action(&ok), ParseSettleAction::EndAttempt);
+        let rejected: Result<Option<()>, MailError> = Ok(None);
+        assert_eq!(prefix_parse_action(&rejected), ParseSettleAction::LeaveOpen);
+        let unreadable: Result<Option<()>, MailError> =
+            Err(MailError::new(FailureKind::Unreadable, "bad"));
+        assert_eq!(
+            prefix_parse_action(&unreadable),
+            ParseSettleAction::Quarantine
+        );
+        let stored: Result<Option<()>, MailError> = Ok(Some(()));
+        assert_eq!(prefix_parse_action(&stored), ParseSettleAction::EndAttempt);
+        let later: Result<(), MailError> = Ok(());
+        assert_eq!(full_parse_action(&later), ParseSettleAction::EndAttempt);
+    }
+
+    #[test]
+    fn idle_mailbox_change_overrides_timeout() {
+        use super::resolve_idle_outcome;
+        use async_imap::extensions::idle::IdleResponse;
+        assert_eq!(
+            resolve_idle_outcome(&IdleResponse::Timeout, true),
+            super::IdleOutcome::Changed
+        );
+        assert_eq!(
+            resolve_idle_outcome(&IdleResponse::Timeout, false),
+            super::IdleOutcome::Timeout
+        );
     }
 
     #[test]

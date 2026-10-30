@@ -711,25 +711,24 @@ impl Database {
         rule: &FilterRule,
         newer_than_id: Option<i64>,
     ) -> Result<Vec<(i64, u32, String, i64)>, String> {
-        let Some((column, like, domain_like)) = rule_match_pattern(rule) else {
+        let Some(pattern) = rule_match_pattern(rule) else {
             return Ok(Vec::new());
         };
         let conn = self.read_conn()?;
+        let condition = rule_match_condition(&pattern, RuleMatchQuery::Find);
+        let (primary, domain_like) = rule_match_params(&pattern);
         let mut statement = conn
             .prepare(&format!(
                 "SELECT m.id,m.uid,f.name,f.id FROM messages m JOIN mailboxes f ON f.id=m.mailbox_id
                  WHERE m.account_id=?1 AND f.role='inbox' AND m.is_read=0 AND m.pending_move_to IS NULL
                  AND (?3 IS NULL OR m.id > ?3)
-                 AND (
-                   LOWER({column}) LIKE ?2 ESCAPE '\\'
-                   OR (LENGTH(?4) > 0 AND LOWER(m.sender_address) LIKE ?4 ESCAPE '\\')
-                 )
+                 AND {condition}
                  ORDER BY m.uid DESC LIMIT 100"
             ))
             .map_err(db_error)?;
         let rows = statement
             .query_map(
-                params![account_id, like, newer_than_id, domain_like],
+                params![account_id, primary, newer_than_id, domain_like],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .map_err(db_error)?
@@ -744,7 +743,7 @@ impl Database {
         account_id: &str,
         rule: &FilterRule,
     ) -> Result<FilterMatchPreview, String> {
-        let Some((column, like, domain_like)) = rule_match_pattern(rule) else {
+        let Some(pattern) = rule_match_pattern(rule) else {
             return Ok(FilterMatchPreview {
                 matched: 0,
                 capped: false,
@@ -752,19 +751,18 @@ impl Database {
             });
         };
         let conn = self.conn()?;
+        let condition = rule_match_condition(&pattern, RuleMatchQuery::Preview);
+        let (primary, domain_like) = rule_match_params(&pattern);
         let mut statement = conn
             .prepare(&format!(
                 "SELECT m.subject FROM messages m JOIN mailboxes f ON f.id=m.mailbox_id
                  WHERE m.account_id=?1 AND f.role='inbox' AND m.is_read=0 AND m.pending_move_to IS NULL
-                 AND (
-                   LOWER({column}) LIKE ?2 ESCAPE '\\'
-                   OR (LENGTH(?3) > 0 AND LOWER(m.sender_address) LIKE ?3 ESCAPE '\\')
-                 )
+                 AND {condition}
                  ORDER BY m.uid DESC LIMIT 100"
             ))
             .map_err(db_error)?;
         let subjects = statement
-            .query_map(params![account_id, like, domain_like], |row| {
+            .query_map(params![account_id, primary, domain_like], |row| {
                 row.get::<_, String>(0)
             })
             .map_err(db_error)?
@@ -1042,11 +1040,64 @@ fn pending_sends_denied(pending_bytes: i64) -> bool {
     pending_bytes >= MAX_PENDING_OUTBOX_BYTES
 }
 
-fn rule_match_pattern(rule: &FilterRule) -> Option<(&'static str, String, String)> {
-    let needle: String = rule
-        .contains
-        .trim()
-        .to_ascii_lowercase()
+enum RuleMatchPattern {
+    ColumnLike {
+        column: &'static str,
+        like: String,
+        domain_like: String,
+    },
+    ToAddressExact {
+        address: String,
+    },
+}
+
+enum RuleMatchQuery {
+    Find,
+    Preview,
+}
+
+const RULE_MATCH_TO_ADDRESS_EXACT: &str = "(
+                   EXISTS (
+                     SELECT 1 FROM json_each(CASE WHEN json_valid(m.to_json) THEN m.to_json ELSE '[]' END) AS addr
+                     WHERE lower(addr.value)=?2
+                   )
+                   OR EXISTS (
+                     SELECT 1 FROM json_each(CASE WHEN json_valid(m.cc_json) THEN m.cc_json ELSE '[]' END) AS addr
+                     WHERE lower(addr.value)=?2
+                   )
+                 )";
+
+fn rule_match_params(pattern: &RuleMatchPattern) -> (String, String) {
+    match pattern {
+        RuleMatchPattern::ColumnLike {
+            like, domain_like, ..
+        } => (like.clone(), domain_like.clone()),
+        RuleMatchPattern::ToAddressExact { address } => (address.clone(), String::new()),
+    }
+}
+
+fn rule_match_condition(pattern: &RuleMatchPattern, query: RuleMatchQuery) -> String {
+    let domain_param = match query {
+        RuleMatchQuery::Find => "?4",
+        RuleMatchQuery::Preview => "?3",
+    };
+    match pattern {
+        RuleMatchPattern::ToAddressExact { .. } => format!(
+            "({RULE_MATCH_TO_ADDRESS_EXACT} AND LENGTH({domain_param}) >= 0)"
+        ),
+        RuleMatchPattern::ColumnLike { column, .. } => format!(
+            "(
+                   LOWER({column}) LIKE ?2 ESCAPE '\\'
+                   OR (LENGTH({domain_param}) > 0 AND LOWER(m.sender_address) LIKE {domain_param} ESCAPE '\\')
+                 )"
+        ),
+    }
+}
+
+fn rule_match_pattern(rule: &FilterRule) -> Option<RuleMatchPattern> {
+    let trimmed = rule.contains.trim();
+    let lowered = trimmed.to_ascii_lowercase();
+    let needle: String = lowered
         .chars()
         .flat_map(|character| match character {
             '\\' => vec!['\\', '\\'],
@@ -1059,18 +1110,25 @@ fn rule_match_pattern(rule: &FilterRule) -> Option<(&'static str, String, String
         return None;
     }
     if rule.field == "domain" {
-        if !crate::models::valid_sender_domain(rule.contains.trim()) {
+        if !crate::models::valid_sender_domain(trimmed) {
             return None;
         }
-        return Some((
-            "m.sender_address",
-            format!("%@{needle}"),
-            format!("%@%.{needle}"),
-        ));
+        return Some(RuleMatchPattern::ColumnLike {
+            column: "m.sender_address",
+            like: format!("%@{needle}"),
+            domain_like: format!("%@%.{needle}"),
+        });
     }
-    if rule.field == "from" && is_full_address(rule.contains.trim()) {
+    if rule.field == "from" && is_full_address(trimmed) {
         // Exact address: no wildcards, so "me@x.io" never hits "me@x.io.com".
-        return Some(("m.sender_address", needle, String::new()));
+        return Some(RuleMatchPattern::ColumnLike {
+            column: "m.sender_address",
+            like: needle,
+            domain_like: String::new(),
+        });
+    }
+    if rule.field == "to" && is_full_address(trimmed) {
+        return Some(RuleMatchPattern::ToAddressExact { address: lowered });
     }
     let column = match rule.field.as_str() {
         "subject" => "m.subject",
@@ -1078,7 +1136,11 @@ fn rule_match_pattern(rule: &FilterRule) -> Option<(&'static str, String, String
         "from" => "(m.sender_name || ' ' || m.sender_address)",
         _ => return None,
     };
-    Some((column, format!("%{needle}%"), String::new()))
+    Some(RuleMatchPattern::ColumnLike {
+        column,
+        like: format!("%{needle}%"),
+        domain_like: String::new(),
+    })
 }
 
 /// One bare `local@domain.tld`: one '@', non-empty local part, dotted domain, no spaces.
@@ -1118,10 +1180,12 @@ fn preview_subject(value: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::CachedMessage;
     use crate::models::{
-        AccountRecord, AccountSummary, BodyFormat, ComposeDraft, ProviderKind, ServerConfig,
-        TlsMode,
+        AccountRecord, AccountSummary, BodyFormat, ComposeDraft, FilterRule, MailboxRole,
+        ProviderKind, ServerConfig, TlsMode,
     };
+    use std::collections::HashSet;
 
     fn account() -> AccountRecord {
         AccountRecord {
@@ -1576,6 +1640,151 @@ mod tests {
         let (_, _, message_id, mime) = db.outbox_delivery(&filled, &account_id).unwrap();
         assert_eq!(message_id, "<filled@example.com>");
         assert_eq!(mime, b"already attempted");
+    }
+
+    fn inbox_rule_message(
+        uid: u32,
+        subject: &str,
+        to: Vec<String>,
+        cc: Vec<String>,
+        bcc: Vec<String>,
+        recipients: &str,
+    ) -> CachedMessage {
+        CachedMessage {
+            uid,
+            internal_at: None,
+            message_id: Some(format!("<{uid}@filter.example.com>")),
+            subject: subject.into(),
+            sender_name: "Sender".into(),
+            sender_address: "sender@example.com".into(),
+            recipients: recipients.into(),
+            received_at: "2026-08-18T12:00:00Z".into(),
+            preview: subject.into(),
+            is_read: false,
+            is_starred: false,
+            size: 32,
+            to,
+            cc,
+            bcc,
+            reply_to: None,
+            thread_parent: None,
+            text_body: subject.into(),
+            html_body: None,
+            attachments: vec![],
+            raw_message: b"stub".to_vec(),
+            has_attachments: false,
+            is_answered: false,
+            is_forwarded: false,
+            has_calendar: false,
+            calendar_json: None,
+            list_unsubscribe: None,
+            list_unsubscribe_post: None,
+            importance: String::new(),
+            disposition_to: String::new(),
+        }
+    }
+
+    #[test]
+    fn full_address_to_rule_matches_to_and_cc_json_exactly() {
+        // Full-address To rule must not match a lookalike local part or longer domain.
+        let (db, account_id) = with_account();
+        let inbox = db
+            .upsert_mailbox(
+                &account_id,
+                "INBOX",
+                &MailboxRole::Inbox,
+                Some(1),
+                Some(10),
+                Some(0),
+                0,
+            )
+            .unwrap();
+        let rule = FilterRule {
+            id: "rule-1".into(),
+            account_id: account_id.clone(),
+            name: "To Alice".into(),
+            field: "to".into(),
+            contains: "alice@company.com".into(),
+            action: "mark_read".into(),
+            target_mailbox: None,
+            enabled: true,
+        };
+        let cases = [
+            (
+                1,
+                "To Alice",
+                vec!["alice@company.com".into()],
+                vec![],
+                vec![],
+                "alice@company.com",
+                true,
+            ),
+            (
+                2,
+                "Cc Alice",
+                vec!["bob@example.com".into()],
+                vec!["alice@company.com".into()],
+                vec![],
+                "bob@example.com, alice@company.com",
+                true,
+            ),
+            (
+                3,
+                "Not Alice local",
+                vec!["notalice@company.com".into()],
+                vec![],
+                vec![],
+                "notalice@company.com",
+                false,
+            ),
+            (
+                4,
+                "Evil domain",
+                vec!["alice@company.com.evil".into()],
+                vec![],
+                vec![],
+                "alice@company.com.evil",
+                false,
+            ),
+            (
+                5,
+                "Bcc only",
+                vec!["bob@example.com".into()],
+                vec![],
+                vec!["alice@company.com".into()],
+                "bob@example.com, alice@company.com",
+                false,
+            ),
+        ];
+        for (uid, subject, to, cc, bcc, recipients, _) in &cases {
+            db.upsert_message(
+                &account_id,
+                inbox,
+                &inbox_rule_message(
+                    *uid,
+                    subject,
+                    to.clone(),
+                    cc.clone(),
+                    bcc.clone(),
+                    recipients,
+                ),
+            )
+            .unwrap();
+        }
+
+        let matches = db.find_rule_matches(&account_id, &rule, None).unwrap();
+        let matched_uids: HashSet<u32> = matches.iter().map(|(_, uid, _, _)| *uid).collect();
+        let expected: HashSet<u32> = cases
+            .iter()
+            .filter(|(_, _, _, _, _, _, keep)| *keep)
+            .map(|(uid, _, _, _, _, _, _)| *uid)
+            .collect();
+        assert_eq!(matched_uids, expected);
+
+        let preview = db.preview_rule_matches(&account_id, &rule).unwrap();
+        assert_eq!(preview.matched, expected.len() as u32);
+        assert!(preview.subjects.iter().any(|s| s.contains("To Alice")));
+        assert!(preview.subjects.iter().any(|s| s.contains("Cc Alice")));
     }
 
     #[test]

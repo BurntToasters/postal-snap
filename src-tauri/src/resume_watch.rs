@@ -73,7 +73,7 @@ fn on_wake(app: &AppHandle) {
     };
     for account in accounts {
         // Every connection from before sleep is suspect.
-        crate::mail::pool::forget(&account.id);
+        crate::mail::pool::discard_parked(&account.id);
         // A worker paused for a rejected password ignores this wake.
         state.wake_after_sleep(&account.id);
     }

@@ -63,9 +63,7 @@ pub async fn save_attachment(
         return Ok(());
     }
     let (_, bytes) = mail::extract_attachment(&raw, &attachment.id)?;
-    tokio::fs::write(&destination, bytes)
-        .await
-        .map_err(|_| "Could not save the attachment at that location.".to_string())?;
+    write_user_chosen_file(&destination, &bytes).await?;
     crate::download_mark::mark_downloaded(&destination);
     Ok(())
 }
@@ -77,6 +75,7 @@ const RISKY_EXTENSIONS: &[&str] = &[
     "appimage",
     "application",
     "appref-ms",
+    "appinstaller",
     "appx",
     "appxbundle",
     "bat",
@@ -116,6 +115,8 @@ const RISKY_EXTENSIONS: &[&str] = &[
     "msc",
     "msi",
     "msix",
+    "msixbundle",
+    "msu",
     "msp",
     "one",
     "pif",
@@ -144,6 +145,7 @@ const RISKY_EXTENSIONS: &[&str] = &[
     "svg",
     "svgz",
     "terminal",
+    "tool",
     "url",
     "vbe",
     "vbs",
@@ -313,13 +315,15 @@ pub async fn save_all_attachments(
     state: State<'_, AppState>,
 ) -> CommandResult<u32> {
     state.db.account(&account_id)?;
-    let preview = state.db.message_detail(message_id, &account_id)?;
-    if !preview.attachments.iter().any(|item| !item.inline) {
+    ensure_message_content_for(&account_id, message_id, &state, Need::Full).await?;
+    let detail = state.db.message_detail(message_id, &account_id)?;
+    if !detail.attachments.iter().any(|item| !item.inline) {
         return Err("This message has no files to save.".into());
     }
+    let raw = state.db.raw_message(message_id, &account_id)?;
     if !confirm_risky_files(
         &app,
-        risky_file_names(regular_file_names(&preview.attachments)),
+        risky_file_names(regular_file_names(&detail.attachments)),
     )
     .await?
     {
@@ -328,9 +332,6 @@ pub async fn save_all_attachments(
     let Some(folder) = pick_folder(&app).await? else {
         return Ok(0);
     };
-    ensure_message_content_for(&account_id, message_id, &state, Need::Full).await?;
-    let detail = state.db.message_detail(message_id, &account_id)?;
-    let raw = state.db.raw_message(message_id, &account_id)?;
     let mut used = HashSet::new();
     let saved = write_message_files(&folder, &raw, &detail.attachments, &mut used).await?;
     Ok(saved)
@@ -489,7 +490,7 @@ async fn write_new_file(
         let path = allocate_attachment_path(folder, filename, used)?;
         match create_new_file(&path).await {
             Ok(file) => {
-                write_all_or_remove(file, &path, bytes)
+                write_all_or_remove(file, &path, bytes, true)
                     .await
                     .map_err(|_| failure.to_string())?;
                 crate::download_mark::mark_downloaded(&path);
@@ -503,8 +504,14 @@ async fn write_new_file(
     Err(failure.into())
 }
 
-/// Write and flush, then drop the handle. A failed write leaves no partial file.
-async fn write_all_or_remove<W>(mut file: W, path: &Path, bytes: &[u8]) -> io::Result<()>
+/// Write and flush, then drop the handle. When `remove_on_failure` is set, a
+/// failed write deletes a file this call just created; overwrites keep the path.
+async fn write_all_or_remove<W>(
+    mut file: W,
+    path: &Path,
+    bytes: &[u8],
+    remove_on_failure: bool,
+) -> io::Result<()>
 where
     W: AsyncWriteExt + Unpin,
 {
@@ -514,10 +521,92 @@ where
     }
     .await;
     drop(file);
-    if result.is_err() {
+    if result.is_err() && remove_on_failure {
         let _ = tokio::fs::remove_file(path).await;
     }
     result
+}
+
+const USER_SAVE_FAILURE: &str = "Could not save the attachment at that location.";
+
+/// Write attachment bytes to the exact path the user chose. Never follows a
+/// symlink or reparse point; overwrites an existing regular file in place only.
+async fn write_user_chosen_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    match tokio::fs::symlink_metadata(path).await {
+        Ok(meta) => {
+            if meta.file_type().is_symlink() || !meta.is_file() {
+                return Err(USER_SAVE_FAILURE.into());
+            }
+            let file = open_user_file_for_overwrite(path)
+                .await
+                .map_err(|_| USER_SAVE_FAILURE.to_string())?;
+            #[cfg(windows)]
+            windows_write_identity_matches(path, &file)
+                .await
+                .map_err(|_| USER_SAVE_FAILURE.to_string())?;
+            file.set_len(0)
+                .await
+                .map_err(|_| USER_SAVE_FAILURE.to_string())?;
+            write_all_or_remove(file, path, bytes, false)
+                .await
+                .map_err(|_| USER_SAVE_FAILURE.to_string())?;
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            let file = open_user_file_exclusive(path)
+                .await
+                .map_err(|_| USER_SAVE_FAILURE.to_string())?;
+            write_all_or_remove(file, path, bytes, true)
+                .await
+                .map_err(|_| USER_SAVE_FAILURE.to_string())?;
+        }
+        Err(_) => return Err(USER_SAVE_FAILURE.into()),
+    }
+    Ok(())
+}
+
+async fn open_user_file_for_overwrite(path: &Path) -> io::Result<tokio::fs::File> {
+    let mut options = tokio::fs::OpenOptions::new();
+    options.write(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW);
+    options.open(path).await
+}
+
+async fn open_user_file_exclusive(path: &Path) -> io::Result<tokio::fs::File> {
+    let mut options = tokio::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW);
+    options.open(path).await
+}
+
+#[cfg(windows)]
+async fn windows_write_identity_matches(
+    path: &Path,
+    content: &tokio::fs::File,
+) -> Result<(), io::Error> {
+    use windows::Win32::Storage::FileSystem::{
+        FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
+        FILE_SHARE_WRITE,
+    };
+
+    let mut attr_opts = tokio::fs::OpenOptions::new();
+    attr_opts.access_mode(FILE_READ_ATTRIBUTES.0);
+    attr_opts.share_mode(FILE_SHARE_READ.0 | FILE_SHARE_WRITE.0 | FILE_SHARE_DELETE.0);
+    attr_opts.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0);
+    let attr = attr_opts.open(path).await?;
+
+    let content_std = content.try_clone().await?.into_std().await;
+    let attr_std = attr.try_clone().await?.into_std().await;
+    let content_id = same_file::Handle::from_file(content_std)?;
+    let attr_id = same_file::Handle::from_file(attr_std)?;
+    if content_id != attr_id {
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            "path identity mismatch",
+        ));
+    }
+    Ok(())
 }
 
 /// O_EXCL-style open: fails on any existing entry, including a symlink.
@@ -1382,8 +1471,66 @@ mod tests {
             "x.hlp",
             "x.ins",
             "x.isp",
+            "run.tool",
+            "app.msixbundle",
+            "store.appinstaller",
+            "update.msu",
         ];
         assert_eq!(risky_file_names(names).len(), names.len());
+    }
+
+    // Failure mode: save-all warns from prefix metadata and misses risky files
+    // downloaded only after the full-body fetch.
+    #[test]
+    fn save_all_risky_names_use_full_message_attachments() {
+        let safe = "From: Jane <jane@example.test>\r\nSubject: Late attachment\r\nContent-Type: multipart/mixed; boundary=\"bnd\"\r\n\r\n\
+             --bnd\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello\r\n\
+             --bnd\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=\"report.pdf\"\r\nContent-Transfer-Encoding: base64\r\n\r\nQUJD\r\n\
+             --bnd\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=\"notes.pdf\"\r\nContent-Transfer-Encoding: base64\r\n\r\nQUJD\r\n\
+             --bnd\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"setup.exe\"\r\nContent-Transfer-Encoding: base64\r\n\r\nTVpB\r\n--bnd--\r\n";
+        let setup_marker = "--bnd\r\nContent-Type: application/octet-stream";
+        let cut = safe
+            .find(setup_marker)
+            .expect("fixture includes late executable part");
+        let partial = parse_partial_message(
+            1,
+            &safe.as_bytes()[..cut],
+            safe.len() as u64,
+            true,
+            false,
+            None,
+        )
+        .unwrap()
+        .expect("partial fixture");
+        let full = parse_message(1, safe.as_bytes(), true, false, None).unwrap();
+        let prefix_risky = risky_file_names(regular_file_names(&partial.attachments));
+        let full_risky = risky_file_names(regular_file_names(&full.attachments));
+        assert!(!prefix_risky.iter().any(|name| name.ends_with(".exe")));
+        assert!(full_risky.iter().any(|name| name == "setup.exe"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn user_chosen_save_refuses_a_symlink_destination() {
+        // Failure mode: tokio::fs::write follows the symlink and overwrites the target.
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("secret.bin");
+        let link = dir.path().join("save-as.bin");
+        std::fs::write(&target, b"secret").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let error = write_user_chosen_file(&link, b"MZ").await.unwrap_err();
+        assert_eq!(error, USER_SAVE_FAILURE);
+        assert_eq!(std::fs::read(&target).unwrap(), b"secret");
+    }
+
+    #[tokio::test]
+    async fn user_chosen_save_writes_a_regular_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("note.txt");
+        write_user_chosen_file(&path, b"hello").await.unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"hello");
+        write_user_chosen_file(&path, b"updated").await.unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"updated");
     }
 
     struct FailingWriter;
@@ -1413,6 +1560,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn user_chosen_failed_overwrite_keeps_existing_file() {
+        // Failure mode: a failed overwrite deletes the user's existing file.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("note.txt");
+        std::fs::write(&path, b"keep me").unwrap();
+        assert!(write_all_or_remove(FailingWriter, &path, b"data", false)
+            .await
+            .is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"keep me");
+    }
+
+    #[tokio::test]
     async fn failed_attachment_write_removes_partial_file() {
         // Ways this can fail: a failed write leaves a partial file behind, a
         // successful write is deleted, or the error is swallowed.
@@ -1420,9 +1579,11 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let failed = dir.join("failed.bin");
         std::fs::write(&failed, b"partial").unwrap();
-        assert!(super::write_all_or_remove(FailingWriter, &failed, b"data")
-            .await
-            .is_err());
+        assert!(
+            super::write_all_or_remove(FailingWriter, &failed, b"data", true)
+                .await
+                .is_err()
+        );
         assert!(!failed.exists());
 
         let kept = dir.join("kept.bin");
@@ -1433,7 +1594,7 @@ mod tests {
             .open(&kept)
             .await
             .unwrap();
-        super::write_all_or_remove(file, &kept, b"hello")
+        super::write_all_or_remove(file, &kept, b"hello", true)
             .await
             .unwrap();
         assert_eq!(std::fs::read(&kept).unwrap(), b"hello");

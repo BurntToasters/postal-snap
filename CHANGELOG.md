@@ -33,6 +33,13 @@ Postal Snap is a calm, accessible desktop email client. Mail stays on your compu
 - **FIX - Sending:** A server that accepts the connection and then stops answering no longer holds that account until quit. The message stays in Needs attention.
 - **FIX - macOS close:** Closing the window quits when the menu bar icon is not there, instead of hiding the app with no way to see it.
 - **FIX - Rules:** When two rules would move the same message, the earlier rule keeps its destination.
+- **FIX - Rules:** A To rule for a complete address matches that address only.
+- **FIX - Attachments:** Save all downloads the whole message before the risky-file warning. Saving one file does not follow a shortcut onto another file. A few more installer and script extensions get the same warning.
+- **FIX - Server search:** Several words match mail that contains each word. Attachment search keeps looking until it fills the list, and snoozed mail stays hidden.
+- **FIX - Sign-in:** Waking the computer does not try a rejected password again.
+- **FIX - New mail:** Mail that arrives while an inbox check is starting or stopping is picked up right away.
+- **FIX - Empty folders:** Refreshing a folder the server reports as empty removes the cached messages.
+- **FIX - Unreadable mail:** A message whose preview cannot be parsed still stops being opened automatically after repeated failures.
 - **FIX - Rules:** A pending rule save no longer clears newer text in the form, and a second click while the save is pending does not create a duplicate rule.
 - **FIX - Drafts and snoozed mail:** Queued drafts cannot be restored by stale saves, and snooze transfers stay tied to the correct destination mailbox.
 - **IMPROVED - Settings and accessibility:** Settings, composer, reader, message list, and folder controls have clearer layouts, keyboard focus, and behavior at larger text sizes and narrow widths.

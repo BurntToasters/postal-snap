@@ -115,6 +115,53 @@ fn header_suggests_attachments(fetch: &async_imap::types::Fetch) -> bool {
     fetch.header().is_some_and(header_bytes_suggest_attachments)
 }
 
+pub(crate) fn header_bytes_top_media_type(raw: &[u8]) -> Option<String> {
+    let text = header_block_text(raw);
+    let mut content_type = String::new();
+    let mut in_content_type = false;
+    for line in text.lines() {
+        if line.starts_with([' ', '\t']) {
+            if in_content_type {
+                content_type.push(' ');
+                content_type.push_str(line.trim());
+            }
+            continue;
+        }
+        in_content_type = false;
+        if let Some((name, value)) = line.split_once(':') {
+            if name.trim().eq_ignore_ascii_case("content-type") {
+                content_type = value.trim().to_string();
+                in_content_type = true;
+            }
+        }
+    }
+    let media = content_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if media.is_empty() {
+        None
+    } else {
+        Some(media)
+    }
+}
+
+/// Signed/related/encrypted multiparts may hide attachments until the body is cached.
+pub(crate) fn header_attachment_uncertain_for_search(
+    header_media: Option<&str>,
+    body_cached: bool,
+) -> bool {
+    !body_cached
+        && header_media.is_some_and(|media| {
+            matches!(
+                media,
+                "multipart/signed" | "multipart/related" | "multipart/encrypted"
+            )
+        })
+}
+
 fn header_bytes_suggest_attachments(raw: &[u8]) -> bool {
     let text = header_block_text(raw);
     let mut content_type = String::new();
@@ -1060,6 +1107,20 @@ mod tests {
         let plain = b"Subject: caf\xe9\r\nContent-Type: text/plain\r\n\r\n";
         assert!(!super::header_bytes_suggest_attachments(plain));
         assert_eq!(super::thread_parent_from_header(plain), None);
+        let signed = b"Content-Type: multipart/signed; boundary=x\r\n\r\n";
+        assert!(!super::header_bytes_suggest_attachments(signed));
+        assert_eq!(
+            super::header_bytes_top_media_type(signed).as_deref(),
+            Some("multipart/signed")
+        );
+        assert!(super::header_attachment_uncertain_for_search(
+            Some("multipart/signed"),
+            false
+        ));
+        assert!(!super::header_attachment_uncertain_for_search(
+            Some("multipart/signed"),
+            true
+        ));
     }
 
     #[test]

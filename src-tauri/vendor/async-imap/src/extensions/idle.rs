@@ -22,7 +22,19 @@ use tokio::{
 use crate::client::Session;
 use crate::error::Result;
 use crate::parse::handle_unilateral;
-use crate::types::ResponseData;
+use crate::types::{ResponseData, UnsolicitedResponse};
+
+/// True if any drained response was EXISTS or EXPUNGE.
+fn drain_mailbox_change<T: Read + Write + Unpin + fmt::Debug>(session: &mut Session<T>) -> bool {
+    let mut changed = false;
+    while let Ok(response) = session.unsolicited_responses.try_recv() {
+        match response {
+            UnsolicitedResponse::Exists(_) | UnsolicitedResponse::Expunge(_) => changed = true,
+            _ => {}
+        }
+    }
+    changed
+}
 
 /// `Handle` allows a client to block waiting for changes to the remote mailbox.
 ///
@@ -178,6 +190,11 @@ impl<T: Read + Write + Unpin + fmt::Debug + Send> Handle<T> {
         (fut, interrupt)
     }
 
+    /// Drains unsolicited EXISTS/EXPUNGE queued while IDLE starts or ends.
+    pub fn take_mailbox_change(&mut self) -> bool {
+        drain_mailbox_change(&mut self.session)
+    }
+
     /// Initialise the idle connection by sending the `IDLE` command to the server.
     pub async fn init(&mut self) -> Result<()> {
         let id = self.session.run_command("IDLE").await?;
@@ -227,5 +244,12 @@ impl<T: Read + Write + Unpin + fmt::Debug + Send> Handle<T> {
             .await?;
 
         Ok(self.session)
+    }
+}
+
+impl<T: Read + Write + Unpin + fmt::Debug> Session<T> {
+    /// Same drain as [`Handle::take_mailbox_change`] after [`Handle::done`].
+    pub fn take_mailbox_change(&mut self) -> bool {
+        drain_mailbox_change(self)
     }
 }

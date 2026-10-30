@@ -8,7 +8,10 @@ use super::sync::account_policy;
 use super::{
     command_result, emit_folder_counts, emit_message_change, wake, AppState, CommandResult,
 };
-use crate::mail::sync::{body_fetch_for, BodyFetch, FetchedBody};
+use crate::mail::sync::{
+    apply_parse_settle_action, body_fetch_for, prefix_download_action, BodyFetch, FetchedBody,
+    ParseSettleAction,
+};
 use crate::{
     db::{BodyState, CachedMessage, Database},
     mail::{
@@ -96,28 +99,22 @@ pub(crate) fn content_plan(
     }
 }
 
-/// Settles the parse count after a download that may have parsed.
-fn settle_parse<T>(
+fn settle_open_download<T>(
     state: &AppState,
     mailbox_id: i64,
     uid: u32,
-    parsing: bool,
+    attempt_open: bool,
     result: &Result<T, MailError>,
 ) -> Result<(), MailError> {
-    if !parsing {
+    if !attempt_open {
         return Ok(());
     }
-    if matches!(result, Err(error) if error.kind == FailureKind::Unreadable) {
-        state
-            .db
-            .quarantine_parse(mailbox_id, uid)
-            .map_err(MailError::local_storage)?;
+    let action = crate::mail::sync::full_parse_action(result);
+    apply_parse_settle_action(&state.db, mailbox_id, uid, action)?;
+    if action == ParseSettleAction::Quarantine {
         return Err(MailError::new(FailureKind::Unreadable, QUARANTINED));
     }
-    state
-        .db
-        .end_parse(mailbox_id, uid)
-        .map_err(MailError::local_storage)
+    Ok(())
 }
 
 /// The message's download location, read under the account lock.
@@ -135,12 +132,15 @@ async fn download_full_once(
     location: &Location,
     uid_validity: u32,
     cached_received_at: Option<&str>,
+    continue_parse: bool,
 ) -> Result<CachedMessage, MailError> {
     let account = state.db.account(account_id)?;
     let password = crate::oauth::session_secret(&account)
         .await
         .map_err(MailError::local_storage)?;
-    let parsing = AtomicBool::new(false);
+    // A rejected prefix may have left parse_pending open. Only settle when
+    // before_parse runs; an examine/fetch error must not call end_parse.
+    let attempt_open = AtomicBool::new(false);
     let result = mail::download_message(
         &account,
         &password,
@@ -150,16 +150,20 @@ async fn download_full_once(
         Some(uid_validity),
         cached_received_at,
         || {
-            parsing.store(true, Ordering::SeqCst);
-            state.db.begin_parse(location.mailbox_id, location.uid)
+            attempt_open.store(true, Ordering::SeqCst);
+            if continue_parse {
+                Ok(())
+            } else {
+                state.db.begin_parse(location.mailbox_id, location.uid)
+            }
         },
     )
     .await;
-    settle_parse(
+    settle_open_download(
         state,
         location.mailbox_id,
         location.uid,
-        parsing.load(Ordering::SeqCst),
+        attempt_open.load(Ordering::SeqCst),
         &result,
     )?;
     result
@@ -191,13 +195,13 @@ async fn download_partial_once(
         },
     )
     .await;
-    settle_parse(
-        state,
-        location.mailbox_id,
-        location.uid,
-        parsing.load(Ordering::SeqCst),
-        &result,
-    )?;
+    if parsing.load(Ordering::SeqCst) {
+        let action = prefix_download_action(&result);
+        apply_parse_settle_action(&state.db, location.mailbox_id, location.uid, action)?;
+        if action == ParseSettleAction::Quarantine {
+            return Err(MailError::new(FailureKind::Unreadable, QUARANTINED));
+        }
+    }
     result
 }
 
@@ -252,6 +256,7 @@ async fn fetch_and_store(
             location,
             uid_validity,
             cached_received_at.as_deref(),
+            false,
         )
         .await?;
         return store_body(state, account_id, location, uid_validity, &message, false);
@@ -278,6 +283,7 @@ async fn fetch_and_store(
                 location,
                 uid_validity,
                 cached_received_at.as_deref(),
+                true,
             )
             .await?;
             store_body(state, account_id, location, uid_validity, &message, false)
@@ -1591,6 +1597,120 @@ impl mail::SyncHooks for SearchHooks {
     }
 
     fn progress(&mut self, _folder: &str) {}
+}
+
+#[cfg(test)]
+mod download_parse_settle_tests {
+    use crate::db::{CachedMessage, Database};
+    use crate::mail::failure::MailError;
+    use crate::mail::sync::{full_parse_action, ParseSettleAction};
+    use crate::models::{
+        AccountRecord, AccountSummary, BodyFormat, MailboxRole, ProviderKind, ServerConfig, TlsMode,
+    };
+
+    fn envelope(uid: u32) -> CachedMessage {
+        CachedMessage {
+            uid,
+            internal_at: None,
+            message_id: Some(format!("<{uid}@example.com>")),
+            subject: "Test".into(),
+            sender_name: String::new(),
+            sender_address: "a@example.test".into(),
+            recipients: String::new(),
+            received_at: "2026-08-18T12:00:00Z".into(),
+            preview: String::new(),
+            is_read: false,
+            is_starred: false,
+            size: 32,
+            to: vec![],
+            cc: vec![],
+            bcc: vec![],
+            reply_to: None,
+            thread_parent: None,
+            text_body: String::new(),
+            html_body: None,
+            attachments: vec![],
+            raw_message: vec![],
+            has_attachments: false,
+            is_answered: false,
+            is_forwarded: false,
+            has_calendar: false,
+            calendar_json: None,
+            list_unsubscribe: None,
+            list_unsubscribe_post: None,
+            importance: String::new(),
+            disposition_to: String::new(),
+        }
+    }
+
+    fn test_account() -> AccountRecord {
+        AccountRecord {
+            summary: AccountSummary {
+                default_body_format: BodyFormat::Html,
+                id: "account-1".into(),
+                provider: ProviderKind::Manual,
+                email: "sam@example.com".into(),
+                display_name: "Sam".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+                signature_html: String::new(),
+                reply_to: String::new(),
+                color: None,
+            },
+            imap: ServerConfig {
+                trusted_certificate: None,
+                host: "imap.example.com".into(),
+                port: 993,
+                tls_mode: TlsMode::Tls,
+                username: "sam@example.com".into(),
+            },
+            smtp: ServerConfig {
+                trusted_certificate: None,
+                host: "smtp.example.com".into(),
+                port: 587,
+                tls_mode: TlsMode::StartTls,
+                username: "sam@example.com".into(),
+            },
+        }
+    }
+
+    #[test]
+    fn pre_parse_full_download_failure_leaves_open_prefix_count() {
+        let db = Database::memory();
+        db.insert_account(&test_account()).unwrap();
+        let inbox = db
+            .upsert_mailbox(
+                "account-1",
+                "INBOX",
+                &MailboxRole::Inbox,
+                Some(1),
+                Some(2),
+                Some(0),
+                1,
+            )
+            .unwrap();
+        db.upsert_envelope("account-1", inbox, &envelope(9))
+            .unwrap();
+        db.begin_parse(inbox, 9).unwrap();
+        let err: Result<CachedMessage, MailError> =
+            Err(MailError::connection("Message download timed out."));
+        assert_eq!(full_parse_action(&err), ParseSettleAction::EndAttempt);
+        let attempt_open = false;
+        assert!(!attempt_open, "before_parse never ran on this path");
+        let pending: i32 = db
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT parse_pending FROM messages WHERE mailbox_id=?1 AND uid=?2",
+                rusqlite::params![inbox, 9],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(pending, 1);
+    }
 }
 
 #[cfg(test)]

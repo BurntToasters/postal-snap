@@ -168,6 +168,30 @@ fn must_end(
         )
 }
 
+/// Why the watcher is parked without a session.
+#[derive(Clone, Copy)]
+pub(crate) enum ParkReason {
+    /// Wrong password: only credential or server edits may retry.
+    SignInRejected,
+    /// Connection cap, no IDLE, or repeated drops: sleep may retry.
+    RetryOnEpoch,
+}
+
+pub(crate) fn park_may_resume(
+    reason: ParkReason,
+    generation: u64,
+    current_generation: u64,
+    epoch: u64,
+    current_epoch: u64,
+) -> bool {
+    match reason {
+        ParkReason::SignInRejected => generation != current_generation,
+        ParkReason::RetryOnEpoch => {
+            restart_required(generation, current_generation, epoch, current_epoch)
+        }
+    }
+}
+
 /// Hold without a session until credentials, the server, or sleep state
 /// changes. Returns false once the account is removed.
 async fn park(
@@ -176,12 +200,14 @@ async fn park(
     account_id: &str,
     generation: u64,
     epoch: u64,
+    reason: ParkReason,
 ) -> bool {
     loop {
         if !account_present(db, account_id) {
             return false;
         }
-        if restart_required(
+        if park_may_resume(
+            reason,
             generation,
             pool::generation(account_id),
             epoch,
@@ -231,6 +257,14 @@ async fn idle_until_end(
         ) {
             return Ending::Failed;
         }
+        if idle.take_mailbox_change() {
+            session = match tokio::time::timeout(Duration::from_secs(5), idle.done()).await {
+                Ok(Ok(session)) => session,
+                _ => return Ending::Failed,
+            };
+            actor.request(wake::INBOX);
+            continue;
+        }
         let response = {
             let (wait, interrupt) = idle.wait_with_timeout(WATCH_ROUND);
             tokio::pin!(wait);
@@ -255,9 +289,14 @@ async fn idle_until_end(
             Ok(Ok(session)) => session,
             _ => return Ending::Failed,
         };
+        let queued_mailbox_change = session.take_mailbox_change();
         match response {
             Ok(IdleResponse::NewData(_)) => actor.request(wake::INBOX),
-            Ok(IdleResponse::Timeout) => {}
+            Ok(IdleResponse::Timeout) => {
+                if queued_mailbox_change {
+                    actor.request(wake::INBOX);
+                }
+            }
             Ok(IdleResponse::ManualInterrupt) => {
                 if must_end(db, account_id, generation, epoch, link) {
                     return if account_present(db, account_id) {
@@ -265,6 +304,9 @@ async fn idle_until_end(
                     } else {
                         Ending::Gone
                     };
+                }
+                if queued_mailbox_change {
+                    actor.request(wake::INBOX);
                 }
             }
             Err(_) => return Ending::Failed,
@@ -297,9 +339,32 @@ pub(crate) async fn run_with_secret(
             Ok(connected) => connected,
             Err(error) => {
                 match classify_connect(&error) {
-                    Refusal::ConnectionLimit | Refusal::SignInRejected => {
-                        // Retrying now would be refused again, or risk a lockout.
-                        if !park(link, &db, &account_id, generation, epoch).await {
+                    Refusal::ConnectionLimit => {
+                        if !park(
+                            link,
+                            &db,
+                            &account_id,
+                            generation,
+                            epoch,
+                            ParkReason::RetryOnEpoch,
+                        )
+                        .await
+                        {
+                            break;
+                        }
+                    }
+                    Refusal::SignInRejected => {
+                        // Retrying now would risk a lockout.
+                        if !park(
+                            link,
+                            &db,
+                            &account_id,
+                            generation,
+                            epoch,
+                            ParkReason::SignInRejected,
+                        )
+                        .await
+                        {
                             break;
                         }
                     }
@@ -315,7 +380,16 @@ pub(crate) async fn run_with_secret(
         if !capabilities.idle {
             // Without IDLE the worker keeps its polling path.
             drop(session);
-            if !park(link, &db, &account_id, generation, epoch).await {
+            if !park(
+                link,
+                &db,
+                &account_id,
+                generation,
+                epoch,
+                ParkReason::RetryOnEpoch,
+            )
+            .await
+            {
                 break;
             }
             continue;
@@ -352,7 +426,16 @@ pub(crate) async fn run_with_secret(
                 if short_sessions >= SHORT_SESSION_LIMIT {
                     // The server keeps dropping us: stop until a change.
                     short_sessions = 0;
-                    if !park(link, &db, &account_id, generation, epoch).await {
+                    if !park(
+                        link,
+                        &db,
+                        &account_id,
+                        generation,
+                        epoch,
+                        ParkReason::RetryOnEpoch,
+                    )
+                    .await
+                    {
                         break;
                     }
                     continue;
@@ -372,8 +455,8 @@ pub(crate) async fn run_with_secret(
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_connect, classify_refusal, restart_required, short_session_streak, Refusal,
-        WatchLink, WATCH_ROUND,
+        classify_connect, classify_refusal, park_may_resume, restart_required,
+        short_session_streak, ParkReason, Refusal, WatchLink, WATCH_ROUND,
     };
     use crate::mail::connect::{is_bye, ConnectError};
     use crate::mail::failure::{FailureKind, MailError};
@@ -527,6 +610,23 @@ mod tests {
     // 1. A password or server edit leaves the watcher on the old session.
     // 2. Waking from sleep keeps a dead IDLE socket that never reports mail.
     // 3. An ordinary INBOX or outbox wake tears down a healthy session.
+    #[test]
+    fn sign_in_park_waits_for_password_not_sleep_epoch() {
+        // Failure mode: each wake retries a rejected password.
+        assert!(
+            !park_may_resume(ParkReason::SignInRejected, 1, 1, 0, 1),
+            "sleep epoch alone must not retry sign-in"
+        );
+        assert!(
+            park_may_resume(ParkReason::SignInRejected, 1, 2, 0, 1),
+            "new password or server settings retry"
+        );
+        assert!(
+            park_may_resume(ParkReason::RetryOnEpoch, 1, 1, 0, 1),
+            "connection-cap park still retries after sleep"
+        );
+    }
+
     #[test]
     fn generation_or_credential_signals_restart_the_watcher() {
         assert!(restart_required(1, 2, 0, 0), "server or password edit");
