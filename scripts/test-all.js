@@ -46,6 +46,11 @@ const STEP_INFO = {
   test: { name: "test", label: "Tests", vitest: true },
   "test:e2e": { name: "e2e", label: "E2E", e2e: true },
   "test:rust": { name: "rustTest", label: "Rust Test", rust: true },
+  "test:vendored-imap": {
+    name: "vendoredImap",
+    label: "Vendored IMAP",
+    rust: true,
+  },
   "test:release-assets": { name: "releaseAssets", label: "Release Assets" },
   build: { name: "build", label: "Build" },
 };
@@ -69,6 +74,7 @@ export function qualityGateSteps(env = process.env) {
     ["test"],
     ...(e2eEnabled(env) ? [["run", "test:e2e"]] : []),
     ["run", "test:rust"],
+    ["run", "test:vendored-imap"],
     ["run", "test:release-assets"],
     ["run", "build"],
   ];

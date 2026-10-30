@@ -287,7 +287,8 @@ pub fn print_webview(window: tauri::WebviewWindow) -> CommandResult<()> {
 
 #[tauri::command]
 pub fn relaunch_app(app: AppHandle) -> CommandResult<()> {
-    app.restart();
+    crate::update_relaunch::relaunch(&app);
+    Ok(())
 }
 
 #[tauri::command]

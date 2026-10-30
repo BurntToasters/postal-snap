@@ -2436,6 +2436,44 @@ mod tests {
     }
 
     #[test]
+    fn first_queued_move_wins_when_multiple_move_rules_match() {
+        let db = Database::memory();
+        let account = rule_account();
+        let account_id = account.summary.id.clone();
+        db.insert_account(&account).unwrap();
+        let inbox = rule_mailbox(&db, &account_id, "INBOX", &MailboxRole::Inbox);
+        let archive = rule_mailbox(&db, &account_id, "Archive", &MailboxRole::Archive);
+        let trash = rule_mailbox(&db, &account_id, "Trash", &MailboxRole::Trash);
+        let message_id = bill(&db, &account_id, inbox, 1);
+        db.create_filter_rule(&enabled_rule(&account_id, "move_archive"))
+            .unwrap();
+        db.create_filter_rule(&enabled_rule(&account_id, "move_trash"))
+            .unwrap();
+        apply_filter_rules(&db, &account, None);
+        let move_ops: Vec<String> = db
+            .queued_operations(&account_id)
+            .unwrap()
+            .iter()
+            .filter(|(_, kind, _)| kind == "move")
+            .map(|(_, _, payload)| payload.clone())
+            .collect();
+        assert_eq!(move_ops.len(), 1);
+        assert!(move_ops[0].contains("\"destination\":\"Archive\""));
+        assert!(!move_ops[0].contains("\"destination\":\"Trash\""));
+        let pending: Option<i64> = db
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT pending_move_to FROM messages WHERE id=?1",
+                [message_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(pending, Some(archive));
+        assert_ne!(pending, Some(trash));
+    }
+
+    #[test]
     fn update_password_keeps_the_normalized_secret() {
         let secret = take_normalized_account_password(
             &ProviderKind::Icloud,

@@ -1517,6 +1517,11 @@ test("test-all and package.json include cargo safe update and policy check", asy
   const testAll = await readFile(join(root, "scripts/test-all.js"), "utf8");
   assert.ok(testAll.includes('["run", "check:cargo-update-policy"]'));
   assert.ok(testAll.includes('["run", "test:cargo-safe-update"]'));
+  assert.equal(
+    packageJson.scripts["test:vendored-imap"],
+    "node scripts/test-vendored-imap.js",
+  );
+  assert.ok(testAll.includes('["run", "test:vendored-imap"]'));
 });
 
 test("MSIX manifest declares the WebView2 runtime dependency", async () => {

@@ -61,26 +61,79 @@ where
     Ok(bytes)
 }
 
-/// Read one regular file, bounded by `limit`. Symlinks, directories, and
-/// missing paths are refused without disclosing the path; oversized files
-/// are refused before any buffer is allocated for their contents.
+/// Open one regular file without following its final path component, then
+/// validate the opened descriptor before allocating a bounded buffer.
 pub(crate) async fn read_regular_file(
     path: &Path,
     limit: usize,
 ) -> Result<Vec<u8>, BoundedFileError> {
-    let metadata = tokio::fs::symlink_metadata(path)
+    let mut options = tokio::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let mut file = options
+        .open(path)
+        .await
+        .map_err(|_| BoundedFileError::Unavailable)?;
+    #[cfg(windows)]
+    {
+        windows_identity_matches(path, &file).await?;
+    }
+    let metadata = file
+        .metadata()
         .await
         .map_err(|_| BoundedFileError::Unavailable)?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(BoundedFileError::Unavailable);
     }
-    if metadata.len() > limit as u64 {
+    let admitted_len = metadata.len();
+    if admitted_len > limit as u64 {
         return Err(BoundedFileError::TooLarge);
     }
-    let mut file = tokio::fs::File::open(path)
+    read_bounded(&mut file, admitted_len, limit).await
+}
+
+#[cfg(windows)]
+async fn windows_identity_matches(
+    path: &Path,
+    content: &tokio::fs::File,
+) -> Result<(), BoundedFileError> {
+    use windows::Win32::Storage::FileSystem::{
+        FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
+        FILE_SHARE_WRITE,
+    };
+
+    let mut attr_opts = tokio::fs::OpenOptions::new();
+    attr_opts.access_mode(FILE_READ_ATTRIBUTES.0);
+    attr_opts.share_mode(FILE_SHARE_READ.0 | FILE_SHARE_WRITE.0 | FILE_SHARE_DELETE.0);
+    attr_opts.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0);
+    let attr = attr_opts
+        .open(path)
         .await
         .map_err(|_| BoundedFileError::Unavailable)?;
-    read_bounded(&mut file, metadata.len(), limit).await
+
+    let content_std = content
+        .try_clone()
+        .await
+        .map_err(|_| BoundedFileError::Unavailable)?
+        .into_std()
+        .await;
+    let attr_std = attr
+        .try_clone()
+        .await
+        .map_err(|_| BoundedFileError::Unavailable)?
+        .into_std()
+        .await;
+    let content_id =
+        same_file::Handle::from_file(content_std).map_err(|_| BoundedFileError::Unavailable)?;
+    let attr_id =
+        same_file::Handle::from_file(attr_std).map_err(|_| BoundedFileError::Unavailable)?;
+    if content_id != attr_id {
+        return Err(BoundedFileError::Unavailable);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -150,6 +203,88 @@ mod tests {
 
         assert_eq!(read_regular_file(&empty, 4).await.unwrap(), b"");
         assert_eq!(read_regular_file(&exact, 4).await.unwrap(), b"1234");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_final_component_replaced_with_a_symlink_is_not_followed() {
+        use std::sync::mpsc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let chosen = dir.path().join("chosen.bin");
+        let replacement = dir.path().join("replacement.bin");
+        std::fs::write(&chosen, b"public fixture").unwrap();
+        std::fs::write(&replacement, b"PRIVATE FIXTURE").unwrap();
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .max_blocking_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let (started_tx, started_rx) = mpsc::channel();
+            let (release_tx, release_rx) = mpsc::channel();
+            let blocker = tokio::task::spawn_blocking(move || {
+                started_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+            });
+            started_rx.recv().unwrap();
+
+            let mut read = Box::pin(read_regular_file(&chosen, 128));
+            let first_poll = std::future::poll_fn(|cx| {
+                Poll::Ready(std::future::Future::poll(read.as_mut(), cx))
+            })
+            .await;
+            assert!(first_poll.is_pending());
+
+            release_tx.send(()).unwrap();
+            blocker.await.unwrap();
+            // The first file operation is ahead of this barrier in the single
+            // blocking queue, placing replacement between admission and open
+            // in the old implementation.
+            tokio::task::spawn_blocking(|| ()).await.unwrap();
+            std::fs::remove_file(&chosen).unwrap();
+            std::os::unix::fs::symlink(&replacement, &chosen).unwrap();
+
+            let result = read.await;
+            assert!(
+                result == Err(BoundedFileError::Unavailable)
+                    || result == Ok(b"public fixture".to_vec()),
+                "replacement symlink was followed: {result:?}"
+            );
+        });
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_fifo_is_rejected_without_waiting_for_a_writer() {
+        use std::time::Duration;
+
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("pipe.bin");
+        nix::unistd::mkfifo(
+            &fifo,
+            nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+        )
+        .unwrap();
+
+        let result = tokio::time::timeout(Duration::from_secs(1), read_regular_file(&fifo, 128))
+            .await
+            .expect("a nonregular FIFO must not hang");
+        assert_eq!(result.unwrap_err(), BoundedFileError::Unavailable);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn readonly_regular_files_remain_readable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("readonly.bin");
+        std::fs::write(&path, b"read only").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o400)).unwrap();
+
+        assert_eq!(read_regular_file(&path, 16).await.unwrap(), b"read only");
     }
 
     #[tokio::test]

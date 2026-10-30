@@ -1,5 +1,5 @@
 import { createRef } from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import { AttachmentPreviewDialog } from "../components/reader/attachmentList";
@@ -162,6 +162,68 @@ describe("plain message content", () => {
     expect(onOpenLink).toHaveBeenCalledTimes(2);
     expect(onOpenMailto).toHaveBeenCalledWith("mailto:one@example.test");
     expect(onOpenMailto).toHaveBeenCalledWith("mailto:two@example.test");
+
+    const { container: embeddedHttp } = render(
+      <PlainTextContent
+        text="seehttp://example.test"
+        onOpenLink={onOpenLink}
+        onOpenMailto={onOpenMailto}
+      />,
+    );
+    expect(
+      within(embeddedHttp).getByRole("link", {
+        name: "http://example.test",
+      }),
+    ).toBeInTheDocument();
+
+    const { container: embeddedHttps } = render(
+      <PlainTextContent
+        text="xxhttps://example.test/a"
+        onOpenLink={onOpenLink}
+        onOpenMailto={onOpenMailto}
+      />,
+    );
+    expect(
+      within(embeddedHttps).getByRole("link", {
+        name: "https://example.test/a",
+      }),
+    ).toBeInTheDocument();
+
+    const { container: embeddedMailto } = render(
+      <PlainTextContent
+        text="gomailto:one@example.test"
+        onOpenLink={onOpenLink}
+        onOpenMailto={onOpenMailto}
+      />,
+    );
+    expect(
+      within(embeddedMailto).getByRole("link", { name: "one@example.test" }),
+    ).toBeInTheDocument();
+
+    const dotTrapBody = "a".repeat(100_000) + "@" + ".".repeat(100_000);
+    const dotTrapStarted = Date.now();
+    render(
+      <PlainTextContent
+        text={dotTrapBody}
+        onOpenLink={onOpenLink}
+        onOpenMailto={onOpenMailto}
+      />,
+    );
+    expect(Date.now() - dotTrapStarted).toBeLessThan(500);
+
+    const largeBody = `${"a".repeat(200_000)} https://example.test/end`;
+    const started = Date.now();
+    render(
+      <PlainTextContent
+        text={largeBody}
+        onOpenLink={onOpenLink}
+        onOpenMailto={onOpenMailto}
+      />,
+    );
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(
+      screen.getByRole("link", { name: "https://example.test/end" }),
+    ).toBeInTheDocument();
   });
 });
 

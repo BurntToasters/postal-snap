@@ -15,30 +15,53 @@ pub(crate) fn parse_names<T: Stream<Item = io::Result<ResponseData>> + Unpin + S
     unsolicited: channel::Sender<UnsolicitedResponse>,
     command_tag: RequestId,
 ) -> impl Stream<Item = Result<Name>> + '_ + Send + Unpin {
-    use futures::{FutureExt, StreamExt};
+    use imap_proto::Status;
 
-    StreamExt::filter_map(
-        StreamExt::take_while(stream, move |res| filter(res, &command_tag)),
-        move |resp| {
-            let unsolicited = unsolicited.clone();
-            async move {
-                match resp {
-                    Ok(resp) => match resp.parsed() {
+    let stream = futures::stream::unfold(Some(stream), move |state| {
+        let unsolicited = unsolicited.clone();
+        let command_tag = command_tag.clone();
+        async move {
+            let stream = state?;
+            loop {
+                let (item, next) = match stream.try_next().await {
+                    Ok(Some(response)) => match response.parsed() {
+                        Response::Done {
+                            tag,
+                            status,
+                            code,
+                            information,
+                            ..
+                        } if tag == &command_tag => {
+                            let item = match status {
+                                Status::Ok => None,
+                                Status::No => Some(Err(Error::No(format!(
+                                    "code: {code:?}, info: {information:?}"
+                                )))),
+                                Status::Bad => Some(Err(Error::Bad(format!(
+                                    "code: {code:?}, info: {information:?}"
+                                )))),
+                                other => Some(Err(Error::Io(std::io::Error::other(format!(
+                                    "status: {other:?}, code: {code:?}, information: {information:?}"
+                                ))))),
+                            };
+                            (item, None)
+                        }
                         Response::MailboxData(MailboxDatum::List { .. }) => {
-                            let name = Name::from_mailbox_data(resp);
-                            Some(Ok(name))
+                            (Some(Ok(Name::from_mailbox_data(response))), Some(stream))
                         }
                         _ => {
-                            handle_unilateral(resp, unsolicited);
-                            None
+                            handle_unilateral(response, unsolicited.clone());
+                            continue;
                         }
                     },
-                    Err(err) => Some(Err(err.into())),
-                }
+                    Ok(None) => (Some(Err(Error::ConnectionLost)), None),
+                    Err(error) => (Some(Err(error.into())), None),
+                };
+                return item.map(|item| (item, next));
             }
-            .boxed()
-        },
-    )
+        }
+    });
+    Box::pin(stream)
 }
 
 pub(crate) fn filter(
@@ -115,13 +138,18 @@ pub(crate) fn parse_fetches<T: Stream<Item = io::Result<ResponseData>> + Unpin +
 pub(crate) async fn parse_status<T: Stream<Item = io::Result<ResponseData>> + Unpin + Send>(
     stream: &mut T,
     expected_mailbox: &str,
+    requested_items: &str,
     unsolicited: channel::Sender<UnsolicitedResponse>,
     command_tag: RequestId,
 ) -> Result<Mailbox> {
     let mut mbox = Mailbox::default();
+    let requested = requested_status_items(requested_items);
+    let mut received = HashSet::new();
+    let mut saw_matching_status = false;
 
-    while let Some(resp) = stream.try_next().await? {
-        match resp.parsed() {
+    loop {
+        let response = stream.try_next().await?.ok_or(Error::ConnectionLost)?;
+        match response.parsed() {
             Response::Done {
                 tag,
                 status,
@@ -132,7 +160,15 @@ pub(crate) async fn parse_status<T: Stream<Item = io::Result<ResponseData>> + Un
                 use imap_proto::Status;
                 match status {
                     Status::Ok => {
-                        break;
+                        if !saw_matching_status
+                            || !requested.iter().all(|item| received.contains(item))
+                        {
+                            return Err(Error::Io(io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                "incomplete IMAP STATUS response",
+                            )));
+                        }
+                        return Ok(mbox);
                     }
                     Status::Bad => {
                         return Err(Error::Bad(format!("code: {code:?}, info: {information:?}")))
@@ -150,7 +186,11 @@ pub(crate) async fn parse_status<T: Stream<Item = io::Result<ResponseData>> + Un
             Response::MailboxData(MailboxDatum::Status { mailbox, status })
                 if mailbox == expected_mailbox =>
             {
+                saw_matching_status = true;
                 for attribute in status {
+                    if let Some(name) = status_attribute_name(attribute) {
+                        received.insert(name.to_string());
+                    }
                     match attribute {
                         StatusAttribute::HighestModSeq(highest_modseq) => {
                             mbox.highest_modseq = Some(*highest_modseq)
@@ -166,13 +206,29 @@ pub(crate) async fn parse_status<T: Stream<Item = io::Result<ResponseData>> + Un
                     }
                 }
             }
-            _ => {
-                handle_unilateral(resp, unsolicited.clone());
-            }
+            _ => handle_unilateral(response, unsolicited.clone()),
         }
     }
+}
 
-    Ok(mbox)
+fn requested_status_items(items: &str) -> HashSet<String> {
+    items
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|item| !item.is_empty() && !item.eq_ignore_ascii_case("HIGHESTMODSEQ"))
+        .map(str::to_ascii_uppercase)
+        .collect()
+}
+
+fn status_attribute_name(attribute: &StatusAttribute) -> Option<&'static str> {
+    match attribute {
+        StatusAttribute::HighestModSeq(_) => Some("HIGHESTMODSEQ"),
+        StatusAttribute::Messages(_) => Some("MESSAGES"),
+        StatusAttribute::Recent(_) => Some("RECENT"),
+        StatusAttribute::UidNext(_) => Some("UIDNEXT"),
+        StatusAttribute::UidValidity(_) => Some("UIDVALIDITY"),
+        StatusAttribute::Unseen(_) => Some("UNSEEN"),
+        _ => None,
+    }
 }
 
 pub(crate) fn parse_expunge<T: Stream<Item = io::Result<ResponseData>> + Unpin + Send>(
@@ -225,6 +281,47 @@ pub(crate) fn parse_expunge<T: Stream<Item = io::Result<ResponseData>> + Unpin +
     Box::pin(StreamExt::filter_map(stream, |item| async move { item }))
 }
 
+/// Maps a command's tagged completion to success or the server's refusal.
+fn tagged_completion(
+    status: &imap_proto::Status,
+    code: &impl std::fmt::Debug,
+    information: &impl std::fmt::Debug,
+) -> Result<()> {
+    use imap_proto::Status;
+    match status {
+        Status::Ok => Ok(()),
+        Status::No => Err(Error::No(format!("code: {code:?}, info: {information:?}"))),
+        Status::Bad => Err(Error::Bad(format!("code: {code:?}, info: {information:?}"))),
+        other => Err(Error::Io(io::Error::other(format!(
+            "status: {other:?}, code: {code:?}, information: {information:?}"
+        )))),
+    }
+}
+
+/// Passes each response before the matching tagged completion to `each`,
+/// then requires that completion to be OK. EOF before it is an error.
+async fn until_completion<T: Stream<Item = io::Result<ResponseData>> + Unpin>(
+    stream: &mut T,
+    command_tag: &RequestId,
+    mut each: impl FnMut(ResponseData),
+) -> Result<()> {
+    loop {
+        let resp = stream.try_next().await?.ok_or(Error::ConnectionLost)?;
+        if let Response::Done {
+            tag,
+            status,
+            code,
+            information,
+        } = resp.parsed()
+        {
+            if tag == command_tag {
+                return tagged_completion(status, code, information);
+            }
+        }
+        each(resp);
+    }
+}
+
 pub(crate) async fn parse_capabilities<T: Stream<Item = io::Result<ResponseData>> + Unpin>(
     stream: &mut T,
     unsolicited: channel::Sender<UnsolicitedResponse>,
@@ -232,22 +329,17 @@ pub(crate) async fn parse_capabilities<T: Stream<Item = io::Result<ResponseData>
 ) -> Result<Capabilities> {
     let mut caps: HashSet<Capability> = HashSet::new();
 
-    while let Some(resp) = stream
-        .take_while(|res| filter(res, &command_tag))
-        .try_next()
-        .await?
-    {
-        match resp.parsed() {
-            Response::Capabilities(cs) => {
-                for c in cs {
-                    caps.insert(Capability::from(c)); // TODO: avoid clone
-                }
-            }
-            _ => {
-                handle_unilateral(resp, unsolicited.clone());
+    until_completion(stream, &command_tag, |resp| match resp.parsed() {
+        Response::Capabilities(cs) => {
+            for c in cs {
+                caps.insert(Capability::from(c)); // TODO: avoid clone
             }
         }
-    }
+        _ => {
+            handle_unilateral(resp, unsolicited.clone());
+        }
+    })
+    .await?;
 
     Ok(Capabilities(caps))
 }
@@ -257,15 +349,10 @@ pub(crate) async fn parse_noop<T: Stream<Item = io::Result<ResponseData>> + Unpi
     unsolicited: channel::Sender<UnsolicitedResponse>,
     command_tag: RequestId,
 ) -> Result<()> {
-    while let Some(resp) = stream
-        .take_while(|res| filter(res, &command_tag))
-        .try_next()
-        .await?
-    {
+    until_completion(stream, &command_tag, |resp| {
         handle_unilateral(resp, unsolicited.clone());
-    }
-
-    Ok(())
+    })
+    .await
 }
 
 pub(crate) async fn parse_mailbox<T: Stream<Item = io::Result<ResponseData>> + Unpin>(
@@ -382,22 +469,17 @@ pub(crate) async fn parse_ids<T: Stream<Item = io::Result<ResponseData>> + Unpin
 ) -> Result<HashSet<u32>> {
     let mut ids: HashSet<u32> = HashSet::new();
 
-    while let Some(resp) = stream
-        .take_while(|res| filter(res, &command_tag))
-        .try_next()
-        .await?
-    {
-        match resp.parsed() {
-            Response::MailboxData(MailboxDatum::Search(cs)) => {
-                for c in cs {
-                    ids.insert(*c);
-                }
-            }
-            _ => {
-                handle_unilateral(resp, unsolicited.clone());
+    until_completion(stream, &command_tag, |resp| match resp.parsed() {
+        Response::MailboxData(MailboxDatum::Search(cs)) => {
+            for c in cs {
+                ids.insert(*c);
             }
         }
-    }
+        _ => {
+            handle_unilateral(resp, unsolicited.clone());
+        }
+    })
+    .await?;
 
     Ok(ids)
 }
@@ -410,28 +492,23 @@ pub(crate) async fn parse_metadata<T: Stream<Item = io::Result<ResponseData>> + 
     command_tag: RequestId,
 ) -> Result<Vec<Metadata>> {
     let mut res_values = Vec::new();
-    while let Some(resp) = stream
-        .take_while(|res| filter(res, &command_tag))
-        .try_next()
-        .await?
-    {
-        match resp.parsed() {
-            // METADATA Response with Values
-            // <https://datatracker.ietf.org/doc/html/rfc5464.html#section-4.4.1>
-            Response::MailboxData(MailboxDatum::MetadataSolicited { mailbox, values })
-                if mailbox == mailbox_name =>
-            {
-                res_values.extend_from_slice(values.as_slice());
-            }
-
-            // We are not interested in
-            // [Unsolicited METADATA Response without Values](https://datatracker.ietf.org/doc/html/rfc5464.html#section-4.4.2),
-            // they go to unsolicited channel with other unsolicited responses.
-            _ => {
-                handle_unilateral(resp, unsolicited.clone());
-            }
+    until_completion(stream, &command_tag, |resp| match resp.parsed() {
+        // METADATA Response with Values
+        // <https://datatracker.ietf.org/doc/html/rfc5464.html#section-4.4.1>
+        Response::MailboxData(MailboxDatum::MetadataSolicited { mailbox, values })
+            if mailbox == mailbox_name =>
+        {
+            res_values.extend_from_slice(values.as_slice());
         }
-    }
+
+        // We are not interested in
+        // [Unsolicited METADATA Response without Values](https://datatracker.ietf.org/doc/html/rfc5464.html#section-4.4.2),
+        // they go to unsolicited channel with other unsolicited responses.
+        _ => {
+            handle_unilateral(resp, unsolicited.clone());
+        }
+    })
+    .await?;
     Ok(res_values)
 }
 
@@ -493,8 +570,10 @@ mod tests {
     #[cfg_attr(feature = "runtime-async-std", async_std::test)]
     async fn parse_capability_test() {
         let expected_capabilities = &["IMAP4rev1", "STARTTLS", "AUTH=GSSAPI", "LOGINDISABLED"];
-        let responses =
-            input_stream(&["* CAPABILITY IMAP4rev1 STARTTLS AUTH=GSSAPI LOGINDISABLED\r\n"]);
+        let responses = input_stream(&[
+            "* CAPABILITY IMAP4rev1 STARTTLS AUTH=GSSAPI LOGINDISABLED\r\n",
+            "A0001 OK CAPABILITY completed\r\n",
+        ]);
 
         let mut stream = async_std::stream::from_iter(responses);
         let (send, recv) = bounded(10);
@@ -513,7 +592,10 @@ mod tests {
     async fn parse_capability_case_insensitive_test() {
         // Test that "IMAP4REV1" (instead of "IMAP4rev1") is accepted
         let expected_capabilities = &["IMAP4rev1", "STARTTLS"];
-        let responses = input_stream(&["* CAPABILITY IMAP4REV1 STARTTLS\r\n"]);
+        let responses = input_stream(&[
+            "* CAPABILITY IMAP4REV1 STARTTLS\r\n",
+            "A0001 OK CAPABILITY completed\r\n",
+        ]);
         let mut stream = async_std::stream::from_iter(responses);
 
         let (send, recv) = bounded(10);
@@ -547,7 +629,10 @@ mod tests {
     #[cfg_attr(feature = "runtime-async-std", async_std::test)]
     async fn parse_names_test() {
         let (send, recv) = bounded(10);
-        let responses = input_stream(&["* LIST (\\HasNoChildren) \".\" \"INBOX\"\r\n"]);
+        let responses = input_stream(&[
+            "* LIST (\\HasNoChildren) \".\" \"INBOX\"\r\n",
+            "A0001 OK LIST completed\r\n",
+        ]);
         let mut stream = async_std::stream::from_iter(responses);
 
         let id = RequestId("A0001".into());
@@ -567,9 +652,54 @@ mod tests {
 
     #[cfg_attr(feature = "runtime-tokio", tokio::test)]
     #[cfg_attr(feature = "runtime-async-std", async_std::test)]
+    async fn parse_names_rejects_refusals_and_missing_matching_completion() {
+        let list = "* LIST (\\HasNoChildren) \".\" \"INBOX\"\r\n";
+        let cases: &[(&str, &[&str])] = &[
+            ("NO", &[list, "A0001 NO LIST refused\r\n"]),
+            ("BAD", &[list, "A0001 BAD LIST unsupported\r\n"]),
+            ("EOF", &[list]),
+            (
+                "mismatched completion",
+                &[list, "A9999 OK LIST completed\r\n"],
+            ),
+        ];
+        let mut accepted = Vec::new();
+        for (scenario, lines) in cases {
+            let (send, _) = bounded(10);
+            let responses = input_stream(lines);
+            let mut stream = async_std::stream::from_iter(responses);
+            let result = parse_names(&mut stream, send, RequestId("A0001".into()))
+                .try_collect::<Vec<Name>>()
+                .await;
+            if result.is_ok() {
+                accepted.push(*scenario);
+            }
+        }
+        assert!(
+            accepted.is_empty(),
+            "accepted invalid LIST replies: {accepted:?}"
+        );
+    }
+
+    #[cfg_attr(feature = "runtime-tokio", tokio::test)]
+    #[cfg_attr(feature = "runtime-async-std", async_std::test)]
+    async fn parse_names_accepts_a_successful_empty_listing() {
+        let (send, recv) = bounded(10);
+        let responses = input_stream(&["A0001 OK LIST completed\r\n"]);
+        let mut stream = async_std::stream::from_iter(responses);
+        let names = parse_names(&mut stream, send, RequestId("A0001".into()))
+            .try_collect::<Vec<Name>>()
+            .await
+            .unwrap();
+        assert!(names.is_empty());
+        assert!(recv.is_empty());
+    }
+
+    #[cfg_attr(feature = "runtime-tokio", tokio::test)]
+    #[cfg_attr(feature = "runtime-async-std", async_std::test)]
     async fn parse_fetches_empty() {
         let (send, recv) = bounded(10);
-        let responses = input_stream(&[]);
+        let responses = input_stream(&["a OK FETCH completed\r\n"]);
         let mut stream = async_std::stream::from_iter(responses);
         let id = RequestId("a".into());
 
@@ -588,6 +718,7 @@ mod tests {
         let responses = input_stream(&[
             "* 24 FETCH (FLAGS (\\Seen) UID 4827943)\r\n",
             "* 25 FETCH (FLAGS (\\Seen))\r\n",
+            "a OK FETCH completed\r\n",
         ]);
         let mut stream = async_std::stream::from_iter(responses);
         let id = RequestId("a".into());
@@ -616,7 +747,11 @@ mod tests {
     async fn parse_fetches_w_unilateral() {
         // https://github.com/mattnenterprise/rust-imap/issues/81
         let (send, recv) = bounded(10);
-        let responses = input_stream(&["* 37 FETCH (UID 74)\r\n", "* 1 RECENT\r\n"]);
+        let responses = input_stream(&[
+            "* 37 FETCH (UID 74)\r\n",
+            "* 1 RECENT\r\n",
+            "a OK FETCH completed\r\n",
+        ]);
         let mut stream = async_std::stream::from_iter(responses);
         let id = RequestId("a".into());
 
@@ -638,6 +773,7 @@ mod tests {
         let responses = input_stream(&[
             "* LIST (\\HasNoChildren) \".\" \"INBOX\"\r\n",
             "* 4 EXPUNGE\r\n",
+            "A0001 OK LIST completed\r\n",
         ]);
         let mut stream = async_std::stream::from_iter(responses);
 
@@ -666,6 +802,7 @@ mod tests {
             "* CAPABILITY IMAP4rev1 STARTTLS AUTH=GSSAPI LOGINDISABLED\r\n",
             "* STATUS dev.github (MESSAGES 10 UIDNEXT 11 UIDVALIDITY 1408806928 UNSEEN 0)\r\n",
             "* 4 EXISTS\r\n",
+            "A0001 OK CAPABILITY completed\r\n",
         ]);
         let mut stream = async_std::stream::from_iter(responses);
 
@@ -702,6 +839,7 @@ mod tests {
             "* SEARCH 23 42 4711\r\n",
             "* 1 RECENT\r\n",
             "* STATUS INBOX (MESSAGES 10 UIDNEXT 11 UIDVALIDITY 1408806928 UNSEEN 0)\r\n",
+            "A0001 OK SEARCH completed\r\n",
         ]);
         let mut stream = async_std::stream::from_iter(responses);
 
@@ -732,6 +870,7 @@ mod tests {
         let responses = input_stream(&[
                 "* SEARCH 1600 1698 1739 1781 1795 1885 1891 1892 1893 1898 1899 1901 1911 1926 1932 1933 1993 1994 2007 2032 2033 2041 2053 2062 2063 2065 2066 2072 2078 2079 2082 2084 2095 2100 2101 2102 2103 2104 2107 2116 2120 2135 2138 2154 2163 2168 2172 2189 2193 2198 2199 2205 2212 2213 2221 2227 2267 2275 2276 2295 2300 2328 2330 2332 2333 2334\r\n",
                 "* SEARCH 2335 2336 2337 2338 2339 2341 2342 2347 2349 2350 2358 2359 2362 2369 2371 2372 2373 2374 2375 2376 2377 2378 2379 2380 2381 2382 2383 2384 2385 2386 2390 2392 2397 2400 2401 2403 2405 2409 2411 2414 2417 2419 2420 2424 2426 2428 2439 2454 2456 2467 2468 2469 2490 2515 2519 2520 2521\r\n",
+                "A0001 OK SEARCH completed\r\n",
             ]);
         let mut stream = async_std::stream::from_iter(responses);
 
@@ -763,7 +902,7 @@ mod tests {
     #[cfg_attr(feature = "runtime-async-std", async_std::test)]
     async fn parse_ids_search() {
         let (send, recv) = bounded(10);
-        let responses = input_stream(&["* SEARCH\r\n"]);
+        let responses = input_stream(&["* SEARCH\r\n", "A0001 OK SEARCH completed\r\n"]);
         let mut stream = async_std::stream::from_iter(responses);
 
         let id = RequestId("A0001".into());

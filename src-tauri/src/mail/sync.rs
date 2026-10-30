@@ -314,6 +314,25 @@ fn status_items(condstore: bool) -> &'static str {
     }
 }
 
+fn validate_sync_status(status: &mut Mailbox) -> Result<(), String> {
+    let unseen = status
+        .unseen
+        .ok_or_else(|| "Mailbox status is incomplete.".to_string())?;
+    let uid_next = status
+        .uid_next
+        .ok_or_else(|| "Mailbox status is incomplete.".to_string())?;
+    let uid_validity = status
+        .uid_validity
+        .ok_or_else(|| "Mailbox status is incomplete.".to_string())?;
+    if uid_next == 0 || uid_validity == 0 {
+        return Err("Mailbox status is invalid.".into());
+    }
+    if unseen > status.exists {
+        status.unseen = Some(status.exists);
+    }
+    Ok(())
+}
+
 /// Park the session, let waiting user actions run, then take the account and
 /// a session back.
 async fn yield_point<H: SyncHooks>(
@@ -543,7 +562,7 @@ async fn sync_folder<H: SyncHooks>(
     let quick = hooks.quick();
     let condstore = lease.capabilities.condstore;
     let wire_name = lease.mailbox_name(&folder.name);
-    let status = match &folder.prefetched {
+    let mut status = match &folder.prefetched {
         Some(status) => status.clone(),
         None => tokio::time::timeout(
             IMAP_COMMAND_TIMEOUT,
@@ -553,10 +572,31 @@ async fn sync_folder<H: SyncHooks>(
         .map_err(|_| "Mailbox status timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Mailbox status"))?,
     };
+    validate_sync_status(&mut status)?;
     let previous = match db.mailbox_id_for_name(account_id, &folder.name)? {
         Some(id) => Some(db.mailbox_sync_meta(id)?),
         None => None,
     };
+    let confirm_identity = previous.as_ref().is_none_or(|meta| {
+        meta.uid_validity != status.uid_validity || meta.server_total != Some(status.exists)
+    });
+    let selected_before_write = if confirm_identity {
+        Some(
+            tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.examine(&wire_name))
+                .await
+                .map_err(|_| "Mailbox sync timed out.".to_string())?
+                .map_err(|error| redact_error(&error, "Mailbox sync"))?,
+        )
+    } else {
+        None
+    };
+    if let Some(selected) = &selected_before_write {
+        if selected.uid_validity != status.uid_validity
+            || (status.exists == 0 && selected.exists != 0)
+        {
+            return Err("Mailbox changed during sync.".into());
+        }
+    }
     let mailbox_id = db.upsert_mailbox_with_source(
         account_id,
         &folder.name,
@@ -610,10 +650,13 @@ async fn sync_folder<H: SyncHooks>(
         db.set_highest_modseq(mailbox_id, status.highest_modseq)?;
         return Ok((false, changed));
     }
-    let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.examine(&wire_name))
-        .await
-        .map_err(|_| "Mailbox sync timed out.".to_string())?
-        .map_err(|error| redact_error(&error, "Mailbox sync"))?;
+    let selected = match selected_before_write {
+        Some(selected) => selected,
+        None => tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.examine(&wire_name))
+            .await
+            .map_err(|_| "Mailbox sync timed out.".to_string())?
+            .map_err(|error| redact_error(&error, "Mailbox sync"))?,
+    };
     if selected.uid_validity != status.uid_validity {
         return Err("Mailbox changed during sync.".into());
     }
@@ -1445,17 +1488,23 @@ pub async fn refresh_mailbox_envelopes(
     let mut lease = pool::checkout(account, password).await?;
     let refresh = async {
         let wire_mailbox = lease.mailbox_name(mailbox);
-        let status = tokio::time::timeout(
+        let mut status = tokio::time::timeout(
             IMAP_COMMAND_TIMEOUT,
             lease.status(&wire_mailbox, "(MESSAGES UNSEEN UIDNEXT UIDVALIDITY)"),
         )
         .await
         .map_err(|_| "Mailbox status timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Mailbox status"))?;
+        validate_sync_status(&mut status)?;
         let selected = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.examine(&wire_mailbox))
             .await
             .map_err(|_| "Mailbox sync timed out.".to_string())?
             .map_err(|error| redact_error(&error, "Mailbox sync"))?;
+        if selected.uid_validity != status.uid_validity
+            || (status.exists == 0 && selected.exists != 0)
+        {
+            return Err("Mailbox changed during sync.".into());
+        }
         if let Some((previous_validity, ..)) =
             db.mailbox_sync_state(&account.summary.id, mailbox)?
         {
@@ -1750,12 +1799,18 @@ async fn search_mailbox(
         .map_err(|_| "Server search timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Server search"))?;
     if let Some(expected_uid_validity) = db.mailbox_uid_validity(&account.summary.id, name)? {
-        if selected.uid_validity != Some(expected_uid_validity) {
-            // The cached generation is stale; caching new-generation UIDs
-            // against it would corrupt the mailbox. Purge and let the
-            // next sync repopulate instead.
-            let _ = db.purge_stale_mailbox(&account.summary.id, name, mailbox_id);
-            return Ok(results);
+        match selected.uid_validity {
+            None => {
+                return Err("Server search is unavailable for this folder.".into());
+            }
+            Some(actual) if actual != expected_uid_validity => {
+                // The cached generation is stale; caching new-generation UIDs
+                // against it would corrupt the mailbox. Purge and let the
+                // next sync repopulate instead.
+                let _ = db.purge_stale_mailbox(&account.summary.id, name, mailbox_id);
+                return Ok(results);
+            }
+            Some(_) => {}
         }
     }
     let mut uids = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.uid_search(criteria))
@@ -2054,7 +2109,8 @@ pub(crate) fn body_fetch_query(prefix: &str) -> String {
 mod tests {
     use super::{
         folders_from_listing, plan_new_uid_chunks, refresh_window_start,
-        should_purge_stale_generation, ServerHitFilter, INITIAL_MESSAGE_BATCH,
+        should_purge_stale_generation, validate_sync_status, ServerHitFilter,
+        INITIAL_MESSAGE_BATCH,
     };
     use crate::mail::list_status::ListedName;
     use crate::models::ProviderKind;
@@ -2188,6 +2244,24 @@ mod tests {
             refresh_window_start(u32::MAX, u32::MAX, INITIAL_MESSAGE_BATCH),
             u32::MAX
         );
+    }
+
+    #[test]
+    fn validate_sync_status_clamps_unseen_above_exists() {
+        let mut status = Mailbox {
+            exists: 3,
+            unseen: Some(9),
+            uid_next: Some(4),
+            uid_validity: Some(1),
+            ..Mailbox::default()
+        };
+        validate_sync_status(&mut status).expect("clamp instead of refuse");
+        assert_eq!(status.unseen, Some(3));
+        status.unseen = Some(2);
+        validate_sync_status(&mut status).expect("valid unseen");
+        assert_eq!(status.unseen, Some(2));
+        status.uid_next = Some(0);
+        assert!(validate_sync_status(&mut status).is_err());
     }
 
     #[test]

@@ -82,11 +82,13 @@ export function useMessageOpening({
           await api.setMessageFlags(accountId, summary.id, true, undefined);
           const latest = useAppStore.getState();
           if (
-            isCurrentMessageOpen(request) &&
-            latest.activeAccountId === accountId &&
-            latest.activeMailboxId === mailboxId &&
-            !latest.activeLocalView
-          ) {
+            latest.activeAccountId !== accountId ||
+            latest.activeMailboxId !== mailboxId ||
+            latest.activeLocalView
+          )
+            return false;
+          const row = latest.messages.find((item) => item.id === summary.id);
+          if (row && !row.isRead) {
             setMessages(
               latest.messages.map((message) =>
                 message.id === summary.id
@@ -96,8 +98,25 @@ export function useMessageOpening({
               latest.messageCursor,
               latest.hasMoreMessages,
             );
-            if (latest.selectedMessage?.id === summary.id)
-              selectMessage({ ...detail, isRead: true });
+            latest.setMailboxes(
+              latest.mailboxes.map((mailbox) =>
+                mailbox.id === mailboxId
+                  ? {
+                      ...mailbox,
+                      unreadCount: Math.max(0, mailbox.unreadCount - 1),
+                    }
+                  : mailbox,
+              ),
+            );
+          }
+          if (
+            isCurrentMessageOpen(request) &&
+            latest.selectedMessage?.id === summary.id
+          ) {
+            selectMessage({
+              ...useAppStore.getState().selectedMessage!,
+              isRead: true,
+            });
             await loadAccountData();
           }
         }
@@ -230,12 +249,39 @@ export function useMessageOpening({
         await api.setMessageFlags(accountId, found.id, true, undefined);
         const latest = useAppStore.getState();
         if (
+          latest.activeAccountId !== accountId ||
+          latest.activeMailboxId !== mailboxId ||
+          latest.activeLocalView
+        )
+          return;
+        const row = latest.messages.find((item) => item.id === found.id);
+        if (row && !row.isRead) {
+          setMessages(
+            latest.messages.map((message) =>
+              message.id === found.id ? { ...message, isRead: true } : message,
+            ),
+            latest.messageCursor,
+            latest.hasMoreMessages,
+          );
+          latest.setMailboxes(
+            latest.mailboxes.map((mailbox) =>
+              mailbox.id === mailboxId
+                ? {
+                    ...mailbox,
+                    unreadCount: Math.max(0, mailbox.unreadCount - 1),
+                  }
+                : mailbox,
+            ),
+          );
+        }
+        if (
           isCurrentMessageOpen(request) &&
-          latest.activeAccountId === accountId &&
-          latest.activeMailboxId === mailboxId &&
           latest.selectedMessage?.id === found.id
         )
-          selectMessage({ ...opened, isRead: true });
+          selectMessage({
+            ...useAppStore.getState().selectedMessage!,
+            isRead: true,
+          });
       }
     } catch (cause) {
       if (isCurrentMessageOpen(request)) setError(String(cause));

@@ -10,11 +10,25 @@ const forbidden = [
   /tokio::process/,
   /Command::new\s*\(/,
 ];
+// Reviewed exceptions: each snippet must occur exactly once in its file.
+// update_relaunch.rs: macOS relaunch helper with fixed binaries and argv-only
+// paths; Tauri's restart uses `open -n`, which adds a second Dock tile.
+const exceptions = new Map([
+  [`${root}/src-tauri/src/update_relaunch.rs`, 'Command::new("/bin/sh")'],
+]);
 const violations = [];
 for (const directory of roots) {
   for (const path of await filesRecursively(directory)) {
     if (!new Set([".ts", ".tsx", ".rs"]).has(extname(path))) continue;
-    const source = await readFile(path, "utf8");
+    let source = await readFile(path, "utf8");
+    const allowed = exceptions.get(path);
+    if (allowed) {
+      if (source.split(allowed).length !== 2) {
+        violations.push(`${path}: reviewed exception must occur exactly once`);
+        continue;
+      }
+      source = source.replace(allowed, "");
+    }
     for (const pattern of forbidden) {
       if (pattern.test(source)) violations.push(`${path}: ${pattern}`);
     }

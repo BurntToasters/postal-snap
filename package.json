@@ -26,6 +26,7 @@
     "test:cov:e2e": "cross-env VITE_COVERAGE=true E2E_COVERAGE=true node scripts/run-e2e.js",
     "test:cov:watch": "vitest --coverage",
     "test:rust": "cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets",
+    "test:vendored-imap": "node scripts/test-vendored-imap.js",
     "test:icloud": "dotenv -e .env -- cargo test --locked --manifest-path src-tauri/Cargo.toml icloud_live_connection_smoke -- --ignored",
     "test:mail-integration": "node scripts/test-mail-integration.js",
     "test:bridge-integration": "node scripts/test-mail-integration.js --bridge-only",

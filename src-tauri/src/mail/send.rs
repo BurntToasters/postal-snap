@@ -312,6 +312,73 @@ fn send_timeout(len: usize) -> Duration {
         .min(SEND_TIMEOUT_CAP)
 }
 
+#[cfg(test)]
+struct NonPinnedSendTestState {
+    override_timeout: Option<Duration>,
+    send_in_flight: bool,
+}
+
+#[cfg(test)]
+static NON_PINNED_SEND_TEST_STATE: std::sync::Mutex<NonPinnedSendTestState> =
+    std::sync::Mutex::new(NonPinnedSendTestState {
+        override_timeout: None,
+        send_in_flight: false,
+    });
+
+#[cfg(test)]
+async fn begin_non_pinned_send(len: usize) -> Duration {
+    loop {
+        {
+            let mut state = NON_PINNED_SEND_TEST_STATE
+                .lock()
+                .expect("non-pinned send test state lock");
+            if !state.send_in_flight {
+                state.send_in_flight = true;
+                return state.override_timeout.unwrap_or_else(|| send_timeout(len));
+            }
+        }
+        tokio::task::yield_now().await;
+    }
+}
+
+#[cfg(test)]
+fn finish_non_pinned_send() {
+    let mut state = NON_PINNED_SEND_TEST_STATE
+        .lock()
+        .expect("non-pinned send test state lock");
+    state.send_in_flight = false;
+}
+
+#[cfg(test)]
+pub(super) struct TestNonPinnedSendTimeoutGuard;
+
+#[cfg(test)]
+impl TestNonPinnedSendTimeoutGuard {
+    pub(super) fn install(timeout: Duration) -> Self {
+        NON_PINNED_SEND_TEST_STATE
+            .lock()
+            .expect("non-pinned send test state lock")
+            .override_timeout = Some(timeout);
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestNonPinnedSendTimeoutGuard {
+    fn drop(&mut self) {
+        let mut state = NON_PINNED_SEND_TEST_STATE
+            .lock()
+            .expect("non-pinned send test state lock");
+        state.override_timeout = None;
+    }
+}
+
+/// Full-session limit for lettre `send_raw` (connect through DATA).
+#[cfg(not(test))]
+fn non_pinned_send_timeout(len: usize) -> Duration {
+    send_timeout(len)
+}
+
 /// A send that runs past its limit may have reached the server: Uncertain.
 async fn within_send_timeout<T>(
     limit: Duration,
@@ -362,17 +429,27 @@ pub async fn send_prepared(
         return Ok(());
     }
     let transport = smtp_transport(&account.smtp, &password, xoauth2).map_err(refused)?;
-    transport
-        .send_raw(&envelope, bytes)
-        .await
-        .map_err(|error| SendError {
-            // lettre keeps its connect-failure kind private; its Debug output
-            // names it. `refused_smtp_connection_is_not_sent` pins this.
-            kind: classify_send_failure(SmtpErrorTraits::of(
-                &error,
-                format!("{error:?}").contains("kind: Connection"),
-            )),
-        })?;
+    #[cfg(test)]
+    let limit = begin_non_pinned_send(bytes.len()).await;
+    #[cfg(not(test))]
+    let limit = non_pinned_send_timeout(bytes.len());
+    let send_result = within_send_timeout(limit, async {
+        transport
+            .send_raw(&envelope, bytes)
+            .await
+            .map_err(|error| SendError {
+                // lettre keeps its connect-failure kind private; its Debug output
+                // names it. `refused_smtp_connection_is_not_sent` pins this.
+                kind: classify_send_failure(SmtpErrorTraits::of(
+                    &error,
+                    format!("{error:?}").contains("kind: Connection"),
+                )),
+            })
+    })
+    .await;
+    #[cfg(test)]
+    finish_non_pinned_send();
+    send_result?;
     Ok(())
 }
 
@@ -970,11 +1047,7 @@ async fn build_message_with_id(
         if metadata.len() > MAX_MESSAGE_BYTES as u64 {
             return Err("An attachment exceeds the maximum allowed size.".into());
         }
-        // The managed file can grow after the size check; never read past the limit.
-        let mut file = tokio::fs::File::open(path)
-            .await
-            .map_err(|_| "Could not read an attachment file.".to_string())?;
-        let bytes = bounded_file::read_bounded(&mut file, metadata.len(), MAX_MESSAGE_BYTES)
+        let bytes = bounded_file::read_regular_file(path, MAX_MESSAGE_BYTES)
             .await
             .map_err(|error| match error {
                 BoundedFileError::TooLarge => {
@@ -1511,6 +1584,29 @@ mod plain_tests {
     }
 
     #[tokio::test]
+    async fn outgoing_mime_preserves_regular_file_bytes_and_rejects_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut plain = draft(BodyFormat::Plain, "See file");
+        plain.attachments = vec![attachment(&dir, "report.txt", false)];
+        let out = rendered(&plain).await;
+        assert!(out.contains("report.txt"));
+        assert!(out.contains("\r\n\r\nfile body\r\n"));
+
+        #[cfg(unix)]
+        {
+            let target = dir.path().join("private.txt");
+            let link = dir.path().join("linked.txt");
+            std::fs::write(&target, b"private fixture").unwrap();
+            std::os::unix::fs::symlink(&target, &link).unwrap();
+            plain.attachments[0].token = link.to_string_lossy().into();
+
+            let error = build_message(&account(), &plain).await.unwrap_err();
+            assert_eq!(error, "An attachment file is no longer available.");
+            assert!(!error.contains(target.to_str().unwrap()));
+        }
+    }
+
+    #[tokio::test]
     async fn plain_inline_image_travels_as_a_file() {
         let dir = tempfile::tempdir().unwrap();
         let mut plain = draft(BodyFormat::Plain, "Look");
@@ -1959,5 +2055,87 @@ mod send_timeout_tests {
         let ok: Result<u8, SendError> =
             within_send_timeout(Duration::from_secs(5), async { Ok(7) }).await;
         assert_eq!(ok.unwrap(), 7);
+    }
+
+    #[tokio::test]
+    async fn non_pinned_send_raw_times_out_on_silent_tcp_peer() {
+        use crate::models::{
+            AccountSummary, BodyFormat, ComposeDraft, ProviderKind, ServerConfig, TlsMode,
+        };
+
+        // Failure modes:
+        // 1. Silent SMTP after TCP connect holds the actor with no deadline.
+        // 2. A timeout is classified as retry/refused instead of Uncertain.
+        // 3. Production waits 60s+ in tests without the override guard.
+        let _timeout = TestNonPinnedSendTimeoutGuard::install(Duration::from_millis(300));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let Ok((stream, _)) = listener.accept().await else {
+                return;
+            };
+            let _hold = stream;
+            std::future::pending::<()>().await;
+        });
+
+        let account = AccountRecord {
+            summary: AccountSummary {
+                default_body_format: BodyFormat::Plain,
+                id: "account-timeout".into(),
+                provider: ProviderKind::Manual,
+                email: "sam@example.com".into(),
+                display_name: "Sam".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+                signature_html: String::new(),
+                reply_to: String::new(),
+                color: None,
+            },
+            imap: ServerConfig {
+                trusted_certificate: None,
+                host: "127.0.0.1".into(),
+                port: 993,
+                tls_mode: TlsMode::Tls,
+                username: "sam".into(),
+            },
+            smtp: ServerConfig {
+                trusted_certificate: None,
+                host: "127.0.0.1".into(),
+                port,
+                tls_mode: TlsMode::Tls,
+                username: "sam".into(),
+            },
+        };
+        let draft = ComposeDraft {
+            body_format: BodyFormat::Plain,
+            source_message_id: None,
+            source_kind: None,
+            include_signature: true,
+            importance: String::new(),
+            request_receipt: false,
+            reply_to: None,
+            id: None,
+            account_id: "account-timeout".into(),
+            from: None,
+            to: vec!["jane@example.com".into()],
+            cc: vec![],
+            bcc: vec![],
+            subject: "Timeout".into(),
+            html_body: String::new(),
+            text_body: "Hi".into(),
+            attachments: vec![],
+            in_reply_to: None,
+            references: None,
+            send_at: None,
+        };
+        let bytes = b"From: sam@example.com\r\nTo: jane@example.com\r\n\r\nHi";
+
+        let started = std::time::Instant::now();
+        let result = send_prepared(&account, "fixture-password", &draft, bytes).await;
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert_eq!(result.unwrap_err().kind, SendFailure::Uncertain);
     }
 }

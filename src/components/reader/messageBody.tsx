@@ -6,6 +6,190 @@ import type { MessageDetail } from "../../types";
 import { HighlightedText } from "../HighlightedText";
 import { InviteCard } from "./inviteCard";
 
+type PlainTextPart = {
+  type: "text" | "link" | "mailto";
+  content: string;
+};
+
+function isUrlBodyChar(ch: string): boolean {
+  return ch.length > 0 && !/\s/.test(ch) && !"<>'\"()".includes(ch);
+}
+
+function isEmailLocalChar(ch: string): boolean {
+  return /[a-zA-Z0-9._%+-]/.test(ch);
+}
+
+function isEmailDomainChar(ch: string): boolean {
+  return /[a-zA-Z0-9.-]/.test(ch);
+}
+
+function httpUrlLength(text: string, i: number): number | null {
+  const start = i;
+  if (text.startsWith("https://", i)) i += 8;
+  else if (text.startsWith("http://", i)) i += 7;
+  else return null;
+  while (i < text.length && isUrlBodyChar(text[i]!)) i += 1;
+  return i - start;
+}
+
+function findNextHttpUrl(text: string, from: number): number {
+  let cursor = from;
+  while (cursor <= text.length) {
+    const idx = text.indexOf("http://", cursor);
+    if (idx === -1) return -1;
+    if (text.startsWith("https://", idx)) {
+      cursor = idx + 1;
+      continue;
+    }
+    return idx;
+  }
+  return -1;
+}
+
+function findNextHttpsUrl(text: string, from: number): number {
+  return text.indexOf("https://", from);
+}
+
+function findNextMailto(text: string, from: number): number {
+  return text.indexOf("mailto:", from);
+}
+
+function mailtoLength(text: string, i: number): number | null {
+  if (!text.startsWith("mailto:", i)) return null;
+  i += 7;
+  const start = i - 7;
+  while (i < text.length && isUrlBodyChar(text[i]!)) i += 1;
+  return i - start;
+}
+
+function findNextBareEmail(
+  text: string,
+  from: number,
+): { start: number; length: number } | null {
+  let search = from;
+  while (search < text.length) {
+    const at = text.indexOf("@", search);
+    if (at === -1) return null;
+    let localStart = at;
+    while (localStart > 0 && isEmailLocalChar(text[localStart - 1]!)) {
+      localStart -= 1;
+    }
+    if (localStart < from || localStart >= at) {
+      search = at + 1;
+      continue;
+    }
+    const length = tryBareEmail(text, localStart);
+    if (length !== null) {
+      return { start: localStart, length };
+    }
+    search = at + 1;
+  }
+  return null;
+}
+
+function tryBareEmail(text: string, i: number): number | null {
+  if (!text[i] || !isEmailLocalChar(text[i]!)) return null;
+  let j = i;
+  while (j < text.length && isEmailLocalChar(text[j]!)) j += 1;
+  if (j >= text.length || text[j] !== "@") return null;
+  j += 1;
+  const domainStart = j;
+  while (j < text.length && isEmailDomainChar(text[j]!)) j += 1;
+  if (j === domainStart) return null;
+  for (let dot = j - 1; dot > domainStart; dot -= 1) {
+    if (text[dot] !== ".") continue;
+    const tld = text.slice(dot + 1, j);
+    if (!/^[a-zA-Z]{2,}$/.test(tld)) continue;
+    const host = text.slice(domainStart, dot);
+    if (host.length > 0 && /^[a-zA-Z0-9.-]+$/.test(host)) {
+      return j - i;
+    }
+  }
+  return null;
+}
+
+function splitTrailingPunctuation(matched: string): {
+  trimmed: string;
+  trailing: string;
+} {
+  const trimmed = matched.replace(/[.,!?;:]+$/, "");
+  return { trimmed, trailing: matched.slice(trimmed.length) };
+}
+
+type LinkCandidate = {
+  start: number;
+  length: number;
+  kind: "url" | "mailto" | "email";
+};
+
+function nextLinkCandidate(text: string, from: number): LinkCandidate | null {
+  const candidates: LinkCandidate[] = [];
+  const httpsAt = findNextHttpsUrl(text, from);
+  if (httpsAt !== -1) {
+    const length = httpUrlLength(text, httpsAt);
+    if (length !== null)
+      candidates.push({ start: httpsAt, length, kind: "url" });
+  }
+  const httpAt = findNextHttpUrl(text, from);
+  if (httpAt !== -1) {
+    const length = httpUrlLength(text, httpAt);
+    if (length !== null)
+      candidates.push({ start: httpAt, length, kind: "url" });
+  }
+  const mailtoAt = findNextMailto(text, from);
+  if (mailtoAt !== -1) {
+    const length = mailtoLength(text, mailtoAt);
+    if (length !== null)
+      candidates.push({ start: mailtoAt, length, kind: "mailto" });
+  }
+  const email = findNextBareEmail(text, from);
+  if (email) {
+    candidates.push({
+      start: email.start,
+      length: email.length,
+      kind: "email",
+    });
+  }
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => a.start - b.start);
+  return candidates[0]!;
+}
+
+function tokenizePlainTextLinks(text: string): PlainTextPart[] {
+  const elements: PlainTextPart[] = [];
+  let lastIndex = 0;
+  while (lastIndex < text.length) {
+    const candidate = nextLinkCandidate(text, lastIndex);
+    if (!candidate) {
+      elements.push({ type: "text", content: text.slice(lastIndex) });
+      break;
+    }
+    if (candidate.start > lastIndex) {
+      elements.push({
+        type: "text",
+        content: text.slice(lastIndex, candidate.start),
+      });
+    }
+    const matched = text.slice(
+      candidate.start,
+      candidate.start + candidate.length,
+    );
+    const { trimmed, trailing } = splitTrailingPunctuation(matched);
+    if (candidate.kind === "url") {
+      elements.push({ type: "link", content: trimmed });
+    } else if (candidate.kind === "mailto") {
+      elements.push({ type: "mailto", content: trimmed });
+    } else {
+      elements.push({ type: "mailto", content: `mailto:${trimmed}` });
+    }
+    if (trailing) {
+      elements.push({ type: "text", content: trailing });
+    }
+    lastIndex = candidate.start + matched.length;
+  }
+  return elements;
+}
+
 export function PlainTextContent({
   text,
   onOpenLink,
@@ -17,43 +201,7 @@ export function PlainTextContent({
   onOpenMailto: (mailto: string) => void;
   searchTerms?: string[];
 }) {
-  const parts = useMemo(() => {
-    const urlOrEmailRegex =
-      /(https?:\/\/[^\s<>"'()]+|mailto:[^\s<>"'()]+|[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g;
-    const elements: Array<{
-      type: "text" | "link" | "mailto";
-      content: string;
-    }> = [];
-    let lastIndex = 0;
-    let match: RegExpExecArray | null;
-    while ((match = urlOrEmailRegex.exec(text)) !== null) {
-      if (match.index > lastIndex) {
-        elements.push({
-          type: "text",
-          content: text.slice(lastIndex, match.index),
-        });
-      }
-      const matched = match[0];
-      // Trailing sentence punctuation is prose, not address.
-      const trimmed = matched.replace(/[.,!?;:]+$/, "");
-      const trailing = matched.slice(trimmed.length);
-      if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-        elements.push({ type: "link", content: trimmed });
-      } else if (trimmed.startsWith("mailto:")) {
-        elements.push({ type: "mailto", content: trimmed });
-      } else {
-        elements.push({ type: "mailto", content: `mailto:${trimmed}` });
-      }
-      if (trailing) {
-        elements.push({ type: "text", content: trailing });
-      }
-      lastIndex = match.index + matched.length;
-    }
-    if (lastIndex < text.length) {
-      elements.push({ type: "text", content: text.slice(lastIndex) });
-    }
-    return elements;
-  }, [text]);
+  const parts = useMemo(() => tokenizePlainTextLinks(text), [text]);
 
   return (
     <div className="plain-text-body">

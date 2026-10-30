@@ -65,6 +65,9 @@ tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.190"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri = { version = "2", features = ["image-png"] }
 # Reads NSWorkspace.accessibilityDisplayShouldReduceTransparency; WKWebView does
@@ -77,10 +80,12 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSAc
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSObject", "NSProcessInfo", "NSString", "NSNotification", "NSOperation", "block2"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+same-file = "1.0.6"
 windows = { version = "0.61.3", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     "Win32_System_LibraryLoader",
+    "Win32_Storage_FileSystem",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
 ] }
@@ -89,6 +94,9 @@ windows = { version = "0.61.3", features = [
 tauri = { version = "2", features = ["test"] }
 tempfile = "3"
 proptest = "1"
+
+[target.'cfg(unix)'.dev-dependencies]
+nix = { version = "=0.31.3", features = ["fs"] }
 
 [lints.rust]
 # Reviewed exceptions: Win32 Snap overlay (window_snap.rs), macOS App Nap

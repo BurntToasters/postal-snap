@@ -2062,6 +2062,470 @@ mod tests {
             .is_err());
     }
 
+    fn rename_queue_rows(
+        db: &Database,
+        account_id: &str,
+    ) -> Vec<(i64, String, String, Option<String>)> {
+        let conn = db.conn().unwrap();
+        let mut statement = conn
+            .prepare(
+                "SELECT id,kind,payload,dedupe_key FROM offline_ops WHERE account_id=?1 ORDER BY id",
+            )
+            .unwrap();
+        statement
+            .query_map([account_id], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    }
+
+    fn rename_case_payload(
+        rows: &[(i64, String, String, Option<String>)],
+        case: &str,
+    ) -> serde_json::Value {
+        rows.iter()
+            .find(|(_, _, payload, _)| {
+                serde_json::from_str::<serde_json::Value>(payload)
+                    .is_ok_and(|value| value["case"] == case)
+            })
+            .unwrap_or_else(|| panic!("missing queued operation case {case}"))
+            .2
+            .as_str()
+            .parse()
+            .unwrap()
+    }
+
+    fn queue_rename_case(
+        db: &Database,
+        account_id: &str,
+        kind: &str,
+        case: &str,
+        mut payload: serde_json::Value,
+        dedupe_key: &str,
+    ) {
+        payload["case"] = serde_json::Value::String(case.into());
+        db.queue_operation(account_id, kind, &payload, Some(dedupe_key))
+            .unwrap();
+    }
+
+    #[test]
+    fn rename_mailbox_local_retargets_all_queued_intents_and_roundtrips() {
+        let db = Database::memory();
+        let account = account();
+        let account_id = account.summary.id.clone();
+        let other = account_with_id("account-2", "kim@example.com");
+        let other_id = other.summary.id.clone();
+        db.insert_account(&account).unwrap();
+        db.insert_account(&other).unwrap();
+
+        let root = mailbox(&db, &account_id, "Receipts", &MailboxRole::Other);
+        db.set_mailbox_listing(root, Some("/")).unwrap();
+        let child = mailbox(&db, &account_id, "Receipts/2026", &MailboxRole::Other);
+        let inbox = mailbox(&db, &account_id, "INBOX", &MailboxRole::Inbox);
+        let source = mailbox(&db, &account_id, "OtherSource", &MailboxRole::Other);
+        let lookalike = mailbox(&db, &account_id, "Receipts-Extra", &MailboxRole::Other);
+
+        let other_root = mailbox(&db, &other_id, "Receipts", &MailboxRole::Other);
+        db.set_mailbox_listing(other_root, Some("/")).unwrap();
+        let other_child = mailbox(&db, &other_id, "Receipts/2026", &MailboxRole::Other);
+        let other_inbox = mailbox(&db, &other_id, "INBOX", &MailboxRole::Inbox);
+
+        let add_message = |account_id: &str, mailbox_id: i64, uid: u32| {
+            db.upsert_message(
+                account_id,
+                mailbox_id,
+                &message(uid, "2026-08-18T12:00:00Z"),
+            )
+            .unwrap();
+            db.message_summary_by_uid(mailbox_id, uid)
+                .unwrap()
+                .unwrap()
+                .id
+        };
+        let root_message = add_message(&account_id, root, 11);
+        let child_message = add_message(&account_id, child, 22);
+        let inbox_message = add_message(&account_id, inbox, 33);
+        let source_message = add_message(&account_id, source, 44);
+        let lookalike_message = add_message(&account_id, lookalike, 55);
+        let other_root_message = add_message(&other_id, other_root, 66);
+        let other_child_message = add_message(&other_id, other_child, 77);
+        let other_inbox_message = add_message(&other_id, other_inbox, 88);
+
+        let flag = |message_id, uid, mailbox: &str| {
+            serde_json::json!({
+                "messageId": message_id,
+                "uid": uid,
+                "mailbox": mailbox,
+                "uidValidity": 1,
+                "isRead": true,
+                "isStarred": null
+            })
+        };
+        let movement = |message_id, uid, source: &str, destination: &str| {
+            serde_json::json!({
+                "messageId": message_id,
+                "uid": uid,
+                "source": source,
+                "destination": destination,
+                "uidValidity": 1
+            })
+        };
+        let keyword = |message_id, uid, mailbox: &str, value: &str| {
+            serde_json::json!({
+                "messageId": message_id,
+                "uid": uid,
+                "mailbox": mailbox,
+                "uidValidity": 1,
+                "keyword": value
+            })
+        };
+
+        queue_rename_case(
+            &db,
+            &account_id,
+            "flags",
+            "root-flags",
+            flag(root_message, 11, "Receipts"),
+            &format!("flags:{root_message}:true:false"),
+        );
+        queue_rename_case(
+            &db,
+            &account_id,
+            "flags",
+            "child-flags",
+            flag(child_message, 22, "Receipts/2026"),
+            &format!("flags:{child_message}:true:false"),
+        );
+        queue_rename_case(
+            &db,
+            &account_id,
+            "move",
+            "root-source-move",
+            movement(root_message, 11, "Receipts", "Archive"),
+            &format!("move:{root_message}"),
+        );
+        queue_rename_case(
+            &db,
+            &account_id,
+            "move",
+            "root-destination-move",
+            movement(inbox_message, 33, "INBOX", "Receipts"),
+            &format!("move:{inbox_message}"),
+        );
+        queue_rename_case(
+            &db,
+            &account_id,
+            "move",
+            "child-source-move",
+            movement(child_message, 22, "Receipts/2026", "Archive"),
+            &format!("move:{child_message}"),
+        );
+        queue_rename_case(
+            &db,
+            &account_id,
+            "move",
+            "child-destination-move",
+            movement(source_message, 44, "OtherSource", "Receipts/2026"),
+            &format!("move:{source_message}"),
+        );
+        queue_rename_case(
+            &db,
+            &account_id,
+            "copy",
+            "root-source-copy",
+            movement(root_message, 11, "Receipts", "Archive"),
+            &format!("copy:{root_message}:Archive"),
+        );
+        queue_rename_case(
+            &db,
+            &account_id,
+            "copy",
+            "root-destination-copy",
+            movement(inbox_message, 33, "INBOX", "Receipts"),
+            &format!("copy:{inbox_message}:Receipts"),
+        );
+        queue_rename_case(
+            &db,
+            &account_id,
+            "copy",
+            "child-source-copy",
+            movement(child_message, 22, "Receipts/2026", "Archive"),
+            &format!("copy:{child_message}:Archive"),
+        );
+        queue_rename_case(
+            &db,
+            &account_id,
+            "copy",
+            "child-destination-copy",
+            movement(inbox_message, 33, "INBOX", "Receipts/2026"),
+            &format!("copy:{inbox_message}:Receipts/2026"),
+        );
+        for (case, message_id, uid, mailbox_name, value) in [
+            ("root-answered", root_message, 11, "Receipts", "answered"),
+            ("root-forwarded", root_message, 11, "Receipts", "forwarded"),
+            (
+                "child-answered",
+                child_message,
+                22,
+                "Receipts/2026",
+                "answered",
+            ),
+            (
+                "child-forwarded",
+                child_message,
+                22,
+                "Receipts/2026",
+                "forwarded",
+            ),
+        ] {
+            queue_rename_case(
+                &db,
+                &account_id,
+                "keyword",
+                case,
+                keyword(message_id, uid, mailbox_name, value),
+                &format!(
+                    "keyword:{message_id}:{}",
+                    if value == "answered" {
+                        "Answered"
+                    } else {
+                        "Forwarded"
+                    }
+                ),
+            );
+        }
+        queue_rename_case(
+            &db,
+            &account_id,
+            "flags",
+            "lookalike-control",
+            flag(lookalike_message, 55, "Receipts-Extra"),
+            &format!("flags:{lookalike_message}:true:false"),
+        );
+
+        queue_rename_case(
+            &db,
+            &other_id,
+            "flags",
+            "other-root-flags",
+            flag(other_root_message, 66, "Receipts"),
+            &format!("flags:{other_root_message}:true:false"),
+        );
+        queue_rename_case(
+            &db,
+            &other_id,
+            "move",
+            "other-child-move",
+            movement(other_child_message, 77, "Receipts/2026", "Archive"),
+            &format!("move:{other_child_message}"),
+        );
+        queue_rename_case(
+            &db,
+            &other_id,
+            "copy",
+            "other-destination-copy",
+            movement(other_inbox_message, 88, "INBOX", "Receipts/2026"),
+            &format!("copy:{other_inbox_message}:Receipts/2026"),
+        );
+        queue_rename_case(
+            &db,
+            &other_id,
+            "keyword",
+            "other-root-keyword",
+            keyword(other_root_message, 66, "Receipts", "answered"),
+            &format!("keyword:{other_root_message}:Answered"),
+        );
+
+        let before = rename_queue_rows(&db, &account_id);
+        let other_before = rename_queue_rows(&db, &other_id);
+        db.rename_mailbox_local(&account_id, "Receipts", "Bills")
+            .unwrap();
+
+        let after = rename_queue_rows(&db, &account_id);
+        assert_eq!(
+            rename_case_payload(&after, "root-flags")["mailbox"],
+            "Bills"
+        );
+        assert_eq!(
+            rename_case_payload(&after, "child-flags")["mailbox"],
+            "Bills/2026"
+        );
+        for (case, field, expected) in [
+            ("root-source-move", "source", "Bills"),
+            ("root-destination-move", "destination", "Bills"),
+            ("child-source-move", "source", "Bills/2026"),
+            ("child-destination-move", "destination", "Bills/2026"),
+            ("root-source-copy", "source", "Bills"),
+            ("root-destination-copy", "destination", "Bills"),
+            ("child-source-copy", "source", "Bills/2026"),
+            ("child-destination-copy", "destination", "Bills/2026"),
+            ("root-answered", "mailbox", "Bills"),
+            ("root-forwarded", "mailbox", "Bills"),
+            ("child-answered", "mailbox", "Bills/2026"),
+            ("child-forwarded", "mailbox", "Bills/2026"),
+        ] {
+            assert_eq!(rename_case_payload(&after, case)[field], expected, "{case}");
+        }
+        assert_eq!(rename_case_payload(&after, "root-flags")["uid"], 11);
+        assert_eq!(rename_case_payload(&after, "root-flags")["uidValidity"], 1);
+        assert_eq!(
+            rename_case_payload(&after, "root-forwarded")["keyword"],
+            "forwarded"
+        );
+        assert_eq!(
+            rename_case_payload(&after, "lookalike-control")["mailbox"],
+            "Receipts-Extra"
+        );
+        let root_copy_key = format!("copy:{inbox_message}:Bills");
+        let child_copy_key = format!("copy:{inbox_message}:Bills/2026");
+        assert!(after.iter().any(|(_, _, payload, key)| {
+            serde_json::from_str::<serde_json::Value>(payload)
+                .is_ok_and(|value| value["case"] == "root-destination-copy")
+                && key.as_deref() == Some(&root_copy_key)
+        }));
+        assert!(after.iter().any(|(_, _, payload, key)| {
+            serde_json::from_str::<serde_json::Value>(payload)
+                .is_ok_and(|value| value["case"] == "child-destination-copy")
+                && key.as_deref() == Some(&child_copy_key)
+        }));
+        assert_eq!(rename_queue_rows(&db, &other_id), other_before);
+        assert_eq!(
+            db.mailbox_uid_validity(&account_id, "Bills").unwrap(),
+            Some(1)
+        );
+        assert_eq!(
+            db.mailbox_uid_validity(&account_id, "Bills/2026").unwrap(),
+            Some(1)
+        );
+
+        let renamed_snapshot = rename_queue_rows(&db, &account_id);
+        db.rename_mailbox_local(&account_id, "Bills", "Bills")
+            .unwrap();
+        assert_eq!(rename_queue_rows(&db, &account_id), renamed_snapshot);
+        db.rename_mailbox_local(&account_id, "Bills", "Receipts")
+            .unwrap();
+        assert_eq!(rename_queue_rows(&db, &account_id), before);
+        assert_eq!(rename_queue_rows(&db, &other_id), other_before);
+    }
+
+    #[test]
+    fn rename_mailbox_local_merges_copy_dedupe_collisions_with_latest_payload() {
+        let db = Database::memory();
+        let account = account();
+        let account_id = account.summary.id.clone();
+        db.insert_account(&account).unwrap();
+        let receipts = mailbox(&db, &account_id, "Receipts", &MailboxRole::Other);
+        let inbox = mailbox(&db, &account_id, "INBOX", &MailboxRole::Inbox);
+        db.upsert_message(&account_id, inbox, &message(1, "2026-08-18T12:00:00Z"))
+            .unwrap();
+        let message_id = db.message_summary_by_uid(inbox, 1).unwrap().unwrap().id;
+        let copy = |destination: &str, case: &str| {
+            serde_json::json!({
+                "messageId": message_id,
+                "uid": 1,
+                "source": "INBOX",
+                "destination": destination,
+                "uidValidity": 1,
+                "case": case
+            })
+        };
+        db.queue_operation(
+            &account_id,
+            "copy",
+            &copy("Bills", "existing-key"),
+            Some(&format!("copy:{message_id}:Bills")),
+        )
+        .unwrap();
+        db.queue_operation(
+            &account_id,
+            "copy",
+            &copy("Receipts", "latest-intent"),
+            Some(&format!("copy:{message_id}:Receipts")),
+        )
+        .unwrap();
+
+        db.rename_mailbox_local(&account_id, "Receipts", "Bills")
+            .unwrap();
+
+        let rows = rename_queue_rows(&db, &account_id);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].1, "copy");
+        let payload: serde_json::Value = serde_json::from_str(&rows[0].2).unwrap();
+        assert_eq!(payload["destination"], "Bills");
+        assert_eq!(payload["case"], "latest-intent");
+        assert_eq!(
+            rows[0].3.as_deref(),
+            Some(format!("copy:{message_id}:Bills").as_str())
+        );
+        assert_eq!(
+            db.mailbox_uid_validity(&account_id, "Bills").unwrap(),
+            Some(1)
+        );
+        assert_eq!(db.mailbox(receipts).unwrap(), (account_id, "Bills".into()));
+    }
+
+    #[test]
+    fn malformed_queued_payload_rolls_back_mailbox_draft_and_copy_key_rename() {
+        let db = Database::memory();
+        let account = account();
+        let account_id = account.summary.id.clone();
+        db.insert_account(&account).unwrap();
+        let root = mailbox(&db, &account_id, "Receipts", &MailboxRole::Other);
+        db.set_mailbox_listing(root, Some("/")).unwrap();
+        mailbox(&db, &account_id, "Receipts/2026", &MailboxRole::Other);
+        let draft = draft(&account_id);
+        let draft_id = db.save_draft(&draft).unwrap();
+        db.update_remote_draft_tracking(&draft_id, &account_id, "Receipts", 12, Some(1), None)
+            .unwrap();
+        db.queue_operation(
+            &account_id,
+            "copy",
+            &serde_json::json!({
+                "messageId": 5,
+                "uid": 1,
+                "source": "INBOX",
+                "destination": "Receipts",
+                "uidValidity": 1
+            }),
+            Some("copy:5:Receipts"),
+        )
+        .unwrap();
+        db.conn()
+            .unwrap()
+            .execute(
+                "INSERT INTO offline_ops(account_id,kind,payload,dedupe_key) VALUES(?1,'keyword','not-json','broken')",
+                [&account_id],
+            )
+            .unwrap();
+        let before = rename_queue_rows(&db, &account_id);
+
+        assert!(db
+            .rename_mailbox_local(&account_id, "Receipts", "Bills")
+            .is_err());
+
+        assert_eq!(
+            db.mailbox_uid_validity(&account_id, "Receipts").unwrap(),
+            Some(1)
+        );
+        assert_eq!(db.mailbox_uid_validity(&account_id, "Bills").unwrap(), None);
+        assert!(db
+            .remote_draft_uids(&account_id, "Receipts", Some(1))
+            .unwrap()
+            .contains(&12));
+        assert!(db
+            .remote_draft_uids(&account_id, "Bills", Some(1))
+            .unwrap()
+            .is_empty());
+        assert_eq!(rename_queue_rows(&db, &account_id), before);
+    }
+
     #[test]
     fn delete_pending_drafts_stay_visible_for_retry() {
         let db = Database::memory();

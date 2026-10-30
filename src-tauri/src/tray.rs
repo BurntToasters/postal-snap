@@ -72,10 +72,7 @@ pub fn should_hide_on_close(close_to_tray: bool, tray_active: bool) -> bool {
     if !close_to_tray {
         return false;
     }
-    if cfg!(target_os = "macos") {
-        return true;
-    }
-    cfg!(target_os = "windows") && tray_active
+    cfg!(any(target_os = "macos", target_os = "windows")) && tray_active
 }
 
 pub fn tray_is_active() -> bool {
@@ -426,10 +423,7 @@ mod tests {
     fn hide_on_close_is_windows_or_macos_only() {
         assert!(!should_hide_on_close(false, true));
         assert!(!should_hide_on_close(false, false));
-        if cfg!(target_os = "macos") {
-            assert!(should_hide_on_close(true, false));
-            assert!(should_hide_on_close(true, true));
-        } else if cfg!(target_os = "windows") {
+        if cfg!(any(target_os = "macos", target_os = "windows")) {
             assert!(!should_hide_on_close(true, false));
             assert!(should_hide_on_close(true, true));
         } else {

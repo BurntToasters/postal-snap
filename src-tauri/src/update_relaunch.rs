@@ -134,9 +134,79 @@ pub fn arm_background_update<R: Runtime>(app: &AppHandle<R>) {
     });
 }
 
+/// The `.app` bundle holding `exe`, if it sits in `<name>.app/Contents/MacOS`.
+#[cfg(any(target_os = "macos", test))]
+fn bundle_root(exe: &Path) -> Option<&Path> {
+    let macos = exe.parent()?;
+    let contents = macos.parent()?;
+    let bundle = contents.parent()?;
+    (macos.file_name()? == "MacOS"
+        && contents.file_name()? == "Contents"
+        && bundle.extension()? == "app")
+        .then_some(bundle)
+}
+
+/// Waits for `$1` to exit (10 s cap), then opens bundle `$2`.
+#[cfg(target_os = "macos")]
+const RELAUNCH_SCRIPT: &str = "i=0; while /bin/kill -0 \"$1\" 2>/dev/null && [ $i -lt 100 ]; do /bin/sleep 0.1; i=$((i+1)); done; exec /usr/bin/open \"$2\"";
+
+/// Relaunches after this process exits. Tauri's restart uses `open -n`,
+/// which adds a second Dock tile and races the single-instance socket.
+/// Returns once exit is requested; the event loop finishes it.
+pub fn relaunch<R: Runtime>(app: &AppHandle<R>) {
+    #[cfg(target_os = "macos")]
+    if let Some(bundle) = tauri::utils::platform::current_exe()
+        .ok()
+        .as_deref()
+        .and_then(bundle_root)
+    {
+        use std::os::unix::process::CommandExt;
+        use std::process::{Command, Stdio};
+        let spawned = Command::new("/bin/sh")
+            .args(["-c", RELAUNCH_SCRIPT, "sh"])
+            .arg(std::process::id().to_string())
+            .arg(bundle)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn();
+        if spawned.is_ok() {
+            app.exit(0);
+            return;
+        }
+    }
+    app.restart()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{parse_marker, RelaunchMode};
+    use super::{bundle_root, parse_marker, RelaunchMode};
+    use std::path::Path;
+
+    #[test]
+    fn bundle_root_requires_an_app_executable() {
+        assert_eq!(
+            bundle_root(Path::new(
+                "/Applications/Postal Snap.app/Contents/MacOS/postal-snap"
+            )),
+            Some(Path::new("/Applications/Postal Snap.app"))
+        );
+        assert_eq!(
+            bundle_root(Path::new("/tmp/it's \"odd\".app/Contents/MacOS/x")),
+            Some(Path::new("/tmp/it's \"odd\".app"))
+        );
+        assert_eq!(
+            bundle_root(Path::new("/repo/target/debug/postal-snap")),
+            None
+        );
+        assert_eq!(
+            bundle_root(Path::new("/x/Contents/MacOS/postal-snap")),
+            None
+        );
+        assert_eq!(bundle_root(Path::new("/x.app/MacOS/postal-snap")), None);
+        assert_eq!(bundle_root(Path::new("postal-snap")), None);
+    }
 
     #[test]
     fn marker_is_accepted_only_while_fresh() {

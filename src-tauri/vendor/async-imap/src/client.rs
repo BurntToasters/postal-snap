@@ -1096,16 +1096,19 @@ impl<T: Read + Write + Unpin + fmt::Debug + Send> Session<T> {
         mailbox_name: S1,
         data_items: S2,
     ) -> Result<Mailbox> {
+        let mailbox_name = mailbox_name.as_ref();
+        let data_items = data_items.as_ref();
         let id = self
             .run_command(&format!(
                 "STATUS {} {}",
-                validate_str(mailbox_name.as_ref())?,
-                data_items.as_ref()
+                validate_str(mailbox_name)?,
+                data_items
             ))
             .await?;
         let mbox = parse_status(
             &mut self.conn.stream,
-            mailbox_name.as_ref(),
+            mailbox_name,
+            data_items,
             self.unsolicited_responses_tx.clone(),
             id,
         )
@@ -1965,6 +1968,72 @@ mod tests {
         assert_eq!(ids, [1, 2, 3, 4, 5].iter().cloned().collect());
     }
 
+    // Refused or cut-off replies must not look like empty results.
+    const INCOMPLETE_REPLIES: [(&str, &str); 6] = [
+        ("tagged NO", "* SEARCH 1 2\r\nA0001 NO refused\r\n"),
+        ("tagged BAD", "A0001 BAD unsupported\r\n"),
+        ("EOF before data", ""),
+        ("EOF after data", "* SEARCH 1 2\r\n"),
+        ("mismatched tag", "* SEARCH 1 2\r\nA9999 OK completed\r\n"),
+        ("untagged only", "* OK still here\r\n"),
+    ];
+
+    #[cfg_attr(feature = "runtime-tokio", tokio::test)]
+    #[cfg_attr(feature = "runtime-async-std", async_std::test)]
+    async fn search_rejects_refused_or_incomplete_replies() {
+        let mut accepted = Vec::new();
+        for (scenario, response) in INCOMPLETE_REPLIES {
+            let mut session = mock_session!(MockStream::new(response.as_bytes().to_vec()));
+            if session.uid_search("ALL").await.is_ok() {
+                accepted.push(format!("UID SEARCH {scenario}"));
+            }
+            let mut session = mock_session!(MockStream::new(response.as_bytes().to_vec()));
+            if session.search("ALL").await.is_ok() {
+                accepted.push(format!("SEARCH {scenario}"));
+            }
+        }
+        assert!(accepted.is_empty(), "accepted: {accepted:?}");
+    }
+
+    #[cfg_attr(feature = "runtime-tokio", tokio::test)]
+    #[cfg_attr(feature = "runtime-async-std", async_std::test)]
+    async fn search_accepts_a_completed_empty_result() {
+        let response = b"* SEARCH\r\nA0001 OK SEARCH completed\r\n".to_vec();
+        let mut session = mock_session!(MockStream::new(response));
+        assert!(session.uid_search("ALL").await.unwrap().is_empty());
+    }
+
+    #[cfg_attr(feature = "runtime-tokio", tokio::test)]
+    #[cfg_attr(feature = "runtime-async-std", async_std::test)]
+    async fn capability_noop_and_metadata_reject_refused_or_incomplete_replies() {
+        let mut accepted = Vec::new();
+        for (scenario, response) in INCOMPLETE_REPLIES {
+            let capability = response.replace("* SEARCH 1 2", "* CAPABILITY IMAP4rev1");
+            let mut session = mock_session!(MockStream::new(capability.into_bytes()));
+            if session.capabilities().await.is_ok() {
+                accepted.push(format!("CAPABILITY {scenario}"));
+            }
+            let noop = response.replace("* SEARCH 1 2", "* 3 EXISTS");
+            let mut session = mock_session!(MockStream::new(noop.into_bytes()));
+            if session.noop().await.is_ok() {
+                accepted.push(format!("NOOP {scenario}"));
+            }
+            let metadata = response.replace(
+                "* SEARCH 1 2",
+                "* METADATA \"INBOX\" (/private/comment \"x\")",
+            );
+            let mut session = mock_session!(MockStream::new(metadata.into_bytes()));
+            if session
+                .get_metadata("INBOX", "", "/private/comment")
+                .await
+                .is_ok()
+            {
+                accepted.push(format!("GETMETADATA {scenario}"));
+            }
+        }
+        assert!(accepted.is_empty(), "accepted: {accepted:?}");
+    }
+
     #[cfg_attr(feature = "runtime-tokio", tokio::test)]
     #[cfg_attr(feature = "runtime-async-std", async_std::test)]
     async fn capability() {
@@ -2447,6 +2516,89 @@ mod tests {
             assert_eq!(status.uid_next, Some(44292));
             assert_eq!(status.exists, 231);
         }
+    }
+
+    #[cfg_attr(feature = "runtime-tokio", tokio::test)]
+    #[cfg_attr(feature = "runtime-async-std", async_std::test)]
+    async fn status_rejects_missing_matching_data_or_requested_items() {
+        let required = "(MESSAGES UNSEEN UIDNEXT UIDVALIDITY)";
+        let cases = [
+            (
+                "missing MESSAGES",
+                "* STATUS INBOX (UNSEEN 0 UIDNEXT 2 UIDVALIDITY 1)\r\nA0001 OK completed\r\n",
+            ),
+            (
+                "missing UNSEEN",
+                "* STATUS INBOX (MESSAGES 1 UIDNEXT 2 UIDVALIDITY 1)\r\nA0001 OK completed\r\n",
+            ),
+            (
+                "missing UIDNEXT",
+                "* STATUS INBOX (MESSAGES 1 UNSEEN 0 UIDVALIDITY 1)\r\nA0001 OK completed\r\n",
+            ),
+            (
+                "missing UIDVALIDITY",
+                "* STATUS INBOX (MESSAGES 1 UNSEEN 0 UIDNEXT 2)\r\nA0001 OK completed\r\n",
+            ),
+            ("missing STATUS data", "A0001 OK completed\r\n"),
+            (
+                "wrong mailbox",
+                "* STATUS Other (MESSAGES 1 UNSEEN 0 UIDNEXT 2 UIDVALIDITY 1)\r\nA0001 OK completed\r\n",
+            ),
+            (
+                "missing tagged completion",
+                "* STATUS INBOX (MESSAGES 1 UNSEEN 0 UIDNEXT 2 UIDVALIDITY 1)\r\n",
+            ),
+            (
+                "tagged NO",
+                "* STATUS INBOX (MESSAGES 1 UNSEEN 0 UIDNEXT 2 UIDVALIDITY 1)\r\nA0001 NO STATUS refused\r\n",
+            ),
+            (
+                "tagged BAD",
+                "* STATUS INBOX (MESSAGES 1 UNSEEN 0 UIDNEXT 2 UIDVALIDITY 1)\r\nA0001 BAD STATUS unsupported\r\n",
+            ),
+            (
+                "mismatched tagged completion",
+                "* STATUS INBOX (MESSAGES 1 UNSEEN 0 UIDNEXT 2 UIDVALIDITY 1)\r\nA9999 OK completed\r\n",
+            ),
+        ];
+        let mut accepted = Vec::new();
+        for (scenario, response) in cases {
+            let mut session = mock_session!(MockStream::new(response.as_bytes().to_vec()));
+            if session.status("INBOX", required).await.is_ok() {
+                accepted.push(scenario);
+            }
+        }
+        assert!(
+            accepted.is_empty(),
+            "accepted incomplete STATUS replies: {accepted:?}"
+        );
+    }
+
+    #[cfg_attr(feature = "runtime-tokio", tokio::test)]
+    #[cfg_attr(feature = "runtime-async-std", async_std::test)]
+    async fn status_accepts_requested_partial_items() {
+        let response = b"* STATUS INBOX (MESSAGES 1)\r\nA0001 OK STATUS completed\r\n";
+        let mut session = mock_session!(MockStream::new(response.to_vec()));
+        let status = session.status("INBOX", "(MESSAGES)").await.unwrap();
+        assert_eq!(status.exists, 1);
+        assert!(status.unseen.is_none());
+        assert!(status.uid_next.is_none());
+    }
+
+    #[cfg_attr(feature = "runtime-tokio", tokio::test)]
+    #[cfg_attr(feature = "runtime-async-std", async_std::test)]
+    async fn status_does_not_require_unreturned_highest_modseq() {
+        let response = b"* STATUS INBOX (MESSAGES 1 UNSEEN 0 UIDNEXT 2 UIDVALIDITY 1)\r\nA0001 OK STATUS completed\r\n";
+        let mut session = mock_session!(MockStream::new(response.to_vec()));
+        let status = session
+            .status(
+                "INBOX",
+                "(MESSAGES UNSEEN UIDNEXT UIDVALIDITY HIGHESTMODSEQ)",
+            )
+            .await
+            .unwrap();
+        assert_eq!(status.exists, 1);
+        assert!(status.highest_modseq.is_none());
     }
 
     #[cfg_attr(feature = "runtime-tokio", tokio::test)]

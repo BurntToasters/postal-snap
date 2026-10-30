@@ -14,6 +14,25 @@ interface Options {
   update: SettingsSaveUpdate;
 }
 
+const aliasMutationQueues = new Map<string, Promise<void>>();
+
+function serializeAliasMutation<T>(
+  accountId: string,
+  mutation: () => Promise<T>,
+) {
+  const previous = aliasMutationQueues.get(accountId) ?? Promise.resolve();
+  const operation = previous.then(mutation, mutation);
+  const settled = operation.then(
+    () => undefined,
+    () => undefined,
+  );
+  aliasMutationQueues.set(accountId, settled);
+  return operation.finally(() => {
+    if (aliasMutationQueues.get(accountId) === settled)
+      aliasMutationQueues.delete(accountId);
+  });
+}
+
 /** State and actions for account connection, identity, and alias settings. */
 export function useSettingsAccountManagement({
   onClose,
@@ -80,6 +99,14 @@ export function useSettingsAccountManagement({
         value !==
         (accounts.find((account) => account.id === id)?.signatureHtml ?? ""),
     );
+
+  function clearAliasInputIfUnchanged(accountId: string, submitted: string) {
+    setNewAliasInputs((previous) =>
+      (previous[accountId] ?? "") === submitted
+        ? { ...previous, [accountId]: "" }
+        : previous,
+    );
+  }
 
   async function removeAccount(id: string, name: string) {
     try {
@@ -156,13 +183,15 @@ export function useSettingsAccountManagement({
     if (detectingAliasesAccountId) return;
     setDetectingAliasesAccountId(accountId);
     try {
-      const updated = await api.discoverAccountAliases(accountId);
-      mergeAccountFields(accountId, { aliases: updated.aliases });
-      const count = updated.aliases?.length ?? 0;
-      setAliasStatus((prev) => ({
-        ...prev,
-        [accountId]: strings.settings.aliasesFound(count),
-      }));
+      await serializeAliasMutation(accountId, async () => {
+        const updated = await api.discoverAccountAliases(accountId);
+        mergeAccountFields(accountId, { aliases: updated.aliases });
+        const count = updated.aliases?.length ?? 0;
+        setAliasStatus((prev) => ({
+          ...prev,
+          [accountId]: strings.settings.aliasesFound(count),
+        }));
+      });
     } catch (cause) {
       setError(String(cause));
     } finally {
@@ -171,31 +200,46 @@ export function useSettingsAccountManagement({
   }
 
   async function handleAddAlias(accountId: string) {
-    const input = (newAliasInputs[accountId] ?? "").trim().toLowerCase();
+    const submitted = newAliasInputs[accountId] ?? "";
+    const input = submitted.trim().toLowerCase();
     if (!input || !/^[^\s@<>]+@[^\s@<>]+$/.test(input)) {
       setError(strings.settings.aliasInvalid);
       return;
     }
-    const account = useAppStore
+    const currentAccount = useAppStore
       .getState()
       .accounts.find((item) => item.id === accountId);
-    if (!account) return;
-    const current = account.aliases ?? [];
-    if (current.includes(input) || account.email.toLowerCase() === input) {
-      setNewAliasInputs((prev) => ({ ...prev, [accountId]: "" }));
+    if (
+      currentAccount &&
+      !aliasMutationQueues.has(accountId) &&
+      ((currentAccount.aliases ?? []).includes(input) ||
+        currentAccount.email.toLowerCase() === input)
+    ) {
+      clearAliasInputIfUnchanged(accountId, submitted);
       return;
     }
     try {
-      const updated = await api.updateAccountAliases(accountId, [
-        ...current,
-        input,
-      ]);
-      mergeAccountFields(accountId, { aliases: updated.aliases });
-      setNewAliasInputs((prev) => ({ ...prev, [accountId]: "" }));
-      setAliasStatus((prev) => ({
-        ...prev,
-        [accountId]: strings.settings.aliasAdded(input),
-      }));
+      await serializeAliasMutation(accountId, async () => {
+        const account = useAppStore
+          .getState()
+          .accounts.find((item) => item.id === accountId);
+        if (!account) return;
+        const current = account.aliases ?? [];
+        if (current.includes(input) || account.email.toLowerCase() === input) {
+          clearAliasInputIfUnchanged(accountId, submitted);
+          return;
+        }
+        const updated = await api.updateAccountAliases(accountId, [
+          ...current,
+          input,
+        ]);
+        mergeAccountFields(accountId, { aliases: updated.aliases });
+        clearAliasInputIfUnchanged(accountId, submitted);
+        setAliasStatus((prev) => ({
+          ...prev,
+          [accountId]: strings.settings.aliasAdded(input),
+        }));
+      });
     } catch (cause) {
       setError(String(cause));
     }
@@ -207,19 +251,21 @@ export function useSettingsAccountManagement({
       strings.settings.removeAliasConfirm(alias),
     );
     if (!confirmed) return;
-    const account = useAppStore
-      .getState()
-      .accounts.find((item) => item.id === accountId);
-    if (!account) return;
-    const remainingAliases = (account.aliases ?? []).filter(
-      (item) => item !== alias,
-    );
     try {
-      const updated = await api.updateAccountAliases(
-        accountId,
-        remainingAliases,
-      );
-      mergeAccountFields(accountId, { aliases: updated.aliases });
+      await serializeAliasMutation(accountId, async () => {
+        const account = useAppStore
+          .getState()
+          .accounts.find((item) => item.id === accountId);
+        if (!account) return;
+        const remainingAliases = (account.aliases ?? []).filter(
+          (item) => item !== alias,
+        );
+        const updated = await api.updateAccountAliases(
+          accountId,
+          remainingAliases,
+        );
+        mergeAccountFields(accountId, { aliases: updated.aliases });
+      });
     } catch (cause) {
       setError(String(cause));
     }

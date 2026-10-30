@@ -1038,11 +1038,7 @@ pub async fn read_compose_image(
     if metadata.len() > MAX_COMPOSE_IMAGE_BYTES as u64 {
         return Err("That image is too large.".into());
     }
-    // The managed file can grow after the size check; never read past the limit.
-    let mut file = tokio::fs::File::open(&path)
-        .await
-        .map_err(|_| "Could not read that image.".to_string())?;
-    let bytes = bounded_file::read_bounded(&mut file, metadata.len(), MAX_COMPOSE_IMAGE_BYTES)
+    let bytes = bounded_file::read_regular_file(&path, MAX_COMPOSE_IMAGE_BYTES)
         .await
         .map_err(|error| match error {
             BoundedFileError::TooLarge => "That image is too large.".to_string(),
@@ -1068,6 +1064,113 @@ pub async fn release_compose_attachments(
 mod tests {
     use super::*;
     use crate::mail::parse::{attachment_id_variants, parse_message, parse_partial_message};
+
+    fn compose_preview_app(
+        path: &Path,
+        token: &str,
+    ) -> (
+        tauri::App<tauri::test::MockRuntime>,
+        tempfile::TempDir,
+        String,
+    ) {
+        use crate::models::{
+            AccountRecord, AccountSummary, BodyFormat, ProviderKind, ServerConfig, TlsMode,
+        };
+        use tauri::Manager;
+
+        let app_dir = tempfile::tempdir().unwrap();
+        let db = crate::db::Database::memory();
+        let account_id = "preview-account".to_string();
+        let account = AccountRecord {
+            summary: AccountSummary {
+                id: account_id.clone(),
+                provider: ProviderKind::Manual,
+                email: "preview@example.test".into(),
+                display_name: "Preview".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+                signature_html: String::new(),
+                reply_to: String::new(),
+                color: None,
+                default_body_format: BodyFormat::Html,
+            },
+            imap: ServerConfig {
+                host: "imap.example.test".into(),
+                port: 993,
+                tls_mode: TlsMode::Tls,
+                username: "preview@example.test".into(),
+                trusted_certificate: None,
+            },
+            smtp: ServerConfig {
+                host: "smtp.example.test".into(),
+                port: 465,
+                tls_mode: TlsMode::Tls,
+                username: "preview@example.test".into(),
+                trusted_certificate: None,
+            },
+        };
+        db.insert_account(&account).unwrap();
+        db.grant_file(
+            token,
+            &account_id,
+            path,
+            std::fs::metadata(path).unwrap().len(),
+        )
+        .unwrap();
+        let settings =
+            crate::settings::SettingsStore::load(app_dir.path().join("settings.json"), &db)
+                .unwrap();
+        let app = tauri::test::mock_app();
+        app.app_handle().manage(crate::commands::AppState::new(
+            db,
+            settings,
+            app_dir.path().to_path_buf(),
+        ));
+        (app, app_dir, account_id)
+    }
+
+    #[tokio::test]
+    async fn compose_preview_preserves_valid_image_mime_and_bytes() {
+        use tauri::Manager;
+
+        let dir = tempfile::tempdir().unwrap();
+        let image = dir.path().join("preview.png");
+        let bytes = b"\x89PNG\r\n\x1a\npreview";
+        std::fs::write(&image, bytes).unwrap();
+        let (app, _app_dir, account_id) = compose_preview_app(&image, "preview-token");
+        let state = app.app_handle().state::<AppState>();
+
+        let preview = read_compose_image("preview-token".into(), account_id, state)
+            .await
+            .unwrap();
+        assert_eq!(
+            preview,
+            format!("data:image/png;base64,{}", STANDARD.encode(bytes))
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn compose_preview_rejects_a_static_symlink() {
+        use tauri::Manager;
+
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target.png");
+        let link = dir.path().join("link.png");
+        std::fs::write(&target, b"\x89PNG\r\n\x1a\nprivate fixture").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let (app, _app_dir, account_id) = compose_preview_app(&link, "symlink-token");
+        let state = app.app_handle().state::<AppState>();
+
+        let error = read_compose_image("symlink-token".into(), account_id, state)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "invalidInput");
+        assert!(!error.message.contains(link.to_str().unwrap()));
+    }
 
     // Failure modes: stale prefix IDs stop resolving after a full fetch;
     // duplicate filenames select the wrong part; or unrelated IDs are accepted.
