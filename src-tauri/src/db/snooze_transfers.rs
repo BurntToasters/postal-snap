@@ -2,7 +2,8 @@
 //!
 //! A move gives the copy a new row id and a new UID. The snooze becomes a
 //! transfer keyed by account, destination mailbox, and Message-ID header. It
-//! lands on the destination copy the next time that mailbox stores envelopes.
+//! lands only on a matching copy in the captured mailbox generation and UID
+//! range.
 
 use super::{db_error, messages::remove_message_in_transaction, Database};
 use rusqlite::{params, OptionalExtension, Transaction};
@@ -10,14 +11,30 @@ use rusqlite::{params, OptionalExtension, Transaction};
 /// Same clock format and comparison as `NOT_SNOOZED_SQL`.
 const NOW_SQL: &str = "strftime('%Y-%m-%dT%H:%M:%S+00:00','now')";
 
+#[derive(Clone, Copy)]
+struct DestinationIdentity {
+    mailbox_id: i64,
+    uid_validity: Option<u32>,
+    uid_next: Option<u32>,
+    highest_cached_uid: Option<i64>,
+}
+
+struct PendingSnoozeTransfer {
+    message_id_header: String,
+    snoozed_until: String,
+    created_at: String,
+    destination_uid_validity: Option<u32>,
+    destination_uid_min: Option<u32>,
+}
+
 database_operations! {
 impl Database {
     /// Delete source rows after a successful remote move (live, deferred, or
     /// queued), in one transaction.
     /// A snooze on a message with a Message-ID header becomes a transfer for
     /// the destination mailbox. A snooze cannot be keyed when the message has
-    /// no Message-ID or the destination folder is not cached yet; it is dropped
-    /// and the copy shows in its new folder. The source rows always go.
+    /// no Message-ID or the destination folder is not cached yet; it is dropped.
+    /// The source rows always go.
     pub fn remove_moved_messages(
         &self,
         account_id: &str,
@@ -26,28 +43,63 @@ impl Database {
     ) -> Result<(), String> {
         let mut conn = self.conn()?;
         let transaction = conn.transaction().map_err(db_error)?;
-        let destination_id: Option<i64> = transaction
+        let destination_identity: Option<DestinationIdentity> = transaction
             .query_row(
-                "SELECT id FROM mailboxes WHERE account_id=?1 AND name=?2",
+                "SELECT f.id,f.uid_validity,f.uid_next,
+                        (SELECT MAX(m.uid) FROM messages m
+                         WHERE m.account_id=f.account_id AND m.mailbox_id=f.id)
+                 FROM mailboxes f WHERE f.account_id=?1 AND f.name=?2",
                 params![account_id, destination],
-                |row| row.get(0),
+                |row| {
+                    Ok(DestinationIdentity {
+                        mailbox_id: row.get(0)?,
+                        uid_validity: row.get(1)?,
+                        uid_next: row.get(2)?,
+                        highest_cached_uid: row.get(3)?,
+                    })
+                },
             )
             .optional()
             .map_err(db_error)?;
+        let destination_uid_min = destination_identity.as_ref().and_then(
+            |identity| {
+                let cached_min = identity
+                    .highest_cached_uid
+                    .and_then(|highest| u32::try_from(highest).ok()?.checked_add(1));
+                match (identity.uid_next, cached_min) {
+                    (Some(next), Some(cached)) => Some(next.max(cached)),
+                    (Some(next), None) => Some(next),
+                    (None, Some(cached)) => Some(cached),
+                    (None, None) => None,
+                }
+            },
+        );
         for &message_row_id in message_row_ids {
-            let Some(destination_id) = destination_id else {
+            let Some(destination_identity) = destination_identity else {
                 remove_message_in_transaction(&transaction, message_row_id)?;
                 continue;
             };
             transaction
                 .execute(
-                    "INSERT INTO pending_snooze_transfers(account_id,mailbox_id,message_id_header,snoozed_until,created_at)
-                     SELECT s.account_id,?2,m.message_id,s.snoozed_until,s.created_at
+                    "INSERT INTO pending_snooze_transfers(
+                         account_id,mailbox_id,message_id_header,snoozed_until,created_at,
+                         destination_uid_validity,destination_uid_min)
+                     SELECT ?3,?2,m.message_id,s.snoozed_until,s.created_at,?4,?5
                      FROM snoozed_messages s JOIN messages m ON m.id=s.message_id AND m.account_id=s.account_id
-                     WHERE s.message_id=?1 AND m.message_id IS NOT NULL AND m.message_id<>''
+                     WHERE s.message_id=?1 AND s.account_id=?3 AND m.account_id=?3
+                       AND m.message_id IS NOT NULL AND m.message_id<>''
                      ON CONFLICT(account_id,mailbox_id,message_id_header)
-                     DO UPDATE SET snoozed_until=excluded.snoozed_until, created_at=excluded.created_at",
-                    params![message_row_id, destination_id],
+                     DO UPDATE SET snoozed_until=excluded.snoozed_until,
+                         created_at=excluded.created_at,
+                         destination_uid_validity=excluded.destination_uid_validity,
+                         destination_uid_min=excluded.destination_uid_min",
+                    params![
+                        message_row_id,
+                        destination_identity.mailbox_id,
+                        account_id,
+                        destination_identity.uid_validity,
+                        destination_uid_min
+                    ],
                 )
                 .map_err(db_error)?;
             remove_message_in_transaction(&transaction, message_row_id)?;
@@ -56,8 +108,8 @@ impl Database {
     }
 
     /// Land pending transfers for one mailbox. Expired transfers are dropped.
-    /// Only rows in that mailbox, not under a pending move, are candidates;
-    /// the highest UID wins when several copies share the header.
+    /// Only one row in the captured mailbox generation and UID range can land.
+    /// Missing or ambiguous identities stay pending.
     pub fn apply_pending_snooze_transfers(
         &self,
         account_id: &str,
@@ -86,48 +138,83 @@ pub(crate) fn apply_in_transaction(
             params![account_id, mailbox_id],
         )
         .map_err(db_error)?;
-    let transfers: Vec<(String, String, String)> = {
+    let transfers: Vec<PendingSnoozeTransfer> = {
         let mut statement = transaction
             .prepare_cached(
-                "SELECT message_id_header,snoozed_until,created_at FROM pending_snooze_transfers
+                "SELECT message_id_header,snoozed_until,created_at,
+                        destination_uid_validity,destination_uid_min
+                 FROM pending_snooze_transfers
                  WHERE account_id=?1 AND mailbox_id=?2",
             )
             .map_err(db_error)?;
         let rows = statement
             .query_map(params![account_id, mailbox_id], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                Ok(PendingSnoozeTransfer {
+                    message_id_header: row.get(0)?,
+                    snoozed_until: row.get(1)?,
+                    created_at: row.get(2)?,
+                    destination_uid_validity: row.get(3)?,
+                    destination_uid_min: row.get(4)?,
+                })
             })
             .map_err(db_error)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(db_error)?;
         rows
     };
-    for (header, snoozed_until, created_at) in transfers {
-        let landing: Option<i64> = transaction
-            .query_row(
-                "SELECT id FROM messages
-                 WHERE account_id=?1 AND mailbox_id=?2 AND message_id=?3 AND pending_move_to IS NULL
-                 ORDER BY uid DESC LIMIT 1",
-                params![account_id, mailbox_id, header],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(db_error)?;
-        let Some(landing) = landing else {
+    for transfer in transfers {
+        let (Some(destination_uid_validity), Some(destination_uid_min)) = (
+            transfer.destination_uid_validity,
+            transfer.destination_uid_min,
+        ) else {
             continue;
         };
+        let landings: Vec<i64> = {
+            let mut statement = transaction
+                .prepare_cached(
+                    "SELECT m.id FROM messages m
+                 JOIN mailboxes f ON f.id=m.mailbox_id AND f.account_id=m.account_id
+                 WHERE m.account_id=?1 AND m.mailbox_id=?2 AND f.account_id=?1
+                   AND f.uid_validity=?3 AND m.uid>=?4 AND m.message_id=?5
+                   AND m.pending_move_to IS NULL
+                 ORDER BY m.uid DESC LIMIT 2",
+                )
+                .map_err(db_error)?;
+            let rows = statement
+                .query_map(
+                    params![
+                        account_id,
+                        mailbox_id,
+                        destination_uid_validity,
+                        destination_uid_min,
+                        transfer.message_id_header.as_str()
+                    ],
+                    |row| row.get(0),
+                )
+                .map_err(db_error)?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(db_error)?
+        };
+        if landings.len() != 1 {
+            continue;
+        }
+        let landing = landings[0];
         transaction
             .execute(
                 "INSERT OR IGNORE INTO snoozed_messages(account_id,message_id,snoozed_until,created_at)
                  VALUES(?1,?2,?3,?4)",
-                params![account_id, landing, snoozed_until, created_at],
+                params![
+                    account_id,
+                    landing,
+                    transfer.snoozed_until,
+                    transfer.created_at
+                ],
             )
             .map_err(db_error)?;
         transaction
             .execute(
                 "DELETE FROM pending_snooze_transfers
                  WHERE account_id=?1 AND mailbox_id=?2 AND message_id_header=?3",
-                params![account_id, mailbox_id, header],
+                params![account_id, mailbox_id, transfer.message_id_header],
             )
             .map_err(db_error)?;
     }
@@ -140,14 +227,14 @@ mod tests {
     use crate::models::{
         AccountRecord, AccountSummary, BodyFormat, MailboxRole, ProviderKind, ServerConfig, TlsMode,
     };
+    use rusqlite::OptionalExtension;
 
     const FUTURE: &str = "2999-01-01T00:00:00+00:00";
     const PAST: &str = "2000-01-01T00:00:00+00:00";
     const NOW: &str = "2026-01-01T00:00:00+00:00";
 
-    fn with_account() -> (Database, String) {
-        let database = Database::memory();
-        let account = AccountRecord {
+    fn test_account() -> AccountRecord {
+        AccountRecord {
             summary: AccountSummary {
                 default_body_format: BodyFormat::Html,
                 id: "account-1".into(),
@@ -177,13 +264,27 @@ mod tests {
                 tls_mode: TlsMode::StartTls,
                 username: "sam@example.com".into(),
             },
-        };
+        }
+    }
+
+    fn with_account() -> (Database, String) {
+        let database = Database::memory();
+        let account = test_account();
         database.insert_account(&account).unwrap();
         (database, account.summary.id.clone())
     }
 
     fn mailbox(db: &Database, name: &str, role: &MailboxRole) -> i64 {
-        db.upsert_mailbox("account-1", name, role, Some(1), Some(100), None, 0)
+        mailbox_with_uid_next(db, name, role, Some(1))
+    }
+
+    fn mailbox_with_uid_next(
+        db: &Database,
+        name: &str,
+        role: &MailboxRole,
+        uid_next: Option<u32>,
+    ) -> i64 {
+        db.upsert_mailbox("account-1", name, role, Some(1), uid_next, None, 0)
             .unwrap()
     }
 
@@ -260,6 +361,19 @@ mod tests {
             .unwrap()
     }
 
+    fn transfer_identity(db: &Database) -> Option<(Option<u32>, Option<u32>)> {
+        db.conn()
+            .unwrap()
+            .query_row(
+                "SELECT destination_uid_validity,destination_uid_min
+                 FROM pending_snooze_transfers WHERE account_id='account-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .unwrap()
+    }
+
     #[test]
     fn two_snoozes_moved_in_one_batch_both_survive_the_destination_refresh() {
         let (db, account_id) = with_account();
@@ -309,6 +423,206 @@ mod tests {
         sync_row(&db, archive, &copy(7, Some("<1@example.com>")));
         assert_eq!(snoozed_ids(&db), vec![row_id(&db, archive, 7)]);
         assert_eq!(transfer_count(&db), 0);
+    }
+
+    #[test]
+    fn old_destination_duplicate_and_partial_refresh_do_not_consume_transfer() {
+        let (db, account_id) = with_account();
+        let inbox = mailbox(&db, "INBOX", &MailboxRole::Inbox);
+        let archive = mailbox_with_uid_next(&db, "Archive", &MailboxRole::Archive, Some(6));
+        sync_row(&db, inbox, &copy(1, Some("<same@example.test>")));
+        sync_row(&db, archive, &copy(5, Some("<same@example.test>")));
+        let source = row_id(&db, inbox, 1);
+        db.snooze_message(&account_id, source, FUTURE).unwrap();
+        db.remove_moved_messages(&account_id, &[source], "Archive")
+            .unwrap();
+
+        // A failed/partial destination refresh leaves only the old duplicate.
+        db.apply_pending_snooze_transfers(&account_id, archive)
+            .unwrap();
+        assert_eq!(transfer_count(&db), 1);
+        assert!(snoozed_ids(&db).is_empty());
+
+        // An unrelated envelope triggers the same transactional apply path.
+        sync_row(&db, archive, &copy(6, Some("<unrelated@example.test>")));
+        assert_eq!(transfer_count(&db), 1);
+        assert!(snoozed_ids(&db).is_empty());
+
+        sync_row(&db, archive, &copy(7, Some("<same@example.test>")));
+        assert_eq!(snoozed_ids(&db), vec![row_id(&db, archive, 7)]);
+        assert_eq!(transfer_count(&db), 0);
+    }
+
+    #[test]
+    fn transfer_application_is_repeatable_and_preserves_uid_identity() {
+        let (db, account_id) = with_account();
+        let inbox = mailbox(&db, "INBOX", &MailboxRole::Inbox);
+        let archive = mailbox_with_uid_next(&db, "Archive", &MailboxRole::Archive, Some(10));
+        sync_row(&db, inbox, &copy(1, Some("<repeat@example.test>")));
+        let source = row_id(&db, inbox, 1);
+        db.snooze_message(&account_id, source, FUTURE).unwrap();
+        db.remove_moved_messages(&account_id, &[source], "Archive")
+            .unwrap();
+
+        assert_eq!(transfer_identity(&db), Some((Some(1), Some(10))));
+        for _ in 0..2 {
+            db.apply_pending_snooze_transfers(&account_id, archive)
+                .unwrap();
+        }
+        assert_eq!(transfer_count(&db), 1);
+        sync_row(&db, archive, &copy(10, Some("<repeat@example.test>")));
+        db.apply_pending_snooze_transfers(&account_id, archive)
+            .unwrap();
+        assert_eq!(snoozed_ids(&db), vec![row_id(&db, archive, 10)]);
+        assert_eq!(transfer_count(&db), 0);
+    }
+
+    #[test]
+    fn transfer_survives_restart_and_rejects_pre_move_duplicate() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("mail.sqlite3");
+        let account = test_account();
+        let account_id = account.summary.id.clone();
+        let db = Database::open(&path).unwrap();
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, "INBOX", &MailboxRole::Inbox);
+        let archive = mailbox_with_uid_next(&db, "Archive", &MailboxRole::Archive, Some(21));
+        sync_row(&db, inbox, &copy(1, Some("<restart@example.test>")));
+        sync_row(&db, archive, &copy(20, Some("<restart@example.test>")));
+        let source = row_id(&db, inbox, 1);
+        db.snooze_message(&account_id, source, FUTURE).unwrap();
+        db.remove_moved_messages(&account_id, &[source], "Archive")
+            .unwrap();
+        assert_eq!(transfer_identity(&db), Some((Some(1), Some(21))));
+        drop(db);
+
+        let reopened = Database::open(&path).unwrap();
+        let archive = reopened
+            .mailbox_id_for_name(&account_id, "Archive")
+            .unwrap()
+            .unwrap();
+        reopened
+            .apply_pending_snooze_transfers(&account_id, archive)
+            .unwrap();
+        assert_eq!(transfer_count(&reopened), 1);
+        assert!(snoozed_ids(&reopened).is_empty());
+
+        sync_row(
+            &reopened,
+            archive,
+            &copy(21, Some("<restart@example.test>")),
+        );
+        assert_eq!(snoozed_ids(&reopened), vec![row_id(&reopened, archive, 21)]);
+        assert_eq!(transfer_count(&reopened), 0);
+    }
+
+    #[test]
+    fn transfer_does_not_cross_destination_uidvalidity_generation() {
+        let (db, account_id) = with_account();
+        let inbox = mailbox(&db, "INBOX", &MailboxRole::Inbox);
+        let archive = mailbox_with_uid_next(&db, "Archive", &MailboxRole::Archive, Some(10));
+        sync_row(&db, inbox, &copy(1, Some("<generation@example.test>")));
+        let source = row_id(&db, inbox, 1);
+        db.snooze_message(&account_id, source, FUTURE).unwrap();
+        db.remove_moved_messages(&account_id, &[source], "Archive")
+            .unwrap();
+
+        db.upsert_mailbox(
+            &account_id,
+            "Archive",
+            &MailboxRole::Archive,
+            Some(2),
+            Some(2),
+            None,
+            0,
+        )
+        .unwrap();
+        sync_row(&db, archive, &copy(1, Some("<generation@example.test>")));
+        assert!(snoozed_ids(&db).is_empty());
+        assert_eq!(transfer_count(&db), 1);
+    }
+
+    #[test]
+    fn transfer_without_destination_uid_boundary_stays_pending() {
+        let (db, account_id) = with_account();
+        let inbox = mailbox(&db, "INBOX", &MailboxRole::Inbox);
+        let archive = mailbox_with_uid_next(&db, "Archive", &MailboxRole::Archive, None);
+        sync_row(&db, inbox, &copy(1, Some("<unknown@example.test>")));
+        let source = row_id(&db, inbox, 1);
+        db.snooze_message(&account_id, source, FUTURE).unwrap();
+        db.remove_moved_messages(&account_id, &[source], "Archive")
+            .unwrap();
+
+        sync_row(&db, archive, &copy(2, Some("<unknown@example.test>")));
+        assert!(snoozed_ids(&db).is_empty());
+        assert_eq!(transfer_count(&db), 1);
+        assert_eq!(transfer_identity(&db), Some((Some(1), None)));
+    }
+
+    #[test]
+    fn v41_transfer_content_is_preserved_without_guessing_legacy_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("mail.sqlite3");
+        let account = test_account();
+        let account_id = account.summary.id.clone();
+        let db = Database::open(&path).unwrap();
+        db.insert_account(&account).unwrap();
+        let inbox = mailbox(&db, "INBOX", &MailboxRole::Inbox);
+        let archive = mailbox_with_uid_next(&db, "Archive", &MailboxRole::Archive, Some(6));
+        sync_row(&db, inbox, &copy(1, Some("<legacy@example.test>")));
+        sync_row(&db, archive, &copy(5, Some("<legacy@example.test>")));
+        let source = row_id(&db, inbox, 1);
+        db.snooze_message(&account_id, source, FUTURE).unwrap();
+        db.remove_moved_messages(&account_id, &[source], "Archive")
+            .unwrap();
+
+        // Rebuild the v41 transfer table with the original content and schema.
+        {
+            let conn = db.conn().unwrap();
+            conn.execute_batch(
+                "DROP TABLE pending_snooze_transfers;
+                 CREATE TABLE pending_snooze_transfers (
+                   account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                   mailbox_id INTEGER NOT NULL REFERENCES mailboxes(id) ON DELETE CASCADE,
+                   message_id_header TEXT NOT NULL,
+                   snoozed_until TEXT NOT NULL,
+                   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                   PRIMARY KEY(account_id,mailbox_id,message_id_header)
+                 );
+                 PRAGMA user_version=41;",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO pending_snooze_transfers
+                 (account_id,mailbox_id,message_id_header,snoozed_until,created_at)
+                 VALUES(?1,?2,'<legacy@example.test>',?3,'2026-10-25T00:00:00Z')",
+                rusqlite::params![account_id, archive, FUTURE],
+            )
+            .unwrap();
+        }
+        drop(db);
+
+        let migrated = Database::open(&path).unwrap();
+        let stored: (String, String, Option<u32>, Option<u32>) = migrated
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT message_id_header,snoozed_until,
+                        destination_uid_validity,destination_uid_min
+                 FROM pending_snooze_transfers WHERE account_id=?1",
+                [&account_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            stored,
+            ("<legacy@example.test>".into(), FUTURE.into(), None, None)
+        );
+        migrated
+            .apply_pending_snooze_transfers(&account_id, archive)
+            .unwrap();
+        assert!(snoozed_ids(&migrated).is_empty());
+        assert_eq!(transfer_count(&migrated), 1);
     }
 
     #[test]

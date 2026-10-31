@@ -8,6 +8,7 @@ import type { SettingsSaveUpdate } from "./useSettingsSave";
 interface AdvancedTabProps {
   setAdvertisingBlocking: (enabled: boolean) => Promise<void>;
   setThreatBlocking: (enabled: boolean) => Promise<void>;
+  threatSwitchRef?: { current: HTMLInputElement | null };
   distribution?: DistributionChannel;
   update: SettingsSaveUpdate;
 }
@@ -15,6 +16,7 @@ interface AdvancedTabProps {
 export function AdvancedTab({
   setAdvertisingBlocking,
   setThreatBlocking,
+  threatSwitchRef,
   distribution,
   update,
 }: AdvancedTabProps) {
@@ -51,6 +53,7 @@ export function AdvancedTab({
             <small>{strings.settings.blockThreatsHelp}</small>
           </span>
           <input
+            ref={threatSwitchRef}
             type="checkbox"
             checked={threatsOn}
             onChange={(event) => void setThreatBlocking(event.target.checked)}

@@ -5,8 +5,8 @@
 
 | <img height="20" src="https://raw.githubusercontent.com/BurntToasters/bcls/main/media/windows.png" /> Windows                                                                                                                                                                                      | <img height="20" src="https://raw.githubusercontent.com/BurntToasters/bcls/main/media/mac.png" /> macOS                           | <img height="20" src="https://raw.githubusercontent.com/BurntToasters/bcls/main/media/linux.png" /> Linux                                                                                                                                                                       |
 | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | :-------------------------------------------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **EXE:** [x64](https://github.com/BurntToasters/postal-snap/releases/download/v0.5.0/Postal-Snap-Windows-x64.exe) / [arm64](https://github.com/BurntToasters/postal-snap/releases/download/v0.5.0/Postal-Snap-Windows-arm64.exe)                                                                   | **[Universal DMG](https://github.com/BurntToasters/postal-snap/releases/download/v0.5.0/Postal-Snap-macOS.dmg)**                  | **AppImage:** [x64](https://github.com/BurntToasters/postal-snap/releases/download/v0.5.0/Postal-Snap-Linux-x64.AppImage)                                                                                                                                                     |
-| <!-- <div align="center"><a href="https://apps.microsoft.com/detail/<MS_STORE_ID>?referrer=appbadge&mode=full"><img src="https://get.microsoft.com/images/en-us%20light.svg" width="150"/></a></div> -->                                                                                           | **[Universal ZIP](https://github.com/BurntToasters/postal-snap/releases/download/v0.5.0/Postal-Snap-macOS.zip)**                  | **Flatpak:** [x64](https://github.com/BurntToasters/postal-snap/releases/download/v0.5.0/Postal-Snap-Linux-x64.flatpak)                                                                                                                                                          |
+| **EXE:** [x64](https://github.com/BurntToasters/postal-snap/releases/download/v0.5.1/Postal-Snap-Windows-x64.exe) / [arm64](https://github.com/BurntToasters/postal-snap/releases/download/v0.5.1/Postal-Snap-Windows-arm64.exe)                                                                   | **[Universal DMG](https://github.com/BurntToasters/postal-snap/releases/download/v0.5.1/Postal-Snap-macOS.dmg)**                  | **AppImage:** [x64](https://github.com/BurntToasters/postal-snap/releases/download/v0.5.1/Postal-Snap-Linux-x64.AppImage)                                                                                                                                                     |
+| <!-- <div align="center"><a href="https://apps.microsoft.com/detail/<MS_STORE_ID>?referrer=appbadge&mode=full"><img src="https://get.microsoft.com/images/en-us%20light.svg" width="150"/></a></div> -->                                                                                           | **[Universal ZIP](https://github.com/BurntToasters/postal-snap/releases/download/v0.5.1/Postal-Snap-macOS.zip)**                  | **Flatpak:** [x64](https://github.com/BurntToasters/postal-snap/releases/download/v0.5.1/Postal-Snap-Linux-x64.flatpak)                                                                                                                                                          |
 
 > [!IMPORTANT]
 > The `.sig` files in this repo are NOT normal gpg signatures — they are for Tauri V2's
@@ -19,6 +19,31 @@
 ### ℹ️ Enjoying Postal Snap? Consider [❤️ Supporting Me! ❤️](https://rosie.run/support)
 
 Postal Snap is a calm, accessible desktop email client. Mail stays on your computer. There is no Postal Snap cloud, telemetry, or account of mine to log into.
+
+## Changes in `v0.5.1:`
+
+- **FIX - macOS updates:** Later updates preserve the installed app's identity and avoid an extra Gatekeeper prompt. Updating to 0.5.1 from an older version still uses that version's updater.
+- **FIX - macOS restart:** Restarting after an update or Erase All Data reopens Postal Snap in its existing Dock icon instead of adding a second one.
+- **FIX - Update reliability:** Changing update channels during installation no longer causes a restart without installing. Failed downloads release their resources.
+- **FIX - Mail state:** A refused IMAP flag or keyword write now stays queued instead of being reported as success and discarded. The pinned `async-imap` parser is patched locally to surface the server's tagged response.
+- **FIX - Cached mail:** A refused or interrupted folder list, folder status, or message search reply no longer clears cached folders or messages. Empty Folder reports a refused server search instead of claiming success.
+- **FIX - Sync:** Folder sync clamps impossible unread counts from STATUS instead of failing the folder forever.
+- **FIX - Server search:** Search refuses folders whose EXAMINE reply omits UIDVALIDITY instead of purging cached mail.
+- **FIX - Plain text:** A large plain-text message no longer freezes the reader while it looks for links and addresses.
+- **FIX - Sending:** A server that accepts the connection and then stops answering no longer holds that account until quit. The message stays in Needs attention.
+- **FIX - macOS close:** Closing the window quits when the menu bar icon is not there, instead of hiding the app with no way to see it.
+- **FIX - Rules:** When two rules would move the same message, the earlier rule keeps its destination.
+- **FIX - Rules:** A To rule for a complete address matches that address only.
+- **FIX - Attachments:** Save all downloads the whole message before the risky-file warning. Saving one file does not follow a shortcut onto another file. A few more installer and script extensions get the same warning.
+- **FIX - Server search:** Several words match mail that contains each word. Attachment search keeps looking until it fills the list, and snoozed mail stays hidden.
+- **FIX - Sign-in:** Waking the computer does not try a rejected password again.
+- **FIX - New mail:** Mail that arrives while an inbox check is starting or stopping is picked up right away.
+- **FIX - Empty folders:** Refreshing a folder the server reports as empty removes the cached messages.
+- **FIX - Unreadable mail:** A message whose preview cannot be parsed still stops being opened automatically after repeated failures.
+- **FIX - Rules:** A pending rule save no longer clears newer text in the form, and a second click while the save is pending does not create a duplicate rule.
+- **FIX - Drafts and snoozed mail:** Queued drafts cannot be restored by stale saves, and snooze transfers stay tied to the correct destination mailbox.
+- **IMPROVED - Settings and accessibility:** Settings, composer, reader, message list, and folder controls have clearer layouts, keyboard focus, and behavior at larger text sizes and narrow widths.
+- **IMPROVED - Attachments and releases:** Attachment reads are bounded, and update manifests and release assets receive stricter validation.
 
 ## Changes in `v0.5.0:`
 

@@ -161,7 +161,6 @@ export function useReaderMoves({
       );
       if (!readyToMark) return;
       await api.setMessageFlags(next.accountId, next.id, true, undefined);
-      if (!isCurrentMessageOpen(request)) return;
       const latest = useAppStore.getState();
       if (
         latest.activeAccountId !== next.accountId ||
@@ -169,25 +168,35 @@ export function useReaderMoves({
         latest.activeLocalView
       )
         return;
-      setMessages(
-        latest.messages.map((item) =>
-          item.id === next.id ? { ...item, isRead: true } : item,
-        ),
-        latest.messageCursor,
-        latest.hasMoreMessages,
-      );
-      setMailboxes(
-        latest.mailboxes.map((mailbox) =>
-          mailbox.id === next.mailboxId
-            ? {
-                ...mailbox,
-                unreadCount: Math.max(0, mailbox.unreadCount - 1),
-              }
-            : mailbox,
-        ),
-      );
-      if (latest.selectedMessage?.id === next.id)
-        selectMessage({ ...detail, isRead: true });
+      const row = latest.messages.find((item) => item.id === next.id);
+      if (row && !row.isRead) {
+        setMessages(
+          latest.messages.map((item) =>
+            item.id === next.id ? { ...item, isRead: true } : item,
+          ),
+          latest.messageCursor,
+          latest.hasMoreMessages,
+        );
+        setMailboxes(
+          latest.mailboxes.map((mailbox) =>
+            mailbox.id === next.mailboxId
+              ? {
+                  ...mailbox,
+                  unreadCount: Math.max(0, mailbox.unreadCount - 1),
+                }
+              : mailbox,
+          ),
+        );
+      }
+      if (
+        isCurrentMessageOpen(request) &&
+        latest.selectedMessage?.id === next.id
+      ) {
+        selectMessage({
+          ...useAppStore.getState().selectedMessage!,
+          isRead: true,
+        });
+      }
     } catch (cause) {
       if (!isCurrentMessageOpen(request)) return;
       setError(String(cause));

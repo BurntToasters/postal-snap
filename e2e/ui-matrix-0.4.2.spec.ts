@@ -61,16 +61,25 @@ async function probeList(page: Page) {
       return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
     };
     const q = (selector: string) => document.querySelector(selector);
-    const list = q(".message-list");
-    const listBox = box(list);
+    const list = q(".message-list") as HTMLElement | null;
+    const listRect = list?.getBoundingClientRect() ?? null;
+    const listClientLeft =
+      list && listRect ? listRect.left + list.clientLeft : null;
+    const listClientRight =
+      listClientLeft !== null && list
+        ? listClientLeft + list.clientWidth
+        : null;
     const rows = [...document.querySelectorAll(".message-row")];
     const row = box(rows[0]);
     const filter = q(".mailbox-filter-control") ?? q(".mailbox-filter");
     const sender = q(".message-sender");
     return {
       rowInset:
-        row && listBox
-          ? { left: row.left - listBox.left, right: listBox.right - row.right }
+        row && listClientLeft !== null && listClientRight !== null
+          ? {
+              left: row.left - listClientLeft,
+              right: listClientRight - row.right,
+            }
           : null,
       leftEdges: {
         heading: box(q(".pane-heading h1"))?.left ?? null,

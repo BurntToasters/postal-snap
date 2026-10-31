@@ -6,6 +6,10 @@ export default defineConfig({
   test: {
     include: ["src/**/*.{test,spec}.{ts,tsx}"],
     environment: "jsdom",
+    execArgv:
+      Number(process.versions.node.split(".")[0]) >= 25
+        ? ["--no-webstorage"]
+        : [],
     setupFiles: ["./src/tests/setup.ts"],
     css: true,
     coverage: {

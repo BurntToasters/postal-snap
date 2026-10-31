@@ -44,6 +44,7 @@ const MIGRATIONS: &[(u32, Migration)] = &[
     (39, step_v39),
     (40, step_v40),
     (41, step_v41),
+    (42, step_v42),
 ];
 
 pub(super) fn migrate_schema(connection: &mut Connection) -> Result<(), String> {
@@ -959,6 +960,25 @@ fn step_v41(transaction: &rusqlite::Transaction<'_>) -> Result<(), String> {
     Ok(())
 }
 
+fn step_v42(transaction: &rusqlite::Transaction<'_>) -> Result<(), String> {
+    ensure_column(
+        transaction,
+        "pending_snooze_transfers",
+        "destination_uid_validity",
+        "ALTER TABLE pending_snooze_transfers ADD COLUMN destination_uid_validity INTEGER",
+    )?;
+    ensure_column(
+        transaction,
+        "pending_snooze_transfers",
+        "destination_uid_min",
+        "ALTER TABLE pending_snooze_transfers ADD COLUMN destination_uid_min INTEGER",
+    )?;
+    transaction
+        .pragma_update(None, "user_version", 42)
+        .map_err(db_error)?;
+    Ok(())
+}
+
 /// Schema v23: convert cached IMAP4rev1 mailbox names from modified UTF-7.
 fn migrate_v23_mailbox_names(transaction: &rusqlite::Transaction) -> Result<(), String> {
     let rows = {
@@ -1312,7 +1332,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn v41_adds_pending_snooze_transfers_to_a_v40_database() {
+    fn v41_and_v42_add_pending_snooze_transfer_identity_to_a_v40_database() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("mail.sqlite3");
         {
@@ -1334,7 +1354,7 @@ mod tests {
         let version: u32 = conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 41);
+        assert_eq!(version, 42);
         assert!(conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='pending_snooze_transfers'",
@@ -1343,6 +1363,13 @@ mod tests {
             )
             .map(|count| count == 1)
             .unwrap());
+        assert!(column_exists(
+            &conn,
+            "pending_snooze_transfers",
+            "destination_uid_validity"
+        )
+        .unwrap());
+        assert!(column_exists(&conn, "pending_snooze_transfers", "destination_uid_min").unwrap());
     }
 
     #[test]

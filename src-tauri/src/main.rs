@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app_nap;
+mod bounded_file;
 mod bridge;
 mod commands;
 mod content_blocking;
@@ -300,13 +301,10 @@ fn main() {
                 }
             }
             if !has_startup_error {
-                let account_ids = accounts
-                    .iter()
-                    .map(|account| account.id.clone())
-                    .collect();
+                let database = app.state::<AppState>().db.clone();
                 tauri::async_runtime::spawn(commands::sweep_orphans_at_startup(
                     orphan_cleanup_dir,
-                    account_ids,
+                    database,
                     orphan_marker,
                 ));
             }

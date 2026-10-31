@@ -583,20 +583,44 @@ export async function registerMockMessages(page: Page): Promise<void> {
         const trashHit = params.has("trashThread")
           ? trashThreadItems().find((item) => item.id === args.messageId)
           : undefined;
-        const selected = earlierHit
-          ? earlierHit
-          : trashHit
-            ? trashHit
-            : params.has("rowMix")
-              ? (rowMixItems().find((item) => item.id === args.messageId) ??
-                summary)
-              : params.has("threadGap")
-                ? (threadGapItems().find(
-                    (item) => item.id === args.messageId,
-                  ) ?? summary)
-                : args.accountId === secondSummary.accountId
-                  ? secondSummary
-                  : summary;
+        const hugeHit =
+          params.has("hugeList") &&
+          typeof args.messageId === "number" &&
+          args.messageId >= 5000
+            ? (() => {
+                const index = (args.messageId as number) - 5000;
+                const count = Number(params.get("hugeList")) || 1500;
+                if (index < 0 || index >= count) return undefined;
+                return {
+                  ...summary,
+                  id: args.messageId as number,
+                  uid: args.messageId as number,
+                  messageId: `<huge-${index}@example.com>`,
+                  subject: `Archive note ${index + 1}`,
+                  receivedAt: new Date(
+                    Date.parse("2026-08-01T12:00:00Z") - index * 600_000,
+                  ).toISOString(),
+                  isRead: true,
+                  threadRoot: null,
+                };
+              })()
+            : undefined;
+        const selected = hugeHit
+          ? hugeHit
+          : earlierHit
+            ? earlierHit
+            : trashHit
+              ? trashHit
+              : params.has("rowMix")
+                ? (rowMixItems().find((item) => item.id === args.messageId) ??
+                  summary)
+                : params.has("threadGap")
+                  ? (threadGapItems().find(
+                      (item) => item.id === args.messageId,
+                    ) ?? summary)
+                  : args.accountId === secondSummary.accountId
+                    ? secondSummary
+                    : summary;
         if (params.has("bodyOffline")) {
           return {
             ...selected,

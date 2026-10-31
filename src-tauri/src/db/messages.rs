@@ -601,6 +601,35 @@ impl Database {
         })
     }
 
+    pub fn message_body_cached_by_uid(&self, mailbox_id: i64, uid: u32) -> Result<bool, String> {
+        Ok(self
+            .read_conn()?
+            .query_row(
+                "SELECT (COALESCE(body_bytes, 0) > 0 OR LENGTH(COALESCE(raw_message, X'')) > 0)
+                 FROM messages WHERE mailbox_id=?1 AND uid=?2",
+                params![mailbox_id, uid],
+                |row| row.get::<_, i32>(0),
+            )
+            .optional()
+            .map_err(db_error)?
+            .unwrap_or(0)
+            != 0)
+    }
+
+    pub fn message_still_snoozed(&self, account_id: &str, message_id: i64) -> Result<bool, String> {
+        Ok(self
+            .read_conn()?
+            .query_row(
+                "SELECT 1 FROM snoozed_messages s WHERE s.message_id=?1 AND s.account_id=?2
+                 AND s.snoozed_until>strftime('%Y-%m-%dT%H:%M:%S+00:00','now')",
+                params![message_id, account_id],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(db_error)?
+            .is_some())
+    }
+
     pub fn message_summary_by_uid(
         &self,
         mailbox_id: i64,

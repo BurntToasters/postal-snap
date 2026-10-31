@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import {
   TextAlignStart,
   Archive,
@@ -47,7 +48,7 @@ import {
   senderSearchQuery,
   subjectSearchQuery,
 } from "../../contextMenu";
-import { shortcutMod, shortcutShiftMod } from "../../format";
+import { shortcutChord } from "../../format";
 import { strings } from "../../i18n";
 import { folderPathLabel } from "../../i18n/mail";
 import type { MailboxSummary, MessageDetail, ReadingPane } from "../../types";
@@ -216,6 +217,69 @@ export function ReaderToolbar({
       shell.style.removeProperty("--reader-bar-height");
     };
   }, [readingPane]);
+  // Keep the More menu inside the viewport: measure the trigger and the
+  // menu, then pin the menu with fixed coordinates (clamped horizontally,
+  // below the trigger when there is room and above it otherwise, with the
+  // height capped to the available space so the list scrolls inside).
+  const menuNodeRef = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    if (!moreOpen) return;
+    const menu = menuNodeRef.current;
+    const trigger = moreTriggerRef.current;
+    if (!menu || !trigger) return;
+    const update = () => {
+      const slot = trigger.getBoundingClientRect();
+      const margin = 8;
+      const gap = 6;
+      menu.style.position = "fixed";
+      menu.style.right = "auto";
+      menu.style.margin = "0";
+      menu.style.top = "0px";
+      menu.style.left = "0px";
+      menu.style.maxWidth = `${Math.max(0, window.innerWidth - margin * 2)}px`;
+      menu.style.visibility = "hidden";
+      const cap = Math.max(0, window.innerWidth - margin * 2);
+      if (menu.offsetWidth > cap) {
+        menu.style.minWidth = "0";
+        menu.style.width = `${cap}px`;
+      }
+      const width = Math.min(menu.offsetWidth, cap);
+      const fullHeight = menu.scrollHeight;
+      const below = window.innerHeight - slot.bottom - gap - margin;
+      const above = slot.top - gap - margin;
+      const placeBelow = below >= fullHeight || below >= above;
+      const maxHeight = Math.max(
+        0,
+        Math.min(fullHeight, placeBelow ? below : above),
+      );
+      menu.style.maxHeight = `${maxHeight}px`;
+      // The menu is portalled to the body, so fixed coordinates are viewport
+      // coordinates and do not inherit the toolbar's backdrop filter box.
+      const viewportLeft = Math.min(
+        Math.max(margin, slot.right - width),
+        Math.max(margin, window.innerWidth - width - margin),
+      );
+      const viewportTop = placeBelow
+        ? slot.bottom + gap
+        : Math.max(margin, slot.top - gap - maxHeight);
+      menu.style.left = `${viewportLeft}px`;
+      menu.style.top = `${viewportTop}px`;
+      menu.style.visibility = "";
+    };
+    update();
+    window.addEventListener("resize", update);
+    const onScroll = (event: Event) => {
+      // Ignore the menu's own scrolling; changing its max-height would reset
+      // the scroll position while the user is reaching a lower item.
+      if (event.target instanceof Node && menu.contains(event.target)) return;
+      update();
+    };
+    window.addEventListener("scroll", onScroll, true);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", onScroll, true);
+    };
+  }, [moreOpen, moreTriggerRef]);
   const showNav = listPosition
     ? listPosition.total > 1
     : Boolean(onPrevious || onNext);
@@ -251,7 +315,7 @@ export function ReaderToolbar({
       </button>
       {readingPane === "hidden" ? (
         <button
-          className="desktop-reader-close"
+          className="desktop-reader-close reader-icon-action"
           type="button"
           onClick={onBack}
           aria-label={strings.reader.closeMessage}
@@ -266,7 +330,8 @@ export function ReaderToolbar({
           <button
             type="button"
             onClick={onReply}
-            title={withShortcut(strings.reader.reply, `${shortcutMod()}R`)}
+            aria-label={strings.reader.reply}
+            title={withShortcut(strings.reader.reply, shortcutChord("R"))}
             aria-keyshortcuts="Meta+R Control+R"
           >
             <Reply aria-hidden="true" />
@@ -275,9 +340,10 @@ export function ReaderToolbar({
           <button
             type="button"
             onClick={onReplyAll}
+            aria-label={strings.reader.replyAll}
             title={withShortcut(
               strings.reader.replyAll,
-              `${shortcutShiftMod()}R`,
+              shortcutChord("R", { shift: true }),
             )}
             aria-keyshortcuts="Meta+Shift+R Control+Shift+R"
           >
@@ -294,11 +360,16 @@ export function ReaderToolbar({
             type="button"
             onClick={onForward}
             disabled={preparingForward}
+            aria-label={
+              preparingForward
+                ? strings.reader.preparing
+                : strings.reader.forward
+            }
             title={withShortcut(
               preparingForward
                 ? strings.reader.preparing
                 : strings.reader.forward,
-              `${shortcutShiftMod()}F`,
+              shortcutChord("F", { shift: true }),
             )}
             aria-keyshortcuts="Meta+Shift+F Control+Shift+F"
           >
@@ -311,6 +382,7 @@ export function ReaderToolbar({
         <div className="reader-action-group">
           <button
             type="button"
+            className="reader-icon-action"
             onClick={onToggleStar}
             aria-pressed={message.isStarred}
             aria-label={
@@ -322,7 +394,7 @@ export function ReaderToolbar({
               message.isStarred
                 ? strings.reader.removeStar
                 : strings.reader.addStar,
-              `${shortcutShiftMod()}L`,
+              shortcutChord("L", { shift: true }),
             )}
             aria-keyshortcuts="Meta+Shift+L Control+Shift+L"
           >
@@ -333,6 +405,7 @@ export function ReaderToolbar({
           </button>
           <button
             type="button"
+            className="reader-icon-action"
             onClick={isArchiveMailbox ? onMoveToInbox : onArchive}
             aria-label={
               isArchiveMailbox
@@ -342,7 +415,7 @@ export function ReaderToolbar({
             title={
               isArchiveMailbox
                 ? strings.reader.moveToInbox
-                : withShortcut(strings.reader.archive, `${shortcutMod()}E`)
+                : withShortcut(strings.reader.archive, shortcutChord("E"))
             }
             aria-keyshortcuts={
               isArchiveMailbox ? undefined : "Meta+E Control+E"
@@ -356,6 +429,7 @@ export function ReaderToolbar({
           </button>
           <button
             type="button"
+            className="reader-icon-action"
             onClick={onTrash}
             aria-label={
               isTrashMailbox ? strings.mail.deleteForever : strings.reader.trash
@@ -364,7 +438,7 @@ export function ReaderToolbar({
               isTrashMailbox
                 ? strings.mail.deleteForever
                 : strings.reader.trash,
-              isTrashMailbox ? "Delete" : `${shortcutMod()}⌫`,
+              isTrashMailbox ? "Delete" : shortcutChord("⌫"),
             )}
             aria-keyshortcuts={
               isTrashMailbox ? "Delete" : "Meta+Backspace Control+Backspace"
@@ -372,10 +446,11 @@ export function ReaderToolbar({
           >
             <Trash aria-hidden="true" />
           </button>
-          <div className="reader-more" ref={moreMenuRef}>
+          <div className="reader-more">
             <button
               ref={moreTriggerRef}
               type="button"
+              className="reader-icon-action"
               onClick={onToggleMore}
               onKeyDown={(event) => {
                 if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -391,891 +466,918 @@ export function ReaderToolbar({
             >
               <Ellipsis aria-hidden="true" />
             </button>
-            {moreOpen ? (
-              <div
-                id="reader-more-menu"
-                className="reader-more-menu app-menu"
-                role="menu"
-                aria-label={strings.reader.moreActions}
-                onKeyDownCapture={moveMenuFocus}
-              >
-                {onReplyWithoutQuoting ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onReplyWithoutQuoting();
-                      onCloseMore();
+            {moreOpen
+              ? createPortal(
+                  <div
+                    ref={(node) => {
+                      menuNodeRef.current = node;
+                      moreMenuRef.current = node;
                     }}
+                    id="reader-more-menu"
+                    className="reader-more-menu app-menu"
+                    role="menu"
+                    aria-label={strings.reader.moreActions}
+                    onKeyDownCapture={moveMenuFocus}
                   >
-                    <Reply aria-hidden="true" />
-                    {strings.reader.replyWithoutQuoting}
-                  </button>
-                ) : null}
-                {onReplyAllWithoutQuoting ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onReplyAllWithoutQuoting();
-                      onCloseMore();
-                    }}
-                  >
-                    <ReplyAll aria-hidden="true" />
-                    {strings.reader.replyAllWithoutQuoting}
-                  </button>
-                ) : null}
-                {onReplyWithAttachments ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    disabled={preparingForward}
-                    onClick={() => {
-                      onReplyWithAttachments();
-                      onCloseMore();
-                    }}
-                  >
-                    <Paperclip aria-hidden="true" />
-                    {preparingForward
-                      ? strings.reader.preparing
-                      : strings.reader.replyWithAttachments}
-                  </button>
-                ) : null}
-                {onReplyAllWithAttachments ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    disabled={preparingForward}
-                    onClick={() => {
-                      onReplyAllWithAttachments();
-                      onCloseMore();
-                    }}
-                  >
-                    <Paperclip aria-hidden="true" />
-                    {preparingForward
-                      ? strings.reader.preparing
-                      : strings.reader.replyAllWithAttachments}
-                  </button>
-                ) : null}
-                {onRedirect ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onRedirect();
-                      onCloseMore();
-                    }}
-                  >
-                    <CornerUpRight aria-hidden="true" />
-                    {strings.reader.redirect}
-                  </button>
-                ) : null}
-                {onForwardConversation ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onForwardConversation();
-                      onCloseMore();
-                    }}
-                  >
-                    <Forward aria-hidden="true" />
-                    {strings.reader.forwardConversation}
-                  </button>
-                ) : null}
-                {onForwardAsAttachment ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    disabled={preparingForward}
-                    onClick={() => {
-                      onForwardAsAttachment();
-                      onCloseMore();
-                    }}
-                  >
-                    <Paperclip aria-hidden="true" />
-                    {preparingForward
-                      ? strings.reader.preparing
-                      : strings.reader.forwardAsAttachment}
-                  </button>
-                ) : null}
-                {onEditAsNew ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    disabled={preparingForward}
-                    onClick={() => {
-                      onEditAsNew();
-                      onCloseMore();
-                    }}
-                  >
-                    <FilePen aria-hidden="true" />
-                    {preparingForward
-                      ? strings.reader.preparing
-                      : strings.reader.editAsNew}
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    onPrint();
-                    onCloseMore();
-                  }}
-                >
-                  <Printer aria-hidden="true" />
-                  {strings.reader.print}
-                </button>
-                {onPrintConversation ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onPrintConversation();
-                      onCloseMore();
-                    }}
-                  >
-                    <Printer aria-hidden="true" />
-                    {strings.reader.printConversation}
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    onCopyMessageText();
-                    onCloseMore();
-                  }}
-                >
-                  <Copy aria-hidden="true" />
-                  {strings.reader.copyMessageText}
-                </button>
-                {onCopySubject ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onCopySubject();
-                      onCloseMore();
-                    }}
-                  >
-                    <Copy aria-hidden="true" />
-                    {strings.reader.copySubject}
-                  </button>
-                ) : null}
-                {onCopySenderAddress ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onCopySenderAddress();
-                      onCloseMore();
-                    }}
-                  >
-                    <Copy aria-hidden="true" />
-                    {strings.reader.copySenderAddress}
-                  </button>
-                ) : null}
-                {onCopyRecipients ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onCopyRecipients();
-                      onCloseMore();
-                    }}
-                  >
-                    <Copy aria-hidden="true" />
-                    {strings.reader.copyRecipients}
-                  </button>
-                ) : null}
-                {onCopyConversationText ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onCopyConversationText();
-                      onCloseMore();
-                    }}
-                  >
-                    <Copy aria-hidden="true" />
-                    {strings.reader.copyConversationText}
-                  </button>
-                ) : null}
-                {onSaveConversationFiles ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onSaveConversationFiles();
-                      onCloseMore();
-                    }}
-                  >
-                    <Paperclip aria-hidden="true" />
-                    {strings.reader.saveConversationFiles}
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  role="menuitem"
-                  title={withShortcut(
-                    message.isRead
-                      ? strings.reader.markUnread
-                      : strings.reader.markRead,
-                    `${shortcutShiftMod()}U`,
-                  )}
-                  aria-keyshortcuts="Meta+Shift+U Control+Shift+U"
-                  onClick={() => {
-                    onToggleRead();
-                    onCloseMore();
-                  }}
-                >
-                  {message.isRead ? (
-                    <Mail aria-hidden="true" />
-                  ) : (
-                    <MailOpen aria-hidden="true" />
-                  )}
-                  {message.isRead
-                    ? strings.reader.markUnread
-                    : strings.reader.markRead}
-                  <kbd aria-hidden="true">{`${shortcutShiftMod()}U`}</kbd>
-                </button>
-                {onMarkConversationRead ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onMarkConversationRead();
-                      onCloseMore();
-                    }}
-                  >
-                    <CheckCheck aria-hidden="true" />
-                    {strings.reader.markConversationRead}
-                  </button>
-                ) : null}
-                {onMarkConversationUnread ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onMarkConversationUnread();
-                      onCloseMore();
-                    }}
-                  >
-                    <Mail aria-hidden="true" />
-                    {strings.reader.markConversationUnread}
-                  </button>
-                ) : null}
-                {onArchiveConversation ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onArchiveConversation();
-                      onCloseMore();
-                    }}
-                  >
-                    <Archive aria-hidden="true" />
-                    {strings.reader.archiveConversation}
-                  </button>
-                ) : null}
-                {onMoveConversationToInbox ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onMoveConversationToInbox();
-                      onCloseMore();
-                    }}
-                  >
-                    <Inbox aria-hidden="true" />
-                    {strings.reader.moveConversationToInbox}
-                  </button>
-                ) : null}
-                {onTrashConversation ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onTrashConversation();
-                      onCloseMore();
-                    }}
-                  >
-                    <Trash aria-hidden="true" />
-                    {strings.reader.trashConversation}
-                  </button>
-                ) : null}
-                {onDeleteConversation ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onDeleteConversation();
-                      onCloseMore();
-                    }}
-                  >
-                    <Trash aria-hidden="true" />
-                    {strings.reader.deleteConversation}
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    onToggleStar();
-                    onCloseMore();
-                  }}
-                >
-                  <Star
-                    aria-hidden="true"
-                    fill={message.isStarred ? "currentColor" : "none"}
-                  />
-                  {message.isStarred
-                    ? strings.reader.removeStar
-                    : strings.reader.addStar}
-                </button>
-                {onStarConversation ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onStarConversation();
-                      onCloseMore();
-                    }}
-                  >
-                    <Star aria-hidden="true" />
-                    {strings.reader.starConversation}
-                  </button>
-                ) : null}
-                {onUnstarConversation ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onUnstarConversation();
-                      onCloseMore();
-                    }}
-                  >
-                    <Star aria-hidden="true" fill="currentColor" />
-                    {strings.reader.unstarConversation}
-                  </button>
-                ) : null}
-                {onPin ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onPin();
-                      onCloseMore();
-                    }}
-                  >
-                    {message.pinned ? (
-                      <PinOff aria-hidden="true" />
-                    ) : (
-                      <Pin aria-hidden="true" />
-                    )}
-                    {message.pinned ? strings.reader.unpin : strings.reader.pin}
-                  </button>
-                ) : null}
-                {onPinConversation ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onPinConversation();
-                      onCloseMore();
-                    }}
-                  >
-                    <Pin aria-hidden="true" />
-                    {strings.reader.pinConversation}
-                  </button>
-                ) : null}
-                {onUnpinConversation ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onUnpinConversation();
-                      onCloseMore();
-                    }}
-                  >
-                    <PinOff aria-hidden="true" />
-                    {strings.reader.unpinConversation}
-                  </button>
-                ) : null}
-                {onSelectConversation ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onSelectConversation();
-                      onCloseMore();
-                    }}
-                  >
-                    <ListChecks aria-hidden="true" />
-                    {strings.reader.selectConversation}
-                  </button>
-                ) : null}
-                {onSelectFromSender ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onSelectFromSender();
-                      onCloseMore();
-                    }}
-                  >
-                    <ListChecks aria-hidden="true" />
-                    {strings.reader.selectFromSender}
-                  </button>
-                ) : null}
-                {onOpenEarlier ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onOpenEarlier();
-                      onCloseMore();
-                    }}
-                  >
-                    <Mail aria-hidden="true" />
-                    {strings.reader.openEarlier}
-                  </button>
-                ) : null}
-                {onOlderInConversation ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onOlderInConversation();
-                      onCloseMore();
-                    }}
-                  >
-                    <ChevronDown aria-hidden="true" />
-                    {strings.reader.olderInConversation}
-                  </button>
-                ) : null}
-                {onNewerInConversation ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onNewerInConversation();
-                      onCloseMore();
-                    }}
-                  >
-                    <ChevronUp aria-hidden="true" />
-                    {strings.reader.newerInConversation}
-                  </button>
-                ) : null}
-                {onUnreadInConversation ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onUnreadInConversation();
-                      onCloseMore();
-                    }}
-                  >
-                    <MailOpen aria-hidden="true" />
-                    {strings.reader.unreadInConversation}
-                  </button>
-                ) : null}
-                {isJunkMailbox ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onMoveToInbox();
-                      onDismissMore();
-                    }}
-                  >
-                    <ShieldCheck aria-hidden="true" />
-                    {strings.reader.notJunk}
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onMoveJunk();
-                      onDismissMore();
-                    }}
-                  >
-                    <ShieldAlert aria-hidden="true" />
-                    {strings.reader.junk}
-                  </button>
-                )}
-                {onJunkConversation ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onJunkConversation();
-                      onCloseMore();
-                    }}
-                  >
-                    <ShieldAlert aria-hidden="true" />
-                    {strings.reader.junkConversation}
-                  </button>
-                ) : null}
-                {senderBlocked &&
-                onUnblockSender &&
-                senderRuleNeedle(message.senderAddress) ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onUnblockSender();
-                      onDismissMore();
-                    }}
-                  >
-                    <ShieldCheck aria-hidden="true" />
-                    {strings.reader.unblockSender}
-                  </button>
-                ) : onBlockSender && senderRuleNeedle(message.senderAddress) ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onBlockSender();
-                      onDismissMore();
-                    }}
-                  >
-                    <ShieldAlert aria-hidden="true" />
-                    {strings.reader.blockSender}
-                  </button>
-                ) : null}
-                {domainBlocked &&
-                onUnblockDomain &&
-                senderDomain(message.senderAddress) ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onUnblockDomain();
-                      onDismissMore();
-                    }}
-                  >
-                    <ShieldCheck aria-hidden="true" />
-                    {strings.reader.unblockDomain}
-                  </button>
-                ) : onBlockDomain && senderDomain(message.senderAddress) ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onBlockDomain();
-                      onDismissMore();
-                    }}
-                  >
-                    <ShieldAlert aria-hidden="true" />
-                    {strings.reader.blockDomain}
-                  </button>
-                ) : null}
-                {onMuteConversation && canMuteConversation(message) ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onMuteConversation();
-                      onDismissMore();
-                    }}
-                  >
-                    {message.conversationMuted ? (
-                      <Bell aria-hidden="true" />
-                    ) : (
-                      <BellOff aria-hidden="true" />
-                    )}
-                    {message.conversationMuted
-                      ? strings.reader.unmuteConversation
-                      : strings.reader.muteConversation}
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    onOpenSnooze();
-                    onDismissMore();
-                  }}
-                >
-                  <Clock aria-hidden="true" />
-                  {strings.reader.snooze}
-                </button>
-                {onSnoozeConversation ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onSnoozeConversation();
-                      onDismissMore();
-                    }}
-                  >
-                    <Clock aria-hidden="true" />
-                    {strings.reader.snoozeConversation}
-                  </button>
-                ) : null}
-                {senderRuleNeedle(message.senderAddress) ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onCreateRule();
-                      onDismissMore();
-                    }}
-                  >
-                    <Funnel aria-hidden="true" />
-                    {strings.reader.createRuleFromSender}
-                  </button>
-                ) : null}
-                {onCreateSubjectRule && subjectRuleNeedle(message.subject) ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onCreateSubjectRule();
-                      onDismissMore();
-                    }}
-                  >
-                    <Funnel aria-hidden="true" />
-                    {strings.reader.createRuleFromSubject}
-                  </button>
-                ) : null}
-                {onComposeToSender && addressMailbox(message.senderAddress) ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onComposeToSender();
-                      onDismissMore();
-                    }}
-                  >
-                    <SquarePen aria-hidden="true" />
-                    {strings.reader.newMessageToSender}
-                  </button>
-                ) : null}
-                {onMessagesFromSender &&
-                senderSearchQuery(message.senderAddress) ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onMessagesFromSender();
-                      onDismissMore();
-                    }}
-                  >
-                    <Search aria-hidden="true" />
-                    {strings.reader.messagesFromSender}
-                  </button>
-                ) : null}
-                {onMessagesWithSubject &&
-                subjectSearchQuery(message.subject) ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onMessagesWithSubject();
-                      onDismissMore();
-                    }}
-                  >
-                    <Search aria-hidden="true" />
-                    {strings.reader.messagesWithSubject}
-                  </button>
-                ) : null}
-                {message.unsubscribe ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onUnsubscribe();
-                      onDismissMore();
-                    }}
-                  >
-                    <MailMinus aria-hidden="true" />
-                    {strings.reader.unsubscribe}
-                  </button>
-                ) : null}
-                {canViewPlain ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onTogglePlain?.();
-                      onDismissMore();
-                    }}
-                  >
-                    <TextAlignStart aria-hidden="true" />
-                    {viewingPlain
-                      ? strings.reader.viewFormatted
-                      : strings.reader.viewPlain}
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    onShowOriginal();
-                    onDismissMore();
-                  }}
-                >
-                  <FileText aria-hidden="true" />
-                  {strings.reader.showOriginal}
-                </button>
-                {onSaveEml ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onSaveEml();
-                      onDismissMore();
-                    }}
-                  >
-                    <Download aria-hidden="true" />
-                    {strings.reader.saveEml}
-                  </button>
-                ) : null}
-                {moveDestinations.length > 0 ? (
-                  // Folders as menu items, like the right-click menu. Archive,
-                  // Junk, and Trash already have direct actions above.
-                  <>
-                    <div className="context-menu-separator" role="separator" />
-                    <div role="group" aria-labelledby="reader-move-heading">
-                      <div
-                        id="reader-move-heading"
-                        className="context-menu-heading"
+                    {onReplyWithoutQuoting ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onReplyWithoutQuoting();
+                          onCloseMore();
+                        }}
                       >
-                        {strings.contextMenu.moveTo}
-                      </div>
-                      {moveDestinations.map((mailbox) => {
-                        const Icon = folderIcons[mailbox.role] ?? FolderInput;
-                        const name = folderPathLabel(mailbox);
-                        return (
-                          <button
-                            key={mailbox.id}
-                            type="button"
-                            role="menuitem"
-                            aria-label={strings.contextMenu.moveToFolder(name)}
-                            onClick={() => {
-                              onMoveToMailbox(mailbox.id);
-                              onDismissMore();
-                            }}
+                        <Reply aria-hidden="true" />
+                        {strings.reader.replyWithoutQuoting}
+                      </button>
+                    ) : null}
+                    {onReplyAllWithoutQuoting ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onReplyAllWithoutQuoting();
+                          onCloseMore();
+                        }}
+                      >
+                        <ReplyAll aria-hidden="true" />
+                        {strings.reader.replyAllWithoutQuoting}
+                      </button>
+                    ) : null}
+                    {onReplyWithAttachments ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        disabled={preparingForward}
+                        onClick={() => {
+                          onReplyWithAttachments();
+                          onCloseMore();
+                        }}
+                      >
+                        <Paperclip aria-hidden="true" />
+                        {preparingForward
+                          ? strings.reader.preparing
+                          : strings.reader.replyWithAttachments}
+                      </button>
+                    ) : null}
+                    {onReplyAllWithAttachments ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        disabled={preparingForward}
+                        onClick={() => {
+                          onReplyAllWithAttachments();
+                          onCloseMore();
+                        }}
+                      >
+                        <Paperclip aria-hidden="true" />
+                        {preparingForward
+                          ? strings.reader.preparing
+                          : strings.reader.replyAllWithAttachments}
+                      </button>
+                    ) : null}
+                    {onRedirect ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onRedirect();
+                          onCloseMore();
+                        }}
+                      >
+                        <CornerUpRight aria-hidden="true" />
+                        {strings.reader.redirect}
+                      </button>
+                    ) : null}
+                    {onForwardConversation ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onForwardConversation();
+                          onCloseMore();
+                        }}
+                      >
+                        <Forward aria-hidden="true" />
+                        {strings.reader.forwardConversation}
+                      </button>
+                    ) : null}
+                    {onForwardAsAttachment ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        disabled={preparingForward}
+                        onClick={() => {
+                          onForwardAsAttachment();
+                          onCloseMore();
+                        }}
+                      >
+                        <Paperclip aria-hidden="true" />
+                        {preparingForward
+                          ? strings.reader.preparing
+                          : strings.reader.forwardAsAttachment}
+                      </button>
+                    ) : null}
+                    {onEditAsNew ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        disabled={preparingForward}
+                        onClick={() => {
+                          onEditAsNew();
+                          onCloseMore();
+                        }}
+                      >
+                        <FilePen aria-hidden="true" />
+                        {preparingForward
+                          ? strings.reader.preparing
+                          : strings.reader.editAsNew}
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        onPrint();
+                        onCloseMore();
+                      }}
+                    >
+                      <Printer aria-hidden="true" />
+                      {strings.reader.print}
+                    </button>
+                    {onPrintConversation ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onPrintConversation();
+                          onCloseMore();
+                        }}
+                      >
+                        <Printer aria-hidden="true" />
+                        {strings.reader.printConversation}
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        onCopyMessageText();
+                        onCloseMore();
+                      }}
+                    >
+                      <Copy aria-hidden="true" />
+                      {strings.reader.copyMessageText}
+                    </button>
+                    {onCopySubject ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onCopySubject();
+                          onCloseMore();
+                        }}
+                      >
+                        <Copy aria-hidden="true" />
+                        {strings.reader.copySubject}
+                      </button>
+                    ) : null}
+                    {onCopySenderAddress ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onCopySenderAddress();
+                          onCloseMore();
+                        }}
+                      >
+                        <Copy aria-hidden="true" />
+                        {strings.reader.copySenderAddress}
+                      </button>
+                    ) : null}
+                    {onCopyRecipients ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onCopyRecipients();
+                          onCloseMore();
+                        }}
+                      >
+                        <Copy aria-hidden="true" />
+                        {strings.reader.copyRecipients}
+                      </button>
+                    ) : null}
+                    {onCopyConversationText ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onCopyConversationText();
+                          onCloseMore();
+                        }}
+                      >
+                        <Copy aria-hidden="true" />
+                        {strings.reader.copyConversationText}
+                      </button>
+                    ) : null}
+                    {onSaveConversationFiles ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onSaveConversationFiles();
+                          onCloseMore();
+                        }}
+                      >
+                        <Paperclip aria-hidden="true" />
+                        {strings.reader.saveConversationFiles}
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      role="menuitem"
+                      title={withShortcut(
+                        message.isRead
+                          ? strings.reader.markUnread
+                          : strings.reader.markRead,
+                        shortcutChord("U", { shift: true }),
+                      )}
+                      aria-keyshortcuts="Meta+Shift+U Control+Shift+U"
+                      onClick={() => {
+                        onToggleRead();
+                        onCloseMore();
+                      }}
+                    >
+                      {message.isRead ? (
+                        <Mail aria-hidden="true" />
+                      ) : (
+                        <MailOpen aria-hidden="true" />
+                      )}
+                      {message.isRead
+                        ? strings.reader.markUnread
+                        : strings.reader.markRead}
+                      <kbd aria-hidden="true">
+                        {shortcutChord("U", { shift: true })}
+                      </kbd>
+                    </button>
+                    {onMarkConversationRead ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onMarkConversationRead();
+                          onCloseMore();
+                        }}
+                      >
+                        <CheckCheck aria-hidden="true" />
+                        {strings.reader.markConversationRead}
+                      </button>
+                    ) : null}
+                    {onMarkConversationUnread ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onMarkConversationUnread();
+                          onCloseMore();
+                        }}
+                      >
+                        <Mail aria-hidden="true" />
+                        {strings.reader.markConversationUnread}
+                      </button>
+                    ) : null}
+                    {onArchiveConversation ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onArchiveConversation();
+                          onCloseMore();
+                        }}
+                      >
+                        <Archive aria-hidden="true" />
+                        {strings.reader.archiveConversation}
+                      </button>
+                    ) : null}
+                    {onMoveConversationToInbox ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onMoveConversationToInbox();
+                          onCloseMore();
+                        }}
+                      >
+                        <Inbox aria-hidden="true" />
+                        {strings.reader.moveConversationToInbox}
+                      </button>
+                    ) : null}
+                    {onTrashConversation ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onTrashConversation();
+                          onCloseMore();
+                        }}
+                      >
+                        <Trash aria-hidden="true" />
+                        {strings.reader.trashConversation}
+                      </button>
+                    ) : null}
+                    {onDeleteConversation ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onDeleteConversation();
+                          onCloseMore();
+                        }}
+                      >
+                        <Trash aria-hidden="true" />
+                        {strings.reader.deleteConversation}
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        onToggleStar();
+                        onCloseMore();
+                      }}
+                    >
+                      <Star
+                        aria-hidden="true"
+                        fill={message.isStarred ? "currentColor" : "none"}
+                      />
+                      {message.isStarred
+                        ? strings.reader.removeStar
+                        : strings.reader.addStar}
+                    </button>
+                    {onStarConversation ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onStarConversation();
+                          onCloseMore();
+                        }}
+                      >
+                        <Star aria-hidden="true" />
+                        {strings.reader.starConversation}
+                      </button>
+                    ) : null}
+                    {onUnstarConversation ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onUnstarConversation();
+                          onCloseMore();
+                        }}
+                      >
+                        <Star aria-hidden="true" fill="currentColor" />
+                        {strings.reader.unstarConversation}
+                      </button>
+                    ) : null}
+                    {onPin ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onPin();
+                          onCloseMore();
+                        }}
+                      >
+                        {message.pinned ? (
+                          <PinOff aria-hidden="true" />
+                        ) : (
+                          <Pin aria-hidden="true" />
+                        )}
+                        {message.pinned
+                          ? strings.reader.unpin
+                          : strings.reader.pin}
+                      </button>
+                    ) : null}
+                    {onPinConversation ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onPinConversation();
+                          onCloseMore();
+                        }}
+                      >
+                        <Pin aria-hidden="true" />
+                        {strings.reader.pinConversation}
+                      </button>
+                    ) : null}
+                    {onUnpinConversation ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onUnpinConversation();
+                          onCloseMore();
+                        }}
+                      >
+                        <PinOff aria-hidden="true" />
+                        {strings.reader.unpinConversation}
+                      </button>
+                    ) : null}
+                    {onSelectConversation ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onSelectConversation();
+                          onCloseMore();
+                        }}
+                      >
+                        <ListChecks aria-hidden="true" />
+                        {strings.reader.selectConversation}
+                      </button>
+                    ) : null}
+                    {onSelectFromSender ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onSelectFromSender();
+                          onCloseMore();
+                        }}
+                      >
+                        <ListChecks aria-hidden="true" />
+                        {strings.reader.selectFromSender}
+                      </button>
+                    ) : null}
+                    {onOpenEarlier ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onOpenEarlier();
+                          onCloseMore();
+                        }}
+                      >
+                        <Mail aria-hidden="true" />
+                        {strings.reader.openEarlier}
+                      </button>
+                    ) : null}
+                    {onOlderInConversation ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onOlderInConversation();
+                          onCloseMore();
+                        }}
+                      >
+                        <ChevronDown aria-hidden="true" />
+                        {strings.reader.olderInConversation}
+                      </button>
+                    ) : null}
+                    {onNewerInConversation ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onNewerInConversation();
+                          onCloseMore();
+                        }}
+                      >
+                        <ChevronUp aria-hidden="true" />
+                        {strings.reader.newerInConversation}
+                      </button>
+                    ) : null}
+                    {onUnreadInConversation ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onUnreadInConversation();
+                          onCloseMore();
+                        }}
+                      >
+                        <MailOpen aria-hidden="true" />
+                        {strings.reader.unreadInConversation}
+                      </button>
+                    ) : null}
+                    {isJunkMailbox ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onMoveToInbox();
+                          onDismissMore();
+                        }}
+                      >
+                        <ShieldCheck aria-hidden="true" />
+                        {strings.reader.notJunk}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onMoveJunk();
+                          onDismissMore();
+                        }}
+                      >
+                        <ShieldAlert aria-hidden="true" />
+                        {strings.reader.junk}
+                      </button>
+                    )}
+                    {onJunkConversation ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onJunkConversation();
+                          onCloseMore();
+                        }}
+                      >
+                        <ShieldAlert aria-hidden="true" />
+                        {strings.reader.junkConversation}
+                      </button>
+                    ) : null}
+                    {senderBlocked &&
+                    onUnblockSender &&
+                    senderRuleNeedle(message.senderAddress) ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onUnblockSender();
+                          onDismissMore();
+                        }}
+                      >
+                        <ShieldCheck aria-hidden="true" />
+                        {strings.reader.unblockSender}
+                      </button>
+                    ) : onBlockSender &&
+                      senderRuleNeedle(message.senderAddress) ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onBlockSender();
+                          onDismissMore();
+                        }}
+                      >
+                        <ShieldAlert aria-hidden="true" />
+                        {strings.reader.blockSender}
+                      </button>
+                    ) : null}
+                    {domainBlocked &&
+                    onUnblockDomain &&
+                    senderDomain(message.senderAddress) ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onUnblockDomain();
+                          onDismissMore();
+                        }}
+                      >
+                        <ShieldCheck aria-hidden="true" />
+                        {strings.reader.unblockDomain}
+                      </button>
+                    ) : onBlockDomain && senderDomain(message.senderAddress) ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onBlockDomain();
+                          onDismissMore();
+                        }}
+                      >
+                        <ShieldAlert aria-hidden="true" />
+                        {strings.reader.blockDomain}
+                      </button>
+                    ) : null}
+                    {onMuteConversation && canMuteConversation(message) ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onMuteConversation();
+                          onDismissMore();
+                        }}
+                      >
+                        {message.conversationMuted ? (
+                          <Bell aria-hidden="true" />
+                        ) : (
+                          <BellOff aria-hidden="true" />
+                        )}
+                        {message.conversationMuted
+                          ? strings.reader.unmuteConversation
+                          : strings.reader.muteConversation}
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        onOpenSnooze();
+                        onDismissMore();
+                      }}
+                    >
+                      <Clock aria-hidden="true" />
+                      {strings.reader.snooze}
+                    </button>
+                    {onSnoozeConversation ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onSnoozeConversation();
+                          onDismissMore();
+                        }}
+                      >
+                        <Clock aria-hidden="true" />
+                        {strings.reader.snoozeConversation}
+                      </button>
+                    ) : null}
+                    {senderRuleNeedle(message.senderAddress) ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onCreateRule();
+                          onDismissMore();
+                        }}
+                      >
+                        <Funnel aria-hidden="true" />
+                        {strings.reader.createRuleFromSender}
+                      </button>
+                    ) : null}
+                    {onCreateSubjectRule &&
+                    subjectRuleNeedle(message.subject) ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onCreateSubjectRule();
+                          onDismissMore();
+                        }}
+                      >
+                        <Funnel aria-hidden="true" />
+                        {strings.reader.createRuleFromSubject}
+                      </button>
+                    ) : null}
+                    {onComposeToSender &&
+                    addressMailbox(message.senderAddress) ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onComposeToSender();
+                          onDismissMore();
+                        }}
+                      >
+                        <SquarePen aria-hidden="true" />
+                        {strings.reader.newMessageToSender}
+                      </button>
+                    ) : null}
+                    {onMessagesFromSender &&
+                    senderSearchQuery(message.senderAddress) ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onMessagesFromSender();
+                          onDismissMore();
+                        }}
+                      >
+                        <Search aria-hidden="true" />
+                        {strings.reader.messagesFromSender}
+                      </button>
+                    ) : null}
+                    {onMessagesWithSubject &&
+                    subjectSearchQuery(message.subject) ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onMessagesWithSubject();
+                          onDismissMore();
+                        }}
+                      >
+                        <Search aria-hidden="true" />
+                        {strings.reader.messagesWithSubject}
+                      </button>
+                    ) : null}
+                    {message.unsubscribe ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onUnsubscribe();
+                          onDismissMore();
+                        }}
+                      >
+                        <MailMinus aria-hidden="true" />
+                        {strings.reader.unsubscribe}
+                      </button>
+                    ) : null}
+                    {canViewPlain ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onTogglePlain?.();
+                          onDismissMore();
+                        }}
+                      >
+                        <TextAlignStart aria-hidden="true" />
+                        {viewingPlain
+                          ? strings.reader.viewFormatted
+                          : strings.reader.viewPlain}
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        onShowOriginal();
+                        onDismissMore();
+                      }}
+                    >
+                      <FileText aria-hidden="true" />
+                      {strings.reader.showOriginal}
+                    </button>
+                    {onSaveEml ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onSaveEml();
+                          onDismissMore();
+                        }}
+                      >
+                        <Download aria-hidden="true" />
+                        {strings.reader.saveEml}
+                      </button>
+                    ) : null}
+                    {moveDestinations.length > 0 ? (
+                      // Folders as menu items, like the right-click menu. Archive,
+                      // Junk, and Trash already have direct actions above.
+                      <>
+                        <div
+                          className="context-menu-separator"
+                          role="separator"
+                        />
+                        <div role="group" aria-labelledby="reader-move-heading">
+                          <div
+                            id="reader-move-heading"
+                            className="context-menu-heading"
                           >
-                            <Icon aria-hidden="true" />
-                            {name}
-                          </button>
-                        );
-                      })}
-                    </div>
-                    {onMoveConversationToMailbox ? (
-                      <div
-                        role="group"
-                        aria-labelledby="reader-move-conversation-heading"
-                      >
-                        <div
-                          id="reader-move-conversation-heading"
-                          className="context-menu-heading"
-                        >
-                          {strings.contextMenu.moveConversationTo}
+                            {strings.contextMenu.moveTo}
+                          </div>
+                          {moveDestinations.map((mailbox) => {
+                            const Icon =
+                              folderIcons[mailbox.role] ?? FolderInput;
+                            const name = folderPathLabel(mailbox);
+                            return (
+                              <button
+                                key={mailbox.id}
+                                type="button"
+                                role="menuitem"
+                                aria-label={strings.contextMenu.moveToFolder(
+                                  name,
+                                )}
+                                onClick={() => {
+                                  onMoveToMailbox(mailbox.id);
+                                  onDismissMore();
+                                }}
+                              >
+                                <Icon aria-hidden="true" />
+                                {name}
+                              </button>
+                            );
+                          })}
                         </div>
-                        {moveDestinations.map((mailbox) => {
-                          const Icon = folderIcons[mailbox.role] ?? FolderInput;
-                          const name = folderPathLabel(mailbox);
-                          return (
-                            <button
-                              key={`move-conversation-${mailbox.id}`}
-                              type="button"
-                              role="menuitem"
-                              aria-label={strings.contextMenu.moveConversationToFolder(
-                                name,
-                              )}
-                              onClick={() => {
-                                onMoveConversationToMailbox(mailbox.id);
-                                onDismissMore();
-                              }}
+                        {onMoveConversationToMailbox ? (
+                          <div
+                            role="group"
+                            aria-labelledby="reader-move-conversation-heading"
+                          >
+                            <div
+                              id="reader-move-conversation-heading"
+                              className="context-menu-heading"
                             >
-                              <Icon aria-hidden="true" />
-                              {name}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    ) : null}
-                    {onCopyToMailbox ? (
-                      <div role="group" aria-labelledby="reader-copy-heading">
-                        <div
-                          id="reader-copy-heading"
-                          className="context-menu-heading"
-                        >
-                          {strings.contextMenu.copyTo}
-                        </div>
-                        {moveDestinations.map((mailbox) => {
-                          const Icon = folderIcons[mailbox.role] ?? FolderInput;
-                          const name = folderPathLabel(mailbox);
-                          return (
-                            <button
-                              key={`copy-${mailbox.id}`}
-                              type="button"
-                              role="menuitem"
-                              aria-label={strings.contextMenu.copyToFolder(
-                                name,
-                              )}
-                              onClick={() => {
-                                onCopyToMailbox(mailbox.id);
-                                onDismissMore();
-                              }}
+                              {strings.contextMenu.moveConversationTo}
+                            </div>
+                            {moveDestinations.map((mailbox) => {
+                              const Icon =
+                                folderIcons[mailbox.role] ?? FolderInput;
+                              const name = folderPathLabel(mailbox);
+                              return (
+                                <button
+                                  key={`move-conversation-${mailbox.id}`}
+                                  type="button"
+                                  role="menuitem"
+                                  aria-label={strings.contextMenu.moveConversationToFolder(
+                                    name,
+                                  )}
+                                  onClick={() => {
+                                    onMoveConversationToMailbox(mailbox.id);
+                                    onDismissMore();
+                                  }}
+                                >
+                                  <Icon aria-hidden="true" />
+                                  {name}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : null}
+                        {onCopyToMailbox ? (
+                          <div
+                            role="group"
+                            aria-labelledby="reader-copy-heading"
+                          >
+                            <div
+                              id="reader-copy-heading"
+                              className="context-menu-heading"
                             >
-                              <Icon aria-hidden="true" />
-                              {name}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    ) : null}
-                    {onCopyConversationToMailbox ? (
-                      <div
-                        role="group"
-                        aria-labelledby="reader-copy-conversation-heading"
-                      >
-                        <div
-                          id="reader-copy-conversation-heading"
-                          className="context-menu-heading"
-                        >
-                          {strings.contextMenu.copyConversationTo}
-                        </div>
-                        {moveDestinations.map((mailbox) => {
-                          const Icon = folderIcons[mailbox.role] ?? FolderInput;
-                          const name = folderPathLabel(mailbox);
-                          return (
-                            <button
-                              key={`copy-conversation-${mailbox.id}`}
-                              type="button"
-                              role="menuitem"
-                              aria-label={strings.contextMenu.copyConversationToFolder(
-                                name,
-                              )}
-                              onClick={() => {
-                                onCopyConversationToMailbox(mailbox.id);
-                                onDismissMore();
-                              }}
+                              {strings.contextMenu.copyTo}
+                            </div>
+                            {moveDestinations.map((mailbox) => {
+                              const Icon =
+                                folderIcons[mailbox.role] ?? FolderInput;
+                              const name = folderPathLabel(mailbox);
+                              return (
+                                <button
+                                  key={`copy-${mailbox.id}`}
+                                  type="button"
+                                  role="menuitem"
+                                  aria-label={strings.contextMenu.copyToFolder(
+                                    name,
+                                  )}
+                                  onClick={() => {
+                                    onCopyToMailbox(mailbox.id);
+                                    onDismissMore();
+                                  }}
+                                >
+                                  <Icon aria-hidden="true" />
+                                  {name}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : null}
+                        {onCopyConversationToMailbox ? (
+                          <div
+                            role="group"
+                            aria-labelledby="reader-copy-conversation-heading"
+                          >
+                            <div
+                              id="reader-copy-conversation-heading"
+                              className="context-menu-heading"
                             >
-                              <Icon aria-hidden="true" />
-                              {name}
-                            </button>
-                          );
-                        })}
-                      </div>
+                              {strings.contextMenu.copyConversationTo}
+                            </div>
+                            {moveDestinations.map((mailbox) => {
+                              const Icon =
+                                folderIcons[mailbox.role] ?? FolderInput;
+                              const name = folderPathLabel(mailbox);
+                              return (
+                                <button
+                                  key={`copy-conversation-${mailbox.id}`}
+                                  type="button"
+                                  role="menuitem"
+                                  aria-label={strings.contextMenu.copyConversationToFolder(
+                                    name,
+                                  )}
+                                  onClick={() => {
+                                    onCopyConversationToMailbox(mailbox.id);
+                                    onDismissMore();
+                                  }}
+                                >
+                                  <Icon aria-hidden="true" />
+                                  {name}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : null}
+                      </>
                     ) : null}
-                  </>
-                ) : null}
-              </div>
-            ) : null}
+                  </div>,
+                  document.body,
+                )
+              : null}
           </div>
         </div>
         {showNav ? (
           <div className="reader-action-group reader-nav">
             <button
               type="button"
+              className="reader-icon-action"
               onClick={onPrevious}
               disabled={!onPrevious}
               aria-label={strings.reader.previousMessage}
@@ -1299,6 +1401,7 @@ export function ReaderToolbar({
             ) : null}
             <button
               type="button"
+              className="reader-icon-action"
               onClick={onNext}
               disabled={!onNext}
               aria-label={strings.reader.nextMessage}

@@ -89,10 +89,7 @@ export function StorageTab({
           </select>
         </SettingRow>
         {settings.cachePolicy.mode === "recent" ? (
-          <SettingRow
-            title={strings.settings.cacheDays}
-            help={strings.settings.cachePolicyHelp}
-          >
+          <SettingRow title={strings.settings.cacheDays}>
             <select
               aria-label={strings.settings.cacheDays}
               value={settings.cachePolicy.days}
@@ -113,10 +110,7 @@ export function StorageTab({
             </select>
           </SettingRow>
         ) : null}
-        <SettingRow
-          title={strings.settings.cacheLimit}
-          help={strings.settings.cachePolicyHelp}
-        >
+        <SettingRow title={strings.settings.cacheLimit}>
           <select
             aria-label={strings.settings.cacheLimit}
             value={settings.cachePolicy.maxBytes}

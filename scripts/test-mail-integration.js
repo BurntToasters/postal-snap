@@ -45,6 +45,7 @@ let environment;
 let stage = "openssl-prerequisite";
 let greenmailStarted = false;
 const fixtures = [];
+const protocolFixtures = [];
 const compose = join(root, "tests/mail/docker-compose.yml");
 const project = "postal-snap-mail-test";
 async function recordedRun(command, args, options) {
@@ -398,6 +399,33 @@ try {
   const recoveryPorts = await recoveryFixture.start();
   environment.POSTAL_SNAP_BRIDGE_IMAP_RECOVERY = String(recoveryPorts.imap);
   environment.POSTAL_SNAP_BRIDGE_SMTP_RECOVERY = String(recoveryPorts.smtp);
+  stage = "bridge-keyword-reject-fixture-start";
+  const keywordRejectFixture = await createCompatibilityFixture({
+    certificatePath: certificate,
+    keyPath: key,
+    tlsMode: "tls",
+    capabilities: ["IMAP4rev1"],
+    folderNames: ["INBOX", "KeywordReject"],
+    messages: {
+      KeywordReject: [
+        {
+          uid: 1,
+          messageId: "<keyword-reject@example.test>",
+          subject: "Keyword reject",
+          body: "KEYWORD-REJECT-CONTENT",
+        },
+      ],
+    },
+    rejectKeywordStoreMailboxes: ["KeywordReject"],
+  });
+  fixtures.push({ name: "KEYWORD-REJECT", fixture: keywordRejectFixture });
+  const keywordRejectPorts = await keywordRejectFixture.start();
+  environment.POSTAL_SNAP_BRIDGE_IMAP_KEYWORD_REJECT = String(
+    keywordRejectPorts.imap,
+  );
+  environment.POSTAL_SNAP_BRIDGE_SMTP_KEYWORD_REJECT = String(
+    keywordRejectPorts.smtp,
+  );
   stage = "bridge-utf8-fixture-start";
   const utf8Fixture = await createCompatibilityFixture({
     certificatePath: certificate,
@@ -443,12 +471,195 @@ try {
   const watcherPorts = await watcherFixture.start();
   environment.POSTAL_SNAP_WATCH_NO_IDLE_PORT = String(watcherPorts.imap);
   environment.POSTAL_SNAP_WATCH_EVENTS = watcherEvents;
+  stage = "protocol-cache-fixtures-start";
+  const cachedMessages = {
+    INBOX: [
+      {
+        uid: 1,
+        messageId: "<cached-inbox@example.test>",
+        subject: "Cached inbox fixture",
+        body: "Synthetic inbox cache control",
+      },
+    ],
+    Archive: [
+      {
+        uid: 1,
+        messageId: "<cached-archive@example.test>",
+        subject: "Cached archive fixture",
+        body: "Synthetic archive cache control",
+      },
+    ],
+  };
+  const startProtocolFixture = async (name, options) => {
+    const fixture = await createCompatibilityFixture({
+      certificatePath: certificate,
+      keyPath: key,
+      tlsMode: "tls",
+      folderNames: ["INBOX", "Archive"],
+      messages: cachedMessages,
+      ...options,
+    });
+    protocolFixtures.push({ name, fixture });
+    const ports = await fixture.start();
+    environment[`POSTAL_SNAP_PROTOCOL_${name}_IMAP`] = String(ports.imap);
+    environment[`POSTAL_SNAP_PROTOCOL_${name}_SMTP`] = String(ports.smtp);
+    return fixture;
+  };
+  const protocolListFixture = await startProtocolFixture("LIST", {
+    capabilities: ["IMAP4rev1"],
+    listResponses: ["NO", "BAD", "EOF_PARTIAL", "MISMATCHED_TAG"],
+  });
+  const protocolFallbackFixture = await startProtocolFixture("FALLBACK", {
+    capabilities: ["IMAP4rev1", "LIST-STATUS"],
+    listStatusResponses: ["NO"],
+    listResponses: ["BAD"],
+  });
+  const protocolStatusModes = [
+    "NO_DATA",
+    "WRONG_MAILBOX",
+    "MISSING_MESSAGES",
+    "MISSING_UNSEEN",
+    "MISSING_UIDNEXT",
+    "MISSING_UIDVALIDITY",
+    "EOF_BEFORE_DATA",
+    "EOF_AFTER_DATA",
+    "MISMATCHED_TAG",
+    "NO",
+    "BAD",
+    "INVALID_UNSEEN",
+    "UIDNEXT_ZERO",
+    "UIDVALIDITY_ZERO",
+    "UIDVALIDITY_MISMATCH",
+    "NO_DATA",
+    "PARTIAL_MESSAGES",
+  ];
+  const protocolStatusFixture = await startProtocolFixture("STATUS", {
+    capabilities: ["IMAP4rev1"],
+    statusResponses: { INBOX: protocolStatusModes },
+  });
+  const protocolEmptyFixture = await startProtocolFixture("EMPTY", {
+    capabilities: ["IMAP4rev1"],
+    messages: {
+      Archive: cachedMessages.Archive,
+    },
+  });
+  const protocolSearchFixture = await startProtocolFixture("SEARCH", {
+    capabilities: ["IMAP4rev1"],
+    omitExamineUidValidity: true,
+  });
+  const emptyFolderSearchModes = [
+    "NO",
+    "BAD",
+    "EOF",
+    "EOF_AFTER_DATA",
+    "MISMATCHED_TAG",
+    "OK",
+  ];
+  const protocolEmptyFolderSearchFixture = await startProtocolFixture(
+    "EMPTYFOLDER",
+    {
+      capabilities: ["IMAP4rev1"],
+      messages: {
+        Archive: cachedMessages.Archive,
+      },
+      uidSearchResponses: emptyFolderSearchModes,
+    },
+  );
+  stage = "bridge-sync-refusals-protocol-integration";
+  await protocolTest(
+    "bridge_sync_refusals_preserve_cached_mail_integration",
+    environment,
+  );
+  stage = "bridge-search-examine-protocol-integration";
+  await protocolTest(
+    "bridge_server_search_refuses_missing_examine_uid_validity_integration",
+    environment,
+  );
+  stage = "bridge-empty-folder-search-protocol-integration";
+  await protocolTest(
+    "bridge_empty_folder_search_refusals_integration",
+    environment,
+  );
+  assert.deepEqual(
+    protocolListFixture.results().listResponseModes,
+    ["NO", "BAD", "EOF_PARTIAL", "MISMATCHED_TAG"],
+    "the plain LIST refusal and interrupted discovery cases were not exercised.",
+  );
+  assert.deepEqual(
+    protocolFallbackFixture.results().listStatusResponseModes,
+    ["NO"],
+    "the LIST-STATUS refusal fallback was not exercised.",
+  );
+  assert.deepEqual(
+    protocolFallbackFixture.results().listResponseModes,
+    ["BAD"],
+    "ordinary LIST after LIST-STATUS refusal was not exercised.",
+  );
+  assert.deepEqual(
+    protocolStatusFixture
+      .results()
+      .statusResponseModes.filter((mode) => mode.startsWith("INBOX:"))
+      .map((mode) => mode.slice("INBOX:".length)),
+    protocolStatusModes,
+    "the matching and partial STATUS cases were not exercised.",
+  );
+  assert.deepEqual(
+    protocolEmptyFolderSearchFixture.results().uidSearchResponseModes,
+    emptyFolderSearchModes,
+    "the UID SEARCH refusal and OK empty-folder cases were not exercised.",
+  );
+  assert.equal(
+    protocolEmptyFolderSearchFixture.results().deletedFlagStores,
+    1,
+    "only the OK empty-folder case should mark messages deleted.",
+  );
+  assert.equal(
+    protocolEmptyFolderSearchFixture.results().expungeCommands,
+    1,
+    "only the OK empty-folder case should expunge messages.",
+  );
+  for (const { name } of protocolFixtures) {
+    report.results.push({
+      name: `bridge-${name.toLowerCase()}`,
+      status: "passed",
+    });
+  }
+  report.results.push({
+    name: "bridge-sync-refusals-cache-preserved",
+    status: "passed",
+    counters: {
+      list: protocolListFixture.results(),
+      fallback: protocolFallbackFixture.results(),
+      status: protocolStatusFixture.results(),
+      empty: protocolEmptyFixture.results(),
+      search: protocolSearchFixture.results(),
+      emptyFolderSearch: protocolEmptyFolderSearchFixture.results(),
+    },
+  });
   stage = "bridge-protocol-integration";
   await protocolTest("bridge_tls_protocol_integration", environment);
   stage = "bridge-list-status-protocol-integration";
   await protocolTest("bridge_list_status_protocol_integration", environment);
   stage = "bridge-recovery-protocol-integration";
   await protocolTest("bridge_recovery_protocol_integration", environment);
+  stage = "bridge-keyword-reject-protocol-integration";
+  await protocolTest(
+    "bridge_rejected_keyword_store_is_not_silent_success",
+    environment,
+  );
+  assert.ok(
+    keywordRejectFixture.results().rejectedKeywordStores > 0,
+    "The keyword rejection scenario was not exercised.",
+  );
+  report.results.push({
+    name: "bridge-rejected-keyword-store",
+    status: "passed",
+  });
+  report.results.push({
+    name: "bridge-keyword-reject",
+    status: "passed",
+    counters: keywordRejectFixture.results(),
+  });
   for (const { name, fixture } of fixtures) {
     const counters = fixture.results();
     if (name === "UTF8") {
@@ -510,7 +721,7 @@ try {
       );
       assert.equal(
         counters.rejectedFlagStores,
-        2,
+        1,
         "destination flag failure scenario was not exercised.",
       );
       assert.equal(
@@ -526,6 +737,7 @@ try {
       continue;
     }
     if (name === "NO-IDLE-WATCHER-CAP") continue;
+    if (name === "KEYWORD-REJECT") continue;
     const positive = ["TLS", "STARTTLS"].includes(name);
     if (name === "TLS") {
       assert.ok(
@@ -815,7 +1027,7 @@ try {
   throw error;
 } finally {
   // Preserve counters even when the native process fails midway.
-  for (const { name, fixture } of fixtures) {
+  for (const { name, fixture } of [...fixtures, ...protocolFixtures]) {
     if (
       !report.results.some(
         (result) => result.name === `bridge-${name.toLowerCase()}`,

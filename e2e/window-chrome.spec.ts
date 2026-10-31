@@ -519,11 +519,67 @@ for (const [platform, userAgent] of Object.entries(platforms)) {
           .click();
         const content = page.locator(".settings-content");
         await expect(content).toBeVisible();
-        const bounds = (await content.boundingBox())!;
-        expect(bounds.y + bounds.height).toBeLessThanOrEqual(541);
-        await content.evaluate((element) => {
-          element.scrollTop = element.scrollHeight;
+        const lastControl = content.getByRole("button", {
+          name: "Import settings",
+          exact: true,
         });
+        await expect(lastControl).toBeVisible();
+        const reachability = await lastControl.evaluate((control) => {
+          let ancestor = control.parentElement as HTMLElement | null;
+          let scroller: HTMLElement | null = null;
+          while (ancestor) {
+            const overflowY = getComputedStyle(ancestor).overflowY;
+            if (
+              (overflowY === "auto" || overflowY === "scroll") &&
+              ancestor.scrollHeight > ancestor.clientHeight
+            ) {
+              scroller = ancestor;
+              break;
+            }
+            ancestor = ancestor.parentElement;
+          }
+          if (!scroller) return null;
+
+          const viewport = scroller.getBoundingClientRect();
+          const before = scroller.scrollTop;
+          scroller.scrollTop = scroller.scrollHeight;
+          const after = scroller.scrollTop;
+          const visibleTop = viewport.top + scroller.clientTop;
+          const visibleBottom = visibleTop + scroller.clientHeight;
+          const controlBounds = control.getBoundingClientRect();
+          return {
+            scroller: scroller.className,
+            viewport: {
+              top: visibleTop,
+              bottom: visibleBottom,
+              height: scroller.clientHeight,
+            },
+            scrollHeight: scroller.scrollHeight,
+            scrollTopBefore: before,
+            scrollTopAfter: after,
+            control: {
+              top: controlBounds.top,
+              bottom: controlBounds.bottom,
+              height: controlBounds.height,
+            },
+            controlFullyVisible:
+              controlBounds.top >= visibleTop - 1 &&
+              controlBounds.bottom <= visibleBottom + 1,
+          };
+        });
+        expect(reachability).not.toBeNull();
+        if (!reachability)
+          throw new Error("No active Settings scroller found.");
+        expect(reachability.scroller.split(/\s+/)).toContain("settings-layout");
+        expect(reachability.viewport.bottom).toBeLessThanOrEqual(541);
+        expect(reachability.scrollHeight).toBeGreaterThan(
+          reachability.viewport.height,
+        );
+        expect(reachability.scrollTopAfter).toBeGreaterThan(
+          reachability.scrollTopBefore,
+        );
+        expect(reachability.control.height).toBeGreaterThan(0);
+        expect(reachability.controlFullyVisible).toBe(true);
         await page.screenshot({
           animations: "disabled",
           path: testInfo.outputPath(`${platform}-${theme}-settings-200.png`),

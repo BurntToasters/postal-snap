@@ -415,7 +415,7 @@ impl Database {
         new_name: &str,
     ) -> Result<(), String> {
         let mut statement = transaction
-            .prepare("SELECT id,kind,payload FROM offline_ops WHERE account_id=?1")
+            .prepare("SELECT id,kind,payload,created_at FROM offline_ops WHERE account_id=?1 ORDER BY id")
             .map_err(db_error)?;
         let rows = statement
             .query_map([account_id], |row| {
@@ -423,22 +423,24 @@ impl Database {
                     row.get::<_, i64>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
                 ))
             })
             .map_err(db_error)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(db_error)?;
         drop(statement);
-        for (id, kind, payload) in rows {
+        for (id, kind, payload, created_at) in rows {
             let mut value: serde_json::Value = serde_json::from_str(&payload)
                 .map_err(|_| "Queued changes are damaged.".to_string())?;
             let mut dirty = false;
-            if kind == "flags" {
+            let mut copy_destination_changed = false;
+            if kind == "flags" || kind == "keyword" {
                 if value.get("mailbox").and_then(|name| name.as_str()) == Some(old_name) {
                     value["mailbox"] = serde_json::Value::String(new_name.to_string());
                     dirty = true;
                 }
-            } else if kind == "move" {
+            } else if kind == "move" || kind == "copy" {
                 if value.get("source").and_then(|name| name.as_str()) == Some(old_name) {
                     value["source"] = serde_json::Value::String(new_name.to_string());
                     dirty = true;
@@ -446,17 +448,63 @@ impl Database {
                 if value.get("destination").and_then(|name| name.as_str()) == Some(old_name) {
                     value["destination"] = serde_json::Value::String(new_name.to_string());
                     dirty = true;
+                    copy_destination_changed = kind == "copy";
                 }
             }
             if dirty {
                 let rewritten = serde_json::to_string(&value)
                     .map_err(|_| "Queued changes are damaged.".to_string())?;
-                transaction
-                    .execute(
-                        "UPDATE offline_ops SET payload=?2 WHERE id=?1 AND account_id=?3",
-                        params![id, rewritten, account_id],
-                    )
-                    .map_err(db_error)?;
+                if copy_destination_changed {
+                    let message_id = value
+                        .get("messageId")
+                        .and_then(serde_json::Value::as_i64)
+                        .ok_or_else(|| "Queued changes are damaged.".to_string())?;
+                    let dedupe_key = format!("copy:{message_id}:{new_name}");
+                    let collision: Option<(i64, String, String)> = transaction
+                        .query_row(
+                            "SELECT id,kind,created_at FROM offline_ops WHERE account_id=?1 AND dedupe_key=?2 AND id<>?3",
+                            params![account_id, dedupe_key, id],
+                            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                        )
+                        .optional()
+                        .map_err(db_error)?;
+                    if let Some((collision_id, collision_kind, collision_created_at)) = collision {
+                        if collision_kind != "copy" {
+                            return Err("Queued changes are damaged.".into());
+                        }
+                        // Same-second queue timestamps use ID as a stable tie breaker.
+                        let current_is_newer = created_at.as_str() > collision_created_at.as_str()
+                            || (created_at == collision_created_at && id > collision_id);
+                        if current_is_newer {
+                            transaction
+                                .execute(
+                                    "UPDATE offline_ops SET payload=?2,created_at=?3,not_before=NULL,undo_token=NULL WHERE id=?1 AND account_id=?4",
+                                    params![collision_id, rewritten, created_at, account_id],
+                                )
+                                .map_err(db_error)?;
+                        }
+                        transaction
+                            .execute(
+                                "DELETE FROM offline_ops WHERE id=?1 AND account_id=?2",
+                                params![id, account_id],
+                            )
+                            .map_err(db_error)?;
+                    } else {
+                        transaction
+                            .execute(
+                                "UPDATE offline_ops SET payload=?2,dedupe_key=?3 WHERE id=?1 AND account_id=?4",
+                                params![id, rewritten, dedupe_key, account_id],
+                            )
+                            .map_err(db_error)?;
+                    }
+                } else {
+                    transaction
+                        .execute(
+                            "UPDATE offline_ops SET payload=?2 WHERE id=?1 AND account_id=?3",
+                            params![id, rewritten, account_id],
+                        )
+                        .map_err(db_error)?;
+                }
             }
         }
         Ok(())

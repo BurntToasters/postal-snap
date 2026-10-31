@@ -1104,6 +1104,92 @@ mod tests {
         );
     }
 
+    // A rejected STORE must surface as an error. Otherwise replay discards the
+    // keyword and the server never records the reply mark.
+    #[tokio::test]
+    #[ignore = "requires npm run test:mail-integration"]
+    async fn bridge_rejected_keyword_store_is_not_silent_success() {
+        let certificate = std::fs::read_to_string(
+            std::env::var("POSTAL_SNAP_MAIL_TEST_CA_CERT").expect("fixture certificate required"),
+        )
+        .unwrap();
+        let server = |name: &str| ServerConfig {
+            host: "127.0.0.1".into(),
+            port: std::env::var(name)
+                .unwrap_or_else(|_| panic!("missing fixture port {name}"))
+                .parse()
+                .unwrap(),
+            tls_mode: TlsMode::Tls,
+            username: "fixture@example.test".into(),
+            trusted_certificate: Some(certificate.clone()),
+        };
+        let account = AccountRecord {
+            summary: AccountSummary {
+                id: "bridge-keyword-reject-fixture".into(),
+                provider: ProviderKind::ProtonBridge,
+                email: "fixture@example.test".into(),
+                display_name: "Fixture".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+                signature_html: String::new(),
+                reply_to: String::new(),
+                color: None,
+                default_body_format: crate::models::BodyFormat::Plain,
+            },
+            imap: server("POSTAL_SNAP_BRIDGE_IMAP_KEYWORD_REJECT"),
+            smtp: server("POSTAL_SNAP_BRIDGE_SMTP_KEYWORD_REJECT"),
+        };
+        let password = "fixture-password";
+        let mut session = connect_imap(&account.imap, password).await.unwrap();
+        let selected = session.select("KeywordReject").await.unwrap();
+        let uid = *session
+            .uid_search("ALL")
+            .await
+            .unwrap()
+            .iter()
+            .next()
+            .unwrap();
+        let validity = selected.uid_validity;
+        session.logout().await.unwrap();
+
+        let error = super::set_remote_keyword(
+            &account,
+            password,
+            "KeywordReject",
+            uid,
+            validity,
+            super::SourceKeyword::Answered,
+        )
+        .await
+        .expect_err("a rejected STORE must not be reported as success");
+        assert!(
+            !error.terminal,
+            "a tagged NO must remain retryable: {error}"
+        );
+
+        let mut verify = connect_imap(&account.imap, password).await.unwrap();
+        let selected = verify.select("KeywordReject").await.unwrap();
+        assert_eq!(selected.uid_validity, validity);
+        let rows = verify
+            .uid_fetch(uid.to_string(), "(UID FLAGS)")
+            .await
+            .unwrap()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        verify.logout().await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(
+            !rows[0]
+                .flags()
+                .any(|flag| matches!(flag, async_imap::types::Flag::Answered)),
+            "the fixture must not store the rejected keyword"
+        );
+    }
+
     #[test]
     fn parses_and_decodes_mime_message() {
         let raw = b"From: Jane <jane@example.com>\r\nTo: Sam <sam@example.com>\r\nSubject: Hello\r\nMessage-ID: <one@example.com>\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello from Postal Snap";
@@ -1727,6 +1813,653 @@ mod tests {
         assert!(inbox.uid_validity.is_some() && inbox.uid_next.is_some());
         assert!(inbox.unseen.is_some());
         lease.release();
+    }
+
+    // LIST and STATUS are authoritative only after a matching successful tag
+    // and complete mailbox data. The fixtures are synthetic and TLS-pinned.
+    #[tokio::test]
+    #[ignore = "requires npm run test:mail-integration"]
+    async fn bridge_sync_refusals_preserve_cached_mail_integration() {
+        let certificate = std::fs::read_to_string(
+            std::env::var("POSTAL_SNAP_MAIL_TEST_CA_CERT").expect("fixture certificate required"),
+        )
+        .unwrap();
+        let server = |port_name: &str| ServerConfig {
+            host: "127.0.0.1".into(),
+            port: std::env::var(port_name)
+                .unwrap_or_else(|_| panic!("missing fixture port {port_name}"))
+                .parse()
+                .unwrap(),
+            tls_mode: TlsMode::Tls,
+            username: "fixture@example.test".into(),
+            trusted_certificate: Some(certificate.clone()),
+        };
+        let make_account = |id: &str, imap: &str, smtp: &str| AccountRecord {
+            summary: AccountSummary {
+                id: id.into(),
+                provider: ProviderKind::Manual,
+                email: "fixture@example.test".into(),
+                display_name: "Fixture".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+                signature_html: String::new(),
+                reply_to: String::new(),
+                color: None,
+                default_body_format: crate::models::BodyFormat::Plain,
+            },
+            imap: server(imap),
+            smtp: server(smtp),
+        };
+        let seed_cache = |db: &Database, account: &AccountRecord| {
+            db.insert_account(account).unwrap();
+            let received_at = (chrono::Utc::now() - chrono::Duration::days(1)).to_rfc3339();
+            let mut message_ids = std::collections::HashMap::new();
+            for (name, role) in [
+                ("INBOX", MailboxRole::Inbox),
+                ("Archive", MailboxRole::Archive),
+            ] {
+                let mailbox_id = db
+                    .upsert_mailbox_with_source(
+                        &account.summary.id,
+                        name,
+                        &role,
+                        "name",
+                        Some(1),
+                        Some(2),
+                        Some(0),
+                        1,
+                    )
+                    .unwrap();
+                db.set_mailbox_listing(mailbox_id, Some("/")).unwrap();
+                let message = CachedMessage {
+                    uid: 1,
+                    internal_at: None,
+                    message_id: Some(format!("<{name}@example.test>")),
+                    subject: format!("Cached {name}"),
+                    sender_name: "Fixture".into(),
+                    sender_address: "sender@example.test".into(),
+                    recipients: "fixture@example.test".into(),
+                    received_at: received_at.clone(),
+                    preview: "Synthetic cached message".into(),
+                    is_read: false,
+                    is_starred: false,
+                    size: 38,
+                    to: vec!["fixture@example.test".into()],
+                    cc: vec![],
+                    bcc: vec![],
+                    reply_to: None,
+                    thread_parent: None,
+                    text_body: "Synthetic cached message".into(),
+                    html_body: None,
+                    attachments: vec![],
+                    raw_message: b"Subject: Cached fixture\r\n\r\nSynthetic cached message"
+                        .to_vec(),
+                    has_attachments: false,
+                    is_answered: false,
+                    is_forwarded: false,
+                    has_calendar: false,
+                    calendar_json: None,
+                    list_unsubscribe: None,
+                    list_unsubscribe_post: None,
+                    importance: String::new(),
+                    disposition_to: String::new(),
+                };
+                db.upsert_message(&account.summary.id, mailbox_id, &message)
+                    .unwrap();
+                let row = db
+                    .list_messages(mailbox_id, None, 10)
+                    .unwrap()
+                    .items
+                    .pop()
+                    .expect("seeded cache message");
+                message_ids.insert(name.to_string(), row.id);
+            }
+            let flag_payload = serde_json::json!({
+                "messageId": message_ids["INBOX"],
+                "uid": 1,
+                "mailbox": "INBOX",
+                "uidValidity": 1,
+                "isRead": true,
+                "isStarred": null
+            });
+            db.queue_operation(
+                &account.summary.id,
+                "flags",
+                &flag_payload,
+                Some(&format!("flags:{}:true:false", message_ids["INBOX"])),
+            )
+            .unwrap();
+            (message_ids, flag_payload)
+        };
+        let cache_failures =
+            |db: &Database,
+             account_id: &str,
+             seeded: &(std::collections::HashMap<String, i64>, serde_json::Value)| {
+                let mut failures = Vec::new();
+                let folders = db.list_mailboxes(account_id).unwrap();
+                let names: std::collections::HashSet<_> =
+                    folders.iter().map(|folder| folder.name.as_str()).collect();
+                if names != ["INBOX", "Archive"].into_iter().collect() {
+                    failures.push("cached folder set changed".to_string());
+                }
+                for name in ["INBOX", "Archive"] {
+                    match folders.iter().find(|folder| folder.name == name) {
+                        Some(folder) => {
+                            let rows = db.list_messages(folder.id, None, 10).unwrap().items;
+                            let expected_id = seeded.0[name];
+                            if rows.len() != 1
+                                || rows[0].id != expected_id
+                                || rows[0].uid != 1
+                                || rows[0].message_id.as_deref()
+                                    != Some(format!("<{name}@example.test>").as_str())
+                                || rows[0].subject != format!("Cached {name}")
+                            {
+                                failures.push(format!("cached message identity in {name} changed"));
+                            }
+                            match db.message_detail(expected_id, account_id) {
+                                Ok(detail)
+                                    if detail.summary.id == expected_id
+                                        && detail.summary.uid == 1
+                                        && detail.summary.message_id.as_deref()
+                                            == Some(format!("<{name}@example.test>").as_str())
+                                        && detail.text_body == "Synthetic cached message" => {}
+                                Ok(_) => {
+                                    failures.push(format!("cached message body in {name} changed"))
+                                }
+                                Err(_) => {
+                                    failures.push(format!("cached message in {name} disappeared"))
+                                }
+                            }
+                        }
+                        None => failures.push(format!("cached folder {name} disappeared")),
+                    }
+                }
+                let queued = db.queued_operations(account_id).unwrap();
+                if queued.len() != 1 {
+                    failures.push("queued flag intent count changed".to_string());
+                } else if let Some((_, kind, payload)) = queued.first() {
+                    let actual_payload = serde_json::from_str::<serde_json::Value>(payload).ok();
+                    if kind != "flags" || actual_payload.as_ref() != Some(&seeded.1) {
+                        failures.push("queued flag intent payload changed".to_string());
+                    }
+                }
+                failures
+            };
+
+        let mut failures = Vec::new();
+        let list_account = make_account(
+            "bridge-list-refusal-fixture",
+            "POSTAL_SNAP_PROTOCOL_LIST_IMAP",
+            "POSTAL_SNAP_PROTOCOL_LIST_SMTP",
+        );
+        for (index, scenario) in ["NO", "BAD", "EOF_PARTIAL", "MISMATCHED_TAG"]
+            .into_iter()
+            .enumerate()
+        {
+            let account = AccountRecord {
+                summary: AccountSummary {
+                    id: format!("bridge-list-refusal-{index}"),
+                    ..list_account.summary.clone()
+                },
+                ..list_account.clone()
+            };
+            let db = Database::memory();
+            let seeded = seed_cache(&db, &account);
+            let result = sync_account(
+                &db,
+                &account,
+                "fixture-password",
+                &CachePolicy::default(),
+                &mut Uncontended,
+            )
+            .await;
+            if result.is_ok() {
+                failures.push(format!("LIST {scenario} was accepted"));
+            }
+            failures.extend(
+                cache_failures(&db, &account.summary.id, &seeded)
+                    .into_iter()
+                    .map(|failure| format!("LIST {scenario}: {failure}")),
+            );
+        }
+
+        let fallback_account = make_account(
+            "bridge-list-status-fallback-fixture",
+            "POSTAL_SNAP_PROTOCOL_FALLBACK_IMAP",
+            "POSTAL_SNAP_PROTOCOL_FALLBACK_SMTP",
+        );
+        let db = Database::memory();
+        let seeded = seed_cache(&db, &fallback_account);
+        let fallback_result = sync_account(
+            &db,
+            &fallback_account,
+            "fixture-password",
+            &CachePolicy::default(),
+            &mut Uncontended,
+        )
+        .await;
+        if fallback_result.is_ok() {
+            failures.push("refused LIST-STATUS and ordinary LIST were accepted".into());
+        }
+        failures.extend(
+            cache_failures(&db, &fallback_account.summary.id, &seeded)
+                .into_iter()
+                .map(|failure| format!("LIST-STATUS fallback: {failure}")),
+        );
+
+        let status_account = make_account(
+            "bridge-status-refusal-fixture",
+            "POSTAL_SNAP_PROTOCOL_STATUS_IMAP",
+            "POSTAL_SNAP_PROTOCOL_STATUS_SMTP",
+        );
+        for scenario in [
+            "NO_DATA",
+            "WRONG_MAILBOX",
+            "MISSING_MESSAGES",
+            "MISSING_UNSEEN",
+            "MISSING_UIDNEXT",
+            "MISSING_UIDVALIDITY",
+            "EOF_BEFORE_DATA",
+            "EOF_AFTER_DATA",
+            "MISMATCHED_TAG",
+            "NO",
+            "BAD",
+            "INVALID_UNSEEN",
+            "UIDNEXT_ZERO",
+            "UIDVALIDITY_ZERO",
+            "UIDVALIDITY_MISMATCH",
+        ] {
+            let account = AccountRecord {
+                summary: AccountSummary {
+                    id: format!("bridge-status-{}", scenario.to_ascii_lowercase()),
+                    ..status_account.summary.clone()
+                },
+                ..status_account.clone()
+            };
+            let db = Database::memory();
+            let seeded = seed_cache(&db, &account);
+            let result = sync_account(
+                &db,
+                &account,
+                "fixture-password",
+                &CachePolicy::default(),
+                &mut Uncontended,
+            )
+            .await;
+            match (scenario, result) {
+                ("INVALID_UNSEEN", Ok(outcome)) if outcome.folder_errors == 0 => {
+                    let folders = db.list_mailboxes(&account.summary.id).unwrap();
+                    let inbox = folders
+                        .iter()
+                        .find(|folder| folder.name == "INBOX")
+                        .expect("INBOX after INVALID_UNSEEN sync");
+                    if inbox.unread_count != inbox.total_count || inbox.total_count != 1 {
+                        failures.push(format!(
+                            "STATUS {scenario}: unread {} total {} expected 1/1",
+                            inbox.unread_count, inbox.total_count
+                        ));
+                    }
+                }
+                (_, Ok(outcome)) if outcome.folder_errors == 1 => {}
+                (_, Ok(_)) => failures.push(format!("STATUS {scenario} was accepted")),
+                (_, Err(_)) => failures.push(format!("STATUS {scenario} failed the whole pass")),
+            }
+            failures.extend(
+                cache_failures(&db, &account.summary.id, &seeded)
+                    .into_iter()
+                    .map(|failure| format!("STATUS {scenario}: {failure}")),
+            );
+        }
+
+        let refresh_account = AccountRecord {
+            summary: AccountSummary {
+                id: "bridge-status-refresh-fixture".into(),
+                ..status_account.summary.clone()
+            },
+            ..status_account.clone()
+        };
+        let refresh_db = Database::memory();
+        let refresh_seeded = seed_cache(&refresh_db, &refresh_account);
+        let refresh_result = refresh_mailbox_envelopes(
+            &refresh_account,
+            "fixture-password",
+            "INBOX",
+            &refresh_db,
+            &CachePolicy::default(),
+        )
+        .await;
+        if refresh_result.is_ok() {
+            failures.push("envelope refresh accepted STATUS with no data".into());
+        }
+        failures.extend(
+            cache_failures(&refresh_db, &refresh_account.summary.id, &refresh_seeded)
+                .into_iter()
+                .map(|failure| format!("STATUS envelope refresh: {failure}")),
+        );
+
+        let partial_account = AccountRecord {
+            summary: AccountSummary {
+                id: "bridge-status-partial-query-fixture".into(),
+                ..status_account.summary.clone()
+            },
+            ..status_account.clone()
+        };
+        match pool::checkout(&partial_account, "fixture-password").await {
+            Ok(mut lease) => match lease.status("INBOX", "(MESSAGES)").await {
+                Ok(partial) if partial.exists == 1 && partial.uid_next.is_none() => {
+                    lease.release();
+                }
+                Ok(_) => failures.push("partial MESSAGES STATUS lost its requested value".into()),
+                Err(_) => failures.push("valid partial MESSAGES STATUS was rejected".into()),
+            },
+            Err(_) => failures.push("partial STATUS fixture checkout failed".into()),
+        }
+
+        let empty_account = make_account(
+            "bridge-empty-mailbox-fixture",
+            "POSTAL_SNAP_PROTOCOL_EMPTY_IMAP",
+            "POSTAL_SNAP_PROTOCOL_EMPTY_SMTP",
+        );
+        let empty_db = Database::memory();
+        let empty_seeded = seed_cache(&empty_db, &empty_account);
+        let outcome = sync_account(
+            &empty_db,
+            &empty_account,
+            "fixture-password",
+            &CachePolicy::default(),
+            &mut Uncontended,
+        )
+        .await
+        .expect("a valid empty mailbox remains authoritative");
+        assert_eq!(outcome.folder_errors, 0);
+        let folders = empty_db.list_mailboxes(&empty_account.summary.id).unwrap();
+        let inbox = folders
+            .iter()
+            .find(|folder| folder.name == "INBOX")
+            .unwrap();
+        let archive = folders
+            .iter()
+            .find(|folder| folder.name == "Archive")
+            .unwrap();
+        assert!(empty_db
+            .list_messages(inbox.id, None, 10)
+            .unwrap()
+            .items
+            .is_empty());
+        assert_eq!(
+            empty_db
+                .list_messages(archive.id, None, 10)
+                .unwrap()
+                .items
+                .len(),
+            1
+        );
+        assert_eq!(
+            empty_db
+                .queued_operations(&empty_account.summary.id)
+                .unwrap()
+                .len(),
+            1
+        );
+        let archive_message = empty_db
+            .message_detail(empty_seeded.0["Archive"], &empty_account.summary.id)
+            .unwrap();
+        assert_eq!(archive_message.summary.uid, 1);
+        assert_eq!(
+            archive_message.summary.message_id.as_deref(),
+            Some("<Archive@example.test>")
+        );
+        assert_eq!(archive_message.text_body, "Synthetic cached message");
+        let queued = empty_db
+            .queued_operations(&empty_account.summary.id)
+            .unwrap();
+        assert_eq!(queued[0].1, "flags");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&queued[0].2).unwrap(),
+            empty_seeded.1
+        );
+        assert!(
+            failures.is_empty(),
+            "protocol regression failures: {failures:?}"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires npm run test:mail-integration"]
+    async fn bridge_server_search_refuses_missing_examine_uid_validity_integration() {
+        let certificate = std::fs::read_to_string(
+            std::env::var("POSTAL_SNAP_MAIL_TEST_CA_CERT").expect("fixture certificate required"),
+        )
+        .unwrap();
+        let server = |port_name: &str| ServerConfig {
+            host: "127.0.0.1".into(),
+            port: std::env::var(port_name)
+                .unwrap_or_else(|_| panic!("missing fixture port {port_name}"))
+                .parse()
+                .unwrap(),
+            tls_mode: TlsMode::Tls,
+            username: "fixture@example.test".into(),
+            trusted_certificate: Some(certificate.clone()),
+        };
+        let account = AccountRecord {
+            summary: AccountSummary {
+                id: "bridge-search-examine-fixture".into(),
+                provider: ProviderKind::Manual,
+                email: "fixture@example.test".into(),
+                display_name: "Fixture".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+                signature_html: String::new(),
+                reply_to: String::new(),
+                color: None,
+                default_body_format: crate::models::BodyFormat::Plain,
+            },
+            imap: server("POSTAL_SNAP_PROTOCOL_SEARCH_IMAP"),
+            smtp: server("POSTAL_SNAP_PROTOCOL_SEARCH_SMTP"),
+        };
+        let db = Database::memory();
+        db.insert_account(&account).unwrap();
+        let mailbox_id = db
+            .upsert_mailbox_with_source(
+                &account.summary.id,
+                "INBOX",
+                &MailboxRole::Inbox,
+                "name",
+                Some(1),
+                Some(2),
+                Some(0),
+                1,
+            )
+            .unwrap();
+        db.set_mailbox_listing(mailbox_id, Some("/")).unwrap();
+        let received_at = (chrono::Utc::now() - chrono::Duration::days(1)).to_rfc3339();
+        let message = CachedMessage {
+            uid: 1,
+            internal_at: None,
+            message_id: Some("<inbox@example.test>".into()),
+            subject: "Cached INBOX".into(),
+            sender_name: "Fixture".into(),
+            sender_address: "sender@example.test".into(),
+            recipients: "fixture@example.test".into(),
+            received_at: received_at.clone(),
+            preview: "Synthetic cached message".into(),
+            is_read: false,
+            is_starred: false,
+            size: 38,
+            to: vec!["fixture@example.test".into()],
+            cc: vec![],
+            bcc: vec![],
+            reply_to: None,
+            thread_parent: None,
+            text_body: "Synthetic cached message".into(),
+            html_body: None,
+            attachments: vec![],
+            raw_message: b"Subject: Cached fixture\r\n\r\nSynthetic cached message".to_vec(),
+            has_attachments: false,
+            is_answered: false,
+            is_forwarded: false,
+            has_calendar: false,
+            calendar_json: None,
+            list_unsubscribe: None,
+            list_unsubscribe_post: None,
+            importance: String::new(),
+            disposition_to: String::new(),
+        };
+        db.upsert_message(&account.summary.id, mailbox_id, &message)
+            .unwrap();
+        let cached_id = db
+            .list_messages(mailbox_id, None, 10)
+            .unwrap()
+            .items
+            .pop()
+            .expect("seeded cache message")
+            .id;
+
+        let search = server_search(
+            &db,
+            &account,
+            "fixture-password",
+            &SearchQuery {
+                account_id: account.summary.id.clone(),
+                mailbox_id: Some(mailbox_id),
+                text: "Synthetic".into(),
+                all_folders: false,
+                limit: 25,
+            },
+            &mut Uncontended,
+        )
+        .await;
+        match search {
+            Err(error) if error == "Server search is unavailable for this folder." => {}
+            Ok(_) => panic!("missing EXAMINE UIDVALIDITY search was accepted"),
+            Err(error) => panic!("unexpected search error: {error}"),
+        }
+        let rows = db.list_messages(mailbox_id, None, 10).unwrap().items;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, cached_id);
+        assert_eq!(rows[0].uid, 1);
+        let detail = db.message_detail(cached_id, &account.summary.id).unwrap();
+        assert_eq!(detail.text_body, "Synthetic cached message");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires npm run test:mail-integration"]
+    async fn bridge_empty_folder_search_refusals_integration() {
+        let certificate = std::fs::read_to_string(
+            std::env::var("POSTAL_SNAP_MAIL_TEST_CA_CERT").expect("fixture certificate required"),
+        )
+        .unwrap();
+        let server = |port_name: &str| ServerConfig {
+            host: "127.0.0.1".into(),
+            port: std::env::var(port_name)
+                .unwrap_or_else(|_| panic!("missing fixture port {port_name}"))
+                .parse()
+                .unwrap(),
+            tls_mode: TlsMode::Tls,
+            username: "fixture@example.test".into(),
+            trusted_certificate: Some(certificate.clone()),
+        };
+        let base = AccountRecord {
+            summary: AccountSummary {
+                id: "bridge-empty-folder-search-fixture".into(),
+                provider: ProviderKind::Manual,
+                email: "fixture@example.test".into(),
+                display_name: "Fixture".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+                signature_html: String::new(),
+                reply_to: String::new(),
+                color: None,
+                default_body_format: crate::models::BodyFormat::Plain,
+            },
+            imap: server("POSTAL_SNAP_PROTOCOL_EMPTYFOLDER_IMAP"),
+            smtp: server("POSTAL_SNAP_PROTOCOL_EMPTYFOLDER_SMTP"),
+        };
+        let mut failures = Vec::new();
+        for (index, scenario) in ["NO", "BAD", "EOF", "EOF_AFTER_DATA", "MISMATCHED_TAG"]
+            .into_iter()
+            .enumerate()
+        {
+            let account = AccountRecord {
+                summary: AccountSummary {
+                    id: format!("bridge-empty-search-{index}"),
+                    ..base.summary.clone()
+                },
+                ..base.clone()
+            };
+            if empty_folder(&account, "fixture-password", "Archive", Some(1), &[])
+                .await
+                .is_ok()
+            {
+                failures.push(format!("UID SEARCH {scenario} empty folder succeeded"));
+            }
+            match pool::checkout(&account, "fixture-password").await {
+                Ok(mut session) => {
+                    let wire = session.mailbox_name("Archive");
+                    match session.select(&wire).await {
+                        Ok(selected) if selected.exists == 1 => session.release(),
+                        Ok(selected) => {
+                            session.release();
+                            failures.push(format!(
+                                "UID SEARCH {scenario}: Archive expected 1 message, got {}",
+                                selected.exists
+                            ));
+                        }
+                        Err(_) => {
+                            session.release();
+                            failures.push(format!(
+                                "UID SEARCH {scenario}: could not re-select Archive"
+                            ));
+                        }
+                    }
+                }
+                Err(_) => failures.push(format!("UID SEARCH {scenario}: checkout failed")),
+            }
+        }
+        let control = AccountRecord {
+            summary: AccountSummary {
+                id: "bridge-empty-search-ok".into(),
+                ..base.summary.clone()
+            },
+            ..base.clone()
+        };
+        match empty_folder(&control, "fixture-password", "Archive", Some(1), &[]).await {
+            Ok(()) => {}
+            Err(error) => failures.push(format!("UID SEARCH OK empty folder failed: {error}")),
+        }
+        match pool::checkout(&control, "fixture-password").await {
+            Ok(mut session) => {
+                let wire = session.mailbox_name("Archive");
+                match session.select(&wire).await {
+                    Ok(selected) if selected.exists == 0 => session.release(),
+                    Ok(selected) => {
+                        session.release();
+                        failures.push(format!(
+                            "UID SEARCH OK: Archive should be empty, still has {}",
+                            selected.exists
+                        ));
+                    }
+                    Err(_) => {
+                        session.release();
+                        failures.push("UID SEARCH OK: could not re-select Archive".into());
+                    }
+                }
+            }
+            Err(_) => failures.push("UID SEARCH OK: checkout failed".into()),
+        }
+        assert!(
+            failures.is_empty(),
+            "empty-folder SEARCH refusals: {failures:?}"
+        );
     }
 
     // Live protocol scenarios: matching pins, TLS modes, rejected auth,

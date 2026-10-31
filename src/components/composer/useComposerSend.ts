@@ -308,7 +308,16 @@ export function useComposerSend({
       if (!(event.metaKey || event.ctrlKey)) return;
       if (event.key === "Enter") {
         event.preventDefault();
-        void sendMessage();
+        if (sendMenuOpen && scheduleOpen) {
+          const when = new Date(scheduleValue);
+          if (!Number.isFinite(when.getTime())) {
+            setError(strings.composer.invalidSchedule);
+            return;
+          }
+          void sendMessage(when.toISOString());
+        } else {
+          void sendMessage();
+        }
       } else if (event.key.toLowerCase() === "s") {
         event.preventDefault();
         void saveDraft(false);
@@ -316,7 +325,15 @@ export function useComposerSend({
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [saveDraft, sendMessage, shortcutsPaused]);
+  }, [
+    saveDraft,
+    scheduleOpen,
+    scheduleValue,
+    sendMenuOpen,
+    sendMessage,
+    setError,
+    shortcutsPaused,
+  ]);
 
   useEffect(() => {
     if (!sendMenuOpen) return;

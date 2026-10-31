@@ -130,6 +130,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
+  column-gap: 2px;
   padding: var(--bar-pad-block) var(--reader-pad-inline);
   overflow: visible;
   border-bottom: 1px solid var(--border);
@@ -163,7 +164,7 @@ html[data-reduce-transparency="true"] .reader-actions {
   min-width: 0;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-1);
+  gap: 2px;
 }
 
 /* Thread navigation sits last, at the trailing edge. */
@@ -171,19 +172,20 @@ html[data-reduce-transparency="true"] .reader-actions {
   margin-inline-start: auto;
 }
 
-/* One borderless capsule per group, on a system fill (HIG toolbars). */
+/* One borderless capsule per group, on a system fill (HIG toolbars).
+   No gap keeps all three groups on one row at desktop width. */
 .reader-action-group {
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 2px;
-  padding: 2px;
+  gap: 0;
+  padding: 1px;
   border-radius: var(--radius-pill);
   background: var(--fill);
 }
 
 .reader-position {
-  padding-inline: 0.35rem;
+  padding-inline: 0;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -193,8 +195,8 @@ html[data-reduce-transparency="true"] .reader-actions {
   display: inline-flex;
   min-height: var(--target-size-inset);
   align-items: center;
-  gap: 5px;
-  padding: 7px var(--space-2);
+  gap: 4px;
+  padding: 7px var(--space-1);
   white-space: nowrap;
   border: 0;
   border-radius: var(--radius-pill);
@@ -211,6 +213,13 @@ html[data-reduce-transparency="true"] .reader-actions {
 .reader-actions svg {
   width: 1.125rem;
   height: 1.125rem;
+}
+
+/* Icon-only toolbar actions keep the full touch target; text buttons size
+   to their labels so they still wrap at large text. */
+.reader-actions .reader-icon-action {
+  min-width: var(--target-size);
+  justify-content: center;
 }
 
 .reader-more {
@@ -602,10 +611,13 @@ html[data-reduce-transparency="true"] .reader-actions {
   padding: 8px var(--reader-pad-inline);
   border-bottom: 1px solid var(--border);
   background: var(--surface-muted);
+  flex-wrap: wrap;
 }
 
 .message-find input {
-  flex: 1;
+  flex: 1 1 6rem;
+  width: auto;
+  min-width: 6rem;
   min-height: var(--target-size);
 }
 

@@ -23,14 +23,14 @@ test("a mailbox names how much mail it holds", async ({ page }) => {
   const folders = page.getByRole("navigation", { name: "Mailboxes" });
   await expect(folders.getByRole("button", { name: /^Inbox/ })).toHaveAttribute(
     "title",
-    "1 unread, 1 item",
+    "Inbox, 1 unread, 1 item",
   );
   await expect(
     folders.getByRole("button", { name: "Archive", exact: true }),
-  ).not.toHaveAttribute("title");
+  ).toHaveAttribute("title", "Archive");
   await expect(folders.getByRole("button", { name: /^Trash/ })).toHaveAttribute(
     "title",
-    "2 items",
+    "Trash, 2 items",
   );
 });
 
@@ -41,6 +41,6 @@ test("a partly loaded folder names its full total from the mailbox list", async 
   const folders = page.getByRole("navigation", { name: "Mailboxes" });
   await expect(folders.getByRole("button", { name: /^Inbox/ })).toHaveAttribute(
     "title",
-    "1 unread, 40 items",
+    "Inbox, 1 unread, 40 items",
   );
 });

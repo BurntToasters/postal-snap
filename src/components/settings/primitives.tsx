@@ -59,14 +59,14 @@ export function SettingRow({
   children,
 }: {
   title: string;
-  help: string;
+  help?: string;
   children: ReactNode;
 }) {
   return (
     <label className="settings-row">
       <span>
         <strong>{title}</strong>
-        <small>{help}</small>
+        {help ? <small>{help}</small> : null}
       </span>
       {children}
     </label>

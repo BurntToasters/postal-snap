@@ -118,6 +118,13 @@ impl Database {
             serde_json::to_string(draft).map_err(|_| "Could not queue message.".to_string())?;
         let mut conn = self.conn()?;
         let transaction = conn.transaction().map_err(db_error)?;
+        if let Some(source_id) = draft.id.as_deref() {
+            super::drafts::ensure_draft_queueable(
+                &transaction,
+                source_id,
+                &draft.account_id,
+            )?;
+        }
         let (terminal_count, terminal_bytes): (i64, i64) = transaction
             .query_row(
                 "SELECT COUNT(*), COALESCE(SUM(LENGTH(mime_bytes)),0) FROM outbox
@@ -169,6 +176,13 @@ impl Database {
             &id,
             &draft.attachments,
         )?;
+        if let Some(source_id) = draft.id.as_deref() {
+            super::drafts::retire_outbox_source_draft_in_transaction(
+                &transaction,
+                source_id,
+                &draft.account_id,
+            )?;
+        }
         transaction.commit().map_err(db_error)?;
         Ok(id)
     }
@@ -303,6 +317,60 @@ impl Database {
         let draft = serde_json::from_str(&row.0)
             .map_err(|_| "This queued message could not be read.".to_string())?;
         Ok((draft, row.1, row.2, row.3))
+    }
+
+    /// Retire a legacy editable source only when its saved content still
+    /// matches the snapshot that was delivered.
+    pub fn finalize_outbox_source_draft(
+        &self,
+        id: &str,
+        account_id: &str,
+    ) -> Result<bool, String> {
+        let mut conn = self.conn()?;
+        let transaction = conn.transaction().map_err(db_error)?;
+        let queued_json: Option<String> = transaction
+            .query_row(
+                "SELECT draft_json FROM outbox WHERE id=?1 AND account_id=?2",
+                params![id, account_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?;
+        let Some(queued_json) = queued_json else {
+            return Ok(false);
+        };
+        let queued: ComposeDraft = serde_json::from_str(&queued_json)
+            .map_err(|_| "This queued message could not be read.".to_string())?;
+        if queued.account_id != account_id {
+            return Err("Queued message does not belong to this account.".into());
+        }
+        let Some(source_id) = queued.id.as_deref() else {
+            return Ok(false);
+        };
+        let source: Option<(String, String, Option<String>)> = transaction
+            .query_row(
+                "SELECT account_id,draft_json,deleted_at FROM drafts WHERE id=?1",
+                [source_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .map_err(db_error)?;
+        let Some((owner, current_json, deleted_at)) = source else {
+            return Ok(false);
+        };
+        if owner != account_id {
+            return Err("Draft does not belong to this account.".into());
+        }
+        if deleted_at.is_some() || !same_draft_content(&queued, &current_json)? {
+            return Ok(false);
+        }
+        let changed = super::drafts::retire_outbox_source_draft_in_transaction(
+            &transaction,
+            source_id,
+            account_id,
+        )?;
+        transaction.commit().map_err(db_error)?;
+        Ok(changed)
     }
 
     pub fn outbox_ids_in_state(
@@ -643,25 +711,24 @@ impl Database {
         rule: &FilterRule,
         newer_than_id: Option<i64>,
     ) -> Result<Vec<(i64, u32, String, i64)>, String> {
-        let Some((column, like, domain_like)) = rule_match_pattern(rule) else {
+        let Some(pattern) = rule_match_pattern(rule) else {
             return Ok(Vec::new());
         };
         let conn = self.read_conn()?;
+        let condition = rule_match_condition(&pattern, RuleMatchQuery::Find);
+        let (primary, domain_like) = rule_match_params(&pattern);
         let mut statement = conn
             .prepare(&format!(
                 "SELECT m.id,m.uid,f.name,f.id FROM messages m JOIN mailboxes f ON f.id=m.mailbox_id
                  WHERE m.account_id=?1 AND f.role='inbox' AND m.is_read=0 AND m.pending_move_to IS NULL
                  AND (?3 IS NULL OR m.id > ?3)
-                 AND (
-                   LOWER({column}) LIKE ?2 ESCAPE '\\'
-                   OR (LENGTH(?4) > 0 AND LOWER(m.sender_address) LIKE ?4 ESCAPE '\\')
-                 )
+                 AND {condition}
                  ORDER BY m.uid DESC LIMIT 100"
             ))
             .map_err(db_error)?;
         let rows = statement
             .query_map(
-                params![account_id, like, newer_than_id, domain_like],
+                params![account_id, primary, newer_than_id, domain_like],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .map_err(db_error)?
@@ -676,7 +743,7 @@ impl Database {
         account_id: &str,
         rule: &FilterRule,
     ) -> Result<FilterMatchPreview, String> {
-        let Some((column, like, domain_like)) = rule_match_pattern(rule) else {
+        let Some(pattern) = rule_match_pattern(rule) else {
             return Ok(FilterMatchPreview {
                 matched: 0,
                 capped: false,
@@ -684,19 +751,18 @@ impl Database {
             });
         };
         let conn = self.conn()?;
+        let condition = rule_match_condition(&pattern, RuleMatchQuery::Preview);
+        let (primary, domain_like) = rule_match_params(&pattern);
         let mut statement = conn
             .prepare(&format!(
                 "SELECT m.subject FROM messages m JOIN mailboxes f ON f.id=m.mailbox_id
                  WHERE m.account_id=?1 AND f.role='inbox' AND m.is_read=0 AND m.pending_move_to IS NULL
-                 AND (
-                   LOWER({column}) LIKE ?2 ESCAPE '\\'
-                   OR (LENGTH(?3) > 0 AND LOWER(m.sender_address) LIKE ?3 ESCAPE '\\')
-                 )
+                 AND {condition}
                  ORDER BY m.uid DESC LIMIT 100"
             ))
             .map_err(db_error)?;
         let subjects = statement
-            .query_map(params![account_id, like, domain_like], |row| {
+            .query_map(params![account_id, primary, domain_like], |row| {
                 row.get::<_, String>(0)
             })
             .map_err(db_error)?
@@ -890,6 +956,38 @@ impl Database {
                 source_mailbox_id,
             )?;
         }
+        if let Some(source_id) = draft.id.as_deref() {
+            let source: Option<(String, String, Option<u32>, Option<String>)> = transaction
+                .query_row(
+                    "SELECT account_id,draft_json,remote_uid,deleted_at FROM drafts WHERE id=?1",
+                    [source_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+                .optional()
+                .map_err(db_error)?;
+            if let Some((owner, current_json, _, deleted_at)) = source {
+                if owner != account_id {
+                    return Err("Draft does not belong to this account.".into());
+                }
+                if deleted_at.is_none() {
+                    let current: ComposeDraft = serde_json::from_str(&current_json)
+                        .map_err(|_| "This saved draft could not be read.".to_string())?;
+                    if !same_draft_content(&draft, &current_json)? {
+                        let mut newer_copy = current;
+                        newer_copy.id = None;
+                        super::drafts::save_draft_in_transaction(&transaction, &newer_copy)?;
+                    }
+                    super::drafts::retire_outbox_source_draft_in_transaction(
+                        &transaction,
+                        source_id,
+                        account_id,
+                    )?;
+                }
+            }
+            // Restored content gets a fresh identity. The retired ID remains
+            // reserved so an in-flight autosave cannot overwrite Undo/Edit.
+            draft.id = None;
+        }
         let draft_id = super::drafts::save_draft_in_transaction(&transaction, &draft)?;
         transaction
             .execute(
@@ -913,6 +1011,16 @@ impl Database {
 }
 }
 
+fn same_draft_content(queued: &ComposeDraft, current_json: &str) -> Result<bool, String> {
+    let current: ComposeDraft = serde_json::from_str(current_json)
+        .map_err(|_| "This saved draft could not be read.".to_string())?;
+    let queued =
+        serde_json::to_value(queued).map_err(|_| "Could not read queued message.".to_string())?;
+    let current =
+        serde_json::to_value(current).map_err(|_| "Could not read saved draft.".to_string())?;
+    Ok(queued == current)
+}
+
 /// Stored MIME bytes waiting to leave one account: queued, scheduled, or
 /// parked for attention. Pure accounting over the outbox table.
 fn pending_outbox_bytes(conn: &rusqlite::Connection, account_id: &str) -> Result<i64, String> {
@@ -932,11 +1040,64 @@ fn pending_sends_denied(pending_bytes: i64) -> bool {
     pending_bytes >= MAX_PENDING_OUTBOX_BYTES
 }
 
-fn rule_match_pattern(rule: &FilterRule) -> Option<(&'static str, String, String)> {
-    let needle: String = rule
-        .contains
-        .trim()
-        .to_ascii_lowercase()
+enum RuleMatchPattern {
+    ColumnLike {
+        column: &'static str,
+        like: String,
+        domain_like: String,
+    },
+    ToAddressExact {
+        address: String,
+    },
+}
+
+enum RuleMatchQuery {
+    Find,
+    Preview,
+}
+
+const RULE_MATCH_TO_ADDRESS_EXACT: &str = "(
+                   EXISTS (
+                     SELECT 1 FROM json_each(CASE WHEN json_valid(m.to_json) THEN m.to_json ELSE '[]' END) AS addr
+                     WHERE lower(addr.value)=?2
+                   )
+                   OR EXISTS (
+                     SELECT 1 FROM json_each(CASE WHEN json_valid(m.cc_json) THEN m.cc_json ELSE '[]' END) AS addr
+                     WHERE lower(addr.value)=?2
+                   )
+                 )";
+
+fn rule_match_params(pattern: &RuleMatchPattern) -> (String, String) {
+    match pattern {
+        RuleMatchPattern::ColumnLike {
+            like, domain_like, ..
+        } => (like.clone(), domain_like.clone()),
+        RuleMatchPattern::ToAddressExact { address } => (address.clone(), String::new()),
+    }
+}
+
+fn rule_match_condition(pattern: &RuleMatchPattern, query: RuleMatchQuery) -> String {
+    let domain_param = match query {
+        RuleMatchQuery::Find => "?4",
+        RuleMatchQuery::Preview => "?3",
+    };
+    match pattern {
+        RuleMatchPattern::ToAddressExact { .. } => format!(
+            "({RULE_MATCH_TO_ADDRESS_EXACT} AND LENGTH({domain_param}) >= 0)"
+        ),
+        RuleMatchPattern::ColumnLike { column, .. } => format!(
+            "(
+                   LOWER({column}) LIKE ?2 ESCAPE '\\'
+                   OR (LENGTH({domain_param}) > 0 AND LOWER(m.sender_address) LIKE {domain_param} ESCAPE '\\')
+                 )"
+        ),
+    }
+}
+
+fn rule_match_pattern(rule: &FilterRule) -> Option<RuleMatchPattern> {
+    let trimmed = rule.contains.trim();
+    let lowered = trimmed.to_ascii_lowercase();
+    let needle: String = lowered
         .chars()
         .flat_map(|character| match character {
             '\\' => vec!['\\', '\\'],
@@ -949,18 +1110,25 @@ fn rule_match_pattern(rule: &FilterRule) -> Option<(&'static str, String, String
         return None;
     }
     if rule.field == "domain" {
-        if !crate::models::valid_sender_domain(rule.contains.trim()) {
+        if !crate::models::valid_sender_domain(trimmed) {
             return None;
         }
-        return Some((
-            "m.sender_address",
-            format!("%@{needle}"),
-            format!("%@%.{needle}"),
-        ));
+        return Some(RuleMatchPattern::ColumnLike {
+            column: "m.sender_address",
+            like: format!("%@{needle}"),
+            domain_like: format!("%@%.{needle}"),
+        });
     }
-    if rule.field == "from" && is_full_address(rule.contains.trim()) {
+    if rule.field == "from" && is_full_address(trimmed) {
         // Exact address: no wildcards, so "me@x.io" never hits "me@x.io.com".
-        return Some(("m.sender_address", needle, String::new()));
+        return Some(RuleMatchPattern::ColumnLike {
+            column: "m.sender_address",
+            like: needle,
+            domain_like: String::new(),
+        });
+    }
+    if rule.field == "to" && is_full_address(trimmed) {
+        return Some(RuleMatchPattern::ToAddressExact { address: lowered });
     }
     let column = match rule.field.as_str() {
         "subject" => "m.subject",
@@ -968,7 +1136,11 @@ fn rule_match_pattern(rule: &FilterRule) -> Option<(&'static str, String, String
         "from" => "(m.sender_name || ' ' || m.sender_address)",
         _ => return None,
     };
-    Some((column, format!("%{needle}%"), String::new()))
+    Some(RuleMatchPattern::ColumnLike {
+        column,
+        like: format!("%{needle}%"),
+        domain_like: String::new(),
+    })
 }
 
 /// One bare `local@domain.tld`: one '@', non-empty local part, dotted domain, no spaces.
@@ -1008,10 +1180,12 @@ fn preview_subject(value: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::CachedMessage;
     use crate::models::{
-        AccountRecord, AccountSummary, BodyFormat, ComposeDraft, ProviderKind, ServerConfig,
-        TlsMode,
+        AccountRecord, AccountSummary, BodyFormat, ComposeDraft, FilterRule, MailboxRole,
+        ProviderKind, ServerConfig, TlsMode,
     };
+    use std::collections::HashSet;
 
     fn account() -> AccountRecord {
         AccountRecord {
@@ -1079,6 +1253,350 @@ mod tests {
         }
     }
 
+    fn draft_with_id(db: &Database, account_id: &str) -> ComposeDraft {
+        let mut draft = draft();
+        draft.account_id = account_id.to_string();
+        let id = db.save_draft(&draft).unwrap();
+        draft.id = Some(id);
+        draft
+    }
+
+    fn add_second_account(db: &Database) -> String {
+        let mut second = account();
+        second.summary.id = "account-2".into();
+        second.summary.email = "lee@example.com".into();
+        second.summary.display_name = "Lee".into();
+        second.imap.username = "lee@example.com".into();
+        second.smtp.username = "lee@example.com".into();
+        db.insert_account(&second).unwrap();
+        second.summary.id
+    }
+
+    fn add_attachment(db: &Database, account_id: &str, draft: &mut ComposeDraft, token: &str) {
+        db.conn()
+            .unwrap()
+            .execute(
+                "INSERT INTO file_grants(token,account_id,path,size) VALUES(?1,?2,'/tmp/attachment.txt',4)",
+                params![token, account_id],
+            )
+            .unwrap();
+        draft.attachments.push(crate::models::ComposeAttachment {
+            token: token.into(),
+            filename: "attachment.txt".into(),
+            content_type: Some("text/plain".into()),
+            inline: false,
+            content_id: None,
+            size: Some(4),
+        });
+    }
+
+    fn insert_legacy_outbox(db: &Database, draft: &ComposeDraft, state: &str) -> String {
+        let id = uuid::Uuid::new_v4().to_string();
+        let json = serde_json::to_string(draft).unwrap();
+        db.conn()
+            .unwrap()
+            .execute(
+                "INSERT INTO outbox(id,account_id,draft_json,state,message_id,mime_bytes,updated_at)
+                 VALUES(?1,?2,?3,?4,'<legacy@example.test>',X'6D696D65',CURRENT_TIMESTAMP)",
+                params![id, draft.account_id, json, state],
+            )
+            .unwrap();
+        id
+    }
+
+    #[test]
+    fn queue_atomically_owns_draft_and_rejects_stale_saves_or_requeues() {
+        let (db, account_id) = with_account();
+        for (index, state) in ["queued", "scheduled", "needs_attention"]
+            .into_iter()
+            .enumerate()
+        {
+            let mut source = draft_with_id(&db, &account_id);
+            source.subject = format!("Queued source {index}");
+            if state == "scheduled" {
+                source.send_at = Some("2099-01-01T00:00:00Z".into());
+            }
+            let id = source.id.clone().unwrap();
+            let token = format!("attachment-{index}");
+            add_attachment(&db, &account_id, &mut source, &token);
+            db.save_draft(&source).unwrap();
+
+            let outbox_id = db
+                .queue_outbox(&source, state, None, "<queued@example.test>", b"mime", None)
+                .unwrap();
+
+            assert!(
+                db.draft(&id, &account_id).is_err(),
+                "{state} left source editable"
+            );
+            assert!(!db
+                .list_drafts(&account_id)
+                .unwrap()
+                .iter()
+                .any(|item| item.id == id));
+            let mut stale = source.clone();
+            stale.subject = "Late autosave must not resurrect the source".into();
+            assert!(
+                db.save_draft(&stale).is_err(),
+                "{state} accepted stale autosave"
+            );
+            assert!(
+                db.queue_outbox(
+                    &stale,
+                    state,
+                    None,
+                    "<duplicate@example.test>",
+                    b"mime",
+                    None
+                )
+                .is_err(),
+                "{state} accepted duplicate queueing by source ID"
+            );
+
+            let owners = db
+                .conn()
+                .unwrap()
+                .prepare("SELECT owner_kind,owner_id FROM attachment_refs WHERE token=?1")
+                .unwrap()
+                .query_map([&token], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            assert_eq!(owners, vec![("outbox".into(), outbox_id)]);
+        }
+    }
+
+    #[test]
+    fn queue_rejects_a_draft_id_owned_by_another_account() {
+        let (db, account_id) = with_account();
+        let second_account = add_second_account(&db);
+        let source = draft_with_id(&db, &account_id);
+        let mut cross_account = source.clone();
+        cross_account.account_id = second_account.clone();
+
+        assert!(db
+            .queue_outbox(
+                &cross_account,
+                "scheduled",
+                None,
+                "<cross-account@example.test>",
+                b"mime",
+                Some("2099-01-01T00:00:00Z"),
+            )
+            .is_err());
+        assert!(db.draft(source.id.as_deref().unwrap(), &account_id).is_ok());
+        assert!(db.list_outbox(&second_account).unwrap().is_empty());
+    }
+
+    #[test]
+    fn restore_transfers_local_attachment_ownership_and_releases_source_reservation() {
+        let (db, account_id) = with_account();
+        let mut source = draft_with_id(&db, &account_id);
+        let token = "restore-attachment";
+        add_attachment(&db, &account_id, &mut source, token);
+        db.save_draft(&source).unwrap();
+        let source_id = source.id.clone().unwrap();
+        let outbox_id = db
+            .queue_outbox(
+                &source,
+                "scheduled",
+                None,
+                "<restore@example.test>",
+                b"mime",
+                Some("2099-01-01T00:00:00Z"),
+            )
+            .unwrap();
+
+        let restored = db.restore_outbox_as_draft(&outbox_id, &account_id).unwrap();
+        let restored_id = restored.id.clone().unwrap();
+        assert_ne!(restored_id, source_id);
+        assert!(db.outbox(&outbox_id, &account_id).is_err());
+        assert!(db.draft(&source_id, &account_id).is_err());
+        assert!(db.draft(&restored_id, &account_id).is_ok());
+        let owners = db
+            .conn()
+            .unwrap()
+            .prepare("SELECT owner_kind,owner_id FROM attachment_refs WHERE token=?1")
+            .unwrap()
+            .query_map([token], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(owners, vec![("draft".into(), restored_id.clone())]);
+
+        let mut edited = restored;
+        edited.subject = "Explicitly edited after Undo".into();
+        assert_eq!(db.save_draft(&edited).unwrap(), restored_id);
+        let mut stale = source;
+        stale.subject = "Stale autosave after restore".into();
+        assert!(db.save_draft(&stale).is_err());
+    }
+
+    #[test]
+    fn restoring_remote_source_preserves_delete_tombstone_and_attachment_refs() {
+        let (db, account_id) = with_account();
+        let mut source = draft_with_id(&db, &account_id);
+        let token = "remote-restore-attachment";
+        add_attachment(&db, &account_id, &mut source, token);
+        db.save_draft(&source).unwrap();
+        let source_id = source.id.clone().unwrap();
+        db.conn()
+            .unwrap()
+            .execute(
+                "UPDATE drafts SET sync_state='synced',remote_mailbox='Drafts',remote_uid=18,
+                 remote_uid_validity=7 WHERE id=?1 AND account_id=?2",
+                params![source_id, account_id],
+            )
+            .unwrap();
+        let outbox_id = db
+            .queue_outbox(
+                &source,
+                "queued",
+                None,
+                "<remote-restore@example.test>",
+                b"mime",
+                None,
+            )
+            .unwrap();
+
+        let pending = db.pending_draft_sync(&account_id).unwrap();
+        assert!(pending
+            .iter()
+            .any(|record| record.id == source_id && record.deleted));
+        let restored = db.restore_outbox_as_draft(&outbox_id, &account_id).unwrap();
+        let restored_id = restored.id.clone().unwrap();
+        assert_ne!(restored_id, source_id);
+        assert!(db.draft(&restored_id, &account_id).is_ok());
+        assert!(db
+            .pending_draft_sync(&account_id)
+            .unwrap()
+            .iter()
+            .any(|record| { record.id == source_id && record.deleted }));
+
+        let owners = db
+            .conn()
+            .unwrap()
+            .prepare("SELECT owner_kind,owner_id FROM attachment_refs WHERE token=?1 ORDER BY owner_kind")
+            .unwrap()
+            .query_map([token], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(owners, vec![("draft".into(), restored_id)]);
+        db.finish_remote_draft_delete(&source_id, &account_id)
+            .unwrap();
+        assert!(db.draft(&source_id, &account_id).is_err());
+        assert!(db.draft(&restored.id.unwrap(), &account_id).is_ok());
+    }
+
+    #[test]
+    fn legacy_restore_keeps_a_newer_draft_and_restores_queued_snapshot_separately() {
+        let (db, account_id) = with_account();
+        let source = draft_with_id(&db, &account_id);
+        let source_id = source.id.clone().unwrap();
+        let mut newer = source.clone();
+        newer.subject = "Newer draft must survive".into();
+        db.save_draft(&newer).unwrap();
+        let outbox_id = insert_legacy_outbox(&db, &source, "scheduled");
+
+        let restored = db.restore_outbox_as_draft(&outbox_id, &account_id).unwrap();
+        assert_ne!(restored.id.as_deref(), Some(source_id.as_str()));
+        assert!(db.draft(&source_id, &account_id).is_err());
+        assert_eq!(restored.subject, source.subject);
+        assert_eq!(
+            db.draft(restored.id.as_deref().unwrap(), &account_id)
+                .unwrap()
+                .subject,
+            source.subject
+        );
+        let drafts = db.list_drafts(&account_id).unwrap();
+        assert!(drafts
+            .iter()
+            .any(|item| item.subject == "Newer draft must survive"));
+        assert!(drafts.iter().any(|item| item.subject == source.subject));
+        let newer_copy = drafts
+            .iter()
+            .find(|item| item.subject == "Newer draft must survive")
+            .unwrap();
+        assert_ne!(newer_copy.id, source_id);
+        let mut stale = newer;
+        stale.subject = "Stale autosave after legacy restore".into();
+        assert!(db.save_draft(&stale).is_err());
+        assert!(db.outbox(&outbox_id, &account_id).is_err());
+    }
+
+    #[test]
+    fn failed_queue_keeps_source_and_draft_attachment_references() {
+        let (db, account_id) = with_account();
+        for index in 0..MAX_NEEDS_ATTENTION_OUTBOX_MESSAGES {
+            db.queue_outbox(
+                &draft(),
+                "needs_attention",
+                None,
+                &format!("<parked-{index}@example.test>"),
+                b"parked",
+                None,
+            )
+            .unwrap();
+        }
+        let mut source = draft_with_id(&db, &account_id);
+        add_attachment(&db, &account_id, &mut source, "failed-queue-attachment");
+        db.save_draft(&source).unwrap();
+        let source_id = source.id.clone().unwrap();
+
+        assert!(db
+            .queue_outbox(
+                &source,
+                "scheduled",
+                None,
+                "<blocked@example.test>",
+                b"mime",
+                Some("2099-01-01T00:00:00Z"),
+            )
+            .is_err());
+        assert!(db.draft(&source_id, &account_id).is_ok());
+        let owner: String = db
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT owner_kind FROM attachment_refs WHERE token='failed-queue-attachment'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(owner, "draft");
+    }
+
+    #[test]
+    fn legacy_delivery_cleanup_preserves_new_edits_and_removes_matching_source() {
+        let (db, account_id) = with_account();
+        let source = draft_with_id(&db, &account_id);
+        let source_id = source.id.clone().unwrap();
+        let mut newer = source.clone();
+        newer.subject = "Newer unsent edit".into();
+        db.save_draft(&newer).unwrap();
+        let outbox_id = insert_legacy_outbox(&db, &source, "queued");
+        assert!(!db
+            .finalize_outbox_source_draft(&outbox_id, &account_id)
+            .unwrap());
+        assert_eq!(
+            db.draft(&source_id, &account_id).unwrap().subject,
+            "Newer unsent edit"
+        );
+
+        let matching_outbox = insert_legacy_outbox(&db, &newer, "queued");
+        assert!(db
+            .finalize_outbox_source_draft(&matching_outbox, &account_id)
+            .unwrap());
+        assert!(db.draft(&source_id, &account_id).is_err());
+    }
+
     #[test]
     fn prepare_queued_outbox_repairs_any_waiting_state_but_never_overwrites() {
         let (db, account_id) = with_account();
@@ -1122,6 +1640,151 @@ mod tests {
         let (_, _, message_id, mime) = db.outbox_delivery(&filled, &account_id).unwrap();
         assert_eq!(message_id, "<filled@example.com>");
         assert_eq!(mime, b"already attempted");
+    }
+
+    fn inbox_rule_message(
+        uid: u32,
+        subject: &str,
+        to: Vec<String>,
+        cc: Vec<String>,
+        bcc: Vec<String>,
+        recipients: &str,
+    ) -> CachedMessage {
+        CachedMessage {
+            uid,
+            internal_at: None,
+            message_id: Some(format!("<{uid}@filter.example.com>")),
+            subject: subject.into(),
+            sender_name: "Sender".into(),
+            sender_address: "sender@example.com".into(),
+            recipients: recipients.into(),
+            received_at: "2026-08-18T12:00:00Z".into(),
+            preview: subject.into(),
+            is_read: false,
+            is_starred: false,
+            size: 32,
+            to,
+            cc,
+            bcc,
+            reply_to: None,
+            thread_parent: None,
+            text_body: subject.into(),
+            html_body: None,
+            attachments: vec![],
+            raw_message: b"stub".to_vec(),
+            has_attachments: false,
+            is_answered: false,
+            is_forwarded: false,
+            has_calendar: false,
+            calendar_json: None,
+            list_unsubscribe: None,
+            list_unsubscribe_post: None,
+            importance: String::new(),
+            disposition_to: String::new(),
+        }
+    }
+
+    #[test]
+    fn full_address_to_rule_matches_to_and_cc_json_exactly() {
+        // Full-address To rule must not match a lookalike local part or longer domain.
+        let (db, account_id) = with_account();
+        let inbox = db
+            .upsert_mailbox(
+                &account_id,
+                "INBOX",
+                &MailboxRole::Inbox,
+                Some(1),
+                Some(10),
+                Some(0),
+                0,
+            )
+            .unwrap();
+        let rule = FilterRule {
+            id: "rule-1".into(),
+            account_id: account_id.clone(),
+            name: "To Alice".into(),
+            field: "to".into(),
+            contains: "alice@company.com".into(),
+            action: "mark_read".into(),
+            target_mailbox: None,
+            enabled: true,
+        };
+        let cases = [
+            (
+                1,
+                "To Alice",
+                vec!["alice@company.com".into()],
+                vec![],
+                vec![],
+                "alice@company.com",
+                true,
+            ),
+            (
+                2,
+                "Cc Alice",
+                vec!["bob@example.com".into()],
+                vec!["alice@company.com".into()],
+                vec![],
+                "bob@example.com, alice@company.com",
+                true,
+            ),
+            (
+                3,
+                "Not Alice local",
+                vec!["notalice@company.com".into()],
+                vec![],
+                vec![],
+                "notalice@company.com",
+                false,
+            ),
+            (
+                4,
+                "Evil domain",
+                vec!["alice@company.com.evil".into()],
+                vec![],
+                vec![],
+                "alice@company.com.evil",
+                false,
+            ),
+            (
+                5,
+                "Bcc only",
+                vec!["bob@example.com".into()],
+                vec![],
+                vec!["alice@company.com".into()],
+                "bob@example.com, alice@company.com",
+                false,
+            ),
+        ];
+        for (uid, subject, to, cc, bcc, recipients, _) in &cases {
+            db.upsert_message(
+                &account_id,
+                inbox,
+                &inbox_rule_message(
+                    *uid,
+                    subject,
+                    to.clone(),
+                    cc.clone(),
+                    bcc.clone(),
+                    recipients,
+                ),
+            )
+            .unwrap();
+        }
+
+        let matches = db.find_rule_matches(&account_id, &rule, None).unwrap();
+        let matched_uids: HashSet<u32> = matches.iter().map(|(_, uid, _, _)| *uid).collect();
+        let expected: HashSet<u32> = cases
+            .iter()
+            .filter(|(_, _, _, _, _, _, keep)| *keep)
+            .map(|(uid, _, _, _, _, _, _)| *uid)
+            .collect();
+        assert_eq!(matched_uids, expected);
+
+        let preview = db.preview_rule_matches(&account_id, &rule).unwrap();
+        assert_eq!(preview.matched, expected.len() as u32);
+        assert!(preview.subjects.iter().any(|s| s.contains("To Alice")));
+        assert!(preview.subjects.iter().any(|s| s.contains("Cc Alice")));
     }
 
     #[test]

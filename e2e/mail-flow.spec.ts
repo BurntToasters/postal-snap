@@ -1305,7 +1305,9 @@ test("triages several messages at once", async ({ page }) => {
     page.getByRole("option", { name: /Weekend plans/i }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Select", exact: true }).click();
-  await page.getByRole("checkbox", { name: /Weekend plans/i }).check();
+  await page
+    .locator('.message-select[aria-label="Select Weekend plans"]')
+    .check();
   await expect(page.getByRole("toolbar", { name: "1 selected" })).toBeVisible();
   // Read state lives in the mailbox More menu while selecting.
   await page.getByRole("button", { name: "More mailbox actions" }).click();

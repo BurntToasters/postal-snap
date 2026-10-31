@@ -46,6 +46,12 @@ export async function createCompatibilityFixture({
   fetchSizeMismatchMailboxes = [],
   uidValidityChangesAfterFetch = [],
   rejectFlagStoreMailboxes = [],
+  rejectKeywordStoreMailboxes = [],
+  listResponses = [],
+  listStatusResponses = [],
+  statusResponses = {},
+  uidSearchResponses = [],
+  omitExamineUidValidity = false,
 }) {
   if (!["tls", "startTls"].includes(tlsMode))
     throw new Error("Invalid fixture TLS mode.");
@@ -75,8 +81,15 @@ export async function createCompatibilityFixture({
     fetchItems: 0,
     flagStoreTargets: [],
     rejectedFlagStores: 0,
+    rejectedKeywordStores: 0,
     utf8AcceptRequested: 0,
     utf8AcceptEnabled: 0,
+    listResponseModes: [],
+    listStatusResponseModes: [],
+    statusResponseModes: [],
+    uidSearchResponseModes: [],
+    deletedFlagStores: 0,
+    expungeCommands: 0,
   };
   const mailboxes = new Map(
     folderNames.map((name) => [
@@ -88,11 +101,44 @@ export async function createCompatibilityFixture({
     ]),
   );
   let currentUidValidity = uidValidity;
+  let listResponseIndex = 0;
+  let listStatusResponseIndex = 0;
+  let uidSearchResponseIndex = 0;
+  const statusResponseIndices = new Map();
   let interruptMovePending = interruptMoveAfterCopy;
   let interruptAppendPending = interruptAppendAfterCommit;
   let replayScenariosArmed = false;
   const changedUidValidity = new Set();
   let ports = { imap: imapPort, smtp: smtpPort };
+
+  function configuredMode(configured, index) {
+    if (Array.isArray(configured)) return configured[index] ?? "OK";
+    return configured ?? "OK";
+  }
+
+  function nextListMode(configured, listStatus) {
+    const index = listStatus ? listStatusResponseIndex++ : listResponseIndex++;
+    const mode = configuredMode(configured, index);
+    counts[listStatus ? "listStatusResponseModes" : "listResponseModes"].push(
+      mode,
+    );
+    return mode;
+  }
+
+  function nextStatusMode(mailbox) {
+    const index = statusResponseIndices.get(mailbox) ?? 0;
+    statusResponseIndices.set(mailbox, index + 1);
+    const mode = configuredMode(statusResponses[mailbox], index);
+    counts.statusResponseModes.push(`${mailbox}:${mode}`);
+    return mode;
+  }
+
+  function nextUidSearchMode() {
+    const index = uidSearchResponseIndex++;
+    const mode = configuredMode(uidSearchResponses, index);
+    counts.uidSearchResponseModes.push(mode);
+    return mode;
+  }
 
   function encodeMailbox(name) {
     return name.replace(/[^\x20-\x7e]+|&/g, (part) => {
@@ -148,6 +194,33 @@ export async function createCompatibilityFixture({
         0,
         ...(mailboxes.get(name) ?? []).map((message) => message.uid),
       ) + 1
+    );
+  }
+
+  function parseUidSet(set) {
+    return new Set(
+      set.split(",").flatMap((part) => {
+        const [start, end] = part.split(":").map(Number);
+        if (!Number.isFinite(start)) return [];
+        if (!Number.isFinite(end)) return [start];
+        return Array.from(
+          { length: Math.max(0, end - start + 1) },
+          (_, offset) => start + offset,
+        );
+      }),
+    );
+  }
+
+  function expungeDeleted(mailbox, set) {
+    const wanted = set.trim() ? parseUidSet(set) : null;
+    const rows = selectedMessages(mailbox);
+    mailboxes.set(
+      mailbox,
+      rows.filter((message) => {
+        if (!message.flags.includes("\\Deleted")) return true;
+        if (wanted === null) return false;
+        return !wanted.has(message.uid);
+      }),
     );
   }
 
@@ -215,16 +288,41 @@ export async function createCompatibilityFixture({
       const value = encodeMailbox(name);
       return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
     };
-    const sendStatus = (mailbox) => {
+    const sendStatus = (mailbox, mode = "OK") => {
       const rows = selectedMessages(mailbox);
       const unseen = rows.filter(
         (message) => !message.flags?.includes("\\Seen"),
       ).length;
-      sendMailboxResponse(
-        "* STATUS ",
-        mailbox,
-        ` (MESSAGES ${rows.length} UNSEEN ${unseen} UIDNEXT ${nextUid(mailbox)} UIDVALIDITY ${currentUidValidity} HIGHESTMODSEQ ${currentUidValidity})`,
-      );
+      const attributes = new Map([
+        ["MESSAGES", rows.length],
+        ["UNSEEN", unseen],
+        ["UIDNEXT", nextUid(mailbox)],
+        [
+          "UIDVALIDITY",
+          mode === "UIDVALIDITY_MISMATCH"
+            ? currentUidValidity + 1
+            : currentUidValidity,
+        ],
+        ["HIGHESTMODSEQ", currentUidValidity],
+      ]);
+      if (mode === "PARTIAL_MESSAGES") {
+        for (const name of [...attributes.keys()])
+          if (name !== "MESSAGES") attributes.delete(name);
+      } else if (mode === "MISSING_MESSAGES") attributes.delete("MESSAGES");
+      else if (mode === "MISSING_UNSEEN") attributes.delete("UNSEEN");
+      else if (mode === "MISSING_UIDNEXT") attributes.delete("UIDNEXT");
+      else if (mode === "MISSING_UIDVALIDITY") attributes.delete("UIDVALIDITY");
+      else if (mode === "EMPTY_AFTER_DATA") {
+        attributes.set("MESSAGES", 0);
+        attributes.set("UNSEEN", 0);
+      } else if (mode === "INVALID_UNSEEN")
+        attributes.set("UNSEEN", rows.length + 1);
+      else if (mode === "UIDNEXT_ZERO") attributes.set("UIDNEXT", 0);
+      else if (mode === "UIDVALIDITY_ZERO") attributes.set("UIDVALIDITY", 0);
+      const suffix = [...attributes]
+        .map(([name, value]) => `${name} ${value}`)
+        .join(" ");
+      sendMailboxResponse("* STATUS ", mailbox, ` (${suffix})`);
     };
     const sendMailboxResponse = (prefix, name, suffix = "") => {
       if (!utf8AcceptEnabled) {
@@ -336,12 +434,28 @@ export async function createCompatibilityFixture({
           capabilities.includes("LIST-STATUS") &&
           /\bRETURN\s*\(/i.test(args);
         if (withStatus) counts.listStatusReplies++;
+        const mode = nextListMode(
+          withStatus ? listStatusResponses : listResponses,
+          withStatus,
+        );
+        if (withStatus && ["NO", "BAD"].includes(mode)) {
+          send(`${tag} ${mode} fixture refused LIST-STATUS`);
+          return;
+        }
+        let emitted = 0;
         for (const name of mailboxes.keys()) {
+          if (["EOF_PARTIAL", "MISMATCHED_TAG"].includes(mode) && emitted >= 1)
+            break;
           const flags = name === "All Mail" ? "(\\All)" : "()";
           sendMailboxResponse(`* ${command} ${flags} "/" `, name);
-          if (withStatus) sendStatus(name);
+          if (withStatus && mode !== "MISSING_STATUS") sendStatus(name);
+          emitted++;
         }
-        send(`${tag} OK listed`);
+        if (["EOF", "EOF_PARTIAL", "MISMATCHED_TAG"].includes(mode)) {
+          if (mode === "MISMATCHED_TAG") send(`${tag}X OK listed`);
+          socket.end();
+        } else
+          send(`${tag} ${["NO", "BAD"].includes(mode) ? mode : "OK"} listed`);
       } else if (command === "STATUS") {
         const rawName = args.match(/^"(?:[^"\\]|\\.)*"|^\S+/)?.[0] ?? "";
         const mailbox = decodeMailbox(
@@ -350,8 +464,27 @@ export async function createCompatibilityFixture({
             .replaceAll('\\"', '"')
             .replaceAll("\\\\", "\\"),
         );
-        sendStatus(mailbox);
-        send(`${tag} OK status`);
+        const mode = nextStatusMode(mailbox);
+        if (mode === "NO_DATA") {
+          send(`${tag} OK status`);
+        } else if (mode === "WRONG_MAILBOX") {
+          sendStatus(`${mailbox}-wrong-mailbox`);
+          send(`${tag} OK status`);
+        } else if (["EOF", "EOF_BEFORE_DATA"].includes(mode)) {
+          socket.end();
+        } else {
+          sendStatus(
+            mailbox,
+            mode === "EOF_AFTER_DATA" ? "EMPTY_AFTER_DATA" : mode,
+          );
+          if (mode === "MISMATCHED_TAG") {
+            send(`${tag}X OK status`);
+            socket.end();
+          } else if (mode === "EOF_AFTER_DATA") socket.end();
+          else if (["NO", "BAD"].includes(mode))
+            send(`${tag} ${mode} status refused`);
+          else send(`${tag} OK status`);
+        }
       } else if (
         (command === "UID" && /^FETCH\b/i.test(args)) ||
         command === "FETCH"
@@ -448,9 +581,28 @@ export async function createCompatibilityFixture({
             (message.subject ?? "").toLocaleLowerCase().includes(wanted),
           );
         }
-        send(
-          `* SEARCH ${matches.map((message) => message.uid).join(" ")}`.trimEnd(),
-        );
+        const mode = nextUidSearchMode();
+        const searchLine =
+          `* SEARCH ${matches.map((message) => message.uid).join(" ")}`.trimEnd();
+        if (mode === "EOF") {
+          socket.end();
+          return;
+        }
+        if (mode === "EOF_AFTER_DATA") {
+          send(searchLine);
+          socket.end();
+          return;
+        }
+        send(searchLine);
+        if (mode === "MISMATCHED_TAG") {
+          send(`${tag}X OK searched`);
+          socket.end();
+          return;
+        }
+        if (["NO", "BAD"].includes(mode)) {
+          send(`${tag} ${mode} search refused`);
+          return;
+        }
         send(`${tag} OK searched`);
       } else if (command === "RENAME") {
         const values = args.match(/"(?:[^"\\]|\\.)*"|\S+/g) ?? [];
@@ -497,7 +649,7 @@ export async function createCompatibilityFixture({
         );
         const selected = selectedMessages(selectedMailbox);
         const target = mailboxes.get(destination);
-        const wanted = new Set(set.split(",").map(Number));
+        const wanted = parseUidSet(set);
         for (const message of selected.filter((row) => wanted.has(row.uid))) {
           if (target) {
             target.push({
@@ -519,6 +671,18 @@ export async function createCompatibilityFixture({
         const [, set = "", operation = ""] =
           /^STORE\s+(\S+)\s+([\s\S]+)$/i.exec(args) ?? [];
         const changesReadOrStar = /\\(?:Seen|Flagged)/i.test(operation);
+        const changesKeyword = /\\(?:Answered)\b|\$Forwarded\b/i.test(
+          operation,
+        );
+        if (
+          changesKeyword &&
+          rejectKeywordStoreMailboxes.includes(selectedMailbox)
+        ) {
+          counts.rejectedKeywordStores++;
+          send(`${tag} NO keyword update rejected by fixture`);
+          return;
+        }
+        if (/\\Deleted/i.test(operation)) counts.deletedFlagStores++;
         if (changesReadOrStar) {
           counts.flagStoreTargets.push({
             mailbox: selectedMailbox,
@@ -538,7 +702,7 @@ export async function createCompatibilityFixture({
           send(`${tag} NO flag update rejected by fixture`);
           return;
         }
-        const wanted = new Set(set.split(",").map(Number));
+        const wanted = parseUidSet(set);
         for (const message of selectedMessages(selectedMailbox)) {
           if (!wanted.has(message.uid)) continue;
           if (operation.includes("\\Deleted") && operation.startsWith("+")) {
@@ -563,20 +727,15 @@ export async function createCompatibilityFixture({
         }
         send(`${tag} OK stored`);
       } else if (command === "UID" && /^EXPUNGE\b/i.test(args)) {
-        const wanted = new Set(
-          args
-            .replace(/^EXPUNGE\s+/i, "")
-            .split(",")
-            .map(Number),
-        );
-        const rows = selectedMessages(selectedMailbox);
-        mailboxes.set(
+        counts.expungeCommands++;
+        expungeDeleted(
           selectedMailbox,
-          rows.filter(
-            (message) =>
-              !(wanted.has(message.uid) && message.flags.includes("\\Deleted")),
-          ),
+          args.replace(/^EXPUNGE\s+/i, ""),
         );
+        send(`${tag} OK expunged`);
+      } else if (command === "EXPUNGE") {
+        counts.expungeCommands++;
+        expungeDeleted(selectedMailbox, "");
         send(`${tag} OK expunged`);
       } else if (command === "APPEND") {
         const parsed =
@@ -610,7 +769,9 @@ export async function createCompatibilityFixture({
           replayScenariosArmed && changedUidValidity.has(selectedMailbox)
             ? currentUidValidity + 1
             : currentUidValidity;
-        send(`* OK [UIDVALIDITY ${selectedUidValidity}] generation`);
+        if (!omitExamineUidValidity) {
+          send(`* OK [UIDVALIDITY ${selectedUidValidity}] generation`);
+        }
         send(`* OK [UIDNEXT ${nextUid(selectedMailbox)}] next`);
         send(`${tag} OK [READ-WRITE] selected`);
       } else {

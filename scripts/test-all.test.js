@@ -214,7 +214,7 @@ test("runCommand passes each step its own timeout", () => {
     seen.push({ timeout: options.timeout });
     return { status: 0, stdout: "", stderr: "" };
   };
-  for (const name of ["releaseAssets", "rustClippy"]) {
+  for (const name of ["releaseAssets", "rustClippy", "vendoredImap"]) {
     runCommand(
       plan.find((step) => step.name === name),
       results,
@@ -226,8 +226,19 @@ test("runCommand passes each step its own timeout", () => {
   }
   assert.equal(seen[0].timeout, 300_000);
   assert.equal(seen[1].timeout, 4242);
+  assert.equal(seen[2].timeout, 4242);
   assert.equal(results.releaseAssets.status, "passed");
   assert.equal(results.rustClippy.status, "passed");
+  assert.equal(results.vendoredImap.status, "passed");
+});
+
+test("the E2E step timeout covers the full browser suite", () => {
+  const e2e = createStepPlan({ npm: "npm", env: {} }).find(
+    (step) => step.name === "e2e",
+  );
+  assert.ok(e2e, "the quality gate includes an E2E step");
+  // The suite takes about five minutes locally and longer on single-worker CI.
+  assert.ok(e2e.timeout >= 1_800_000, `E2E timeout is ${e2e.timeout} ms`);
 });
 
 test("parseTest extracts vitest counts from colored output", () => {

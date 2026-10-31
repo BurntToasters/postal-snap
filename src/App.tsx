@@ -515,6 +515,7 @@ export default function App() {
   return (
     <>
       <ContextMenuHost />
+      <WindowChrome />
       <div className="app-viewport" inert={settingsOpen || undefined}>
         {mainContent}
       </div>
@@ -559,7 +560,6 @@ export default function App() {
         </ErrorBoundary>
       ) : null}
       <NoticeRegion />
-      <WindowChrome />
     </>
   );
 }

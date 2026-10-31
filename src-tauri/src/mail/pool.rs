@@ -93,6 +93,13 @@ fn can_repark(account_id: &str, generation: u64) -> bool {
     generation_of(account_id) == generation
 }
 
+#[cfg(test)]
+fn is_parked(account_id: &str) -> bool {
+    POOL.lock()
+        .ok()
+        .is_some_and(|pool| pool.parked.contains_key(account_id))
+}
+
 /// Exclusive use of an account's IMAP session. Call [`Lease::release`] after
 /// a successful operation to park it for the next caller; dropping the lease
 /// closes the connection instead.
@@ -296,6 +303,13 @@ pub fn generation(account_id: &str) -> u64 {
         .unwrap_or(0)
 }
 
+/// Drop a parked session after sleep without invalidating credentials.
+pub fn discard_parked(account_id: &str) {
+    if let Ok(mut pool) = POOL.lock() {
+        pool.parked.remove(account_id);
+    }
+}
+
 /// Drop any parked session for an account: its password changed, it was
 /// removed, or its server settings were edited.
 pub fn forget(account_id: &str) {
@@ -308,7 +322,7 @@ pub fn forget(account_id: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{forget, parked_age, MAX_PARKED, REVALIDATE_AFTER};
+    use super::{discard_parked, forget, parked_age, MAX_PARKED, REVALIDATE_AFTER};
     use std::time::Duration;
 
     #[test]
@@ -349,6 +363,18 @@ mod tests {
         assert!(!flags.id);
         assert!(!flags.list_status);
         assert!(!flags.special_use);
+    }
+
+    #[test]
+    fn discard_parked_drops_session_without_bumping_generation() {
+        let id = "acc-discard-parked";
+        forget(id);
+        let generation = super::generation_of(id);
+        assert!(!super::is_parked(id));
+        discard_parked(id);
+        assert_eq!(super::generation_of(id), generation);
+        forget(id);
+        assert_eq!(super::generation_of(id), generation + 1);
     }
 
     #[test]

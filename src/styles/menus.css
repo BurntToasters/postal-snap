@@ -105,8 +105,12 @@
   top: calc(100% + 6px);
   right: 0;
   min-width: var(--reader-more-menu-min-width);
-  /* Long folder lists scroll inside the menu instead of off screen. */
+  /* Long folder lists scroll inside the menu instead of off screen. The
+     toolbar also pins the menu with inline fixed coordinates, so cap the
+     width here as well to keep labels inside narrow viewports. */
+  max-width: min(28rem, calc(100vw - 16px));
   max-height: min(70vh, 34rem);
+  overflow-x: hidden;
   overflow-y: auto;
 }
 

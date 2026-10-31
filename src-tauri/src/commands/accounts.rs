@@ -396,15 +396,9 @@ pub async fn erase_all_data(app: AppHandle, state: State<'_, AppState>) -> Comma
 
 /// Sweeps attachment folders that no remaining account owns. Accounts whose
 /// removal failed still own theirs, so they are kept. Returns how many folders
-/// remain; an unreadable account list counts as one, since owners are unknown.
+/// remain; failed ownership checks preserve files and count as leftovers.
 pub(crate) async fn sweep_unowned_attachments(db: &crate::db::Database, root: PathBuf) -> usize {
-    match db.list_accounts() {
-        Ok(accounts) => {
-            let active = accounts.into_iter().map(|account| account.id).collect();
-            cleanup_orphaned_account_dirs(root, active).await
-        }
-        Err(_) => 1,
-    }
+    cleanup_orphaned_account_dirs(root, db).await
 }
 
 const ERASE_PENDING_DETAIL: &str =

@@ -182,6 +182,23 @@ impl Database {
         tx.commit().map_err(db_error)
     }
 
+    /// Whether an offline op row exists for this dedupe key, including deferred rows.
+    pub fn has_offline_op_dedupe_key(
+        &self,
+        account_id: &str,
+        dedupe_key: &str,
+    ) -> Result<bool, String> {
+        self.conn()?
+            .query_row(
+                "SELECT 1 FROM offline_ops WHERE account_id=?1 AND dedupe_key=?2 LIMIT 1",
+                params![account_id, dedupe_key],
+                |_| Ok(()),
+            )
+            .optional()
+            .map(|row| row.is_some())
+            .map_err(db_error)
+    }
+
     pub fn queue_operation<T: serde::Serialize>(
         &self,
         account_id: &str,

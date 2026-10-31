@@ -258,8 +258,12 @@ function FolderTreeNode({
           tone={mailbox.role}
           mailboxId={mailbox.id}
           onClick={() => onFolderClick(mailbox)}
-          onRename={personal ? () => onRename(mailbox) : undefined}
-          onDelete={personal ? () => onDelete(mailbox) : undefined}
+          onRename={
+            personal && depth === 0 ? () => onRename(mailbox) : undefined
+          }
+          onDelete={
+            personal && depth === 0 ? () => onDelete(mailbox) : undefined
+          }
           onDropMessages={onDropMessages}
         />
       </div>

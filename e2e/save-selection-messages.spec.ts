@@ -45,10 +45,10 @@ test("save selected messages includes every checked message", async ({
     page.getByRole("option", { name: /Weekend plans/i }),
   ).toBeVisible();
   await expect(
-    page.getByRole("checkbox", { name: "Select Library hours" }),
+    page.locator('.message-select[aria-label="Select Library hours"]'),
   ).toBeChecked();
   await expect(
-    page.getByRole("checkbox", { name: "Select Older family note" }),
+    page.locator('.message-select[aria-label="Select Older family note"]'),
   ).toBeChecked();
   await expect(
     page.getByRole("toolbar", { name: /2 selected/i }),

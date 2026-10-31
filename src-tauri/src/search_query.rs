@@ -555,15 +555,11 @@ impl ParsedSearch {
         if let Some(size) = self.smaller_than {
             keys.push(format!("SMALLER {size}"));
         }
-        let text = self
-            .plain
-            .iter()
-            .map(|term| term.text.as_str())
-            .collect::<Vec<_>>()
-            .join(" ");
-        if let Some(quoted) = imap_quote(&text) {
-            ascii &= text.is_ascii();
-            keys.push(format!("TEXT {quoted}"));
+        for term in &self.plain {
+            if let Some(quoted) = imap_quote(&term.text) {
+                ascii &= term.text.is_ascii();
+                keys.push(format!("TEXT {quoted}"));
+            }
         }
         if keys.is_empty() {
             // Attachment names have no IMAP key. ALL would list the mailbox
@@ -870,6 +866,15 @@ mod tests {
         assert_eq!(
             parse("before:0001-05-05").imap_criteria().unwrap(),
             "BEFORE 5-May-0001"
+        );
+        // IMAP TEXT is contiguous; separate keys AND-match like local FTS.
+        assert_eq!(
+            parse("hello world").imap_criteria().unwrap(),
+            "TEXT \"hello\" TEXT \"world\""
+        );
+        assert_eq!(
+            parse("\"hello world\"").imap_criteria().unwrap(),
+            "TEXT \"hello world\""
         );
     }
 

@@ -26,13 +26,13 @@ test("select unread checks only unread messages in the mailbox", async ({
     .getByRole("menuitem", { name: "Select unread", exact: true })
     .click();
   await expect(
-    page.getByRole("checkbox", { name: /Weekend plans/i }),
+    page.locator('.message-select[aria-label="Select Weekend plans"]'),
   ).toBeChecked();
   await expect(
-    page.getByRole("checkbox", { name: /Older family note/i }),
+    page.locator('.message-select[aria-label="Select Older family note"]'),
   ).toBeChecked();
   await expect(
-    page.getByRole("checkbox", { name: /Library hours/i }),
+    page.locator('.message-select[aria-label="Select Library hours"]'),
   ).not.toBeChecked();
   await expect(page.getByRole("toolbar", { name: "2 selected" })).toBeVisible();
 });

@@ -19,7 +19,7 @@ svg {
 }
 
 @media (forced-colors: active) {
-  .switch-row input {
+  .switch-row input[type="checkbox"] {
     width: var(--target-size);
     min-width: var(--target-size);
     appearance: auto;
@@ -27,8 +27,8 @@ svg {
     accent-color: Highlight;
   }
 
-  .switch-row input::before,
-  .switch-row input::after {
+  .switch-row input[type="checkbox"]::before,
+  .switch-row input[type="checkbox"]::after {
     display: none;
   }
 

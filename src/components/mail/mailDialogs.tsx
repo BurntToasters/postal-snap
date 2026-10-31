@@ -114,7 +114,7 @@ export function MoveFolderDialog({
   );
   return createPortal(
     <div
-      className="settings-confirm-overlay"
+      className="modal-layer settings-confirm-overlay"
       onClick={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}

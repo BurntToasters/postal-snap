@@ -78,7 +78,7 @@ function RecipientPreview({ addresses }: { addresses: string[] }) {
   const full = addresses.join(", ");
   const extra = addresses.length > 2;
   return (
-    <span className="recipient-preview" title={extra ? full : undefined}>
+    <span className="recipient-preview" title={full || undefined}>
       <span aria-hidden={extra ? true : undefined}>
         {recipientPreview(addresses)}
       </span>

@@ -271,6 +271,19 @@
   }
 }
 
+@media (max-width: 760px) and (max-height: 640px) {
+  .settings-layout {
+    align-content: start;
+    grid-template-rows: max-content max-content max-content;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .settings-content {
+    overflow: visible;
+  }
+}
+
 @media (max-width: 560px) {
   .form-grid.two-columns,
   .server-settings,
@@ -309,6 +322,24 @@
 
   .settings-row select {
     width: 100%;
+    max-width: none;
+  }
+
+  .account-overview {
+    gap: var(--space-4);
+  }
+
+  .account-overview-row {
+    flex-wrap: wrap;
+  }
+
+  .account-overview-item {
+    flex-direction: column;
+  }
+
+  .account-overview-order {
+    flex-direction: row;
+    justify-content: flex-end;
   }
 
   .address-fields label {
@@ -452,6 +483,24 @@ html[data-text-scale="large"] :is(.settings-row, .switch-row) {
 
 html[data-text-scale="large"] .settings-row select {
   width: 100%;
+  max-width: none;
+}
+
+html[data-text-scale="large"] .account-overview {
+  gap: var(--space-4);
+}
+
+html[data-text-scale="large"] .account-overview-row {
+  flex-wrap: wrap;
+}
+
+html[data-text-scale="large"] .account-overview-item {
+  flex-direction: column;
+}
+
+html[data-text-scale="large"] .account-overview-order {
+  flex-direction: row;
+  justify-content: flex-end;
 }
 
 /* Large text wraps reader actions; a pill shape reads as broken. */

@@ -25,7 +25,10 @@ test("a closed folder keeps unread mail from inside it", async ({ page }) => {
     name: "Projects, 2 unread in subfolders",
   });
   await expect(projects).toBeVisible();
-  await expect(projects).toHaveAttribute("title", "2 unread in subfolders");
+  await expect(projects).toHaveAttribute(
+    "title",
+    "Projects, 2 unread in subfolders",
+  );
   await page.getByRole("button", { name: "Expand Projects" }).click();
   await expect(
     page.getByRole("button", { name: "Projects", exact: true }),

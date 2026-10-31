@@ -596,6 +596,14 @@ pub(crate) fn apply_filter_rules(
                 uid_validity: Some(validity),
             };
             let dedupe_key = format!("move:{id}");
+            match db.has_offline_op_dedupe_key(account_id, &dedupe_key) {
+                Ok(true) => continue,
+                Ok(false) => {}
+                Err(_) => {
+                    complete = false;
+                    continue;
+                }
+            }
             if db
                 .queue_operation(account_id, "move", &operation, Some(&dedupe_key))
                 .is_err()

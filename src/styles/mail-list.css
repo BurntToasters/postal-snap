@@ -223,6 +223,7 @@ html[data-text-scale="large"] .mailbox-filter-control {
 }
 
 .message-row-wrap {
+  --row-leading-inset: 0px;
   position: relative;
   display: flex;
   align-items: stretch;
@@ -260,9 +261,11 @@ html[data-text-scale="large"] .mailbox-filter-control {
   position: absolute;
   inset-block: var(--list-row-margin-block);
   inset-inline-end: var(--list-row-inset);
-  /* Never cover half the row, so the left half stays clickable. */
+  /* Keep the row center clear after a thread child shifts inward. */
   width: max-content;
-  max-width: calc(48% - var(--list-row-inset));
+  max-width: calc(
+    50% - var(--list-row-inset) - var(--row-leading-inset) / 2 - 1px
+  );
   z-index: 1;
   display: flex;
   align-items: center;
@@ -405,8 +408,9 @@ html[data-text-scale="large"] .mailbox-filter-control {
 }
 
 .message-row-wrap.thread-child {
+  --row-leading-inset: 18px;
   border-top: 1px dashed var(--border);
-  padding-left: 18px;
+  padding-inline-start: var(--row-leading-inset);
 }
 
 .message-row-wrap.thread-end {

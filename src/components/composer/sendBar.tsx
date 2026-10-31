@@ -1,5 +1,7 @@
 import {
+  useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   type Dispatch,
   type KeyboardEvent,
@@ -7,6 +9,7 @@ import {
   type RefObject,
   type SetStateAction,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   Archive,
   ChevronDown,
@@ -18,9 +21,10 @@ import {
   Send,
   Sunrise,
 } from "lucide-react";
-import { formatMessageDate, shortcutMod } from "../../format";
+import { formatMessageDate, shortcutChord } from "../../format";
 import { strings } from "../../i18n";
 import { moveMenuFocus } from "../toolbarNav";
+import { placeSendMenu } from "./sendMenuPlacement";
 import { tonightAtNine, tomorrowAtEight } from "./schedule";
 
 export interface SendBarProps {
@@ -70,12 +74,41 @@ export function SendBar({
   const chevronRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
+  // Placed before paint, and again when the schedule form changes its height.
+  const placeMenu = useCallback(() => {
+    const menu = menuRef.current;
+    const trigger = sendMenuRef.current;
+    if (menu && trigger) placeSendMenu(menu, trigger);
+  }, [sendMenuRef]);
+
+  useLayoutEffect(() => {
+    if (sendMenuOpen) placeMenu();
+  }, [placeMenu, scheduleOpen, sendMenuOpen]);
+
   useEffect(() => {
     if (!sendMenuOpen) return;
     menuRef.current
       ?.querySelector<HTMLElement>('[role="menuitem"]:not([disabled])')
       ?.focus();
-  }, [sendMenuOpen]);
+    const view = window.visualViewport;
+    // The footer scrolls sideways when narrow; scrolls inside the menu are ignored.
+    const onScroll = (event: Event) => {
+      const inMenu =
+        event.target instanceof Node && menuRef.current?.contains(event.target);
+      if (!inMenu) placeMenu();
+    };
+    window.addEventListener("resize", placeMenu);
+    view?.addEventListener("resize", placeMenu);
+    document.addEventListener("scroll", onScroll, {
+      capture: true,
+      passive: true,
+    });
+    return () => {
+      window.removeEventListener("resize", placeMenu);
+      view?.removeEventListener("resize", placeMenu);
+      document.removeEventListener("scroll", onScroll, true);
+    };
+  }, [placeMenu, sendMenuOpen]);
 
   function closeMenu() {
     setScheduleOpen(false);
@@ -95,13 +128,13 @@ export function SendBar({
           aria-label={
             sending ? strings.composer.sending : strings.composer.send
           }
-          title={`${sending ? strings.composer.sending : strings.composer.send} (${shortcutMod()}↵)`}
+          title={`${sending ? strings.composer.sending : strings.composer.send} (${shortcutChord("↵")})`}
         >
           <Send />
           <span>
             {sending ? strings.composer.sending : strings.composer.send}
           </span>
-          <kbd className="send-kbd-hint">{`${shortcutMod()}↵`}</kbd>
+          <kbd className="send-kbd-hint">{shortcutChord("↵")}</kbd>
         </button>
         <button
           className="primary-button send-chevron"
@@ -119,113 +152,138 @@ export function SendBar({
         >
           <ChevronDown aria-hidden="true" />
         </button>
-        {sendMenuOpen ? (
-          <div
-            className="send-menu app-menu"
-            ref={menuRef}
-            role="menu"
-            aria-label={strings.composer.sendOptions}
-            onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
-              if (event.key === "Escape" || event.key === "Tab") {
-                event.preventDefault();
-                event.stopPropagation();
-                closeMenu();
-                return;
-              }
-              if (
-                event.target instanceof HTMLElement &&
-                event.target.matches("input, textarea")
-              )
-                return;
-              moveMenuFocus(event);
-            }}
-          >
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                setSendMenuOpen(false);
-                void sendMessage();
-              }}
-            >
-              <Send aria-hidden="true" />
-              {strings.composer.sendNow}
-            </button>
-            {sendAndArchive ? (
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setSendMenuOpen(false);
-                  void sendAndArchive();
+        {/* Portaled to body so the footer's scroll container cannot clip it.
+            Presses stop here so the composer's outside-press listener ignores them. */}
+        {sendMenuOpen
+          ? createPortal(
+              <div
+                className="send-menu app-menu"
+                ref={menuRef}
+                role="menu"
+                aria-label={strings.composer.sendOptions}
+                onPointerDown={(event) => event.stopPropagation()}
+                onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
+                  const inForm =
+                    event.target instanceof HTMLElement &&
+                    event.target.closest(".schedule-form");
+                  if (event.key === "Tab" && inForm) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const input = inForm.querySelector("input");
+                    const submit = inForm.querySelector("button");
+                    // WebKit's native Tab order can skip buttons.
+                    const next =
+                      event.target === input && !submit?.disabled
+                        ? submit
+                        : input;
+                    next?.focus();
+                    return;
+                  }
+                  if (event.key === "Escape" || event.key === "Tab") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    closeMenu();
+                    return;
+                  }
+                  if (
+                    event.target instanceof HTMLElement &&
+                    event.target.matches("input, textarea")
+                  )
+                    return;
+                  moveMenuFocus(event);
                 }}
               >
-                <Archive aria-hidden="true" />
-                {strings.composer.sendAndArchive}
-              </button>
-            ) : null}
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                setSendMenuOpen(false);
-                void sendMessage(tonightAtNine().toISOString());
-              }}
-            >
-              <Moon aria-hidden="true" />
-              {strings.composer.sendTonight}
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                setSendMenuOpen(false);
-                void sendMessage(tomorrowAtEight().toISOString());
-              }}
-            >
-              <Sunrise aria-hidden="true" />
-              {strings.composer.sendTomorrow}
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              aria-expanded={scheduleOpen}
-              onClick={() => setScheduleOpen((value) => !value)}
-            >
-              <Clock aria-hidden="true" />
-              {strings.composer.sendCustom}
-            </button>
-            {scheduleOpen ? (
-              <form
-                className="schedule-form"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  const iso = new Date(scheduleValue).toISOString();
-                  setSendMenuOpen(false);
-                  setScheduleOpen(false);
-                  void sendMessage(iso);
-                }}
-              >
-                <label>
-                  <span>{strings.composer.scheduleTime}</span>
-                  <input
-                    type="datetime-local"
-                    required
-                    value={scheduleValue}
-                    onChange={(event) => setScheduleValue(event.target.value)}
-                  />
-                </label>
                 <button
-                  className="primary-button"
-                  type="submit"
-                  disabled={!scheduleValue}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setSendMenuOpen(false);
+                    void sendMessage();
+                  }}
                 >
-                  {strings.composer.scheduleAction}
+                  <Send aria-hidden="true" />
+                  {strings.composer.sendNow}
                 </button>
-              </form>
-            ) : null}
-          </div>
-        ) : null}
+                {sendAndArchive ? (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setSendMenuOpen(false);
+                      void sendAndArchive();
+                    }}
+                  >
+                    <Archive aria-hidden="true" />
+                    {strings.composer.sendAndArchive}
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setSendMenuOpen(false);
+                    void sendMessage(tonightAtNine().toISOString());
+                  }}
+                >
+                  <Moon aria-hidden="true" />
+                  {strings.composer.sendTonight}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setSendMenuOpen(false);
+                    void sendMessage(tomorrowAtEight().toISOString());
+                  }}
+                >
+                  <Sunrise aria-hidden="true" />
+                  {strings.composer.sendTomorrow}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  aria-expanded={scheduleOpen}
+                  onClick={() => setScheduleOpen((value) => !value)}
+                >
+                  <Clock aria-hidden="true" />
+                  {strings.composer.sendCustom}
+                </button>
+                {scheduleOpen ? (
+                  <form
+                    className="schedule-form"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      const iso = new Date(scheduleValue).toISOString();
+                      setSendMenuOpen(false);
+                      setScheduleOpen(false);
+                      void sendMessage(iso);
+                    }}
+                  >
+                    <label>
+                      <span>{strings.composer.scheduleTime}</span>
+                      <input
+                        autoFocus
+                        type="datetime-local"
+                        required
+                        value={scheduleValue}
+                        onChange={(event) =>
+                          setScheduleValue(event.target.value)
+                        }
+                      />
+                    </label>
+                    <button
+                      className="primary-button"
+                      type="submit"
+                      disabled={!scheduleValue}
+                    >
+                      {strings.composer.scheduleAction}
+                    </button>
+                  </form>
+                ) : null}
+              </div>,
+              document.body,
+            )
+          : null}
       </div>
       <button
         className="toolbar-button"
@@ -233,7 +291,7 @@ export function SendBar({
         onClick={() => void saveDraft(false)}
         disabled={sending || saveState === "saving"}
         aria-keyshortcuts="Meta+S Control+S"
-        title={`${strings.composer.saveDraft} (${shortcutMod()}+S)`}
+        title={`${strings.composer.saveDraft} (${shortcutChord("S")})`}
       >
         <Save aria-hidden="true" />
         {saveState === "saving"

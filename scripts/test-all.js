@@ -12,6 +12,8 @@ const appVersion = packageJson.version ?? "unknown";
 const scriptVersion = "1.1.0";
 const defaultTimeoutMs = 300_000;
 const rustTimeoutMs = process.platform === "win32" ? 1_200_000 : 600_000;
+// The full browser suite outgrows the default step timeout.
+const e2eTimeoutMs = 1_800_000;
 
 const colors = {
   reset: "\x1b[0m",
@@ -42,8 +44,13 @@ const STEP_INFO = {
   typecheck: { name: "typecheck", label: "TypeCheck" },
   "typecheck:test": { name: "typecheckTest", label: "TypeCheck(Test)" },
   test: { name: "test", label: "Tests", vitest: true },
-  "test:e2e": { name: "e2e", label: "E2E" },
+  "test:e2e": { name: "e2e", label: "E2E", e2e: true },
   "test:rust": { name: "rustTest", label: "Rust Test", rust: true },
+  "test:vendored-imap": {
+    name: "vendoredImap",
+    label: "Vendored IMAP",
+    rust: true,
+  },
   "test:release-assets": { name: "releaseAssets", label: "Release Assets" },
   build: { name: "build", label: "Build" },
 };
@@ -67,6 +74,7 @@ export function qualityGateSteps(env = process.env) {
     ["test"],
     ...(e2eEnabled(env) ? [["run", "test:e2e"]] : []),
     ["run", "test:rust"],
+    ["run", "test:vendored-imap"],
     ["run", "test:release-assets"],
     ["run", "build"],
   ];
@@ -94,7 +102,11 @@ export function createStepPlan({
       label: info.label,
       command: npm,
       args,
-      timeout: info.rust ? rustTimeout : defaultTimeoutMs,
+      timeout: info.rust
+        ? rustTimeout
+        : info.e2e
+          ? e2eTimeoutMs
+          : defaultTimeoutMs,
       parser: info.vitest ? parseTest : undefined,
       detail: info.vitest ? formatTestDetail : undefined,
     };

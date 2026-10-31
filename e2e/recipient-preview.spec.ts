@@ -42,5 +42,5 @@ test("a short To line lists each address", async ({ page }) => {
   await openWeekend(page);
   const to = page.locator(".recipient-preview").first();
   await expect(to).toHaveText("sam@icloud.com");
-  await expect(to).not.toHaveAttribute("title");
+  await expect(to).toHaveAttribute("title", "sam@icloud.com");
 });

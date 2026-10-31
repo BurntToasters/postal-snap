@@ -49,6 +49,7 @@ import { ComposerHeader } from "./composer/composerHeader";
 import { FormatToolbar } from "./composer/formatToolbar";
 import { clipboardImages } from "./composer/pasteImage";
 import { SendBar } from "./composer/sendBar";
+import { AttachmentPreview } from "./composer/attachmentPreview";
 import {
   htmlToQuotedPlainText,
   isPlainPasteShortcut,
@@ -479,6 +480,8 @@ export function Composer({ accountId, onDraftSaved }: Props) {
     setError,
   });
   pasteImageRef.current = pasteImage;
+  // The Preview button that opened the picture preview gets focus back on close.
+  const previewTriggerRef = useRef<HTMLButtonElement>(null);
 
   const buildDraft = useCallback((): ComposeDraft => {
     const plain = bodyFormat === "plain";
@@ -610,7 +613,8 @@ export function Composer({ accountId, onDraftSaved }: Props) {
   }, [accountId]);
 
   async function requestClose() {
-    if (isDiscarding.current) return;
+    // The picture preview owns Escape and close while it is open.
+    if (attachmentPreview || isDiscarding.current) return;
     if (sending || saveInFlight.current) {
       pendingClose.current = true;
       return;
@@ -709,7 +713,12 @@ export function Composer({ accountId, onDraftSaved }: Props) {
     saveDraft,
     setError,
     warningSetters,
-    shortcutsPaused: minimized || warningOpen || confirmPlain,
+    shortcutsPaused:
+      minimized ||
+      warningOpen ||
+      confirmPlain ||
+      linkDialogOpen ||
+      attachmentPreview !== null,
   });
 
   useLayoutEffect(() => {
@@ -719,7 +728,7 @@ export function Composer({ accountId, onDraftSaved }: Props) {
     const apply = () => {
       document
         .querySelectorAll<HTMLElement>(
-          ".composer-window .tiptap, .composer-plain-editor",
+          ".composer-window .composer-body, .composer-window .tiptap, .composer-plain-editor",
         )
         .forEach((node) => {
           node.scrollTop = top;
@@ -733,10 +742,15 @@ export function Composer({ accountId, onDraftSaved }: Props) {
   function setComposerMinimized(value: SetStateAction<boolean>) {
     const next = typeof value === "function" ? value(minimized) : value;
     if (next) {
-      const scrolling = document.querySelector<HTMLElement>(
-        ".composer-window .tiptap, .composer-plain-editor",
-      );
-      composerPlace.current = scrolling?.scrollTop ?? 0;
+      let top = 0;
+      document
+        .querySelectorAll<HTMLElement>(
+          ".composer-window .composer-body, .composer-window .tiptap, .composer-plain-editor",
+        )
+        .forEach((node) => {
+          top = Math.max(top, node.scrollTop);
+        });
+      composerPlace.current = top;
     }
     setMinimized(next);
   }
@@ -1012,6 +1026,7 @@ export function Composer({ accountId, onDraftSaved }: Props) {
       role="dialog"
       aria-modal={keepSourceVisible ? "false" : "true"}
       aria-labelledby="composer-title"
+      inert={attachmentPreview ? true : undefined}
     >
       {keepSourceVisible ? null : (
         <button
@@ -1054,182 +1069,191 @@ export function Composer({ accountId, onDraftSaved }: Props) {
           setMaximized={setMaximized}
           requestClose={requestClose}
         />
-        <AddressFields
-          accountId={accountId}
-          availableSenders={availableSenders}
-          fromAddress={fromAddress}
-          fromValue={fromValue}
-          setFromAddress={chooseFromAddress}
-          to={to}
-          setTo={setTo}
-          cc={cc}
-          setCc={setCc}
-          bcc={bcc}
-          setBcc={setBcc}
-          showCc={showCc}
-          setShowCc={setShowCc}
-          showBcc={showBcc}
-          setShowBcc={setShowBcc}
-          subject={subject}
-          setSubject={setSubject}
-          recipientError={recipientError}
-          setRecipientError={setRecipientError}
-          subjectError={subjectError}
-          setSubjectError={setSubjectError}
-          subjectLocked={redirecting}
-          replyTo={redirecting ? undefined : replyTo}
-          setReplyTo={setReplyTo}
-          replyToError={replyToError}
-          setReplyToError={setReplyToError}
-          markUnsaved={markUnsaved}
-          focusTo={!focusLetter}
-        />
-        {seed?.sourceMessage ? (
-          <details className="compose-original">
-            <summary>{strings.composer.originalMessage}</summary>
-            <p>
-              {seed.sourceMessage.senderName ||
-                seed.sourceMessage.senderAddress}
-              {" — "}
-              {seed.sourceMessage.subject || strings.common.noSubject}
+        {/* section (not div): keeps `.composer-window > div:has(.composer-editor)`
+            resolving to the editor wrap for existing metric assertions. */}
+        <section className="composer-body">
+          <AddressFields
+            accountId={accountId}
+            availableSenders={availableSenders}
+            fromAddress={fromAddress}
+            fromValue={fromValue}
+            setFromAddress={chooseFromAddress}
+            to={to}
+            setTo={setTo}
+            cc={cc}
+            setCc={setCc}
+            bcc={bcc}
+            setBcc={setBcc}
+            showCc={showCc}
+            setShowCc={setShowCc}
+            showBcc={showBcc}
+            setShowBcc={setShowBcc}
+            subject={subject}
+            setSubject={setSubject}
+            recipientError={recipientError}
+            setRecipientError={setRecipientError}
+            subjectError={subjectError}
+            setSubjectError={setSubjectError}
+            subjectLocked={redirecting}
+            replyTo={redirecting ? undefined : replyTo}
+            setReplyTo={setReplyTo}
+            replyToError={replyToError}
+            setReplyToError={setReplyToError}
+            markUnsaved={markUnsaved}
+            focusTo={!focusLetter}
+          />
+          {seed?.sourceMessage ? (
+            <details className="compose-original">
+              <summary>{strings.composer.originalMessage}</summary>
+              <p>
+                {seed.sourceMessage.senderName ||
+                  seed.sourceMessage.senderAddress}
+                {" — "}
+                {seed.sourceMessage.subject || strings.common.noSubject}
+              </p>
+              <pre>
+                {readableMessageText(seed.sourceMessage) ||
+                  strings.composer.originalEmpty}
+              </pre>
+            </details>
+          ) : null}
+          {redirecting ? (
+            <p className="composer-redirect-note">
+              {strings.composer.redirectNote}
             </p>
-            <pre>
-              {readableMessageText(seed.sourceMessage) ||
-                strings.composer.originalEmpty}
-            </pre>
-          </details>
-        ) : null}
-        {redirecting ? (
-          <p className="composer-redirect-note">
-            {strings.composer.redirectNote}
-          </p>
-        ) : null}
-        {redirecting ? null : bodyFormat === "html" ? (
-          <FormatToolbar
-            editor={editor}
-            formattingOpen={formattingOpen}
-            setFormattingOpen={setFormattingOpen}
-            moreFormattingOpen={moreFormattingOpen}
-            setMoreFormattingOpen={setMoreFormattingOpen}
-            adjustIndent={adjustIndent}
-            addLink={addLink}
-          >
-            {optionToggles}
-          </FormatToolbar>
-        ) : (
-          <div className="composer-toggle-row">{optionToggles}</div>
-        )}
-        {redirecting ? null : bodyFormat === "html" ? (
-          <div data-context="composer">
-            <EditorContent editor={editor} />
-          </div>
-        ) : (
-          <div data-context="composer">
-            <textarea
-              ref={plainRef}
-              className="composer-plain-editor"
-              aria-label={strings.composer.plainBodyLabel}
-              value={plainBody}
-              onKeyDown={(event) => {
-                if (!isPlainPasteShortcut(event)) return;
-                event.preventDefault();
-                void pastePlainRef.current();
-              }}
-              onPaste={(event) => {
-                takePastedImages(event.nativeEvent);
-              }}
-              onChange={(event) => {
-                setPlainBody(event.target.value);
-                markUnsaved();
-              }}
-            />
-          </div>
-        )}
-        {((bodyFormat === "html" &&
-          (account?.signatureHtml || account?.signature)) ||
-          (bodyFormat === "plain" && account?.signature)) &&
-        includeSignature &&
-        !seed?.draft &&
-        !redirecting ? (
-          <aside className="composer-signature-preview">
-            <strong>{strings.composer.signaturePreview}</strong>
-            {bodyFormat === "html" && account.signatureHtml ? (
-              <div
-                className="composer-signature-html"
-                dangerouslySetInnerHTML={{
-                  __html: signaturePreviewHtml(account.signatureHtml),
+          ) : null}
+          {redirecting ? null : bodyFormat === "html" ? (
+            <FormatToolbar
+              editor={editor}
+              formattingOpen={formattingOpen}
+              setFormattingOpen={setFormattingOpen}
+              moreFormattingOpen={moreFormattingOpen}
+              setMoreFormattingOpen={setMoreFormattingOpen}
+              adjustIndent={adjustIndent}
+              addLink={addLink}
+            >
+              {optionToggles}
+            </FormatToolbar>
+          ) : (
+            <div className="composer-toggle-row">{optionToggles}</div>
+          )}
+          {redirecting ? null : bodyFormat === "html" ? (
+            <div data-context="composer" className="composer-editor-wrap">
+              <EditorContent editor={editor} />
+            </div>
+          ) : (
+            <div data-context="composer" className="composer-editor-wrap">
+              <textarea
+                ref={plainRef}
+                className="composer-plain-editor"
+                aria-label={strings.composer.plainBodyLabel}
+                value={plainBody}
+                onKeyDown={(event) => {
+                  if (!isPlainPasteShortcut(event)) return;
+                  event.preventDefault();
+                  void pastePlainRef.current();
+                }}
+                onPaste={(event) => {
+                  takePastedImages(event.nativeEvent);
+                }}
+                onChange={(event) => {
+                  setPlainBody(event.target.value);
+                  markUnsaved();
                 }}
               />
-            ) : (
-              <pre>{account.signature}</pre>
-            )}
-          </aside>
-        ) : null}
-        {attachments.length > 0 ? (
-          <div className="compose-attachments">
-            {attachments.map((item, index) => (
-              <span
-                key={`${item.token}-${index}`}
-                data-context="composer-attachment"
-                data-attachment-index={index}
-              >
-                {item.inline ? strings.composer.imagePrefix : ""}
-                {item.filename}
-                {typeof item.size === "number" ? (
-                  <small className="compose-attachment-size">
-                    {formatBytes(item.size)}
-                  </small>
-                ) : null}
-                {composeImageFile(item) ? (
+            </div>
+          )}
+          {((bodyFormat === "html" &&
+            (account?.signatureHtml || account?.signature)) ||
+            (bodyFormat === "plain" && account?.signature)) &&
+          includeSignature &&
+          !seed?.draft &&
+          !redirecting ? (
+            <aside className="composer-signature-preview">
+              <strong>{strings.composer.signaturePreview}</strong>
+              {bodyFormat === "html" && account.signatureHtml ? (
+                <div
+                  className="composer-signature-html"
+                  dangerouslySetInnerHTML={{
+                    __html: signaturePreviewHtml(account.signatureHtml),
+                  }}
+                />
+              ) : (
+                <pre>{account.signature}</pre>
+              )}
+            </aside>
+          ) : null}
+          {attachments.length > 0 ? (
+            <div className="compose-attachments">
+              {attachments.map((item, index) => (
+                <span
+                  key={`${item.token}-${index}`}
+                  data-context="composer-attachment"
+                  data-attachment-index={index}
+                >
+                  {item.inline ? strings.composer.imagePrefix : ""}
+                  {item.filename}
+                  {typeof item.size === "number" ? (
+                    <small className="compose-attachment-size">
+                      {formatBytes(item.size)}
+                    </small>
+                  ) : null}
+                  {composeImageFile(item) ? (
+                    <button
+                      type="button"
+                      className="compose-attachment-preview"
+                      onClick={(event) => {
+                        previewTriggerRef.current = event.currentTarget;
+                        void previewComposeImage(item);
+                      }}
+                      disabled={sending || saveState === "saving"}
+                      aria-label={strings.composer.previewAttachment(
+                        item.filename,
+                      )}
+                    >
+                      {strings.reader.preview}
+                    </button>
+                  ) : null}
                   <button
                     type="button"
-                    className="compose-attachment-preview"
-                    onClick={() => void previewComposeImage(item)}
+                    onClick={() => removeAttachment(index)}
                     disabled={sending || saveState === "saving"}
-                    aria-label={strings.composer.previewAttachment(
+                    aria-label={strings.composer.removeAttachment(
                       item.filename,
                     )}
                   >
-                    {strings.reader.preview}
+                    ×
                   </button>
-                ) : null}
+                </span>
+              ))}
+              {attachments.length > 1 ? (
                 <button
                   type="button"
-                  onClick={() => removeAttachment(index)}
+                  className="compose-remove-all"
+                  onClick={removeAllAttachments}
                   disabled={sending || saveState === "saving"}
-                  aria-label={strings.composer.removeAttachment(item.filename)}
                 >
-                  ×
+                  {strings.composer.removeAllAttachments}
                 </button>
+              ) : null}
+              {attachments.every((item) => typeof item.size === "number") ? (
+                <p className="compose-attachment-total">
+                  {strings.composer.attachmentTotal(
+                    formatBytes(totalAttachmentBytes),
+                  )}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+          {isAttachmentSizeWarning ? (
+            <div className="draft-sync-banner localOnly" role="alert">
+              <TriangleAlert aria-hidden="true" />
+              <span>
+                <strong>{strings.composer.attachmentSizeWarning}</strong>
               </span>
-            ))}
-            {attachments.length > 1 ? (
-              <button
-                type="button"
-                className="compose-remove-all"
-                onClick={removeAllAttachments}
-                disabled={sending || saveState === "saving"}
-              >
-                {strings.composer.removeAllAttachments}
-              </button>
-            ) : null}
-            {attachments.every((item) => typeof item.size === "number") ? (
-              <p className="compose-attachment-total">
-                {strings.composer.attachmentTotal(
-                  formatBytes(totalAttachmentBytes),
-                )}
-              </p>
-            ) : null}
-          </div>
-        ) : null}
-        {isAttachmentSizeWarning ? (
-          <div className="draft-sync-banner localOnly" role="alert">
-            <TriangleAlert aria-hidden="true" />
-            <span>
-              <strong>{strings.composer.attachmentSizeWarning}</strong>
-            </span>
-          </div>
-        ) : null}
+            </div>
+          ) : null}
+        </section>
         <SendBar
           sendMenuRef={sendMenuRef}
           canSend={canSend}
@@ -1448,39 +1472,21 @@ export function Composer({ accountId, onDraftSaved }: Props) {
           />
         ) : null}
         {attachmentPreview ? (
-          <div
-            className="settings-confirm-overlay"
-            role="presentation"
-            onMouseDown={() => setAttachmentPreview(null)}
-          >
-            <div
-              className="settings-confirm-dialog compose-image-preview"
-              role="dialog"
-              aria-label={attachmentPreview.filename}
-              onMouseDown={(event) => event.stopPropagation()}
-            >
-              <img
-                src={attachmentPreview.src}
-                alt={attachmentPreview.filename}
-              />
-              <button
-                type="button"
-                className="toolbar-button"
-                onClick={() => setAttachmentPreview(null)}
-              >
-                {strings.common.close}
-              </button>
-            </div>
-          </div>
+          <AttachmentPreview
+            preview={attachmentPreview}
+            onClose={() => setAttachmentPreview(null)}
+            triggerRef={previewTriggerRef}
+          />
         ) : null}
         {linkDialogOpen ? (
           <div
             className="settings-confirm-overlay"
             role="dialog"
+            aria-modal="true"
             aria-labelledby="composer-link-title"
           >
             <form
-              className="settings-confirm-dialog"
+              className="settings-confirm-card"
               onSubmit={(event) => {
                 event.preventDefault();
                 applyLink();
@@ -1517,7 +1523,7 @@ export function Composer({ accountId, onDraftSaved }: Props) {
               }}
             >
               <h2 id="composer-link-title">{strings.composer.insertLink}</h2>
-              <label>
+              <label className="settings-confirm-field">
                 <span>{strings.composer.webAddress}</span>
                 <input
                   autoFocus

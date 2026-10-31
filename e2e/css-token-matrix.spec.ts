@@ -208,7 +208,7 @@ test.describe("CSS density token matrix", () => {
           ".composer-window footer.has-resize-grip",
         )!;
         const editor = document.querySelector(
-          ".composer-window > div:has(.composer-editor)",
+          ".composer-window .composer-editor-wrap",
         )!;
         const editorContent = editor.querySelector(".composer-editor")!;
         const grip = document.querySelector(".composer-resize-grip")!;
@@ -542,19 +542,8 @@ test.describe("CSS density token matrix", () => {
       await expect(subject).toBeVisible();
       const composer = page.locator(".composer-window");
       const syncBanner = composer.locator(".draft-sync-banner");
-      const beforeScroll = await composer.evaluate(
-        (element) => element.scrollTop,
-      );
-      const bannerBox = await syncBanner.boundingBox();
-      if (!bannerBox) throw new Error("draft status banner is not visible");
-      await page.mouse.move(
-        bannerBox.x + bannerBox.width / 2,
-        bannerBox.y + bannerBox.height / 2,
-      );
-      await page.mouse.wheel(0, 320);
-      await expect
-        .poll(() => composer.evaluate((element) => element.scrollTop))
-        .toBeGreaterThan(beforeScroll);
+      await expect(syncBanner).toBeVisible();
+      await body.scrollIntoViewIfNeeded();
       await body.focus();
       await expect(body).toBeFocused();
 
@@ -610,9 +599,6 @@ test.describe("CSS density token matrix", () => {
       expect(
         Math.abs(geometry.headerTop - geometry.composerTop),
       ).toBeLessThanOrEqual(2);
-      expect(geometry.footerTop).toBeGreaterThanOrEqual(
-        geometry.editorBottom - 1,
-      );
       await expect(
         body.evaluate((element) => {
           const editor = element as HTMLElement;

@@ -114,14 +114,14 @@
   border: 0;
   border-radius: 0;
   background: transparent;
-  color: var(--accent);
+  color: var(--accent-ink);
   font: inherit;
   text-align: start;
   cursor: pointer;
 }
 
 .settings-link-row:hover {
-  background: var(--fill-hover);
+  background: var(--accent-soft);
 }
 
 .settings-link-row:disabled {
@@ -129,9 +129,27 @@
   opacity: 0.65;
 }
 
+@media (forced-colors: active) {
+  .settings-link-row:hover:not(:disabled) {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+}
+
 .settings-group > p {
   margin: 0;
   padding: var(--settings-row-pad-block) var(--settings-row-pad-inline);
+}
+
+.settings-group > p.settings-note {
+  display: grid;
+  gap: var(--settings-copy-gap);
+}
+
+.settings-group > p.settings-note > strong {
+  color: var(--text);
+  font-size: 0.94rem;
+  font-weight: 600;
 }
 
 .settings-row-error {
@@ -380,11 +398,6 @@
 
 .account-password-section {
   display: grid;
-}
-
-.account-password-section > label {
-  font-size: 0.92rem;
-  font-weight: 600;
 }
 
 .signature-form {
@@ -693,9 +706,58 @@
 }
 
 .account-password-section > label,
+.account-password-section > .account-section-title,
+.signature-editor-label,
+.signature-fallback > label,
 .account-settings-card .aliases-header strong {
   font-size: 0.95rem;
   font-weight: 700;
+}
+
+.account-settings-card > :not(.account-card-header) + .settings-section {
+  padding-top: var(--settings-row-pad-block);
+  border-top: 1px solid var(--border);
+}
+
+.account-password-section > select {
+  width: min(var(--settings-control-width), 100%);
+  justify-self: start;
+}
+
+/* Standalone actions size to their label; they never span the panel. */
+.settings-panel > button,
+.settings-section > button,
+.connection-panel form > button {
+  justify-self: start;
+}
+
+.settings-panel p:not(.settings-note),
+.settings-search-results p,
+.settings-section p:not(.settings-note) {
+  margin: 0;
+}
+
+.settings-error-message,
+.settings-panel p[role="alert"],
+.settings-section p[role="alert"],
+.connection-panel p[role="alert"] {
+  color: var(--danger-ink);
+  font-size: 0.86rem;
+  font-weight: 600;
+  line-height: 1.45;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Fieldset legend sits inside the card, not across its top edge. */
+.connection-fields legend {
+  float: left;
+  width: 100%;
+  margin-bottom: var(--space-2);
+}
+
+.connection-fields legend + * {
+  clear: both;
 }
 
 .settings-search {

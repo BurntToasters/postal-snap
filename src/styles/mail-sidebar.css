@@ -228,6 +228,9 @@
 
 .folder-list {
   display: grid;
+  /* Fixed track so row max-content (margins included) can never widen the
+     column past the pane and cause horizontal scrolling. */
+  grid-template-columns: minmax(0, 1fr);
   min-height: 0;
   flex: 1 1 auto;
   align-content: start;
@@ -338,8 +341,11 @@
   min-width: 0;
 }
 
-/* Rename/Delete float over the row's end on hover or keyboard focus, as in
-   Mail (the folder context menu offers them too). Still in the Tab order. */
+/* Rename/Delete overlay the row's end on hover or keyboard focus, as in
+   Mail (the folder context menu offers them too). Still in the Tab order.
+   They take no layout space, so the sidebar never overflows. Only depth-0
+   rows render inline actions; deeper rows rely on the context menu so their
+   labels keep full width and center clicks always hit the folder button. */
 .folder-row .folder-action {
   position: absolute;
   top: 50%;
@@ -382,6 +388,7 @@
 }
 
 .folder-expand {
+  position: relative;
   flex: 0 0 auto;
   width: min(var(--target-size-inset), 2rem);
   min-height: var(--target-size);
@@ -393,6 +400,16 @@
   background: transparent;
   box-shadow: none;
   color: var(--text-muted);
+}
+
+/* Larger pointer target without layout shift. The overlay extends outward
+   (inline-start) and vertically only, so it never covers the folder button. */
+.folder-expand::after {
+  content: "";
+  position: absolute;
+  inset-block: -6px;
+  inset-inline-start: -16px;
+  inset-inline-end: 0;
 }
 
 .folder-expand:hover {

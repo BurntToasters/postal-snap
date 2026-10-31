@@ -1,7 +1,51 @@
-/* Composer */
+/* Composer: the window is a fixed three-row shell (header, scrolling body,
+   send bar) so Send stays visible without scrolling the window itself. */
 
-.composer-window > * {
+.modal-layer .composer-window {
+  overflow: hidden;
+}
+
+.composer-window > header,
+.composer-window > footer {
   flex-shrink: 0;
+}
+
+/* Middle row: everything between the header and the send bar scrolls here,
+   so the send bar below never moves out of view. */
+.composer-window > .composer-body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Recipient row wraps: the To field keeps a usable width, and the
+   Cc/Bcc/Reply-To toggles drop to their own row instead of squeezing it. */
+.composer-window .to-field-row {
+  flex-wrap: wrap;
+}
+
+.composer-window .to-field-row .to-field {
+  flex: 1 1 auto;
+  min-width: min(17.5rem, 100%);
+}
+
+.composer-window .to-field-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-inline-start: auto;
+}
+
+/* 200% text: the toggles always get their own row so To keeps full width. */
+html[data-text-scale="large"] .composer-window .to-field-row .to-field {
+  flex-basis: 100%;
 }
 
 .composer-layer-followup:not(.composer-layer-maximized) {
@@ -348,19 +392,30 @@
   text-decoration: underline 3px;
 }
 
-.composer-window > div:has(.composer-editor) {
+/* The editor grows with the letter inside the scrolling body and fills
+   leftover space when the letter is short. The editor itself scrolls when it
+   has room; in a short window the body becomes the scroller. */
+.composer-editor-wrap {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
   min-height: var(--composer-editor-min-height);
-  flex: 1 0 var(--composer-editor-min-height);
   overflow: hidden;
 }
 
 /* EditorContent's wrapper must fill too, or clicks below the text miss. */
-.composer-window > div:has(.composer-editor) > div {
-  height: 100%;
+.composer-editor-wrap > div {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .composer-window .tiptap {
+  flex: 1 1 auto;
   height: 100%;
+  min-height: var(--composer-editor-min-height);
   padding: 18px var(--toolbar-pad-inline);
   overflow: auto;
   outline: none;
@@ -463,6 +518,21 @@
   height: auto;
 }
 
+/* Picture preview: body-level, above the composer's inert layer (z-index 30). */
+.compose-preview-layer {
+  position: fixed;
+  top: var(--native-chrome-height);
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 31;
+  display: grid;
+  place-items: safe center;
+  overflow: auto;
+  padding: var(--space-5);
+  background: var(--scrim);
+}
+
 .compose-attachments button {
   min-width: var(--target-size);
   min-height: var(--target-size);
@@ -510,18 +580,32 @@
   background: var(--surface);
 }
 
-html[data-text-scale="large"] .composer-window footer {
-  position: relative;
-  z-index: auto;
-  bottom: auto;
-}
-
 html[data-text-scale="large"] .composer-window > header {
   background: var(--surface);
 }
 
 .composer-window footer > * {
   min-width: 0;
+}
+
+/* At 200% in a narrow window, wrapped secondary actions would starve the
+   body (75 px left for the whole letter). Keep one scrollable action row so
+   Send stays visible and the body keeps a usable height. */
+@media (max-width: 760px) {
+  html[data-text-scale="large"] .composer-window footer {
+    flex-wrap: nowrap;
+    align-items: center;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+  }
+
+  html[data-text-scale="large"] .composer-window footer > * {
+    flex: 0 0 auto;
+  }
+
+  html[data-text-scale="large"] .composer-window footer .discard-button {
+    margin-left: 0;
+  }
 }
 
 .composer-window .discard-button {
@@ -552,6 +636,17 @@ html[data-text-scale="large"] .composer-window > header {
   height: 1.0625rem;
 }
 
+/* Send menu: body-level (sendBar.tsx), so the footer's scroll container
+   cannot clip it. JS sets top, left, and max-height from the trigger. */
+.send-menu.app-menu {
+  position: fixed;
+  z-index: 1100;
+  bottom: auto;
+  max-width: calc(100vw - 2 * var(--space-3));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
 .field-error {
   margin: 4px 0 6px 15px;
   color: var(--danger);
@@ -570,17 +665,13 @@ html[data-text-scale="large"] .composer-window > header {
 }
 
 /* Plain-text editor: same box, focus ring, and text scale as the rich one. */
-.composer-window > div:has(.composer-plain-editor) {
-  min-height: var(--composer-editor-min-height);
-  flex: 1 0 var(--composer-editor-min-height);
-  overflow: hidden;
-}
-
 .composer-plain-editor {
   display: block;
+  flex: 1 1 auto;
   width: 100%;
   height: 100%;
   min-height: var(--composer-editor-min-height);
+  overflow: auto;
   box-sizing: border-box;
   padding: 18px var(--toolbar-pad-inline);
   border: 0;

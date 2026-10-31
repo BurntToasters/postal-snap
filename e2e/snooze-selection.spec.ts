@@ -22,10 +22,10 @@ test("snooze selected hides the checked messages", async ({ page }) => {
   await page.getByRole("option", { name: /Library hours/i }).click();
   await page.getByRole("option", { name: /Older family note/i }).click();
   await expect(
-    page.getByRole("checkbox", { name: /Library hours/i }),
+    page.locator('.message-select[aria-label="Select Library hours"]'),
   ).toBeChecked();
   await expect(
-    page.getByRole("checkbox", { name: /Older family note/i }),
+    page.locator('.message-select[aria-label="Select Older family note"]'),
   ).toBeChecked();
   await page.getByRole("button", { name: "More mailbox actions" }).click();
   await page

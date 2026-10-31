@@ -1,7 +1,52 @@
 import { useEffect, useRef } from "react";
 
 const focusable =
-  'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), iframe, [href], [tabindex]:not([tabindex="-1"]), summary, [contenteditable="true"], audio[controls], video[controls]';
+  'button, input, select, textarea, iframe, a[href], area[href], [tabindex], summary, [contenteditable]:not([contenteditable="false"]), audio[controls], video[controls]';
+
+function isFocusEligible(item: HTMLElement): boolean {
+  const explicitTabIndex = item.getAttribute("tabindex");
+  if (
+    (explicitTabIndex !== null && item.tabIndex < 0) ||
+    (explicitTabIndex === null &&
+      item.tabIndex < 0 &&
+      !isNaturallyTabbable(item)) ||
+    item.matches(":disabled") ||
+    item.closest("[hidden], [inert], [aria-hidden='true']")
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function isSequentiallyFocusable(item: HTMLElement): boolean {
+  if (!isFocusEligible(item)) return false;
+  return typeof item.checkVisibility === "function"
+    ? item.checkVisibility()
+    : item.offsetParent !== null || item.getClientRects().length > 0;
+}
+
+function hasLayoutGeometry(dialog: HTMLElement): boolean {
+  return (
+    typeof dialog.checkVisibility === "function" ||
+    dialog.getClientRects().length > 0 ||
+    document.documentElement.getClientRects().length > 0
+  );
+}
+
+function isNaturallyTabbable(item: HTMLElement): boolean {
+  if (item.isContentEditable) {
+    return !item.parentElement?.isContentEditable;
+  }
+  if (item.matches("iframe, audio[controls], video[controls]")) return true;
+  if (item.matches("summary") && item.parentElement?.matches("details")) {
+    return (
+      Array.from(item.parentElement.children).find(
+        (child) => child.localName === "summary",
+      ) === item
+    );
+  }
+  return false;
+}
 
 export function useDialogFocus(
   onClose: () => void,
@@ -19,11 +64,21 @@ export function useDialogFocus(
     const previous = document.activeElement as HTMLElement | null;
     const dialog = ref.current;
     if (dialog) {
+      if (trapFocus) dialog.setAttribute("data-dialog-focus-trap", "");
       // React applies autoFocus without leaving an attribute or property
       // behind, so detect it by position: if focus already landed inside
       // the dialog, leave it alone instead of yanking it to the first
       // button (which also clears pending input work like debounces).
-      const controls = [...dialog.querySelectorAll<HTMLElement>(focusable)];
+      const eligibleControls = [
+        ...dialog.querySelectorAll<HTMLElement>(focusable),
+      ].filter(isFocusEligible);
+      const visibleControls = eligibleControls.filter(isSequentiallyFocusable);
+      const controls =
+        visibleControls.length > 0
+          ? visibleControls
+          : hasLayoutGeometry(dialog)
+            ? []
+            : eligibleControls;
       const first =
         controls.find((element) => element.hasAttribute("autofocus")) ??
         controls[0];
@@ -48,6 +103,13 @@ export function useDialogFocus(
       ) {
         return;
       }
+      const activeTrap =
+        document.activeElement instanceof Element
+          ? document.activeElement.closest<HTMLElement>(
+              "[data-dialog-focus-trap]",
+            )
+          : null;
+      if (activeTrap && activeTrap !== currentDialog) return;
       if (event.key === "Escape") {
         if (event.defaultPrevented) return;
         event.preventDefault();
@@ -60,14 +122,7 @@ export function useDialogFocus(
         ...document.querySelectorAll<HTMLElement>(
           ".global-window-caption-controls button",
         ),
-      ].filter(
-        (item) =>
-          !item.hidden &&
-          !item.closest("[inert]") &&
-          (typeof item.checkVisibility === "function"
-            ? item.checkVisibility()
-            : item.offsetParent !== null || item.getClientRects().length > 0),
-      );
+      ].filter(isSequentiallyFocusable);
       if (items.length === 0) return;
       const firstItem = items[0];
       const lastItem = items.at(-1)!;
@@ -102,6 +157,7 @@ export function useDialogFocus(
     document.addEventListener("keydown", onKeyDown);
     return () => {
       document.removeEventListener("keydown", onKeyDown);
+      if (trapFocus) dialog?.removeAttribute("data-dialog-focus-trap");
       previous?.focus();
     };
   }, [trapFocus]);

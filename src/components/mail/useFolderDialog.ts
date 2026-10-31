@@ -67,7 +67,9 @@ export function useFolderDialog({
   function closeFolderDialog() {
     setFolderDialog(null);
     setFolderName("");
-    lastFolderInvoker.current?.focus();
+    window.setTimeout(() => {
+      (newFolderButtonRef.current ?? lastFolderInvoker.current)?.focus();
+    }, 0);
   }
 
   function folderDialogKeyDown(event: ReactKeyboardEvent) {

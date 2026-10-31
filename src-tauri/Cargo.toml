@@ -1,6 +1,6 @@
 [package]
 name = "postal-snap"
-version = "0.5.0"
+version = "0.5.1"
 description = "A calm, accessible desktop email client."
 authors = ["BurntToasters <code@rosie.run>"]
 edition = "2021"
@@ -45,8 +45,8 @@ tauri-plugin-deep-link = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-process = { version = "2", optional = true }
-# Pinned to upstream v2's zip 9 security fix; the registry release still uses zip 4.
-tauri-plugin-updater = { git = "https://github.com/tauri-apps/plugins-workspace.git", rev = "f36ba7ba48695776bc11cce0bfdc45678ec24f72", package = "tauri-plugin-updater", optional = true }
+# Based on upstream f36ba7ba; local macOS installation preserves app identity.
+tauri-plugin-updater = { path = "vendor/tauri-plugin-updater", optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "fs", "io-util"] }
 tokio-native-tls = "0.3"
 url = "2"
@@ -65,6 +65,9 @@ tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.190"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri = { version = "2", features = ["image-png"] }
 # Reads NSWorkspace.accessibilityDisplayShouldReduceTransparency; WKWebView does
@@ -77,10 +80,12 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSAc
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSObject", "NSProcessInfo", "NSString", "NSNotification", "NSOperation", "block2"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+same-file = "1.0.6"
 windows = { version = "0.61.3", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     "Win32_System_LibraryLoader",
+    "Win32_Storage_FileSystem",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
 ] }
@@ -90,10 +95,18 @@ tauri = { version = "2", features = ["test"] }
 tempfile = "3"
 proptest = "1"
 
+[target.'cfg(unix)'.dev-dependencies]
+nix = { version = "=0.31.3", features = ["fs"] }
+
 [lints.rust]
 # Reviewed exceptions: Win32 Snap overlay (window_snap.rs), macOS App Nap
 # activity (app_nap.rs), and macOS activation observer (tray.rs).
 unsafe_code = "deny"
+
+# Local patch: surface tagged NO/BAD and connection loss from STORE/EXPUNGE.
+# See vendor/async-imap/POSTAL-SNAP.md.
+[patch.crates-io]
+async-imap = { path = "vendor/async-imap" }
 
 [profile.release]
 # Unwind so a panic fails one task (a sync pass, one message parse) instead of

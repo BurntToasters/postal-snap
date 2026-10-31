@@ -182,6 +182,7 @@ pub async fn send_message(
     let offline = account.summary.sync_state == "offline";
     let initial_detail = offline.then_some(OutboxReason::WaitingConnection);
     if let Some(send_at) = resolve_requested_send_at(draft.send_at.as_deref())? {
+        let _guard = state.lock_account(&draft.account_id).await?;
         let detail = if offline {
             OutboxReason::WaitingConnection
         } else {
@@ -196,7 +197,7 @@ pub async fn send_message(
             Some(&send_at),
             archive_source,
         )?;
-        state.request(&draft.account_id, wake::OUTBOX)?;
+        state.request(&draft.account_id, wake::OUTBOX | wake::DRAFTS)?;
         emit_outbox_change(&app, &draft.account_id, Some(&outbox_id), Some("scheduled"));
         return Ok(SendOutcome {
             id: outbox_id,
@@ -205,6 +206,7 @@ pub async fn send_message(
         });
     }
     if delay > 0 {
+        let _guard = state.lock_account(&draft.account_id).await?;
         let send_at =
             (chrono::Utc::now() + chrono::Duration::seconds(i64::from(delay))).to_rfc3339();
         let detail = if offline {
@@ -221,7 +223,7 @@ pub async fn send_message(
             Some(&send_at),
             archive_source,
         )?;
-        state.request(&draft.account_id, wake::OUTBOX)?;
+        state.request(&draft.account_id, wake::OUTBOX | wake::DRAFTS)?;
         emit_outbox_change(&app, &draft.account_id, Some(&outbox_id), Some("scheduled"));
         return Ok(SendOutcome {
             id: outbox_id,
@@ -230,6 +232,7 @@ pub async fn send_message(
         });
     }
     if offline {
+        let _guard = state.lock_account(&draft.account_id).await?;
         let outbox_id = state.db.queue_outbox_with_reason(
             &draft,
             "queued",
@@ -239,7 +242,7 @@ pub async fn send_message(
             None,
             archive_source,
         )?;
-        state.request(&draft.account_id, wake::OUTBOX)?;
+        state.request(&draft.account_id, wake::OUTBOX | wake::DRAFTS)?;
         emit_outbox_change(&app, &draft.account_id, Some(&outbox_id), Some("queued"));
         return Ok(SendOutcome {
             id: outbox_id,
@@ -257,9 +260,9 @@ pub async fn send_message(
         None,
         archive_source,
     )?;
-    command_result(
-        deliver_outbox_locked(&outbox_id, &draft.account_id, "queued", &app, &state).await,
-    )
+    let result = deliver_outbox_locked(&outbox_id, &draft.account_id, "queued", &app, &state).await;
+    let _ = state.request(&draft.account_id, wake::DRAFTS);
+    command_result(result)
 }
 
 #[tauri::command]

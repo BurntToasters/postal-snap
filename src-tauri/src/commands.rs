@@ -1650,11 +1650,17 @@ fn managed_account_dir(root: &Path, account_id: &str) -> Result<PathBuf, String>
 
 /// Removes account folders that no active account owns. Returns how many
 /// orphaned folders are still present, so callers can report leftovers.
-pub(crate) async fn cleanup_orphaned_account_dirs(
-    root: PathBuf,
-    active_account_ids: Vec<String>,
-) -> usize {
-    sweep_orphaned_account_dirs(root, active_account_ids, tokio::fs::remove_dir_all).await
+pub(crate) async fn cleanup_orphaned_account_dirs(root: PathBuf, database: &Database) -> usize {
+    sweep_orphaned_account_dirs(root, Vec::new(), |path| {
+        let database = database.clone();
+        async move {
+            tokio::task::spawn_blocking(move || database.remove_unowned_account_dir(&path))
+                .await
+                .map_err(std::io::Error::other)?
+                .map_err(std::io::Error::other)
+        }
+    })
+    .await
 }
 
 /// `cleanup_orphaned_account_dirs` with the removal operation injected for tests.
@@ -1691,9 +1697,13 @@ where
         if id.hyphenated().to_string() != name || active_account_ids.contains(name) {
             continue;
         }
-        let Ok(file_type) = entry.file_type().await else {
-            remaining += 1;
-            continue;
+        let file_type = match entry.file_type().await {
+            Ok(file_type) => file_type,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => {
+                remaining += 1;
+                continue;
+            }
         };
         let removable = file_type.is_dir() && !file_type.is_symlink();
         if removable && remove(entry.path()).await.is_err() {
@@ -1704,12 +1714,8 @@ where
 }
 
 /// Startup sweep: best effort and non-blocking, with its result kept in a marker.
-pub(crate) async fn sweep_orphans_at_startup(
-    root: PathBuf,
-    active_account_ids: Vec<String>,
-    marker: PathBuf,
-) {
-    let remaining = cleanup_orphaned_account_dirs(root, active_account_ids).await;
+pub(crate) async fn sweep_orphans_at_startup(root: PathBuf, database: Database, marker: PathBuf) {
+    let remaining = cleanup_orphaned_account_dirs(root, &database).await;
     record_orphan_marker(&marker, remaining);
 }
 
@@ -2430,6 +2436,44 @@ mod tests {
     }
 
     #[test]
+    fn first_queued_move_wins_when_multiple_move_rules_match() {
+        let db = Database::memory();
+        let account = rule_account();
+        let account_id = account.summary.id.clone();
+        db.insert_account(&account).unwrap();
+        let inbox = rule_mailbox(&db, &account_id, "INBOX", &MailboxRole::Inbox);
+        let archive = rule_mailbox(&db, &account_id, "Archive", &MailboxRole::Archive);
+        let trash = rule_mailbox(&db, &account_id, "Trash", &MailboxRole::Trash);
+        let message_id = bill(&db, &account_id, inbox, 1);
+        db.create_filter_rule(&enabled_rule(&account_id, "move_archive"))
+            .unwrap();
+        db.create_filter_rule(&enabled_rule(&account_id, "move_trash"))
+            .unwrap();
+        apply_filter_rules(&db, &account, None);
+        let move_ops: Vec<String> = db
+            .queued_operations(&account_id)
+            .unwrap()
+            .iter()
+            .filter(|(_, kind, _)| kind == "move")
+            .map(|(_, _, payload)| payload.clone())
+            .collect();
+        assert_eq!(move_ops.len(), 1);
+        assert!(move_ops[0].contains("\"destination\":\"Archive\""));
+        assert!(!move_ops[0].contains("\"destination\":\"Trash\""));
+        let pending: Option<i64> = db
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT pending_move_to FROM messages WHERE id=?1",
+                [message_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(pending, Some(archive));
+        assert_ne!(pending, Some(trash));
+    }
+
+    #[test]
     fn update_password_keeps_the_normalized_secret() {
         let secret = take_normalized_account_password(
             &ProviderKind::Icloud,
@@ -2437,6 +2481,103 @@ mod tests {
         )
         .expect("normalized password");
         assert_eq!(secret.as_str(), "family-secret");
+    }
+
+    fn attachment_owners(ids: &[&str]) -> crate::db::Database {
+        let db = crate::db::Database::memory();
+        for (index, id) in ids.iter().enumerate() {
+            let mut account = rule_account();
+            account.summary.id = (*id).to_string();
+            account.summary.email = format!("owner{index}@example.com");
+            db.insert_account(&account).unwrap();
+        }
+        db
+    }
+
+    // Failures: delayed cleanup uses stale owners, deletes a new account's
+    // attachment, or reports success when ownership cannot be read.
+    #[test]
+    fn delayed_orphan_cleanup_keeps_a_newly_added_account() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let root = tempfile::tempdir().unwrap();
+            let db = crate::db::Database::memory();
+            let mut account = rule_account();
+            account.summary.id = uuid::Uuid::new_v4().to_string();
+            let path = root.path().join(&account.summary.id);
+            let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+            let (release_tx, release_rx) = std::sync::mpsc::channel();
+            let blocker = tokio::task::spawn_blocking(move || {
+                started_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+            });
+            started_rx.await.unwrap();
+            let sweep = super::accounts::sweep_unowned_attachments(&db, root.path().to_path_buf());
+            tokio::pin!(sweep);
+            std::future::poll_fn(|cx| {
+                assert!(std::future::Future::poll(sweep.as_mut(), cx).is_pending());
+                std::task::Poll::Ready(())
+            })
+            .await;
+            db.insert_account(&account).unwrap();
+            std::fs::create_dir(&path).unwrap();
+            std::fs::write(path.join("draft.bin"), b"unsent attachment").unwrap();
+            release_tx.send(()).unwrap();
+            let remaining = sweep.await;
+            blocker.await.unwrap();
+            assert_eq!(remaining, 0);
+            assert!(path.join("draft.bin").is_file());
+        });
+    }
+
+    // Failure: overlapping startup/retry sweeps report already-removed files
+    // as leftovers and leave a false pending-cleanup marker.
+    #[tokio::test]
+    async fn concurrent_orphan_sweeps_do_not_report_removed_files_as_leftovers() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("draft.bin"), b"orphan").unwrap();
+        let db = crate::db::Database::memory();
+        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(2));
+        let remove = |path: std::path::PathBuf| {
+            let db = db.clone();
+            let barrier = barrier.clone();
+            async move {
+                barrier.wait().await;
+                tokio::task::spawn_blocking(move || db.remove_unowned_account_dir(&path))
+                    .await
+                    .unwrap()
+                    .map_err(std::io::Error::other)
+            }
+        };
+        let (first, second) = tokio::join!(
+            sweep_orphaned_account_dirs(root.path().to_path_buf(), vec![], &remove),
+            sweep_orphaned_account_dirs(root.path().to_path_buf(), vec![], &remove),
+        );
+        assert!(!path.exists());
+        assert_eq!((first, second), (0, 0));
+    }
+
+    #[tokio::test]
+    async fn orphan_cleanup_keeps_files_when_ownership_query_fails() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("draft.bin"), b"keep").unwrap();
+        let db = crate::db::Database::memory();
+        db.conn()
+            .unwrap()
+            .execute_batch("DROP TABLE accounts")
+            .unwrap();
+        let remaining =
+            super::accounts::sweep_unowned_attachments(&db, root.path().to_path_buf()).await;
+        assert_eq!(remaining, 1);
+        assert!(path.join("draft.bin").is_file());
     }
 
     #[tokio::test]
@@ -2449,8 +2590,11 @@ mod tests {
         std::fs::create_dir(root.path().join(&orphaned)).unwrap();
         std::fs::create_dir(root.path().join(unrelated)).unwrap();
 
-        let remaining =
-            cleanup_orphaned_account_dirs(root.path().to_path_buf(), vec![active.clone()]).await;
+        let remaining = cleanup_orphaned_account_dirs(
+            root.path().to_path_buf(),
+            &attachment_owners(&[&active]),
+        )
+        .await;
 
         assert_eq!(remaining, 0);
         assert!(root.path().join(active).is_dir());
@@ -2478,7 +2622,8 @@ mod tests {
             // Running as root bypasses directory permissions; nothing to prove.
             return;
         };
-        let remaining = cleanup_orphaned_account_dirs(root.path().to_path_buf(), vec![]).await;
+        let remaining =
+            cleanup_orphaned_account_dirs(root.path().to_path_buf(), &attachment_owners(&[])).await;
         drop(lock);
         assert_eq!(remaining, 1);
         assert!(orphan.is_dir());
@@ -2488,11 +2633,14 @@ mod tests {
     async fn orphan_sweep_reports_nothing_for_a_clean_or_missing_root() {
         let root = tempfile::tempdir().unwrap();
         assert_eq!(
-            cleanup_orphaned_account_dirs(root.path().to_path_buf(), vec![]).await,
+            cleanup_orphaned_account_dirs(root.path().to_path_buf(), &attachment_owners(&[])).await,
             0
         );
         let missing = root.path().join("never-created");
-        assert_eq!(cleanup_orphaned_account_dirs(missing, vec![]).await, 0);
+        assert_eq!(
+            cleanup_orphaned_account_dirs(missing, &attachment_owners(&[])).await,
+            0
+        );
     }
 
     #[cfg(unix)]
@@ -2506,7 +2654,8 @@ mod tests {
             .join(uuid::Uuid::new_v4().hyphenated().to_string());
         std::os::unix::fs::symlink(outside.path(), &link).unwrap();
 
-        let remaining = cleanup_orphaned_account_dirs(root.path().to_path_buf(), vec![]).await;
+        let remaining =
+            cleanup_orphaned_account_dirs(root.path().to_path_buf(), &attachment_owners(&[])).await;
 
         assert_eq!(remaining, 0);
         assert!(outside.path().join("keep.txt").is_file());
@@ -2526,7 +2675,8 @@ mod tests {
             std::fs::create_dir(root.path().join(name)).unwrap();
         }
 
-        let remaining = cleanup_orphaned_account_dirs(root.path().to_path_buf(), vec![]).await;
+        let remaining =
+            cleanup_orphaned_account_dirs(root.path().to_path_buf(), &attachment_owners(&[])).await;
 
         assert_eq!(remaining, 0);
         for name in &names {
