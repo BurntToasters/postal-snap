@@ -224,7 +224,7 @@
 }
 
 .update-ready-badge:hover {
-  background: var(--accent);
+  background: var(--accent-fill-hover);
   color: var(--accent-contrast);
 }
 

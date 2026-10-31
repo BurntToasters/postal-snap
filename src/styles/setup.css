@@ -21,28 +21,18 @@
   align-items: start;
   justify-items: center;
   overflow: auto;
-  background:
-    radial-gradient(
-      circle at 18% 12%,
-      color-mix(in srgb, var(--accent) 13%, transparent),
-      transparent 34%
-    ),
-    radial-gradient(
-      circle at 86% 92%,
-      color-mix(in srgb, var(--accent) 7%, transparent),
-      transparent 30%
-    ),
-    var(--canvas);
+  background: transparent;
 }
 
+/* Static margins so overflow scrolls instead of clipping auto-margins. */
 .setup-page > .setup-card {
-  margin-block: auto;
+  margin: clamp(10px, 2.5vh, 22px) auto 20px;
 }
 
 .setup-brand {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
 }
 
 .setup-brand p,
@@ -61,25 +51,25 @@
 .setup-brand h1,
 .account-form h1,
 .account-form h2 {
-  font-size: clamp(1.65rem, 4vw, 2.1rem);
+  font-size: clamp(1.4rem, 3vw, 1.7rem);
   letter-spacing: -0.025em;
 }
 
 .setup-intro {
-  margin: 9px 0 0;
+  margin: 4px 0 0;
   color: var(--text-muted);
-  line-height: 1.5;
+  line-height: 1.45;
 }
 
 .setup-progress {
   display: grid;
   grid-template-columns: var(--setup-step-size) 1fr var(--setup-step-size);
   align-items: center;
-  margin: 28px 0 24px;
+  margin: 16px 0 12px;
   color: var(--text-muted);
 }
 
-.setup-progress > span {
+.setup-progress > span:not(.visually-hidden) {
   display: grid;
   width: var(--setup-step-size);
   height: var(--setup-step-size);
@@ -91,14 +81,13 @@
   font-weight: 800;
 }
 
-.setup-progress > span.active,
-.setup-progress > span.done {
-  border-color: var(--accent);
+.setup-progress > span:is(.active, .done) {
+  border-color: var(--accent-fill);
   color: var(--accent-contrast);
-  background: var(--accent);
+  background: var(--accent-fill);
 }
 
-.setup-progress > span svg {
+.setup-progress > span:not(.visually-hidden) svg {
   width: 0.9375rem;
   height: 0.9375rem;
 }
@@ -109,7 +98,7 @@
 }
 
 .setup-progress > small {
-  padding-top: 7px;
+  padding-top: 5px;
   font-size: 0.76rem;
   white-space: nowrap;
 }
@@ -469,14 +458,14 @@
 .setup-flow-progress {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0;
-  margin: 26px 0 22px;
+  margin: 16px 0 12px;
 }
 
 .setup-flow-progress > div {
   position: relative;
   display: grid;
   justify-items: center;
-  gap: 7px;
+  gap: 5px;
   min-width: 0;
   color: var(--text-muted);
 }
@@ -484,9 +473,9 @@
 .setup-flow-progress > div:not(:last-child)::after {
   position: absolute;
   z-index: 0;
-  top: 0.9375rem;
-  left: calc(50% + 1.25rem);
-  width: calc(100% - 2.5rem);
+  top: calc(var(--setup-step-size) / 2);
+  left: calc(50% + var(--setup-step-size) / 2 + 0.3125rem);
+  width: calc(100% - var(--setup-step-size) - 0.625rem);
   height: 2px;
   content: "";
   background: var(--border);
@@ -496,7 +485,7 @@
   background: color-mix(in srgb, var(--accent) 70%, var(--border));
 }
 
-.setup-flow-progress > div > span {
+.setup-flow-progress > div > span:not(.visually-hidden) {
   position: relative;
   z-index: 1;
   display: grid;
@@ -510,15 +499,15 @@
   font-weight: 800;
 }
 
-.setup-flow-progress > div > span svg {
+.setup-flow-progress > div > span:not(.visually-hidden) svg {
   width: 0.9375rem;
   height: 0.9375rem;
 }
 
-.setup-flow-progress > div:is(.active, .done) > span {
-  border-color: var(--accent);
+.setup-flow-progress > div:is(.active, .done) > span:not(.visually-hidden) {
+  border-color: var(--accent-fill);
   color: var(--accent-contrast);
-  background: var(--accent);
+  background: var(--accent-fill);
   box-shadow: 0 0 0 4px var(--accent-soft);
 }
 
@@ -535,13 +524,13 @@
 
 .setup-step {
   display: grid;
-  gap: 16px;
+  gap: 10px;
 }
 
 .setup-actions {
   display: grid;
   gap: 10px;
-  margin-top: 8px;
+  margin-top: 4px;
 }
 
 .setup-actions.split {
@@ -551,13 +540,13 @@
 .setup-field-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
-  gap: 14px 16px;
+  gap: 10px 16px;
 }
 
 .setup-field-grid label {
   display: grid;
   align-content: start;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
   font-weight: 650;
 }
@@ -566,7 +555,7 @@
   color: var(--text-muted);
   font-size: 0.84rem;
   font-weight: 500;
-  line-height: 1.4;
+  line-height: 1.35;
 }
 
 .setup-display {
@@ -592,7 +581,7 @@
 
 .setup-switches {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .setup-switches .switch-row {
@@ -608,10 +597,20 @@
     inset 0 1px 0 var(--surface-highlight);
 }
 
+/* Setup rows stay at the minimum target height; Settings keeps its 52px row. */
+.setup-card .switch-row {
+  min-height: var(--control-height);
+  padding-block: 2px;
+}
+
+.setup-card .switch-row > span {
+  gap: 2px;
+}
+
 .setup-preview {
   display: grid;
-  gap: 10px;
-  padding: 12px;
+  gap: 8px;
+  padding: 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--surface-muted);
@@ -626,7 +625,7 @@
 .setup-preview-mail {
   display: grid;
   grid-template-columns: var(--setup-preview-list-width) 1fr 1fr;
-  gap: 8px;
+  gap: 6px;
   min-height: var(--setup-preview-min-height);
 }
 
@@ -649,7 +648,7 @@
   display: grid;
   gap: 6px;
   align-content: start;
-  padding: 10px;
+  padding: 8px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--surface);
@@ -664,7 +663,7 @@
 }
 
 .setup-preview-folders span {
-  min-height: var(--target-size);
+  min-height: var(--space-6);
   display: flex;
   align-items: center;
   padding: 0 8px;
@@ -681,8 +680,8 @@
 .setup-preview-row {
   display: grid;
   gap: 2px;
-  min-height: var(--bar-height-md);
-  padding: 8px 10px;
+  min-height: var(--control-height);
+  padding: 6px 10px;
   border-radius: var(--radius-sm);
   background: var(--surface-muted);
 }

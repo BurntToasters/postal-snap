@@ -35,20 +35,20 @@
 }
 
 .primary-button {
-  border-color: var(--accent);
+  border-color: var(--accent-fill);
   color: var(--accent-contrast);
   background: linear-gradient(
     180deg,
-    color-mix(in srgb, var(--accent) 88%, white),
-    var(--accent)
+    color-mix(in srgb, var(--accent-fill) 88%, white),
+    var(--accent-fill)
   );
   font-weight: 700;
-  box-shadow: 0 2px 5px color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow: 0 2px 5px color-mix(in srgb, var(--accent-fill) 22%, transparent);
 }
 
 .primary-button:hover {
-  border-color: var(--accent-hover);
-  background: var(--accent-hover);
+  border-color: var(--accent-fill-hover);
+  background: var(--accent-fill-hover);
 }
 
 .secondary-button:hover,

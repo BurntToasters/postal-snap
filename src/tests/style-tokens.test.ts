@@ -42,12 +42,13 @@ describe("color accessibility tokens", () => {
     it(`${theme} theme keeps text and focus indicators distinguishable`, () => {
       const block = themeBlock(selector);
       const accent = color(block, "accent");
+      const accentFill = color(block, "accent-fill");
       const accentContrast = color(block, "accent-contrast");
       const focus = color(block, "focus");
       const surface = color(block, "surface");
 
       expect(contrast(accent, surface)).toBeGreaterThanOrEqual(4.5);
-      expect(contrast(accentContrast, accent)).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(accentContrast, accentFill)).toBeGreaterThanOrEqual(4.5);
       expect(contrast(focus, surface)).toBeGreaterThanOrEqual(3);
       expect(contrast(focus, accent)).toBeGreaterThanOrEqual(3);
     });

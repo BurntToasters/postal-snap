@@ -41,7 +41,7 @@
 }
 
 :root[data-density="compact"] .sidebar-section-title {
-  margin-block: 10px 3px;
+  margin-block: 6px 2px;
 }
 
 :root[data-density="compact"] .add-account-button {

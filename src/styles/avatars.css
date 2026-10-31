@@ -22,7 +22,7 @@
   place-items: center;
   border-radius: 50%;
   color: var(--accent-contrast);
-  background: var(--accent);
+  background: var(--accent-fill);
   font-size: var(--account-avatar-font-size);
   font-weight: 700;
 }
@@ -74,7 +74,7 @@
   padding: 0;
   border: 3px solid transparent;
   border-radius: 50%;
-  background: var(--accent);
+  background: var(--accent-fill);
 }
 
 .account-color-swatch[aria-checked="true"] {

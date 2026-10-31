@@ -285,9 +285,9 @@ html[data-reduce-transparency="true"] .reader-actions {
 
 .message-header {
   display: grid;
-  grid-template-columns: 42px minmax(0, 1fr) auto;
+  grid-template-columns: var(--sender-avatar-size) minmax(0, 1fr) auto;
   gap: 8px 11px;
-  padding: 20px var(--reader-pad-inline) 16px;
+  padding: var(--reader-head-pad-block) var(--reader-pad-inline) 10px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
 }
 
@@ -312,7 +312,7 @@ html[data-reduce-transparency="true"] .reader-actions {
 
 .message-header h1 {
   grid-column: 1 / -1;
-  margin: 0 0 7px;
+  margin: 0 0 4px;
   font-size: clamp(1.25rem, 2.1vw, 1.75rem);
   line-height: 1.2;
   letter-spacing: -0.02em;
@@ -551,7 +551,7 @@ html[data-reduce-transparency="true"] .reader-actions {
   flex-wrap: wrap;
   align-items: center;
   gap: 9px;
-  padding: 10px var(--reader-pad-inline);
+  padding: 8px var(--reader-pad-inline);
   color: var(--text);
   background: var(--fill);
   border-bottom: 1px solid var(--border);
