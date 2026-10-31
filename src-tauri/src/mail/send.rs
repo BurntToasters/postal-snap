@@ -313,28 +313,27 @@ fn send_timeout(len: usize) -> Duration {
 }
 
 #[cfg(test)]
-struct NonPinnedSendTestState {
-    override_timeout: Option<Duration>,
-    send_in_flight: bool,
-}
+static NON_PINNED_SEND_IN_FLIGHT: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
 
+// Per test thread: a parallel test must never inherit another test's limit.
 #[cfg(test)]
-static NON_PINNED_SEND_TEST_STATE: std::sync::Mutex<NonPinnedSendTestState> =
-    std::sync::Mutex::new(NonPinnedSendTestState {
-        override_timeout: None,
-        send_in_flight: false,
-    });
+thread_local! {
+    static NON_PINNED_SEND_OVERRIDE: std::cell::Cell<Option<Duration>> =
+        const { std::cell::Cell::new(None) };
+}
 
 #[cfg(test)]
 async fn begin_non_pinned_send(len: usize) -> Duration {
     loop {
         {
-            let mut state = NON_PINNED_SEND_TEST_STATE
+            let mut in_flight = NON_PINNED_SEND_IN_FLIGHT
                 .lock()
                 .expect("non-pinned send test state lock");
-            if !state.send_in_flight {
-                state.send_in_flight = true;
-                return state.override_timeout.unwrap_or_else(|| send_timeout(len));
+            if !*in_flight {
+                *in_flight = true;
+                return NON_PINNED_SEND_OVERRIDE
+                    .with(std::cell::Cell::get)
+                    .unwrap_or_else(|| send_timeout(len));
             }
         }
         tokio::task::yield_now().await;
@@ -343,10 +342,9 @@ async fn begin_non_pinned_send(len: usize) -> Duration {
 
 #[cfg(test)]
 fn finish_non_pinned_send() {
-    let mut state = NON_PINNED_SEND_TEST_STATE
+    *NON_PINNED_SEND_IN_FLIGHT
         .lock()
-        .expect("non-pinned send test state lock");
-    state.send_in_flight = false;
+        .expect("non-pinned send test state lock") = false;
 }
 
 #[cfg(test)]
@@ -355,10 +353,7 @@ pub(super) struct TestNonPinnedSendTimeoutGuard;
 #[cfg(test)]
 impl TestNonPinnedSendTimeoutGuard {
     pub(super) fn install(timeout: Duration) -> Self {
-        NON_PINNED_SEND_TEST_STATE
-            .lock()
-            .expect("non-pinned send test state lock")
-            .override_timeout = Some(timeout);
+        NON_PINNED_SEND_OVERRIDE.with(|limit| limit.set(Some(timeout)));
         Self
     }
 }
@@ -366,10 +361,7 @@ impl TestNonPinnedSendTimeoutGuard {
 #[cfg(test)]
 impl Drop for TestNonPinnedSendTimeoutGuard {
     fn drop(&mut self) {
-        let mut state = NON_PINNED_SEND_TEST_STATE
-            .lock()
-            .expect("non-pinned send test state lock");
-        state.override_timeout = None;
+        NON_PINNED_SEND_OVERRIDE.with(|limit| limit.set(None));
     }
 }
 

@@ -601,10 +601,7 @@ async fn windows_write_identity_matches(
     let content_id = same_file::Handle::from_file(content_std)?;
     let attr_id = same_file::Handle::from_file(attr_std)?;
     if content_id != attr_id {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            "path identity mismatch",
-        ));
+        return Err(io::Error::other("path identity mismatch"));
     }
     Ok(())
 }

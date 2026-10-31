@@ -1,9 +1,9 @@
 import { readFile } from "node:fs/promises";
-import { extname } from "node:path";
+import { extname, join } from "node:path";
 import { filesRecursively } from "./lib/artifacts.js";
 import { root } from "./lib/paths.js";
 
-const roots = [`${root}/src`, `${root}/src-tauri/src`];
+const roots = [join(root, "src"), join(root, "src-tauri/src")];
 const forbidden = [
   /@tauri-apps\/plugin-shell/,
   /std::process::Command/,
@@ -14,7 +14,7 @@ const forbidden = [
 // update_relaunch.rs: macOS relaunch helper with fixed binaries and argv-only
 // paths; Tauri's restart uses `open -n`, which adds a second Dock tile.
 const exceptions = new Map([
-  [`${root}/src-tauri/src/update_relaunch.rs`, 'Command::new("/bin/sh")'],
+  [join(root, "src-tauri/src/update_relaunch.rs"), 'Command::new("/bin/sh")'],
 ]);
 const violations = [];
 for (const directory of roots) {
