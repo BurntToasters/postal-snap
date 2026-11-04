@@ -20,7 +20,7 @@ import { pathToFileURL } from "node:url";
 
 export const MINIMUM_NPM_VERSION = "12.2.1";
 export const SUPPORTED_NODE_VERSIONS = "^24.22.1 || >=26.13.0";
-export const PINNED_RUST_VERSION = "1.97.1";
+export const PINNED_RUST_VERSION = "1.99.1";
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
 
 export function parseVersion(value) {

@@ -8,7 +8,7 @@ At the 2026-10-17 audit, npm audit reported zero vulnerabilities and the RustSec
 
 ## Automated gates
 
-- [ ] Clean checkout uses Node.js 24 and Rust 1.97.1.
+- [ ] Clean checkout uses Node.js 24 and Rust 1.99.1.
 - [ ] `npm ci` succeeds without lockfile changes.
 - [ ] `npm run audit` reports no npm or RustSec vulnerabilities (online; signing host).
 - [ ] `npm run workspace:prepare` passes (`SKIP_E2E=1`; Playwright is not required on the signing host).

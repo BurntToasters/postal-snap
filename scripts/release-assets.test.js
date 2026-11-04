@@ -1338,7 +1338,7 @@ test("rust:update passes clippy and rustfmt as one --component value", async () 
   const rustUpdate = packageJson.scripts["rust:update"];
   assert.equal(
     rustUpdate,
-    "rustup toolchain install 1.97.1 --profile minimal --component cargo,clippy,rustfmt",
+    "rustup toolchain install 1.99.1 --profile minimal --component cargo,clippy,rustfmt",
   );
 
   for (const [name, script] of Object.entries(packageJson.scripts)) {
