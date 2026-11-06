@@ -41,7 +41,7 @@ Linux AppImages need FUSE 2 (`libfuse2` on Ubuntu 22.04, `libfuse2t64` on 24.04)
 
 ## Development
 
-Prerequisites: Node.js 24+, Rust 1.99.1, and the [Tauri 2 platform prerequisites](https://v2.tauri.app/start/prerequisites/).
+Prerequisites: Node.js 24+, Rust (version pinned in `rust-toolchain.toml`), and the [Tauri 2 platform prerequisites](https://v2.tauri.app/start/prerequisites/).
 
 ```sh
 npm install
