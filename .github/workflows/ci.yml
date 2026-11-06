@@ -37,7 +37,11 @@ jobs:
       - name: Read pinned Rust toolchain
         id: rust-pin
         shell: bash
-        run: echo "channel=$(node scripts/rust-toolchain.mjs --print)" >> "$GITHUB_OUTPUT"
+        run: |
+          set -euo pipefail
+          channel="$(node scripts/rust-toolchain.mjs --print)"
+          test -n "$channel"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
         with:
           toolchain: ${{ steps.rust-pin.outputs.channel }}
@@ -111,7 +115,11 @@ jobs:
       - name: Read pinned Rust toolchain
         id: rust-pin
         shell: bash
-        run: echo "channel=$(node scripts/rust-toolchain.mjs --print)" >> "$GITHUB_OUTPUT"
+        run: |
+          set -euo pipefail
+          channel="$(node scripts/rust-toolchain.mjs --print)"
+          test -n "$channel"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
         with:
           toolchain: ${{ steps.rust-pin.outputs.channel }}
