@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import process from "node:process";
 import test from "node:test";
 import { join } from "node:path";
 import { artifactArch, artifactPlatform } from "./lib/artifacts.js";
@@ -1594,4 +1596,32 @@ test("platform CI runs Clippy and Cargo update integration tests on Windows and 
     compile,
     /- if: matrix\.name != 'linux'\s*\n\s*run: npm run test:cargo-safe-update/,
   );
+});
+
+test("rust toolchain CLI --print matches the bare pin and never combines with an action", () => {
+  const script = join(root, "scripts", "rust-toolchain.mjs");
+  const run = (args) =>
+    spawnSync(process.execPath, [script, ...args], { encoding: "utf8" });
+  const bare = run([]);
+  assert.equal(bare.status, 0, bare.stderr);
+  assert.match(bare.stdout, /^\d+\.\d+\.\d+\n$/u);
+  const printed = run(["--print"]);
+  assert.equal(printed.status, 0, printed.stderr);
+  assert.equal(printed.stdout, bare.stdout);
+  for (const args of [
+    ["--print", "--install"],
+    ["--install", "--print"],
+    ["--print", "--target", "x86_64-pc-windows-msvc"],
+    ["--target", "x86_64-pc-windows-msvc", "--print"],
+  ]) {
+    const result = run(args);
+    const label = args.join(" ");
+    assert.notEqual(result.status, 0, `${label} must fail`);
+    assert.match(
+      result.stderr,
+      /--print cannot be combined/u,
+      `${label} must name --print`,
+    );
+    assert.equal(result.stdout, "", `${label} must not print or act`);
+  }
 });

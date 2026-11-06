@@ -165,6 +165,12 @@ function runRustup(args) {
 const USAGE = `Usage: node scripts/rust-toolchain.mjs [print|--install|--target <triple...>]`;
 
 function parseArguments(argv) {
+  if (
+    argv.some((arg) => arg === "--print" || arg === "print") &&
+    argv.length > 1
+  ) {
+    throw new Error("--print cannot be combined with an action");
+  }
   const [command, ...rest] = argv;
   if (!command || command === "--print" || command === "print") {
     return { action: "print" };
