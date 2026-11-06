@@ -134,7 +134,11 @@ export function SendBar({
           <span>
             {sending ? strings.composer.sending : strings.composer.send}
           </span>
-          <kbd className="send-kbd-hint">{shortcutChord("↵")}</kbd>
+          <kbd
+            className="send-kbd-hint"
+            aria-hidden="true"
+            data-chord={shortcutChord("↵")}
+          />
         </button>
         <button
           className="primary-button send-chevron"

@@ -288,11 +288,15 @@ export function AccountsTab({
               const name = account.displayName || account.email;
               return (
                 <div key={account.id} className="account-overview-item">
+                  <span id={`account-row-verb-${account.id}`} hidden>
+                    {strings.settings.manageAccountVerb}
+                  </span>
                   <button
                     type="button"
                     className="account-overview-row"
+                    id={`account-row-${account.id}`}
                     data-settings-account-id={account.id}
-                    aria-label={strings.settings.manageAccount(name)}
+                    aria-labelledby={`account-row-verb-${account.id} account-row-${account.id}`}
                     onClick={() => {
                       setPage("connection");
                       onSelectAccount(account.id);
@@ -300,12 +304,14 @@ export function AccountsTab({
                   >
                     <Mail aria-hidden="true" />
                     <span>
-                      <strong>{name}</strong>
-                      <small>{account.email}</small>
+                      <strong>{name}</strong> <small>{account.email}</small>
                       {account.error ? (
-                        <small role="alert">{account.error}</small>
+                        <>
+                          {" "}
+                          <small role="alert">{account.error}</small>
+                        </>
                       ) : null}
-                    </span>
+                    </span>{" "}
                     <SyncStatus account={account} sync={undefined} />
                   </button>
                   {accounts.length > 1 ? (

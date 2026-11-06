@@ -31,7 +31,7 @@ async function openIdentity(page: Page, density: string, scale: number) {
   await page.goto(`/?localMail=1&density=${density}&scale=${scale}`);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("tab", { name: "Accounts", exact: true }).click();
-  await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
+  await page.getByRole("button", { name: /^Manage Sam\b/ }).click();
   await page.getByRole("button", { name: "Identity", exact: true }).click();
 }
 

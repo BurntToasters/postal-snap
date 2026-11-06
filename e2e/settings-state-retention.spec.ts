@@ -48,7 +48,7 @@ test("retains alias and filter-rule drafts while Settings sections change", asyn
   await page.goto("/?localMail=1");
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("tab", { name: "Accounts" }).click();
-  await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
+  await page.getByRole("button", { name: /^Manage Sam\b/ }).click();
   await page.getByRole("button", { name: "Identity", exact: true }).click();
 
   const aliasInput = page.getByLabel("alias@yourdomain.com");
@@ -88,7 +88,7 @@ test("rich signature HTML and account identity survive canceled Settings guards"
   await page.goto("/?localMail=1");
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("tab", { name: "Accounts" }).click();
-  await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
+  await page.getByRole("button", { name: /^Manage Sam\b/ }).click();
   await page.getByRole("button", { name: "Identity", exact: true }).click();
 
   const nameInput = page.getByLabel("Name on mail you send");
@@ -136,7 +136,7 @@ test("confirmed discard clears account drafts and does not prompt again", async 
   await page.goto("/?localMail=1");
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("tab", { name: "Accounts" }).click();
-  await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
+  await page.getByRole("button", { name: /^Manage Sam\b/ }).click();
   await page.getByRole("button", { name: "Identity", exact: true }).click();
 
   const nameInput = page.getByLabel("Name on mail you send");

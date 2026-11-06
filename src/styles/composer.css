@@ -366,6 +366,11 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
   background: color-mix(in srgb, var(--accent-contrast) 15%, transparent);
 }
 
+/* Generated text keeps the hint out of the button's visible name text. */
+.send-kbd-hint::after {
+  content: attr(data-chord);
+}
+
 .color-control {
   position: relative;
   display: grid;

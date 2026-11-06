@@ -116,7 +116,7 @@ test("all settings views expose a scroll region and valid tab relationships", as
   }
 
   await page.getByRole("tab", { name: "Accounts", exact: true }).click();
-  await page.getByRole("button", { name: "Manage Work", exact: true }).click();
+  await page.getByRole("button", { name: /^Manage Work\b/ }).click();
   await scanSettings(page, accessibilityRules);
   for (const name of ["Connection", "Folders", "Identity", "Rules"]) {
     const pageButton = page.getByRole("button", { name, exact: true });
@@ -299,8 +299,7 @@ test("account navigation restores focus without bypassing dirty form guards", as
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("tab", { name: "Accounts", exact: true }).click();
   const manageWork = page.getByRole("button", {
-    name: "Manage Work",
-    exact: true,
+    name: /^Manage Work\b/,
   });
   await manageWork.focus();
   await page.keyboard.press("Enter");

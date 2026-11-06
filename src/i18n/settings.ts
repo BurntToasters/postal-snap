@@ -8,6 +8,7 @@ export const settings = {
   sectionSelector: "Settings section",
   backAccounts: "Back to accounts",
   manageAccount: (name: string) => `Manage ${name}`,
+  manageAccountVerb: "Manage",
   moveUp: "Move up",
   moveDown: "Move down",
   moveAccountUp: (name: string) => `Move ${name} up`,

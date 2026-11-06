@@ -22,7 +22,7 @@ test("an account color shows in the account list", async ({ page }) => {
   ).toHaveAttribute("data-color", "blue");
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("tab", { name: "Accounts" }).click();
-  await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
+  await page.getByRole("button", { name: /^Manage Sam\b/ }).click();
   await page.getByRole("button", { name: "Identity" }).click();
   await page.getByRole("radio", { name: "Purple" }).click();
   await expect(page.getByRole("radio", { name: "Purple" })).toHaveAttribute(

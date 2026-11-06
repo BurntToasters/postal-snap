@@ -19,7 +19,7 @@ test("a collapsed conversation shows marks from any loaded message", async ({
 }) => {
   await page.goto("/?threadGap=1&threadMarks=1");
   const header = page.getByRole("treeitem", {
-    name: /Conversation, Jane, jane@example\.com, Weekend plans/i,
+    name: /Conversation, Jane, .*Weekend plans/i,
   });
   await expect(header).toBeVisible();
   await expect(header).toHaveAttribute(

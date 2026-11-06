@@ -346,8 +346,10 @@ html[data-text-scale="large"] .mailbox-filter-control {
     pointer-events: auto;
   }
 
-  .message-row-wrap:hover .message-when {
-    opacity: 0;
+  /* Transparent text, not opacity: the date stays in the row's visible name text. */
+  .message-row-wrap:hover .message-when,
+  .message-row-wrap:hover .message-when * {
+    color: transparent;
   }
 }
 

@@ -35,8 +35,8 @@ for (const all of [false, true]) {
       await page.goto("/?previewable=1&filePair=1");
       await page.getByRole("option", { name: /Weekend plans/i }).click();
       const button = page.getByRole("button", {
-        name: all ? "Save all files" : "Download file: family.png",
-        exact: true,
+        name: all ? "Save all files" : /^Download file: family\.png/,
+        exact: all,
       });
       await button.click();
       const args = await commandArgs(
@@ -97,7 +97,7 @@ test("tests a saved account through the native boundary", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("tab", { name: "Accounts", exact: true }).click();
-  const manage = page.getByRole("button", { name: "Manage Sam", exact: true });
+  const manage = page.getByRole("button", { name: /^Manage Sam\b/ });
   await manage.click();
   await page
     .getByRole("button", { name: "Test connection", exact: true })

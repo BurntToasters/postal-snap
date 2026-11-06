@@ -800,7 +800,7 @@ describe("attachments", () => {
     );
     fireEvent.click(
       screen.getByRole("button", {
-        name: `${strings.reader.downloadFile}: archive.bin`,
+        name: new RegExp(`^${strings.reader.downloadFile}: archive.bin`),
       }),
     );
     expect(onPreview).toHaveBeenCalledWith("image");

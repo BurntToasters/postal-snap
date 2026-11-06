@@ -147,7 +147,7 @@ async function manageAccount(
 ) {
   await act(async () => {
     fireEvent.click(
-      await screen.findByRole("button", { name: "Manage Test User" }),
+      await screen.findByRole("button", { name: /^Manage Test User\b/ }),
     );
   });
   if (page !== "Connection") await accountPage(page);
@@ -196,8 +196,8 @@ describe("SettingsDialog component", () => {
     expect(
       screen
         .getAllByRole("button", { name: /^Manage / })
-        .map((button) => button.getAttribute("aria-label")),
-    ).toEqual(["Manage Work", "Manage Test User"]);
+        .map((button) => button.getAttribute("data-settings-account-id")),
+    ).toEqual(["account-2", "account-1"]);
   });
 
   it("saves the color used for an account", async () => {

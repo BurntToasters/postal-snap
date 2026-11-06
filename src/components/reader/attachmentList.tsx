@@ -291,6 +291,14 @@ export function AttachmentList({
           (item) => !item.inline,
         );
         const partial = message.bodyPartial === true;
+        const attachmentDetail = (
+          attachment: (typeof regularAttachments)[number],
+        ) =>
+          `${fileKind(attachment.contentType)}${
+            partial && attachment.size === 0
+              ? ""
+              : ` · ${formatBytes(attachment.size)}`
+          }`;
         if (regularAttachments.length === 0 && !partial) return null;
         const fileBytes = regularAttachments.reduce(
           (total, item) => total + item.size,
@@ -403,17 +411,12 @@ export function AttachmentList({
                   onClick={() =>
                     void onDownload(attachment.id, attachment.filename)
                   }
-                  aria-label={`${strings.reader.downloadFile}: ${attachment.filename}`}
+                  aria-label={`${strings.reader.downloadFile}: ${attachment.filename} ${attachmentDetail(attachment)}`}
                 >
                   <Download aria-hidden="true" />
                   <span>
-                    <strong>{attachment.filename}</strong>
-                    <small>
-                      {fileKind(attachment.contentType)}
-                      {partial && attachment.size === 0
-                        ? ""
-                        : ` · ${formatBytes(attachment.size)}`}
-                    </small>
+                    <strong>{attachment.filename}</strong>{" "}
+                    <small>{attachmentDetail(attachment)}</small>
                   </span>
                 </button>
               </div>

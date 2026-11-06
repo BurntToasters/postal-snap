@@ -84,7 +84,7 @@ test("mail rule fields have room between them", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("tab", { name: "Accounts" }).click();
-  await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
+  await page.getByRole("button", { name: /^Manage Sam\b/ }).click();
   await page.getByRole("button", { name: "Rules", exact: true }).click();
   const input = await box(page.getByLabel("Rule name").first());
   const nextLabel = await box(page.getByText("Match by").first());
@@ -159,7 +159,7 @@ test("account settings are split into titled sections", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("tab", { name: "Accounts" }).click();
-  await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
+  await page.getByRole("button", { name: /^Manage Sam\b/ }).click();
   const accountGroup = page
     .locator(".account-settings-card .settings-group")
     .first();

@@ -646,7 +646,7 @@ test("settings layout has no hijacked inputs, stretched actions, or gaps", async
   }
 
   await expect(page.getByText("Reset everything")).toBeVisible();
-  await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
+  await page.getByRole("button", { name: /^Manage Sam\b/ }).click();
   await expect(page.getByText("Reset everything")).toHaveCount(0);
   const back = await page
     .getByRole("button", { name: "Back to accounts" })

@@ -1301,7 +1301,7 @@ describe("MessageReader", () => {
       } else {
         fireEvent.click(
           screen.getByRole("button", {
-            name: `${strings.reader.downloadFile}: photo.png`,
+            name: new RegExp(`^${strings.reader.downloadFile}: photo.png`),
           }),
         );
       }

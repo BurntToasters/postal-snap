@@ -31,7 +31,7 @@ test("moving an account changes the switcher order", async ({ page }) => {
   ).toBeDisabled();
   await page.getByRole("button", { name: "Move Work up" }).click();
   const managed = page.getByRole("button", { name: /^Manage / });
-  await expect(managed.first()).toHaveAccessibleName("Manage Work");
+  await expect(managed.first()).toHaveAccessibleName(/^Manage Work\b/);
   await page.getByRole("button", { name: "Close settings" }).click();
 
   await page.getByRole("button", { name: /Sam.*sam@icloud\.com/i }).click();

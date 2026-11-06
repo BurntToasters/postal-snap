@@ -74,7 +74,10 @@ function MessageWhen({
       </time>
       <span className="message-size">{formatBytes(message.size)}</span>
       {late ? (
-        <span className="message-arrived">{strings.mail.arrivedLater}</span>
+        <>
+          {" "}
+          <span className="message-arrived">{strings.mail.arrivedLater}</span>
+        </>
       ) : null}
     </span>
   );
@@ -1045,21 +1048,34 @@ export function MessageList({
       ? checked
       : selectedId === message.id && !isNewestThreadChild;
     const folder = folderName(message);
+    // The visible text stays one in-order run so the name contains it (WCAG 2.5.3).
     const rowLabel = [
       message.isRead ? strings.mail.read : strings.mail.unread,
       message.isStarred ? strings.mail.starred : null,
       message.pinned ? strings.mail.pinned : null,
       correspondent(message),
-      senderAddressTitle(message),
+      formatMessageListWhen(message.receivedAt, listNow, dateFormatters),
+      notableArrival(message.receivedAt, message.arrivedAt)
+        ? strings.mail.arrivedLater
+        : null,
+      folder,
+      message.conversationMuted ? strings.mail.muted : null,
       message.subject || strings.common.noSubject,
+      message.attachmentCount
+        ? strings.mail.draftFiles(message.attachmentCount)
+        : null,
+      showMessagePreviews || loadingMessageId === message.id
+        ? loadingMessageId === message.id
+          ? strings.mail.downloadingMessage
+          : message.preview || strings.mail.openToDownload
+        : null,
+      senderAddressTitle(message),
       folder ? strings.mail.inFolder(folder) : null,
       formatFullMessageDate(message.receivedAt, listNow, dateFormatters),
       formatBytes(message.size),
-      message.attachmentCount
-        ? strings.mail.draftFiles(message.attachmentCount)
-        : message.hasAttachments
-          ? strings.mail.hasAttachments
-          : null,
+      !message.attachmentCount && message.hasAttachments
+        ? strings.mail.hasAttachments
+        : null,
       message.importance === "high"
         ? strings.mail.highImportance
         : message.importance === "low"
@@ -1068,10 +1084,6 @@ export function MessageList({
       message.hasCalendar ? strings.mail.hasInvitation : null,
       message.isAnswered ? strings.mail.replied : null,
       message.isForwarded ? strings.mail.forwarded : null,
-      message.conversationMuted ? strings.mail.muted : null,
-      notableArrival(message.receivedAt, message.arrivedAt)
-        ? strings.mail.arrivedLater
-        : null,
     ]
       .filter(Boolean)
       .join(", ");
@@ -1134,12 +1146,12 @@ export function MessageList({
               text={correspondent(message)}
               terms={marks.correspondent}
             />
-          </span>
+          </span>{" "}
           <MessageWhen
             message={message}
             now={listNow}
             formatters={dateFormatters}
-          />
+          />{" "}
           <span className="message-subject">
             {message.isStarred ? (
               <Star
@@ -1148,12 +1160,18 @@ export function MessageList({
                 aria-hidden="true"
               />
             ) : null}
-            {folder ? <span className="message-folder">{folder}</span> : null}
+            {folder ? (
+              <>
+                <span className="message-folder">{folder}</span>{" "}
+              </>
+            ) : null}
             {message.pinned ? (
               <Pin className="message-mark pin-mark" aria-hidden="true" />
             ) : null}
             {message.conversationMuted ? (
-              <span className="message-muted">{strings.mail.muted}</span>
+              <>
+                <span className="message-muted">{strings.mail.muted}</span>{" "}
+              </>
             ) : null}
             <span>
               <HighlightedText
@@ -1162,9 +1180,12 @@ export function MessageList({
               />
             </span>
             {message.attachmentCount ? (
-              <span className="message-file-count">
-                {strings.mail.draftFiles(message.attachmentCount)}
-              </span>
+              <>
+                {" "}
+                <span className="message-file-count">
+                  {strings.mail.draftFiles(message.attachmentCount)}
+                </span>
+              </>
             ) : message.hasAttachments ? (
               <Paperclip aria-hidden="true" />
             ) : null}
@@ -1178,7 +1199,7 @@ export function MessageList({
             {message.isForwarded ? (
               <Forward className="message-mark" aria-hidden="true" />
             ) : null}
-          </span>
+          </span>{" "}
           {showMessagePreviews || loadingMessageId === message.id ? (
             <span className="message-preview">
               {loadingMessageId === message.id ? (
@@ -1251,15 +1272,29 @@ export function MessageList({
           aria-label={[
             strings.mail.conversation,
             conversationPeople(group),
-            senderAddressTitle(group.newest),
+            formatMessageListWhen(
+              group.newest.receivedAt,
+              listNow,
+              dateFormatters,
+            ),
+            conversationLate ? strings.mail.arrivedLater : null,
+            headerFolder,
+            conversationMuted ? strings.mail.muted : null,
             group.newest.subject || strings.common.noSubject,
-            conversationStarred ? strings.mail.starred : null,
-            conversationPinned ? strings.mail.pinned : null,
             conversationFiles
               ? strings.mail.draftFiles(conversationFiles)
-              : conversationAttachment
-                ? strings.mail.hasAttachments
-                : null,
+              : null,
+            String(group.items.length),
+            group.unread > 0 ? strings.mail.threadUnread(group.unread) : null,
+            showMessagePreviews
+              ? group.newest.preview || strings.mail.openToDownload
+              : null,
+            senderAddressTitle(group.newest),
+            conversationStarred ? strings.mail.starred : null,
+            conversationPinned ? strings.mail.pinned : null,
+            !conversationFiles && conversationAttachment
+              ? strings.mail.hasAttachments
+              : null,
             conversationImportance === "high"
               ? strings.mail.highImportance
               : conversationImportance === "low"
@@ -1268,10 +1303,7 @@ export function MessageList({
             conversationCalendar ? strings.mail.hasInvitation : null,
             conversationReplied ? strings.mail.replied : null,
             conversationForwarded ? strings.mail.forwarded : null,
-            conversationMuted ? strings.mail.muted : null,
-            conversationLate ? strings.mail.arrivedLater : null,
             strings.mail.threadMessages(group.items.length),
-            group.unread > 0 ? strings.mail.threadUnread(group.unread) : null,
             headerFolder ? strings.mail.inFolder(headerFolder) : null,
             formatFullMessageDate(
               group.newest.receivedAt,
@@ -1298,12 +1330,12 @@ export function MessageList({
               text={conversationPeople(group)}
               terms={marks.correspondent}
             />
-          </span>
+          </span>{" "}
           <MessageWhen
             message={group.newest}
             now={listNow}
             formatters={dateFormatters}
-          />
+          />{" "}
           <span className="message-subject">
             {conversationStarred ? (
               <Star
@@ -1313,13 +1345,17 @@ export function MessageList({
               />
             ) : null}
             {headerFolder ? (
-              <span className="message-folder">{headerFolder}</span>
+              <>
+                <span className="message-folder">{headerFolder}</span>{" "}
+              </>
             ) : null}
             {conversationPinned ? (
               <Pin className="message-mark pin-mark" aria-hidden="true" />
             ) : null}
             {conversationMuted ? (
-              <span className="message-muted">{strings.mail.muted}</span>
+              <>
+                <span className="message-muted">{strings.mail.muted}</span>{" "}
+              </>
             ) : null}
             <span>
               <HighlightedText
@@ -1328,9 +1364,12 @@ export function MessageList({
               />
             </span>
             {conversationFiles ? (
-              <span className="message-file-count">
-                {strings.mail.draftFiles(conversationFiles)}
-              </span>
+              <>
+                {" "}
+                <span className="message-file-count">
+                  {strings.mail.draftFiles(conversationFiles)}
+                </span>
+              </>
             ) : conversationAttachment ? (
               <Paperclip aria-hidden="true" />
             ) : null}
@@ -1343,14 +1382,17 @@ export function MessageList({
             ) : null}
             {conversationForwarded ? (
               <Forward className="message-mark" aria-hidden="true" />
-            ) : null}
+            ) : null}{" "}
             <strong className="thread-count">{group.items.length}</strong>
             {group.unread > 0 ? (
-              <span className="thread-unread">
-                {strings.mail.threadUnread(group.unread)}
-              </span>
+              <>
+                {" "}
+                <span className="thread-unread">
+                  {strings.mail.threadUnread(group.unread)}
+                </span>
+              </>
             ) : null}
-          </span>
+          </span>{" "}
           {showMessagePreviews ? (
             <span className="message-preview">
               {group.newest.preview || strings.mail.openToDownload}

@@ -12,7 +12,7 @@ async function openAccount(
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("tab", { name: "Accounts", exact: true }).click();
   await page
-    .getByRole("button", { name: `Manage ${name}`, exact: true })
+    .getByRole("button", { name: new RegExp(`^Manage ${name}\\b`) })
     .click();
 }
 
@@ -525,7 +525,7 @@ test("account list explains connection status in plain language", async ({
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("tab", { name: "Accounts", exact: true }).click();
   await expect(
-    page.getByRole("button", { name: "Manage Sam", exact: true }),
+    page.getByRole("button", { name: /^Manage Sam\b/ }),
   ).toContainText("Mail is up to date");
 });
 

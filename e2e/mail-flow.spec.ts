@@ -1196,7 +1196,7 @@ test("detects and manages account aliases and presents From selector in composer
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("tab", { name: "Accounts" }).click();
-  await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
+  await page.getByRole("button", { name: /^Manage Sam\b/ }).click();
   await page.getByRole("button", { name: "Identity", exact: true }).click();
 
   await page.getByRole("button", { name: "Detect from iCloud" }).click();
@@ -1216,7 +1216,7 @@ test("renders alias header help without overlap blockers", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("tab", { name: "Accounts" }).click();
-  await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
+  await page.getByRole("button", { name: /^Manage Sam\b/ }).click();
   await page.getByRole("button", { name: "Identity", exact: true }).click();
   await expect(page.getByText("Email Aliases & Custom Domains")).toBeVisible();
   await expect(
@@ -1293,7 +1293,7 @@ test("recovers expired passwords without removing the account", async ({
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("tab", { name: "Accounts" }).click();
   await expect(page.getByRole("alert")).toContainText("Sign-in failed");
-  await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
+  await page.getByRole("button", { name: /^Manage Sam\b/ }).click();
   await page.getByLabel("Update password").fill("new-app-password");
   await page.getByRole("button", { name: "Update password" }).click();
   await expect(page.getByText(/Password updated/)).toBeVisible();
@@ -1409,7 +1409,7 @@ test("saves a per-account signature", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("tab", { name: "Accounts" }).click();
-  await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
+  await page.getByRole("button", { name: /^Manage Sam\b/ }).click();
   await page.getByRole("button", { name: "Identity", exact: true }).click();
   await page.getByLabel("Email signature").fill("Best,\nSam");
   await page.getByRole("button", { name: "Save", exact: true }).click();
@@ -1420,7 +1420,7 @@ test("creates, disables, and deletes a mail rule", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("tab", { name: "Accounts" }).click();
-  await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
+  await page.getByRole("button", { name: /^Manage Sam\b/ }).click();
   await page.getByRole("button", { name: "Rules", exact: true }).click();
   await page.getByLabel("Rule name").fill("Bills");
   await page.getByLabel("Text to match").fill("power.example.com");

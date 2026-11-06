@@ -32,7 +32,7 @@ for (const { density, scale } of variants) {
     await page.goto(`/?localMail=1&density=${density}&scale=${scale}`);
     await page.getByRole("button", { name: "Settings" }).click();
     await page.getByRole("tab", { name: "Accounts" }).click();
-    await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
+    await page.getByRole("button", { name: /^Manage Sam\b/ }).click();
     await page.getByRole("button", { name: "Identity", exact: true }).click();
 
     const editor = page.getByRole("textbox", { name: "Rich signature" });
@@ -90,7 +90,7 @@ for (const { density, scale } of variants) {
     await page.getByRole("button", { name: "Close settings" }).click();
     await page.getByRole("button", { name: "Settings" }).click();
     await page.getByRole("tab", { name: "Accounts" }).click();
-    await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
+    await page.getByRole("button", { name: /^Manage Sam\b/ }).click();
     await page.getByRole("button", { name: "Identity", exact: true }).click();
     await expect(
       page.getByRole("textbox", { name: "Rich signature" }).locator("strong"),

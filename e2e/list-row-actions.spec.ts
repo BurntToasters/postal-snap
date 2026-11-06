@@ -82,6 +82,7 @@ async function measure(wrap: Locator) {
       pointer: style?.pointerEvents ?? null,
       dateOpacity: date ? Number(getComputedStyle(date).opacity) : null,
       dateVisibility: date ? getComputedStyle(date).visibility : null,
+      dateColor: date ? getComputedStyle(date).color : null,
       buttons: [...node.querySelectorAll("button.row-action")].map((button) => {
         const r = button.getBoundingClientRect();
         return { width: r.width, height: r.height };
@@ -91,7 +92,11 @@ async function measure(wrap: Locator) {
 }
 
 function dateHidden(m: Awaited<ReturnType<typeof measure>>): boolean {
-  return m.dateOpacity === 0 || m.dateVisibility === "hidden";
+  return (
+    m.dateOpacity === 0 ||
+    m.dateVisibility === "hidden" ||
+    m.dateColor === "rgba(0, 0, 0, 0)"
+  );
 }
 
 test("the cluster is invisible and inert before hover", async ({ page }) => {
