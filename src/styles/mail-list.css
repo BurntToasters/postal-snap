@@ -620,7 +620,8 @@ button.list-day:focus-visible {
   display: grid;
   width: calc(100% - 12px);
   min-height: var(--message-row-height);
-  grid-template-columns: 0.625rem minmax(0, 1fr) auto;
+  /* The sender keeps three characters even when large text widens the date. */
+  grid-template-columns: 0.625rem minmax(3em, 1fr) auto;
   grid-template-areas:
     "dot sender date"
     "dot subject subject"
