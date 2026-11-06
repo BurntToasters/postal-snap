@@ -20,6 +20,11 @@
 
 Postal Snap is a calm, accessible desktop email client. Mail stays on your computer. There is no Postal Snap cloud, telemetry, or account of mine to log into.
 
+## Changes in `v0.5.2:`
+
+- **IMPROVED - Interface density:** Tighter toolbar, message-list, reader-header, avatar, and setup-wizard spacing across comfortable and compact density, with clearer accent colors and contrast coverage.
+- **IMPROVED - Window chrome and controls:** Refined window chrome, buttons, and disabled states for more consistent focus and contrast.
+
 ## Changes in `v0.5.1:`
 
 - **FIX - macOS updates:** Later updates preserve the installed app's identity and avoid an extra Gatekeeper prompt. Updating to 0.5.1 from an older version still uses that version's updater.
