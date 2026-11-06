@@ -271,10 +271,12 @@ function createRegistryRaceFixture() {
   );
   writeFileSync(path.join(crateRoot, "src", "lib.rs"), "pub fn race() {}\n");
   const archive = path.join(tempRoot, "race-dep-1.0.0.crate");
+  // Relative paths: GNU tar (e.g. Git Bash) reads "C:\..." as host:path.
   const tar = spawnSync(
     "tar",
-    ["-czf", archive, "-C", tempRoot, "race-dep-1.0.0"],
+    ["-czf", "race-dep-1.0.0.crate", "race-dep-1.0.0"],
     {
+      cwd: tempRoot,
       encoding: "utf8",
       timeout: 30_000,
       env: { ...process.env, COPYFILE_DISABLE: "1" },
