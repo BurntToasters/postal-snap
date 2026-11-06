@@ -1331,32 +1331,27 @@ test("per-platform continue uploads without requiring the complete artifact set"
   );
 });
 
-test("rust:update passes clippy and rustfmt as one --component value", async () => {
+test("rust scripts derive the toolchain from rust-toolchain.toml", async () => {
   const packageJson = JSON.parse(
     await readFile(join(root, "package.json"), "utf8"),
   );
-  const rustUpdate = packageJson.scripts["rust:update"];
   assert.equal(
-    rustUpdate,
-    "rustup toolchain install 1.99.1 --profile minimal --component cargo,clippy,rustfmt",
+    packageJson.scripts["rust:update"],
+    "node scripts/rust-toolchain.mjs --install",
   );
 
   for (const [name, script] of Object.entries(packageJson.scripts)) {
-    const argv = String(script).split(/\s+/);
-    if (argv[0] !== "rustup") continue;
-    for (let index = 0; index < argv.length; index += 1) {
-      if (argv[index] !== "--component" && argv[index] !== "-c") continue;
-      const value = argv[index + 1];
-      assert.ok(
-        value && !value.startsWith("-"),
-        `${name} must pass a value to --component`,
-      );
-      const next = argv[index + 2];
-      assert.ok(
-        next === undefined || next.startsWith("-"),
-        `${name} must not pass extra rustup components as positional args`,
-      );
-    }
+    if (!name.startsWith("rust:") || script.includes("npm run")) continue;
+    assert.match(
+      script,
+      /^node scripts\/rust-toolchain\.mjs (?:--install|--target )/,
+      `${name} must delegate to scripts/rust-toolchain.mjs`,
+    );
+    assert.doesNotMatch(
+      script,
+      /\b\d+\.\d+\.\d+\b/,
+      `${name} must not hardcode a Rust version`,
+    );
   }
 });
 

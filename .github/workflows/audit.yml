@@ -15,7 +15,6 @@ concurrency:
 env:
   NODE_VERSION: "26.13.0"
   NPM_VERSION: "12.2.1"
-  RUST_VERSION: "1.99.1"
   CARGO_AUDIT_VERSION: "0.22.2"
 
 jobs:
@@ -34,9 +33,13 @@ jobs:
         run: npm install --global npm@${{ env.NPM_VERSION }} --ignore-scripts --min-release-age=3
       - run: npm ci --ignore-scripts
       - run: npm run audit:npm
+      - name: Read pinned Rust toolchain
+        id: rust-pin
+        shell: bash
+        run: echo "channel=$(node scripts/rust-toolchain.mjs --print)" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
         with:
-          toolchain: ${{ env.RUST_VERSION }}
+          toolchain: ${{ steps.rust-pin.outputs.channel }}
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri

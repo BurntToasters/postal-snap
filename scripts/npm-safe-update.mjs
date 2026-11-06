@@ -17,10 +17,11 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { readPinnedRustToolchain } from "./rust-toolchain.mjs";
 
+export { readPinnedRustToolchain };
 export const MINIMUM_NPM_VERSION = "12.2.1";
 export const SUPPORTED_NODE_VERSIONS = "^24.22.1 || >=26.13.0";
-export const PINNED_RUST_VERSION = "1.99.1";
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
 
 export function parseVersion(value) {
@@ -48,7 +49,10 @@ export function isSupportedNodeVersion(value) {
   return major > 26;
 }
 
-export function hasPinnedRustToolchain(output, version = PINNED_RUST_VERSION) {
+export function hasPinnedRustToolchain(
+  output,
+  version = readPinnedRustToolchain(),
+) {
   return String(output)
     .split(/\r?\n/u)
     .some(
@@ -177,12 +181,13 @@ export function assertUpdateEnvironment() {
     );
   }
 
+  const pinnedRustVersion = readPinnedRustToolchain();
   const rustToolchains = run("rustup", ["toolchain", "list"], {
     capture: true,
   });
-  if (!hasPinnedRustToolchain(rustToolchains)) {
+  if (!hasPinnedRustToolchain(rustToolchains, pinnedRustVersion)) {
     throw new Error(
-      `Rust ${PINNED_RUST_VERSION} must already be installed before updating dependencies`,
+      `Rust ${pinnedRustVersion} must already be installed before updating dependencies`,
     );
   }
 }

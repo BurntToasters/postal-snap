@@ -4,7 +4,7 @@
 
 The command does not update `node_modules` or bump the application version. It synchronizes the existing version from `package.json` into the Tauri manifests after updating the lockfiles. After reviewing the lockfile changes, an isolated development environment must run `npm ci --ignore-scripts` before starting the app; otherwise the installed JavaScript packages can be older than the lockfile and Tauri may reject mismatched plugin versions.
 
-The command requires Node.js `^24.22.1 || >=26.13.0`, npm 12.2.1 or newer, and an already-installed Rust 1.99.1 toolchain. It performs these steps:
+The command requires Node.js `^24.22.1 || >=26.13.0`, npm 12.2.1 or newer, and an already-installed Rust toolchain matching `rust-toolchain.toml`. It performs these steps:
 
 1. Resolve npm updates with `--package-lock-only`, `--ignore-scripts`, and a three-day minimum release age in a disposable npm cache.
 2. Reject high-severity npm audit findings without populating the project `node_modules` directory.
@@ -29,6 +29,25 @@ pinned to an exact version in both the command and `package.json`. Keep
 --save-exact` invocation, and review the lock diff to confirm no other package
 version changed. Record the exact publication time, 72-hour eligibility time,
 and reason in the remediation note. Never persist the exclusion in `.npmrc`.
+
+## Rust toolchain pin
+
+`rust-toolchain.toml` is the only Rust version pin. `scripts/rust-toolchain.mjs`
+reads its `channel`, `profile`, and `components` for local scripts and CI.
+
+Failure inventory:
+
+- A missing pin file, `[toolchain]` table, or `channel` fails closed with the
+  expected path instead of falling back to a default.
+- A non-version channel such as `stable`, `beta`, or `nightly` is rejected; the
+  pin must name an exact version.
+- Malformed TOML, unterminated arrays, and non-string components fail with a
+  line reference.
+- UTF-8 BOM, CRLF, comments, and multiline component arrays parse normally.
+- CI extraction runs after checkout because the pin file does not exist before
+  it; each extraction step uses `shell: bash` so `$GITHUB_OUTPUT` expands.
+- The CLI spawns `rustup` directly on Windows and fails on a missing executable
+  or a non-zero exit status.
 
 ## Cargo source transition safety
 

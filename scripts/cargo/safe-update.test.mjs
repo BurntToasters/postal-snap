@@ -36,15 +36,17 @@ import {
 } from "../cargo-safe-update.mjs";
 import {
   MINIMUM_NPM_VERSION,
-  PINNED_RUST_VERSION,
   commandRequiresShell,
   hasPinnedRustToolchain,
   isSupportedNodeVersion,
   isVersionAtLeast,
   npmUpdateArguments,
   parseVersion,
+  readPinnedRustToolchain,
   restoreSnapshot,
 } from "../npm-safe-update.mjs";
+
+const pinnedRustVersion = readPinnedRustToolchain();
 
 // Skip real Cargo integration tests if SKIP_CARGO_INTEGRATION=1
 const SKIP_CARGO_INTEGRATION = process.env.SKIP_CARGO_INTEGRATION === "1";
@@ -135,7 +137,7 @@ function createGitTransitionFixture() {
       env: {
         ...process.env,
         TMPDIR: process.env.POSTAL_SNAP_DEPENDENCY_TMP ?? os.tmpdir(),
-        RUSTUP_TOOLCHAIN: PINNED_RUST_VERSION,
+        RUSTUP_TOOLCHAIN: pinnedRustVersion,
       },
     },
   );
@@ -176,7 +178,7 @@ function runSafeCargoUpdate(fixture, args = []) {
       env: {
         ...process.env,
         TMPDIR: process.env.POSTAL_SNAP_DEPENDENCY_TMP ?? os.tmpdir(),
-        RUSTUP_TOOLCHAIN: PINNED_RUST_VERSION,
+        RUSTUP_TOOLCHAIN: pinnedRustVersion,
       },
     },
   );
@@ -203,7 +205,7 @@ function runSafeCargoUpdateAsync(
         env: {
           ...process.env,
           TMPDIR: process.env.POSTAL_SNAP_DEPENDENCY_TMP ?? os.tmpdir(),
-          RUSTUP_TOOLCHAIN: PINNED_RUST_VERSION,
+          RUSTUP_TOOLCHAIN: pinnedRustVersion,
           ...env,
         },
         stdio: ["ignore", "pipe", "pipe"],
@@ -249,7 +251,7 @@ function createRegistryRaceFixture() {
       env: {
         ...process.env,
         TMPDIR: process.env.POSTAL_SNAP_DEPENDENCY_TMP ?? os.tmpdir(),
-        RUSTUP_TOOLCHAIN: PINNED_RUST_VERSION,
+        RUSTUP_TOOLCHAIN: pinnedRustVersion,
       },
     },
   );
@@ -1848,7 +1850,7 @@ test("45. update environment versions fail closed at exact boundaries", () => {
   assert.throws(() => parseVersion("latest"), /Invalid semantic version/);
   assert.equal(
     hasPinnedRustToolchain(
-      `${PINNED_RUST_VERSION}-aarch64-apple-darwin (default)\n`,
+      `${pinnedRustVersion}-aarch64-apple-darwin (default)\n`,
     ),
     true,
   );
@@ -1954,7 +1956,7 @@ test(
           env: {
             ...process.env,
             CARGO_HOME: userCargoHome,
-            RUSTUP_TOOLCHAIN: PINNED_RUST_VERSION,
+            RUSTUP_TOOLCHAIN: pinnedRustVersion,
           },
           encoding: "utf8",
           timeout: 120_000,
@@ -2083,7 +2085,7 @@ test(
           env: {
             ...process.env,
             TMPDIR: process.env.POSTAL_SNAP_DEPENDENCY_TMP ?? os.tmpdir(),
-            RUSTUP_TOOLCHAIN: PINNED_RUST_VERSION,
+            RUSTUP_TOOLCHAIN: pinnedRustVersion,
           },
         },
       );
@@ -2197,7 +2199,7 @@ test(
           env: {
             ...process.env,
             TMPDIR: process.env.POSTAL_SNAP_DEPENDENCY_TMP ?? os.tmpdir(),
-            RUSTUP_TOOLCHAIN: PINNED_RUST_VERSION,
+            RUSTUP_TOOLCHAIN: pinnedRustVersion,
           },
         },
       );
