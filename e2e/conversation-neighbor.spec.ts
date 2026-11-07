@@ -1,6 +1,7 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { revealMenuItem } from "./menu-reveal";
 
 // Failure modes covered here:
 // 1. The newest message offers the older one and not a newer one.
@@ -27,11 +28,13 @@ test("the reader opens the older and newer message in a conversation", async ({
   await expect(
     page.getByRole("menuitem", { name: "Newer in conversation" }),
   ).toHaveCount(0);
+  await revealMenuItem(page, "Older in conversation");
   await page.getByRole("menuitem", { name: "Older in conversation" }).click();
   await expect(
     page.getByRole("heading", { name: "Older family note" }),
   ).toBeVisible();
   await page.getByRole("button", { name: "More actions" }).click();
+  await revealMenuItem(page, "Newer in conversation");
   await page.getByRole("menuitem", { name: "Newer in conversation" }).click();
   await expect(
     page.getByRole("heading", { name: "Weekend plans" }),

@@ -180,7 +180,7 @@ export function Sidebar({
         type="button"
         onClick={onAddAccount}
       >
-        <MailPlus /> {strings.mail.addAccount}
+        <MailPlus aria-hidden="true" /> {strings.mail.addAccount}
       </button>
       <nav className="folder-list" aria-label={strings.mail.mailboxes}>
         <p className="sidebar-section-title">{strings.mail.localFolders}</p>

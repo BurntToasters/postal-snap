@@ -344,7 +344,7 @@ test("unsaved connection changes require confirmation before leaving", async ({
   ).toBeVisible();
 });
 
-for (const density of ["comfortable", "compact"]) {
+for (const density of ["comfortable", "normal", "compact"]) {
   for (const scale of [100, 200]) {
     for (const theme of ["light", "dark"]) {
       for (const width of [720, 1400]) {

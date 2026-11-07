@@ -1,6 +1,7 @@
-import type { Locator } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { revealMenuItem } from "./menu-reveal";
 
 // Failure modes covered here:
 // 1. Search focus draws a clipped outline; Select mode shows a 44px checkbox.
@@ -45,8 +46,9 @@ test("select mode checkbox is compact with a full hit area", async ({
   const visual = await box(checkbox);
   expect(visual.width).toBeLessThanOrEqual(24);
   const hit = await box(page.locator(".message-select-hit").first());
-  expect(hit.width).toBeGreaterThanOrEqual(44);
-  expect(hit.height).toBeGreaterThanOrEqual(44);
+  const target = await targetSize(page);
+  expect(hit.width).toBeGreaterThanOrEqual(target);
+  expect(hit.height).toBeGreaterThanOrEqual(target);
   await page.locator(".message-select-hit").first().click();
   await expect(checkbox).toBeChecked();
   await page.screenshot({ path: "test-results/ui-audit-select.png" });
@@ -115,10 +117,13 @@ test("select-mode actions fit one row and the rest sit in the menu", async ({
   expect(bar.height).toBeLessThan(72);
   await page.getByRole("button", { name: "More mailbox actions" }).click();
   const menu = page.getByRole("menu", { name: "More mailbox actions" });
+  await revealMenuItem(page, "Mark read");
   await expect(menu.getByRole("menuitem", { name: "Mark read" })).toBeVisible();
-  await expect(
-    menu.getByRole("menuitem", { name: "Mark unread" }),
-  ).toBeVisible();
+  // One read toggle: an unread selection offers Mark read only.
+  await expect(menu.getByRole("menuitem", { name: "Mark unread" })).toHaveCount(
+    0,
+  );
+  await revealMenuItem(page, "Mark as junk");
   await expect(
     menu.getByRole("menuitem", { name: "Mark as junk" }),
   ).toBeVisible();
@@ -149,6 +154,7 @@ test("the reader menu lists move destinations as items", async ({ page }) => {
   await page.locator('[role="option"]').first().click();
   await page.getByRole("button", { name: "More actions" }).click();
   const menu = page.getByRole("menu", { name: "More actions" });
+  await menu.getByRole("menuitem", { name: "Move to", exact: true }).click();
   const group = menu.getByRole("group", { name: "Move to" });
   await expect(group.getByRole("menuitem").first()).toBeVisible();
   await expect(menu.getByRole("combobox")).toHaveCount(0);
@@ -250,3 +256,14 @@ test("nested folders fit the sidebar and actions appear on demand", async ({
   await expect(rename).toBeFocused();
   await page.screenshot({ path: "test-results/ui-audit-sidebar.png" });
 });
+
+async function targetSize(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const probe = document.createElement("i");
+    probe.style.cssText = "position:fixed;width:var(--target-size)";
+    document.body.append(probe);
+    const width = probe.getBoundingClientRect().width;
+    probe.remove();
+    return width;
+  });
+}

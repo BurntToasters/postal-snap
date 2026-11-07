@@ -28,7 +28,7 @@ function remoteFetches(page: Page) {
   );
 }
 
-for (const density of ["comfortable", "compact"] as const) {
+for (const density of ["comfortable", "normal", "compact"] as const) {
   for (const scale of [1, 2]) {
     test(`remembered sender requires consent: ${density}, ${scale * 100}%`, async ({
       page,

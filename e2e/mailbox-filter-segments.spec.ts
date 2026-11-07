@@ -105,7 +105,7 @@ test("F7 a remembered filter shows in the control", async ({ page }) => {
   await expect(moreButton(page)).toHaveAccessibleName("More filters");
 });
 
-for (const density of ["compact", "comfortable"] as const)
+for (const density of ["compact", "normal", "comfortable"] as const)
   for (const scale of [1, 2] as const)
     for (const pane of ["bottom", "right"] as const)
       test(`F6 every More item is reachable: ${density} ${scale}x ${pane}`, async ({
@@ -169,12 +169,12 @@ for (const width of [1280, 900]) {
 
 type Combo = {
   width: number;
-  density: "comfortable" | "compact";
+  density: "comfortable" | "normal" | "compact";
   scale: 1 | 2;
   pane: "right" | "bottom";
 };
 const combos: Combo[] = [];
-for (const density of ["comfortable", "compact"] as const)
+for (const density of ["comfortable", "normal", "compact"] as const)
   for (const scale of [1, 2] as const)
     for (const pane of ["right", "bottom"] as const)
       combos.push({ width: 1280, density, scale, pane });

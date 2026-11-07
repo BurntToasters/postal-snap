@@ -1,6 +1,7 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { revealMenuItem } from "./menu-reveal";
 
 // Failure modes covered here:
 // 1. A read message offers the unread one in the same conversation.
@@ -20,10 +21,13 @@ test("the reader opens the unread message in a conversation", async ({
 }) => {
   await page.goto("/?threadGap=1&threadUnread=1");
   await page.getByRole("treeitem", { name: /Weekend plans/i }).click();
+  await revealMenuItem(page, "Unread in conversation");
   await expect(
     page.getByRole("heading", { name: "Weekend plans" }),
   ).toBeVisible();
+  await revealMenuItem(page, "Unread in conversation");
   await page.getByRole("button", { name: "More actions" }).click();
+  await revealMenuItem(page, "Unread in conversation");
   await page.getByRole("menuitem", { name: "Unread in conversation" }).click();
   await expect(
     page.getByRole("heading", { name: "Older family note" }),

@@ -14,6 +14,8 @@ import { installMockIpc } from "./mock-ipc";
 const VIEWPORT = { width: 1280, height: 900 };
 const combos = [
   { density: "comfortable", scale: 1 },
+  { density: "normal", scale: 1 },
+  { density: "normal", scale: 2 },
   { density: "compact", scale: 1 },
   { density: "comfortable", scale: 2 },
   { density: "compact", scale: 2 },

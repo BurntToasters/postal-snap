@@ -31,7 +31,17 @@ import type { AppSettings, Attachment, MessageDetail } from "../../types";
 import { collapseQuotedMail, hydrateInlineImages } from "./readerUtils";
 
 /** Smallest shrink-to-fit scale before wide mail scrolls sideways. */
-const MIN_FIT_ZOOM = 0.6;
+const MIN_FIT_ZOOM = 0.8;
+
+/** Vertical frame margin from the density token, read like the header inset. */
+function frameMarginBlock(): number {
+  const header = document.querySelector(".message-header");
+  const source = header ?? document.documentElement;
+  const value = Number.parseFloat(
+    getComputedStyle(source).getPropertyValue("--reader-frame-margin-block"),
+  );
+  return Number.isFinite(value) && value > 0 ? value : 16;
+}
 
 interface Options {
   frame: RefObject<HTMLIFrameElement | null>;
@@ -82,10 +92,18 @@ export function useMessageFrame({
         settings.textScale,
         // Colorless mail follows dark mode; designed mail keeps its page.
         isDark && !hasAuthorColors(frameSource),
+        frameMarginBlock(),
       ) +
       // Identical bodies must still reload, so the frame gets its link wiring.
       `<!-- ${messageId ?? ""} -->`,
-    [frameSource, isDark, messageId, searchQuery, settings.textScale],
+    [
+      frameSource,
+      isDark,
+      messageId,
+      searchQuery,
+      settings.textScale,
+      settings.density,
+    ],
   );
 
   useEffect(() => {

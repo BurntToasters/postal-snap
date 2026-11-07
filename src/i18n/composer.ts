@@ -48,7 +48,6 @@ export const composer = {
   moreFormatting: "More formatting",
   formatting: "Formatting",
   showFormatting: "Show formatting",
-  hideFormatting: "Hide formatting",
   pasteWithoutFormatting: "Paste without formatting",
   clipboardUnavailable: "Postal Snap could not read the clipboard.",
   undo: "Undo",

@@ -379,7 +379,7 @@ export function SetupWizard({
           className={`setup-card first-sync${embedded ? " first-sync-embedded" : ""}`}
           aria-labelledby="first-sync-title"
         >
-          {!embedded ? <AppMark size={52} /> : null}
+          {!embedded ? <AppMark className="setup-mark" /> : null}
           <LoaderCircle className="first-sync-spinner" aria-hidden="true" />
           <h2 id="first-sync-title" tabIndex={-1}>
             {strings.setup.gettingMail}
@@ -421,7 +421,7 @@ export function SetupWizard({
           {!embedded ? (
             <>
               <header className="setup-brand" data-tauri-drag-region="deep">
-                <AppMark size={52} />
+                <AppMark className="setup-mark" />
                 <span>
                   <p>{strings.appName}</p>
                   <h1 id="setup-title" tabIndex={-1}>
@@ -460,14 +460,14 @@ export function SetupWizard({
               onClick={() => chooseProvider("protonBridge")}
             >
               <span className="provider-symbol" aria-hidden="true">
-                <ShieldCheck />
+                <ShieldCheck aria-hidden="true" />
               </span>
               <span className="provider-copy">
                 <strong>{strings.setup.bridge}</strong>
                 <small>{strings.setup.bridgeDetail}</small>
               </span>
               <span className="provider-arrow" aria-hidden="true">
-                <ChevronRight />
+                <ChevronRight aria-hidden="true" />
               </span>
             </button>
             <button
@@ -476,7 +476,7 @@ export function SetupWizard({
               onClick={() => chooseProvider("icloud")}
             >
               <span className="provider-symbol" aria-hidden="true">
-                <Cloud />
+                <Cloud aria-hidden="true" />
               </span>
               <span className="provider-copy">
                 <span className="provider-title">
@@ -488,7 +488,7 @@ export function SetupWizard({
                 <small>{strings.setup.icloudRecommended}</small>
               </span>
               <span className="provider-arrow" aria-hidden="true">
-                <ChevronRight />
+                <ChevronRight aria-hidden="true" />
               </span>
             </button>
             <button
@@ -497,7 +497,7 @@ export function SetupWizard({
               onClick={() => chooseProvider("manual")}
             >
               <span className="provider-symbol" aria-hidden="true">
-                <Server />
+                <Server aria-hidden="true" />
               </span>
               <span className="provider-copy">
                 <strong>{strings.setup.other}</strong>
@@ -505,7 +505,7 @@ export function SetupWizard({
                 <small>{strings.setup.supportedProviders}</small>
               </span>
               <span className="provider-arrow" aria-hidden="true">
-                <ChevronRight />
+                <ChevronRight aria-hidden="true" />
               </span>
             </button>
           </div>

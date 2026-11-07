@@ -141,7 +141,7 @@ test("archive actions stay visible at 200% text in both densities", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1180, height: 820 });
-  for (const density of ["comfortable", "compact"] as const) {
+  for (const density of ["comfortable", "normal", "compact"] as const) {
     await page.goto(
       `/?localMail=1&scheduled=1&scheduledPast=1&archiveWarning=1&density=${density}&scale=2`,
     );

@@ -43,7 +43,7 @@
   right: 16px;
   bottom: 16px;
   display: flex;
-  max-width: min(520px, calc(100vw - 32px));
+  max-width: min(var(--notice-max-width), calc(100vw - 32px));
   align-items: center;
   gap: 12px;
   padding: 12px 14px;
@@ -65,16 +65,16 @@
 }
 
 .toast.sent-toast button {
-  font-size: 0.9rem;
-  font-weight: 650;
-  color: var(--accent);
-  padding-inline: 8px;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--accent-ink);
+  padding-inline: var(--space-2);
 }
 
 .toast button {
-  min-width: var(--target-size);
-  min-height: var(--target-size);
+  min-width: var(--control-height);
+  min-height: var(--control-height);
   border: 0;
   background: transparent;
-  font-size: 1.35rem;
+  font-size: var(--fs-base);
 }

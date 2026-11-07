@@ -45,6 +45,7 @@ import {
   beginMessageDrag,
   endMessageDrag,
   messageDragPayload,
+  setMessageDragChip,
 } from "../../messageDrag";
 import { HighlightedText } from "../HighlightedText";
 import { RowActions } from "./rowActions";
@@ -129,16 +130,40 @@ type VirtualItem =
     }
   | { kind: "option"; key: string; option: VisibleOption; groupEnd: boolean };
 
-// Estimates until measureElement reports real heights.
-const DAY_ESTIMATE = 36;
-const ROW_ESTIMATE = 84;
+interface RowEstimates {
+  day: number;
+  row: number;
+}
+
+// Keys that act on the selection, not the focused row, while selecting.
+const SELECTION_KEYS = new Set(["s", "u", "e", "#", "!", "Escape"]);
+
+// Estimates until measureElement reports real heights. Read from the live
+// tokens so each density starts close to its real pitch.
+function readRowEstimates(densityKey: string): RowEstimates {
+  const probe = document.createElement("div");
+  probe.style.cssText = "position:absolute;visibility:hidden;height:0;";
+  probe.dataset.densityKey = densityKey;
+  document.body.append(probe);
+  const px = (name: string, fallback: number) => {
+    probe.style.width = `var(--${name})`;
+    const width = probe.getBoundingClientRect().width;
+    return width > 0 ? width : fallback;
+  };
+  const estimates = {
+    day: px("list-day-height", 32),
+    row: px("message-row-height", 64),
+  };
+  probe.remove();
+  return estimates;
+}
 
 // Stacks every item by estimate; used until the list has a height.
-function estimatedRows(items: VirtualItem[]) {
+function estimatedRows(items: VirtualItem[], estimates: RowEstimates) {
   let start = 0;
   return items.map((item, index) => {
     const row = { index, key: item.key, start };
-    start += item.kind === "day" ? DAY_ESTIMATE : ROW_ESTIMATE;
+    start += item.kind === "day" ? estimates.day : estimates.row;
     return row;
   });
 }
@@ -171,11 +196,14 @@ export function MessageList({
   selecting,
   selectedIds,
   onToggleSelect,
+  onSelectionKey,
+  showSizes = false,
   onCheckFocused,
   onArchiveFocused,
   onTrashFocused,
   onJunkFocused,
   onReplyFocused,
+  onForwardFocused,
   onRangeSelect,
   onToggleStar,
   onToggleConversationStar,
@@ -205,6 +233,10 @@ export function MessageList({
   selecting?: boolean;
   selectedIds?: number[];
   onToggleSelect?: (id: number) => void;
+  /** Runs s, u, e, #, ! or Escape against the selection while selecting. */
+  onSelectionKey?: (key: string) => void;
+  /** Sorting by size shows each row's size in the visible line. */
+  showSizes?: boolean;
   /** Check or uncheck the focused row, or a whole loaded conversation. */
   onCheckFocused?: (ids: number[]) => void;
   /** Archive the focused row, or every loaded message in a conversation. */
@@ -213,6 +245,8 @@ export function MessageList({
   onTrashFocused?: (message: MessageSummary, conversation: boolean) => void;
   /** Mark the focused row as junk, or move it to Inbox when it is already junk. */
   onJunkFocused?: (message: MessageSummary, conversation: boolean) => void;
+  /** Forward the focused row without opening it first. */
+  onForwardFocused?: (message: MessageSummary) => void;
   /** Reply, or reply all, to the focused row without opening it first. */
   onReplyFocused?: (
     message: MessageSummary,
@@ -567,6 +601,9 @@ export function MessageList({
     if (first >= 0) pinnedIndexes.push(first, last);
   }
 
+  // Density and text scale change the tokens; the key re-reads them.
+  const densityKey = `${document.documentElement.dataset.density ?? ""}|${document.documentElement.dataset.textScale ?? ""}`;
+  const estimates = useMemo(() => readRowEstimates(densityKey), [densityKey]);
   // The virtualizer is read during render; this component is not memoized.
   // eslint-disable-next-line react-hooks/incompatible-library
   const virtualizer: Virtualizer<HTMLDivElement, Element> = useVirtualizer<
@@ -576,7 +613,7 @@ export function MessageList({
     count: items.length,
     getScrollElement: () => listRef.current,
     estimateSize: (index) =>
-      items[index]?.kind === "day" ? DAY_ESTIMATE : ROW_ESTIMATE,
+      items[index]?.kind === "day" ? estimates.day : estimates.row,
     getItemKey: (index) => items[index]?.key ?? index,
     overscan: 8,
     initialRect: { width: 0, height: 800 },
@@ -607,7 +644,7 @@ export function MessageList({
   const laidOut = (virtualizer.scrollRect?.height ?? 0) > 0;
   const renderedRows = laidOut
     ? virtualizer.getVirtualItems()
-    : estimatedRows(items);
+    : estimatedRows(items, estimates);
   const pendingMounted =
     pendingFocusKey !== undefined && itemIndex.has(pendingFocusKey);
   useLayoutEffect(() => {
@@ -779,6 +816,19 @@ export function MessageList({
     optionKey: string,
   ) {
     const option = visibleOptions.find((item) => item.key === optionKey);
+    if (
+      selecting &&
+      onSelectionKey &&
+      SELECTION_KEYS.has(event.key) &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.altKey
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      onSelectionKey(event.key);
+      return;
+    }
     if (hasThreadedGroups) {
       if (
         event.key === "ArrowRight" &&
@@ -836,6 +886,24 @@ export function MessageList({
           ? (threadsById.get(option.groupKey)?.newest ?? option.message)
           : option.message;
       onReplyFocused(message, event.key === "a" ? "replyAll" : "reply");
+      return;
+    }
+    if (
+      event.key === "f" &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !event.shiftKey &&
+      option &&
+      onForwardFocused
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      onForwardFocused(
+        option.kind === "header" && option.groupKey
+          ? (threadsById.get(option.groupKey)?.newest ?? option.message)
+          : option.message,
+      );
       return;
     }
     if (
@@ -1013,13 +1081,12 @@ export function MessageList({
       draggable: true as const,
       onDragStart: (event: DragEvent<HTMLButtonElement>) => {
         event.dataTransfer.effectAllowed = "move";
+        const ids = dragIds(message, wholeConversation);
         event.dataTransfer.setData(
           MESSAGE_DRAG_TYPE,
-          messageDragPayload(
-            message.accountId,
-            dragIds(message, wholeConversation),
-          ),
+          messageDragPayload(message.accountId, ids),
         );
+        setMessageDragChip(event.dataTransfer, ids.length);
         beginMessageDrag();
         setDragKey(optionKey);
       },
@@ -1055,6 +1122,8 @@ export function MessageList({
       message.pinned ? strings.mail.pinned : null,
       correspondent(message),
       formatMessageListWhen(message.receivedAt, listNow, dateFormatters),
+      // Visible text must stay one run in order (WCAG 2.5.3); hidden size goes last.
+      showSizes ? formatBytes(message.size) : null,
       notableArrival(message.receivedAt, message.arrivedAt)
         ? strings.mail.arrivedLater
         : null,
@@ -1069,10 +1138,10 @@ export function MessageList({
           ? strings.mail.downloadingMessage
           : message.preview || strings.mail.openToDownload
         : null,
+      showSizes ? null : formatBytes(message.size),
       senderAddressTitle(message),
       folder ? strings.mail.inFolder(folder) : null,
       formatFullMessageDate(message.receivedAt, listNow, dateFormatters),
-      formatBytes(message.size),
       !message.attachmentCount && message.hasAttachments
         ? strings.mail.hasAttachments
         : null,
@@ -1131,7 +1200,9 @@ export function MessageList({
           {...messageDragProps(message, false, optionKey)}
           onClick={(event) => {
             if (!selecting) {
-              void onChoose(message);
+              // Cmd/Ctrl+click starts select mode with this row checked.
+              if (event.metaKey || event.ctrlKey) checkIds([message.id]);
+              else void onChoose(message);
               return;
             }
             if (event.shiftKey) onRangeSelect?.(message.id);
@@ -1459,7 +1530,7 @@ export function MessageList({
 
   return (
     <div
-      className="message-list"
+      className={`message-list${showSizes ? " show-sizes" : ""}`}
       ref={listRef}
       onPointerDown={() => {
         pointerPick.current = true;
@@ -1470,7 +1541,7 @@ export function MessageList({
       onScroll={() => {
         const top = listRef.current?.scrollTop ?? 0;
         if (scrollKey) rememberListScroll(scrollKey, top);
-        if (top < 48) setNewAtTop(false);
+        if (top < estimates.row / 2) setNewAtTop(false);
       }}
     >
       {newAtTop ? (

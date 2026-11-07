@@ -2,7 +2,7 @@
 .setup-card {
   width: min(640px, 100%);
   padding: var(--setup-card-padding);
-  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border: 1px solid var(--border-soft);
   border-radius: var(--radius-lg);
   background: linear-gradient(
     155deg,
@@ -36,8 +36,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 14px 18px;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--border);
 }
 
@@ -49,7 +49,7 @@
 
 .attachment-preview-dialog h2 {
   margin: 0;
-  font-size: 1.05rem;
+  font-size: var(--fs-lg);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -64,7 +64,7 @@
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: var(--space-2);
-  padding: var(--space-3) 18px;
+  padding: var(--space-3) var(--space-4);
   border-top: 1px solid var(--border);
 }
 
@@ -101,7 +101,7 @@
 
 .license-credits-body h3 {
   margin: 0 0 8px;
-  font-size: 1rem;
+  font-size: var(--fs-base);
 }
 
 .license-credits-body pre,
@@ -162,7 +162,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
   background: var(--surface-muted);
-  font-size: 0.75rem;
+  font-size: var(--fs-xs);
 }
 
 .license-card-body {
@@ -247,13 +247,13 @@
 .composer-window {
   position: relative;
   z-index: 1;
-  width: min(940px, 96vw);
+  width: var(--composer-window-width);
   max-height: 100%;
-  height: min(780px, 100%);
+  height: var(--composer-window-height);
   display: flex;
   flex-direction: column;
   overflow: auto;
-  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--surface);
   box-shadow:
@@ -278,13 +278,9 @@
   min-height: var(--bar-height-md);
   align-items: center;
   justify-content: space-between;
-  padding: 7px var(--toolbar-pad-inline);
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--surface-raised) 86%, var(--surface-highlight)),
-    var(--surface)
-  );
+  padding: 0 var(--space-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--bar);
 }
 
 .composer-window > header > span {
@@ -293,8 +289,8 @@
 
 .composer-window h1 {
   margin: 0;
-  font-size: 1.18rem;
-  font-weight: 700;
+  font-size: var(--fs-lg);
+  font-weight: 600;
 }
 
 .composer-window header small {
@@ -311,7 +307,7 @@
   max-height: 100%;
   min-height: 0;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border: 1px solid var(--border-soft);
   border-radius: var(--radius-lg);
   background: var(--surface);
   box-shadow:
@@ -325,9 +321,9 @@
   min-height: var(--bar-height-md);
   align-items: center;
   justify-content: space-between;
-  padding: var(--space-2) var(--space-4);
+  padding: var(--bar-pad-block) var(--space-4);
   border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  background: var(--bar);
   box-shadow: none;
 }
 
@@ -341,8 +337,8 @@
 
 .settings-window h1 {
   margin: 0;
-  font-size: 1.18rem;
-  font-weight: 700;
+  font-size: var(--fs-lg);
+  font-weight: 600;
 }
 
 .settings-window header small {

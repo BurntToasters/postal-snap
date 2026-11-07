@@ -478,9 +478,10 @@ test("P4 a stale interactive check re-runs and never says up to date", async ({
 });
 
 for (const [name, query] of [
-  ["comfortable", "?"],
+  ["comfortable", "?density=comfortable&"],
+  ["normal", "?density=normal&"],
   ["compact", "?density=compact&"],
-  ["200-text", "?scale=2&"],
+  ["200-text", "?density=comfortable&scale=2&"],
 ] as const) {
   test(`Advanced tab screenshot ${name}`, async ({ page }) => {
     await page.goto(`/${query}version=0.4.3`);

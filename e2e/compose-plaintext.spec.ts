@@ -137,9 +137,18 @@ test("header menu is keyboard operable and Escape keeps the composer", async ({
   // Empty body: no formatting to lose, so the switch is immediate.
   await page.keyboard.press("Enter");
   await expect(plainBox(page)).toBeFocused();
+  // Normal density: the header control meets the --target-size token.
   const target = await button.boundingBox();
-  expect(target?.width).toBeGreaterThanOrEqual(44);
-  expect(target?.height).toBeGreaterThanOrEqual(44);
+  const token = await page.evaluate(() => {
+    const probe = document.createElement("i");
+    probe.style.cssText = "position:fixed;width:var(--target-size)";
+    document.body.append(probe);
+    const width = probe.getBoundingClientRect().width;
+    probe.remove();
+    return width;
+  });
+  expect(target?.width).toBeGreaterThanOrEqual(token);
+  expect(target?.height).toBeGreaterThanOrEqual(token);
 });
 
 test("plain editor follows text scale and shows focus", async ({ page }) => {
@@ -159,7 +168,12 @@ test("plain editor follows text scale and shows focus", async ({ page }) => {
   const rootSize = await page.evaluate(() =>
     Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
   );
-  expect(metrics.fontSize).toBeGreaterThanOrEqual(rootSize);
+  // Plain text inherits the body UI size, which scales with text size.
+  const bodySize = await page.evaluate(() =>
+    Number.parseFloat(getComputedStyle(document.body).fontSize),
+  );
+  expect(metrics.fontSize).toBeGreaterThanOrEqual(bodySize);
+  expect(metrics.fontSize).toBeGreaterThanOrEqual(rootSize * 0.9);
   expect(metrics.height).toBeGreaterThanOrEqual(160);
   expect(metrics.focusRing).not.toBe("none");
   expect(metrics.clipped).toBe(false);

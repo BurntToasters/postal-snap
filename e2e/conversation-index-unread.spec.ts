@@ -25,10 +25,10 @@ test("an unread message in the conversation says so", async ({ page }) => {
     "Unread",
   ]);
   await expect(
-    index.getByRole("button", { name: /Unread, Older family note from Lee/ }),
+    index.getByRole("button", { name: /Older family note Unread Lee/ }),
   ).toBeVisible();
   await expect(
-    index.getByRole("button", { name: /^Weekend plans from Jane/ }),
+    index.getByRole("button", { name: /^Weekend plans .*Jane/ }),
   ).toBeVisible();
 });
 

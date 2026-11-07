@@ -1,6 +1,7 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { revealMenuItem } from "./menu-reveal";
 
 // Failure modes covered here:
 // 1. A single message has no conversation selection.
@@ -29,6 +30,7 @@ test("select conversation checks the loaded thread", async ({ page }) => {
   await page.goto("/?threadGap=1");
   await page.getByRole("treeitem", { name: /Weekend plans/i }).click();
   await page.getByRole("button", { name: "More actions" }).click();
+  await revealMenuItem(page, "Select conversation");
   await page.getByRole("menuitem", { name: "Select conversation" }).click();
   await expect(page.getByRole("toolbar", { name: "2 selected" })).toBeVisible();
   await expect(

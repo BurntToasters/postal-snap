@@ -1,6 +1,7 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { revealMenuItem } from "./menu-reveal";
 
 // Failure modes covered here:
 // 1. The subject rule form opens with this message's subject.
@@ -19,7 +20,9 @@ test.afterEach(async ({ page }, testInfo: TestInfo) => {
 test("create rule from subject fills the rule form", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("option", { name: /Weekend plans/i }).click();
+  await revealMenuItem(page, "Create rule from subject");
   await page.getByRole("button", { name: "More actions" }).click();
+  await revealMenuItem(page, "Create rule from subject");
   await page
     .getByRole("menuitem", { name: "Create rule from subject", exact: true })
     .click();

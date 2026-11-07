@@ -37,6 +37,22 @@ export function moveToolbarFocus(event: KeyboardEvent<HTMLElement>) {
   items[index].focus();
 }
 
+// Items of this menu only: a submenu panel is a nested role="menu" and
+// handles its own keys.
+function menuItemsOf(menu: HTMLElement, withSelects = false): HTMLElement[] {
+  const selector = withSelects
+    ? '[role="menuitem"]:not([disabled]), [role="menuitemradio"]:not([disabled]), [role="menuitemcheckbox"]:not([disabled]), select:not([disabled])'
+    : '[role="menuitem"]:not([disabled]), [role="menuitemradio"]:not([disabled]), [role="menuitemcheckbox"]:not([disabled])';
+  return [...menu.querySelectorAll<HTMLElement>(selector)].filter(
+    (item) =>
+      item.closest('[role="menu"]') === menu &&
+      !item.hidden &&
+      (typeof item.checkVisibility === "function"
+        ? item.checkVisibility()
+        : item.offsetParent !== null || item.getClientRects().length > 0),
+  );
+}
+
 // Typeahead: a printable key jumps to the next item whose visible label
 // starts with it, wrapping around.
 function focusMenuItemByLetter(event: KeyboardEvent<HTMLElement>) {
@@ -47,11 +63,7 @@ function focusMenuItemByLetter(event: KeyboardEvent<HTMLElement>) {
     return;
   }
   const letter = event.key.toLocaleLowerCase();
-  const items = [
-    ...event.currentTarget.querySelectorAll<HTMLElement>(
-      '[role="menuitem"]:not([disabled]), [role="menuitemradio"]:not([disabled])',
-    ),
-  ];
+  const items = menuItemsOf(event.currentTarget);
   const start = items.findIndex((item) => item === document.activeElement);
   for (let step = 1; step <= items.length; step += 1) {
     const item = items[(start + step) % items.length];
@@ -84,17 +96,7 @@ export function moveMenuFocus(event: KeyboardEvent<HTMLElement>) {
   ) {
     return;
   }
-  const items = [
-    ...event.currentTarget.querySelectorAll<HTMLElement>(
-      '[role="menuitem"]:not([disabled]), [role="menuitemradio"]:not([disabled]), select:not([disabled])',
-    ),
-  ].filter(
-    (item) =>
-      !item.hidden &&
-      (typeof item.checkVisibility === "function"
-        ? item.checkVisibility()
-        : item.offsetParent !== null || item.getClientRects().length > 0),
-  );
+  const items = menuItemsOf(event.currentTarget, true);
   if (items.length === 0) return;
   event.stopPropagation();
   const active = document.activeElement as HTMLElement | null;

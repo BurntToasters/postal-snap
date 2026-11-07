@@ -124,6 +124,24 @@ beforeEach(() => {
   });
 });
 
+/** Finds a menu item, opening the submenu that holds it first. */
+function menuItemBy(options: { name: string | RegExp }) {
+  if (!screen.queryByRole("menuitem", options)) {
+    const triggers = document.querySelectorAll<HTMLElement>(
+      '[role="menuitem"][aria-haspopup="menu"]',
+    );
+    for (const trigger of Array.from(triggers)) {
+      fireEvent.click(trigger);
+      if (screen.queryByRole("menuitem", options)) break;
+    }
+  }
+  return screen.getByRole("menuitem", options);
+}
+
+async function findMenuItem(options: { name: string | RegExp }) {
+  return waitFor(() => menuItemBy(options));
+}
+
 describe("MessageReader", () => {
   it("renders empty and hidden-pane states", () => {
     useAppStore.setState({ selectedMessage: undefined });
@@ -396,7 +414,7 @@ describe("MessageReader", () => {
       screen.getByRole("button", { name: strings.reader.moreActions }),
     );
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.reader.createRuleFromSubject,
       }),
     );
@@ -435,9 +453,7 @@ describe("MessageReader", () => {
         name: strings.reader.copyConversationText,
       }),
     ).not.toBeInTheDocument();
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: strings.reader.copyMessageText }),
-    );
+    fireEvent.click(menuItemBy({ name: strings.reader.copyMessageText }));
     await waitFor(() =>
       expect(writeText).toHaveBeenCalledWith(
         "Visit https://example.test or mail jane@example.test",
@@ -499,10 +515,10 @@ describe("MessageReader", () => {
       name: strings.reader.conversationMessages,
     });
     expect(
-      screen.getByRole("button", { name: /Weekend plans from Jane/ }),
+      screen.getByRole("button", { name: /Weekend plans Unread Jane/ }),
     ).toHaveAttribute("aria-current", "true");
     fireEvent.click(
-      screen.getByRole("button", { name: /Older family note from Jane/ }),
+      screen.getByRole("button", { name: /Older family note Unread Jane/ }),
     );
     expect(open).toHaveBeenCalledWith(expect.objectContaining({ id: 1 }));
     expect(list).toBeVisible();
@@ -523,7 +539,9 @@ describe("MessageReader", () => {
     });
     expect(box).toHaveValue("");
     expect(
-      screen.queryByRole("button", { name: strings.reader.startReplyAll }),
+      screen.queryByRole("button", {
+        name: new RegExp(strings.reader.startReplyAll),
+      }),
     ).toBeNull();
   });
 
@@ -557,7 +575,7 @@ describe("MessageReader", () => {
       name: strings.reader.quickReply,
     });
     const replyAll = screen.getByRole("button", {
-      name: strings.reader.startReplyAll,
+      name: new RegExp(strings.reader.startReplyAll),
     });
     expect(replyAll).toBeDisabled();
     fireEvent.change(box, { target: { value: "See you then" } });
@@ -588,7 +606,7 @@ describe("MessageReader", () => {
       screen.getByRole("button", { name: strings.reader.moreActions }),
     );
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.reader.replyWithoutQuoting,
       }),
     );
@@ -600,7 +618,7 @@ describe("MessageReader", () => {
       screen.getByRole("button", { name: strings.reader.moreActions }),
     );
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.reader.replyAllWithoutQuoting,
       }),
     );
@@ -614,9 +632,7 @@ describe("MessageReader", () => {
     fireEvent.click(
       screen.getByRole("button", { name: strings.reader.moreActions }),
     );
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: strings.reader.saveEml }),
-    );
+    fireEvent.click(menuItemBy({ name: strings.reader.saveEml }));
     expect(saveEml).toHaveBeenCalledWith("account-1", 1);
     fireEvent.click(
       screen.getByRole("button", { name: strings.reader.forward }),
@@ -645,9 +661,7 @@ describe("MessageReader", () => {
     const more = () =>
       screen.getByRole("button", { name: strings.reader.moreActions });
     fireEvent.click(more());
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: strings.reader.markRead }),
-    );
+    fireEvent.click(menuItemBy({ name: strings.reader.markRead }));
     await waitFor(() =>
       expect(api.setMessageFlags).toHaveBeenCalledWith(
         "account-1",
@@ -660,9 +674,7 @@ describe("MessageReader", () => {
     expect(useAppStore.getState().mailboxes[0].unreadCount).toBe(1);
 
     fireEvent.click(more());
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: strings.reader.addStar }),
-    );
+    fireEvent.click(menuItemBy({ name: strings.reader.addStar }));
     await waitFor(() =>
       expect(api.setMessageFlags).toHaveBeenLastCalledWith(
         "account-1",
@@ -772,16 +784,14 @@ describe("MessageReader", () => {
       fireEvent.click(
         screen.getByRole("button", { name: strings.reader.moreActions }),
       );
-      fireEvent.click(
-        screen.getByRole("menuitem", { name: strings.reader.junk }),
-      );
+      fireEvent.click(menuItemBy({ name: strings.reader.junk }));
     }, ["account-1", 1, "junk"]);
     await runAction(() => {
       fireEvent.click(
         screen.getByRole("button", { name: strings.reader.moreActions }),
       );
       fireEvent.click(
-        screen.getByRole("menuitem", {
+        menuItemBy({
           name: strings.contextMenu.moveToFolder("Receipts"),
         }),
       );
@@ -793,9 +803,7 @@ describe("MessageReader", () => {
     fireEvent.click(
       screen.getByRole("button", { name: strings.reader.moreActions }),
     );
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: strings.reader.notJunk }),
-    );
+    fireEvent.click(menuItemBy({ name: strings.reader.notJunk }));
     await waitFor(() =>
       expect(api.moveMessageToMailbox).toHaveBeenLastCalledWith(
         "account-1",
@@ -932,7 +940,7 @@ describe("MessageReader", () => {
       screen.getByRole("button", { name: strings.reader.moreActions }),
     );
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.reader.deleteConversation,
       }),
     );
@@ -987,7 +995,7 @@ describe("MessageReader", () => {
       screen.getByRole("button", { name: strings.reader.moreActions }),
     );
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.reader.deleteConversation,
       }),
     );
@@ -1026,7 +1034,7 @@ describe("MessageReader", () => {
       screen.getByRole("button", { name: strings.reader.moreActions }),
     );
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.reader.deleteConversation,
       }),
     );
@@ -1065,7 +1073,7 @@ describe("MessageReader", () => {
       screen.getByRole("button", { name: strings.reader.moreActions }),
     );
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.reader.deleteConversation,
       }),
     );
@@ -1101,7 +1109,7 @@ describe("MessageReader", () => {
       }),
     ).not.toBeInTheDocument();
     expect(
-      screen.getByRole("menuitem", { name: strings.reader.trashConversation }),
+      menuItemBy({ name: strings.reader.trashConversation }),
     ).toBeVisible();
   });
 
@@ -1141,7 +1149,7 @@ describe("MessageReader", () => {
       screen.getByRole("button", { name: strings.reader.moreActions }),
     );
     fireEvent.click(
-      await screen.findByRole("menuitem", {
+      await findMenuItem({
         name: strings.reader.unblockSender,
       }),
     );
@@ -1182,7 +1190,7 @@ describe("MessageReader", () => {
       screen.getByRole("button", { name: strings.reader.moreActions }),
     );
     fireEvent.click(
-      await screen.findByRole("menuitem", {
+      await findMenuItem({
         name: strings.reader.unblockSender,
       }),
     );
@@ -1213,7 +1221,7 @@ describe("MessageReader", () => {
       screen.getByRole("button", { name: strings.reader.moreActions }),
     );
     fireEvent.click(
-      await screen.findByRole("menuitem", {
+      await findMenuItem({
         name: strings.reader.unblockSender,
       }),
     );
@@ -1233,9 +1241,7 @@ describe("MessageReader", () => {
     fireEvent.click(
       screen.getByRole("button", { name: strings.reader.moreActions }),
     );
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: strings.reader.markRead }),
-    );
+    fireEvent.click(menuItemBy({ name: strings.reader.markRead }));
     await waitFor(() =>
       expect(useAppStore.getState().error).toBe("Error: flag failed"),
     );
@@ -1248,9 +1254,7 @@ describe("MessageReader", () => {
     fireEvent.click(
       screen.getByRole("button", { name: strings.reader.moreActions }),
     );
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: strings.reader.addStar }),
-    );
+    fireEvent.click(menuItemBy({ name: strings.reader.addStar }));
     await waitFor(() =>
       expect(useAppStore.getState().error).toBe("Error: star failed"),
     );
@@ -1274,7 +1278,7 @@ describe("MessageReader", () => {
       screen.getByRole("button", { name: strings.reader.moreActions }),
     );
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.contextMenu.moveToFolder("Receipts"),
       }),
     );
@@ -1328,9 +1332,7 @@ describe("MessageReader", () => {
     fireEvent.click(
       screen.getByRole("button", { name: strings.reader.moreActions }),
     );
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: strings.reader.snooze }),
-    );
+    fireEvent.click(menuItemBy({ name: strings.reader.snooze }));
     fireEvent.click(
       screen.getByRole("button", { name: strings.reader.snoozeTomorrow }),
     );
@@ -1356,7 +1358,7 @@ describe("MessageReader", () => {
       screen.getByRole("button", { name: strings.reader.moreActions }),
     );
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.reader.snoozeConversation,
       }),
     );
@@ -1402,7 +1404,7 @@ describe("MessageReader", () => {
       screen.getByRole("button", { name: strings.reader.moreActions }),
     );
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.reader.printConversation,
       }),
     );
@@ -1450,7 +1452,7 @@ describe("MessageReader", () => {
       screen.getByRole("button", { name: strings.reader.moreActions }),
     );
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.reader.forwardConversation,
       }),
     );
@@ -1513,7 +1515,7 @@ describe("MessageReader", () => {
       screen.getByRole("button", { name: strings.reader.moreActions }),
     );
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.reader.copyConversationText,
       }),
     );
@@ -1548,7 +1550,7 @@ describe("MessageReader", () => {
       screen.getByRole("button", { name: strings.reader.moreActions }),
     );
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.reader.copyConversationText,
       }),
     );
@@ -1568,7 +1570,7 @@ describe("MessageReader", () => {
     expect(
       screen.queryByRole("menuitem", { name: strings.reader.pinConversation }),
     ).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("menuitem", { name: strings.reader.pin }));
+    fireEvent.click(menuItemBy({ name: strings.reader.pin }));
     await waitFor(() =>
       expect(api.setMessagesPinned).toHaveBeenCalledWith(
         "account-1",
@@ -1620,7 +1622,7 @@ describe("MessageReader", () => {
       messages: [newer, { ...older, hasAttachments: true }],
     });
     fireEvent.click(
-      await screen.findByRole("menuitem", {
+      await findMenuItem({
         name: strings.reader.saveConversationFiles,
       }),
     );
@@ -1833,9 +1835,7 @@ describe("MessageReader", () => {
     fireEvent.click(
       screen.getByRole("button", { name: strings.reader.moreActions }),
     );
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: strings.reader.snooze }),
-    );
+    fireEvent.click(menuItemBy({ name: strings.reader.snooze }));
     fireEvent.click(
       screen.getByRole("button", { name: strings.reader.snoozeTomorrow }),
     );
@@ -1922,9 +1922,7 @@ describe("MessageReader", () => {
     fireEvent.click(
       screen.getByRole("button", { name: strings.reader.moreActions }),
     );
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: strings.reader.snooze }),
-    );
+    fireEvent.click(menuItemBy({ name: strings.reader.snooze }));
     fireEvent.click(
       screen.getByRole("button", { name: strings.reader.snoozeTomorrow }),
     );
@@ -1941,7 +1939,7 @@ describe("MessageReader", () => {
       screen.getByRole("button", { name: strings.reader.moreActions }),
     );
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.contextMenu.copyToFolder("Receipts"),
       }),
     );
@@ -1979,7 +1977,7 @@ describe("MessageReader", () => {
       screen.getByRole("button", { name: strings.reader.moreActions }),
     );
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.contextMenu.moveConversationToFolder("Receipts"),
       }),
     );
@@ -2019,7 +2017,7 @@ describe("MessageReader", () => {
       screen.getByRole("button", { name: strings.reader.moreActions }),
     );
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.contextMenu.copyConversationToFolder("Receipts"),
       }),
     );
@@ -2063,7 +2061,7 @@ describe("MessageReader", () => {
       screen.getByRole("button", { name: strings.reader.moreActions }),
     );
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.reader.forwardAsAttachment,
       }),
     );
@@ -2122,7 +2120,7 @@ describe("MessageReader", () => {
       screen.getByRole("button", { name: strings.reader.moreActions }),
     );
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.reader.replyWithAttachments,
       }),
     );
@@ -2151,7 +2149,7 @@ describe("MessageReader", () => {
       screen.getByRole("button", { name: strings.reader.moreActions }),
     );
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.reader.replyAllWithAttachments,
       }),
     );
@@ -2200,7 +2198,7 @@ describe("MessageReader", () => {
       screen.getByRole("button", { name: strings.reader.moreActions }),
     );
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.reader.replyWithAttachments,
       }),
     );
@@ -2224,9 +2222,7 @@ describe("MessageReader", () => {
     fireEvent.click(
       screen.getByRole("button", { name: strings.reader.moreActions }),
     );
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: strings.reader.editAsNew }),
-    );
+    fireEvent.click(menuItemBy({ name: strings.reader.editAsNew }));
     await waitFor(() =>
       expect(api.prepareForwardAttachments).toHaveBeenCalledWith(
         "account-1",
@@ -2246,9 +2242,7 @@ describe("MessageReader", () => {
     fireEvent.click(
       screen.getByRole("button", { name: strings.reader.moreActions }),
     );
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: strings.reader.redirect }),
-    );
+    fireEvent.click(menuItemBy({ name: strings.reader.redirect }));
     const seed = useAppStore.getState().composeSeed;
     expect(seed?.composeMode).toBe("redirect");
     expect(seed?.prefill).toBeUndefined();
@@ -2429,9 +2423,7 @@ describe("MessageReader", () => {
       name: strings.reader.moreActions,
     });
     fireEvent.click(more);
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: strings.reader.snooze }),
-    );
+    fireEvent.click(menuItemBy({ name: strings.reader.snooze }));
     fireEvent.click(
       screen.getByRole("button", { name: strings.common.cancel }),
     );
@@ -2486,7 +2478,7 @@ describe("MessageReader", () => {
     expect(srcdoc).toContain("Thanks, I will send it tomorrow.");
     expect(srcdoc).toContain("<details");
     expect(srcdoc).toContain(strings.reader.quotedText);
-    expect(srcdoc).toContain("min-height:2.75em");
+    expect(srcdoc).toContain("min-height:2.25em");
   });
 
   it("opens the next message after the open one is archived", async () => {

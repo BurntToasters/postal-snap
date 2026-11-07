@@ -158,8 +158,10 @@ test("hover reveals four target-sized buttons inside the row without shifting it
 });
 
 for (const [label, query] of [
+  ["normal", "&density=normal"],
   ["compact", "&density=compact"],
-  ["200% text", "&scale=2"],
+  ["comfortable 200% text", "&density=comfortable&scale=2"],
+  ["normal 200% text", "&density=normal&scale=2"],
   ["compact 200%", "&density=compact&scale=2"],
   ["240px pane", "&messagePaneWidth=240"],
 ] as const) {
@@ -422,9 +424,10 @@ test.describe("touch", () => {
 });
 
 for (const [label, query] of [
-  ["comfortable", ""],
+  ["comfortable", "&density=comfortable"],
+  ["normal", "&density=normal"],
   ["compact", "&density=compact"],
-  ["200% text", "&scale=2"],
+  ["comfortable 200% text", "&density=comfortable&scale=2"],
 ] as const) {
   test(`the cluster spans the full row height: ${label}`, async ({ page }) => {
     await page.goto(`${MIX}${query}`);

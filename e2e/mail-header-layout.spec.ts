@@ -3,7 +3,7 @@ import { installMockIpc } from "./mock-ipc";
 
 // Large text and long counts must not overlap the mailbox actions or
 // escape the heading. Preserve all pane modes and both density settings.
-for (const density of ["comfortable", "compact"] as const) {
+for (const density of ["comfortable", "normal", "compact"] as const) {
   for (const scale of [1, 2]) {
     for (const pane of ["right", "bottom", "hidden"] as const) {
       test(`mailbox heading fits: ${density}, ${scale * 100}%, ${pane}`, async ({

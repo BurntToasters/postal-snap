@@ -1,6 +1,7 @@
 import { expect, test } from "./coverage-fixture";
 import { attachIpcLog, recordIpc, recordedCalls } from "./ipc-recorder";
 import { installMockIpc } from "./mock-ipc";
+import { revealMenuItem } from "./menu-reveal";
 
 // Missing command mocks must not turn user actions into silent errors.
 // These flows verify the IPC boundary; native TLS, dialogs, and file writes
@@ -58,7 +59,9 @@ for (const all of [false, true]) {
 test("forwards the open message as an attached MIME copy", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("option", { name: /Weekend plans/i }).click();
+  await revealMenuItem(page, "Forward as attachment");
   await page.getByRole("button", { name: "More actions", exact: true }).click();
+  await revealMenuItem(page, "Forward as attachment");
   await page
     .getByRole("menuitem", { name: "Forward as attachment", exact: true })
     .click();
@@ -75,7 +78,9 @@ test("forwards the open message as an attached MIME copy", async ({ page }) => {
 test("copies one message without removing its source", async ({ page }) => {
   await page.goto("/?manyFolders=1");
   await page.getByRole("option", { name: /Weekend plans/i }).click();
+  await revealMenuItem(page, "Copy to Receipts");
   await page.getByRole("button", { name: "More actions", exact: true }).click();
+  await revealMenuItem(page, "Copy to Receipts");
   await page
     .getByRole("menuitem", { name: "Copy to Receipts", exact: true })
     .click();

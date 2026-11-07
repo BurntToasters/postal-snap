@@ -28,7 +28,7 @@
   align-items: center;
   gap: var(--space-2);
   padding: var(--control-pad-block) var(--space-3);
-  font-size: 0.92rem;
+  font-size: var(--fs-ui);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -45,15 +45,15 @@
   color: var(--text);
   border-color: transparent;
   background: var(--sidebar-selection);
-  font-weight: 650;
+  font-weight: 600;
   box-shadow:
     inset 0 1px 0 var(--surface-highlight),
     var(--shadow-control);
 }
 
 .settings-nav svg {
-  width: 1.1875rem;
-  height: 1.1875rem;
+  width: var(--icon-md);
+  height: var(--icon-md);
   color: var(--accent);
 }
 
@@ -102,7 +102,7 @@
 }
 
 .settings-group > :not(:first-child) {
-  border-top: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
+  border-top: 1px solid var(--border-soft);
 }
 
 .settings-link-row {
@@ -148,19 +148,19 @@
 
 .settings-group > p.settings-note > strong {
   color: var(--text);
-  font-size: 0.94rem;
+  font-size: var(--fs-ui);
   font-weight: 600;
 }
 
 .settings-row-error {
   color: var(--danger-ink);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .settings-section > h3 {
   margin: 0;
-  font-size: 0.78rem;
-  font-weight: 700;
+  font-size: var(--fs-xs);
+  font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--text-muted);
@@ -169,7 +169,7 @@
 .settings-lead {
   margin: 0;
   color: var(--text-muted);
-  line-height: 1.5;
+  line-height: 1.45;
 }
 
 .settings-warning,
@@ -198,8 +198,8 @@
 
 .settings-panel h2 {
   margin: 0;
-  font-size: 1.15rem;
-  letter-spacing: -0.02em;
+  font-size: var(--fs-base);
+  font-weight: 600;
 }
 
 .security-summary,
@@ -244,7 +244,7 @@
   width: min(var(--settings-confirm-width), 100%);
   display: grid;
   gap: var(--space-3);
-  padding: var(--space-5);
+  padding: var(--space-4);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--surface);
@@ -253,12 +253,13 @@
 
 .settings-confirm-card h2 {
   margin: 0;
-  font-size: 1.15rem;
+  font-size: var(--fs-xl);
+  font-weight: 600;
 }
 
 .settings-confirm-card p {
   margin: 0;
-  line-height: 1.5;
+  line-height: 1.45;
 }
 
 .settings-confirm-field {
@@ -307,8 +308,8 @@
 
 .settings-actions svg,
 .settings-empty-state > svg {
-  width: 1.0625rem;
-  height: 1.0625rem;
+  width: var(--icon-md);
+  height: var(--icon-md);
 }
 
 .settings-panel .settings-data-status {
@@ -338,7 +339,7 @@
 
 .settings-note {
   margin: 0;
-  font-size: 0.85rem;
+  font-size: var(--fs-md);
   line-height: 1.45;
 }
 
@@ -391,7 +392,7 @@
   margin: 0;
   padding: var(--settings-row-pad-block) var(--settings-row-pad-inline);
   border-radius: var(--radius-sm);
-  font-size: 0.86rem;
+  font-size: var(--fs-md);
   font-weight: 600;
   line-height: 1.45;
 }
@@ -418,7 +419,7 @@
 }
 
 .signature-editor-label {
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .signature-editor-toolbar {
@@ -457,7 +458,7 @@
 .signature-rich-help-fallback {
   margin: 0;
   color: var(--text-muted);
-  font-size: 0.85rem;
+  font-size: var(--fs-md);
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
@@ -496,12 +497,12 @@
 
 .aliases-header strong {
   display: block;
-  font-size: 0.92rem;
-  line-height: 1.35;
+  font-size: var(--fs-ui);
+  line-height: 1.45;
 }
 
 .detect-aliases-button {
-  font-size: 0.84rem;
+  font-size: var(--fs-md);
   min-height: var(--target-size);
   padding: var(--space-2) var(--space-3);
   white-space: nowrap;
@@ -509,7 +510,7 @@
 }
 
 .alias-status-message {
-  font-size: 0.84rem;
+  font-size: var(--fs-md);
   color: var(--success);
   font-weight: 500;
   line-height: 1.45;
@@ -532,7 +533,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface-muted);
-  font-size: 0.86rem;
+  font-size: var(--fs-md);
 }
 
 .alias-chip.primary {
@@ -543,10 +544,10 @@
 }
 
 .alias-badge {
-  font-size: 0.72rem;
+  font-size: var(--fs-xs);
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.04em;
   opacity: 0.85;
 }
 
@@ -554,14 +555,14 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: var(--target-size);
-  min-height: var(--target-size);
+  min-width: var(--target-size-inset);
+  min-height: var(--target-size-inset);
   border: none;
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
   padding: 0 var(--space-1);
-  font-size: 1.15rem;
+  font-size: var(--fs-xl);
   line-height: 1;
   border-radius: var(--radius-xs);
 }
@@ -585,7 +586,7 @@
 .add-alias-form button {
   min-height: var(--target-size);
   padding: var(--space-2) var(--space-4);
-  font-size: 0.88rem;
+  font-size: var(--fs-md);
 }
 
 /* Update ready card */
@@ -613,7 +614,7 @@
 
 .update-ready-body p {
   margin: 0 0 var(--space-2);
-  font-size: 0.88rem;
+  font-size: var(--fs-md);
   color: var(--text);
 }
 
@@ -641,7 +642,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-xs);
   font-family: inherit;
-  font-size: 0.85rem;
+  font-size: var(--fs-md);
   font-weight: 600;
   background: var(--surface);
   box-shadow: var(--shadow-control);
@@ -655,7 +656,7 @@
 
 .rule-form > label {
   margin-top: var(--settings-label-gap);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .rule-form > label:first-child {
@@ -710,7 +711,7 @@
 .signature-editor-label,
 .signature-fallback > label,
 .account-settings-card .aliases-header strong {
-  font-size: 0.95rem;
+  font-size: var(--fs-ui);
   font-weight: 700;
 }
 
@@ -742,7 +743,7 @@
 .settings-section p[role="alert"],
 .connection-panel p[role="alert"] {
   color: var(--danger-ink);
-  font-size: 0.86rem;
+  font-size: var(--fs-md);
   font-weight: 600;
   line-height: 1.45;
   margin: 0;
@@ -763,6 +764,7 @@
 .settings-search {
   grid-area: search;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
@@ -773,6 +775,33 @@
   min-width: 0;
   flex: 1;
   min-height: var(--control-height);
+}
+
+/* One-sentence help; the rest opens under "Learn more". */
+.help-more {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.help-more summary {
+  display: flex;
+  align-items: center;
+  min-height: var(--target-size-inset);
+  color: var(--accent-ink);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.help-more small {
+  color: var(--text-muted);
+}
+
+/* Autosave status sits under the search field, out of the header. */
+.settings-search .settings-autosave {
+  flex: 1 0 100%;
+  padding-top: var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
 }
 .settings-save-error {
   margin: 0;
@@ -821,12 +850,23 @@
 }
 .account-overview-order {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  align-items: center;
   justify-content: center;
   gap: var(--space-1);
 }
 .account-overview-order button {
-  min-height: var(--target-size);
+  width: var(--target-size-inset);
+  min-width: var(--target-size-inset);
+  height: var(--target-size-inset);
+  min-height: var(--target-size-inset);
+  padding: 0;
+  display: grid;
+  place-items: center;
+}
+.account-overview-order svg {
+  width: var(--icon-md);
+  height: var(--icon-md);
 }
 .account-overview-row {
   display: flex;

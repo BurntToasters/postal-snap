@@ -93,7 +93,7 @@ test("a thread adds navigation last and right-aligned", async ({ page }) => {
 });
 
 const combos = [
-  ...(["comfortable", "compact"] as const).flatMap((density) =>
+  ...(["comfortable", "normal", "compact"] as const).flatMap((density) =>
     [1, 2].flatMap((scale) =>
       (["right", "bottom"] as const).map((pane) => ({
         name: `${density} x${scale} ${pane}`,
@@ -190,7 +190,8 @@ test("header links share one line and start at the sender name", async ({
 }) => {
   await open(page, "fileCount=2&earlier=1&inTrash=1");
   const links = page.locator(".message-header-links > *");
-  expect(await links.count()).toBeGreaterThanOrEqual(3);
+  // Details lives in the stamp column, so the links row holds file links only.
+  expect(await links.count()).toBeGreaterThanOrEqual(2);
   const tops = await links.evaluateAll((nodes) =>
     nodes.map((n) => Math.round(n.getBoundingClientRect().top)),
   );

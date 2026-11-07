@@ -42,7 +42,5 @@ test("messages to this address searches the whole account", async ({
   await expect(
     page.getByRole("searchbox", { name: "Search mail" }),
   ).toHaveValue('to:"jane@example.com"');
-  await expect(
-    page.getByRole("button", { name: "All folders" }),
-  ).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".search-scope")).toHaveText("All folders");
 });

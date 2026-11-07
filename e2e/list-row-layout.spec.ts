@@ -40,8 +40,10 @@ async function lefts(page: Page) {
   });
 }
 
-async function expectOneEdge(page: Page) {
+// Select mode swaps the filter band for the bulk bar (D18), so it is skipped there.
+async function expectOneEdge(page: Page, skip: string[] = []) {
   const edges = await lefts(page);
+  for (const name of skip) delete edges[name as keyof typeof edges];
   for (const [name, value] of Object.entries(edges)) {
     expect(value, name).not.toBeNull();
   }
@@ -51,9 +53,7 @@ async function expectOneEdge(page: Page) {
   }
 }
 
-test("rows sit 5-7px from the list edge with no hit columns", async ({
-  page,
-}) => {
+test("rows are flat and full width with no hit columns", async ({ page }) => {
   await page.goto(`/${MIX}`);
   await expect(page.locator(".message-row").first()).toBeVisible();
   const facts = await page.evaluate(() => {
@@ -70,8 +70,8 @@ test("rows sit 5-7px from the list edge with no hit columns", async ({
         .visibility,
     };
   });
-  expect(facts.inset).toBeGreaterThanOrEqual(5);
-  expect(facts.inset).toBeLessThanOrEqual(7);
+  // D11: flat rows run edge to edge; the selection inset is drawn inside.
+  expect(Math.abs(facts.inset)).toBeLessThanOrEqual(1);
   expect(facts.firstIsRow).toBe(true);
   expect(facts.starHits).toBe(0);
   expect(facts.readHits).toBe(0);
@@ -145,9 +145,11 @@ test("a selected row paints no accent outside the row", async ({ page }) => {
 });
 
 const cases = [
-  { name: "comfortable", query: "" },
+  { name: "comfortable", query: "&density=comfortable" },
+  { name: "normal", query: "&density=normal" },
   { name: "compact", query: "&density=compact" },
-  { name: "200%", query: "&scale=2" },
+  { name: "comfortable 200%", query: "&density=comfortable&scale=2" },
+  { name: "normal 200%", query: "&density=normal&scale=2" },
   { name: "compact 200%", query: "&density=compact&scale=2" },
 ];
 
@@ -167,12 +169,12 @@ for (const { name, query } of cases) {
     await page.locator("button.list-day").first().click();
     await expect(page.locator(".message-select-hit").first()).toBeVisible();
     await expect(page.locator(".message-pane")).toHaveClass(/selecting/);
-    await expectOneEdge(page);
+    await expectOneEdge(page, ["filter"]);
   });
 }
 
 test("the day count lines up with the date column", async ({ page }) => {
-  await page.goto(`/${MIX}`);
+  await page.goto(`/${MIX}&density=comfortable`);
   await expect(page.locator(".message-row").first()).toBeVisible();
   const gap = await page.evaluate(() => {
     const count = document.querySelector(".list-day-count")!;
@@ -200,12 +202,14 @@ test("the sender keeps three characters of room at 200%", async ({ page }) => {
   expect(ratio).toBeGreaterThanOrEqual(3);
 });
 
-test("the size hides in a narrow list", async ({ page }) => {
+// D13: size leaves the row at every width; its name still carries it.
+test("the size stays out of the row at every width", async ({ page }) => {
   await page.goto(`/${MIX}&messagePaneWidth=240`);
   await expect(page.locator(".message-row").first()).toBeVisible();
   await expect(page.locator(".message-size").first()).toBeHidden();
   await page.goto(`/${MIX}&messagePaneWidth=520`);
-  await expect(page.locator(".message-size").first()).toBeVisible();
+  await expect(page.locator(".message-row").first()).toBeVisible();
+  await expect(page.locator(".message-size").first()).toBeHidden();
 });
 
 test("load more is borderless", async ({ page }) => {
@@ -271,7 +275,7 @@ test("a selected row shows every mark in a color unlike its background", async (
   expect(await row.locator(".pin-mark").count()).toBeGreaterThan(0);
 });
 
-for (const density of ["comfortable", "compact"] as const) {
+for (const density of ["comfortable", "normal", "compact"] as const) {
   for (const pane of ["right", "bottom"] as const) {
     for (const height of [800, 640]) {
       test(`large-text heading controls stay visible: ${density} ${pane} ${height}`, async ({

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import {
   Check,
   ChevronDown,
@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { accountSyncPhase } from "../../accountStatus";
 import { strings } from "../../i18n";
+import { placeAnchoredMenu } from "../popupPlacement";
 import { moveMenuFocus } from "../toolbarNav";
 import type { AccountInboxCount, AccountSummary, SyncState } from "../../types";
 import { UnreadBadge } from "./unreadBadge";
@@ -72,6 +73,20 @@ export function AccountSwitcher({
     .filter((item) => accounts.some((account) => account.id === item.accountId))
     .reduce((sum, item) => sum + item.unreadCount, 0);
   const triggerRef = useRef<HTMLButtonElement>(null);
+
+  // Fixed placement: the sidebar clips absolute menus.
+  useLayoutEffect(() => {
+    if (!open) return;
+    const menu = rootRef.current?.querySelector<HTMLElement>(
+      ".account-switcher-menu",
+    );
+    const trigger = triggerRef.current;
+    if (!menu || !trigger) return;
+    const update = () => placeAnchoredMenu(menu, trigger);
+    update();
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;

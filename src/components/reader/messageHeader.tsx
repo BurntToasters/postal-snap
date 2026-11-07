@@ -56,15 +56,9 @@ export function CopyButton({ text, title }: { text: string; title: string }) {
         aria-label={copied ? strings.reader.copied : title}
       >
         {copied ? (
-          <>
-            <Check size={12} aria-hidden="true" />
-            <span>{strings.reader.copied}</span>
-          </>
+          <Check className="reader-icon-sm" aria-hidden="true" />
         ) : (
-          <>
-            <Copy size={12} aria-hidden="true" />
-            <span>{title}</span>
-          </>
+          <Copy className="reader-icon-sm" aria-hidden="true" />
         )}
       </button>
       <span className="visually-hidden" role="status">
@@ -164,7 +158,10 @@ export function MessageHeader({
           </strong>
           {message.senderName &&
           message.senderName !== message.senderAddress ? (
-            <span className="sender-address-muted">
+            <span
+              className="sender-address-muted"
+              title={message.senderAddress}
+            >
               &lt;{message.senderAddress}&gt;
             </span>
           ) : null}
@@ -206,40 +203,41 @@ export function MessageHeader({
           <div className="reply-state" data-testid="reply-state">
             {answered ? (
               <span>
-                <Reply aria-hidden="true" size={14} />
+                <Reply className="reader-icon-sm" aria-hidden="true" />
                 {strings.mail.replied}
               </span>
             ) : null}
             {forwarded ? (
               <span>
-                <Forward aria-hidden="true" size={14} />
+                <Forward className="reader-icon-sm" aria-hidden="true" />
                 {strings.mail.forwarded}
               </span>
             ) : null}
           </div>
         ) : null}
         <div className="recipient-summary">
-          <span className="recipient-label">{strings.reader.to}</span>
-          {message.to.length > 0 ? (
-            <RecipientPreview addresses={message.to} />
-          ) : (
-            <span className="recipient-preview">
-              {strings.reader.noRecipients}
-            </span>
-          )}
+          <span className="recipient-group">
+            <span className="recipient-label">{strings.reader.to}</span>
+            {message.to.length > 0 ? (
+              <RecipientPreview addresses={message.to} />
+            ) : (
+              <span className="recipient-preview">
+                {strings.reader.noRecipients}
+              </span>
+            )}
+          </span>
+          {message.cc && message.cc.length > 0 ? (
+            <>
+              <span className="recipient-separator" aria-hidden="true">
+                ·
+              </span>
+              <span className="recipient-group">
+                <span className="recipient-label">{strings.reader.cc}</span>
+                <RecipientPreview addresses={message.cc} />
+              </span>
+            </>
+          ) : null}
         </div>
-        {message.cc && message.cc.length > 0 ? (
-          <div className="recipient-summary">
-            <span className="recipient-label">{strings.reader.cc}</span>
-            <RecipientPreview addresses={message.cc} />
-          </div>
-        ) : null}
-        {message.bcc && message.bcc.length > 0 ? (
-          <div className="recipient-summary">
-            <span className="recipient-label">{strings.reader.bcc}</span>
-            <RecipientPreview addresses={message.bcc} />
-          </div>
-        ) : null}
         {message.replyTo && message.replyTo !== message.senderAddress ? (
           <div className="recipient-summary">
             <span className="recipient-label">{strings.reader.replyTo}</span>
@@ -248,39 +246,61 @@ export function MessageHeader({
             </span>
           </div>
         ) : null}
-        <div className="message-header-links">
-          {onOpenEarlier ? (
-            <button
-              type="button"
-              className="header-files"
-              onClick={onOpenEarlier}
-            >
-              {strings.reader.openEarlier}
-            </button>
-          ) : null}
-          {fileCount > 0 ? (
-            <button
-              type="button"
-              className="header-files"
-              onClick={() => {
-                const target = document.getElementById("message-attachments");
-                target?.scrollIntoView({ block: "nearest" });
-                target?.focus();
-              }}
-            >
-              {strings.reader.showFiles(fileCount)}
-              <span className="header-file-size">{formatBytes(fileBytes)}</span>
-            </button>
-          ) : null}
-          {onShowInFolder && currentMailbox ? (
-            <button
-              type="button"
-              className="header-files"
-              onClick={onShowInFolder}
-            >
-              {strings.reader.showInFolder(folderName)}
-            </button>
-          ) : null}
+        {onOpenEarlier ||
+        fileCount > 0 ||
+        (onShowInFolder && currentMailbox) ? (
+          <div className="message-header-links">
+            {onOpenEarlier ? (
+              <button
+                type="button"
+                className="header-files"
+                onClick={onOpenEarlier}
+              >
+                {strings.reader.openEarlier}
+              </button>
+            ) : null}
+            {fileCount > 0 ? (
+              <button
+                type="button"
+                className="header-files"
+                onClick={() => {
+                  const target = document.getElementById("message-attachments");
+                  target?.scrollIntoView({ block: "nearest" });
+                  target?.focus();
+                }}
+              >
+                {strings.reader.showFiles(fileCount)}
+                <span className="header-file-size">
+                  {formatBytes(fileBytes)}
+                </span>
+              </button>
+            ) : null}
+            {onShowInFolder && currentMailbox ? (
+              <button
+                type="button"
+                className="header-files"
+                onClick={onShowInFolder}
+              >
+                {strings.reader.showInFolder(folderName)}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+      <div className="message-stamp">
+        <time
+          dateTime={message.receivedAt}
+          title={formatFullMessageDate(message.receivedAt)}
+        >
+          {new Intl.DateTimeFormat(undefined, {
+            dateStyle: "medium",
+            timeStyle: "short",
+          }).format(new Date(message.receivedAt))}
+        </time>
+        <span className="message-stamp-meta">
+          <span className="message-header-size">
+            {formatBytes(message.size)}
+          </span>
           <button
             type="button"
             className="details-toggle"
@@ -295,29 +315,17 @@ export function MessageHeader({
           >
             {showDetails ? (
               <>
-                <ChevronUp size={15} aria-hidden="true" />
+                <ChevronUp className="reader-icon-sm" aria-hidden="true" />
                 {strings.reader.hideDetails}
               </>
             ) : (
               <>
-                <ChevronDown size={15} aria-hidden="true" />
+                <ChevronDown className="reader-icon-sm" aria-hidden="true" />
                 {strings.reader.showDetails}
               </>
             )}
           </button>
-        </div>
-      </div>
-      <div className="message-stamp">
-        <time
-          dateTime={message.receivedAt}
-          title={formatFullMessageDate(message.receivedAt)}
-        >
-          {new Intl.DateTimeFormat(undefined, {
-            dateStyle: "medium",
-            timeStyle: "short",
-          }).format(new Date(message.receivedAt))}
-        </time>
-        <span className="message-header-size">{formatBytes(message.size)}</span>
+        </span>
       </div>
       {showDetails ? (
         <div
@@ -472,7 +480,7 @@ export function MessageHeader({
             </dd>
             <dt>{strings.reader.security}</dt>
             <dd className="security-badge">
-              <ShieldCheck size={16} aria-hidden="true" />
+              <ShieldCheck aria-hidden="true" />
               <span>
                 <strong>{strings.reader.securityTls}</strong> —{" "}
                 {strings.reader.securityTlsDetail}

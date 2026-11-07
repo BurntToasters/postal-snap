@@ -34,6 +34,11 @@ fn default_true() -> bool {
     true
 }
 
+/// Files with no density key predate the setting and keep the comfortable look.
+fn default_legacy_density() -> String {
+    "comfortable".into()
+}
+
 fn default_group_threads() -> bool {
     true
 }
@@ -709,6 +714,7 @@ pub struct AppSettings {
     pub text_scale: f64,
     pub private_notifications: bool,
     pub theme: String,
+    #[serde(default = "default_legacy_density")]
     pub density: String,
     pub cache_policy: CachePolicy,
     pub last_account_id: Option<String>,
@@ -825,6 +831,7 @@ pub struct PortableSettings {
     pub text_scale: f64,
     pub private_notifications: bool,
     pub theme: String,
+    #[serde(default = "default_legacy_density")]
     pub density: String,
     pub cache_policy: PortableCachePolicy,
     pub folder_pane_width: u32,
@@ -929,13 +936,13 @@ impl Default for AppSettings {
             text_scale: 1.0,
             private_notifications: false,
             theme: "system".into(),
-            density: "comfortable".into(),
+            density: "normal".into(),
             cache_policy: CachePolicy::default(),
             last_account_id: None,
             last_mailbox_id: None,
-            folder_pane_width: 264,
-            message_pane_width: 400,
-            reader_pane_height: 360,
+            folder_pane_width: 240,
+            message_pane_width: 380,
+            reader_pane_height: 420,
             window_effects: true,
             sidebar_visible: true,
             undo_send_seconds: default_undo_send_seconds(),

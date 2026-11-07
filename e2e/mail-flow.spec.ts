@@ -1,3 +1,4 @@
+import type { Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 
 import { expect, test } from "./coverage-fixture";
@@ -130,7 +131,9 @@ test("uses an edge-to-edge Mail-style sidebar and trailing scoped search", async
   expect(geometry.searchLeft).toBeGreaterThan(
     geometry.toolbarLeft + (geometry.toolbarRight - geometry.toolbarLeft) / 2,
   );
-  expect(geometry.scopeHeight).toBeGreaterThanOrEqual(44);
+  expect(geometry.scopeHeight).toBeGreaterThanOrEqual(
+    await targetSize(page, "--target-size-inset"),
+  );
 
   await expect(page.getByRole("button", { name: "Get Mail" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Compose" })).toBeVisible();
@@ -142,10 +145,16 @@ test("uses an edge-to-edge Mail-style sidebar and trailing scoped search", async
   await expect(current).toBeVisible();
   await expect(current).not.toHaveAccessibleName(/In Inbox/);
 
+  await page.getByRole("button", { name: "This mailbox" }).click();
+  await page.getByRole("menuitemradio", { name: "All folders" }).click();
+  await expect(page.getByRole("button", { name: "All folders" })).toHaveText(
+    "All folders",
+  );
   await page.getByRole("button", { name: "All folders" }).click();
   await expect(
-    page.getByRole("button", { name: "All folders" }),
-  ).toHaveAttribute("aria-pressed", "true");
+    page.getByRole("menuitemradio", { name: "All folders" }),
+  ).toHaveAttribute("aria-checked", "true");
+  await page.keyboard.press("Escape");
   await expect(
     page.getByRole("option", { name: /Across account/i }),
   ).toHaveAccessibleName(/In Inbox/);
@@ -154,7 +163,7 @@ test("uses an edge-to-edge Mail-style sidebar and trailing scoped search", async
 test("opens the mailbox drawer across the responsive sidebar range", async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 900, height: 720 });
+  await page.setViewportSize({ width: 899, height: 720 });
   await page.goto("/");
 
   const folderPane = page.locator(".folder-pane");
@@ -172,7 +181,7 @@ test("opens the mailbox drawer across the responsive sidebar range", async ({
   ).toHaveAttribute("aria-expanded", "true");
 
   await page.setViewportSize({ width: 620, height: 540 });
-  await expect(page.getByRole("button", { name: "All folders" })).toBeVisible();
+  await expect(page.locator(".search-scope")).toBeVisible();
 });
 
 test("completes guided iCloud first run", async ({ page }) => {
@@ -399,7 +408,18 @@ test("requires typing CONFIRM before reported-threat warnings can be disabled", 
     document.documentElement.style.fontSize = "";
     return pad;
   });
-  expect(confirmPad).toBeCloseTo(40, 0);
+  // Expected value comes from the --space-4 token at the same 32px root.
+  const expectedPad = await page.evaluate(() => {
+    document.documentElement.style.fontSize = "32px";
+    const probe = document.createElement("i");
+    probe.style.cssText = "position:fixed;padding-top:var(--space-4)";
+    document.body.append(probe);
+    const pad = parseFloat(getComputedStyle(probe).paddingTop);
+    probe.remove();
+    document.documentElement.style.fontSize = "";
+    return pad;
+  });
+  expect(confirmPad).toBeCloseTo(expectedPad, 0);
   expect(
     await page
       .locator(".settings-confirm-overlay")
@@ -1533,3 +1553,17 @@ test("right-click reply uses the product context menu", async ({ page }) => {
     page.getByRole("combobox", { name: "To", exact: true }),
   ).toHaveValue("jane@example.com");
 });
+
+async function targetSize(
+  page: Page,
+  token = "--target-size",
+): Promise<number> {
+  return page.evaluate((token) => {
+    const probe = document.createElement("i");
+    probe.style.cssText = `position:fixed;width:var(${token})`;
+    document.body.append(probe);
+    const width = probe.getBoundingClientRect().width;
+    probe.remove();
+    return width;
+  }, token);
+}

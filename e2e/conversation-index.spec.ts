@@ -22,15 +22,13 @@ test("the open message lists the rest of the conversation", async ({
   await page.getByRole("treeitem", { name: /Weekend plans/i }).click();
   const list = page.getByRole("navigation", { name: "In this conversation" });
   await expect(
-    list.getByRole("button", { name: /Weekend plans from Jane/ }),
+    list.getByRole("button", { name: /Weekend plans .*Jane/ }),
   ).toHaveAttribute("aria-current", "true");
-  await list
-    .getByRole("button", { name: /Older family note from Jane/ })
-    .click();
+  await list.getByRole("button", { name: /Older family note .*Jane/ }).click();
   await expect(
     page.getByRole("heading", { name: "Older family note" }),
   ).toBeVisible();
   await expect(
-    list.getByRole("button", { name: /Older family note from Jane/ }),
+    list.getByRole("button", { name: /Older family note .*Jane/ }),
   ).toHaveAttribute("aria-current", "true");
 });

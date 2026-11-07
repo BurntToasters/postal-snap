@@ -25,6 +25,23 @@ function contrast(first: string, second: string): number {
   return (values[0] + 0.05) / (values[1] + 0.05);
 }
 
+// Blends an rgb(... / alpha%) token over an opaque hex background.
+function blend(translucent: string, background: string): string {
+  const match = translucent.match(
+    /rgb\(\s*(\d+)\s+(\d+)\s+(\d+)\s*\/\s*(\d+(?:\.\d+)?)%\s*\)/,
+  );
+  if (!match) throw new Error(`Unsupported color: ${translucent}`);
+  const alpha = Number(match[4]) / 100;
+  const bg = background
+    .slice(1)
+    .match(/../g)!
+    .map((value) => Number.parseInt(value, 16));
+  const mixed = [1, 2, 3].map((index) =>
+    Math.round(alpha * Number(match[index]) + (1 - alpha) * bg[index - 1]),
+  );
+  return `#${mixed.map((value) => value.toString(16).padStart(2, "0")).join("")}`;
+}
+
 function themeBlock(selector: string): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const block = variablesCss.match(
@@ -32,6 +49,23 @@ function themeBlock(selector: string): string {
   );
   if (!block) throw new Error(`Missing ${selector} theme block.`);
   return block[1];
+}
+
+// The system-dark block is indented inside @media, so it is matched apart.
+function systemDarkBlock(): string {
+  const block = variablesCss.match(
+    /:root:not\(\[data-theme="light"\]\):not\(\[data-theme="dark"\]\)\s*{([\s\S]*?)\n {2}}/,
+  );
+  if (!block) throw new Error("Missing system dark theme block.");
+  return block[1];
+}
+
+function declarations(block: string): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const match of block.matchAll(/(--[a-z0-9-]+):\s*([^;]+);/g)) {
+    map.set(match[1], match[2].replace(/\s+/g, " ").trim());
+  }
+  return map;
 }
 
 describe("color accessibility tokens", () => {
@@ -52,5 +86,28 @@ describe("color accessibility tokens", () => {
       expect(contrast(focus, surface)).toBeGreaterThanOrEqual(3);
       expect(contrast(focus, accent)).toBeGreaterThanOrEqual(3);
     });
+
+    it(`${theme} theme keeps accent text and muted text readable`, () => {
+      const block = themeBlock(selector);
+      const accentInk = color(block, "accent-ink");
+      const surfaceMuted = color(block, "surface-muted");
+      const surfaceRaised = color(block, "surface-raised");
+      const sidebarBg = color(block, "sidebar-bg");
+      const textMuted = block.match(/--text-muted:\s*([^;]+);/)![1];
+
+      expect(contrast(accentInk, surfaceMuted)).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(accentInk, surfaceRaised)).toBeGreaterThanOrEqual(4.5);
+      expect(
+        contrast(blend(textMuted.trim(), sidebarBg), sidebarBg),
+      ).toBeGreaterThanOrEqual(4.5);
+    });
   }
+
+  it("system dark block matches the data-theme dark block token-for-token", () => {
+    const explicit = declarations(themeBlock(':root[data-theme="dark"]'));
+    const system = declarations(systemDarkBlock());
+
+    expect(system.size).toBeGreaterThan(0);
+    expect(system).toEqual(explicit);
+  });
 });

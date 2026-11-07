@@ -2,7 +2,12 @@ import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
 import type { DistributionChannel, UpdateChannel } from "../../types";
 import { onUpdateChannelChanged } from "../../update";
-import { SettingRow, SettingsGroup, SettingsPanel } from "./primitives";
+import {
+  HelpText,
+  SettingRow,
+  SettingsGroup,
+  SettingsPanel,
+} from "./primitives";
 import type { SettingsSaveUpdate } from "./useSettingsSave";
 
 interface AdvancedTabProps {
@@ -32,12 +37,20 @@ export function AdvancedTab({
           <small>{strings.settings.vaultHelp}</small>
         </span>
       </div>
-      <p className="settings-lead">{strings.settings.advancedHelp}</p>
+      <div className="settings-lead">
+        <HelpText
+          short={strings.settings.advancedHelp}
+          more={strings.settings.advancedHelpMore}
+        />
+      </div>
       <SettingsGroup>
         <label className="switch-row">
           <span>
             <strong>{strings.settings.blockAds}</strong>
-            <small>{strings.settings.blockAdsHelp}</small>
+            <HelpText
+              short={strings.settings.blockAdsHelp}
+              more={strings.settings.blockAdsHelpMore}
+            />
           </span>
           <input
             type="checkbox"
@@ -50,7 +63,10 @@ export function AdvancedTab({
         <label className="switch-row">
           <span>
             <strong>{strings.settings.blockThreats}</strong>
-            <small>{strings.settings.blockThreatsHelp}</small>
+            <HelpText
+              short={strings.settings.blockThreatsHelp}
+              more={strings.settings.blockThreatsHelpMore}
+            />
           </span>
           <input
             ref={threatSwitchRef}
@@ -63,6 +79,7 @@ export function AdvancedTab({
           <SettingRow
             title={strings.settings.updateChannel}
             help={strings.settings.updateChannelHelp}
+            helpMore={strings.settings.updateChannelHelpMore}
           >
             <select
               aria-label={strings.settings.updateChannel}

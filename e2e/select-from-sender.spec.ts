@@ -1,6 +1,7 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { revealMenuItem } from "./menu-reveal";
 
 // Failure modes covered here:
 // 1. One loaded message from a sender has no select-from-sender action.
@@ -28,7 +29,9 @@ test("one message cannot select others from the sender", async ({ page }) => {
 test("selects every loaded message from this sender", async ({ page }) => {
   await page.goto("/?threadGap=1");
   await page.getByRole("treeitem", { name: /Weekend plans/i }).click();
+  await revealMenuItem(page, "Select messages from this sender");
   await page.getByRole("button", { name: "More actions" }).click();
+  await revealMenuItem(page, "Select messages from this sender");
   await page
     .getByRole("menuitem", { name: "Select messages from this sender" })
     .click();

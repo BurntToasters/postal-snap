@@ -15,6 +15,8 @@ import { installMockIpc } from "./mock-ipc";
 const combos = [
   { name: "comfortable-1x", density: "comfortable", scale: 1 },
   { name: "comfortable-2x", density: "comfortable", scale: 2 },
+  { name: "normal-1x", density: "normal", scale: 1 },
+  { name: "normal-2x", density: "normal", scale: 2 },
   { name: "compact-1x", density: "compact", scale: 1 },
   { name: "compact-2x", density: "compact", scale: 2 },
 ] as const;
@@ -271,21 +273,29 @@ test.describe("CSS density token matrix", () => {
         preview: { firstColumn: number };
         composer: { editorMinHeight: number };
       };
+      const normal = metrics[`normal-${scale}x`] as typeof comfortable;
       const compact = metrics[`compact-${scale}x`] as typeof comfortable;
-      expect(compact.avatars.account.width).toBeLessThan(
-        comfortable.avatars.account.width,
-      );
-      expect(compact.avatars.sender.width).toBeLessThan(
-        comfortable.avatars.sender.width,
-      );
-      expect(compact.provider.symbol).toBeLessThan(comfortable.provider.symbol);
-      expect(compact.provider.arrow).toBeLessThan(comfortable.provider.arrow);
-      expect(compact.preview.firstColumn).toBeLessThan(
-        comfortable.preview.firstColumn,
-      );
-      expect(compact.composer.editorMinHeight).toBeLessThan(
-        comfortable.composer.editorMinHeight,
-      );
+      // Ordering: normal <= comfortable at every scale; compact <= normal at 100% text only.
+      const chain = [
+        ["avatar account", (m: typeof comfortable) => m.avatars.account.width],
+        ["avatar sender", (m: typeof comfortable) => m.avatars.sender.width],
+        ["provider symbol", (m: typeof comfortable) => m.provider.symbol],
+        ["provider arrow", (m: typeof comfortable) => m.provider.arrow],
+        [
+          "preview first column",
+          (m: typeof comfortable) => m.preview.firstColumn,
+        ],
+        [
+          "composer editor min height",
+          (m: typeof comfortable) => m.composer.editorMinHeight,
+        ],
+      ] as const;
+      for (const [label, pick] of chain) {
+        if (scale === 1)
+          expect(pick(compact), label).toBeLessThanOrEqual(pick(normal));
+        expect(pick(normal), label).toBeLessThanOrEqual(pick(comfortable));
+        expect(pick(compact), label).toBeLessThan(pick(comfortable));
+      }
     }
 
     await writeFile(

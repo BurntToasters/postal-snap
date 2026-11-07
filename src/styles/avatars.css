@@ -92,11 +92,11 @@
   height: var(--sender-avatar-size);
   place-items: center;
   border-radius: 50%;
-  /* Contacts-style monogram, as Mail shows for senders without a photo. */
-  color: #ffffff;
+  /* Flat monogram, as Mail shows for senders without a photo. */
+  color: var(--text);
   background: var(--monogram);
   font-size: var(--sender-avatar-font-size);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 @media (forced-colors: active) {

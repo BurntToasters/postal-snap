@@ -16,6 +16,7 @@ import {
   earlierHeaderId,
   iframeTargetFromDetail,
   itemsForTarget,
+  type ContextMenuItem,
   resolveContextTarget,
   senderSearchQuery,
   subjectSearchQuery,
@@ -71,6 +72,17 @@ beforeEach(() => {
     clipboard: { writeText: vi.fn().mockResolvedValue(undefined) },
   });
 });
+
+/** Items with submenu children flattened, so specs can match by id. */
+function flatItemsForTarget(target: Parameters<typeof itemsForTarget>[0]) {
+  const flatten = (
+    items: ReturnType<typeof itemsForTarget>,
+  ): ContextMenuItem[] =>
+    items.flatMap((entry) =>
+      entry.type === "submenu" ? flatten(entry.items) : [entry],
+    );
+  return flatten(itemsForTarget(target));
+}
 
 describe("sender search query", () => {
   it("quotes a usable address and drops an unusable one", () => {
@@ -720,7 +732,7 @@ describe("context menu items", () => {
       messages: [message],
     });
     rememberMoveMailbox(travel);
-    const ids = itemsForTarget({ kind: "message", messageId: 1 }).flatMap(
+    const ids = flatItemsForTarget({ kind: "message", messageId: 1 }).flatMap(
       (entry) =>
         entry.type === "item" && entry.id.startsWith("move-mailbox:")
           ? [entry.id]
@@ -728,7 +740,7 @@ describe("context menu items", () => {
     );
     expect(ids).toEqual(["move-mailbox:6", "move-mailbox:5"]);
     rememberMoveMailbox(inbox);
-    const afterInbox = itemsForTarget({
+    const afterInbox = flatItemsForTarget({
       kind: "message",
       messageId: 1,
     }).flatMap((entry) =>
@@ -816,11 +828,11 @@ describe("context menu items", () => {
     });
 
     expect(itemsForTarget({ kind: "suppress" })).toEqual([]);
-    expect(itemsForTarget({ kind: "message", messageId: 99 })).toEqual([]);
-    expect(itemsForTarget({ kind: "folder", mailboxId: 99 })).toEqual([]);
+    expect(flatItemsForTarget({ kind: "message", messageId: 99 })).toEqual([]);
+    expect(flatItemsForTarget({ kind: "folder", mailboxId: 99 })).toEqual([]);
     expect(itemsForTarget({ kind: "outbox", outboxId: "missing" })).toEqual([]);
 
-    const unreadItems = itemsForTarget({ kind: "message", messageId: 1 });
+    const unreadItems = flatItemsForTarget({ kind: "message", messageId: 1 });
     expect(unreadItems).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -886,7 +898,7 @@ describe("context menu items", () => {
     useAppStore.setState({
       messages: [unread, starred, junked, trashed, muted, unnamed],
     });
-    expect(itemsForTarget({ kind: "message", messageId: 8 })).toEqual(
+    expect(flatItemsForTarget({ kind: "message", messageId: 8 })).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           id: "mute-conversation",
@@ -895,7 +907,7 @@ describe("context menu items", () => {
       ]),
     );
     expect(
-      itemsForTarget({ kind: "message", messageId: 9 }).some(
+      flatItemsForTarget({ kind: "message", messageId: 9 }).some(
         (item) => item.type === "item" && item.id === "mute-conversation",
       ),
     ).toBe(false);
@@ -912,7 +924,7 @@ describe("context menu items", () => {
       ]),
     );
 
-    const archiveItems = itemsForTarget({ kind: "message", messageId: 2 });
+    const archiveItems = flatItemsForTarget({ kind: "message", messageId: 2 });
     expect(archiveItems).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -929,7 +941,7 @@ describe("context menu items", () => {
         }),
       ]),
     );
-    expect(itemsForTarget({ kind: "message", messageId: 3 })).toEqual(
+    expect(flatItemsForTarget({ kind: "message", messageId: 3 })).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           id: "not-junk",
@@ -954,7 +966,7 @@ describe("context menu items", () => {
     useAppStore.setState({
       messages: [unread, starred, junked, trashed, threaded, threadedReply],
     });
-    expect(itemsForTarget({ kind: "message", messageId: 6 })).toEqual(
+    expect(flatItemsForTarget({ kind: "message", messageId: 6 })).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           id: "mark-conversation-read",
@@ -1025,17 +1037,17 @@ describe("context menu items", () => {
       ]),
     );
     expect(
-      itemsForTarget({ kind: "message", messageId: 6 }).some(
+      flatItemsForTarget({ kind: "message", messageId: 6 }).some(
         (entry) => entry.type === "item" && entry.id === "unstar-conversation",
       ),
     ).toBe(false);
     expect(
-      itemsForTarget({ kind: "message", messageId: 1 }).some(
+      flatItemsForTarget({ kind: "message", messageId: 1 }).some(
         (entry) => entry.type === "item" && entry.id === "forward-conversation",
       ),
     ).toBe(false);
     expect(
-      itemsForTarget({ kind: "message", messageId: 6 }).some(
+      flatItemsForTarget({ kind: "message", messageId: 6 }).some(
         (entry) =>
           entry.type === "item" && entry.id === "save-conversation-files",
       ),
@@ -1050,7 +1062,7 @@ describe("context menu items", () => {
         { ...threadedReply, hasAttachments: true },
       ],
     });
-    expect(itemsForTarget({ kind: "message", messageId: 6 })).toEqual(
+    expect(flatItemsForTarget({ kind: "message", messageId: 6 })).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           id: "save-conversation-files",
@@ -1058,30 +1070,30 @@ describe("context menu items", () => {
         }),
       ]),
     );
-    expect(itemsForTarget({ kind: "message", messageId: 1 })).not.toEqual(
+    expect(flatItemsForTarget({ kind: "message", messageId: 1 })).not.toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: "archive-conversation" }),
       ]),
     );
-    expect(itemsForTarget({ kind: "message", messageId: 1 })).not.toEqual(
+    expect(flatItemsForTarget({ kind: "message", messageId: 1 })).not.toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: "copy-conversation:5" }),
       ]),
     );
-    expect(itemsForTarget({ kind: "message", messageId: 1 })).not.toEqual(
+    expect(flatItemsForTarget({ kind: "message", messageId: 1 })).not.toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: "print-conversation" }),
         expect.objectContaining({ id: "copy-conversation-text" }),
         expect.objectContaining({ id: "move-conversation:5" }),
       ]),
     );
-    expect(itemsForTarget({ kind: "message", messageId: 1 })).not.toEqual(
+    expect(flatItemsForTarget({ kind: "message", messageId: 1 })).not.toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: "mark-conversation-read" }),
       ]),
     );
 
-    expect(itemsForTarget({ kind: "message", messageId: 4 })).toEqual(
+    expect(flatItemsForTarget({ kind: "message", messageId: 4 })).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           id: "delete-forever",
@@ -1110,7 +1122,7 @@ describe("context menu items", () => {
     useAppStore.setState((state) => ({
       messages: [...state.messages, trashNewer, trashOlder],
     }));
-    expect(itemsForTarget({ kind: "message", messageId: 8 })).toEqual(
+    expect(flatItemsForTarget({ kind: "message", messageId: 8 })).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           id: "delete-conversation",
@@ -1119,18 +1131,18 @@ describe("context menu items", () => {
         }),
       ]),
     );
-    expect(itemsForTarget({ kind: "message", messageId: 4 })).not.toEqual(
+    expect(flatItemsForTarget({ kind: "message", messageId: 4 })).not.toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: "delete-conversation" }),
       ]),
     );
-    expect(itemsForTarget({ kind: "message", messageId: 6 })).not.toEqual(
+    expect(flatItemsForTarget({ kind: "message", messageId: 6 })).not.toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: "delete-conversation" }),
       ]),
     );
 
-    expect(itemsForTarget({ kind: "folder", mailboxId: inbox.id })).toEqual(
+    expect(flatItemsForTarget({ kind: "folder", mailboxId: inbox.id })).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: "open" }),
         expect.objectContaining({
@@ -1139,10 +1151,12 @@ describe("context menu items", () => {
         }),
       ]),
     );
-    expect(itemsForTarget({ kind: "folder", mailboxId: inbox.id })).not.toEqual(
+    expect(
+      flatItemsForTarget({ kind: "folder", mailboxId: inbox.id }),
+    ).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ id: "hide-folder" })]),
     );
-    expect(itemsForTarget({ kind: "folder", mailboxId: other.id })).toEqual(
+    expect(flatItemsForTarget({ kind: "folder", mailboxId: other.id })).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           id: "hide-folder",
@@ -1150,17 +1164,17 @@ describe("context menu items", () => {
         }),
       ]),
     );
-    expect(itemsForTarget({ kind: "folder", mailboxId: trash.id })).toEqual(
+    expect(flatItemsForTarget({ kind: "folder", mailboxId: trash.id })).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: "empty-trash", danger: true }),
       ]),
     );
-    expect(itemsForTarget({ kind: "folder", mailboxId: junk.id })).toEqual(
+    expect(flatItemsForTarget({ kind: "folder", mailboxId: junk.id })).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: "empty-junk", danger: true }),
       ]),
     );
-    expect(itemsForTarget({ kind: "folder", mailboxId: other.id })).toEqual(
+    expect(flatItemsForTarget({ kind: "folder", mailboxId: other.id })).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: "rename-folder" }),
         expect.objectContaining({ id: "delete-folder", danger: true }),
@@ -1291,7 +1305,7 @@ describe("context menu items", () => {
     const inbox = makeMailbox();
     const withFile = makeMessage({ hasAttachments: true });
     resetStore({ mailboxes: [inbox], messages: [withFile] });
-    const fileIds = itemsForTarget({
+    const fileIds = flatItemsForTarget({
       kind: "message",
       messageId: withFile.id,
     }).flatMap((item) => (item.type === "item" ? [item.id] : []));
@@ -1305,7 +1319,7 @@ describe("context menu items", () => {
       senderAddress: "jane@other.test",
     });
     resetStore({ mailboxes: [inbox], messages: [plain] });
-    const plainIds = itemsForTarget({
+    const plainIds = flatItemsForTarget({
       kind: "message",
       messageId: plain.id,
     }).flatMap((item) => (item.type === "item" ? [item.id] : []));
@@ -1333,7 +1347,7 @@ describe("context menu items", () => {
         enabled: true,
       },
     ]);
-    const blocked = itemsForTarget({
+    const blocked = flatItemsForTarget({
       kind: "message",
       messageId: message.id,
     }).flatMap((item) => (item.type === "item" ? [item.id] : []));
@@ -1374,7 +1388,7 @@ describe("context menu items", () => {
         enabled: true,
       },
     ]);
-    const domainBlocked = itemsForTarget({
+    const domainBlocked = flatItemsForTarget({
       kind: "message",
       messageId: covered.id,
     }).flatMap((item) => (item.type === "item" ? [item.id] : []));
@@ -1383,7 +1397,7 @@ describe("context menu items", () => {
 
     resetStore({ mailboxes: [inbox], messages: [message] });
     clearBlockedSenders();
-    const open = itemsForTarget({
+    const open = flatItemsForTarget({
       kind: "message",
       messageId: message.id,
     }).flatMap((item) => (item.type === "item" ? [item.id] : []));

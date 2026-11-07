@@ -1,6 +1,7 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { revealMenuItem } from "./menu-reveal";
 
 // Failure modes covered here:
 // 1. Copying from the list leaves the message closed.
@@ -26,6 +27,7 @@ test("the message list copies the letter and leaves it closed", async ({
   await page
     .getByRole("option", { name: /Weekend plans/i })
     .click({ button: "right" });
+  await revealMenuItem(page, "Copy message text");
   await page.getByRole("menuitem", { name: "Copy message text" }).click();
   await expect
     .poll(() => page.evaluate(() => navigator.clipboard.readText()))
@@ -39,6 +41,7 @@ test("the open message copies its readable text", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("option", { name: /Weekend plans/i }).click();
   await page.getByRole("button", { name: "More actions" }).click();
+  await revealMenuItem(page, "Copy message text");
   await page.getByRole("menuitem", { name: "Copy message text" }).click();
   await expect
     .poll(() => page.evaluate(() => navigator.clipboard.readText()))

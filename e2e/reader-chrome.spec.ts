@@ -127,7 +127,9 @@ test("mail toolbars share insets with the message and the list", async ({
   expect(Math.abs(aligned.actionInset)).toBeLessThanOrEqual(1);
   expect(Math.abs(aligned.barDelta)).toBeLessThanOrEqual(1);
   expect(Math.abs(aligned.searchDelta)).toBeLessThanOrEqual(1);
-  expect(aligned.scopeHeight).toBeGreaterThanOrEqual(44);
+  expect(aligned.scopeHeight).toBeGreaterThanOrEqual(
+    await targetSize(page, "--target-size-inset"),
+  );
   await page.screenshot({
     path: "test-results/reader-chrome-aligned.png",
     animations: "disabled",
@@ -240,22 +242,50 @@ function textLeft(page: Page, selector: string) {
   }, selector);
 }
 
-async function frameTextLeft(page: Page) {
-  const local = await page
+// A plain letter is capped at a 72ch measure and centered on wide panes
+// (plan §10.6 D19); otherwise its first line starts at the subject's edge.
+async function letterInset(page: Page) {
+  const subject = await textLeft(page, "#message-title");
+  const frame = await page.locator(".message-body iframe").boundingBox();
+  const geo = await page
     .frameLocator(".message-body iframe")
     .locator("body")
-    .evaluate((node) => {
+    .evaluate((body) => {
+      const box = body.getBoundingClientRect();
+      const style = getComputedStyle(body);
+      const prose = body
+        .querySelector(".letter-prose")
+        ?.getBoundingClientRect();
       const range = document.createRange();
-      range.selectNodeContents(node);
-      return range.getBoundingClientRect().left;
+      range.selectNodeContents(body);
+      return {
+        // Border box: margins sit outside it, padding inside.
+        contentLeft: box.left + Number.parseFloat(style.paddingLeft),
+        contentRight: box.right - Number.parseFloat(style.paddingRight),
+        proseLeft: prose?.left ?? null,
+        proseRight: prose?.right ?? null,
+        textLeft: range.getBoundingClientRect().left,
+      };
     });
-  const frame = await page.locator(".message-body iframe").boundingBox();
-  return local + (frame?.x ?? 0);
+  const offset = frame?.x ?? 0;
+  const left = (geo.proseLeft ?? geo.textLeft) + offset;
+  const content = geo.contentLeft + offset;
+  const centered =
+    geo.proseLeft !== null && geo.proseLeft - geo.contentLeft > 2;
+  return {
+    subject,
+    centered,
+    left,
+    content,
+    leftGap: geo.proseLeft === null ? 0 : geo.proseLeft - geo.contentLeft,
+    rightGap: geo.proseRight === null ? 0 : geo.contentRight - geo.proseRight,
+  };
 }
 
 for (const [name, query] of [
   ["reading pane", "?theme=light"],
   ["full screen", "?pane=hidden&theme=dark"],
+  ["normal", "?density=normal&theme=light"],
   ["compact", "?density=compact&theme=light"],
   ["bottom", "?pane=bottom&theme=light"],
 ] as const) {
@@ -265,10 +295,13 @@ for (const [name, query] of [
     await openWeekend(page, query);
     await expect
       .poll(async () => {
-        const subject = await textLeft(page, "#message-title");
-        const body = await frameTextLeft(page);
-        if (subject === null) return 99;
-        return Math.abs(body - subject);
+        const inset = await letterInset(page);
+        if (inset.subject === null) return 99;
+        if (inset.centered) {
+          if (Math.abs(inset.leftGap - inset.rightGap) > 2) return 98;
+          return inset.left - inset.subject >= -1 ? 0 : 97;
+        }
+        return Math.abs(inset.left - inset.subject);
       })
       .toBeLessThanOrEqual(1);
   });
@@ -312,10 +345,51 @@ test("bottom reading keeps the letter inside the pane", async ({ page }) => {
   expect(boxes.bodyHeight).toBeGreaterThan(48);
 });
 
-test("plain text uses the same inset as the subject", async ({ page }) => {
+test("plain text uses the same inset as the subject, or centers its measure", async ({
+  page,
+}) => {
   await openWeekend(page, "?blankHtml=1&theme=light");
+  const geo = await page.evaluate(() => {
+    const plain = document.querySelector(".plain-text-body");
+    const body = document.querySelector(".message-body");
+    if (!(plain instanceof HTMLElement) || !(body instanceof HTMLElement))
+      return null;
+    const box = plain.getBoundingClientRect();
+    const pane = body.getBoundingClientRect();
+    const padLeft = Number.parseFloat(getComputedStyle(plain).paddingLeft);
+    const padRight = Number.parseFloat(getComputedStyle(plain).paddingRight);
+    return {
+      leftGap: box.left - pane.left,
+      rightGap: pane.right - box.right,
+      textLeft: box.left + padLeft,
+      textRight: box.right - padRight,
+    };
+  });
   const subject = await textLeft(page, "#message-title");
-  const body = await textLeft(page, ".plain-text-body");
   expect(subject).not.toBeNull();
-  expect(Math.abs((body ?? 0) - (subject ?? 0))).toBeLessThanOrEqual(1);
+  expect(geo).not.toBeNull();
+  if ((geo?.leftGap ?? 0) > 2) {
+    expect(
+      Math.abs((geo?.leftGap ?? 0) - (geo?.rightGap ?? 0)),
+    ).toBeLessThanOrEqual(2);
+    expect((geo?.textLeft ?? 0) - (subject ?? 0)).toBeGreaterThanOrEqual(-1);
+  } else {
+    expect(Math.abs((geo?.textLeft ?? 0) - (subject ?? 0))).toBeLessThanOrEqual(
+      1,
+    );
+  }
 });
+
+async function targetSize(
+  page: Page,
+  token = "--target-size",
+): Promise<number> {
+  return page.evaluate((token) => {
+    const probe = document.createElement("i");
+    probe.style.cssText = `position:fixed;width:var(${token})`;
+    document.body.append(probe);
+    const width = probe.getBoundingClientRect().width;
+    probe.remove();
+    return width;
+  }, token);
+}

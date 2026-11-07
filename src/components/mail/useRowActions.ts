@@ -169,5 +169,23 @@ export function useRowActions({
     }
   }
 
-  return { archiveFocused, trashFocused, junkFocused, replyFocused };
+  async function forwardFocused(message: MessageSummary) {
+    const accountId = message.accountId;
+    try {
+      const detail = await api.getMessage(accountId, message.id);
+      const state = useAppStore.getState();
+      if (state.activeAccountId !== accountId) return;
+      openComposer({ sourceMessage: detail, composeMode: "forward" });
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }
+
+  return {
+    archiveFocused,
+    trashFocused,
+    junkFocused,
+    replyFocused,
+    forwardFocused,
+  };
 }

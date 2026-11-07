@@ -1,7 +1,12 @@
-import { useLayoutEffect, useRef, useState, type RefObject } from "react";
+import {
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import {
   Archive,
-  ArrowUpNarrowWide,
   ChevronDown,
   ChevronsDownUp,
   ChevronsUpDown,
@@ -32,6 +37,8 @@ import {
   type MessageListSort,
 } from "../../listSort";
 import type { MailboxRole } from "../../types";
+import { PopupEntries, type PopupEntry } from "../ContextMenu";
+import { placeAnchoredMenu, syncScrollCue } from "../popupPlacement";
 import { moveMenuFocus } from "../toolbarNav";
 import { usePopupMenu } from "../usePopupMenu";
 import { folderIcons } from "./folderIcons";
@@ -40,6 +47,8 @@ type LocalView = "drafts" | "outbox" | "snoozed";
 
 interface MessagePaneHeaderProps {
   heading: string;
+  /** Shown in the heading actions for Drafts, Outbox, and Snoozed. */
+  localAction?: ReactNode;
   /** Shown when more than one account is set up. */
   accountLabel?: string;
   shownCount: number;
@@ -87,6 +96,10 @@ interface MessagePaneHeaderProps {
     onUnstar: () => void;
     onPin: () => void;
     onUnpin: () => void;
+    anySelectedUnread: boolean;
+    anySelectedRead: boolean;
+    anySelectedUnstarred: boolean;
+    anySelectedStarred: boolean;
     pinDisabled: boolean;
     unpinDisabled: boolean;
     onJunk: () => void;
@@ -110,6 +123,7 @@ interface MessagePaneHeaderProps {
 
 export function MessagePaneHeader({
   heading,
+  localAction,
   accountLabel,
   shownCount,
   folderTotal,
@@ -198,6 +212,337 @@ export function MessagePaneHeader({
     { id: "subject", label: strings.mail.sortSubject },
     { id: "size", label: strings.mail.sortSize },
   ];
+
+  // Sort is a submenu of fields plus a direction pair. While selecting, the
+  // selection actions replace the sort group.
+  const reversed = sortIsReversed(listSort);
+  const directionLabels =
+    sortFamily(listSort) === "date"
+      ? [strings.contextMenu.newestFirst, strings.mail.sortOldest]
+      : sortFamily(listSort) === "size"
+        ? [strings.contextMenu.largestFirst, strings.mail.sortSmallest]
+        : [strings.contextMenu.atoZ, strings.mail.sortDescending];
+  const sortEntries: PopupEntry[] = [
+    {
+      kind: "submenu",
+      id: "sort-by",
+      label: strings.contextMenu.sortBy,
+      entries: sorts.map((sort) => ({
+        kind: "action",
+        id: `sort-${sort.id}`,
+        label: sort.label,
+        role: "menuitemradio",
+        checked: sortFamily(listSort) === sort.id,
+        onSelect: () => onListSort(sort.id),
+      })),
+    },
+    {
+      kind: "action",
+      id: "sort-newest",
+      label: directionLabels[0],
+      role: "menuitemradio",
+      checked: !reversed,
+      onSelect: () => {
+        if (reversed) onListSort(toggleSortDirection(listSort));
+      },
+    },
+    {
+      kind: "action",
+      id: "sort-oldest",
+      label: directionLabels[1],
+      role: "menuitemradio",
+      checked: reversed,
+      onSelect: () => {
+        if (!reversed) onListSort(toggleSortDirection(listSort));
+      },
+    },
+    { kind: "separator" },
+  ];
+  const selectionEntries: PopupEntry[] = selection
+    ? [
+        {
+          kind: "action",
+          id: "select-all",
+          label: strings.contextMenu.selectAll,
+          icon: ListChecks,
+          disabled: bulkBusy,
+          onSelect: selection.onSelectAll,
+        },
+        {
+          kind: "action",
+          id: "select-unread",
+          label: strings.contextMenu.selectUnread,
+          icon: Mail,
+          disabled: bulkBusy || selection.selectUnreadDisabled,
+          onSelect: selection.onSelectUnread,
+        },
+        // A mixed selection offers both sides of read, star, and pin.
+        ...(selection.anySelectedUnread
+          ? [
+              {
+                kind: "action" as const,
+                id: "mark-read",
+                label: strings.reader.markRead,
+                icon: MailOpen,
+                disabled: selectionDisabled,
+                onSelect: selection.onMarkRead,
+              },
+            ]
+          : []),
+        ...(selection.anySelectedRead || !selection.anySelectedUnread
+          ? [
+              {
+                kind: "action" as const,
+                id: "mark-unread",
+                label: strings.reader.markUnread,
+                icon: Mail,
+                disabled: selectionDisabled,
+                onSelect: selection.onMarkUnread,
+              },
+            ]
+          : []),
+        ...(selection.anySelectedUnstarred
+          ? [
+              {
+                kind: "action" as const,
+                id: "star",
+                label: strings.reader.addStar,
+                icon: Star,
+                disabled: selectionDisabled,
+                onSelect: selection.onStar,
+              },
+            ]
+          : []),
+        ...(selection.anySelectedStarred || !selection.anySelectedUnstarred
+          ? [
+              {
+                kind: "action" as const,
+                id: "unstar",
+                label: strings.reader.removeStar,
+                icon: Star,
+                disabled: selectionDisabled,
+                onSelect: selection.onUnstar,
+              },
+            ]
+          : []),
+        // Pin shows while any checked message is unpinned (or nothing is checked).
+        ...(!selection.pinDisabled || selection.unpinDisabled
+          ? [
+              {
+                kind: "action" as const,
+                id: "pin-selected",
+                label: strings.mail.pinSelected,
+                icon: Pin,
+                disabled: selectionDisabled || selection.pinDisabled,
+                onSelect: selection.onPin,
+              },
+            ]
+          : []),
+        // Unpin shows while any checked message is pinned.
+        ...(!selection.unpinDisabled
+          ? [
+              {
+                kind: "action" as const,
+                id: "unpin-selected",
+                label: strings.mail.unpinSelected,
+                icon: PinOff,
+                disabled: selectionDisabled || selection.unpinDisabled,
+                onSelect: selection.onUnpin,
+              },
+            ]
+          : []),
+        selection.mailboxRole === "junk"
+          ? {
+              kind: "action" as const,
+              id: "not-junk",
+              label: strings.reader.notJunk,
+              icon: Inbox,
+              disabled: selectionDisabled,
+              onSelect: selection.onNotJunk,
+            }
+          : {
+              kind: "action" as const,
+              id: "junk",
+              label: strings.reader.junk,
+              icon: ShieldAlert,
+              disabled: selectionDisabled,
+              onSelect: selection.onJunk,
+            },
+        ...(selection.moveDestinations.length > 0
+          ? [
+              {
+                kind: "submenu" as const,
+                id: "bulk-move",
+                label: strings.contextMenu.moveTo,
+                entries: selection.moveDestinations.map((mailbox) => ({
+                  kind: "action" as const,
+                  id: `bulk-move-${mailbox.id}`,
+                  label: mailbox.name,
+                  icon: folderIcons[mailbox.role],
+                  ariaLabel: strings.contextMenu.moveToFolder(mailbox.name),
+                  disabled: selectionDisabled,
+                  onSelect: () => selection.onMoveTo(mailbox.id),
+                })),
+              },
+              {
+                kind: "submenu" as const,
+                id: "bulk-copy",
+                label: strings.contextMenu.copyTo,
+                entries: selection.moveDestinations.map((mailbox) => ({
+                  kind: "action" as const,
+                  id: `bulk-copy-${mailbox.id}`,
+                  label: mailbox.name,
+                  icon: folderIcons[mailbox.role],
+                  ariaLabel: strings.contextMenu.copyToFolder(mailbox.name),
+                  disabled: selectionDisabled,
+                  onSelect: () => selection.onCopyTo(mailbox.id),
+                })),
+              },
+            ]
+          : []),
+        {
+          kind: "action",
+          id: "save-files",
+          label: strings.reader.saveSelectedFiles,
+          icon: Download,
+          disabled: selectionDisabled || selection.saveFilesDisabled,
+          onSelect: selection.onSaveFiles,
+        },
+        {
+          kind: "action",
+          id: "save-messages",
+          label: strings.reader.saveSelectedMessages,
+          icon: FileDown,
+          disabled: selectionDisabled,
+          onSelect: selection.onSaveMessages,
+        },
+        {
+          kind: "action",
+          id: "print-selected",
+          label: strings.reader.printSelected,
+          icon: Printer,
+          disabled: selectionDisabled,
+          onSelect: selection.onPrint,
+        },
+        {
+          kind: "action",
+          id: "copy-selected",
+          label: strings.reader.copySelectedText,
+          icon: Copy,
+          disabled: selectionDisabled,
+          onSelect: selection.onCopyText,
+        },
+        {
+          kind: "action",
+          id: "forward-selected",
+          label: strings.reader.forwardSelected,
+          icon: Forward,
+          disabled: selectionDisabled,
+          onSelect: selection.onForward,
+        },
+        {
+          kind: "action",
+          id: "snooze-selected",
+          label: strings.mail.snoozeSelected,
+          icon: Clock,
+          disabled: selectionDisabled,
+          onSelect: selection.onSnooze,
+        },
+        { kind: "separator" },
+      ]
+    : [];
+  const conversationEntries: PopupEntry[] =
+    onExpandConversations && onCollapseConversations
+      ? [
+          {
+            kind: "action",
+            id: "expand-conversations",
+            label: strings.mail.expandConversations,
+            icon: ChevronsUpDown,
+            disabled: bulkBusy,
+            onSelect: onExpandConversations,
+          },
+          {
+            kind: "action",
+            id: "collapse-conversations",
+            label: strings.mail.collapseConversations,
+            icon: ChevronsDownUp,
+            disabled: bulkBusy,
+            onSelect: onCollapseConversations,
+          },
+          { kind: "separator" },
+        ]
+      : [];
+  const navEntries: PopupEntry[] = [
+    {
+      kind: "action",
+      id: "go-to-inbox",
+      label: strings.mail.goToInbox,
+      icon: Inbox,
+      disabled: goToInboxDisabled || bulkBusy,
+      onSelect: onGoToInbox,
+    },
+    {
+      kind: "action",
+      id: "go-to-sent",
+      label: strings.mail.goToSent,
+      icon: Send,
+      disabled: goToSentDisabled || bulkBusy,
+      onSelect: onGoToSent,
+    },
+    {
+      kind: "action",
+      id: "next-unread",
+      label: strings.mail.nextUnread,
+      icon: Mail,
+      disabled: nextUnreadDisabled || bulkBusy,
+      onSelect: onNextUnread,
+    },
+    {
+      kind: "action",
+      id: "next-unread-mailbox",
+      label: strings.mail.nextUnreadMailbox,
+      icon: Inbox,
+      disabled: nextUnreadMailboxDisabled || bulkBusy,
+      onSelect: onNextUnreadMailbox,
+    },
+    {
+      kind: "action",
+      id: "previous-unread-mailbox",
+      label: strings.mail.previousUnreadMailbox,
+      icon: Inbox,
+      disabled: previousUnreadMailboxDisabled || bulkBusy,
+      onSelect: onPreviousUnreadMailbox,
+    },
+    {
+      kind: "action",
+      id: "mark-all-read",
+      label: strings.mail.markAllRead,
+      icon: MailOpen,
+      disabled: bulkBusy,
+      onSelect: onMarkAllRead,
+    },
+  ];
+  const moreEntries: PopupEntry[] = [
+    ...(!submittedQuery && !(selecting && selection) ? sortEntries : []),
+    ...selectionEntries,
+    ...conversationEntries,
+    ...navEntries,
+  ];
+  // Mailbox More is fixed-placed too: the pane clips absolute menus.
+  useLayoutEffect(() => {
+    if (!mailboxMoreOpen) return;
+    const root = mailboxMoreRef.current;
+    const trigger = root?.querySelector<HTMLElement>(
+      "button[aria-haspopup='menu']",
+    );
+    const menu = root?.querySelector<HTMLElement>("#mailbox-more-menu");
+    if (!trigger || !menu) return;
+    const update = () => placeAnchoredMenu(menu, trigger);
+    update();
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, [mailboxMoreOpen, mailboxMoreRef]);
   return (
     <>
       <div className="pane-heading">
@@ -205,17 +550,22 @@ export function MessagePaneHeader({
           {accountLabel ? <p className="pane-account">{accountLabel}</p> : null}
           <h1>{heading}</h1>
           <small>
-            {[
-              unreadCount ? strings.mail.unreadCount(unreadCount) : null,
-              folderTotal != null && folderTotal > shownCount && shownCount > 0
-                ? strings.mail.loadedOfTotal(shownCount, folderTotal)
-                : strings.mail.itemCount(shownCount),
-            ]
-              .filter(Boolean)
-              .join(" · ")}
+            {selecting && selection
+              ? strings.mail.selectedCount(selection.count)
+              : [
+                  unreadCount ? strings.mail.unreadCount(unreadCount) : null,
+                  folderTotal != null &&
+                  folderTotal > shownCount &&
+                  shownCount > 0
+                    ? strings.mail.loadedOfTotal(shownCount, folderTotal)
+                    : strings.mail.itemCount(shownCount),
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
           </small>
         </span>
         <div className="pane-heading-actions">
+          {activeLocalView ? localAction : null}
           {!activeLocalView ? (
             <>
               <button
@@ -251,348 +601,10 @@ export function MessagePaneHeader({
                     className="mailbox-more-menu app-menu"
                     role="menu"
                     aria-label={strings.mail.moreMailboxActions}
-                    onKeyDownCapture={moveMenuFocus}
+                    onKeyDown={moveMenuFocus}
+                    onScroll={(event) => syncScrollCue(event.currentTarget)}
                   >
-                    {!submittedQuery ? (
-                      <>
-                        <div
-                          role="group"
-                          aria-labelledby="mailbox-sort-heading"
-                        >
-                          <div
-                            id="mailbox-sort-heading"
-                            className="context-menu-heading"
-                          >
-                            {strings.mail.sortMessages}
-                          </div>
-                          {sorts.map((sort) => (
-                            <button
-                              key={sort.id}
-                              type="button"
-                              role="menuitemradio"
-                              aria-checked={sortFamily(listSort) === sort.id}
-                              onClick={() => onListSort(sort.id)}
-                            >
-                              {sort.label}
-                            </button>
-                          ))}
-                          <button
-                            type="button"
-                            role="menuitemcheckbox"
-                            aria-checked={sortIsReversed(listSort)}
-                            onClick={() =>
-                              onListSort(toggleSortDirection(listSort))
-                            }
-                          >
-                            <ArrowUpNarrowWide aria-hidden="true" />
-                            {sortFamily(listSort) === "date"
-                              ? strings.mail.sortOldest
-                              : sortFamily(listSort) === "size"
-                                ? strings.mail.sortSmallest
-                                : strings.mail.sortDescending}
-                          </button>
-                        </div>
-                        <div
-                          className="context-menu-separator"
-                          role="separator"
-                        />
-                      </>
-                    ) : null}
-                    {selecting && selection ? (
-                      <>
-                        <button
-                          type="button"
-                          role="menuitem"
-                          disabled={bulkBusy}
-                          onClick={selection.onSelectAll}
-                        >
-                          <ListChecks aria-hidden="true" />
-                          {strings.contextMenu.selectAll}
-                        </button>
-                        <button
-                          type="button"
-                          role="menuitem"
-                          disabled={bulkBusy || selection.selectUnreadDisabled}
-                          onClick={selection.onSelectUnread}
-                        >
-                          <Mail aria-hidden="true" />
-                          {strings.contextMenu.selectUnread}
-                        </button>
-                        <button
-                          type="button"
-                          role="menuitem"
-                          disabled={selectionDisabled}
-                          onClick={selection.onMarkRead}
-                        >
-                          <MailOpen aria-hidden="true" />
-                          {strings.reader.markRead}
-                        </button>
-                        <button
-                          type="button"
-                          role="menuitem"
-                          disabled={selectionDisabled}
-                          onClick={selection.onMarkUnread}
-                        >
-                          <Mail aria-hidden="true" />
-                          {strings.reader.markUnread}
-                        </button>
-                        <button
-                          type="button"
-                          role="menuitem"
-                          disabled={selectionDisabled}
-                          onClick={selection.onStar}
-                        >
-                          <Star aria-hidden="true" />
-                          {strings.reader.addStar}
-                        </button>
-                        <button
-                          type="button"
-                          role="menuitem"
-                          disabled={selectionDisabled}
-                          onClick={selection.onUnstar}
-                        >
-                          <Star aria-hidden="true" fill="currentColor" />
-                          {strings.reader.removeStar}
-                        </button>
-                        <button
-                          type="button"
-                          role="menuitem"
-                          disabled={selectionDisabled || selection.pinDisabled}
-                          onClick={selection.onPin}
-                        >
-                          <Pin aria-hidden="true" />
-                          {strings.mail.pinSelected}
-                        </button>
-                        <button
-                          type="button"
-                          role="menuitem"
-                          disabled={
-                            selectionDisabled || selection.unpinDisabled
-                          }
-                          onClick={selection.onUnpin}
-                        >
-                          <PinOff aria-hidden="true" />
-                          {strings.mail.unpinSelected}
-                        </button>
-                        {selection.mailboxRole === "junk" ? (
-                          <button
-                            type="button"
-                            role="menuitem"
-                            disabled={selectionDisabled}
-                            onClick={selection.onNotJunk}
-                          >
-                            <Inbox aria-hidden="true" />
-                            {strings.reader.notJunk}
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            role="menuitem"
-                            disabled={selectionDisabled}
-                            onClick={selection.onJunk}
-                          >
-                            <ShieldAlert aria-hidden="true" />
-                            {strings.reader.junk}
-                          </button>
-                        )}
-                        {selection.moveDestinations.length > 0 ? (
-                          <div role="group" aria-labelledby="bulk-move-heading">
-                            <div
-                              id="bulk-move-heading"
-                              className="context-menu-heading"
-                            >
-                              {strings.contextMenu.moveTo}
-                            </div>
-                            {selection.moveDestinations.map((mailbox) => {
-                              const Icon = folderIcons[mailbox.role];
-                              return (
-                                <button
-                                  key={mailbox.id}
-                                  type="button"
-                                  role="menuitem"
-                                  disabled={selectionDisabled}
-                                  aria-label={strings.contextMenu.moveToFolder(
-                                    mailbox.name,
-                                  )}
-                                  onClick={() => selection.onMoveTo(mailbox.id)}
-                                >
-                                  <Icon aria-hidden="true" />
-                                  {mailbox.name}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        ) : null}
-                        {selection.moveDestinations.length > 0 ? (
-                          <div role="group" aria-labelledby="bulk-copy-heading">
-                            <div
-                              id="bulk-copy-heading"
-                              className="context-menu-heading"
-                            >
-                              {strings.contextMenu.copyTo}
-                            </div>
-                            {selection.moveDestinations.map((mailbox) => {
-                              const Icon = folderIcons[mailbox.role];
-                              return (
-                                <button
-                                  key={`copy-${mailbox.id}`}
-                                  type="button"
-                                  role="menuitem"
-                                  disabled={selectionDisabled}
-                                  aria-label={strings.contextMenu.copyToFolder(
-                                    mailbox.name,
-                                  )}
-                                  onClick={() => selection.onCopyTo(mailbox.id)}
-                                >
-                                  <Icon aria-hidden="true" />
-                                  {mailbox.name}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        ) : null}
-                        <button
-                          type="button"
-                          role="menuitem"
-                          disabled={
-                            selectionDisabled || selection.saveFilesDisabled
-                          }
-                          onClick={selection.onSaveFiles}
-                        >
-                          <Download aria-hidden="true" />
-                          {strings.reader.saveSelectedFiles}
-                        </button>
-                        <button
-                          type="button"
-                          role="menuitem"
-                          disabled={selectionDisabled}
-                          onClick={selection.onSaveMessages}
-                        >
-                          <FileDown aria-hidden="true" />
-                          {strings.reader.saveSelectedMessages}
-                        </button>
-                        <button
-                          type="button"
-                          role="menuitem"
-                          disabled={selectionDisabled}
-                          onClick={selection.onPrint}
-                        >
-                          <Printer aria-hidden="true" />
-                          {strings.reader.printSelected}
-                        </button>
-                        <button
-                          type="button"
-                          role="menuitem"
-                          disabled={selectionDisabled}
-                          onClick={selection.onCopyText}
-                        >
-                          <Copy aria-hidden="true" />
-                          {strings.reader.copySelectedText}
-                        </button>
-                        <button
-                          type="button"
-                          role="menuitem"
-                          disabled={selectionDisabled}
-                          onClick={selection.onForward}
-                        >
-                          <Forward aria-hidden="true" />
-                          {strings.reader.forwardSelected}
-                        </button>
-                        <button
-                          type="button"
-                          role="menuitem"
-                          disabled={selectionDisabled}
-                          onClick={selection.onSnooze}
-                        >
-                          <Clock aria-hidden="true" />
-                          {strings.mail.snoozeSelected}
-                        </button>
-                        <div
-                          className="context-menu-separator"
-                          role="separator"
-                        />
-                      </>
-                    ) : null}
-                    {onExpandConversations && onCollapseConversations ? (
-                      <>
-                        <button
-                          type="button"
-                          role="menuitem"
-                          onClick={onExpandConversations}
-                          disabled={bulkBusy}
-                        >
-                          <ChevronsUpDown aria-hidden="true" />
-                          {strings.mail.expandConversations}
-                        </button>
-                        <button
-                          type="button"
-                          role="menuitem"
-                          onClick={onCollapseConversations}
-                          disabled={bulkBusy}
-                        >
-                          <ChevronsDownUp aria-hidden="true" />
-                          {strings.mail.collapseConversations}
-                        </button>
-                        <div
-                          className="context-menu-separator"
-                          role="separator"
-                        />
-                      </>
-                    ) : null}
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={onGoToInbox}
-                      disabled={goToInboxDisabled || bulkBusy}
-                    >
-                      <Inbox aria-hidden="true" />
-                      {strings.mail.goToInbox}
-                    </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={onGoToSent}
-                      disabled={goToSentDisabled || bulkBusy}
-                    >
-                      <Send aria-hidden="true" />
-                      {strings.mail.goToSent}
-                    </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={onNextUnread}
-                      disabled={nextUnreadDisabled || bulkBusy}
-                    >
-                      <Mail aria-hidden="true" />
-                      {strings.mail.nextUnread}
-                    </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={onNextUnreadMailbox}
-                      disabled={nextUnreadMailboxDisabled || bulkBusy}
-                    >
-                      <Inbox aria-hidden="true" />
-                      {strings.mail.nextUnreadMailbox}
-                    </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={onPreviousUnreadMailbox}
-                      disabled={previousUnreadMailboxDisabled || bulkBusy}
-                    >
-                      <Inbox aria-hidden="true" />
-                      {strings.mail.previousUnreadMailbox}
-                    </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={onMarkAllRead}
-                      disabled={bulkBusy}
-                    >
-                      <MailOpen aria-hidden="true" />
-                      {strings.mail.markAllRead}
-                    </button>
+                    <PopupEntries entries={moreEntries} />
                   </div>
                 ) : null}
               </div>
@@ -609,7 +621,8 @@ export function MessagePaneHeader({
           ) : null}
         </div>
       </div>
-      {!activeLocalView && !submittedQuery ? (
+      {/* Select mode swaps this band for the bulk bar in the same slot. */}
+      {!activeLocalView && !submittedQuery && !selecting ? (
         <div className="mailbox-filter">
           <div className="mailbox-filter-control">
             <div
@@ -717,7 +730,6 @@ export function BulkBar({
       role="toolbar"
       aria-label={strings.mail.selectedCount(selectedCount)}
     >
-      <strong>{strings.mail.selectedCount(selectedCount)}</strong>
       <button type="button" disabled={disabled} onClick={onArchive}>
         <Archive aria-hidden="true" /> {archiveLabel}
       </button>

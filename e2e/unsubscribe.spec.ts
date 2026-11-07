@@ -1,6 +1,7 @@
 import type { Page } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { attachArtifacts, ipcCommands } from "./ipc-artifact";
+import { revealMenuItem } from "./menu-reveal";
 import { installMockIpc } from "./mock-ipc";
 
 // Failure modes covered here:
@@ -21,6 +22,8 @@ async function openMore(page: Page, query: string) {
     page.getByRole("heading", { name: "Weekend plans" }),
   ).toBeVisible();
   await page.getByRole("button", { name: "More actions" }).click();
+  // Unsubscribe sits in the Sender rules submenu when offered.
+  if (query.includes("unsub=")) await revealMenuItem(page, "Unsubscribe");
 }
 
 test("one-click asks with the host first, then sends only ids", async ({

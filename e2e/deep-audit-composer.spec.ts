@@ -132,11 +132,13 @@ for (const density of ["comfortable", "compact"] as const) {
     await page.evaluate(() => window.dispatchEvent(new Event("blur")));
     await expect(page.getByText(/Draft saved/).first()).toBeVisible();
 
-    // Send menu, shortcut hint, and discard affordances are unchanged.
+    // Send menu and discard affordances are unchanged; the chord lives in the title.
     await expect(
       page.getByRole("button", { name: "Send options" }),
     ).toBeEnabled();
-    await expect(page.locator(".send-kbd-hint")).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Send", exact: true }),
+    ).toHaveAttribute("title", /\(.+\)/);
     await expect(page.getByRole("button", { name: "Discard" })).toBeVisible();
     await page.getByRole("button", { name: "Send options" }).click();
     // Visible is not enough: each item must be the element a pointer hits.

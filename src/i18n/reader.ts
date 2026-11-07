@@ -61,8 +61,6 @@ export const reader = {
   newerInConversation: "Newer in conversation",
   unreadInConversation: "Unread in conversation",
   conversationMessages: "In this conversation",
-  conversationMessage: (subject: string, sender: string, when: string) =>
-    `${subject} from ${sender}, ${when}`,
   earlierMessageMissing: "That earlier message is not on this computer.",
   archive: "Archive",
   archiveConversation: "Archive conversation",
@@ -252,7 +250,7 @@ export const reader = {
   inviteNoRsvp:
     "Postal Snap shows invitations but does not send replies. Answer from your calendar or by email.",
   blockedImages: (count: number) =>
-    `${count} remote image${count === 1 ? "" : "s"} blocked for privacy.`,
+    `${count} remote image${count === 1 ? "" : "s"} blocked`,
   blockedImagesDetail:
     "Known trackers stay blocked if you load them, but other pictures may tell the sender you opened this message.",
 } as const;

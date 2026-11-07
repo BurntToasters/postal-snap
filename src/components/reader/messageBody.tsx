@@ -348,16 +348,26 @@ export function MessageBody({
         <div className="remote-content-banner" role="status" aria-live="polite">
           <Image aria-hidden="true" />
           <span>
-            {strings.reader.blockedImages(remainingBlockedImages)}{" "}
-            {strings.reader.blockedImagesDetail}
+            {strings.reader.blockedImages(remainingBlockedImages)}
             {sanitized?.blockedImageHosts.length ? (
-              <strong className="remote-image-hosts">
-                {" "}
-                {sanitized.blockedImageHosts.join(", ")}
-              </strong>
+              <>
+                {" · "}
+                <strong className="remote-image-hosts">
+                  {sanitized.blockedImageHosts.join(", ")}
+                </strong>
+              </>
             ) : null}
+            <span className="visually-hidden">
+              {" "}
+              {strings.reader.blockedImagesDetail}
+            </span>
           </span>
-          <button type="button" onClick={onLoadImages} disabled={loadingImages}>
+          <button
+            type="button"
+            onClick={onLoadImages}
+            disabled={loadingImages}
+            title={strings.reader.blockedImagesDetail}
+          >
             {loadingImages
               ? strings.common.loading
               : currentLoadedHtml

@@ -1,6 +1,7 @@
 import type { Page } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { revealMenuItem } from "./menu-reveal";
 
 // Deep audit for reader findings: More-menu viewport clamping at 620x540
 // with 200% text, Escape/focus behavior, icon-button targets, reply names,
@@ -72,6 +73,7 @@ test("more menu stays inside a 1280 viewport at 100%", async ({ page }) => {
   expect(box!.x).toBeGreaterThanOrEqual(0);
   expect(box!.x + box!.width).toBeLessThanOrEqual(1280);
   expect(box!.y + box!.height).toBeLessThanOrEqual(800);
+  await page.getByRole("menuitem", { name: "Move to", exact: true }).click();
   await expect(menu.getByRole("group", { name: "Move to" })).toBeVisible();
 });
 
@@ -90,17 +92,18 @@ test("Escape closes the more menu and restores trigger focus", async ({
   ).toBeFocused();
 });
 
-test("icon-only reader actions keep a 44px target at comfortable 100%", async ({
+test("icon-only reader actions keep the target-size hit area at 100%", async ({
   page,
 }) => {
   await openWeekend(page, "theme=light");
   const bar = page.locator(".reader-actions");
+  const target = await targetSize(page);
   for (const name of ["Add star", "Archive", "Move to trash", "More actions"]) {
     const box = await bar
       .getByRole("button", { name, exact: true })
       .boundingBox();
     expect(box).not.toBeNull();
-    expect(box!.width).toBeGreaterThanOrEqual(44);
+    expect(box!.width).toBeGreaterThanOrEqual(target);
   }
 });
 
@@ -128,6 +131,7 @@ test("reader snooze Escape closes and returns focus to the trigger", async ({
 }) => {
   await openWeekend(page, "theme=light");
   await page.getByRole("button", { name: "More actions" }).click();
+  await revealMenuItem(page, "Snooze");
   await page.getByRole("menuitem", { name: "Snooze", exact: true }).click();
   const panel = page.locator(".snooze-panel");
   await expect(panel).toBeVisible();
@@ -147,6 +151,7 @@ test("bulk snooze Escape closes and returns focus to the trigger", async ({
   await page.getByRole("option", { name: /Weekend plans/i }).click();
   await expect(page.getByRole("toolbar", { name: "1 selected" })).toBeVisible();
   await page.getByRole("button", { name: "More mailbox actions" }).click();
+  await revealMenuItem(page, "Snooze selected");
   await page.getByRole("menuitem", { name: "Snooze selected" }).click();
   const panel = page.locator(".snooze-panel");
   await expect(panel).toBeVisible();
@@ -156,3 +161,14 @@ test("bulk snooze Escape closes and returns focus to the trigger", async ({
     page.getByRole("button", { name: "More mailbox actions" }),
   ).toBeFocused();
 });
+
+async function targetSize(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const probe = document.createElement("i");
+    probe.style.cssText = "position:fixed;width:var(--target-size)";
+    document.body.append(probe);
+    const width = probe.getBoundingClientRect().width;
+    probe.remove();
+    return width;
+  });
+}

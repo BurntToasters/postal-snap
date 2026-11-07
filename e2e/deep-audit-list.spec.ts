@@ -32,6 +32,20 @@ const selectionAxeConfigs = [
     scale: 1,
   },
   {
+    name: "1280-normal-100",
+    width: 1280,
+    height: 800,
+    density: "normal",
+    scale: 1,
+  },
+  {
+    name: "1280-normal-200",
+    width: 1280,
+    height: 800,
+    density: "normal",
+    scale: 2,
+  },
+  {
     name: "1280-compact-200",
     width: 1280,
     height: 800,

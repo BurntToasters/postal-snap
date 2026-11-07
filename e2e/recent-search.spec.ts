@@ -62,3 +62,30 @@ test("a recent search can be chosen again and then cleared", async ({
       ]),
     );
 });
+
+test("the first recent search is the hit target at 900px and 1280px", async ({
+  page,
+}) => {
+  // B1: the recent menu used to be clipped by the toolbar's overflow box.
+  for (const width of [900, 1280]) {
+    await page.setViewportSize({ width, height: 820 });
+    await page.goto("/");
+    const search = page.getByRole("searchbox", { name: "Search mail" });
+    await search.fill("Picnic");
+    await search.press("Enter");
+    await search.fill("");
+    await search.blur();
+    await search.focus();
+    const first = page.getByRole("menuitem", { name: "Picnic", exact: true });
+    await expect(first).toBeVisible();
+    const hit = await first.evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      const top = document.elementFromPoint(
+        r.x + r.width / 2,
+        r.y + r.height / 2,
+      );
+      return el.contains(top);
+    });
+    expect(hit, `first recent item hit at ${width}px`).toBe(true);
+  }
+});

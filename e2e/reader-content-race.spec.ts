@@ -6,6 +6,7 @@ import { resolve } from "node:path";
 import { expect, test } from "@playwright/test";
 import { installMockIpc } from "./mock-ipc";
 import { recordIpc, recordedCalls } from "./ipc-recorder";
+import { revealMenuItem } from "./menu-reveal";
 
 test.use({ trace: "off" });
 
@@ -144,6 +145,8 @@ test.afterEach(async ({ page }, testInfo) => {
 
 const matrix = [
   { density: "comfortable", scale: 1 },
+  { density: "normal", scale: 1 },
+  { density: "normal", scale: 2 },
   { density: "compact", scale: 1 },
   { density: "comfortable", scale: 2 },
   { density: "compact", scale: 2 },
@@ -233,7 +236,9 @@ for (const { density, scale } of matrix) {
     await page.goto(`/?trashThread=1&density=${density}&scale=${scale}`);
     await page.getByRole("button", { name: /^Trash/ }).click();
     await page.getByRole("treeitem", { name: /Old receipt/i }).click();
+    await revealMenuItem(page, "Delete conversation");
     await page.getByRole("button", { name: "More actions" }).click();
+    await revealMenuItem(page, "Delete conversation");
     await page
       .getByRole("menuitem", { name: "Delete conversation", exact: true })
       .click();

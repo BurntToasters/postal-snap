@@ -154,6 +154,23 @@ export async function registerMockMessages(page: Page): Promise<void> {
             ? false
             : olderSummary.isRead,
       },
+      // `?threadThree=1`: a third reply in the same thread, oldest of the three.
+      ...(params.has("threadThree")
+        ? [
+            {
+              ...summary,
+              id: 31,
+              uid: 51,
+              messageId: "<weekend-third@example.com>",
+              subject: "Re: Weekend plans",
+              senderName: "Pat",
+              senderAddress: "pat@example.com",
+              receivedAt: "2026-08-16T15:00:00Z",
+              threadRoot: "<weekend@example.com>",
+              isRead: true,
+            },
+          ]
+        : []),
     ];
     // `?rowMix=1`: pinned, thread, urgent, files, invitation, across days.
     const rowMixItems = () => [

@@ -175,10 +175,14 @@ test("is:important lists high-importance mail", async ({ page }) => {
 
 test("search tips open and close from the keyboard", async ({ page }) => {
   await page.goto("/");
-  const tips = page.getByRole("button", { name: "Search tips", exact: true });
-  await tips.focus();
+  const scope = page.locator(".search-scope");
+  await scope.focus();
   await page.keyboard.press("Enter");
-  await expect(tips).toHaveAttribute("aria-expanded", "true");
+  await page.keyboard.press("End");
+  await expect(
+    page.getByRole("menuitem", { name: /^Search tips/ }),
+  ).toBeFocused();
+  await page.keyboard.press("Enter");
   const panel = page.getByRole("region", { name: "Search tips" });
   await expect(panel).toBeVisible();
   for (const syntax of [
@@ -211,21 +215,24 @@ test("search tips open and close from the keyboard", async ({ page }) => {
   await page.screenshot({ path: "test-results/search-operators-tips.png" });
   await page.keyboard.press("Escape");
   await expect(panel).toHaveCount(0);
-  await expect(tips).toBeFocused();
-  await expect(tips).toHaveAttribute("aria-expanded", "false");
+  await expect(scope).toBeFocused();
 });
 
 test("search tips close from the Close button and outside clicks", async ({
   page,
 }) => {
   await page.goto("/");
-  const tips = page.getByRole("button", { name: "Search tips", exact: true });
-  await tips.click();
+  const scope = page.locator(".search-scope");
+  const openTips = async () => {
+    await scope.click();
+    await page.getByRole("menuitem", { name: /^Search tips/ }).click();
+  };
+  await openTips();
   const panel = page.getByRole("region", { name: "Search tips" });
   await panel.getByRole("button", { name: "Close search tips" }).click();
   await expect(panel).toHaveCount(0);
-  await expect(tips).toBeFocused();
-  await tips.click();
+  await expect(scope).toBeFocused();
+  await openTips();
   await expect(panel).toBeVisible();
   await page.mouse.click(5, 300);
   await expect(panel).toHaveCount(0);

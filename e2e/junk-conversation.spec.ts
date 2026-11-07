@@ -1,6 +1,7 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { revealMenuItem } from "./menu-reveal";
 
 // Failure modes covered here:
 // 1. A single message has no conversation junk action.
@@ -34,6 +35,7 @@ test("mark conversation as junk files the loaded thread", async ({ page }) => {
     page.getByRole("heading", { name: "Weekend plans" }),
   ).toBeVisible();
   await page.getByRole("button", { name: "More actions" }).click();
+  await revealMenuItem(page, "Mark conversation as junk");
   await page
     .getByRole("menuitem", { name: "Mark conversation as junk" })
     .click();

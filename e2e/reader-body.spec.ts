@@ -1,5 +1,6 @@
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { revealMenuItem } from "./menu-reveal";
 
 test.beforeEach(async ({ page }) => installMockIpc(page));
 
@@ -107,8 +108,11 @@ test.describe("macOS print", () => {
     page,
   }) => {
     await page.goto("/");
+    await revealMenuItem(page, "Print message");
     await page.getByRole("option", { name: /Weekend plans/i }).click();
+    await revealMenuItem(page, "Print message");
     await page.getByRole("button", { name: "More actions" }).click();
+    await revealMenuItem(page, "Print message");
     await page.getByRole("menuitem", { name: "Print message" }).click();
 
     const host = page.locator("body > .print-host");

@@ -1,9 +1,9 @@
 /* Main mail window */
 .mail-shell {
-  --rendered-folder-width: clamp(210px, var(--folder-pane-width, 248px), 26vw);
+  --rendered-folder-width: clamp(210px, var(--folder-pane-width, 240px), 26vw);
   --rendered-message-width: clamp(
     240px,
-    var(--message-pane-width, 390px),
+    var(--message-pane-width, 380px),
     calc((100vw - var(--rendered-folder-width) - 10px) * 0.55)
   );
   --mail-body-height: max(
@@ -31,7 +31,7 @@
     var(--local-row-inline) + var(--local-icon) + var(--local-gap)
   );
   --rendered-reader-height: min(
-    var(--reader-pane-height, 360px),
+    var(--reader-pane-height, 420px),
     max(
       0px,
       calc(

@@ -1,6 +1,7 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { revealMenuItem } from "./menu-reveal";
 
 // Failure modes covered here:
 // 1. A sender with no Junk rule still offers Block sender.
@@ -19,7 +20,9 @@ test.afterEach(async ({ page }, testInfo: TestInfo) => {
 test("an open sender can still be blocked", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("option", { name: /Weekend plans/i }).click();
+  await revealMenuItem(page, "Block sender");
   await page.getByRole("button", { name: "More actions" }).click();
+  await revealMenuItem(page, "Block sender");
   await expect(
     page.getByRole("menuitem", { name: "Block sender", exact: true }),
   ).toBeVisible();
@@ -31,6 +34,7 @@ test("an open sender can still be blocked", async ({ page }) => {
 test("unblock sender removes the Junk rule", async ({ page }) => {
   await page.goto("/?blockedSender=1");
   await page.getByRole("option", { name: /Weekend plans/i }).click();
+  await revealMenuItem(page, "Unblock sender");
   await page.getByRole("button", { name: "More actions" }).click();
   page.once("dialog", (dialog) => {
     expect(dialog.message()).toContain(
@@ -38,6 +42,7 @@ test("unblock sender removes the Junk rule", async ({ page }) => {
     );
     void dialog.accept();
   });
+  await revealMenuItem(page, "Unblock sender");
   await page
     .getByRole("menuitem", { name: "Unblock sender", exact: true })
     .click();
@@ -48,7 +53,9 @@ test("unblock sender removes the Junk rule", async ({ page }) => {
     () => window.__POSTAL_SNAP_TEST__?.rules ?? [],
   );
   expect(rules).toEqual([]);
+  await revealMenuItem(page, "Block sender");
   await page.getByRole("button", { name: "More actions" }).click();
+  await revealMenuItem(page, "Block sender");
   await expect(
     page.getByRole("menuitem", { name: "Block sender", exact: true }),
   ).toBeVisible();

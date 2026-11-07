@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { strings } from "../../i18n";
 
 export type SettingsTab =
   | "appearance"
@@ -53,20 +54,37 @@ export function SettingsGroup({ children }: { children: ReactNode }) {
   return <div className="settings-group">{children}</div>;
 }
 
+// One short sentence visible; the rest sits behind "Learn more".
+export function HelpText({ short, more }: { short: string; more?: string }) {
+  return (
+    <>
+      <small>{short}</small>
+      {more ? (
+        <details className="help-more">
+          <summary>{strings.settings.learnMore}</summary>
+          <small>{more}</small>
+        </details>
+      ) : null}
+    </>
+  );
+}
+
 export function SettingRow({
   title,
   help,
+  helpMore,
   children,
 }: {
   title: string;
   help?: string;
+  helpMore?: string;
   children: ReactNode;
 }) {
   return (
     <label className="settings-row">
       <span>
         <strong>{title}</strong>
-        {help ? <small>{help}</small> : null}
+        {help ? <HelpText short={help} more={helpMore} /> : null}
       </span>
       {children}
     </label>

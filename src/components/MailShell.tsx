@@ -1,4 +1,5 @@
 import { outboxDetail } from "../outboxDetail";
+import { watchDrawerDrag } from "../messageDrag";
 import {
   useCallback,
   useEffect,
@@ -19,10 +20,12 @@ import {
   CONTEXT_ACTION_EVENT,
   addressSearchQuery,
   subjectSearchQuery,
+  type ContextMenuActionDetail,
 } from "../contextMenu";
+import { printSelectedMessages } from "../printConversation";
 import { strings } from "../i18n";
 import { matchesListFilter, type MessageListFilter } from "../listFilter";
-import type { MessageListSort } from "../listSort";
+import { sortFamily, type MessageListSort } from "../listSort";
 import { mailboxListView, rememberMailboxView } from "../mailboxView";
 import { folderLabel, folderParentLabel } from "../i18n/mail";
 import { useAppStore } from "../store";
@@ -37,7 +40,12 @@ import {
   SentNoticeToast,
 } from "./mail/mailDialogs";
 import { Sidebar } from "./mail/sidebar";
-import { DraftList, OutboxList, SnoozedList } from "./mail/localLists";
+import {
+  DraftList,
+  OutboxList,
+  OutboxRetryAll,
+  SnoozedList,
+} from "./mail/localLists";
 import { matchesLocalQuery } from "./mail/mailSearch";
 import { folderIcons } from "./mail/folderIcons";
 import {
@@ -203,6 +211,10 @@ export function MailShell({ onOpenSettings }: Props) {
     MEDIA_QUERIES.sidebarDrawer,
     onDrawerChange,
   );
+  useEffect(() => {
+    if (!sidebarDrawerViewport) return;
+    return watchDrawerDrag(setSidebarOpen);
+  }, [sidebarDrawerViewport]);
   const sidebarToggleRef = useRef<HTMLButtonElement>(null);
   const folderPaneRef = useRef<HTMLElement>(null);
   const [loadingMessageId, setLoadingMessageId] = useState<number>();
@@ -290,7 +302,7 @@ export function MailShell({ onOpenSettings }: Props) {
     );
     menu
       ?.querySelector<HTMLButtonElement>(
-        "[role='menuitem']:not(:disabled), [role='menuitemradio']:not(:disabled)",
+        "[role='menuitem']:not(:disabled), [role='menuitemradio']:not(:disabled), [role='menuitemcheckbox']:not(:disabled)",
       )
       ?.focus();
     const close = (event: MouseEvent) => {
@@ -661,14 +673,19 @@ export function MailShell({ onOpenSettings }: Props) {
     setSelectionSnoozeOpen,
   });
 
-  const { archiveFocused, trashFocused, junkFocused, replyFocused } =
-    useRowActions({
-      setSelectedIds,
-      chooseMessage,
-      selectMessage,
-      setError,
-      openComposer,
-    });
+  const {
+    archiveFocused,
+    trashFocused,
+    junkFocused,
+    replyFocused,
+    forwardFocused,
+  } = useRowActions({
+    setSelectedIds,
+    chooseMessage,
+    selectMessage,
+    setError,
+    openComposer,
+  });
 
   useEffect(() => {
     void loadAccountData();
@@ -849,6 +866,15 @@ export function MailShell({ onOpenSettings }: Props) {
     const onAction = (event: Event) => {
       const context = contextActionRef.current;
       if (context) handleContextAction(event, context);
+      // Row menu Print: the message prints through the selection print path.
+      const detail = (event as CustomEvent<ContextMenuActionDetail>).detail;
+      const target = detail?.target;
+      if (detail?.id === "print" && target?.kind === "message") {
+        const row = useAppStore
+          .getState()
+          .messages.find((item) => item.id === target.messageId);
+        if (row) void printSelectedMessages(row.accountId, [row.id]);
+      }
     };
     window.addEventListener(CONTEXT_ACTION_EVENT, onAction);
     return () => window.removeEventListener(CONTEXT_ACTION_EVENT, onAction);
@@ -916,6 +942,12 @@ export function MailShell({ onOpenSettings }: Props) {
         ? snoozed.length
         : outbox.length
     : listedMessages.length;
+  const visibleOutbox = outbox.filter((item) =>
+    matchesLocalQuery(
+      `${item.subject} ${item.recipients} ${item.preview ?? ""} ${outboxDetail(item) ?? ""}`,
+      query,
+    ),
+  );
   const shellClass = `mail-shell pane-${settings.readingPane} ${sidebarOpen ? "sidebar-open" : ""} ${sidebarVisible ? "" : "sidebar-collapsed"} ${selectedMessage ? "message-open" : ""}`;
 
   const shellStyle = {
@@ -942,6 +974,35 @@ export function MailShell({ onOpenSettings }: Props) {
     bulkMoveTo,
     bulkCopyTo,
   });
+
+  // Shortcuts act on the checked messages while selecting.
+  function selectionKey(key: string) {
+    if (key === "Escape") {
+      selectionAnchor.current = undefined;
+      setSelecting(false);
+      setSelectedIds([]);
+      setSelectionSnoozeOpen(false);
+      return;
+    }
+    if (selectedIds.length === 0) return;
+    if (key === "s") {
+      selection.onStar();
+    } else if (key === "u") {
+      const anyUnread = listedMessages.some(
+        (message) => selectedIds.includes(message.id) && !message.isRead,
+      );
+      if (anyUnread) selection.onMarkRead();
+      else selection.onMarkUnread();
+    } else if (key === "e") {
+      void bulkMove(activeMailbox?.role === "archive" ? "inbox" : "archive");
+    } else if (key === "#") {
+      if (activeMailbox?.role === "trash") void deleteSelectedTrash();
+      else void bulkMove("trash");
+    } else if (key === "!") {
+      if (selection.mailboxRole === "junk") selection.onNotJunk();
+      else selection.onJunk();
+    }
+  }
 
   return (
     <main className={shellClass} style={shellStyle}>
@@ -1293,6 +1354,15 @@ export function MailShell({ onOpenSettings }: Props) {
               });
             }}
             selection={selection}
+            localAction={
+              activeLocalView === "outbox" ? (
+                <OutboxRetryAll
+                  items={visibleOutbox}
+                  sendingIds={scheduledSendInFlight}
+                  onRetryAll={retryAllQueued}
+                />
+              ) : undefined
+            }
             onClearSearch={() => {
               messageRequest.current += 1;
               searchRequest.current += 1;
@@ -1382,12 +1452,7 @@ export function MailShell({ onOpenSettings }: Props) {
             />
           ) : activeLocalView === "outbox" ? (
             <OutboxList
-              items={outbox.filter((item) =>
-                matchesLocalQuery(
-                  `${item.subject} ${item.recipients} ${item.preview ?? ""} ${outboxDetail(item) ?? ""}`,
-                  query,
-                ),
-              )}
+              items={visibleOutbox}
               emptyLabel={
                 query.trim() && outbox.length > 0
                   ? strings.mail.noOutboxMatch
@@ -1396,7 +1461,6 @@ export function MailShell({ onOpenSettings }: Props) {
               sendingIds={scheduledSendInFlight}
               onOpen={previewQueued}
               onRetry={retryQueued}
-              onRetryAll={retryAllQueued}
               onRetryCopy={retrySentCopy}
               onRetryArchive={retryArchiveAfterSend}
               onSendNow={sendScheduledNow}
@@ -1441,12 +1505,17 @@ export function MailShell({ onOpenSettings }: Props) {
               selecting={selecting}
               selectedIds={selectedIds}
               onToggleSelect={toggleSelectMessage}
+              onSelectionKey={selectionKey}
+              showSizes={sortFamily(listSort) === "size"}
               onCheckFocused={toggleSelectIds}
               onArchiveFocused={archiveFocused}
               onTrashFocused={trashFocused}
               onJunkFocused={junkFocused}
               onReplyFocused={(message, mode) => {
                 void replyFocused(message, mode);
+              }}
+              onForwardFocused={(message) => {
+                void forwardFocused(message);
               }}
               onSelectDay={(ids) => {
                 if (ids.length === 0) return;

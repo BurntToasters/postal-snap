@@ -1,55 +1,14 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import {
-  AlarmClockOff,
-  Archive,
-  ArrowUpRight,
-  Bell,
-  BellOff,
-  CheckCheck,
-  Clipboard,
-  Clock,
-  Copy,
-  Download,
-  Eye,
-  Funnel,
-  FolderOpen,
-  Inbox,
-  FolderPlus,
-  Forward,
-  Link,
-  Mail,
-  MailOpen,
-  MailPlus,
-  Pencil,
-  Pin,
-  PinOff,
-  Printer,
-  Redo2,
-  RefreshCw,
-  Reply,
-  ReplyAll,
-  RotateCcw,
-  Scissors,
-  Search,
-  Send,
-  Settings,
-  ShieldAlert,
-  ShieldCheck,
-  Star,
-  StarOff,
-  SquareDashedText,
-  Trash,
-  Undo2,
-  X,
-  type LucideIcon,
-} from "lucide-react";
+import { Check, ChevronRight, type LucideIcon } from "lucide-react";
 import {
   CONTEXT_ACTION_EVENT,
   CONTEXT_DISMISS_EVENT,
@@ -58,102 +17,270 @@ import {
   itemsForTarget,
   resolveContextTarget,
   type ContextMenuActionDetail,
-  type ContextMenuIcon,
   type ContextMenuItem,
   type ContextMenuTarget,
   type IframeContextMenuDetail,
 } from "../contextMenu";
 import { inspectAndOpenExternalLink } from "./externalLink";
 import { strings } from "../i18n";
-import { folderIcons } from "./mail/folderIcons";
+import { iconFor } from "./menuIcons";
 import { parseMailto } from "../mailto";
 import { useAppStore } from "../store";
+import { placeSubmenuPanel, syncScrollCue } from "./popupPlacement";
 import { moveMenuFocus } from "./toolbarNav";
-
-const menuIcons: Record<
-  Exclude<ContextMenuIcon, `folder:${string}`>,
-  LucideIcon
-> = {
-  reply: Reply,
-  "reply-all": ReplyAll,
-  forward: Forward,
-  "mark-read": MailOpen,
-  "mark-unread": Mail,
-  star: Star,
-  unstar: StarOff,
-  pin: Pin,
-  unpin: PinOff,
-  archive: Archive,
-  inbox: Inbox,
-  junk: ShieldAlert,
-  "not-junk": ShieldCheck,
-  trash: Trash,
-  snooze: Clock,
-  unsnooze: AlarmClockOff,
-  filter: Funnel,
-  open: FolderOpen,
-  refresh: RefreshCw,
-  "mark-all-read": CheckCheck,
-  "new-folder": FolderPlus,
-  rename: Pencil,
-  delete: Trash,
-  retry: RotateCcw,
-  send: Send,
-  discard: Trash,
-  undo: Undo2,
-  redo: Redo2,
-  cut: Scissors,
-  copy: Copy,
-  paste: Clipboard,
-  "select-all": SquareDashedText,
-  find: Search,
-  print: Printer,
-  "open-link": ArrowUpRight,
-  "copy-link": Link,
-  "copy-address": Copy,
-  compose: MailPlus,
-  preview: Eye,
-  download: Download,
-  remove: X,
-  settings: Settings,
-  mute: BellOff,
-  unmute: Bell,
-};
-
-function iconFor(icon: ContextMenuIcon | undefined): LucideIcon | undefined {
-  if (!icon) return undefined;
-  if (icon.startsWith("folder:")) {
-    const role = icon.slice("folder:".length) as keyof typeof folderIcons;
-    return folderIcons[role];
-  }
-  return menuIcons[icon as keyof typeof menuIcons];
-}
 
 type MenuActionItem = Extract<ContextMenuItem, { type: "item" }>;
 
-type MenuSection =
+/** Render model shared by the row menu, reader More, and mailbox More. */
+export type PopupEntry =
   | { kind: "separator" }
-  | { kind: "item"; item: MenuActionItem }
-  | { kind: "group"; label: string; items: MenuActionItem[] };
+  | { kind: "group"; label: string; entries: PopupEntry[] }
+  | {
+      kind: "action";
+      id: string;
+      label: string;
+      icon?: LucideIcon;
+      ariaLabel?: string;
+      chord?: string;
+      disabled?: boolean;
+      danger?: boolean;
+      role?: "menuitem" | "menuitemradio" | "menuitemcheckbox";
+      checked?: boolean;
+      onSelect: () => void;
+    }
+  | {
+      kind: "submenu";
+      id: string;
+      label: string;
+      icon?: LucideIcon;
+      disabled?: boolean;
+      entries: PopupEntry[];
+    };
 
-// A heading owns the items after it, up to the next separator.
-function groupMenuEntries(entries: ContextMenuItem[]): MenuSection[] {
-  const sections: MenuSection[] = [];
-  let group: Extract<MenuSection, { kind: "group" }> | null = null;
-  for (const entry of entries) {
+const ITEM_SELECTOR =
+  '[role="menuitem"]:not(:disabled), [role="menuitemradio"]:not(:disabled), [role="menuitemcheckbox"]:not(:disabled)';
+
+/** Headings own the items after them, up to the next separator. */
+function toPopupEntries(
+  items: ContextMenuItem[],
+  onSelect: (entry: MenuActionItem) => () => void,
+): PopupEntry[] {
+  const entries: PopupEntry[] = [];
+  let group: Extract<PopupEntry, { kind: "group" }> | null = null;
+  for (const entry of items) {
     if (entry.type === "heading") {
-      group = { kind: "group", label: entry.label, items: [] };
-      sections.push(group);
-    } else if (entry.type === "separator") {
+      group = { kind: "group", label: entry.label, entries: [] };
+      entries.push(group);
+      continue;
+    }
+    if (entry.type === "separator") {
       group = null;
-      sections.push({ kind: "separator" });
-    } else if (group) {
-      group.items.push(entry);
-    } else {
-      sections.push({ kind: "item", item: entry });
+      entries.push({ kind: "separator" });
+      continue;
+    }
+    const converted: PopupEntry =
+      entry.type === "submenu"
+        ? {
+            kind: "submenu",
+            id: entry.id,
+            label: entry.label,
+            icon: iconFor(entry.icon),
+            entries: toPopupEntries(entry.items, onSelect),
+          }
+        : {
+            kind: "action",
+            id: entry.id,
+            label: entry.label,
+            icon: iconFor(entry.icon),
+            ariaLabel: entry.ariaLabel,
+            chord: entry.chord,
+            disabled: entry.disabled,
+            danger: entry.danger,
+            onSelect: onSelect(entry),
+          };
+    (group ? group.entries : entries).push(converted);
+  }
+  return entries;
+}
+
+function PopupGroup({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  const headingId = useId();
+  return (
+    <div role="group" aria-labelledby={headingId}>
+      <div id={headingId} className="context-menu-heading">
+        {label}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function PopupActionRow({
+  entry,
+}: {
+  entry: Extract<PopupEntry, { kind: "action" }>;
+}) {
+  const checkable =
+    entry.role === "menuitemradio" || entry.role === "menuitemcheckbox";
+  const Icon = entry.icon ?? (checkable && entry.checked ? Check : undefined);
+  return (
+    <button
+      type="button"
+      role={entry.role ?? "menuitem"}
+      aria-checked={checkable ? entry.checked : undefined}
+      disabled={entry.disabled}
+      aria-label={entry.ariaLabel}
+      className={entry.danger ? "danger" : undefined}
+      onClick={entry.onSelect}
+    >
+      <span className="context-menu-icon" aria-hidden="true">
+        {Icon ? <Icon /> : null}
+      </span>
+      <span className="context-menu-label">{entry.label}</span>
+      {entry.chord ? <kbd aria-hidden="true">{entry.chord}</kbd> : null}
+    </button>
+  );
+}
+
+/** A submenu opens on hover, ArrowRight, Enter, or Space; ArrowLeft or Escape closes it. */
+function PopupSubmenu({
+  entry,
+}: {
+  entry: Extract<PopupEntry, { kind: "submenu" }>;
+}) {
+  const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const focusFirstRef = useRef(false);
+  const panelId = useId();
+  const closeTimer = useRef<number | undefined>(undefined);
+  const Icon = entry.icon;
+
+  // Leaving the row closes after a short grace period, so the pointer can
+  // cross the gap into the panel.
+  const cancelClose = () => window.clearTimeout(closeTimer.current);
+  useEffect(() => cancelClose, []);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const panel = panelRef.current;
+    const trigger = triggerRef.current;
+    if (!panel || !trigger) return;
+    placeSubmenuPanel(panel, trigger);
+    if (focusFirstRef.current) {
+      focusFirstRef.current = false;
+      panel.querySelector<HTMLElement>(ITEM_SELECTOR)?.focus();
+    }
+  }, [open]);
+
+  function openFromKeyboard() {
+    focusFirstRef.current = true;
+    setOpen(true);
+    const panel = panelRef.current;
+    if (panel) {
+      focusFirstRef.current = false;
+      panel.querySelector<HTMLElement>(ITEM_SELECTOR)?.focus();
     }
   }
-  return sections;
+
+  return (
+    <div
+      className="popup-submenu"
+      onMouseEnter={() => {
+        cancelClose();
+        if (!entry.disabled) setOpen(true);
+      }}
+      onMouseLeave={() => {
+        cancelClose();
+        closeTimer.current = window.setTimeout(() => setOpen(false), 250);
+      }}
+    >
+      <button
+        ref={triggerRef}
+        type="button"
+        role="menuitem"
+        className="popup-submenu-trigger"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls={open ? panelId : undefined}
+        disabled={entry.disabled}
+        onClick={() => setOpen(true)}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowRight") {
+            event.preventDefault();
+            event.stopPropagation();
+            openFromKeyboard();
+          } else if (event.key === "Enter" || event.key === " ") {
+            focusFirstRef.current = true;
+          }
+        }}
+      >
+        <span className="context-menu-icon" aria-hidden="true">
+          {Icon ? <Icon /> : null}
+        </span>
+        <span className="context-menu-label">{entry.label}</span>
+        <ChevronRight className="popup-submenu-chevron" aria-hidden="true" />
+      </button>
+      {open ? (
+        <div
+          ref={panelRef}
+          id={panelId}
+          className="app-menu popup-submenu-panel"
+          role="menu"
+          aria-label={entry.label}
+          onScroll={(event) => syncScrollCue(event.currentTarget)}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowLeft" || event.key === "Escape") {
+              event.preventDefault();
+              event.stopPropagation();
+              setOpen(false);
+              triggerRef.current?.focus();
+              return;
+            }
+            moveMenuFocus(event);
+          }}
+        >
+          <PopupEntries entries={entry.entries} />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** Renders popup entries; submenus and groups nest inside the same menu. */
+export function PopupEntries({ entries }: { entries: PopupEntry[] }) {
+  return (
+    <>
+      {entries.map((entry, index) => {
+        if (entry.kind === "separator") {
+          return (
+            <div
+              key={`sep-${index}`}
+              className="context-menu-separator"
+              role="separator"
+            />
+          );
+        }
+        if (entry.kind === "group") {
+          return (
+            <PopupGroup key={`group-${index}`} label={entry.label}>
+              <PopupEntries entries={entry.entries} />
+            </PopupGroup>
+          );
+        }
+        if (entry.kind === "submenu") {
+          return <PopupSubmenu key={`sub-${entry.id}`} entry={entry} />;
+        }
+        return <PopupActionRow key={entry.id} entry={entry} />;
+      })}
+    </>
+  );
 }
 
 interface OpenMenu {
@@ -431,6 +558,14 @@ export function ContextMenuHost() {
       close();
     };
     const onKey = (event: KeyboardEvent) => {
+      // Submenus handle their own Escape and ArrowLeft.
+      if (
+        event.key === "Escape" &&
+        event.target instanceof Element &&
+        event.target.closest(".popup-submenu-panel")
+      ) {
+        return;
+      }
       if (event.key === "Escape" || event.key === "Tab") {
         event.preventDefault();
         close();
@@ -496,32 +631,14 @@ export function ContextMenuHost() {
   if (!menu) return null;
   const openMenu = menu;
 
-  function renderItem(entry: MenuActionItem) {
-    const Icon = iconFor(entry.icon);
-    return (
-      <button
-        key={entry.id}
-        type="button"
-        role="menuitem"
-        disabled={entry.disabled}
-        aria-label={entry.ariaLabel}
-        className={entry.danger ? "danger" : undefined}
-        onClick={() => {
-          const { id, target } = { id: entry.id, target: openMenu.target };
-          const savedEdit = savedEditRef.current;
-          close();
-          void runHostAction(id, target, savedEdit).then((handled) => {
-            if (!handled) dispatchContextAction(id, target);
-          });
-        }}
-      >
-        <span className="context-menu-icon" aria-hidden="true">
-          {Icon ? <Icon /> : null}
-        </span>
-        <span className="context-menu-label">{entry.label}</span>
-      </button>
-    );
-  }
+  const entries = toPopupEntries(openMenu.items, (entry) => () => {
+    const { id, target } = { id: entry.id, target: openMenu.target };
+    const savedEdit = savedEditRef.current;
+    close();
+    void runHostAction(id, target, savedEdit).then((handled) => {
+      if (!handled) dispatchContextAction(id, target);
+    });
+  });
 
   return createPortal(
     <div
@@ -531,30 +648,9 @@ export function ContextMenuHost() {
       aria-label={strings.contextMenu.menu}
       style={{ left: menu.x, top: menu.y }}
       onKeyDown={moveMenuFocus}
+      onScroll={(event) => syncScrollCue(event.currentTarget)}
     >
-      {groupMenuEntries(menu.items).map((section, index) => {
-        if (section.kind === "separator") {
-          return (
-            <div
-              key={`sep-${index}`}
-              className="context-menu-separator"
-              role="separator"
-            />
-          );
-        }
-        if (section.kind === "group") {
-          const headingId = `context-menu-heading-${index}`;
-          return (
-            <div key={headingId} role="group" aria-labelledby={headingId}>
-              <div id={headingId} className="context-menu-heading">
-                {section.label}
-              </div>
-              {section.items.map(renderItem)}
-            </div>
-          );
-        }
-        return renderItem(section.item);
-      })}
+      <PopupEntries entries={entries} />
     </div>,
     document.body,
   );

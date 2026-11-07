@@ -97,7 +97,8 @@ export const settings = {
   light: "Light",
   dark: "Dark",
   spacing: "Interface spacing",
-  spacingHelp: "Comfortable is easiest to scan. Compact shows more mail.",
+  spacingHelp:
+    "Normal fits most screens. Comfortable is larger and easier to read. Compact shows the most mail.",
   badgeScope: "Unread badge",
   badgeScopeHelp:
     "Show unread Inbox mail for the active account or across all accounts.",
@@ -105,7 +106,8 @@ export const settings = {
   badgeScopeAllInboxes: "All account Inboxes",
   sidebar: "Mailboxes sidebar",
   sidebarHelp: "Keep account folders visible beside your messages.",
-  comfortable: "Comfortable",
+  densityNormal: "Normal",
+  comfortable: "Comfortable (larger)",
   compact: "Compact",
   windowEffects: "Translucent window background",
   windowEffectsHelp:
@@ -127,17 +129,23 @@ export const settings = {
   protectionAdsOffHelp:
     "Advertising and tracking image checks are off. Reported-address warnings are still on.",
   reviewAdvanced: "Review Advanced",
-  advancedHelp:
-    "These options change how Postal Snap checks images and links. Leave them on unless you have a specific reason to turn them off. Choosing Load images, private-network blocking, and other safety checks still apply.",
+  advancedHelp: "These options change how Postal Snap checks images and links.",
+  advancedHelpMore:
+    "Leave them on unless you have a specific reason to turn them off. Choosing Load images, private-network blocking, and other safety checks still apply.",
+  learnMore: "Learn more",
   blockAds: "Block advertising and tracking images",
   blockAdsHelp:
-    "After you choose Load images, Postal Snap still hides known advertising and tracking pictures. Turning this off can let those pictures load and tell senders more about you.",
+    "After you choose Load images, Postal Snap still hides known advertising and tracking pictures.",
+  blockAdsHelpMore:
+    "Turning this off can let those pictures load and tell senders more about you.",
   disableAdblockTitle: "Allow advertising and tracking images?",
   disableAdblockQuestion:
     "Postal Snap will no longer hide known advertising and tracking pictures after you choose Load images. Image consent and private-network protections stay on.",
   blockThreats: "Warn about reported dangerous addresses",
   blockThreatsHelp:
-    "Postal Snap checks links and remote images against a local reported-threat list before they can load or open. Turning this off is dangerous. You can turn it back on at any time.",
+    "Postal Snap checks links and remote images against a local reported-threat list before they can load or open.",
+  blockThreatsHelpMore:
+    "Turning this off is dangerous. You can turn it back on at any time.",
   threatOffWarning:
     "Reported-address warnings are off. Postal Snap will not warn you about listed dangerous links or block those remote images. Turn this back on unless you have a specific reason to leave it off.",
   threatDisableTitle: "Turn off reported-address warnings?",
@@ -178,10 +186,10 @@ export const settings = {
   textSize: "Text size",
   textSizeHelp: "Changes Postal Snap controls and text.",
   small: "Small (85%)",
-  normal: "Normal",
-  large: "Large",
-  extraLarge: "Extra large",
-  veryLarge: "Very large",
+  normal: "Default (100%)",
+  large: "Large (115%)",
+  extraLarge: "Extra large (130%)",
+  veryLarge: "Very large (150%)",
   evenLarger: "Even larger (175%)",
   largest: "Largest (200%)",
   shortcuts: "Shortcuts",
@@ -403,15 +411,18 @@ export const settings = {
   flatpakEdition: "Flatpak edition",
   updateCheckInterval: "Check for updates",
   updateCheckIntervalHelp:
-    "Postal Snap looks for signed updates when it starts, and can keep checking while it stays open. Store and Flatpak editions use their own update tools.",
+    "Postal Snap looks for signed updates when it starts, and can keep checking while it stays open.",
+  updateCheckIntervalHelpMore:
+    "Store and Flatpak editions use their own update tools.",
   updateCheckStartupAnd6h: "On startup and every 6 hours",
   updateCheckStartupAnd12h: "On startup and every 12 hours",
   updateCheckStartupAnd24h: "On startup and every 24 hours",
   updateCheckStartup: "On startup only",
   updateCheckManual: "Only when I check",
   updateChannel: "Update channel",
-  updateChannelHelp:
-    "Auto follows the version you run. Stable gets only finished releases. Beta also gets pre-releases, which may be unstable. Switching from Beta to Stable waits for a newer stable release; it never downgrades.",
+  updateChannelHelp: "Auto follows the version you run.",
+  updateChannelHelpMore:
+    "Stable gets only finished releases. Beta also gets pre-releases, which may be unstable. Switching from Beta to Stable waits for a newer stable release; it never downgrades.",
   updateChannelAuto: "Auto",
   updateChannelStable: "Stable",
   updateChannelBeta: "Beta",

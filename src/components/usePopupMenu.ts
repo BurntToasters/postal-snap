@@ -1,7 +1,7 @@
 import { useEffect, useRef, type RefObject } from "react";
 
 const ITEMS =
-  "[role='menuitem']:not(:disabled), [role='menuitemradio']:not(:disabled)";
+  "[role='menuitem']:not(:disabled), [role='menuitemradio']:not(:disabled), [role='menuitemcheckbox']:not(:disabled)";
 
 // Focus on open, outside click closes, Escape/Tab close. Escape returns
 // focus to the trigger button inside rootRef.

@@ -1,6 +1,7 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { revealMenuItem } from "./menu-reveal";
 
 // Failure modes covered here:
 // 1. A single message has no conversation print.
@@ -41,6 +42,7 @@ test.describe("macOS print", () => {
       page.getByRole("heading", { name: "Weekend plans" }),
     ).toBeVisible();
     await page.getByRole("button", { name: "More actions" }).click();
+    await revealMenuItem(page, "Print conversation");
     await page
       .getByRole("menuitem", { name: "Print conversation", exact: true })
       .click();

@@ -51,7 +51,7 @@ describe("first-run setup flow", () => {
     fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
     expect(screen.getByText(/Choose how mail looks/i)).toHaveFocus();
     fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
-    expect(screen.getByText(/Make it comfortable/i)).toHaveFocus();
+    expect(screen.getByText(/Choose your options/i)).toHaveFocus();
     fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
     expect(screen.getByText(/Add your email/i)).toHaveFocus();
   });
@@ -175,7 +175,7 @@ describe("first-run setup flow", () => {
     fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
     fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
     fireEvent.click(screen.getByRole("button", { name: /Back to setup/i }));
-    expect(screen.getByText(/Make it comfortable/i)).toBeVisible();
+    expect(screen.getByText(/Choose your options/i)).toBeVisible();
   });
 
   it("lets Windows first-run setup keep the tray option on by default", async () => {

@@ -100,7 +100,7 @@ html:is([data-platform="macos"], [data-platform="windows"])
   display: block;
   height: var(--native-chrome-height);
   flex: 0 0 auto;
-  margin: 0 -10px 6px;
+  margin: 0 calc(-1 * var(--space-2)) var(--sidebar-drag-gap);
 }
 
 html[data-platform="macos"][data-window-fullscreen="true"] .folder-pane {
@@ -118,7 +118,8 @@ html[data-platform="windows"] .app-toolbar {
 
 @media (max-width: 760px) {
   html:is([data-platform="macos"], [data-platform="windows"]) .app-toolbar {
-    padding: calc(var(--native-chrome-height) + 6px) 10px 8px;
+    padding: calc(var(--native-chrome-height) + var(--toolbar-pad-block))
+      var(--toolbar-pad-inline) var(--space-2);
   }
 }
 
@@ -184,47 +185,18 @@ html[data-platform="macos"][data-window-fullscreen="true"] .app-toolbar {
     pointer-events: none;
   }
 
+  /* Only the action bar sits under the traffic lights or caption buttons. */
   html[data-platform="macos"]:not([data-window-fullscreen="true"])
     .pane-hidden
     .reader-pane:not(.reader-hidden):not(.empty-reader)
-    :is(
-      .reader-actions,
-      .message-header,
-      .remote-content-banner,
-      .message-find,
-      .plain-text-body,
-      .attachment-list,
-      .snooze-panel
-    ) {
+    .reader-actions {
     padding-left: var(--mac-traffic-light-space);
   }
 
-  html[data-platform="macos"]:not([data-window-fullscreen="true"])
-    .pane-hidden
-    .reader-pane:not(.reader-hidden):not(.empty-reader)
-    .invite-card {
-    margin-left: var(--mac-traffic-light-space);
-  }
-
   html[data-platform="windows"]
     .pane-hidden
     .reader-pane:not(.reader-hidden):not(.empty-reader)
-    :is(
-      .reader-actions,
-      .message-header,
-      .remote-content-banner,
-      .message-find,
-      .plain-text-body,
-      .attachment-list,
-      .snooze-panel
-    ) {
+    .reader-actions {
     padding-right: var(--caption-controls-space);
-  }
-
-  html[data-platform="windows"]
-    .pane-hidden
-    .reader-pane:not(.reader-hidden):not(.empty-reader)
-    .invite-card {
-    margin-right: var(--caption-controls-space);
   }
 }

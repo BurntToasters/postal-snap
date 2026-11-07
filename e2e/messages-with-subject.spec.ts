@@ -1,6 +1,7 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { revealMenuItem } from "./menu-reveal";
 
 // Failure modes covered here:
 // 1. The action searches the whole account.
@@ -20,14 +21,14 @@ test("messages with this subject searches the whole account", async ({
 }) => {
   await page.goto("/?subjectPrefix=1");
   await page.getByRole("option", { name: /Weekend plans/i }).click();
+  await revealMenuItem(page, "Messages with this subject");
   await page.getByRole("button", { name: "More actions" }).click();
+  await revealMenuItem(page, "Messages with this subject");
   await page
     .getByRole("menuitem", { name: "Messages with this subject" })
     .click();
   await expect(
     page.getByRole("searchbox", { name: "Search mail" }),
   ).toHaveValue('subject:"Weekend plans"');
-  await expect(
-    page.getByRole("button", { name: "All folders" }),
-  ).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".search-scope")).toHaveText("All folders");
 });

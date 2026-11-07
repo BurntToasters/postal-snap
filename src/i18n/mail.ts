@@ -117,6 +117,9 @@ export const mail = {
   ],
   searchAllFolders: "All folders",
   searchAllFoldersTitle: "Search every folder in this account",
+  searchScopeCurrent: "This mailbox",
+  searchScopeMenu: "Search scope",
+  searchTipsMenuItem: "Search tips…",
   inFolder: (name: string) => `In ${name}`,
   settings: "Settings",
   noMessage: "Choose a message to read it.",
@@ -236,7 +239,7 @@ export const mail = {
   outboxEmptyBody: "This message has no text yet.",
   offlineChangesDropped:
     "Some offline changes could not be applied and were undone.",
-  noSnoozed: "Nothing snoozed. Snoozed mail waits here until its time comes.",
+  noSnoozed: "Nothing snoozed.",
   noSnoozedMatch: "No snoozed messages match this search.",
   snoozed: "Snoozed",
   unsnooze: "Bring back",
@@ -308,8 +311,9 @@ export const mail = {
     `Version ${version} is downloaded and ready to install. Click to restart.`,
   itemCount: (count: number) => (count === 1 ? "1 item" : `${count} items`),
   loadedOfTotal: (shown: number, total: number) => `${shown} of ${total}`,
+  // The detail is server text: keep only its first sentence.
   partialSearch: (detail: string) =>
-    `Server search unavailable. Showing cached results. ${detail}`,
+    `Server search unavailable. Showing cached results. ${detail.split(/(?<=[.!?])\s/)[0] ?? ""}`.trimEnd(),
   noSearchResults: (query: string) =>
     `No messages matching "${query}". Check your spelling or try All Folders.`,
   newFolder: "New folder",
@@ -375,5 +379,6 @@ export const mail = {
   bulkPartial: (failed: number) =>
     `${failed} message${failed === 1 ? " could" : "s could"} not be updated. The rest succeeded.`,
   bulkTooMany: "Select up to 200 messages at a time.",
+  dragMessageCount: (count: number) => `${count} messages`,
   noTargetFolder: "This account does not have that folder.",
 } as const;

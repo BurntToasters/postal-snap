@@ -8,7 +8,8 @@ import { installMockIpc } from "./mock-ipc";
 test.beforeEach(async ({ page }) => installMockIpc(page));
 
 const DENSITIES = [
-  { label: "comfortable", query: "" },
+  { label: "comfortable", query: "&density=comfortable" },
+  { label: "normal", query: "&density=normal" },
   { label: "compact", query: "&density=compact" },
 ] as const;
 const SCALES = [
@@ -115,8 +116,15 @@ for (const viewport of VIEWPORTS) {
             `${folder.key} center must hit its folder button`,
           ).toBe(true);
           expect(geometry.hitAction).toBeNull();
+          const folderHandle = await button.elementHandle();
+          if (!folderHandle)
+            throw new Error(`${folder.key} folder not rendered`);
           await page.mouse.click(geometry.point.x, geometry.point.y);
-          await expect(button).toHaveAttribute("aria-current", "page");
+          // Selecting a folder closes the drawer, which hides the button from
+          // role queries; read the attribute from the element itself.
+          await expect
+            .poll(() => folderHandle.getAttribute("aria-current"))
+            .toBe("page");
         }
 
         // 3a. Depth-0 hover/focus reveals inline Rename/Delete.
@@ -173,8 +181,16 @@ for (const viewport of VIEWPORTS) {
         ).toBeVisible();
         await page.keyboard.press("Escape");
 
-        // 4. Expand chevrons: 32 px layout box, >=44 px pointer target,
-        // absolutely positioned, clear of the folder button.
+        // 4. Expand chevrons: inset layout box, >= --target-size pointer
+        // target, absolutely positioned, clear of the folder button.
+        const targetPx = await page.evaluate(() => {
+          const probe = document.createElement("i");
+          probe.style.cssText = "position:fixed;width:var(--target-size)";
+          document.body.append(probe);
+          const width = probe.getBoundingClientRect().width;
+          probe.remove();
+          return width;
+        });
         const chevrons = await page
           .locator("button.folder-expand")
           .evaluateAll((nodes) =>
@@ -221,8 +237,8 @@ for (const viewport of VIEWPORTS) {
           expect(chevron.layoutWidth).toBeLessThanOrEqual(44.5);
           expect(chevron.position).toBe("absolute");
           expect(chevron.content).not.toBe("none");
-          expect(chevron.hitWidth).toBeGreaterThanOrEqual(44);
-          expect(chevron.hitHeight).toBeGreaterThanOrEqual(44);
+          expect(chevron.hitWidth).toBeGreaterThanOrEqual(targetPx);
+          expect(chevron.hitHeight).toBeGreaterThanOrEqual(targetPx);
           if (chevron.folderLeft != null) {
             expect(chevron.pseudoRight).toBeLessThanOrEqual(
               chevron.folderLeft + 1,

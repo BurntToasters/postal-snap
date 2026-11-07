@@ -15,6 +15,7 @@ export const DENSITY_CHOICES: ReadonlyArray<{
   value: AppSettings["density"];
   label: string;
 }> = [
+  { value: "normal", label: strings.settings.densityNormal },
   { value: "comfortable", label: strings.settings.comfortable },
   { value: "compact", label: strings.settings.compact },
 ];

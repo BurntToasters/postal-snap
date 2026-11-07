@@ -225,7 +225,7 @@ describe("send bar", () => {
       screen.getByRole("button", { name: strings.composer.sending }),
     ).toBeDisabled();
     expect(
-      screen.getByRole("button", { name: strings.common.saving }),
+      screen.getByRole("button", { name: strings.composer.saveDraft }),
     ).toBeDisabled();
     rerender(
       <SendBar
@@ -247,7 +247,7 @@ describe("send bar", () => {
       />,
     );
     expect(
-      screen.getByRole("button", { name: strings.composer.draftSaved }),
+      screen.getByRole("button", { name: strings.composer.saveDraft }),
     ).toBeEnabled();
     expect(
       screen.getByRole("button", { name: strings.composer.scheduleAction }),

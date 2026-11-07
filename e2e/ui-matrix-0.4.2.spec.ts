@@ -13,14 +13,14 @@ type Combo = {
   name: string;
   width: number;
   height: number;
-  density: "comfortable" | "compact";
+  density: "comfortable" | "normal" | "compact";
   scale: 1 | 2;
   theme: "light" | "dark";
   pane: "right" | "bottom";
 };
 
 const combos: Combo[] = [];
-for (const density of ["comfortable", "compact"] as const)
+for (const density of ["comfortable", "normal", "compact"] as const)
   for (const scale of [1, 2] as const)
     for (const theme of ["light", "dark"] as const)
       for (const pane of ["right", "bottom"] as const)
@@ -71,6 +71,15 @@ async function probeList(page: Page) {
         : null;
     const rows = [...document.querySelectorAll(".message-row")];
     const row = box(rows[0]);
+    // D11: flat rows are full width; a selected or checked row is an inset rounded rect.
+    const firstRow = rows[0] instanceof HTMLElement ? rows[0] : null;
+    const rowSelected =
+      firstRow?.classList.contains("selected") ||
+      firstRow?.classList.contains("checked") ||
+      false;
+    const rowMarginInline = firstRow
+      ? Number.parseFloat(getComputedStyle(firstRow).marginLeft)
+      : 0;
     const filter = q(".mailbox-filter-control") ?? q(".mailbox-filter");
     const sender = q(".message-sender");
     return {
@@ -81,6 +90,8 @@ async function probeList(page: Page) {
               right: listClientRight - row.right,
             }
           : null,
+      rowSelected,
+      rowMarginInline,
       leftEdges: {
         heading: box(q(".pane-heading h1"))?.left ?? null,
         filter: box(filter)?.left ?? null,
@@ -299,10 +310,13 @@ test.describe("UI matrix 0.4.2", () => {
       const readerWidth = focused?.readerWidth ?? collapsed?.readerWidth;
       const groups = (focused ?? collapsed)?.toolbarGroups ?? null;
       const rules = {
+        // Flat rows sit on the list edges; a selected row is inset by --space-1.
         rowInset:
           list.rowInset !== null &&
-          [list.rowInset.left, list.rowInset.right].every(
-            (inset) => inset >= 5 && inset <= 7,
+          [list.rowInset.left, list.rowInset.right].every((inset) =>
+            list.rowSelected
+              ? Math.abs(inset - list.rowMarginInline) <= 1
+              : Math.abs(inset) <= 1,
           ),
         leftEdgesAligned:
           edges.length === 4 && Math.max(...edges) - Math.min(...edges) <= 1,

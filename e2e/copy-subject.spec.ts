@@ -1,6 +1,7 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { revealMenuItem } from "./menu-reveal";
 
 // Failure modes covered here:
 // 1. The message list copies the subject and leaves the message closed.
@@ -28,6 +29,7 @@ test("the message list copies the subject and leaves it closed", async ({
     .getByRole("option", { name: /Weekend plans/i })
     .or(page.getByRole("treeitem", { name: /Weekend plans/i }));
   await row.click({ button: "right" });
+  await revealMenuItem(page, "Copy subject");
   await page
     .getByRole("menuitem", { name: "Copy subject", exact: true })
     .click();
@@ -52,6 +54,7 @@ test("the open message copies its subject before details are opened", async ({
     "false",
   );
   await page.getByRole("button", { name: "More actions" }).click();
+  await revealMenuItem(page, "Copy subject");
   await page
     .getByRole("menuitem", { name: "Copy subject", exact: true })
     .click();

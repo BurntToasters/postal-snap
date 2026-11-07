@@ -35,6 +35,11 @@
   gap: 12px;
 }
 
+.app-mark.setup-mark {
+  width: var(--setup-mark-size);
+  height: var(--setup-mark-size);
+}
+
 .setup-brand p,
 .setup-brand h1,
 .account-form h1,
@@ -44,14 +49,16 @@
 
 .setup-brand p {
   color: var(--text-muted);
-  font-size: 0.88rem;
+  font-size: var(--fs-md);
   font-weight: 700;
 }
 
 .setup-brand h1,
 .account-form h1,
 .account-form h2 {
-  font-size: clamp(1.4rem, 3vw, 1.7rem);
+  font-size: var(--fs-2xl);
+  font-weight: 600;
+  line-height: 1.25;
   letter-spacing: -0.025em;
 }
 
@@ -77,8 +84,8 @@
   border: 1px solid var(--border);
   border-radius: 50%;
   background: var(--surface);
-  font-size: 0.83rem;
-  font-weight: 800;
+  font-size: var(--fs-sm);
+  font-weight: 700;
 }
 
 .setup-progress > span:is(.active, .done) {
@@ -88,8 +95,8 @@
 }
 
 .setup-progress > span:not(.visually-hidden) svg {
-  width: 0.9375rem;
-  height: 0.9375rem;
+  width: var(--icon-md);
+  height: var(--icon-md);
 }
 
 .setup-progress > i {
@@ -99,7 +106,7 @@
 
 .setup-progress > small {
   padding-top: 5px;
-  font-size: 0.76rem;
+  font-size: var(--fs-xs);
   white-space: nowrap;
 }
 
@@ -142,15 +149,11 @@
   grid-template-columns: var(--provider-symbol-size) 1fr auto;
   align-items: center;
   gap: 14px;
-  padding: 14px;
+  padding: var(--space-3) var(--space-4);
   text-align: left;
-  border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  border: 1px solid var(--border-soft);
   border-radius: var(--radius-md);
-  background: linear-gradient(
-    145deg,
-    color-mix(in srgb, var(--surface-raised) 92%, var(--surface-highlight)),
-    color-mix(in srgb, var(--surface) 90%, var(--surface-muted))
-  );
+  background: var(--surface-raised);
   box-shadow:
     var(--shadow-card),
     inset 0 1px 0 var(--surface-highlight);
@@ -189,14 +192,14 @@
   border-radius: var(--radius-pill);
   color: var(--accent-ink) !important;
   background: var(--accent-soft);
-  font-size: 0.7rem !important;
-  font-weight: 750;
-  letter-spacing: 0.02em;
+  font-size: var(--fs-xs) !important;
+  font-weight: 700;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 
 .provider-button strong {
-  font-size: 1.04rem;
+  font-size: var(--fs-base);
 }
 
 .provider-button small,
@@ -215,8 +218,8 @@
 }
 
 .provider-arrow svg {
-  width: 1.1875rem;
-  height: 1.1875rem;
+  width: var(--icon-lg);
+  height: var(--icon-lg);
 }
 
 .privacy-note {
@@ -228,12 +231,12 @@
   border: 1px solid color-mix(in srgb, var(--success) 24%, var(--border));
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--success-soft) 72%, transparent);
-  font-size: 0.88rem;
+  font-size: var(--fs-md);
 }
 
 .privacy-note svg {
-  width: 1.25rem;
-  height: 1.25rem;
+  width: var(--icon-lg);
+  height: var(--icon-lg);
   color: var(--success);
 }
 
@@ -272,7 +275,7 @@
 .setup-field-hint {
   margin: -8px 0 0;
   color: var(--text-muted);
-  font-size: 0.84rem;
+  font-size: var(--fs-md);
   font-weight: 500;
   line-height: 1.45;
 }
@@ -289,7 +292,7 @@
 .server-summary > p {
   margin: 0;
   color: var(--text-muted);
-  font-size: 0.86rem;
+  font-size: var(--fs-md);
 }
 
 .server-summary dl {
@@ -305,8 +308,8 @@
 
 .server-summary dt {
   color: var(--text-muted);
-  font-size: 0.72rem;
-  font-weight: 750;
+  font-size: var(--fs-xs);
+  font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
@@ -339,8 +342,8 @@
 }
 
 .connection-status svg {
-  width: 1.1875rem;
-  height: 1.1875rem;
+  width: var(--icon-lg);
+  height: var(--icon-lg);
 }
 
 .connection-status span {
@@ -350,7 +353,7 @@
 
 .connection-status small {
   color: inherit;
-  font-size: 0.86rem;
+  font-size: var(--fs-md);
   line-height: 1.45;
   opacity: 0.92;
 }
@@ -409,7 +412,7 @@
 .download-choice small {
   color: var(--text-muted);
   font-weight: 500;
-  line-height: 1.4;
+  line-height: 1.45;
 }
 
 .first-sync {
@@ -495,27 +498,27 @@
   border: 1px solid var(--border);
   border-radius: 50%;
   background: var(--surface);
-  font-size: 0.83rem;
-  font-weight: 800;
+  font-size: var(--fs-sm);
+  font-weight: 700;
 }
 
 .setup-flow-progress > div > span:not(.visually-hidden) svg {
-  width: 0.9375rem;
-  height: 0.9375rem;
+  width: var(--icon-md);
+  height: var(--icon-md);
 }
 
 .setup-flow-progress > div:is(.active, .done) > span:not(.visually-hidden) {
   border-color: var(--accent-fill);
   color: var(--accent-contrast);
   background: var(--accent-fill);
-  box-shadow: 0 0 0 4px var(--accent-soft);
+  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
 .setup-flow-progress > div > small {
   padding: 0 4px;
   text-align: center;
-  font-size: 0.76rem;
-  font-weight: 650;
+  font-size: var(--fs-xs);
+  font-weight: 600;
 }
 
 .setup-flow-progress > div.active > small {
@@ -548,14 +551,14 @@
   align-content: start;
   gap: 4px;
   min-width: 0;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .setup-field-grid small {
   color: var(--text-muted);
-  font-size: 0.84rem;
+  font-size: var(--fs-md);
   font-weight: 500;
-  line-height: 1.35;
+  line-height: 1.45;
 }
 
 .setup-display {
@@ -568,8 +571,8 @@
 
 .setup-display h2 {
   margin: 0;
-  font-size: 0.78rem;
-  font-weight: 700;
+  font-size: var(--fs-xs);
+  font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--text-muted);
@@ -585,16 +588,9 @@
 }
 
 .setup-switches .switch-row {
-  border: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
+  border: 1px solid var(--border-soft);
   border-radius: var(--radius-sm);
-  background: linear-gradient(
-    145deg,
-    color-mix(in srgb, var(--surface-raised) 92%, var(--surface-highlight)),
-    color-mix(in srgb, var(--surface) 92%, var(--surface-muted))
-  );
-  box-shadow:
-    var(--shadow-card),
-    inset 0 1px 0 var(--surface-highlight);
+  background: var(--surface);
 }
 
 /* Setup rows stay at the minimum target height; Settings keeps its 52px row. */
@@ -619,7 +615,7 @@
 .setup-preview-live {
   margin: 0;
   color: var(--text-muted);
-  font-size: 0.82rem;
+  font-size: var(--fs-sm);
 }
 
 .setup-preview-mail {
@@ -656,7 +652,7 @@
 
 .setup-preview-folders strong,
 .setup-preview-reader strong {
-  font-size: 0.72rem;
+  font-size: var(--fs-xs);
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--text-muted);
@@ -668,7 +664,7 @@
   align-items: center;
   padding: 0 8px;
   border-radius: var(--radius-xs);
-  font-size: 0.86rem;
+  font-size: var(--fs-md);
 }
 
 .setup-preview-folders span.active {
@@ -691,19 +687,19 @@
 }
 
 .setup-preview-row strong {
-  font-size: 0.92rem;
+  font-size: var(--fs-ui);
 }
 
 .setup-preview-row span {
   overflow: hidden;
   color: var(--text-muted);
-  font-size: 0.86rem;
+  font-size: var(--fs-md);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .setup-preview-reader span {
-  font-size: 0.86rem;
+  font-size: var(--fs-md);
   color: var(--text-muted);
 }
 
@@ -734,8 +730,8 @@
 
 .provider-picker-title {
   margin: 0 0 12px;
-  font-size: 0.78rem;
-  font-weight: 700;
+  font-size: var(--fs-xs);
+  font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--text-muted);

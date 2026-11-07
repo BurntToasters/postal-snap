@@ -1,0 +1,33 @@
+/* Message drag feedback: count chip and drop-target outline. */
+
+.drag-chip {
+  position: fixed;
+  inset-block-start: 0;
+  inset-inline-start: 0;
+  z-index: -1;
+  pointer-events: none;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
+
+@media (forced-colors: active) {
+  .drag-chip {
+    border-color: CanvasText;
+    background: Canvas;
+    color: CanvasText;
+    box-shadow: none;
+  }
+
+  /* Every folder has a ButtonText border, so the target gets a thicker dashed outline. */
+  .folder.drop-target {
+    background: transparent;
+    outline: 3px dashed Highlight;
+    outline-offset: -3px;
+  }
+}

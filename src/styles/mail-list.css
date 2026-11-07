@@ -49,19 +49,19 @@
 .pane-account {
   margin: 0;
   color: var(--text-muted);
-  font-size: 0.78rem;
+  font-size: var(--fs-xs);
 }
 
 .pane-heading h1 {
   margin: 0;
   overflow-wrap: anywhere;
-  font-size: 1.05rem;
-  letter-spacing: -0.015em;
-  font-weight: 700;
+  font-size: var(--fs-base);
+  font-weight: 600;
 }
 
 .pane-heading small {
   color: var(--text-muted);
+  font-size: var(--fs-sm);
 }
 
 .pane-heading-actions {
@@ -122,8 +122,8 @@
 }
 
 .mailbox-filter-segment svg {
-  width: 1em;
-  height: 1em;
+  width: var(--icon-md);
+  height: var(--icon-md);
 }
 
 .mailbox-filter-segment input {
@@ -145,7 +145,7 @@
 .mailbox-filter-segment.checked {
   background: var(--surface-raised);
   box-shadow: var(--shadow-control);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .mailbox-filter-segment:has(input:focus-visible),
@@ -154,9 +154,13 @@
   outline-offset: 2px;
 }
 
-/* Wrapped rows of pills need a squarer track. */
+/* At 200% text the segments take less padding; they wrap only when they still do not fit. */
 html[data-text-scale="large"] .mailbox-filter-control {
-  border-radius: var(--radius-lg);
+  flex-wrap: wrap;
+}
+
+html[data-text-scale="large"] .mailbox-filter-segment {
+  padding-inline: var(--space-3);
 }
 
 @media (forced-colors: active) {
@@ -191,27 +195,28 @@ html[data-text-scale="large"] .mailbox-filter-control {
   position: relative;
 }
 
+/* Long menus scroll inside the window instead of running off the bottom. */
+.mailbox-more-menu {
+  max-height: calc(100dvh - 15rem);
+  overflow-y: auto;
+}
+
 .bulk-bar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  padding: var(--bar-pad-block-lg) 16px;
+  gap: var(--space-2);
+  padding: var(--bar-pad-block) var(--toolbar-pad-inline);
   border-bottom: 1px solid var(--border);
   background: var(--surface);
 }
 
-.bulk-bar strong {
-  margin-right: 4px;
-  font-size: 0.9rem;
-}
-
 .bulk-bar button {
   display: inline-flex;
-  min-height: var(--target-size);
+  min-height: var(--target-size-inset);
   align-items: center;
-  gap: 6px;
-  padding: 7px 12px;
+  gap: var(--space-2);
+  padding: var(--control-pad-block) var(--space-3);
   border: 0;
   border-radius: var(--radius-pill);
   background: var(--fill);
@@ -223,8 +228,8 @@ html[data-text-scale="large"] .mailbox-filter-control {
 }
 
 .bulk-bar button svg {
-  width: 1.0625rem;
-  height: 1.0625rem;
+  width: var(--icon-md);
+  height: var(--icon-md);
 }
 
 .message-row-wrap {
@@ -292,14 +297,14 @@ html[data-text-scale="large"] .mailbox-filter-control {
   pointer-events: none;
 }
 
-.message-row-wrap.selected .row-actions {
+.message-list:focus-within .message-row-wrap.selected .row-actions {
   --row-actions-bg: var(--accent-fill);
   color: var(--accent-contrast);
 }
 
 .row-action {
   display: grid;
-  flex: 0 1 auto;
+  flex: none;
   width: var(--target-size);
   min-width: 0;
   min-height: var(--target-size);
@@ -312,9 +317,16 @@ html[data-text-scale="large"] .mailbox-filter-control {
   cursor: pointer;
 }
 
+/* At large text a narrow list keeps three row actions so the subject stays readable. */
+@container message-list (max-width: 26rem) {
+  html[data-text-scale="large"] .row-action[data-action="read"] {
+    display: none;
+  }
+}
+
 .row-action svg {
-  width: 1.125rem;
-  height: 1.125rem;
+  width: var(--icon-lg);
+  height: var(--icon-lg);
 }
 
 .row-action.starred {
@@ -326,13 +338,13 @@ html[data-text-scale="large"] .mailbox-filter-control {
   color: var(--text);
 }
 
-.message-row-wrap.selected .row-action,
-.message-row-wrap.selected .row-action.starred,
-.message-row-wrap.selected .row-action:hover {
+.message-list:focus-within .message-row-wrap.selected .row-action,
+.message-list:focus-within .message-row-wrap.selected .row-action.starred,
+.message-list:focus-within .message-row-wrap.selected .row-action:hover {
   color: var(--accent-contrast);
 }
 
-.message-row-wrap.selected .row-action:hover {
+.message-list:focus-within .message-row-wrap.selected .row-action:hover {
   background: color-mix(in srgb, var(--accent-contrast) 20%, transparent);
 }
 
@@ -381,20 +393,21 @@ html[data-text-scale="large"] .mailbox-filter-control {
     outline-offset: -2px;
   }
 
-  .message-row-wrap.selected .row-actions {
+  .message-list:focus-within .message-row-wrap.selected .row-actions {
     border-color: HighlightText;
     background: Highlight;
   }
 
-  .message-row-wrap.selected .row-action,
-  .message-row-wrap.selected .row-action.starred {
+  .message-list:focus-within .message-row-wrap.selected .row-action,
+  .message-list:focus-within .message-row-wrap.selected .row-action.starred {
     color: HighlightText;
   }
 }
 
 .message-select-hit {
   display: grid;
-  min-width: var(--target-size);
+  flex: 0 0 var(--target-size);
+  width: var(--target-size);
   min-height: var(--target-size);
   margin: auto 0 auto 4px;
   place-items: center;
@@ -409,13 +422,8 @@ html[data-text-scale="large"] .mailbox-filter-control {
   cursor: pointer;
 }
 
-.message-row.checked {
-  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
-  box-shadow: inset 3px 0 var(--accent);
-}
-
 .message-row-wrap.thread-child {
-  --row-leading-inset: 18px;
+  --row-leading-inset: var(--folder-indent);
   border-top: 1px dashed var(--border);
   padding-inline-start: var(--row-leading-inset);
 }
@@ -432,21 +440,22 @@ html[data-text-scale="large"] .mailbox-filter-control {
   border-radius: var(--radius-pill);
   color: var(--text);
   background: var(--fill);
-  font-size: 0.78rem;
-  font-weight: 650;
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
 }
 
-.message-row.selected .thread-count {
+.message-list:focus-within .message-row.selected .thread-count {
   color: var(--accent-contrast);
   background: color-mix(in srgb, var(--accent-contrast) 22%, transparent);
 }
 
 .thread-header .thread-unread {
-  color: var(--accent);
-  font-weight: 650;
+  color: var(--accent-ink);
+  font-weight: 600;
 }
 
-.message-row.selected .thread-unread {
+.message-list:focus-within .message-row.selected .thread-unread {
   color: var(--accent-contrast);
 }
 
@@ -470,11 +479,13 @@ html[data-text-scale="large"] .mailbox-filter-control {
   container: message-list / inline-size;
 }
 
-/* Narrow lists drop the size; the row's accessible name still has it. */
-@container message-list (max-width: 26rem) {
-  .message-size {
-    display: none;
-  }
+/* Size leaves the row (it stays in the row name); sorting by size shows it. */
+.message-size {
+  display: none;
+}
+
+.message-list.show-sizes .message-size {
+  display: inline;
 }
 
 .new-messages {
@@ -485,7 +496,7 @@ html[data-text-scale="large"] .mailbox-filter-control {
   width: max-content;
   margin: 8px auto;
   min-height: var(--target-size);
-  padding: 0 16px;
+  padding: 0 var(--space-4);
   border: 0;
   border-radius: 999px;
   background: var(--accent-fill);
@@ -509,9 +520,9 @@ html[data-text-scale="large"] .mailbox-filter-control {
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--accent);
+  color: var(--accent-ink);
   font: inherit;
-  font-weight: 650;
+  font-weight: 600;
   cursor: pointer;
 }
 
@@ -530,8 +541,8 @@ html[data-text-scale="large"] .mailbox-filter-control {
   padding: clamp(52px, 28vh, 260px) 24px 24px;
   text-align: center;
   color: var(--text-muted);
-  font-size: 1.05rem;
-  line-height: 1.6;
+  font-size: var(--fs-lg);
+  line-height: 1.45;
   overflow-wrap: anywhere;
 }
 
@@ -549,16 +560,21 @@ html[data-text-scale="large"] .mailbox-filter-control {
 
 .list-day {
   display: flex;
+  min-height: var(--list-day-height);
   align-items: center;
   gap: var(--space-2);
-  margin: calc(var(--space-2) - 2px) var(--list-row-inset) 2px;
-  /* The margin already counts the row inset; do not add it twice. */
-  padding-inline: calc(var(--list-text-inset) - var(--list-row-inset))
-    var(--list-row-pad-end);
+  /* Flat rows run edge to edge, so the heading pads to the same text edges. */
+  margin: var(--space-1) 0 0;
+  padding-inline: var(--list-text-inset) var(--list-row-pad-end);
   color: var(--text-muted);
-  font-size: 0.8125rem;
-  font-weight: 650;
-  line-height: 1.3;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+/* The count stays in the day button's name; comfortable shows it too. */
+:root:not([data-density="comfortable"]) .list-day-count {
+  display: none;
 }
 
 .list-day > span:first-child {
@@ -569,22 +585,23 @@ html[data-text-scale="large"] .mailbox-filter-control {
 .list-day-count {
   flex: 0 0 auto;
   margin-inline-start: auto;
-  font-weight: 650;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
 button.list-day {
   display: flex;
   align-items: center;
-  width: calc(100% - 2 * var(--list-row-inset));
-  min-height: var(--target-size);
+  width: 100%;
+  min-height: var(--list-day-height);
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
   font: inherit;
-  font-size: 0.8125rem;
-  font-weight: 650;
-  line-height: 1.3;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  line-height: 1.45;
   text-align: left;
   cursor: pointer;
 }
@@ -617,8 +634,9 @@ button.list-day:focus-visible {
 
 .message-row {
   position: relative;
+  isolation: isolate;
   display: grid;
-  width: calc(100% - 12px);
+  width: 100%;
   min-height: var(--message-row-height);
   /* The sender keeps three characters even when large text widens the date. */
   grid-template-columns: 0.625rem minmax(3em, 1fr) auto;
@@ -626,21 +644,20 @@ button.list-day:focus-visible {
     "dot sender date"
     "dot subject subject"
     "dot preview preview";
-  gap: 2px 8px;
-  margin: 1px 6px;
-  padding: var(--message-row-pad-block) 12px var(--message-row-pad-block) 10px;
+  gap: 1px var(--list-row-gap);
+  margin: 0;
+  /* Flat rows: the inset lives in padding so text lines up with the headings. */
+  padding: var(--message-row-pad-block) var(--list-row-pad-end)
+    var(--message-row-pad-block)
+    calc(var(--list-row-inset) + var(--list-row-pad-start));
   text-align: left;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: 0;
   background: var(--surface);
   color: var(--text);
   line-height: 1.45;
-  box-shadow: inset 0 -1px color-mix(in srgb, var(--border) 72%, transparent);
+  box-shadow: inset 0 -1px var(--border-soft);
   transition: background-color 120ms ease;
-}
-
-.message-row.unread {
-  background: color-mix(in srgb, var(--accent) 3%, var(--surface));
 }
 
 .message-row:focus-visible {
@@ -648,16 +665,29 @@ button.list-day:focus-visible {
   box-shadow: inset 0 0 0 3px var(--focus);
 }
 
-.message-row.selected {
-  /* Text changes immediately, so the selected background must not lag behind. */
-  transition: none;
-  color: var(--accent-contrast);
-  background: var(--accent-fill);
-  box-shadow: inset 0 0 0 1px
-    color-mix(in srgb, var(--accent-contrast) 18%, transparent);
+/* Selection is an inset rounded rectangle; padding keeps the text in place. */
+.message-row.selected,
+.message-row.checked {
+  margin-inline: var(--space-1);
+  padding-inline: calc(
+      var(--list-row-inset) + var(--list-row-pad-start) - var(--space-1)
+    )
+    calc(var(--list-row-pad-end) - var(--space-1));
+  border-radius: var(--radius-sm);
+  background: var(--sidebar-selection);
 }
 
-.message-row.selected
+/* Two states: accent while the list has focus, neutral otherwise. */
+.message-list:focus-within :is(.message-row.selected, .message-row.checked) {
+  color: var(--accent-contrast);
+}
+
+.message-list:focus-within :is(.message-row.selected, .message-row.checked) {
+  background: var(--accent-fill);
+}
+
+.message-list:focus-within
+  :is(.message-row.selected, .message-row.checked)
   :is(
     .message-date,
     .message-size,
@@ -668,12 +698,18 @@ button.list-day:focus-visible {
     .message-arrived,
     .message-file-count
   ),
-.message-row.selected.unread .message-date,
-.message-row.selected.unread .message-size {
+.message-list:focus-within
+  :is(.message-row.selected, .message-row.checked).unread
+  .message-date,
+.message-list:focus-within
+  :is(.message-row.selected, .message-row.checked).unread
+  .message-size {
   color: var(--accent-contrast);
 }
 
-.message-row.selected.unread .unread-dot {
+.message-list:focus-within
+  :is(.message-row.selected, .message-row.checked).unread
+  .unread-dot {
   background: var(--accent-contrast);
 }
 
@@ -704,9 +740,16 @@ button.list-day:focus-visible {
   white-space: nowrap;
 }
 
-.message-row.unread .message-sender,
+.message-sender {
+  font-weight: 600;
+}
+
+.message-row.unread .message-sender {
+  font-weight: 700;
+}
+
 .message-row.unread .message-subject {
-  font-weight: 750;
+  font-weight: 600;
 }
 
 .message-when {
@@ -723,7 +766,7 @@ button.list-day:focus-visible {
 .message-arrived,
 .message-file-count {
   color: var(--text-muted);
-  font-size: 0.82rem;
+  font-size: var(--fs-sm);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -745,6 +788,7 @@ button.list-day:focus-visible {
   min-width: 0;
   align-items: center;
   gap: 5px;
+  font-weight: 400;
 }
 
 .message-subject > span {
@@ -757,22 +801,22 @@ button.list-day:focus-visible {
 .message-muted {
   flex: 0 0 auto;
   color: var(--text-muted);
-  font-size: 0.82rem;
-  font-weight: 650;
+  font-size: var(--fs-sm);
+  font-weight: 600;
 }
 
 .message-folder {
   flex: 0 1 auto;
   max-width: 40%;
   color: var(--text-muted);
-  font-size: 0.82rem;
-  font-weight: 650;
+  font-size: var(--fs-sm);
+  font-weight: 600;
 }
 
 .message-subject svg {
   flex: 0 0 auto;
-  width: 0.875rem;
-  height: 0.875rem;
+  width: var(--icon-sm);
+  height: var(--icon-sm);
   color: var(--warning);
 }
 
@@ -790,8 +834,11 @@ button.list-day:focus-visible {
 }
 
 /* Accent marks vanish on the accent background; selected rows use contrast. */
-.message-row.selected .message-subject svg,
-.message-row.selected .message-subject svg.message-mark {
+.message-list:focus-within .message-row.selected .message-subject svg,
+.message-list:focus-within
+  .message-row.selected
+  .message-subject
+  svg.message-mark {
   color: var(--accent-contrast);
 }
 
@@ -800,8 +847,11 @@ button.list-day:focus-visible {
     color: CanvasText;
   }
 
-  .message-row.selected .message-subject svg,
-  .message-row.selected .message-subject svg.message-mark {
+  .message-list:focus-within .message-row.selected .message-subject svg,
+  .message-list:focus-within
+    .message-row.selected
+    .message-subject
+    svg.message-mark {
     color: HighlightText;
   }
 }
@@ -815,12 +865,12 @@ button.list-day:focus-visible {
   display: -webkit-box;
   overflow: hidden;
   color: var(--text-muted);
-  font-size: 0.87rem;
-  line-height: 1.4;
+  font-size: var(--fs-sm);
+  line-height: 1.45;
   text-overflow: ellipsis;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
+  -webkit-line-clamp: var(--list-preview-lines);
+  line-clamp: var(--list-preview-lines);
 }
 
 .message-list,
@@ -835,7 +885,7 @@ button.list-day:focus-visible {
   align-items: center;
   gap: var(--local-gap);
   padding: var(--list-row-pad-block) var(--local-row-inline);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-soft);
 }
 
 .local-mail-row {
@@ -866,7 +916,7 @@ button.list-day:focus-visible {
 .attention-row time {
   overflow: hidden;
   color: var(--text-muted);
-  font-size: 0.8rem;
+  font-size: var(--fs-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -874,8 +924,13 @@ button.list-day:focus-visible {
 /* Subjects are the sender's words: normal text. Only a message that needs
    attention gets the warning icon and status color. */
 .attention-row {
-  grid-template-columns: var(--local-icon) minmax(0, 1fr);
+  grid-template-columns: var(--local-icon) minmax(0, 1fr) auto;
   color: var(--text);
+}
+
+.attention-row > span {
+  grid-column: 2;
+  grid-row: 1;
 }
 
 .attention-row > svg {
@@ -889,21 +944,86 @@ button.list-day:focus-visible {
   color: var(--warning-ink);
 }
 
-.attention-row small {
+/* One status line may wrap at large text; other lines stay on one row. */
+.attention-row .outbox-status-line {
   white-space: normal;
   overflow-wrap: anywhere;
 }
 
-.attention-row > div {
+.attention-row-actions {
   display: flex;
-  grid-column: 2;
+  grid-column: 3;
+  grid-row: 1;
+  align-items: center;
+  gap: var(--space-2);
+  align-self: center;
+}
+
+/* Secondary actions appear on hover or focus; the context menu has them too. */
+.attention-row-more {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.attention-row:hover .attention-row-more,
+.attention-row:focus-within .attention-row-more {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .attention-row-more {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .attention-row-more {
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .attention-row-more {
+    opacity: 1;
+  }
+}
+
+.local-row-meta {
+  display: flex;
+  min-width: 0;
   flex-wrap: wrap;
-  gap: 7px;
+  column-gap: var(--space-3);
+}
+
+.local-row-meta small {
+  min-width: 0;
+}
+
+.draft-preview {
+  display: -webkit-box;
+  overflow: hidden;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--list-preview-lines);
+  line-clamp: var(--list-preview-lines);
+}
+
+.message-row-wrap > .local-mail-row {
+  flex: 1;
+  min-width: 0;
+}
+
+.local-row-action {
+  align-self: center;
+  margin-inline-end: var(--list-row-inset);
 }
 
 .attention-row button {
-  min-height: var(--target-size);
-  padding: 6px 14px;
+  min-height: var(--target-size-inset);
+  padding: var(--control-pad-block) var(--space-3);
   border: 0;
   border-radius: var(--radius-pill);
   background: var(--fill);
@@ -914,7 +1034,7 @@ button.list-day:focus-visible {
 }
 
 .draft-sync-state {
-  font-size: 0.78rem;
+  font-size: var(--fs-sm);
   font-weight: 500;
   color: var(--text-muted);
   white-space: normal;
@@ -927,5 +1047,5 @@ button.list-day:focus-visible {
 }
 
 .draft-sync-state.pending {
-  color: var(--accent);
+  color: var(--accent-ink);
 }

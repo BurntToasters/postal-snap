@@ -1,6 +1,7 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { revealMenuItem } from "./menu-reveal";
 
 // Failure modes covered here:
 // 1. A single message has no conversation star action.
@@ -31,6 +32,7 @@ test("star conversation marks the loaded thread and remove stars clears it", asy
   await page.goto("/?threadGap=1");
   await page.getByRole("treeitem", { name: /Weekend plans/i }).click();
   await page.getByRole("button", { name: "More actions" }).click();
+  await revealMenuItem(page, "Star conversation");
   await page.getByRole("menuitem", { name: "Star conversation" }).click();
   await expect(page.getByRole("treeitem", { name: /Starred/i })).toHaveCount(3);
   const starred = await page.evaluate(() =>
@@ -44,6 +46,7 @@ test("star conversation marks the loaded thread and remove stars clears it", asy
     isStarred: true,
   });
   await page.getByRole("button", { name: "More actions" }).click();
+  await revealMenuItem(page, "Remove stars");
   await page.getByRole("menuitem", { name: "Remove stars" }).click();
   await expect(page.getByRole("treeitem", { name: /Starred/i })).toHaveCount(0);
   const cleared = await page.evaluate(() =>

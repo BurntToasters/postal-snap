@@ -50,9 +50,11 @@ async function servePagedHugeList(page: Page) {
 }
 
 const DENSITIES = [
-  ["comfortable", ""],
+  ["comfortable", "&density=comfortable"],
+  ["normal", "&density=normal"],
   ["compact", "&density=compact"],
-  ["200% text", "&scale=2"],
+  ["comfortable 200% text", "&density=comfortable&scale=2"],
+  ["normal 200% text", "&density=normal&scale=2"],
 ] as const;
 
 async function domRowCount(page: Page): Promise<number> {

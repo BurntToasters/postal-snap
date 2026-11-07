@@ -3,7 +3,7 @@ import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
 
 // Failure modes covered here:
-// 1. A hidden copy shows before Details is opened, and stays in Details.
+// 1. A hidden copy stays in Details; the header never shows it.
 // 2. A message without one does not show a Bcc row.
 // Each test ends with a screenshot.
 
@@ -26,8 +26,9 @@ test("a hidden copy appears before the details are opened", async ({
     "aria-expanded",
     "false",
   );
-  await expect(header.getByText("Bcc:", { exact: true })).toBeVisible();
-  await expect(header.getByText("hidden@example.com")).toBeVisible();
+  // Bcc lives in Details only; the header stays short.
+  await expect(header.getByText("Bcc:", { exact: true })).toHaveCount(0);
+  await expect(header.getByText("hidden@example.com")).toHaveCount(0);
   await page.getByRole("button", { name: "Details" }).click();
   const details = page.locator("#message-details-panel");
   await expect(details.getByText("Bcc:", { exact: true })).toBeVisible();

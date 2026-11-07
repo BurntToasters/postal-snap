@@ -14,7 +14,6 @@
   border-radius: var(--radius-sm);
   background: var(--surface);
   transition:
-    transform 120ms ease,
     background-color 120ms ease,
     border-color 120ms ease,
     color 120ms ease,
@@ -22,28 +21,16 @@
 }
 
 .toolbar-button,
-.secondary-button,
-.icon-button {
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--surface-raised) 88%, var(--surface-highlight)),
-    color-mix(in srgb, var(--surface) 82%, var(--surface-muted))
-  );
-  box-shadow:
-    var(--shadow-control),
-    inset 0 1px 0 var(--surface-highlight);
+.secondary-button {
+  background: var(--fill);
 }
 
 .primary-button {
   border-color: var(--accent-fill);
   color: var(--accent-contrast);
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--accent-fill) 88%, white),
-    var(--accent-fill)
-  );
+  background: var(--accent-fill);
   font-weight: 700;
-  box-shadow: 0 2px 5px color-mix(in srgb, var(--accent-fill) 22%, transparent);
+  box-shadow: var(--shadow-control);
 }
 
 .primary-button:hover {
@@ -53,15 +40,22 @@
 
 .secondary-button:hover,
 .toolbar-button:hover,
-.icon-button:hover,
 .add-account-button:hover {
   border-color: var(--border-strong);
-  background: var(--surface-hover);
+  background: var(--fill-hover);
 }
 
+/* Icon buttons are bare until hovered, like the toolbar. */
 .icon-button {
   width: var(--control-height);
   padding: var(--control-pad-block);
+  border-color: transparent;
+  background: transparent;
+}
+
+.icon-button:hover {
+  border-color: transparent;
+  background: var(--fill-hover);
 }
 
 .primary-button svg,
@@ -69,17 +63,15 @@
 .toolbar-button svg,
 .icon-button svg,
 .add-account-button svg {
-  width: 1.1875rem;
-  height: 1.1875rem;
+  width: var(--icon-lg);
+  height: var(--icon-lg);
 }
 
 .danger-button {
   border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
   color: var(--danger-ink);
   background: color-mix(in srgb, var(--danger-soft) 70%, transparent);
-  box-shadow:
-    var(--shadow-control),
-    inset 0 1px 0 var(--surface-highlight);
+  box-shadow: var(--shadow-control);
 }
 
 .danger-button:hover {

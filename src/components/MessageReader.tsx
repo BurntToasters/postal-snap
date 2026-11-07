@@ -854,6 +854,25 @@ export function MessageReader({
           onError={(text) => setError(text)}
         />
       ) : null}
+      <AttachmentList
+        message={message}
+        preview={preview}
+        downloadingAttachmentId={downloadingAttachmentId}
+        previewAttachmentId={previewAttachmentId}
+        isPreviewable={isPreviewable}
+        onPreview={previewFile}
+        onDownload={download}
+        onSaveAll={() => void saveAllAttachments()}
+        onSaveChosen={(ids) => void saveChosenAttachments(ids)}
+        onPreviewDownload={() => {
+          const current = message.attachments.find(
+            (item) =>
+              item.filename === preview?.preview.filename && !item.inline,
+          );
+          if (current) void download(current.id, current.filename);
+        }}
+        onPreviewClose={() => setPreview(null)}
+      />
       <MessageBody
         message={message}
         sanitized={sanitized}
@@ -901,25 +920,6 @@ export function MessageReader({
         onOpenLink={(url) => void handleExternalLink(url)}
         onOpenMailto={(url) => openComposer({ prefill: parseMailto(url) })}
         searchTerms={textHighlightTerms(searchQuery ?? "")}
-      />
-      <AttachmentList
-        message={message}
-        preview={preview}
-        downloadingAttachmentId={downloadingAttachmentId}
-        previewAttachmentId={previewAttachmentId}
-        isPreviewable={isPreviewable}
-        onPreview={previewFile}
-        onDownload={download}
-        onSaveAll={() => void saveAllAttachments()}
-        onSaveChosen={(ids) => void saveChosenAttachments(ids)}
-        onPreviewDownload={() => {
-          const current = message.attachments.find(
-            (item) =>
-              item.filename === preview?.preview.filename && !item.inline,
-          );
-          if (current) void download(current.id, current.filename);
-        }}
-        onPreviewClose={() => setPreview(null)}
       />
       <QuickReply message={message} replyNotes={replyNotes} />
     </article>

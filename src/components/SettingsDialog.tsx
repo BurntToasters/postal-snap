@@ -540,9 +540,6 @@ export function SettingsDialog({
         >
           <span>
             <h1 id="settings-title">{strings.settings.title}</h1>
-            <small>
-              {saving ? strings.settings.saving : strings.settings.autosave}
-            </small>
           </span>
           <button
             className="icon-button"
@@ -577,6 +574,9 @@ export function SettingsDialog({
                 {strings.settings.clearSearch}
               </button>
             ) : null}
+            <small className="settings-autosave">
+              {saving ? strings.settings.saving : strings.settings.autosave}
+            </small>
           </div>
           <label className="settings-section-select">
             <span>{strings.settings.sectionSelector}</span>

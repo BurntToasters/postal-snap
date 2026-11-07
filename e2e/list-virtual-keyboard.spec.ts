@@ -50,19 +50,19 @@ test("Shift+arrow selects a range across rows that are not mounted", async ({
   await page.goto("/?hugeList=1500&theme=light");
   await row(page, "Archive note 1").focus();
   await page.keyboard.press("x");
-  await expect(page.locator(".bulk-bar strong")).toHaveText("1 selected");
+  await expect(page.locator(".pane-heading small")).toHaveText("1 selected");
 
   for (let step = 0; step < 30; step += 1) {
     await page.keyboard.press("Shift+ArrowDown");
   }
   await expect(row(page, "Archive note 31")).toBeFocused();
-  await expect(page.locator(".bulk-bar strong")).toHaveText("31 selected");
+  await expect(page.locator(".pane-heading small")).toHaveText("31 selected");
 
   for (let step = 0; step < 10; step += 1) {
     await page.keyboard.press("Shift+ArrowUp");
   }
   await expect(row(page, "Archive note 21")).toBeFocused();
-  await expect(page.locator(".bulk-bar strong")).toHaveText("21 selected");
+  await expect(page.locator(".pane-heading small")).toHaveText("21 selected");
 });
 
 test("rows expose set size and position across the whole list", async ({

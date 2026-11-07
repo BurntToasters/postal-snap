@@ -108,6 +108,19 @@ export function useSelectionMenu(ctx: SelectionMenuCtx): SelectionMenu {
       closeMailboxMore();
       void pinSelection(false);
     },
+    // Read, star, and pin toggles follow the selection's state.
+    anySelectedUnread: messages.some(
+      (message) => selectedIds.includes(message.id) && !message.isRead,
+    ),
+    anySelectedUnstarred: messages.some(
+      (message) => selectedIds.includes(message.id) && !message.isStarred,
+    ),
+    anySelectedRead: messages.some(
+      (message) => selectedIds.includes(message.id) && message.isRead,
+    ),
+    anySelectedStarred: messages.some(
+      (message) => selectedIds.includes(message.id) && message.isStarred,
+    ),
     pinDisabled: !messages.some(
       (message) => selectedIds.includes(message.id) && !message.pinned,
     ),

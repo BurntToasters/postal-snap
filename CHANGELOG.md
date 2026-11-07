@@ -22,7 +22,10 @@ Postal Snap is a calm, accessible desktop email client. Mail stays on your compu
 
 ## Changes in `v0.5.2:`
 
-- **IMPROVED - Interface density:** Tighter toolbar, message-list, reader-header, avatar, and setup-wizard spacing across comfortable and compact density, with clearer accent colors and contrast coverage.
+- **NEW - Normal density:** A space-efficient default layout. Comfortable (larger controls) and Compact remain in Settings > Appearance and first-run setup.
+- **IMPROVED - Reader:** The letter gets the room: single-line header, inline attachments, capped conversation index, a toolbar that no longer wraps, and a compact quick reply.
+- **IMPROVED - Message list and sidebar:** Shorter day bands, one-line previews, and tighter rows show more messages at once.
+- **IMPROVED - Composer and Settings:** Flatter controls and smaller windows. The formatting toggle moves to the composer footer, and importance and read receipt move to the Message options menu.
 - **IMPROVED - Window chrome and controls:** Refined window chrome, buttons, and disabled states for more consistent focus and contrast.
 
 ## Changes in `v0.5.1:`

@@ -1,6 +1,7 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { revealMenuItem } from "./menu-reveal";
 
 // Failure modes covered here:
 // 1. Cancel leaves the message in place and saves no rule.
@@ -25,6 +26,7 @@ async function openBlockSender(page: import("@playwright/test").Page) {
 test("cancel does not block the sender", async ({ page }) => {
   page.once("dialog", (dialog) => dialog.dismiss());
   await openBlockSender(page);
+  await revealMenuItem(page, "Block sender");
   await page.getByRole("menuitem", { name: "Block sender" }).click();
   await expect(
     page.getByRole("heading", { name: "Weekend plans" }),
@@ -40,6 +42,7 @@ test("block sender moves the message and saves a Junk rule", async ({
 }) => {
   page.once("dialog", (dialog) => dialog.accept());
   await openBlockSender(page);
+  await revealMenuItem(page, "Block sender");
   await page.getByRole("menuitem", { name: "Block sender" }).click();
   await expect(
     page.getByRole("heading", { name: "Weekend plans" }),

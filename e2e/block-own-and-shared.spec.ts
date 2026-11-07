@@ -20,6 +20,14 @@ test.afterEach(async ({ page }, testInfo: TestInfo) => {
   await testInfo.attach("screenshot", { path, contentType: "image/png" });
 });
 
+/** Block actions live in the Sender and rules submenu. */
+async function openSenderRules(page: Page, menuName: string) {
+  const trigger = page
+    .getByRole("menu", { name: menuName, exact: true })
+    .getByRole("menuitem", { name: "Sender and rules", exact: true });
+  if (await trigger.count()) await trigger.click();
+}
+
 async function menuNames(page: Page): Promise<{
   more: string[];
   context: string[];
@@ -27,12 +35,14 @@ async function menuNames(page: Page): Promise<{
   const row = page.getByRole("option", { name: /Weekend plans/i });
   await row.click();
   await page.getByRole("button", { name: "More actions" }).click();
+  await openSenderRules(page, "More actions");
   const more = await page
     .getByRole("menu", { name: "More actions" })
     .getByRole("menuitem")
     .allInnerTexts();
   await page.keyboard.press("Escape");
   await row.click({ button: "right" });
+  await openSenderRules(page, "Actions");
   const context = await page
     .getByRole("menu", { name: "Actions" })
     .getByRole("menuitem")

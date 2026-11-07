@@ -129,8 +129,9 @@ test("resizes with the grip and keyboard within limits", async ({ page }) => {
 
   const gripBox = await box(grip);
   results.gripSize = { width: gripBox.width, height: gripBox.height };
-  expect(gripBox.width).toBeGreaterThanOrEqual(44);
-  expect(gripBox.height).toBeGreaterThanOrEqual(44);
+  const target = await targetSize(page);
+  expect(gripBox.width).toBeGreaterThanOrEqual(target);
+  expect(gripBox.height).toBeGreaterThanOrEqual(target);
 
   const before = await box(composer(page));
   await dragBy(page, grip, -200, -150);
@@ -210,3 +211,14 @@ test("restore after the window shrinks stays on screen", async ({ page }) => {
   expect(restored.x + restored.width).toBeGreaterThanOrEqual(80);
   expect(restored.width).toBeLessThanOrEqual(900);
 });
+
+async function targetSize(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const probe = document.createElement("i");
+    probe.style.cssText = "position:fixed;width:var(--target-size)";
+    document.body.append(probe);
+    const width = probe.getBoundingClientRect().width;
+    probe.remove();
+    return width;
+  });
+}

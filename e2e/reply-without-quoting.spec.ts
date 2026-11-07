@@ -1,6 +1,7 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { revealMenuItem } from "./menu-reveal";
 
 // Failure modes covered here:
 // 1. Reply without quoting still quotes the open message.
@@ -19,7 +20,9 @@ test.afterEach(async ({ page }, testInfo: TestInfo) => {
 test("a reply can leave out the original message", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("option", { name: /Weekend plans/i }).click();
+  await revealMenuItem(page, "Reply without quoting");
   await page.getByRole("button", { name: "More actions" }).click();
+  await revealMenuItem(page, "Reply without quoting");
   await page
     .getByRole("menuitem", { name: "Reply without quoting", exact: true })
     .click();

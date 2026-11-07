@@ -231,7 +231,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           }}
           onKeyDown={onKeyDown}
         />
-        <p id={hintId} className="palette-keys">
+        <p id={hintId} className="visually-hidden">
           {palette.keysHint}
         </p>
         <div

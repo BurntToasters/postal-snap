@@ -3,7 +3,7 @@ import {
   nextUnreadMailbox,
   previousUnreadMailbox,
 } from "../components/mail/folderTreeModel";
-import { shortcutAltMod, shortcutMod, shortcutShiftMod } from "../format";
+import { formatChord } from "../format";
 import { strings } from "../i18n";
 import { useAppStore } from "../store";
 import { unreadStep } from "../threads";
@@ -89,7 +89,7 @@ const ACTIONS: readonly ActionDefinition[] = [
     label: () => strings.composer.newMessage,
     scope: "global",
     shortcut: [{ key: "n", mod: true, shift: false, focus: "any" }],
-    hint: () => `${shortcutMod()} N`,
+    hint: () => formatChord("N"),
   },
   {
     id: "get-mail",
@@ -102,7 +102,7 @@ const ACTIONS: readonly ActionDefinition[] = [
       { key: "m", mod: true, shift: true, focus: "any" },
       { key: "F5", focus: "any" },
     ],
-    hint: () => `${shortcutShiftMod()} N`,
+    hint: () => formatChord("N", { shift: true }),
   },
   {
     id: "get-mail-all",
@@ -113,7 +113,7 @@ const ACTIONS: readonly ActionDefinition[] = [
     shortcut: [
       { key: "F5", shift: true, mod: false, alt: false, focus: "any" },
     ],
-    hint: () => "⇧ F5",
+    hint: () => formatChord("F5", { shift: true, mod: false }),
   },
   {
     id: "reply",
@@ -123,7 +123,7 @@ const ACTIONS: readonly ActionDefinition[] = [
     label: () => strings.reader.reply,
     scope: "reader",
     shortcut: [{ key: "r", mod: true, shift: false, focus: "any" }],
-    hint: () => `${shortcutMod()} R`,
+    hint: () => formatChord("R"),
   },
   {
     id: "reply-all",
@@ -132,7 +132,7 @@ const ACTIONS: readonly ActionDefinition[] = [
     label: () => strings.reader.replyAll,
     scope: "reader",
     shortcut: [{ key: "r", mod: true, shift: true, focus: "any" }],
-    hint: () => `${shortcutShiftMod()} R`,
+    hint: () => formatChord("R", { shift: true }),
   },
   {
     id: "forward",
@@ -140,8 +140,11 @@ const ACTIONS: readonly ActionDefinition[] = [
     available: hasSelection,
     label: () => strings.reader.forward,
     scope: "reader",
-    shortcut: [{ key: "f", mod: true, shift: true, focus: "any" }],
-    hint: () => `${shortcutShiftMod()} F`,
+    shortcut: [
+      { key: "f", mod: true, shift: true, focus: "any" },
+      { key: "f", mod: false, alt: false, shift: false },
+    ],
+    hint: () => formatChord("F", { shift: true }),
   },
   {
     id: "archive",
@@ -154,7 +157,7 @@ const ACTIONS: readonly ActionDefinition[] = [
       { key: "e", mod: true, shift: false, focus: "any" },
       { key: "a", ctrl: true, meta: true, focus: "any" },
     ],
-    hint: () => `${shortcutMod()} E`,
+    hint: () => formatChord("E"),
   },
   {
     id: "trash",
@@ -164,7 +167,7 @@ const ACTIONS: readonly ActionDefinition[] = [
     label: () => strings.reader.trash,
     scope: "reader",
     shortcut: [{ key: "Backspace", mod: true }],
-    hint: () => `${shortcutMod()} ⌫`,
+    hint: () => formatChord("⌫"),
   },
   {
     id: "search",
@@ -176,7 +179,7 @@ const ACTIONS: readonly ActionDefinition[] = [
       { key: "f", mod: true, shift: false, alt: false, focus: "any" },
       { key: "/", mod: false, shift: false, focus: "not-editing" },
     ],
-    hint: () => `${shortcutMod()} F / /`,
+    hint: () => `${formatChord("F")} / /`,
   },
   {
     id: "find-in-message",
@@ -185,25 +188,25 @@ const ACTIONS: readonly ActionDefinition[] = [
     label: () => strings.reader.findInMessage,
     scope: "reader",
     shortcut: [{ key: "f", mod: true, alt: true, focus: "any" }],
-    hint: () => `${shortcutAltMod()} F`,
+    hint: () => formatChord("F", { alt: true }),
   },
   {
     id: "send",
     label: () => strings.composer.send,
     scope: "composer",
-    hint: () => `${shortcutMod()} ↵`,
+    hint: () => formatChord("↵"),
   },
   {
     id: "save-draft",
     label: () => strings.composer.saveDraft,
     scope: "composer",
-    hint: () => `${shortcutMod()} S`,
+    hint: () => formatChord("S"),
   },
   {
     id: "text-size",
     label: () => strings.settings.textSize,
     scope: "global",
-    hint: () => `${shortcutMod()} + / ${shortcutMod()} -`,
+    hint: () => `${formatChord("+")} / ${formatChord("-")}`,
   },
   {
     id: "settings",
@@ -211,7 +214,7 @@ const ACTIONS: readonly ActionDefinition[] = [
     run: viaBus("settings"),
     label: () => strings.mail.settings,
     scope: "global",
-    hint: () => `${shortcutMod()} ,`,
+    hint: () => formatChord(","),
   },
   {
     id: "next-unread",
@@ -302,7 +305,7 @@ const ACTIONS: readonly ActionDefinition[] = [
     label: () => strings.settings.shortcutMarkReadUnread,
     scope: "reader",
     shortcut: [{ key: "u", mod: true, shift: true, focus: "any" }],
-    hint: () => `${shortcutShiftMod()} U`,
+    hint: () => formatChord("U", { shift: true }),
   },
   {
     id: "toggle-star",
@@ -311,7 +314,7 @@ const ACTIONS: readonly ActionDefinition[] = [
     label: () => strings.settings.shortcutStarMessage,
     scope: "reader",
     shortcut: [{ key: "l", mod: true, shift: true, focus: "any" }],
-    hint: () => `${shortcutShiftMod()} L`,
+    hint: () => formatChord("L", { shift: true }),
   },
   {
     id: "star-focused",
@@ -369,7 +372,7 @@ const ACTIONS: readonly ActionDefinition[] = [
     available: hasSelection,
     label: () => strings.reader.print,
     scope: "reader",
-    hint: () => `${shortcutMod()} P`,
+    hint: () => formatChord("P"),
   },
   {
     id: "select-account",
@@ -394,7 +397,7 @@ const ACTIONS: readonly ActionDefinition[] = [
     label: () => strings.reader.junk,
     scope: "reader",
     shortcut: [{ key: "j", mod: true, shift: true, focus: "any" }],
-    hint: () => `${shortcutShiftMod()} J`,
+    hint: () => formatChord("J", { shift: true }),
   },
   {
     id: "reading-pane-right",
@@ -404,7 +407,7 @@ const ACTIONS: readonly ActionDefinition[] = [
     shortcut: [
       { key: ["ArrowRight", "Right"], mod: true, alt: true, focus: "any" },
     ],
-    hint: () => `${shortcutAltMod()} →`,
+    hint: () => formatChord("→", { alt: true }),
   },
   {
     id: "reading-pane-bottom",
@@ -414,7 +417,7 @@ const ACTIONS: readonly ActionDefinition[] = [
     shortcut: [
       { key: ["ArrowDown", "Down"], mod: true, alt: true, focus: "any" },
     ],
-    hint: () => `${shortcutAltMod()} ↓`,
+    hint: () => formatChord("↓", { alt: true }),
   },
   {
     id: "reading-pane-hidden",
@@ -422,7 +425,7 @@ const ACTIONS: readonly ActionDefinition[] = [
     label: () => strings.settings.shortcutReadingPaneHidden,
     scope: "global",
     shortcut: [{ key: ["ArrowUp", "Up"], mod: true, alt: true, focus: "any" }],
-    hint: () => `${shortcutAltMod()} ↑`,
+    hint: () => formatChord("↑", { alt: true }),
   },
   {
     id: "open-command-palette",
@@ -431,7 +434,7 @@ const ACTIONS: readonly ActionDefinition[] = [
     shortcut: [
       { key: "k", mod: true, shift: false, alt: false, focus: "not-editing" },
     ],
-    hint: () => `${shortcutMod()} K`,
+    hint: () => formatChord("K"),
     keywords: ["commands", "actions", "jump"],
   },
   {
@@ -443,7 +446,7 @@ const ACTIONS: readonly ActionDefinition[] = [
     shortcut: [
       { key: "z", mod: true, shift: false, alt: false, focus: "not-editing" },
     ],
-    hint: () => `${shortcutMod()} Z`,
+    hint: () => formatChord("Z"),
   },
   {
     id: "show-shortcuts",

@@ -7,7 +7,7 @@ import {
 } from "react";
 import { api } from "../../api";
 import { mergeAccountFields } from "../../accountMerge";
-import { Mail } from "lucide-react";
+import { ChevronDown, ChevronUp, Mail } from "lucide-react";
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
 import type { AccountSummary, FilterRule, MailboxSummary } from "../../types";
@@ -269,7 +269,7 @@ export function AccountsTab({
     <SettingsPanel id="accounts" title={strings.settings.accounts}>
       {accounts.length === 0 ? (
         <div className="settings-empty-state">
-          <Mail />
+          <Mail aria-hidden="true" />
           <p>{strings.settings.noAccounts}</p>
           <button type="button" className="secondary-button" onClick={onClose}>
             {strings.settings.returnToSetup}
@@ -318,23 +318,25 @@ export function AccountsTab({
                     <div className="account-overview-order">
                       <button
                         type="button"
-                        className="secondary-button"
+                        className="icon-button"
                         aria-label={strings.settings.moveAccountUp(name)}
+                        title={strings.settings.moveUp}
                         disabled={Boolean(movingId) || index === 0}
                         onClick={() => void moveAccount(account.id, -1)}
                       >
-                        {strings.settings.moveUp}
+                        <ChevronUp aria-hidden="true" />
                       </button>
                       <button
                         type="button"
-                        className="secondary-button"
+                        className="icon-button"
                         aria-label={strings.settings.moveAccountDown(name)}
+                        title={strings.settings.moveDown}
                         disabled={
                           Boolean(movingId) || index === accounts.length - 1
                         }
                         onClick={() => void moveAccount(account.id, 1)}
                       >
-                        {strings.settings.moveDown}
+                        <ChevronDown aria-hidden="true" />
                       </button>
                     </div>
                   ) : null}
@@ -392,7 +394,7 @@ export function AccountsTab({
             .map((account) => (
               <div key={account.id} className="account-settings-card">
                 <div className="account-card-header">
-                  <Mail />
+                  <Mail aria-hidden="true" />
                   <span className="account-card-info">
                     <strong>{account.displayName || account.email}</strong>
                     <small>

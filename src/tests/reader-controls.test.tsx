@@ -20,6 +20,20 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+/** Finds a menu item, opening the submenu that holds it first. */
+function menuItemBy(options: { name: string | RegExp }) {
+  if (!screen.queryByRole("menuitem", options)) {
+    const triggers = document.querySelectorAll<HTMLElement>(
+      '[role="menuitem"][aria-haspopup="menu"]',
+    );
+    for (const trigger of Array.from(triggers)) {
+      fireEvent.click(trigger);
+      if (screen.queryByRole("menuitem", options)) break;
+    }
+  }
+  return screen.getByRole("menuitem", options);
+}
+
 describe("message header", () => {
   it("shows complete details and copies protected identifiers", async () => {
     vi.useFakeTimers();
@@ -368,10 +382,10 @@ describe("reader toolbar", () => {
       strings.reader.createRuleFromSender,
       strings.reader.messagesFromSender,
     ]) {
-      fireEvent.click(screen.getByRole("menuitem", { name: label }));
+      fireEvent.click(menuItemBy({ name: label }));
     }
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.contextMenu.moveToFolder("Projects"),
       }),
     );
@@ -409,7 +423,7 @@ describe("reader toolbar", () => {
     const onCreateSubjectRule = vi.fn();
     render(toolbar({ onCreateSubjectRule }));
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.reader.createRuleFromSubject,
       }),
     );
@@ -421,12 +435,12 @@ describe("reader toolbar", () => {
     const onReplyAllWithAttachments = vi.fn();
     render(toolbar({ onReplyWithAttachments, onReplyAllWithAttachments }));
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.reader.replyWithAttachments,
       }),
     );
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.reader.replyAllWithAttachments,
       }),
     );
@@ -468,9 +482,7 @@ describe("reader toolbar", () => {
   it("redirects the open message", () => {
     const onRedirect = vi.fn();
     render(toolbar({ onRedirect }));
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: strings.reader.redirect }),
-    );
+    fireEvent.click(menuItemBy({ name: strings.reader.redirect }));
     expect(onRedirect).toHaveBeenCalledOnce();
   });
 
@@ -478,7 +490,7 @@ describe("reader toolbar", () => {
     const onForwardAsAttachment = vi.fn();
     render(toolbar({ onForwardAsAttachment }));
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.reader.forwardAsAttachment,
       }),
     );
@@ -488,9 +500,7 @@ describe("reader toolbar", () => {
   it("starts a new message from the open message", () => {
     const onEditAsNew = vi.fn();
     render(toolbar({ onEditAsNew }));
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: strings.reader.editAsNew }),
-    );
+    fireEvent.click(menuItemBy({ name: strings.reader.editAsNew }));
     expect(onEditAsNew).toHaveBeenCalledOnce();
   });
 
@@ -498,7 +508,7 @@ describe("reader toolbar", () => {
     const onMarkConversationRead = vi.fn();
     render(toolbar({ onMarkConversationRead }));
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.reader.markConversationRead,
       }),
     );
@@ -509,7 +519,7 @@ describe("reader toolbar", () => {
     const onArchiveConversation = vi.fn();
     render(toolbar({ onArchiveConversation }));
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.reader.archiveConversation,
       }),
     );
@@ -520,7 +530,7 @@ describe("reader toolbar", () => {
     const onJunkConversation = vi.fn();
     render(toolbar({ onJunkConversation }));
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.reader.junkConversation,
       }),
     );
@@ -530,7 +540,7 @@ describe("reader toolbar", () => {
   it("pins the open message from the message menu", () => {
     const onPin = vi.fn();
     render(toolbar({ onPin }));
-    fireEvent.click(screen.getByRole("menuitem", { name: strings.reader.pin }));
+    fireEvent.click(menuItemBy({ name: strings.reader.pin }));
     expect(onPin).toHaveBeenCalledOnce();
   });
 
@@ -538,7 +548,7 @@ describe("reader toolbar", () => {
     const onForwardConversation = vi.fn();
     render(toolbar({ onForwardConversation }));
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.reader.forwardConversation,
       }),
     );
@@ -549,7 +559,7 @@ describe("reader toolbar", () => {
     const onCopyConversationText = vi.fn();
     render(toolbar({ onCopyConversationText }));
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.reader.copyConversationText,
       }),
     );
@@ -560,7 +570,7 @@ describe("reader toolbar", () => {
     const onPrintConversation = vi.fn();
     render(toolbar({ onPrintConversation }));
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.reader.printConversation,
       }),
     );
@@ -571,7 +581,7 @@ describe("reader toolbar", () => {
     const onMoveConversationToMailbox = vi.fn();
     render(toolbar({ onMoveConversationToMailbox }));
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.contextMenu.moveConversationToFolder("Projects"),
       }),
     );
@@ -582,7 +592,7 @@ describe("reader toolbar", () => {
     const onCopyConversationToMailbox = vi.fn();
     render(toolbar({ onCopyConversationToMailbox }));
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.contextMenu.copyConversationToFolder("Projects"),
       }),
     );
@@ -593,7 +603,7 @@ describe("reader toolbar", () => {
     const onSaveConversationFiles = vi.fn();
     render(toolbar({ onSaveConversationFiles }));
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.reader.saveConversationFiles,
       }),
     );
@@ -604,7 +614,7 @@ describe("reader toolbar", () => {
     const onSnoozeConversation = vi.fn();
     render(toolbar({ onSnoozeConversation }));
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.reader.snoozeConversation,
       }),
     );
@@ -615,7 +625,7 @@ describe("reader toolbar", () => {
     const onSelectConversation = vi.fn();
     render(toolbar({ onSelectConversation }));
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.reader.selectConversation,
       }),
     );
@@ -626,7 +636,7 @@ describe("reader toolbar", () => {
     const onStarConversation = vi.fn();
     render(toolbar({ onStarConversation }));
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.reader.starConversation,
       }),
     );
@@ -637,7 +647,7 @@ describe("reader toolbar", () => {
     const onMarkConversationUnread = vi.fn();
     render(toolbar({ onMarkConversationUnread }));
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.reader.markConversationUnread,
       }),
     );
@@ -653,7 +663,7 @@ describe("reader toolbar", () => {
       }),
     );
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.reader.unblockSender,
       }),
     );
@@ -669,7 +679,7 @@ describe("reader toolbar", () => {
     const onDeleteConversation = vi.fn();
     render(toolbar({ isTrashMailbox: true, onDeleteConversation }));
     fireEvent.click(
-      screen.getByRole("menuitem", {
+      menuItemBy({
         name: strings.reader.deleteConversation,
       }),
     );
@@ -678,14 +688,10 @@ describe("reader toolbar", () => {
 
   it("switches a formatted message to plain text", () => {
     render(toolbar({ canViewPlain: true }));
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: strings.reader.viewPlain }),
-    );
+    fireEvent.click(menuItemBy({ name: strings.reader.viewPlain }));
     expect(callbacks.onTogglePlain).toHaveBeenCalled();
     render(toolbar({ canViewPlain: true, viewingPlain: true }));
-    expect(
-      screen.getByRole("menuitem", { name: strings.reader.viewFormatted }),
-    ).toBeVisible();
+    expect(menuItemBy({ name: strings.reader.viewFormatted })).toBeVisible();
   });
 
   it("reflects selected mailbox and message states", () => {
@@ -718,15 +724,9 @@ describe("reader toolbar", () => {
     expect(
       screen.queryByRole("button", { name: strings.reader.closeMessage }),
     ).not.toBeInTheDocument();
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: strings.reader.markUnread }),
-    );
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: strings.reader.removeStar }),
-    );
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: strings.reader.notJunk }),
-    );
+    fireEvent.click(menuItemBy({ name: strings.reader.markUnread }));
+    fireEvent.click(menuItemBy({ name: strings.reader.removeStar }));
+    fireEvent.click(menuItemBy({ name: strings.reader.notJunk }));
     expect(callbacks.onMoveToInbox).toHaveBeenCalledTimes(2);
   });
 });

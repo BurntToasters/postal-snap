@@ -5,12 +5,10 @@
   font-size: 16px;
   font-synthesis: none;
   line-height: 1.45;
-  letter-spacing: -0.01em;
 
-  /* macOS 27 design language (Golden Gate / Tahoe light). Semantic mapping:
-     canvas = grouped background, surface = windowBackground,
-     muted/hover = system fills, text = label/secondaryLabel,
-     border = separator, accent = controlAccent/link. */
+  /* Light palette: neutral grays with a Postal blue accent. Roles: canvas =
+     app background, surface = panes and cards, fill and sidebar = system
+     fills, text = label, border = separator. */
   --accent: #006fc9;
   --accent-hover: #005eaa;
   --accent-ink: #00579e;
@@ -27,9 +25,10 @@
   --surface-glass: rgb(255 255 255 / 78%);
   --surface-highlight: rgb(255 255 255 / 86%);
   --text: rgb(0 0 0 / 85%);
-  --text-muted: rgb(0 0 0 / 55%);
+  --text-muted: rgb(0 0 0 / 60%);
   --border: rgb(0 0 0 / 12%);
   --border-strong: rgb(0 0 0 / 24%);
+  --border-soft: color-mix(in srgb, var(--border) 72%, transparent);
   --focus: #1d1d1f;
   --danger: #d70015;
   --danger-ink: #b3261e;
@@ -46,13 +45,8 @@
   --shadow-control: 0 1px 2px rgb(0 0 0 / 8%);
   --scrollbar-thumb: rgba(0, 0, 0, 0.22);
   --scrollbar-thumb-hover: rgba(0, 0, 0, 0.36);
-  --folder-sent: #1f7a33;
-  --folder-drafts: #b54708;
-  --folder-archive: #6e6e73;
-  --folder-trash: #d70015;
-  --folder-junk: #7d2ae8;
   /* Account identity colors stay stable across themes. */
-  --avatar-teal: #00868a;
+  --avatar-teal: #007075;
   --avatar-green: #27843c;
   --avatar-amber: #9a6700;
   --avatar-orange: #c65300;
@@ -71,65 +65,124 @@
   --space-4: 1rem;
   --space-5: 1.25rem;
   --space-6: 1.5rem;
-  --settings-nav-width: 14rem;
-  --settings-control-width: 13.75rem;
-  --settings-field-min-width: 12rem;
-  --settings-window-width: 64rem;
-  --settings-window-height: 46rem;
-  --settings-empty-padding-block: 2rem;
-  --settings-empty-icon-size: 1.875rem;
-  --settings-signature-min-height: 5.5rem;
-  --settings-chip-height: 2.25rem;
-  --settings-update-icon-size: 2rem;
-  --settings-stack-gap: var(--space-5);
-  --settings-label-gap: var(--space-2);
-  --settings-row-pad-block: var(--space-3);
-  --settings-row-pad-inline: var(--space-4);
-  --settings-copy-gap: var(--space-1);
-  --settings-nav-gap: var(--space-1);
-  --settings-page-pad-inline: var(--space-6);
-  --settings-page-pad-block: var(--space-5);
-  --settings-search-pad-block: var(--space-4);
-  --settings-search-pad-end: 0;
-  --settings-kbd-min-height: 1.75rem;
-  --settings-confirm-width: 27.5rem;
-  --control-height: 2.75rem;
-  --toolbar-height: 3.25rem;
-  /* Density tokens: size UI with these, never literals, so compact
-     (below) can restyle everything by overriding them. */
-  --target-size: 44px;
-  --account-avatar-size: 32px;
-  --account-avatar-font-size: min(
-    0.9rem,
-    calc(var(--account-avatar-size) * 0.45)
-  );
-  --sender-avatar-size: 36px;
-  --sender-avatar-font-size: min(1rem, calc(var(--sender-avatar-size) * 0.4));
-  --sender-avatar-narrow-size: 38px;
-  --provider-symbol-size: 50px;
-  --provider-arrow-size: 34px;
-  --setup-icon-size: 2.125rem;
-  --setup-step-size: 1.5rem;
-  --setup-progress-width: 11.25rem;
-  --setup-preview-list-width: 6.875rem;
-  --setup-preview-min-height: 6.75rem;
-  --setup-page-padding: 1.25rem;
-  --setup-card-padding: clamp(1.25rem, 3vw, 1.75rem);
-  --composer-resize-gutter: calc(var(--target-size) + var(--space-2));
-  --composer-editor-min-height: 10rem;
-  --composer-table-cell-min-width: 5rem;
-  --composer-options-menu-min-width: 12.5rem;
-  --composer-docked-pill-max-width: 23.75rem;
-  --composer-docked-restore-min-width: 11.25rem;
-  --composer-docked-restore-max-width: 16.25rem;
-  --menu-search-min-width: 15.625rem;
-  --mailbox-more-menu-min-width: 15rem;
-  --mailbox-filter-menu-min-width: 12rem;
-  --reader-more-menu-min-width: 16rem;
-  --context-menu-min-width: 12.5rem;
-  --search-box-min-width: 9.375rem;
-  --account-select-arrow-space: 2.125rem;
-  --get-mail-menu-min-width: 14rem;
+
+  /* Type scale (weights 400/500/600/700). Not density-driven: density only
+     changes --ui-font-size on body. */
+  --fs-xs: 0.75rem;
+  --fs-sm: 0.8125rem;
+  --fs-md: 0.875rem;
+  --fs-ui: 0.9375rem;
+  --fs-base: 1rem;
+  --fs-lg: 1.0625rem;
+  --fs-xl: 1.125rem;
+  --fs-2xl: 1.25rem;
+
+  /* Icon sizes. */
+  --icon-sm: 0.875rem;
+  --icon-md: 1rem;
+  --icon-lg: 1.25rem;
+
+  /* Density tokens. :root is Normal (the default). The comfortable and
+     compact blocks below override these; never hard-code sizes. */
+  --ui-font-size: 0.9375rem;
+  --control-height: 2.25rem;
+  --toolbar-height: 2.75rem;
+  --toolbar-pad-block: 2px;
+  --toolbar-pad-inline: 12px;
+  --toolbar-button-size: 2rem;
+  --target-size: 36px;
+  --target-size-inset: 32px;
+  --control-pad-block: 6px;
+  --row-pad-block: 5px;
+  --bar-height-sm: 40px;
+  --bar-height-md: 48px;
+  --bar-pad-block: 4px;
+  --bar-pad-block-lg: 6px;
+  --button-lg-height: 42px;
+  --provider-button-height: 64px;
+  --settings-row-height: 40px;
+  --account-avatar-size: 28px;
+  --sender-avatar-size: 32px;
+  --sender-avatar-narrow-size: 34px;
+  --provider-symbol-size: 42px;
+  --provider-arrow-size: 32px;
+  --setup-icon-size: 2rem;
+  --setup-step-size: 1.375rem;
+  --setup-progress-width: 10rem;
+  --setup-preview-list-width: 6rem;
+  --setup-preview-min-height: 6rem;
+  --setup-card-padding: clamp(1rem, 2.5vw, 1.5rem);
+  --setup-mark-size: 44px;
+  --switch-track-height: min(1.5rem, 42px);
+  --drawer-width: 18rem;
+  --menu-row-height: 2.25rem;
+  --folder-indent: 0.875rem;
+  --sidebar-gap: 2px;
+  --sidebar-drag-gap: 2px;
+  --sidebar-section-gap: 6px 8px 2px;
+  --search-box-min-width: 9rem;
+  --search-box-flex-basis: 15rem;
+  /* Max-width is the one token not ordered px-wise: Normal is wider than
+     comfortable's 18.125rem so the search field fills a 1280 px window. */
+  --search-box-max-width: 20rem;
+  --pane-heading-height: 2.75rem;
+  --pane-heading-pad-block: 4px;
+  --message-row-height: 4rem;
+  --message-row-pad-block: 6px;
+  --list-row-height: 3.25rem;
+  --list-row-pad-block: 8px;
+  --list-row-inset: 6px;
+  --list-day-height: 2rem;
+  --list-preview-lines: 1;
+  --reader-pad-inline: clamp(16px, 2.5vw, 24px);
+  --reader-head-pad-block: 10px;
+  --reader-head-pad-end: 8px;
+  --reader-head-gap: 6px 10px;
+  --reader-title-size: clamp(1.125rem, 1.6vw, 1.375rem);
+  --reader-sender-size: 1rem;
+  --reader-meta-size: 0.8125rem;
+  --reader-toolbar-button-pad-block: 5px;
+  --conversation-row-height: 2.25rem;
+  --banner-pad-block: 6px;
+  --attachment-pad-block: 6px;
+  --reader-frame-margin-block: 12px;
+  --invite-pad: 10px 12px;
+  --quick-reply-max-block: min(10rem, 30dvh);
+  --address-row-height: 2.25rem;
+  --composer-editor-min-height: 8rem;
+  --composer-editor-pad-block: 12px;
+  --composer-table-cell-min-width: 4.5rem;
+  --composer-options-menu-min-width: 12rem;
+  --composer-docked-pill-max-width: 23rem;
+  --composer-docked-restore-min-width: 10.5rem;
+  --composer-docked-restore-max-width: 15rem;
+  --composer-window-width: min(900px, 96vw);
+  --composer-window-height: min(700px, 100%);
+  --menu-search-min-width: 15rem;
+  --mailbox-more-menu-min-width: 14.5rem;
+  --mailbox-filter-menu-min-width: 11.5rem;
+  --reader-more-menu-min-width: 15rem;
+  --context-menu-min-width: 12rem;
+  --account-select-arrow-space: 2rem;
+  --settings-window-width: 56rem;
+  --settings-window-height: 40rem;
+  --settings-nav-width: 12rem;
+  --settings-control-width: 12.5rem;
+  --settings-field-min-width: 11rem;
+  --settings-empty-padding-block: 1.5rem;
+  --settings-empty-icon-size: 1.625rem;
+  --settings-signature-min-height: 4.5rem;
+  --settings-chip-height: 2rem;
+  --settings-update-icon-size: 1.75rem;
+  --settings-stack-gap: var(--space-4);
+  --settings-label-gap: 6px;
+  --settings-row-pad-block: 8px;
+  --settings-row-pad-inline: 14px;
+  --settings-page-pad-inline: 20px;
+  --settings-page-pad-block: 16px;
+  --settings-search-pad-block: 12px;
+  --settings-kbd-min-height: 1.5rem;
+  --settings-confirm-width: 26rem;
   --caption-button-width: 46px;
   --caption-controls-space: 150px;
   --mac-traffic-light-space: 84px;
@@ -137,32 +190,16 @@
   --address-label-width: 5rem;
   /* The letter keeps a readable height; the reader scrolls past it in short windows. */
   --reader-body-min: max(6rem, 40dvh);
-  --target-size-inset: var(--target-size);
-  --bar-height-sm: 48px;
-  --bar-height-md: 56px;
-  --settings-row-height: 52px;
-  --button-lg-height: 50px;
-  --provider-button-height: 82px;
-  --folder-indent: 1rem;
-  --control-pad-block: 8px;
-  --row-pad-block: 7px;
-  --toolbar-pad-block: 4px;
-  --toolbar-pad-inline: 16px;
-  /* Reader chrome and the message share one inset. */
-  --reader-pad-inline: clamp(18px, 3vw, 30px);
-  --reader-head-pad-block: 12px;
-  --bar-pad-block: 6px;
-  --bar-pad-block-lg: 10px;
-  /* Quick reply grows with typing up to this height. */
-  --quick-reply-max-block: min(12rem, 35dvh);
-  --sidebar-gap: 3px;
-  --pane-heading-height: 3.25rem;
-  --pane-heading-pad-block: 6px;
-  --message-row-height: 88px;
-  --message-row-pad-block: 8px;
-  --list-row-height: 72px;
-  --list-row-pad-block: 11px;
-  /* OS title bar size; not density-driven (Snap overlay reads its bounds). */
+  --settings-copy-gap: var(--space-1);
+  --settings-nav-gap: var(--space-1);
+  --settings-search-pad-end: 0;
+  --composer-resize-gutter: calc(var(--target-size) + var(--space-2));
+  --account-avatar-font-size: min(
+    0.9rem,
+    calc(var(--account-avatar-size) * 0.45)
+  );
+  --sender-avatar-font-size: min(1rem, calc(var(--sender-avatar-size) * 0.4));
+  --setup-page-padding: 1.25rem;
   --caption-button-height: 44px;
   --scrim: rgb(15 25 33 / 52%);
   --scrim-soft: rgb(15 25 33 / 38%);
@@ -170,27 +207,27 @@
   --mail-ink: #20252b;
   --glass-highlight: rgb(255 255 255 / 12%);
   --window-close: #c42b1c;
+  --notice-max-width: 28rem;
 
   /* macOS 27 Mail chrome: edge-to-edge sidebar a step darker than content,
      neutral sidebar selection, a solid bar, and borderless system fills for
-     grouped controls (tertiarySystemFill). */
+     grouped controls. */
   --sidebar-bg: #ececee;
   --sidebar-selection: rgb(0 0 0 / 9%);
   --bar: #fbfbfc;
   --fill: rgb(118 118 128 / 12%);
   --fill-hover: rgb(118 118 128 / 20%);
-  --monogram: linear-gradient(180deg, #a9aeb8, #868b95);
+  --monogram: var(--fill);
 }
 
 :root[data-theme="light"] {
   color-scheme: light;
 }
 
+/* Dark palette: near-black canvas, neutral elevated surfaces, flat fills.
+   Mirrored token-for-token in the system-dark block below. */
 :root[data-theme="dark"] {
   color-scheme: dark;
-  /* macOS 27 design language (Golden Gate dark). Darkened edge + frosted fills:
-     canvas = near-black base, surface = elevated card,
-     muted/hover = secondary fills, text = label/secondaryLabel dark. */
   --accent: #0a84ff;
   --accent-hover: #409cff;
   --accent-fill: #0068d6;
@@ -198,18 +235,19 @@
   --accent-ink: #64b5ff;
   --accent-soft: rgb(10 132 255 / 20%);
   --accent-contrast: #ffffff;
-  --canvas: #000000;
+  --canvas: #161618;
   --surface: #1c1c1e;
   --surface-muted: #2c2c2e;
-  --surface-hover: #3a3a3c;
+  --surface-hover: #2a2a2d;
   --surface-raised: #28282b;
-  --surface-sunken: #131315;
+  --surface-sunken: #0f0f10;
   --surface-glass: rgb(40 40 43 / 78%);
   --surface-highlight: rgb(255 255 255 / 10%);
   --text: rgb(255 255 255 / 88%);
   --text-muted: rgb(255 255 255 / 60%);
   --border: rgb(255 255 255 / 14%);
   --border-strong: rgb(255 255 255 / 26%);
+  --border-soft: color-mix(in srgb, var(--border) 72%, transparent);
   --focus: #ffffff;
   --danger: #ff453a;
   --danger-ink: #ff7b70;
@@ -226,11 +264,6 @@
   --shadow-control: 0 1px 3px rgb(0 0 0 / 42%);
   --scrollbar-thumb: rgba(255, 255, 255, 0.24);
   --scrollbar-thumb-hover: rgba(255, 255, 255, 0.38);
-  --folder-sent: #30d158;
-  --folder-drafts: #ff9f0a;
-  --folder-archive: #98989d;
-  --folder-trash: #ff453a;
-  --folder-junk: #bf5af2;
   --scrim: rgb(0 0 0 / 56%);
   --scrim-soft: rgb(0 0 0 / 42%);
   --mail-canvas: #ffffff;
@@ -242,7 +275,7 @@
   --bar: #232325;
   --fill: rgb(118 118 128 / 24%);
   --fill-hover: rgb(118 118 128 / 34%);
-  --monogram: linear-gradient(180deg, #8f939c, #6b6f78);
+  --monogram: var(--fill);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -254,18 +287,19 @@
     --accent-ink: #64b5ff;
     --accent-soft: rgb(10 132 255 / 20%);
     --accent-contrast: #ffffff;
-    --canvas: #000000;
+    --canvas: #161618;
     --surface: #1c1c1e;
     --surface-muted: #2c2c2e;
-    --surface-hover: #3a3a3c;
+    --surface-hover: #2a2a2d;
     --surface-raised: #28282b;
-    --surface-sunken: #131315;
+    --surface-sunken: #0f0f10;
     --surface-glass: rgb(40 40 43 / 78%);
     --surface-highlight: rgb(255 255 255 / 10%);
     --text: rgb(255 255 255 / 88%);
     --text-muted: rgb(255 255 255 / 60%);
     --border: rgb(255 255 255 / 14%);
     --border-strong: rgb(255 255 255 / 26%);
+    --border-soft: color-mix(in srgb, var(--border) 72%, transparent);
     --focus: #ffffff;
     --danger: #ff453a;
     --danger-ink: #ff7b70;
@@ -282,11 +316,6 @@
     --shadow-control: 0 1px 3px rgb(0 0 0 / 42%);
     --scrollbar-thumb: rgba(255, 255, 255, 0.24);
     --scrollbar-thumb-hover: rgba(255, 255, 255, 0.38);
-    --folder-sent: #30d158;
-    --folder-drafts: #ff9f0a;
-    --folder-archive: #98989d;
-    --folder-trash: #ff453a;
-    --folder-junk: #bf5af2;
     --scrim: rgb(0 0 0 / 56%);
     --scrim-soft: rgb(0 0 0 / 42%);
     --mail-canvas: #ffffff;
@@ -298,20 +327,200 @@
     --bar: #232325;
     --fill: rgb(118 118 128 / 24%);
     --fill-hover: rgb(118 118 128 / 34%);
-    --monogram: linear-gradient(180deg, #8f939c, #6b6f78);
+    --monogram: var(--fill);
   }
 }
 
+/* Comfortable: the pre-0.5.2 sizes, unchanged. */
+:root[data-density="comfortable"] {
+  --ui-font-size: 1rem;
+  --control-height: 2.75rem;
+  --toolbar-height: 3.25rem;
+  --toolbar-pad-block: 4px;
+  --toolbar-pad-inline: 16px;
+  --toolbar-button-size: 44px;
+  --target-size: 44px;
+  --target-size-inset: var(--target-size);
+  --control-pad-block: 8px;
+  --row-pad-block: 7px;
+  --bar-height-sm: 48px;
+  --bar-height-md: 56px;
+  --bar-pad-block: 6px;
+  --bar-pad-block-lg: 10px;
+  --button-lg-height: 50px;
+  --provider-button-height: 82px;
+  --settings-row-height: 52px;
+  --account-avatar-size: 32px;
+  --sender-avatar-size: 36px;
+  --sender-avatar-narrow-size: 38px;
+  --provider-symbol-size: 50px;
+  --provider-arrow-size: 34px;
+  --setup-icon-size: 2.125rem;
+  --setup-step-size: 1.5rem;
+  --setup-progress-width: 11.25rem;
+  --setup-preview-list-width: 6.875rem;
+  --setup-preview-min-height: 6.75rem;
+  --setup-card-padding: clamp(1.25rem, 3vw, 1.75rem);
+  --setup-mark-size: 52px;
+  --switch-track-height: 1.75rem;
+  --drawer-width: 18rem;
+  --menu-row-height: 2.25rem;
+  --folder-indent: 1rem;
+  --sidebar-gap: 3px;
+  --sidebar-drag-gap: 6px;
+  --sidebar-section-gap: 8px 10px 3px;
+  --search-box-min-width: 9.375rem;
+  --search-box-flex-basis: 16.875rem;
+  --search-box-max-width: 18.125rem;
+  --pane-heading-height: 3.25rem;
+  --pane-heading-pad-block: 6px;
+  --message-row-height: 88px;
+  --message-row-pad-block: 8px;
+  --list-row-height: 72px;
+  --list-row-pad-block: 11px;
+  --list-row-inset: 6px;
+  --list-day-height: 44px;
+  --list-preview-lines: 2;
+  --reader-pad-inline: clamp(18px, 3vw, 30px);
+  --reader-head-pad-block: 12px;
+  --reader-head-pad-end: 10px;
+  --reader-head-gap: 8px 11px;
+  --reader-title-size: clamp(1.25rem, 2.1vw, 1.75rem);
+  --reader-sender-size: 1.05rem;
+  --reader-meta-size: 0.84rem;
+  --reader-toolbar-button-pad-block: 7px;
+  --conversation-row-height: 44px;
+  --banner-pad-block: 8px;
+  --attachment-pad-block: 9px;
+  --reader-frame-margin-block: 16px;
+  --invite-pad: 14px 16px;
+  --quick-reply-max-block: min(12rem, 35dvh);
+  --address-row-height: 44px;
+  --composer-editor-min-height: 10rem;
+  --composer-editor-pad-block: 18px;
+  --composer-table-cell-min-width: 5rem;
+  --composer-options-menu-min-width: 12.5rem;
+  --composer-docked-pill-max-width: 23.75rem;
+  --composer-docked-restore-min-width: 11.25rem;
+  --composer-docked-restore-max-width: 16.25rem;
+  --composer-window-width: min(940px, 96vw);
+  --composer-window-height: min(780px, 100%);
+  --menu-search-min-width: 15.625rem;
+  --mailbox-more-menu-min-width: 15rem;
+  --mailbox-filter-menu-min-width: 12rem;
+  --reader-more-menu-min-width: 16rem;
+  --context-menu-min-width: 12.5rem;
+  --account-select-arrow-space: 2.125rem;
+  --settings-window-width: 64rem;
+  --settings-window-height: 46rem;
+  --settings-nav-width: 14rem;
+  --settings-control-width: 13.75rem;
+  --settings-field-min-width: 12rem;
+  --settings-empty-padding-block: 2rem;
+  --settings-empty-icon-size: 1.875rem;
+  --settings-signature-min-height: 5.5rem;
+  --settings-chip-height: 2.25rem;
+  --settings-update-icon-size: 2rem;
+  --settings-stack-gap: var(--space-5);
+  --settings-label-gap: var(--space-2);
+  --settings-row-pad-block: var(--space-3);
+  --settings-row-pad-inline: var(--space-4);
+  --settings-page-pad-inline: var(--space-6);
+  --settings-page-pad-block: var(--space-5);
+  --settings-search-pad-block: var(--space-4);
+  --settings-kbd-min-height: 1.75rem;
+  --settings-confirm-width: 27.5rem;
+  /* Compact shrinks these; comfortable keeps the base spacing scale. */
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+}
+
+/* Compact: traditional mail density (macOS Mail). AGENTS.md sizing rules
+   cover the default density only. rem values scale with text size. */
 :root[data-density="compact"] {
-  /* Compact: traditional mail density (macOS Mail). AGENTS.md sizing rules
-     cover the default density only. rem values scale with text size. */
+  --ui-font-size: 0.9375rem;
   --control-height: 2rem;
-  --toolbar-height: 3rem;
+  --toolbar-height: 2.75rem;
+  --toolbar-pad-block: 2px;
+  --toolbar-pad-inline: 12px;
+  --toolbar-button-size: 2rem;
   --target-size: min(2rem, 44px);
   --target-size-inset: min(1.75rem, 44px);
-  --settings-row-height: min(2.5rem, 52px);
+  --control-pad-block: 4px;
+  --row-pad-block: 4px;
+  --bar-height-sm: min(2.5rem, 48px);
+  --bar-height-md: min(2.75rem, 56px);
+  --bar-pad-block: 4px;
+  --bar-pad-block-lg: 4px;
   --button-lg-height: min(2.25rem, 50px);
   --provider-button-height: min(3.5rem, 82px);
+  --settings-row-height: min(2.5rem, 52px);
+  --account-avatar-size: 28px;
+  --sender-avatar-size: 30px;
+  --sender-avatar-narrow-size: 34px;
+  --provider-symbol-size: min(2.5rem, 42px);
+  --provider-arrow-size: min(2rem, 32px);
+  --setup-icon-size: 2rem;
+  --setup-step-size: 1.375rem;
+  --setup-progress-width: 10rem;
+  --setup-preview-list-width: 6rem;
+  --setup-preview-min-height: 6rem;
+  --setup-card-padding: clamp(1rem, 2.5vw, 1.5rem);
+  --setup-mark-size: 40px;
+  --switch-track-height: 1.375rem;
+  --drawer-width: 18rem;
+  --menu-row-height: 2.25rem;
+  --folder-indent: 0.75rem;
+  --sidebar-gap: 1px;
+  --sidebar-drag-gap: 2px;
+  --sidebar-section-gap: 4px 8px 2px;
+  --search-box-min-width: min(8rem, 9.375rem);
+  --search-box-flex-basis: 14rem;
+  --search-box-max-width: 18rem;
+  --pane-heading-height: 2.75rem;
+  --pane-heading-pad-block: 4px;
+  --message-row-height: min(3.25rem, 88px);
+  --message-row-pad-block: 6px;
+  --list-row-height: min(3rem, 72px);
+  --list-row-pad-block: 6px;
+  --list-row-inset: 4px;
+  --list-day-height: 1.75rem;
+  --list-preview-lines: 0;
+  --reader-pad-inline: 16px;
+  --reader-head-pad-block: 10px;
+  --reader-head-pad-end: 8px;
+  --reader-head-gap: 4px 8px;
+  --reader-title-size: 1.08rem;
+  --reader-sender-size: 0.95rem;
+  --reader-meta-size: 0.8rem;
+  --reader-toolbar-button-pad-block: 3px;
+  --conversation-row-height: 2rem;
+  --banner-pad-block: 4px;
+  --attachment-pad-block: 5px;
+  --reader-frame-margin-block: 10px;
+  --invite-pad: 8px 10px;
+  --quick-reply-max-block: min(9rem, 30dvh);
+  --address-row-height: 2rem;
+  --composer-editor-min-height: 7rem;
+  --composer-editor-pad-block: 10px;
+  --composer-table-cell-min-width: 4rem;
+  --composer-options-menu-min-width: 11.5rem;
+  --composer-docked-pill-max-width: min(22rem, 23.75rem);
+  --composer-docked-restore-min-width: min(10rem, 11.25rem);
+  --composer-docked-restore-max-width: min(14rem, 16.25rem);
+  --composer-window-width: min(900px, 96vw);
+  --composer-window-height: min(700px, 100%);
+  --menu-search-min-width: 14rem;
+  --mailbox-more-menu-min-width: 13.5rem;
+  --mailbox-filter-menu-min-width: 11rem;
+  --reader-more-menu-min-width: 14.5rem;
+  --context-menu-min-width: 11.5rem;
+  --account-select-arrow-space: 2rem;
+  --settings-window-width: 54rem;
+  --settings-window-height: 38rem;
+  --settings-nav-width: 11.5rem;
   --settings-control-width: min(12.5rem, 13.75rem);
   --settings-field-min-width: 11rem;
   --settings-empty-padding-block: 1.5rem;
@@ -323,57 +532,11 @@
   --settings-label-gap: var(--space-1);
   --settings-row-pad-block: var(--space-2);
   --settings-row-pad-inline: var(--space-3);
+  --settings-page-pad-inline: 16px;
+  --settings-page-pad-block: 12px;
+  --settings-search-pad-block: 10px;
   --settings-kbd-min-height: 1.5rem;
-  --account-avatar-size: 30px;
-  --account-avatar-font-size: min(
-    0.9rem,
-    calc(var(--account-avatar-size) * 0.45)
-  );
-  --sender-avatar-size: 32px;
-  --sender-avatar-font-size: min(1rem, calc(var(--sender-avatar-size) * 0.4));
-  --sender-avatar-narrow-size: 36px;
-  --provider-symbol-size: min(2.5rem, 42px);
-  --provider-arrow-size: min(2rem, 32px);
-  --setup-icon-size: 2rem;
-  --setup-step-size: 1.375rem;
-  --setup-progress-width: 10rem;
-  --setup-preview-list-width: 6rem;
-  --setup-preview-min-height: 6rem;
-  --setup-page-padding: 1.25rem;
-  --setup-card-padding: clamp(1rem, 4vw, 2rem);
-  --composer-editor-min-height: 9rem;
-  --composer-table-cell-min-width: 4rem;
-  --composer-options-menu-min-width: 11.5rem;
-  --composer-docked-pill-max-width: min(22rem, 23.75rem);
-  --composer-docked-restore-min-width: min(10rem, 11.25rem);
-  --composer-docked-restore-max-width: min(14rem, 16.25rem);
-  --menu-search-min-width: 14rem;
-  --mailbox-more-menu-min-width: 13.5rem;
-  --mailbox-filter-menu-min-width: 11rem;
-  --reader-more-menu-min-width: 14.5rem;
-  --context-menu-min-width: 11.5rem;
-  --search-box-min-width: min(8rem, 9.375rem);
-  --account-select-arrow-space: 2rem;
-  --get-mail-menu-min-width: 12.5rem;
-  --folder-indent: 0.75rem;
-  --bar-height-sm: min(2.5rem, 48px);
-  --bar-height-md: min(2.75rem, 56px);
-  --control-pad-block: 4px;
-  --row-pad-block: 4px;
-  --toolbar-pad-block: 5px;
-  --toolbar-pad-inline: 12px;
-  --reader-pad-inline: 16px;
-  --reader-head-pad-block: 10px;
-  --bar-pad-block: 4px;
-  --bar-pad-block-lg: 4px;
-  --quick-reply-max-block: min(9rem, 30dvh);
-  --sidebar-gap: 1px;
-  --pane-heading-height: 2.75rem;
-  --pane-heading-pad-block: 4px;
-  --message-row-height: min(3.25rem, 88px);
-  --message-row-pad-block: 6px;
-  --list-row-height: min(3.5rem, 72px);
-  --list-row-pad-block: 8px;
+  --settings-confirm-width: 26rem;
   --space-3: 0.625rem;
   --space-4: 0.75rem;
   --space-5: 1rem;

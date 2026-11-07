@@ -111,7 +111,15 @@ function NoticeItem({ notice }: { notice: Notice }) {
   return (
     <div
       ref={ref}
-      className={`toast notice notice-${notice.severity}${assertive ? " error-toast" : ""}`}
+      className={[
+        "toast",
+        "notice",
+        `notice-${notice.severity}`,
+        assertive ? "error-toast" : "",
+        notice.className ?? "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
       role={assertive ? "alert" : undefined}
       onPointerEnter={() => setHovered(true)}
       onPointerLeave={() => setHovered(false)}
@@ -142,7 +150,7 @@ function NoticeItem({ notice }: { notice: Notice }) {
         aria-label={dismissLabel}
         title={dismissLabel}
       >
-        <X size="1em" aria-hidden="true" />
+        <X aria-hidden="true" />
       </button>
     </div>
   );

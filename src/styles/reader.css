@@ -5,6 +5,9 @@
   flex-direction: column;
   overflow: auto;
   background: var(--surface);
+  /* Toolbar labels collapse against this pane width, not the window. */
+  container-type: inline-size;
+  container-name: reader;
 }
 
 .reader-pane > * {
@@ -129,9 +132,9 @@
   min-height: var(--pane-heading-height);
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  column-gap: 2px;
-  padding: var(--bar-pad-block) var(--reader-pad-inline);
+  gap: var(--space-1);
+  /* Height comes from min-height; vertical padding would push one row past it. */
+  padding: 0 var(--reader-pad-inline);
   overflow: visible;
   border-bottom: 1px solid var(--border);
   /* Soft scroll edge (macOS 27): the message blurs as it passes beneath. */
@@ -164,7 +167,7 @@ html[data-reduce-transparency="true"] .reader-actions {
   min-width: 0;
   flex-wrap: wrap;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-1);
 }
 
 /* Thread navigation sits last, at the trailing edge. */
@@ -176,7 +179,7 @@ html[data-reduce-transparency="true"] .reader-actions {
    No gap keeps all three groups on one row at desktop width. */
 .reader-action-group {
   display: inline-flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 0;
   padding: 1px;
@@ -195,8 +198,8 @@ html[data-reduce-transparency="true"] .reader-actions {
   display: inline-flex;
   min-height: var(--target-size-inset);
   align-items: center;
-  gap: 4px;
-  padding: 7px var(--space-1);
+  gap: var(--space-1);
+  padding: var(--reader-toolbar-button-pad-block) var(--space-1);
   white-space: nowrap;
   border: 0;
   border-radius: var(--radius-pill);
@@ -211,8 +214,8 @@ html[data-reduce-transparency="true"] .reader-actions {
 }
 
 .reader-actions svg {
-  width: 1.125rem;
-  height: 1.125rem;
+  width: var(--icon-md);
+  height: var(--icon-md);
 }
 
 /* Icon-only toolbar actions keep the full touch target; text buttons size
@@ -222,8 +225,28 @@ html[data-reduce-transparency="true"] .reader-actions {
   justify-content: center;
 }
 
+/* Reply actions become icon-only in a narrow reader; the name stays in
+   aria-label and the title tooltip. */
+@container reader (max-width: 44rem) {
+  .reader-actions .reader-reply-action {
+    min-width: var(--target-size);
+    justify-content: center;
+  }
+
+  .reader-actions .reader-reply-action .reader-action-label {
+    display: none;
+  }
+}
+
+.reader-icon-sm {
+  flex: none;
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
 .reader-more {
   position: relative;
+  display: flex;
 }
 
 .mobile-reader-back {
@@ -239,12 +262,20 @@ html[data-reduce-transparency="true"] .reader-actions {
   border-bottom: 1px solid var(--border);
 }
 
+/* Four rows show; a longer thread scrolls inside the index. */
+.conversation-index {
+  max-height: calc(
+    4 * var(--conversation-row-height) + 3 * var(--space-1) + 2 * var(--space-2)
+  );
+  overflow-y: auto;
+}
+
 .conversation-index button {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
-  min-height: var(--target-size);
+  min-height: var(--conversation-row-height);
   padding: 0 var(--space-2);
   margin-inline: calc(-1 * var(--space-2));
   border: 0;
@@ -256,7 +287,7 @@ html[data-reduce-transparency="true"] .reader-actions {
 
 .conversation-index button[aria-current="true"] {
   background: var(--accent-soft);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .conversation-index button:focus-visible {
@@ -279,16 +310,17 @@ html[data-reduce-transparency="true"] .reader-actions {
 
 .conversation-index-unread {
   flex: none;
-  color: var(--accent);
-  font-weight: 650;
+  color: var(--accent-ink);
+  font-weight: 600;
 }
 
 .message-header {
   display: grid;
   grid-template-columns: var(--sender-avatar-size) minmax(0, 1fr) auto;
-  gap: 8px 11px;
-  padding: var(--reader-head-pad-block) var(--reader-pad-inline) 10px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  gap: var(--reader-head-gap);
+  padding: var(--reader-head-pad-block) var(--reader-pad-inline)
+    var(--reader-head-pad-end);
+  border-bottom: 1px solid var(--border-soft);
 }
 
 .message-header mark,
@@ -312,9 +344,10 @@ html[data-reduce-transparency="true"] .reader-actions {
 
 .message-header h1 {
   grid-column: 1 / -1;
-  margin: 0 0 4px;
-  font-size: clamp(1.25rem, 2.1vw, 1.75rem);
-  line-height: 1.2;
+  margin: 0;
+  font-size: var(--reader-title-size);
+  font-weight: 600;
+  line-height: 1.25;
   letter-spacing: -0.02em;
   overflow-wrap: anywhere;
 }
@@ -322,39 +355,70 @@ html[data-reduce-transparency="true"] .reader-actions {
 .sender-details {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-1);
   min-width: 0;
+}
+
+/* Bottom pane: sender, recipients and file links share one line. */
+.pane-bottom .message-header .sender-details {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--space-3);
 }
 
 .sender-primary-line {
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: var(--space-2);
   flex-wrap: wrap;
   min-width: 0;
-  overflow-wrap: anywhere;
 }
 
 .sender-name {
   min-width: 0;
-  font-size: 1.05rem;
-  font-weight: 700;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--reader-sender-size);
+  font-weight: 600;
   color: var(--text);
 }
 
+/* Addresses stay whole: ellipsis, with the full value in title. */
 .sender-address-muted {
   min-width: 0;
-  font-size: 0.85rem;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--reader-meta-size);
   color: var(--text-muted);
 }
 
 .recipient-summary {
   display: flex;
   align-items: baseline;
-  gap: 6px;
-  font-size: 0.84rem;
+  gap: var(--space-2);
+  font-size: var(--reader-meta-size);
   color: var(--text-muted);
   min-width: 0;
+}
+
+.recipient-group {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.recipient-group .recipient-preview {
+  min-width: 0;
+}
+
+.recipient-separator {
+  flex: none;
 }
 
 .recipient-preview {
@@ -370,27 +434,59 @@ html[data-reduce-transparency="true"] .reader-actions {
   align-self: start;
   display: grid;
   justify-items: end;
-  gap: 2px;
+  gap: 0;
   color: var(--text-muted);
-  font-size: 0.82rem;
+  font-size: var(--reader-meta-size);
   text-align: right;
-  max-inline-size: 20ch;
+  max-inline-size: 24ch;
   white-space: normal;
   line-height: 1.5;
   overflow-wrap: anywhere;
+}
+
+/* Small screens: the stamp drops under the sender, flush left. */
+html[data-text-scale="large"] .message-header .message-stamp {
+  grid-column: 2 / -1;
+  grid-row: 3;
+  justify-items: start;
+  text-align: left;
+}
+
+/* Bottom pane: the date and its meta share one line. */
+.pane-bottom .message-header .message-stamp {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  max-inline-size: none;
+  white-space: nowrap;
+}
+
+/* Date, size and Details share the stamp column. */
+.message-stamp-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 100%;
+}
+
+.message-header-size {
+  font-variant-numeric: tabular-nums;
 }
 
 .header-files {
   display: inline-flex;
   width: fit-content;
   max-width: 100%;
-  min-height: var(--target-size);
+  min-height: var(--target-size-inset);
+  /* Hit area stays full height; the row costs one line of text. */
+  margin-block: calc((1lh - var(--target-size-inset)) / 2);
   align-items: center;
   gap: var(--space-2);
   padding-inline: 0;
   border: 0;
   border-radius: var(--radius-sm);
-  color: var(--accent);
+  color: var(--accent-ink);
   background: transparent;
 }
 
@@ -411,15 +507,16 @@ html[data-reduce-transparency="true"] .reader-actions {
   display: inline-flex;
   width: fit-content;
   max-width: 100%;
-  min-height: var(--target-size);
+  min-height: var(--target-size-inset);
+  margin-block: calc((1lh - var(--target-size-inset)) / 2);
   align-items: center;
-  gap: 6px;
-  padding: 6px 0;
+  gap: var(--space-1);
+  padding: 0;
   border: 0;
   border-radius: var(--radius-sm);
-  color: var(--accent);
+  color: var(--accent-ink);
   background: transparent;
-  font-size: 0.85rem;
+  font-size: var(--reader-meta-size);
   font-weight: 600;
   cursor: pointer;
   transition:
@@ -434,8 +531,8 @@ html[data-reduce-transparency="true"] .reader-actions {
 
 .message-details-panel {
   grid-column: 1 / -1;
-  margin-top: 10px;
-  padding: 14px 18px;
+  margin-top: var(--space-2);
+  padding: var(--space-3) var(--space-4);
   background: var(--surface-muted);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -444,10 +541,10 @@ html[data-reduce-transparency="true"] .reader-actions {
 .details-grid {
   display: grid;
   grid-template-columns: minmax(90px, max-content) minmax(0, 1fr);
-  gap: 8px 14px;
+  gap: var(--space-2) var(--space-3);
   margin: 0;
-  font-size: 0.88rem;
-  line-height: 1.5;
+  font-size: var(--fs-md);
+  line-height: 1.45;
 }
 
 .details-grid dt {
@@ -466,25 +563,25 @@ html[data-reduce-transparency="true"] .reader-actions {
 .address-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   flex-wrap: wrap;
 }
 
 .recipients-list {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--space-2);
 }
 
 .address-chip {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 3px 9px;
+  padding: 2px var(--space-2);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  font-size: 0.84rem;
+  font-size: var(--fs-sm);
 }
 
 .address-spec {
@@ -492,7 +589,7 @@ html[data-reduce-transparency="true"] .reader-actions {
 }
 
 .reply-to-highlight {
-  padding-left: 8px;
+  padding-left: var(--space-2);
   border-left: 3px solid var(--accent);
   font-weight: 600;
 }
@@ -505,37 +602,55 @@ html[data-reduce-transparency="true"] .reader-actions {
 }
 
 .security-badge strong {
-  font-weight: 650;
+  font-weight: 600;
+}
+
+.security-badge svg {
+  flex: none;
+  width: var(--icon-md);
+  height: var(--icon-md);
 }
 
 .message-id-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .message-id-row code {
-  font-size: 0.8rem;
+  font-size: var(--fs-xs);
   background: var(--surface);
-  padding: 2px 7px;
+  padding: 2px var(--space-2);
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
 }
 
+/* Icon-only copy action; the name and tooltip come from aria-label and title. */
 .copy-mini-btn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  min-height: var(--target-size);
-  padding: 6px 12px;
-  font-size: 0.82rem;
-  font-weight: 550;
+  justify-content: center;
+  min-width: var(--target-size-inset);
+  min-height: var(--target-size-inset);
+  padding: 0;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--text-muted);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
+}
+
+/* Bottom pane: the reply box is one text line until focused or filled. */
+.pane-bottom .quick-reply:not(:focus-within):not([data-filled]) {
+  padding-block: var(--space-1);
+}
+
+.pane-bottom .quick-reply:not(:focus-within):not([data-filled]) textarea {
+  min-height: calc(1lh + 2 * var(--control-pad-block) + 2px);
 }
 
 .copy-mini-btn:hover {
@@ -550,8 +665,8 @@ html[data-reduce-transparency="true"] .reader-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 9px;
-  padding: 8px var(--reader-pad-inline);
+  gap: var(--space-2);
+  padding: var(--banner-pad-block) var(--reader-pad-inline);
   color: var(--text);
   background: var(--fill);
   border-bottom: 1px solid var(--border);
@@ -564,8 +679,8 @@ html[data-reduce-transparency="true"] .reader-actions {
 }
 
 .remote-content-banner svg {
-  width: 1.125rem;
-  height: 1.125rem;
+  width: var(--icon-md);
+  height: var(--icon-md);
   color: var(--accent);
 }
 
@@ -575,6 +690,7 @@ html[data-reduce-transparency="true"] .reader-actions {
 
 .remote-content-banner span {
   flex: 1;
+  min-width: 0;
 }
 
 .continue-draft {
@@ -595,8 +711,8 @@ html[data-reduce-transparency="true"] .reader-actions {
 }
 
 .remote-content-banner button {
-  min-height: var(--target-size);
-  padding-inline: 14px;
+  min-height: var(--target-size-inset);
+  padding-inline: var(--space-3);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-pill);
   color: inherit;
@@ -605,10 +721,10 @@ html[data-reduce-transparency="true"] .reader-actions {
 
 .message-find {
   display: flex;
-  gap: 8px;
+  gap: var(--space-2);
   align-items: center;
   min-height: var(--bar-height-sm);
-  padding: 8px var(--reader-pad-inline);
+  padding: var(--banner-pad-block) var(--reader-pad-inline);
   border-bottom: 1px solid var(--border);
   background: var(--surface-muted);
   flex-wrap: wrap;
@@ -644,10 +760,12 @@ html[data-reduce-transparency="true"] .reader-actions {
   color-scheme: light;
 }
 
+/* Plain text uses the frame's margins so both views start at the same edge. */
 .message-body pre,
 .plain-text-body {
-  margin: 0;
-  padding: 22px var(--reader-pad-inline);
+  margin: 0 auto;
+  max-inline-size: 72ch;
+  padding: var(--reader-frame-margin-block) var(--reader-pad-inline);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font: inherit;
@@ -670,7 +788,7 @@ html[data-reduce-transparency="true"] .reader-actions {
 }
 
 .plain-text-body a {
-  color: var(--accent);
+  color: var(--accent-ink);
   text-decoration: underline;
   cursor: pointer;
 }
@@ -684,42 +802,48 @@ html[data-reduce-transparency="true"] .reader-actions {
   place-content: center;
   justify-items: center;
   color: var(--text-muted);
-  font-size: 1.05rem;
+  font-size: var(--fs-lg);
   padding: var(--space-5);
   text-align: center;
-  line-height: 1.6;
+  line-height: 1.45;
   overflow-wrap: anywhere;
 }
 
+/* Attachments: one wrapping row of chips, with the heading inline. */
 .attachment-list {
   display: flex;
   flex-wrap: wrap;
-  gap: 7px;
-  padding: 9px var(--reader-pad-inline);
-  border-top: 1px solid var(--border);
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--attachment-pad-block) var(--reader-pad-inline);
+  border-bottom: 1px solid var(--border);
 }
 
 .attachment-list-header {
-  display: flex;
-  width: 100%;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  display: contents;
 }
 
 .attachment-list h2 {
   width: auto;
   margin: 0;
-  font-size: 0.86rem;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.attachment-list-header .secondary-button {
+  min-height: var(--target-size-inset);
+  padding-inline: var(--space-2);
+  border: 0;
+  background: transparent;
+  color: var(--accent-ink);
 }
 
 .attachment-row button {
   display: flex;
-  min-height: var(--target-size);
+  min-height: var(--target-size-inset);
   max-width: 100%;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   padding: var(--control-pad-block) var(--space-3);
   text-align: left;
   border: 1px solid var(--border);
@@ -746,8 +870,8 @@ html[data-reduce-transparency="true"] .reader-actions {
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  min-width: var(--target-size);
-  min-height: var(--target-size);
+  min-width: var(--target-size-inset);
+  min-height: var(--target-size-inset);
 }
 
 .attachment-row {
@@ -755,7 +879,7 @@ html[data-reduce-transparency="true"] .reader-actions {
   min-width: 0;
   max-width: 100%;
   align-items: stretch;
-  gap: 6px;
+  gap: var(--space-1);
 }
 
 .attachment-row .attachment-download-button {
@@ -765,7 +889,7 @@ html[data-reduce-transparency="true"] .reader-actions {
 
 .attachment-row .attachment-preview-button {
   flex: 0 0 auto;
-  min-width: var(--target-size);
+  min-width: var(--target-size-inset);
   justify-content: center;
 }
 
@@ -777,7 +901,7 @@ html[data-reduce-transparency="true"] .reader-actions {
   min-height: 0;
   flex: 1;
   overflow: auto;
-  padding: 18px;
+  padding: var(--space-4);
   display: grid;
   place-items: center;
   background: var(--surface-muted);
@@ -792,7 +916,7 @@ html[data-reduce-transparency="true"] .reader-actions {
 .attachment-preview-body pre {
   width: 100%;
   margin: 0;
-  padding: 16px;
+  padding: var(--space-4);
   border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--text);
@@ -808,17 +932,17 @@ html[data-reduce-transparency="true"] .reader-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  padding: 10px var(--reader-pad-inline);
+  gap: var(--space-2);
+  padding: var(--banner-pad-block) var(--reader-pad-inline);
   border-bottom: 1px solid var(--border);
   background: var(--surface-muted);
 }
 
 .snooze-panel button {
   display: inline-flex;
-  min-height: var(--target-size);
+  min-height: var(--target-size-inset);
   align-items: center;
-  padding: 7px 12px;
+  padding: var(--control-pad-block) var(--space-3);
   border: 1px solid var(--border);
   border-radius: var(--radius-xs);
   background: var(--surface);
@@ -836,14 +960,14 @@ html[data-reduce-transparency="true"] .reader-actions {
 
 .sender-name-conflict {
   margin: 0;
-  font-size: 0.9rem;
+  font-size: var(--fs-md);
   font-weight: 600;
   color: var(--warning-ink);
 }
 
 .mailing-list-note {
   margin: 0;
-  font-size: 0.9rem;
+  font-size: var(--fs-md);
   font-weight: 600;
   color: var(--text-muted);
 }
@@ -851,13 +975,13 @@ html[data-reduce-transparency="true"] .reader-actions {
 .message-header .message-muted {
   margin: 0;
   color: var(--text-muted);
-  font-size: 0.9rem;
-  font-weight: 650;
+  font-size: var(--fs-md);
+  font-weight: 600;
 }
 
 .message-importance {
   margin: 0;
-  font-size: 0.9rem;
+  font-size: var(--fs-md);
   font-weight: 600;
 }
 
@@ -873,23 +997,23 @@ html[data-reduce-transparency="true"] .reader-actions {
 .reply-state {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: var(--space-3);
   color: var(--text-muted);
-  font-size: 0.85rem;
+  font-size: var(--fs-sm);
 }
 
 .reply-state span {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
 }
 
 /* Calendar invitation card above the body */
 .invite-card {
   display: grid;
-  gap: 6px;
-  margin: 12px var(--reader-pad-inline) 0;
-  padding: 14px 16px;
+  gap: var(--space-2);
+  margin: var(--space-3) var(--reader-pad-inline) 0;
+  padding: var(--invite-pad);
   border: 1px solid var(--border);
   border-left: 4px solid var(--accent);
   border-radius: var(--radius-md);
@@ -907,28 +1031,28 @@ html[data-reduce-transparency="true"] .reader-actions {
 .invite-card-head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   color: var(--text-muted);
-  font-size: 0.85rem;
-  font-weight: 650;
+  font-size: var(--fs-sm);
+  font-weight: 600;
 }
 
 .invite-card-head svg {
-  width: 1.125rem;
-  height: 1.125rem;
+  width: var(--icon-md);
+  height: var(--icon-md);
   color: var(--accent);
 }
 
 .invite-title {
   margin: 0;
-  font-size: 1.15rem;
+  font-size: var(--fs-lg);
   overflow-wrap: anywhere;
 }
 
 .invite-details {
   display: grid;
   grid-template-columns: max-content 1fr;
-  gap: 4px 14px;
+  gap: var(--space-1) var(--space-3);
   margin: 0;
 }
 
@@ -946,9 +1070,9 @@ html[data-reduce-transparency="true"] .reader-actions {
 }
 
 .invite-note {
-  margin: 4px 0 0;
+  margin: var(--space-1) 0 0;
   color: var(--text-muted);
-  font-size: 0.85rem;
+  font-size: var(--fs-sm);
 }
 
 /* Show original dialog */
@@ -963,16 +1087,16 @@ html[data-reduce-transparency="true"] .reader-actions {
   min-height: 0;
   flex: 1;
   overflow: auto;
-  padding: 14px 18px;
+  padding: var(--space-3) var(--space-4);
   display: grid;
-  gap: 8px;
+  gap: var(--space-2);
   align-content: start;
   background: var(--surface-muted);
 }
 
 .original-body h3 {
-  margin: 6px 0 0;
-  font-size: 0.95rem;
+  margin: var(--space-1) 0 0;
+  font-size: var(--fs-ui);
 }
 
 .original-headers-scroll {
@@ -989,7 +1113,7 @@ html[data-reduce-transparency="true"] .reader-actions {
 
 .original-headers th,
 .original-headers td {
-  padding: 6px 10px;
+  padding: var(--control-pad-block) var(--space-2);
   vertical-align: top;
   text-align: left;
   border-bottom: 1px solid var(--border);
@@ -1000,19 +1124,19 @@ html[data-reduce-transparency="true"] .reader-actions {
   width: 1%;
   white-space: nowrap;
   color: var(--text-muted);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .original-source {
   margin: 0;
-  padding: 12px;
+  padding: var(--space-3);
   max-height: 40vh;
   overflow: auto;
   border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--text);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.85rem;
+  font-size: var(--fs-sm);
   line-height: 1.45;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -1021,7 +1145,7 @@ html[data-reduce-transparency="true"] .reader-actions {
 .attachment-partial {
   display: grid;
   width: 100%;
-  gap: 6px;
+  gap: var(--space-1);
   padding: var(--control-pad-block) var(--space-3);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -1034,5 +1158,5 @@ html[data-reduce-transparency="true"] .reader-actions {
 
 .attachment-partial button {
   justify-self: start;
-  min-height: var(--target-size);
+  min-height: var(--target-size-inset);
 }

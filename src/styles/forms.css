@@ -45,7 +45,7 @@ textarea:focus-visible {
 .field-label {
   display: grid;
   gap: 6px;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .form-grid.two-columns,
@@ -72,8 +72,8 @@ textarea:focus-visible {
 }
 
 .password-field svg {
-  width: 1.1875rem;
-  height: 1.1875rem;
+  width: var(--icon-lg);
+  height: var(--icon-lg);
 }
 
 fieldset {
@@ -103,13 +103,13 @@ legend {
 .address-fields {
   position: relative;
   display: grid;
-  padding: 5px var(--toolbar-pad-inline);
+  padding: var(--space-1) var(--space-4);
 }
 
 .address-fields label {
   position: relative;
   display: grid;
-  min-height: var(--target-size);
+  min-height: var(--address-row-height);
   grid-template-columns: var(--address-label-width) minmax(0, 1fr);
   align-items: center;
   border-bottom: 1px solid var(--border);
@@ -139,7 +139,7 @@ legend {
   background: transparent;
   font-weight: 500;
   color: var(--text);
-  padding: 4px 8px;
+  padding: var(--space-1) var(--space-2);
   border-radius: var(--radius-xs);
   cursor: pointer;
   max-width: calc(100% - 20px);
@@ -153,7 +153,7 @@ legend {
 .address-fields .to-field-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   border-bottom: 1px solid var(--border);
 }
 
@@ -166,7 +166,7 @@ legend {
 
 .address-fields .to-field input {
   min-width: 0;
-  padding-right: 8px;
+  padding-right: var(--space-2);
 }
 
 .settings-row,
@@ -228,7 +228,7 @@ legend {
 
 .switch-row input[type="checkbox"] {
   position: relative;
-  --sw-h: min(1.75rem, calc(var(--target-size) - 2px));
+  --sw-h: min(var(--switch-track-height), calc(var(--target-size) - 2px));
   --sw-w: calc(var(--sw-h) * 1.64);
   --sw-knob: calc(var(--sw-h) - 6px);
   width: calc(var(--sw-w) + 0.25rem);

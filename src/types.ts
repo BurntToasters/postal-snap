@@ -4,7 +4,7 @@ export type TlsMode = "tls" | "startTls";
 export type MailboxRole =
   "inbox" | "sent" | "drafts" | "archive" | "trash" | "junk" | "other";
 export type ReadingPane = "right" | "bottom" | "hidden";
-export type UiDensity = "comfortable" | "compact";
+export type UiDensity = "normal" | "comfortable" | "compact";
 export type SyncPhase =
   "idle" | "connecting" | "syncing" | "offline" | "authFailed" | "error";
 

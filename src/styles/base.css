@@ -61,6 +61,7 @@ html[data-text-scale="large"] #root {
 
 body {
   color: var(--text);
+  font-size: var(--ui-font-size);
   background:
     radial-gradient(
       circle at 12% 8%,
@@ -70,6 +71,17 @@ body {
     var(--canvas);
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+}
+
+/* Dark canvas stays flat: no accent glow behind the panes. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) body {
+    background: var(--canvas);
+  }
+}
+
+:root[data-theme="dark"] body {
+  background: var(--canvas);
 }
 
 button,

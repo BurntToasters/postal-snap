@@ -6,7 +6,7 @@ import { installMockIpc } from "./mock-ipc";
 
 // Density token invariants plus a repeatable artifact in artifacts/0.4.3/.
 const dir = join(process.cwd(), "artifacts", "0.4.3", "density-tokens");
-const densities = ["comfortable", "compact"] as const;
+const densities = ["comfortable", "normal", "compact"] as const;
 const scales = [1, 2] as const;
 
 async function load(page: Page, density: string, scale: number) {
@@ -131,7 +131,7 @@ test.describe("density tokens 0.4.3", () => {
         });
       });
 
-  test("compact never exceeds comfortable and sizes come from tokens", async ({
+  test("compact <= normal <= comfortable and sizes come from tokens", async ({
     browser,
   }) => {
     const out: Record<string, Probe> = {};
@@ -145,14 +145,24 @@ test.describe("density tokens 0.4.3", () => {
       }
     for (const scale of scales) {
       const c = out[`comfortable-${scale}x`];
+      const n = out[`normal-${scale}x`];
       const k = out[`compact-${scale}x`];
-      expect(k.target).toBeLessThanOrEqual(c.target);
-      expect(k.barSm).toBeLessThanOrEqual(c.barSm);
-      expect(k.row).toBeLessThanOrEqual(c.row);
+      for (const key of [
+        "target",
+        "barSm",
+        "row",
+        "full",
+        "provider",
+      ] as const) {
+        // Compact <= normal is a 100% text invariant; fixed normal px can sit below rem-scaled compact at 200%.
+        if (scale === 1)
+          expect(k[key], `${key} compact<=normal`).toBeLessThanOrEqual(n[key]);
+        expect(n[key], `${key} normal<=comfortable`).toBeLessThanOrEqual(
+          c[key],
+        );
+      }
       if (scale === 1) expect(k.row).toBeLessThan(c.row);
-      expect(k.full).toBeLessThanOrEqual(c.full);
       if (scale === 1) expect(k.full).toBeLessThan(c.full);
-      expect(k.provider).toBeLessThanOrEqual(c.provider);
       if (scale === 1) expect(k.provider).toBeLessThan(c.provider);
     }
     // Suggestion cap grows with text.

@@ -15,6 +15,8 @@ import type { MockShared } from "./mock/context";
 
 const variants = [
   { density: "comfortable", scale: 1 },
+  { density: "normal", scale: 1 },
+  { density: "normal", scale: 2 },
   { density: "compact", scale: 1 },
   { density: "comfortable", scale: 2 },
   { density: "compact", scale: 2 },

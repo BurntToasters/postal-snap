@@ -20,7 +20,8 @@ test.afterEach(async ({ page }, testInfo: TestInfo) => {
 test("a new message can be marked high importance", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Compose", exact: true }).click();
-  const box = page.getByRole("checkbox", { name: "High importance" });
+  await page.getByRole("button", { name: "Message options" }).click();
+  const box = page.getByRole("menuitemcheckbox", { name: "High importance" });
   await expect(box).not.toBeChecked();
   await page
     .getByRole("combobox", { name: "To", exact: true })
@@ -37,7 +38,8 @@ test("a new message can be marked high importance", async ({ page }) => {
   expect(normal?.importance ?? "").toBe("");
 
   await page.getByRole("button", { name: "Compose", exact: true }).click();
-  await page.getByRole("checkbox", { name: "High importance" }).click();
+  await page.getByRole("button", { name: "Message options" }).click();
+  await page.getByRole("menuitemcheckbox", { name: "High importance" }).click();
   await page
     .getByRole("combobox", { name: "To", exact: true })
     .fill("jane@example.com");

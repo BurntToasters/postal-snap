@@ -4,6 +4,12 @@ import {
   domainIsBlocked,
   senderIsBlocked,
 } from "./blockedSenders";
+import {
+  buildMessageMenu,
+  type FolderKind,
+  type MenuKit,
+  type MessageMenuFacts,
+} from "./menuModel";
 import { differentLinkAddress } from "./security";
 import { strings } from "./i18n";
 import { folderPathLabel } from "./i18n/mail";
@@ -102,6 +108,13 @@ export type ContextMenuIcon =
   | "settings"
   | "mute"
   | "unmute"
+  | "attach"
+  | "redirect"
+  | "older"
+  | "newer"
+  | "unsubscribe"
+  | "plain-text"
+  | "source"
   | `folder:${MailboxRole}`;
 
 export type ContextMenuItem =
@@ -113,8 +126,16 @@ export type ContextMenuItem =
       label: string;
       icon?: ContextMenuIcon;
       ariaLabel?: string;
+      chord?: string;
       disabled?: boolean;
       danger?: boolean;
+    }
+  | {
+      type: "submenu";
+      id: string;
+      label: string;
+      icon?: ContextMenuIcon;
+      items: ContextMenuItem[];
     };
 
 export interface ContextMenuActionDetail {
@@ -138,6 +159,7 @@ export function item(
   extra?: {
     icon?: ContextMenuIcon;
     ariaLabel?: string;
+    chord?: string;
     disabled?: boolean;
     danger?: boolean;
   },
@@ -367,6 +389,44 @@ export function canMuteConversation(message: MessageSummary): boolean {
   return Boolean(message.messageId?.trim());
 }
 
+const ROW_FOLDER_PREFIX: Record<FolderKind, string> = {
+  move: "move-mailbox",
+  "move-conversation": "move-conversation",
+  copy: "copy-mailbox",
+  "copy-conversation": "copy-conversation",
+};
+
+const ROW_FOLDER_ARIA: Record<FolderKind, (name: string) => string> = {
+  move: strings.contextMenu.moveToFolder,
+  "move-conversation": strings.contextMenu.moveConversationToFolder,
+  copy: strings.contextMenu.copyToFolder,
+  "copy-conversation": strings.contextMenu.copyConversationToFolder,
+};
+
+/** Row menu kit: every entry is offered, and the host dispatches by id. */
+const rowMenuKit: MenuKit<ContextMenuItem> = {
+  item: (def) => [
+    item(def.id, def.label, {
+      icon: def.icon,
+      ariaLabel: def.ariaLabel,
+      chord: def.chord,
+      disabled: def.disabled,
+      danger: def.danger,
+    }),
+  ],
+  folder: (kind, folder) => [
+    item(`${ROW_FOLDER_PREFIX[kind]}:${folder.id}`, folder.name, {
+      icon: `folder:${folder.role}`,
+      ariaLabel: ROW_FOLDER_ARIA[kind](folder.name),
+    }),
+  ],
+  group: (label, entries) => [{ type: "heading", label }, ...entries],
+  submenu: (id, label, entries) => [
+    { type: "submenu", id, label, items: entries },
+  ],
+  separator: () => [{ type: "separator" }],
+};
+
 function messageItems(
   message: MessageSummary,
   mailbox: MailboxSummary | undefined,
@@ -374,293 +434,10 @@ function messageItems(
   messages: MessageSummary[],
 ): ContextMenuItem[] {
   const peers = conversationMessages(messages, message);
-  const items: ContextMenuItem[] = [
-    item("reply", strings.reader.reply, { icon: "reply" }),
-    item("reply-all", strings.reader.replyAll, { icon: "reply-all" }),
-    item("reply-bare", strings.reader.replyWithoutQuoting, { icon: "reply" }),
-    item("reply-all-bare", strings.reader.replyAllWithoutQuoting, {
-      icon: "reply-all",
-    }),
-    ...(message.hasAttachments
-      ? [
-          item("reply-with-attachments", strings.reader.replyWithAttachments, {
-            icon: "reply",
-          }),
-          item(
-            "reply-all-with-attachments",
-            strings.reader.replyAllWithAttachments,
-            { icon: "reply-all" },
-          ),
-        ]
-      : []),
-    item("forward", strings.reader.forward, { icon: "forward" }),
-    ...(peers.length > 1
-      ? [
-          item("forward-conversation", strings.reader.forwardConversation, {
-            icon: "forward",
-          }),
-        ]
-      : []),
-    item("forward-attachment", strings.reader.forwardAsAttachment, {
-      icon: "forward",
-    }),
-    item("redirect", strings.reader.redirect, { icon: "forward" }),
-    item("edit-as-new", strings.reader.editAsNew, { icon: "compose" }),
-    ...(addressMailbox(message.senderAddress)
-      ? [
-          item("compose-to-sender", strings.reader.newMessageToSender, {
-            icon: "compose",
-          }),
-        ]
-      : []),
-    item("copy-message-text", strings.reader.copyMessageText, { icon: "copy" }),
-    ...(message.subject.trim()
-      ? [item("copy-subject", strings.reader.copySubject, { icon: "copy" })]
-      : []),
-    ...(addressMailbox(message.senderAddress)
-      ? [
-          item("copy-sender-address", strings.reader.copySenderAddress, {
-            icon: "copy",
-          }),
-        ]
-      : []),
-    item("save-eml", strings.reader.saveEml, { icon: "download" }),
-    ...(message.recipients.trim()
-      ? [
-          item("copy-recipients", strings.reader.copyRecipients, {
-            icon: "copy",
-          }),
-        ]
-      : []),
-    ...(peers.length > 1
-      ? [
-          item("copy-conversation-text", strings.reader.copyConversationText, {
-            icon: "copy",
-          }),
-        ]
-      : []),
-    ...(peers.length > 1
-      ? [
-          item("print-conversation", strings.reader.printConversation, {
-            icon: "print",
-          }),
-        ]
-      : []),
-    ...(peers.length > 1 && peers.some((row) => row.hasAttachments)
-      ? [
-          item(
-            "save-conversation-files",
-            strings.reader.saveConversationFiles,
-            { icon: "download" },
-          ),
-        ]
-      : []),
-    { type: "separator" },
-    message.isRead
-      ? item("toggle-read", strings.reader.markUnread, { icon: "mark-unread" })
-      : item("toggle-read", strings.reader.markRead, { icon: "mark-read" }),
-    ...(conversationUnread(messages, message).length > 0
-      ? [
-          item("mark-conversation-read", strings.reader.markConversationRead, {
-            icon: "mark-all-read",
-          }),
-        ]
-      : []),
-    ...(conversationRead(messages, message).length > 0
-      ? [
-          item(
-            "mark-conversation-unread",
-            strings.reader.markConversationUnread,
-            { icon: "mark-unread" },
-          ),
-        ]
-      : []),
-    message.isStarred
-      ? item("toggle-star", strings.reader.removeStar, { icon: "unstar" })
-      : item("toggle-star", strings.reader.addStar, { icon: "star" }),
-    ...(peers.some((row) => !row.isStarred)
-      ? [
-          item("star-conversation", strings.reader.starConversation, {
-            icon: "star",
-          }),
-        ]
-      : peers.length > 1
-        ? [
-            item("unstar-conversation", strings.reader.unstarConversation, {
-              icon: "unstar",
-            }),
-          ]
-        : []),
-    ...(peers.some((row) => !row.pinned)
-      ? [
-          item("pin-conversation", strings.reader.pinConversation, {
-            icon: "pin",
-          }),
-        ]
-      : peers.length > 1
-        ? [
-            item("unpin-conversation", strings.reader.unpinConversation, {
-              icon: "unpin",
-            }),
-          ]
-        : []),
-    message.pinned
-      ? item("unpin", strings.reader.unpin, { icon: "unpin" })
-      : item("pin", strings.reader.pin, { icon: "pin" }),
-    ...(peers.length > 1
-      ? [
-          item("select-conversation", strings.reader.selectConversation, {
-            icon: "select-all",
-          }),
-        ]
-      : []),
-    ...(sameSenderMessages(messages, message.senderAddress).length > 1
-      ? [
-          item("select-from-sender", strings.reader.selectFromSender, {
-            icon: "select-all",
-          }),
-        ]
-      : []),
-    ...(earlierHeaderId(useAppStore.getState().selectedMessage ?? {}) &&
-    useAppStore.getState().selectedMessage?.id === message.id
-      ? [
-          item("open-earlier", strings.reader.openEarlier, {
-            icon: "open",
-          }),
-        ]
-      : []),
-    item("snooze", strings.reader.snooze, { icon: "snooze" }),
-    ...(peers.length > 1
-      ? [
-          item("snooze-conversation", strings.reader.snoozeConversation, {
-            icon: "snooze",
-          }),
-        ]
-      : []),
-    ...(senderRuleNeedle(message.senderAddress)
-      ? [
-          item("create-rule", strings.reader.createRuleFromSender, {
-            icon: "filter",
-          }),
-          ...(senderSearchQuery(message.senderAddress)
-            ? [
-                item(
-                  "messages-from-sender",
-                  strings.reader.messagesFromSender,
-                  { icon: "find" },
-                ),
-              ]
-            : []),
-        ]
-      : []),
-    ...(subjectRuleNeedle(message.subject)
-      ? [
-          item("create-subject-rule", strings.reader.createRuleFromSubject, {
-            icon: "filter",
-          }),
-        ]
-      : []),
-    ...(subjectSearchQuery(message.subject)
-      ? [
-          item("messages-with-subject", strings.reader.messagesWithSubject, {
-            icon: "find",
-          }),
-        ]
-      : []),
-    { type: "separator" },
-    mailbox?.role === "archive"
-      ? item("move-to-inbox", strings.reader.moveToInbox, { icon: "inbox" })
-      : item("archive", strings.reader.archive, { icon: "archive" }),
-    ...(peers.length > 1
-      ? [
-          mailbox?.role === "archive"
-            ? item(
-                "move-conversation-inbox",
-                strings.reader.moveConversationToInbox,
-                { icon: "inbox" },
-              )
-            : item("archive-conversation", strings.reader.archiveConversation, {
-                icon: "archive",
-              }),
-        ]
-      : []),
-    ...(peers.length > 1 && mailbox?.role === "junk"
-      ? [
-          item(
-            "move-conversation-inbox",
-            strings.reader.moveConversationToInbox,
-            { icon: "inbox" },
-          ),
-        ]
-      : []),
-    mailbox?.role === "junk"
-      ? item("not-junk", strings.reader.notJunk, { icon: "not-junk" })
-      : item("junk", strings.reader.junk, { icon: "junk" }),
-    ...(peers.length > 1 && mailbox?.role !== "junk"
-      ? [
-          item("junk-conversation", strings.reader.junkConversation, {
-            icon: "junk",
-          }),
-        ]
-      : []),
-    ...(senderRuleNeedle(message.senderAddress) &&
-    (senderIsBlocked(message.accountId, message.senderAddress) ||
-      canBlockSender(message.senderAddress, messageAccount(message.accountId)))
-      ? [
-          senderIsBlocked(message.accountId, message.senderAddress)
-            ? item("unblock-sender", strings.reader.unblockSender, {
-                icon: "not-junk",
-              })
-            : item("block-sender", strings.reader.blockSender, {
-                icon: "junk",
-              }),
-        ]
-      : []),
-    ...(domainIsBlocked(message.accountId, message.senderAddress) ||
-    blockableDomain(message.senderAddress, messageAccount(message.accountId))
-      ? [
-          domainIsBlocked(message.accountId, message.senderAddress)
-            ? item("unblock-domain", strings.reader.unblockDomain, {
-                icon: "not-junk",
-              })
-            : item("block-domain", strings.reader.blockDomain, {
-                icon: "junk",
-              }),
-        ]
-      : []),
-    ...(canMuteConversation(message)
-      ? [
-          item(
-            "mute-conversation",
-            message.conversationMuted
-              ? strings.reader.unmuteConversation
-              : strings.reader.muteConversation,
-            { icon: message.conversationMuted ? "unmute" : "mute" },
-          ),
-        ]
-      : []),
-    mailbox?.role === "trash"
-      ? item("delete-forever", strings.mail.deleteForever, {
-          icon: "trash",
-          danger: true,
-        })
-      : item("trash", strings.reader.trash, { icon: "trash" }),
-    ...(peers.length > 1 && mailbox?.role === "trash"
-      ? [
-          item("delete-conversation", strings.reader.deleteConversation, {
-            icon: "trash",
-            danger: true,
-          }),
-        ]
-      : []),
-    ...(peers.length > 1 && mailbox?.role !== "trash"
-      ? [
-          item("trash-conversation", strings.reader.trashConversation, {
-            icon: "trash",
-          }),
-        ]
-      : []),
-  ];
+  const conversation = peers.length > 1;
+  const selected = useAppStore.getState().selectedMessage;
+  const isArchive = mailbox?.role === "archive";
+
   // Archive, Junk, and Trash already have direct actions above.
   const destinations = mailboxes.filter(
     (box) =>
@@ -668,66 +445,63 @@ function messageItems(
       box.role !== "archive" &&
       box.role !== "junk" &&
       box.role !== "trash" &&
-      !(mailbox?.role === "archive" && box.role === "inbox"),
+      !(isArchive && box.role === "inbox"),
   );
-  const orderedDestinations = withRecentMoveMailbox(destinations);
-  if (orderedDestinations.length > 0) {
-    items.push({ type: "separator" });
-    items.push({ type: "heading", label: strings.contextMenu.moveTo });
-    for (const box of orderedDestinations) {
-      const name = folderPathLabel(box);
-      items.push(
-        item(`move-mailbox:${box.id}`, name, {
-          icon: `folder:${box.role}`,
-          ariaLabel: strings.contextMenu.moveToFolder(name),
-        }),
-      );
-    }
-    if (peers.length > 1) {
-      items.push({ type: "separator" });
-      items.push({
-        type: "heading",
-        label: strings.contextMenu.moveConversationTo,
-      });
-      for (const box of orderedDestinations) {
-        const name = folderPathLabel(box);
-        items.push(
-          item(`move-conversation:${box.id}`, name, {
-            icon: `folder:${box.role}`,
-            ariaLabel: strings.contextMenu.moveConversationToFolder(name),
-          }),
-        );
-      }
-    }
-    items.push({ type: "separator" });
-    items.push({ type: "heading", label: strings.contextMenu.copyTo });
-    for (const box of orderedDestinations) {
-      const name = folderPathLabel(box);
-      items.push(
-        item(`copy-mailbox:${box.id}`, name, {
-          icon: `folder:${box.role}`,
-          ariaLabel: strings.contextMenu.copyToFolder(name),
-        }),
-      );
-    }
-    if (peers.length > 1) {
-      items.push({ type: "separator" });
-      items.push({
-        type: "heading",
-        label: strings.contextMenu.copyConversationTo,
-      });
-      for (const box of orderedDestinations) {
-        const name = folderPathLabel(box);
-        items.push(
-          item(`copy-conversation:${box.id}`, name, {
-            icon: `folder:${box.role}`,
-            ariaLabel: strings.contextMenu.copyConversationToFolder(name),
-          }),
-        );
-      }
-    }
-  }
-  return items;
+  const facts: MessageMenuFacts = {
+    isRead: message.isRead,
+    isStarred: message.isStarred,
+    pinned: Boolean(message.pinned),
+    canMute: canMuteConversation(message),
+    conversationMuted: Boolean(message.conversationMuted),
+    mailboxRole: mailbox?.role,
+    conversation,
+    conversationUnread: conversationUnread(messages, message).length > 0,
+    conversationRead: conversationRead(messages, message).length > 0,
+    conversationHasUnstarred: peers.some((row) => !row.isStarred),
+    conversationHasUnpinned: peers.some((row) => !row.pinned),
+    conversationHasAttachments: peers.some((row) => row.hasAttachments),
+    hasAttachments: message.hasAttachments,
+    hasSender: Boolean(addressMailbox(message.senderAddress)),
+    hasSubject: Boolean(message.subject.trim()),
+    hasRecipients: Boolean(message.recipients.trim()),
+    senderRule: Boolean(senderRuleNeedle(message.senderAddress)),
+    subjectRule: Boolean(subjectRuleNeedle(message.subject)),
+    senderSearch: Boolean(senderSearchQuery(message.senderAddress)),
+    subjectSearch: Boolean(subjectSearchQuery(message.subject)),
+    selectFromSender:
+      sameSenderMessages(messages, message.senderAddress).length > 1,
+    openEarlier:
+      Boolean(earlierHeaderId(selected ?? {})) && selected?.id === message.id,
+    blockSender: senderRuleNeedle(message.senderAddress)
+      ? senderIsBlocked(message.accountId, message.senderAddress)
+        ? "unblock"
+        : canBlockSender(
+              message.senderAddress,
+              messageAccount(message.accountId),
+            )
+          ? "block"
+          : undefined
+      : undefined,
+    blockDomain: domainIsBlocked(message.accountId, message.senderAddress)
+      ? "unblock"
+      : blockableDomain(
+            message.senderAddress,
+            messageAccount(message.accountId),
+          )
+        ? "block"
+        : undefined,
+    unsubscribe: false,
+    showOriginal: false,
+    conversationNav: false,
+    preparing: false,
+    moveFolders: withRecentMoveMailbox(destinations).map((box) => ({
+      id: box.id,
+      name: folderPathLabel(box),
+      role: box.role,
+    })),
+    inToolbar: { primary: false, archiveTrash: false },
+  };
+  return buildMessageMenu(facts, rowMenuKit);
 }
 
 function folderItems(mailbox: MailboxSummary): ContextMenuItem[] {

@@ -124,7 +124,7 @@ test("Keyboard shortcuts runs from the palette and restores focus on close", asy
   await attachArtifacts(page, testInfo, "shortcut-overlay-from-palette");
 });
 
-const densities = ["comfortable", "compact"] as const;
+const densities = ["comfortable", "normal", "compact"] as const;
 const scales = [1, 2] as const;
 
 for (const density of densities) {

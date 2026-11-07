@@ -11,6 +11,7 @@ import { api } from "../api";
 import { seedBody } from "../components/composer/composerSeed";
 import { MailShell } from "../components/MailShell";
 import { ContextMenuHost } from "../components/ContextMenu";
+import { NoticeRegion } from "../components/NoticeRegion";
 import { CONTEXT_ACTION_EVENT } from "../contextMenu";
 import { formatMessageDate } from "../format";
 import { strings } from "../i18n";
@@ -185,7 +186,13 @@ function messageDragTransfer() {
     getData(type: string) {
       return stored.get(type) ?? "";
     },
+    setDragImage() {},
   };
+}
+
+/** Opens a popup submenu by its visible label, as a click would. */
+function openSubmenu(name: string) {
+  fireEvent.click(screen.getByRole("menuitem", { name }));
 }
 
 describe("mail shell", () => {
@@ -312,7 +319,7 @@ describe("mail shell", () => {
       screen.getByRole("button", { name: "More mailbox actions" }),
     );
     fireEvent.click(
-      screen.getByRole("menuitemcheckbox", { name: strings.mail.sortOldest }),
+      screen.getByRole("menuitemradio", { name: strings.mail.sortOldest }),
     );
 
     await waitFor(() =>
@@ -331,6 +338,7 @@ describe("mail shell", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "More mailbox actions" }),
     );
+    openSubmenu(strings.contextMenu.sortBy);
     fireEvent.click(
       screen.getByRole("menuitemradio", { name: strings.mail.sortDate }),
     );
@@ -396,6 +404,7 @@ describe("mail shell", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "More mailbox actions" }),
     );
+    openSubmenu(strings.contextMenu.sortBy);
     fireEvent.click(
       screen.getByRole("menuitemradio", { name: strings.mail.sortDate }),
     );
@@ -430,6 +439,7 @@ describe("mail shell", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "More mailbox actions" }),
     );
+    openSubmenu(strings.contextMenu.sortBy);
     fireEvent.click(
       screen.getByRole("menuitemradio", { name: strings.mail.sortSubject }),
     );
@@ -447,7 +457,7 @@ describe("mail shell", () => {
       screen.getByRole("button", { name: "More mailbox actions" }),
     );
     fireEvent.click(
-      screen.getByRole("menuitemcheckbox", {
+      screen.getByRole("menuitemradio", {
         name: strings.mail.sortDescending,
       }),
     );
@@ -467,6 +477,7 @@ describe("mail shell", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "More mailbox actions" }),
     );
+    openSubmenu(strings.contextMenu.sortBy);
     fireEvent.click(
       screen.getByRole("menuitemradio", { name: strings.mail.sortSubject }),
     );
@@ -1180,8 +1191,8 @@ describe("mail shell", () => {
       screen.getByRole("menuitem", { name: strings.mail.pinSelected }),
     ).toBeDisabled();
     expect(
-      screen.getByRole("menuitem", { name: strings.mail.unpinSelected }),
-    ).toBeDisabled();
+      screen.queryByRole("menuitem", { name: strings.mail.unpinSelected }),
+    ).toBeNull();
   });
 
   it("pins the selected messages and leaves one that is already pinned out", async () => {
@@ -1225,6 +1236,10 @@ describe("mail shell", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "More mailbox actions" }),
     );
+    // Mixed selection: both Pin and Unpin are offered.
+    expect(
+      screen.getByRole("menuitem", { name: strings.mail.pinSelected }),
+    ).toBeEnabled();
     expect(
       screen.getByRole("menuitem", { name: strings.mail.unpinSelected }),
     ).toBeEnabled();
@@ -1283,15 +1298,10 @@ describe("mail shell", () => {
       }),
     );
     fireEvent.click(
-      screen.getByLabelText("Select Newer note", {
-        selector: "input.message-select",
-      }),
-    );
-    fireEvent.click(
       screen.getByRole("button", { name: "More mailbox actions" }),
     );
     expect(
-      screen.getByRole("menuitem", { name: strings.mail.pinSelected }),
+      screen.getByRole("menuitem", { name: strings.mail.unpinSelected }),
     ).toBeEnabled();
     fireEvent.click(
       screen.getByRole("menuitem", { name: strings.mail.unpinSelected }),
@@ -1459,6 +1469,7 @@ describe("mail shell", () => {
         name: strings.reader.newerInConversation,
       }),
     ).not.toBeInTheDocument();
+    openSubmenu(strings.contextMenu.conversationOptions);
     fireEvent.click(
       screen.getByRole("menuitem", {
         name: strings.reader.olderInConversation,
@@ -1470,6 +1481,7 @@ describe("mail shell", () => {
     fireEvent.click(
       screen.getByRole("button", { name: strings.reader.moreActions }),
     );
+    openSubmenu(strings.contextMenu.conversationOptions);
     fireEvent.click(
       screen.getByRole("menuitem", {
         name: strings.reader.newerInConversation,
@@ -1515,6 +1527,7 @@ describe("mail shell", () => {
     fireEvent.click(
       screen.getByRole("button", { name: strings.reader.moreActions }),
     );
+    openSubmenu(strings.contextMenu.conversationOptions);
     fireEvent.click(
       screen.getByRole("menuitem", {
         name: strings.reader.unreadInConversation,
@@ -2695,6 +2708,7 @@ describe("mail shell", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "More mailbox actions" }),
     );
+    openSubmenu(strings.contextMenu.moveTo);
     fireEvent.click(screen.getByRole("menuitem", { name: "Move to Projects" }));
 
     await waitFor(() =>
@@ -2740,6 +2754,7 @@ describe("mail shell", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "More mailbox actions" }),
     );
+    openSubmenu(strings.contextMenu.copyTo);
     fireEvent.click(screen.getByRole("menuitem", { name: "Copy to Projects" }));
 
     await waitFor(() =>
@@ -4242,7 +4257,7 @@ describe("mail shell", () => {
     );
 
     await waitFor(() =>
-      expect(useAppStore.getState().settings.messagePaneWidth).toBe(400),
+      expect(useAppStore.getState().settings.messagePaneWidth).toBe(380),
     );
     expect(useAppStore.getState().error).toMatch(/disk full/i);
   });
@@ -4373,9 +4388,14 @@ describe("mail shell", () => {
         outboxId: "outbox-2",
         accountId: account.id,
         scheduled: false,
+        undoSeconds: 10,
       },
     });
+    // Earlier tests can leave notices in the shared store.
+    useAppStore.setState({ notices: [] });
     renderShell();
+    // The app mounts NoticeRegion beside the shell; mirror that here.
+    render(<NoticeRegion />);
 
     expect(await screen.findByText(strings.composer.messageHeld)).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Undo" }));
@@ -4429,16 +4449,30 @@ describe("mail shell", () => {
       limit: 250,
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "All folders" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.mail.searchScopeCurrent }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitemradio", {
+        name: strings.mail.searchAllFolders,
+      }),
+    );
     await waitFor(() =>
       expect(mockedSearchServer).toHaveBeenLastCalledWith(
         expect.objectContaining({ allFolders: true }),
       ),
     );
-    expect(screen.getByRole("button", { name: "All folders" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
+    expect(
+      screen.getByRole("button", { name: strings.mail.searchAllFolders }),
+    ).toBeVisible();
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.mail.searchAllFolders }),
     );
+    expect(
+      screen.getByRole("menuitemradio", {
+        name: strings.mail.searchAllFolders,
+      }),
+    ).toHaveAttribute("aria-checked", "true");
     expect(
       screen.getByRole("option", { name: /Cached match/i }),
     ).toHaveAccessibleName(/In Inbox/);
@@ -4750,9 +4784,14 @@ describe("mail shell", () => {
     expect(screen.getByRole("searchbox", { name: "Search mail" })).toHaveValue(
       'from:"jane@example.test"',
     );
-    expect(
+    fireEvent.click(
       screen.getByRole("button", { name: strings.mail.searchAllFolders }),
-    ).toHaveAttribute("aria-pressed", "true");
+    );
+    expect(
+      screen.getByRole("menuitemradio", {
+        name: strings.mail.searchAllFolders,
+      }),
+    ).toHaveAttribute("aria-checked", "true");
   });
 
   it("searches the whole account for mail with this subject", async () => {
@@ -5000,6 +5039,7 @@ describe("mail shell", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "More mailbox actions" }),
     );
+    openSubmenu(strings.contextMenu.sortBy);
     fireEvent.click(screen.getByRole("menuitemradio", { name: "From" }));
 
     await waitFor(() =>
@@ -5017,6 +5057,7 @@ describe("mail shell", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "More mailbox actions" }),
     );
+    openSubmenu(strings.contextMenu.sortBy);
     expect(screen.getByRole("menuitemradio", { name: "From" })).toHaveAttribute(
       "aria-checked",
       "true",
@@ -5260,7 +5301,7 @@ describe("mail shell", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "More mailbox actions" }),
     );
-    fireEvent.click(screen.getByRole("menuitem", { name: "Mark unread" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Mark read" }));
     await waitFor(() =>
       expect(useAppStore.getState().error).toMatch(/1 message could not/i),
     );
@@ -5320,7 +5361,7 @@ describe("mail shell", () => {
 
     fireEvent.keyDown(trigger, { key: "ArrowDown" });
     expect(
-      await screen.findByRole("menuitemradio", { name: "Date" }),
+      await screen.findByRole("menuitem", { name: strings.contextMenu.sortBy }),
     ).toHaveFocus();
     fireEvent.keyDown(document, { key: "Escape" });
     expect(trigger).toHaveFocus();

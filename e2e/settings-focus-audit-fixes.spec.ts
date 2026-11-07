@@ -1,6 +1,6 @@
-import AxeBuilder from "@axe-core/playwright";
 import type { Page, TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
+import { axeInPage } from "./axe-inpage";
 import { installMockIpc } from "./mock-ipc";
 
 async function dismissConfirmFor(page: Page, action: () => Promise<void>) {
@@ -24,12 +24,9 @@ async function acceptConfirmFor(page: Page, action: () => Promise<void>) {
 }
 
 async function scanSettings(page: Page, rules: string[]) {
-  const result = await new AxeBuilder({ page })
-    .include(".settings-window")
-    .withRules(rules)
-    .analyze();
+  const violations = await axeInPage(page, ".settings-window", { rules });
   expect(
-    result.violations.map((violation) => ({
+    violations.map((violation) => ({
       id: violation.id,
       targets: violation.nodes.map((node) => node.target),
     })),
@@ -76,6 +73,14 @@ test.beforeEach(async ({ page }) => {
 
 test.afterEach(async ({ page }, testInfo) => attachArtifacts(page, testInfo));
 
+const accessibilityRules = [
+  "scrollable-region-focusable",
+  "aria-valid-attr-value",
+  "aria-roles",
+  "duplicate-id",
+];
+
+// Split from one journey: a single test exceeds 30s under parallel load.
 test("all settings views expose a scroll region and valid tab relationships", async ({
   page,
 }) => {
@@ -93,12 +98,6 @@ test("all settings views expose a scroll region and valid tab relationships", as
     "Updates",
     "Advanced",
     "About",
-  ];
-  const accessibilityRules = [
-    "scrollable-region-focusable",
-    "aria-valid-attr-value",
-    "aria-roles",
-    "duplicate-id",
   ];
   const region = page.locator(".settings-content");
 
@@ -124,8 +123,15 @@ test("all settings views expose a scroll region and valid tab relationships", as
     await expect(pageButton).toHaveAttribute("aria-pressed", "true");
     await scanSettings(page, accessibilityRules);
   }
+});
 
+test("Shortcuts search keeps tabs in sync and opens the matched setting", async ({
+  page,
+}) => {
+  await page.goto("/?localMail=1&multiAccount=1");
+  await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("tab", { name: "Shortcuts", exact: true }).click();
+  const region = page.locator(".settings-content");
   const search = page.getByRole("searchbox", { name: "Search settings" });
   const shortcutsTab = page.getByRole("tab", {
     name: "Shortcuts",
@@ -169,7 +175,7 @@ test("Shortcuts scrolls by keyboard across density, scale, and narrow layouts", 
   page,
 }) => {
   const observations: Array<Record<string, unknown>> = [];
-  for (const density of ["comfortable", "compact"]) {
+  for (const density of ["comfortable", "normal", "compact"]) {
     for (const scale of [1, 2]) {
       await page.goto(`/?localMail=1&density=${density}&scale=${scale}`);
       await page.getByRole("button", { name: "Settings" }).click();

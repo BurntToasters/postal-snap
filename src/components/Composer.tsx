@@ -938,7 +938,7 @@ export function Composer({ accountId, onDraftSaved }: Props) {
             aria-label={strings.composer.maximize}
             title={strings.composer.maximize}
           >
-            <Maximize2 size={16} />
+            <Maximize2 aria-hidden="true" />
           </button>
           <button
             className="icon-button"
@@ -947,78 +947,36 @@ export function Composer({ accountId, onDraftSaved }: Props) {
             aria-label={strings.composer.saveClose}
             title={strings.composer.saveClose}
           >
-            <X size={16} />
+            <X aria-hidden="true" />
           </button>
         </div>
       </div>
     );
   }
 
-  const optionToggles = (
-    <>
-      {redirecting ? null : (
-        <label
-          className="composer-signature-toggle"
-          title={strings.composer.highImportanceHelp}
-        >
-          <input
-            type="checkbox"
-            checked={importance === "high"}
-            onChange={(event) => {
-              setImportance(event.target.checked ? "high" : "");
-              markUnsaved();
-            }}
-          />
-          {strings.composer.highImportance}
-        </label>
-      )}
-      {redirecting ? null : (
-        <label
-          className="composer-signature-toggle"
-          title={strings.composer.lowImportanceHelp}
-        >
-          <input
-            type="checkbox"
-            checked={importance === "low"}
-            onChange={(event) => {
-              setImportance(event.target.checked ? "low" : "");
-              markUnsaved();
-            }}
-          />
-          {strings.composer.lowImportance}
-        </label>
-      )}
-      {redirecting ? null : (
-        <label
-          className="composer-signature-toggle"
-          title={strings.composer.requestReceiptHelp}
-        >
-          <input
-            type="checkbox"
-            checked={requestReceipt}
-            onChange={(event) => {
-              setRequestReceipt(event.target.checked);
-              markUnsaved();
-            }}
-          />
-          {strings.composer.requestReceipt}
-        </label>
-      )}
-      {account?.signature && !redirecting ? (
-        <label className="composer-signature-toggle">
-          <input
-            type="checkbox"
-            checked={includeSignature}
-            onChange={(event) => {
-              setIncludeSignature(event.target.checked);
-              markUnsaved();
-            }}
-          />
-          {strings.composer.includeSignature}
-        </label>
-      ) : null}
-    </>
-  );
+  const messageOptions = redirecting
+    ? undefined
+    : {
+        importance,
+        onImportanceChange: (value: "" | "high" | "low") => {
+          setImportance(value);
+          markUnsaved();
+        },
+        requestReceipt,
+        onRequestReceiptChange: (value: boolean) => {
+          setRequestReceipt(value);
+          markUnsaved();
+        },
+        signature: account?.signature
+          ? {
+              included: includeSignature,
+              onChange: (value: boolean) => {
+                setIncludeSignature(value);
+                markUnsaved();
+              },
+            }
+          : undefined,
+      };
 
   return (
     <div
@@ -1065,6 +1023,7 @@ export function Composer({ accountId, onDraftSaved }: Props) {
           bodyFormat={bodyFormat}
           onToggleBodyFormat={toggleBodyFormat}
           hideFormat={redirecting}
+          messageOptions={messageOptions}
           setMinimized={setComposerMinimized}
           setMaximized={setMaximized}
           requestClose={requestClose}
@@ -1122,20 +1081,15 @@ export function Composer({ accountId, onDraftSaved }: Props) {
               {strings.composer.redirectNote}
             </p>
           ) : null}
-          {redirecting ? null : bodyFormat === "html" ? (
+          {redirecting || bodyFormat !== "html" ? null : (
             <FormatToolbar
               editor={editor}
               formattingOpen={formattingOpen}
-              setFormattingOpen={setFormattingOpen}
               moreFormattingOpen={moreFormattingOpen}
               setMoreFormattingOpen={setMoreFormattingOpen}
               adjustIndent={adjustIndent}
               addLink={addLink}
-            >
-              {optionToggles}
-            </FormatToolbar>
-          ) : (
-            <div className="composer-toggle-row">{optionToggles}</div>
+            />
           )}
           {redirecting ? null : bodyFormat === "html" ? (
             <div data-context="composer" className="composer-editor-wrap">
@@ -1272,7 +1226,12 @@ export function Composer({ accountId, onDraftSaved }: Props) {
           setScheduleValue={setScheduleValue}
           saveDraft={saveDraft}
           saveState={saveState}
-          savedAt={savedAt}
+          formattingOpen={formattingOpen}
+          onToggleFormatting={
+            redirecting || bodyFormat !== "html"
+              ? undefined
+              : () => setFormattingOpen((value) => !value)
+          }
           showAttachments={!redirecting}
           addAttachments={addAttachments}
           addInlineImage={addInlineImage}

@@ -9,7 +9,7 @@ export function makeSettings(
     textScale: 1,
     privateNotifications: false,
     theme,
-    density: "comfortable",
+    density: "normal",
     cachePolicy: { mode: "recent", days: 90, maxBytes: 1_073_741_824 },
     lastAccountId: null,
     lastMailboxId: null,

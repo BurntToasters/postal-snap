@@ -135,15 +135,23 @@ test("U6 active account is a checked radio item", async ({ page }) => {
   await shot(page, "account-switcher");
 });
 
-test("U7 scope toggle keeps one name and flips aria-pressed", async ({
+test("U7 scope menu keeps one name and checks the active scope", async ({
   page,
 }) => {
   await page.goto("/");
-  const scope = page.getByRole("button", { name: "All folders" });
-  await expect(scope).toHaveAttribute("aria-pressed", "false");
+  const scope = page.locator(".search-scope");
+  await expect(scope).toHaveText("This mailbox");
   await scope.click();
-  await expect(scope).toHaveAttribute("aria-pressed", "true");
-  await expect(scope).toHaveAccessibleName("All folders");
+  await page.getByRole("menuitemradio", { name: "All folders" }).click();
+  await expect(scope).toHaveText("All folders");
+  await expect(scope).toHaveAttribute("aria-expanded", "false");
+  await scope.click();
+  await expect(
+    page.getByRole("menuitemradio", { name: "All folders" }),
+  ).toHaveAttribute("aria-checked", "true");
+  await expect(
+    page.getByRole("menuitemradio", { name: "This mailbox" }),
+  ).toHaveAttribute("aria-checked", "false");
 });
 
 test("U11 U12 titles on truncated text and icon buttons", async ({ page }) => {

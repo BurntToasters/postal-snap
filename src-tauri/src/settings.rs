@@ -332,7 +332,10 @@ fn normalize_legacy(mut settings: AppSettings) -> Result<AppSettings, String> {
     settings.schema_version = 2;
     // Legacy settings predates integrated glass/sidebar preferences.
     settings.window_effects = false;
-    if !matches!(settings.density.as_str(), "comfortable" | "compact") {
+    if !matches!(
+        settings.density.as_str(),
+        "normal" | "comfortable" | "compact"
+    ) {
         settings.density = "comfortable".into();
     }
     // First-run progress did not exist before this version. Existing installs
@@ -354,6 +357,10 @@ fn parse_and_validate(raw: &str) -> Result<AppSettings, String> {
     if !raw.contains("setupCompleted") {
         settings.setup_completed = true;
         settings.setup_step = None;
+    }
+    // Files without a density key predate "normal"; keep them comfortable (D2).
+    if !raw.contains("density") {
+        settings.density = "comfortable".into();
     }
     settings.image_senders = canonicalize_image_senders(&settings.image_senders)?;
     settings.pinned_mailboxes = canonicalize_pinned_mailboxes(&settings.pinned_mailboxes)?;
@@ -461,7 +468,10 @@ fn validate(settings: &AppSettings) -> Result<(), String> {
             "right" | "bottom" | "hidden"
         )
         || !matches!(settings.theme.as_str(), "system" | "light" | "dark")
-        || !matches!(settings.density.as_str(), "comfortable" | "compact")
+        || !matches!(
+            settings.density.as_str(),
+            "normal" | "comfortable" | "compact"
+        )
         || !matches!(
             settings.update_check_interval.as_str(),
             "startupAnd6h" | "startupAnd12h" | "startupAnd24h" | "startup" | "manual"
@@ -1063,7 +1073,7 @@ mod tests {
             parse_and_validate(&serialize(&defaults).unwrap())
                 .unwrap()
                 .density,
-            "comfortable"
+            "normal"
         );
         let mut value = serde_json::to_value(&defaults).unwrap();
         value.as_object_mut().unwrap().remove("bccSelf");
@@ -1113,6 +1123,11 @@ mod tests {
             ..AppSettings::default()
         };
         assert!(validate(&settings).is_err());
+        assert!(validate(&AppSettings {
+            density: "normal".into(),
+            ..AppSettings::default()
+        })
+        .is_ok());
 
         let undo = AppSettings {
             undo_send_seconds: 31,
@@ -1400,9 +1415,53 @@ mod tests {
 
         let reset = store.reset_preferences().unwrap();
         assert_eq!(reset.theme, "system");
-        assert_eq!(reset.density, "comfortable");
+        assert_eq!(reset.density, "normal");
         assert_eq!(reset.last_account_id, Some(account_id));
         assert_eq!(reset.last_mailbox_id, Some(42));
+    }
+
+    #[test]
+    fn density_defaults_and_legacy_resolution() {
+        let defaults = AppSettings::default();
+        assert_eq!(defaults.density, "normal");
+        assert_eq!(defaults.folder_pane_width, 240);
+        assert_eq!(defaults.message_pane_width, 380);
+        assert_eq!(defaults.reader_pane_height, 420);
+
+        // A file with no density key resolves to comfortable, not the new default.
+        let mut value = serde_json::to_value(&defaults).unwrap();
+        value.as_object_mut().unwrap().remove("density");
+        let raw = serde_json::to_string(&value).unwrap();
+        assert_eq!(parse_and_validate(&raw).unwrap().density, "comfortable");
+
+        let directory = tempfile::tempdir().unwrap();
+        let store =
+            SettingsStore::load(directory.path().join("settings.json"), &Database::memory())
+                .unwrap();
+        let import_path = directory.path().join("export.json");
+        let mut portable = serde_json::to_value(PortableSettingsFile {
+            application: PORTABLE_APPLICATION.into(),
+            format_version: PORTABLE_FORMAT_VERSION,
+            preferences: PortableSettings::from(&defaults),
+        })
+        .unwrap();
+        portable["preferences"]["density"] = serde_json::json!("comfortable");
+        fs::write(&import_path, serde_json::to_vec(&portable).unwrap()).unwrap();
+        assert_eq!(
+            store.import_from(&import_path).unwrap().density,
+            "comfortable"
+        );
+
+        // An export with no density imports as comfortable.
+        portable["preferences"]
+            .as_object_mut()
+            .unwrap()
+            .remove("density");
+        fs::write(&import_path, serde_json::to_vec(&portable).unwrap()).unwrap();
+        assert_eq!(
+            store.import_from(&import_path).unwrap().density,
+            "comfortable"
+        );
     }
 
     #[test]

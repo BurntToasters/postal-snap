@@ -34,6 +34,7 @@ svg {
 
   .folder.active,
   .message-row.selected,
+  .message-row.checked,
   .primary-button,
   .settings-nav button.active,
   .update-ready-badge,

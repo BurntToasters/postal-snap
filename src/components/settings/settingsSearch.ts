@@ -41,7 +41,7 @@ export const settingsSearchEntries: SettingsSearchEntry[] = [
     section: "appearance",
     title: s.spacing,
     help: s.spacingHelp,
-    keywords: "density comfortable compact",
+    keywords: "density normal comfortable compact",
   },
   {
     section: "appearance",

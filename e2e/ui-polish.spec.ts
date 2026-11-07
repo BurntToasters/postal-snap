@@ -1,5 +1,6 @@
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { revealMenuItem } from "./menu-reveal";
 
 test.beforeEach(async ({ page }) => installMockIpc(page));
 
@@ -81,13 +82,17 @@ test("message context menu is compact, iconed, and groups move targets", async (
   expect(count).toBeGreaterThan(8);
   for (let index = 0; index < count; index += 1) {
     const entry = items.nth(index);
-    await expect(entry.locator(".context-menu-icon svg")).toHaveCount(1);
+    // Submenu rows show a trailing chevron instead of a leading icon.
+    if (!(await entry.getAttribute("aria-haspopup"))) {
+      await expect(entry.locator(".context-menu-icon svg")).toHaveCount(1);
+    }
     const box = await entry.boundingBox();
     expect(box?.height ?? 0).toBeGreaterThanOrEqual(32);
     expect(box?.height ?? 99).toBeLessThan(44);
   }
 
   await expect(menu.getByText("Move to", { exact: true })).toBeVisible();
+  await revealMenuItem(page, "Move to Projects");
   await expect(
     menu.getByRole("menuitem", { name: "Move to Projects", exact: true }),
   ).toBeVisible();
@@ -98,6 +103,7 @@ test("message context menu is compact, iconed, and groups move targets", async (
   await expect(
     menu.getByRole("menuitem", { name: /Deleted Messages/ }),
   ).toHaveCount(0);
+  await revealMenuItem(page, "Archive");
   await expect(
     menu.getByRole("menuitem", { name: "Archive", exact: true }),
   ).toBeVisible();
@@ -279,6 +285,7 @@ test("reader move list uses the same folder names as the sidebar", async ({
   await expect(
     menu.getByRole("menuitem", { name: /Deleted Messages/ }),
   ).toHaveCount(0);
+  await revealMenuItem(page, "Move to Projects / 2026 / Launch");
   await expect(
     menu.getByRole("menuitem", { name: "Move to Projects / 2026 / Launch" }),
   ).toHaveCount(1);
@@ -299,17 +306,19 @@ test("heading scale and section labels stay consistent", async ({ page }) => {
     };
   });
   expect(sizes.windowTitle).toBeGreaterThan(sizes.panelTitle);
-  expect(sizes.sectionLabel).toBeCloseTo(0.78 * 16, 1);
+  expect(sizes.sectionLabel).toBeCloseTo(0.75 * 16, 1);
 });
 
-test("active folder and settings tab share token-based highlights", async ({
+test("active folder is flat and settings tab keeps token highlights", async ({
   page,
 }) => {
   for (const theme of ["light", "dark"]) {
     await page.goto(`/?theme=${theme}`);
+    // §5.2: the active sidebar row is flat, with no raised shadow.
     const folder = await page
       .locator(".folder.active")
       .evaluate((node) => getComputedStyle(node).boxShadow);
+    expect(folder, theme).toBe("none");
     const toolbar = await page
       .locator(".app-toolbar")
       .evaluate((node) => getComputedStyle(node).boxShadow);
@@ -317,9 +326,7 @@ test("active folder and settings tab share token-based highlights", async ({
     const tab = await page
       .locator(".settings-nav button.active")
       .evaluate((node) => getComputedStyle(node).boxShadow);
-    expect(tab, theme).toBe(folder);
-    // Hard-coded white/black no longer leak into the shared highlight.
-    expect(folder, theme).not.toMatch(/srgb 1 1 1 \/ 0\.08/);
+    expect(tab, theme).not.toMatch(/srgb 1 1 1 \/ 0\.08/);
     expect(toolbar).not.toContain("0, 0, 0, 0.05");
   }
 });
@@ -338,16 +345,26 @@ test("context menu supports Tab, typeahead, groups, and dismissal", async ({
   await expect(menu).toBeVisible();
 
   await page.keyboard.press("m");
+  await revealMenuItem(page, "Mark read");
   await expect(menu.getByRole("menuitem", { name: "Mark read" })).toBeFocused();
-  // The next "m" item in menu order is "Messages from this sender".
+  // The next "m" item in menu order is "Mute conversation"; sender rules sit in a submenu.
   await page.keyboard.press("m");
   await expect(
-    menu.getByRole("menuitem", { name: "Messages from this sender" }),
+    menu.getByRole("menuitem", { name: /Mute conversation/ }),
+  ).toBeFocused();
+  // Print ▸ now sits between Copy and Save as .eml, so the first "p" lands on it.
+  await page.keyboard.press("p");
+  await expect(
+    menu.getByRole("menuitem", { name: "Print", exact: true }),
   ).toBeFocused();
   await page.keyboard.press("p");
   await expect(
-    menu.getByRole("menuitem", { name: "Move to Projects", exact: true }),
+    menu.getByRole("menuitem", { name: "Pin", exact: true }),
   ).toBeFocused();
+  await revealMenuItem(page, "Move to Projects");
+  await expect(
+    menu.getByRole("menuitem", { name: "Move to Projects", exact: true }),
+  ).toBeVisible();
 
   const group = menu.getByRole("group", { name: "Move to" });
   await expect(group.getByRole("menuitem")).toHaveCount(3);
@@ -381,6 +398,7 @@ test("context menu from the message body stays open and returns focus", async ({
 
   const menu = page.getByRole("menu", { name: "Actions" });
   await expect(menu).toBeVisible();
+  await revealMenuItem(page, "Copy link");
   await expect(menu.getByRole("menuitem", { name: "Copy link" })).toBeVisible();
   await page.screenshot({ path: "test-results/ui-polish-frame-menu.png" });
 
@@ -399,6 +417,7 @@ test("forced colors keep menu hover and download choice visible", async ({
   await page
     .getByRole("option", { name: /Weekend plans/i })
     .click({ button: "right" });
+  await revealMenuItem(page, "Reply");
   const reply = page
     .getByRole("menu", { name: "Actions" })
     .getByRole("menuitem", { name: "Reply", exact: true });
@@ -438,6 +457,7 @@ test("move targets show full folder paths and stay whole at 200% text", async ({
     .getByRole("option", { name: /Weekend plans/i })
     .click({ button: "right" });
   const menu = page.getByRole("menu", { name: "Actions" });
+  await revealMenuItem(page, "Move to Projects / 2026 / Launch");
   await expect(
     menu.getByRole("menuitem", { name: "Move to Projects / 2026 / Launch" }),
   ).toBeVisible();
@@ -449,10 +469,13 @@ test("move targets show full folder paths and stay whole at 200% text", async ({
   );
   expect(clipped).toEqual([]);
   await page.screenshot({ path: "test-results/ui-polish-menu-200.png" });
+  // The first Escape closes the open submenu; the second closes the menu.
+  await page.keyboard.press("Escape");
   await page.keyboard.press("Escape");
 
   await page.getByRole("option", { name: /Weekend plans/i }).click();
   await page.getByRole("button", { name: "More actions" }).click();
+  await revealMenuItem(page, "Move to Projects / 2026 / Launch");
   await expect(
     page
       .getByRole("menu", { name: "More actions" })
@@ -560,11 +583,11 @@ test("selected read message shows no unread dot", async ({ page }) => {
 test("context menu ignores completed list scrolling and closes on new scrolling", async ({
   page,
 }, testInfo) => {
-  await page.goto("/?nestedFolders=1&scale=2");
-  await page
-    .getByRole("option", { name: /Weekend plans/i })
-    .click({ button: "right" });
+  // hugeList keeps the list scrollable at normal density.
+  await page.goto("/?nestedFolders=1&scale=2&hugeList=60&rowMix=1");
+  await page.locator(".message-row").first().click({ button: "right" });
   const menu = page.getByRole("menu", { name: "Actions" });
+  await revealMenuItem(page, "Move to Projects / 2026 / Launch");
   await expect(
     menu.getByRole("menuitem", { name: "Move to Projects / 2026 / Launch" }),
   ).toBeVisible();

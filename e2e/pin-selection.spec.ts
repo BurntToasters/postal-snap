@@ -26,9 +26,10 @@ test("pin selected stays disabled until a message is checked", async ({
   await expect(
     page.getByRole("menuitem", { name: "Pin selected", exact: true }),
   ).toBeDisabled();
+  // One pin toggle: with nothing checked it offers Pin, disabled.
   await expect(
     page.getByRole("menuitem", { name: "Unpin selected", exact: true }),
-  ).toBeDisabled();
+  ).toHaveCount(0);
 });
 
 test("pin selected keeps the checked messages at the top", async ({ page }) => {

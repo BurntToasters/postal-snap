@@ -21,7 +21,7 @@ import {
   Send,
   Sunrise,
 } from "lucide-react";
-import { formatMessageDate, shortcutChord } from "../../format";
+import { formatChord, withChord } from "../../format";
 import { strings } from "../../i18n";
 import { moveMenuFocus } from "../toolbarNav";
 import { placeSendMenu } from "./sendMenuPlacement";
@@ -41,7 +41,9 @@ export interface SendBarProps {
   setScheduleValue: Dispatch<SetStateAction<string>>;
   saveDraft: (showStatus?: boolean) => void | Promise<void>;
   saveState: "unsaved" | "saving" | "saved";
-  savedAt?: string;
+  /** Formatting toggle; omitted for plain-text bodies. */
+  formattingOpen?: boolean;
+  onToggleFormatting?: () => void;
   addAttachments: () => void | Promise<void>;
   addInlineImage: () => void | Promise<void>;
   discardDraft: () => void | Promise<void>;
@@ -64,7 +66,8 @@ export function SendBar({
   setScheduleValue,
   saveDraft,
   saveState,
-  savedAt,
+  formattingOpen = false,
+  onToggleFormatting,
   addAttachments,
   addInlineImage,
   discardDraft,
@@ -128,17 +131,15 @@ export function SendBar({
           aria-label={
             sending ? strings.composer.sending : strings.composer.send
           }
-          title={`${sending ? strings.composer.sending : strings.composer.send} (${shortcutChord("↵")})`}
+          title={withChord(
+            sending ? strings.composer.sending : strings.composer.send,
+            formatChord("↵"),
+          )}
         >
-          <Send />
+          <Send aria-hidden="true" />
           <span>
             {sending ? strings.composer.sending : strings.composer.send}
           </span>
-          <kbd
-            className="send-kbd-hint"
-            aria-hidden="true"
-            data-chord={shortcutChord("↵")}
-          />
         </button>
         <button
           className="primary-button send-chevron"
@@ -295,17 +296,25 @@ export function SendBar({
         onClick={() => void saveDraft(false)}
         disabled={sending || saveState === "saving"}
         aria-keyshortcuts="Meta+S Control+S"
-        title={`${strings.composer.saveDraft} (${shortcutChord("S")})`}
+        title={withChord(strings.composer.saveDraft, formatChord("S"))}
       >
         <Save aria-hidden="true" />
-        {saveState === "saving"
-          ? strings.common.saving
-          : saveState === "saved"
-            ? savedAt
-              ? strings.composer.draftSavedAt(formatMessageDate(savedAt))
-              : strings.composer.draftSaved
-            : strings.composer.saveDraft}
+        {strings.composer.saveDraft}
       </button>
+      {onToggleFormatting ? (
+        <button
+          className="toolbar-button format-toggle"
+          type="button"
+          aria-pressed={formattingOpen}
+          aria-controls="composer-formatting"
+          onClick={onToggleFormatting}
+        >
+          <span className="format-aa" aria-hidden="true">
+            Aa
+          </span>
+          {strings.composer.showFormatting}
+        </button>
+      ) : null}
       {showAttachments ? (
         <button
           className="toolbar-button"
@@ -313,7 +322,7 @@ export function SendBar({
           onClick={() => void addAttachments()}
           disabled={sending}
         >
-          <Paperclip />
+          <Paperclip aria-hidden="true" />
           {strings.composer.attach}
         </button>
       ) : null}
@@ -324,7 +333,7 @@ export function SendBar({
           onClick={() => void addInlineImage()}
           disabled={sending}
         >
-          <ImagePlus />
+          <ImagePlus aria-hidden="true" />
           {strings.composer.picture}
         </button>
       ) : null}

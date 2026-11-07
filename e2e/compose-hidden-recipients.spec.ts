@@ -12,7 +12,7 @@ test.beforeEach(async ({ page }) => {
   await recordIpc(page);
 });
 
-for (const density of ["comfortable", "compact"] as const) {
+for (const density of ["comfortable", "normal", "compact"] as const) {
   for (const scale of [1, 2]) {
     for (const field of ["Cc", "Bcc"] as const) {
       test(`${field} stays visible: ${density}, ${scale * 100}%`, async ({

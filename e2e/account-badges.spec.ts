@@ -53,9 +53,9 @@ test("badges show other-account unread with spoken counts", async ({
   await expect(
     page.getByRole("menuitemradio", { name: /Sam.*1 unread/ }),
   ).toBeVisible();
-  expect(await commandCount(page, "get_account_inbox_counts")).toBeGreaterThan(
-    0,
-  );
+  await expect
+    .poll(() => commandCount(page, "get_account_inbox_counts"))
+    .toBeGreaterThan(0);
 });
 
 test("badges hide at zero and cap the visible count", async ({ page }) => {
@@ -75,19 +75,22 @@ test("badges hide at zero and cap the visible count", async ({ page }) => {
 test("all badges disappear when nothing is unread", async ({ page }) => {
   await page.goto("/?multiAccount=1&badgeCounts=0,0");
   await expect(page.locator(".account-switcher-trigger")).toBeVisible();
+  // Counts load after first paint; wait for them so the zero check is not vacuous.
+  await expect
+    .poll(() => commandCount(page, "get_account_inbox_counts"))
+    .toBeGreaterThan(0);
   await expect(page.locator(".account-unread")).toHaveCount(0);
 });
 
-test("toolbar menu refreshes every account and updates badges", async ({
+test("Shift+click on Get Mail refreshes every account and updates badges", async ({
   page,
 }) => {
   await page.goto("/?multiAccount=1&syncAddsMail=1");
   const trigger = page.locator(".account-switcher-trigger");
   await expect(trigger.locator(".account-unread")).toContainText("3 unread");
-  await page.getByRole("button", { name: "More ways to get mail" }).click();
   await page
-    .getByRole("menuitem", { name: "Get mail for all accounts" })
-    .click();
+    .getByRole("button", { name: "Get Mail", exact: true })
+    .click({ modifiers: ["Shift"] });
   await expect(trigger.locator(".account-unread")).toContainText(
     "5 unread in other accounts",
   );
@@ -95,20 +98,20 @@ test("toolbar menu refreshes every account and updates badges", async ({
   expect(await commandCount(page, "sync_account")).toBe(0);
 });
 
-test("toolbar menu is keyboard operable and closes on Escape", async ({
+test("account switcher offers Get mail for all accounts and closes on Escape", async ({
   page,
 }) => {
   await page.goto("/?multiAccount=1");
-  const more = page.getByRole("button", { name: "More ways to get mail" });
-  await more.focus();
+  const trigger = page.locator(".account-switcher-trigger");
+  await trigger.focus();
   await page.keyboard.press("Enter");
   const item = page.getByRole("menuitem", {
     name: "Get mail for all accounts",
   });
-  await expect(item).toBeFocused();
+  await expect(item).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(item).toHaveCount(0);
-  await expect(more).toBeFocused();
+  await expect(trigger).toBeFocused();
 });
 
 test("Shift+F5 refreshes all accounts and F5 only one", async ({ page }) => {
@@ -134,7 +137,7 @@ test("single-account setups have no refresh-all menu", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("button", { name: "Get Mail" })).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "More ways to get mail" }),
+    page.getByRole("menuitem", { name: "Get mail for all accounts" }),
   ).toHaveCount(0);
   await expect(page.locator(".account-unread")).toHaveCount(0);
 });

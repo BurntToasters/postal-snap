@@ -1,4 +1,4 @@
-/* Compact density. Sizes come from the tokens in variables.css; this file
+/* Density layout overrides. Sizes come from variables.css tokens; this file
    holds only layout changes tokens cannot express. */
 :root[data-density="compact"] .message-row {
   grid-template-areas: "dot sender date" "dot subject subject";
@@ -6,7 +6,7 @@
 
 :root[data-density="compact"] .message-row .message-sender,
 :root[data-density="compact"] .message-row .message-subject {
-  font-size: 0.92rem;
+  font-size: var(--fs-ui);
   letter-spacing: 0;
 }
 
@@ -14,8 +14,8 @@
   display: none;
 }
 
-/* Title and count share one line, like Mail's compact list header. */
-:root[data-density="compact"] .pane-heading > span {
+/* Title and count share one line in normal and compact, like Mail's list header. */
+:root:not([data-density="comfortable"]) .pane-heading > span {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
@@ -24,11 +24,7 @@
 }
 
 :root[data-density="compact"] .pane-heading h1 {
-  font-size: 1.08rem;
-}
-
-:root[data-density="compact"] .message-header {
-  padding-block: 10px 8px;
+  font-size: var(--fs-lg);
 }
 
 :root[data-density="compact"] .folder-pane {
@@ -36,8 +32,8 @@
 }
 
 :root[data-density="compact"] .folder-pane .folder svg {
-  width: 1rem;
-  height: 1rem;
+  width: var(--icon-md);
+  height: var(--icon-md);
 }
 
 :root[data-density="compact"] .sidebar-section-title {
@@ -64,8 +60,16 @@
   padding-block: 2px;
 }
 
-:root[data-density="compact"] .reader-actions button {
-  padding-block: 3px;
+/* Normal: sender and subject share one line in 36px preview rows. */
+:root[data-density="normal"] .setup-preview-row {
+  grid-auto-flow: column;
+  align-items: center;
+  justify-content: start;
+  column-gap: var(--space-2);
+}
+
+:root[data-density="normal"] .setup-preview-row span {
+  min-width: 0;
 }
 
 :root[data-density="compact"] .setup-preview-row {
@@ -77,5 +81,5 @@
 }
 
 :root[data-density="compact"] .setup-preview-row strong {
-  font-size: 0.86rem;
+  font-size: var(--fs-md);
 }

@@ -37,7 +37,7 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   flex: 0 1 auto;
   min-width: 0;
   margin-inline-start: auto;
@@ -57,7 +57,7 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
 
 .composer-layer-followup:not(.composer-layer-maximized) .composer-window {
   pointer-events: auto;
-  height: min(620px, 78vh, 100%);
+  height: min(560px, 70vh, 100%);
 }
 
 /* Floating composer: header drags it, the corner grip resizes it. */
@@ -114,32 +114,6 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
   }
 }
 
-.composer-signature-toggle {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: var(--target-size);
-  margin: 0 var(--toolbar-pad-inline) 8px;
-}
-
-/* Formatting switch and option toggles share one row above the editor. */
-.composer-toggle-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0 20px;
-  margin: var(--space-1) var(--toolbar-pad-inline);
-}
-
-.composer-toggle-row .composer-signature-toggle {
-  margin: 0;
-}
-
-.composer-signature-toggle input {
-  width: 1.25rem;
-  height: 1.25rem;
-}
-
 .composer-redirect-note,
 .composer-signature-preview {
   margin: 0 var(--toolbar-pad-inline) 12px;
@@ -160,7 +134,7 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
   align-items: center;
   gap: 2px;
   padding: 2px;
-  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border: 1px solid var(--border-soft);
   border-radius: var(--radius-pill);
   background: var(--surface-muted);
 }
@@ -179,7 +153,7 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
 
 .composer-docked-pill {
   position: fixed;
-  z-index: 1000;
+  z-index: 50;
   bottom: 24px;
   right: 28px;
   display: flex;
@@ -224,7 +198,7 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
 
 .docked-pill-title {
   font-weight: 600;
-  font-size: 0.9rem;
+  font-size: var(--fs-ui);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -232,15 +206,20 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
 }
 
 .docked-pill-status {
-  font-size: 0.75rem;
+  font-size: var(--fs-xs);
   color: var(--text-muted);
 }
 
 .docked-pill-actions {
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding-right: 8px;
+  gap: var(--space-1);
+  padding-right: var(--space-2);
+}
+
+.docked-pill-actions svg {
+  width: var(--icon-md);
+  height: var(--icon-md);
 }
 
 .recipient-combobox {
@@ -256,16 +235,16 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
 .cc-toggle {
   position: static;
   transform: none;
-  min-height: var(--target-size);
-  min-width: var(--target-size);
-  padding: 8px 12px;
-  font-size: 0.82rem;
+  min-height: var(--target-size-inset);
+  min-width: var(--target-size-inset);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--fs-sm);
   white-space: nowrap;
 }
 
 .format-toggle .format-aa {
-  font-weight: 800;
-  font-size: 1rem;
+  font-weight: 700;
+  font-size: var(--fs-base);
 }
 
 .format-toolbar[hidden] {
@@ -276,10 +255,10 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  padding: 6px var(--toolbar-pad-inline);
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-4);
   overflow-x: auto;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
+  border-bottom: 1px solid var(--border-soft);
   background: color-mix(in srgb, var(--surface) 90%, var(--surface-muted));
 }
 
@@ -287,7 +266,7 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
   display: none;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
   width: 100%;
 }
 
@@ -308,10 +287,10 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
 
 .toolbar-group > button {
   display: grid;
-  min-width: var(--target-size);
-  min-height: var(--target-size);
-  width: max(var(--target-size), 2.25rem);
-  height: max(var(--target-size), 2.25rem);
+  min-width: var(--toolbar-button-size);
+  min-height: var(--toolbar-button-size);
+  width: var(--toolbar-button-size);
+  height: var(--toolbar-button-size);
   place-items: center;
   border: 1px solid transparent;
   border-radius: var(--radius-pill);
@@ -330,18 +309,18 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
 }
 
 .toolbar-group button svg {
-  width: 1.1875rem;
-  height: 1.1875rem;
+  width: var(--icon-md);
+  height: var(--icon-md);
 }
 
 .toolbar-group select {
   width: auto;
-  min-height: var(--target-size);
-  padding: 4px 8px;
+  min-height: var(--toolbar-button-size);
+  padding: var(--space-1) var(--space-2);
   border: 1px solid transparent;
   border-radius: var(--radius-pill);
   background: transparent;
-  font-size: 0.88rem;
+  font-size: var(--fs-md);
 }
 
 .toolbar-group select:hover {
@@ -349,26 +328,10 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
 }
 
 .toolbar-group .color-control {
-  min-width: var(--target-size);
-  min-height: var(--target-size);
-  width: var(--target-size);
-  height: var(--target-size);
-}
-
-.send-kbd-hint {
-  display: inline-block;
-  margin-left: 6px;
-  padding: 1px 5px;
-  font-size: 0.74rem;
-  opacity: 0.85;
-  border: 1px solid color-mix(in srgb, var(--accent-contrast) 45%, transparent);
-  border-radius: 4px;
-  background: color-mix(in srgb, var(--accent-contrast) 15%, transparent);
-}
-
-/* Generated text keeps the hint out of the button's visible name text. */
-.send-kbd-hint::after {
-  content: attr(data-chord);
+  min-width: var(--toolbar-button-size);
+  min-height: var(--toolbar-button-size);
+  width: var(--toolbar-button-size);
+  height: var(--toolbar-button-size);
 }
 
 .color-control {
@@ -389,11 +352,11 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
 .color-control input:focus-visible + span {
   outline: 3px solid var(--focus);
   outline-offset: 2px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
 }
 
 .color-control span {
-  font-weight: 800;
+  font-weight: 700;
   text-decoration: underline 3px;
 }
 
@@ -421,14 +384,19 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
   flex: 1 1 auto;
   height: 100%;
   min-height: var(--composer-editor-min-height);
-  padding: 18px var(--toolbar-pad-inline);
+  padding: var(--composer-editor-pad-block) var(--space-4);
   overflow: auto;
   outline: none;
-  line-height: 1.5;
+  line-height: 1.55;
 }
 
 .composer-window .tiptap:focus-visible {
-  box-shadow: inset 0 0 0 2px var(--focus);
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 70%, transparent);
+}
+
+/* Reply quotes start with an empty paragraph; keep it to one line. */
+.composer-window .tiptap > p:first-child:has(> br:only-child) {
+  margin: 0;
 }
 
 .tiptap p:first-child {
@@ -495,6 +463,7 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
 
 .compose-original {
   margin-block: 0;
+  padding-inline: var(--space-4);
 }
 
 .compose-original summary {
@@ -557,7 +526,7 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
 }
 
 .draft-sync-banner > svg {
-  width: 1.25rem;
+  width: var(--icon-lg);
   flex: 0 0 auto;
   color: var(--warning);
 }
@@ -579,8 +548,8 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
   bottom: 0;
   display: flex;
   flex-wrap: wrap;
-  gap: 7px;
-  padding: 9px var(--toolbar-pad-inline);
+  gap: var(--space-2);
+  padding: var(--bar-pad-block-lg) var(--space-4);
   border-top: 1px solid var(--border);
   background: var(--surface);
 }
@@ -613,6 +582,12 @@ html[data-text-scale="large"] .composer-window > header {
   }
 }
 
+/* Pressed formatting toggle in the footer. */
+.composer-window footer .format-toggle[aria-pressed="true"] {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
 .composer-window .discard-button {
   margin-left: auto;
   color: var(--danger);
@@ -637,8 +612,8 @@ html[data-text-scale="large"] .composer-window > header {
 }
 
 .send-split .send-chevron svg {
-  width: 1.0625rem;
-  height: 1.0625rem;
+  width: var(--icon-md);
+  height: var(--icon-md);
 }
 
 /* Send menu: body-level (sendBar.tsx), so the footer's scroll container
@@ -655,17 +630,17 @@ html[data-text-scale="large"] .composer-window > header {
 .field-error {
   margin: 4px 0 6px 15px;
   color: var(--danger);
-  font-size: 0.84rem;
+  font-size: var(--fs-md);
   font-weight: 600;
-  line-height: 1.3;
+  line-height: 1.45;
 }
 
 /* Header menu: message format. */
 .composer-options-menu {
   position: absolute;
   z-index: 20;
-  top: calc(100% + 6px);
-  right: 12px;
+  top: calc(100% + var(--space-1));
+  right: var(--space-3);
   min-width: var(--composer-options-menu-min-width);
 }
 
@@ -678,7 +653,7 @@ html[data-text-scale="large"] .composer-window > header {
   min-height: var(--composer-editor-min-height);
   overflow: auto;
   box-sizing: border-box;
-  padding: 18px var(--toolbar-pad-inline);
+  padding: var(--composer-editor-pad-block) var(--space-4);
   border: 0;
   border-radius: 0;
   outline: none;
@@ -686,11 +661,11 @@ html[data-text-scale="large"] .composer-window > header {
   color: inherit;
   background: transparent;
   font: inherit;
-  line-height: 1.5;
+  line-height: 1.55;
 }
 
 .composer-plain-editor:focus-visible {
-  box-shadow: inset 0 0 0 2px var(--focus);
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 70%, transparent);
 }
 
 /* Drop-in attachments: covers the composer while files hover over it. */
@@ -710,7 +685,7 @@ html[data-text-scale="large"] .composer-window > header {
     var(--surface) 88%,
     var(--accent, var(--focus))
   );
-  font-size: 1.15rem;
+  font-size: var(--fs-xl);
   opacity: 0;
   pointer-events: none;
 }

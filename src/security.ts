@@ -217,18 +217,31 @@ export function hasAuthorColors(html: string): boolean {
   );
 }
 
+/**
+ * Mail with tables, fixed widths, centering or sized images was laid out by
+ * its sender and stays full-bleed. Plain letters get a readable measure.
+ */
+export function hasAuthorLayout(html: string): boolean {
+  return /<table\b|<center\b|\bwidth\s*[:=]|<img\b[^>]*\bwidth/i.test(html);
+}
+
 // A neutral picture glyph for blocked remote images instead of the browser's
-// broken-image icon. The frame CSP allows data: images.
+// broken-image icon. The frame CSP allows data: images. Stroke is 3:1 on #eef2f6.
 const BLOCKED_IMAGE_GLYPH =
-  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%238e8e93' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='18' height='18' rx='2'/%3E%3Ccircle cx='9' cy='9' r='2'/%3E%3Cpath d='m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21'/%3E%3C/svg%3E";
+  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%236e6e73' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='18' height='18' rx='2'/%3E%3Ccircle cx='9' cy='9' r='2'/%3E%3Cpath d='m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21'/%3E%3C/svg%3E";
+
+// The app UI stack (variables.css) so the letter matches the chrome.
+const LETTER_FONT_STACK =
+  '-apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", sans-serif';
 
 const DARK_FRAME_STYLE =
-  "html,body{background:#1c1c1e !important;color-scheme:dark}body{color:#e8e8ea}a{color:#6cb6ff}mark{background:#7a6200;color:#fff}.remote-image-blocked{background:#2c2c2e;border-color:#48484a}details.quoted-mail>summary{color:#aeaeb2}";
+  "html,body{background:#1c1c1e !important;color-scheme:dark}body{color:#e8e8ea}a{color:#6cb6ff}mark{background:#7a6200;color:#fff}.remote-image-blocked{background:#2c2c2e;border-color:#48484a}blockquote:not([style]){border-inline-start-color:#48484a}details.quoted-mail>summary{color:#aeaeb2}";
 
 export function messageFrameDocument(
   html: string,
   textScale = 1,
   dark = false,
+  marginBlock = 16,
 ): string {
   const fontSize = Math.round(16 * Math.max(1, Math.min(2, textScale)));
   const policy = [
@@ -241,7 +254,10 @@ export function messageFrameDocument(
     "object-src 'none'",
     "base-uri 'none'",
   ].join("; ");
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${policy}"><meta http-equiv="x-dns-prefetch-control" content="off"><meta name="referrer" content="no-referrer"><style>html,body{background:#ffffff !important;color-scheme:light}body{font:${fontSize}px/1.55 system-ui,sans-serif;color:#20252b;margin:16px;overflow-wrap:anywhere}img{max-width:100%;height:auto}.remote-image-blocked{display:inline-block;min-width:120px;min-height:40px;background:#eef2f6;border:1px solid #c8d2dc;border-radius:6px;object-fit:none;content:url("${BLOCKED_IMAGE_GLYPH}")}a{color:#1264a3}mark{background:#fff1a8;color:inherit}details.quoted-mail{margin-top:0.75em}details.quoted-mail>summary{cursor:pointer;color:#667085;min-height:2.75em;display:flex;align-items:center}details.quoted-mail>summary:focus-visible{outline:2px solid #1264a3;outline-offset:2px}${dark ? DARK_FRAME_STYLE : ""}</style></head><body>${html}</body></html>`;
+  // Plain letters get a 72ch measure, centered; sender layouts stay full-bleed.
+  const prose = !hasAuthorLayout(html);
+  const body = prose ? `<div class="letter-prose">${html}</div>` : html;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${policy}"><meta http-equiv="x-dns-prefetch-control" content="off"><meta name="referrer" content="no-referrer"><style>html,body{background:#ffffff !important;color-scheme:light}body{font:${fontSize}px/1.55 ${LETTER_FONT_STACK};color:#20252b;margin:${marginBlock}px 16px;overflow-wrap:anywhere}.letter-prose{max-inline-size:72ch;margin-inline:auto}img{max-width:100%;height:auto}.remote-image-blocked{display:inline-block;min-width:120px;min-height:40px;background:#eef2f6;border:1px dashed #6e6e73;border-radius:6px;object-fit:none;content:url("${BLOCKED_IMAGE_GLYPH}")}a{color:#006fc9}mark{background:#fff1a8;color:inherit}blockquote:not([style]){margin:0.75em 0;padding-inline-start:0.75em;border-inline-start:3px solid #c8d2dc}details.quoted-mail{margin-top:0.75em}details.quoted-mail>summary{cursor:pointer;color:#667085;min-height:2.25em;font-size:0.9375em;display:flex;align-items:center}details.quoted-mail>summary:focus-visible{outline:2px solid #006fc9;outline-offset:2px}${dark ? DARK_FRAME_STYLE : ""}</style></head><body>${body}</body></html>`;
 }
 
 function linkHost(value: string): string | undefined {

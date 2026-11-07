@@ -122,7 +122,7 @@ test("setup steps fit and never paint the hidden step word", async ({
   expect(step2.cardFits).toBe(true);
   const setupStep2 = await shot(page, "setup-step2.png", true);
 
-  await advanceTo(page, "Make it comfortable");
+  await advanceTo(page, "Choose your options");
   const step3 = await setupMetrics(page, 3);
   expect(step3.hiddenWord.present).toBe(true);
   expect(step3.hiddenWord.hidden).toBe(true);
@@ -178,12 +178,20 @@ test("dark selected row and primary controls pass contrast", async ({
   const row = rowCount > 0 ? candidate : page.locator(".message-row").first();
   await row.click();
 
+  // Focus the list so the accent (focused) selection fill applies (D12).
   const selected = page.locator(".message-row.selected").first();
   await expect(selected).toBeVisible();
+  await selected.focus();
+  await expect(page.locator(".message-list:focus-within")).toHaveCount(1);
+  // Poll: the fill transitions in after focus.
+  await expect
+    .poll(() =>
+      selected.evaluate((node) => getComputedStyle(node).backgroundColor),
+    )
+    .toBe("rgb(0, 104, 214)");
   const background = await selected.evaluate(
     (node) => getComputedStyle(node).backgroundColor,
   );
-  expect(background).toBe("rgb(0, 104, 214)");
   expect(background).not.toBe("rgb(10, 132, 255)");
 
   const accentContrast = await page.evaluate(() =>
@@ -231,61 +239,89 @@ test("dark selected row and primary controls pass contrast", async ({
   });
 });
 
-test("comfortable chrome bands drop to the densified heights", async ({
-  page,
-}) => {
-  await page.setViewportSize({ width: 1280, height: 812 });
-  await page.goto("/?theme=light");
-  await expect(page.locator(".mail-shell")).toBeVisible();
+const CHROME_VARIANTS = [
+  {
+    label: "comfortable",
+    density: "comfortable",
+    toolbarMax: 56,
+    headingMax: 62,
+    avatar: 36,
+  },
+  {
+    label: "normal",
+    density: "normal",
+    toolbarMax: 46,
+    headingMax: 46,
+    avatar: 32,
+  },
+] as const;
 
-  const row = page.locator(".message-row:not(.thread-header)").first();
-  await row.click();
-  await expect(page.locator(".message-header .sender-avatar")).toBeVisible();
+for (const variant of CHROME_VARIANTS) {
+  test(`${variant.label} chrome bands drop to the densified heights`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1280, height: 812 });
+    await page.goto(`/?density=${variant.density}&theme=light`);
+    await expect(page.locator(".mail-shell")).toBeVisible();
 
-  const heights = await page.evaluate(() => {
-    const rect = (selector: string) => {
-      const node = document.querySelector(selector);
-      if (!node) return null;
-      const box = node.getBoundingClientRect();
-      return { width: box.width, height: box.height };
-    };
-    const size = document.querySelector(".message-size");
-    return {
-      toolbar: rect(".app-toolbar"),
-      paneHeading: rect(".pane-heading"),
-      filter: rect(".mailbox-filter"),
-      avatar: rect(".message-header .sender-avatar"),
-      sizeDisplay: size ? getComputedStyle(size).display : null,
-    };
+    const row = page.locator(".message-row:not(.thread-header)").first();
+    await row.click();
+    await expect(page.locator(".message-header .sender-avatar")).toBeVisible();
+
+    const heights = await page.evaluate(() => {
+      const rect = (selector: string) => {
+        const node = document.querySelector(selector);
+        if (!node) return null;
+        const box = node.getBoundingClientRect();
+        return { width: box.width, height: box.height };
+      };
+      const size = document.querySelector(".message-size");
+      return {
+        toolbar: rect(".app-toolbar"),
+        paneHeading: rect(".pane-heading"),
+        filter: rect(".mailbox-filter"),
+        avatar: rect(".message-header .sender-avatar"),
+        sizeDisplay: size ? getComputedStyle(size).display : null,
+      };
+    });
+
+    expect(heights.toolbar).not.toBeNull();
+    expect(heights.toolbar?.height ?? Infinity).toBeLessThanOrEqual(
+      variant.toolbarMax,
+    );
+    expect(heights.paneHeading).not.toBeNull();
+    expect(heights.paneHeading?.height ?? Infinity).toBeLessThanOrEqual(
+      variant.headingMax,
+    );
+    expect(heights.filter).not.toBeNull();
+    expect(heights.filter?.height ?? 0).toBeGreaterThan(0);
+    expect(heights.avatar).not.toBeNull();
+    expect(heights.avatar?.width ?? 0).toBeGreaterThanOrEqual(
+      variant.avatar - 0.5,
+    );
+    expect(heights.avatar?.width ?? 0).toBeLessThanOrEqual(
+      variant.avatar + 0.5,
+    );
+    expect(heights.sizeDisplay).toBe("none");
+
+    const chromeShot = await shot(page, `${variant.label}-mail-chrome.png`);
+    await artifact(`${variant.label}-chrome-heights.json`, {
+      toolbarHeight: heights.toolbar?.height ?? null,
+      paneHeadingHeight: heights.paneHeading?.height ?? null,
+      filterBandHeight: heights.filter?.height ?? null,
+      senderAvatarWidth: heights.avatar?.width ?? null,
+      messageSizeDisplay: heights.sizeDisplay,
+      passes: {
+        toolbar: (heights.toolbar?.height ?? Infinity) <= variant.toolbarMax,
+        paneHeading:
+          (heights.paneHeading?.height ?? Infinity) <= variant.headingMax,
+        filterBand: (heights.filter?.height ?? 0) > 0,
+        avatar: heights.avatar
+          ? Math.abs(heights.avatar.width - variant.avatar) <= 0.5
+          : false,
+        sizeChipHidden: heights.sizeDisplay === "none",
+      },
+      screenshot: chromeShot,
+    });
   });
-
-  expect(heights.toolbar).not.toBeNull();
-  expect(heights.toolbar?.height ?? Infinity).toBeLessThanOrEqual(56);
-  expect(heights.paneHeading).not.toBeNull();
-  expect(heights.paneHeading?.height ?? Infinity).toBeLessThanOrEqual(62);
-  expect(heights.filter).not.toBeNull();
-  expect(heights.filter?.height ?? 0).toBeGreaterThan(0);
-  expect(heights.avatar).not.toBeNull();
-  expect(heights.avatar?.width ?? 0).toBeGreaterThanOrEqual(35.5);
-  expect(heights.avatar?.width ?? 0).toBeLessThanOrEqual(36.5);
-  expect(heights.sizeDisplay).toBe("none");
-
-  const chromeShot = await shot(page, "mail-chrome.png");
-  await artifact("chrome-heights.json", {
-    toolbarHeight: heights.toolbar?.height ?? null,
-    paneHeadingHeight: heights.paneHeading?.height ?? null,
-    filterBandHeight: heights.filter?.height ?? null,
-    senderAvatarWidth: heights.avatar?.width ?? null,
-    messageSizeDisplay: heights.sizeDisplay,
-    passes: {
-      toolbar: (heights.toolbar?.height ?? Infinity) <= 56,
-      paneHeading: (heights.paneHeading?.height ?? Infinity) <= 62,
-      filterBand: (heights.filter?.height ?? 0) > 0,
-      avatar: heights.avatar
-        ? Math.abs(heights.avatar.width - 36) <= 0.5
-        : false,
-      sizeChipHidden: heights.sizeDisplay === "none",
-    },
-    screenshot: chromeShot,
-  });
-});
+}

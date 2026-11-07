@@ -1,6 +1,7 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { revealMenuItem } from "./menu-reveal";
 
 // Failure modes covered here:
 // 1. Subject order stays newest-first until Subject is chosen.
@@ -18,7 +19,9 @@ test.afterEach(async ({ page }, testInfo: TestInfo) => {
 
 test("Z to A lists subjects from the end of the alphabet", async ({ page }) => {
   await page.goto("/?threadGap=1");
+  await revealMenuItem(page, "Subject", "menuitemradio");
   await page.getByRole("button", { name: "More mailbox actions" }).click();
+  await revealMenuItem(page, "Subject", "menuitemradio");
   await page
     .getByRole("menuitemradio", { name: "Subject", exact: true })
     .click();
@@ -28,12 +31,15 @@ test("Z to A lists subjects from the end of the alphabet", async ({ page }) => {
   await expect(options.nth(0)).toHaveAccessibleName(/Library hours/i);
   await expect(options.nth(2)).toHaveAccessibleName(/Weekend plans/i);
 
+  await revealMenuItem(page, "Z to A", "menuitemradio");
   await page.getByRole("button", { name: "More mailbox actions" }).click();
+  await revealMenuItem(page, "Z to A", "menuitemradio");
   await expect(
-    page.getByRole("menuitemcheckbox", { name: "Z to A", exact: true }),
+    page.getByRole("menuitemradio", { name: "Z to A", exact: true }),
   ).toBeVisible();
+  await revealMenuItem(page, "Z to A", "menuitemradio");
   await page
-    .getByRole("menuitemcheckbox", { name: "Z to A", exact: true })
+    .getByRole("menuitemradio", { name: "Z to A", exact: true })
     .click();
 
   options = page.getByRole("option");
@@ -50,7 +56,9 @@ test("Z to A lists subjects from the end of the alphabet", async ({ page }) => {
     ),
   ).toBe(true);
 
+  await revealMenuItem(page, "Subject", "menuitemradio");
   await page.getByRole("button", { name: "More mailbox actions" }).click();
+  await revealMenuItem(page, "Subject", "menuitemradio");
   await page
     .getByRole("menuitemradio", { name: "Subject", exact: true })
     .click();

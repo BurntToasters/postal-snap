@@ -1,6 +1,7 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { revealMenuItem } from "./menu-reveal";
 
 // Failure modes covered here:
 // 1. A single message has no conversation save.
@@ -34,6 +35,7 @@ test("save conversation files includes every loaded message", async ({
     page.getByRole("heading", { name: "Weekend plans" }),
   ).toBeVisible();
   await page.getByRole("button", { name: "More actions" }).click();
+  await revealMenuItem(page, "Save conversation files");
   await page.getByRole("menuitem", { name: "Save conversation files" }).click();
   await expect(
     page.getByRole("heading", { name: "Weekend plans" }),

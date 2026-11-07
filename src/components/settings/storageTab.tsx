@@ -36,7 +36,7 @@ export function StorageTab({
         </div>
       ) : null}
       <div className="storage-card">
-        <Database />
+        <Database aria-hidden="true" />
         <span>
           <strong>
             {usage ? formatBytes(usage.bytes) : strings.settings.calculating}{" "}

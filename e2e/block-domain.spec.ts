@@ -1,6 +1,7 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { revealMenuItem } from "./menu-reveal";
 
 // Failure modes covered here:
 // 1. Cancel leaves the message in place and saves no rule.
@@ -21,6 +22,7 @@ test("block domain saves a Junk rule for that domain", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("option", { name: /Weekend plans/i }).click();
   await page.getByRole("button", { name: "More actions" }).click();
+  await revealMenuItem(page, "Block domain");
   await page
     .getByRole("menuitem", { name: "Block domain", exact: true })
     .click();

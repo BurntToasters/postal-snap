@@ -1,4 +1,4 @@
-@media (max-width: 1049px) {
+@media (max-width: 899px) {
   .mail-shell {
     --rendered-folder-width: 0px;
   }
@@ -34,7 +34,7 @@
     position: fixed;
     z-index: 22;
     inset: 0 auto 0 0;
-    width: min(290px, 88vw);
+    width: min(var(--drawer-width), 88vw);
     transform: translateX(-105%);
     visibility: hidden;
     box-shadow: var(--shadow);
@@ -68,15 +68,7 @@
     min-height: var(--bar-height-sm);
     align-items: center;
     justify-content: space-between;
-    padding: 0 4px 8px 9px;
-  }
-}
-
-@media (max-height: 640px) {
-  .pane-heading,
-  .reader-actions {
-    min-height: var(--bar-height-md);
-    padding-block: var(--bar-pad-block);
+    padding: 0 var(--space-1) var(--space-2) var(--space-2);
   }
 }
 
@@ -118,8 +110,8 @@
     grid-template-columns: var(--target-size) minmax(0, 1fr) auto var(
         --target-size
       );
-    gap: 6px;
-    padding-inline: 10px;
+    gap: var(--space-2);
+    padding-inline: var(--toolbar-pad-inline);
   }
 
   .toolbar-cluster,
@@ -193,7 +185,7 @@
 
   .message-header {
     grid-template-columns: var(--sender-avatar-narrow-size) minmax(0, 1fr) auto;
-    padding: 14px;
+    padding: var(--reader-head-pad-block) var(--reader-pad-inline);
   }
 
   .message-header .sender-details {
@@ -209,12 +201,12 @@
 
   .reader-actions {
     flex-wrap: wrap;
-    gap: 4px;
-    padding-inline: 8px;
+    gap: var(--space-1);
+    padding-inline: var(--space-2);
   }
 
   .reader-more-menu {
-    right: 8px;
+    right: var(--space-2);
     left: auto;
   }
 
@@ -310,7 +302,7 @@
   }
 
   .setup-progress small {
-    font-size: 0.7rem;
+    font-size: var(--fs-xs);
   }
 
   .settings-row,
@@ -510,11 +502,11 @@ html[data-text-scale="large"] .reader-action-group {
 
 /* 200% text: the fixed sidebar wraps "Add account". Grow the folder
    column only; the reader is the flexible column that gives up the space. */
-@media (min-width: 1050px) {
+@media (min-width: 900px) {
   html[data-text-scale="large"] .mail-shell:not(.sidebar-collapsed) {
     --rendered-folder-width: clamp(
       210px,
-      max(var(--folder-pane-width, 248px), 300px),
+      max(var(--folder-pane-width, 240px), 300px),
       26vw
     );
   }

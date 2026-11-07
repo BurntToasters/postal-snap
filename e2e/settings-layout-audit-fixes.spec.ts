@@ -4,7 +4,7 @@ import { installMockIpc } from "./mock-ipc";
 
 test.beforeEach(async ({ page }) => installMockIpc(page));
 
-for (const density of ["comfortable", "compact"] as const) {
+for (const density of ["comfortable", "normal", "compact"] as const) {
   for (const scale of [1, 2] as const) {
     for (const theme of ["light", "dark"] as const) {
       test(`short settings rows remain reachable at ${density}, ${scale * 100}%, ${theme}`, async ({
@@ -149,7 +149,7 @@ test("About link hover stays visible in forced colors", async ({
   });
 });
 
-for (const density of ["comfortable", "compact"] as const) {
+for (const density of ["comfortable", "normal", "compact"] as const) {
   for (const scale of [1, 2] as const) {
     for (const theme of ["light", "dark"] as const) {
       test(`About link contrast passes at ${density}, ${scale * 100}%, ${theme}`, async ({

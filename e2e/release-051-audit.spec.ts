@@ -11,7 +11,7 @@ test.afterEach(async ({ page }, info) => {
   });
 });
 
-for (const density of ["comfortable", "compact"]) {
+for (const density of ["comfortable", "normal", "compact"]) {
   test(`Send options receive pointer hits at 200% ${density}`, async ({
     page,
   }) => {

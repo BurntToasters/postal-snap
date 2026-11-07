@@ -41,7 +41,7 @@ test("shows a plain leftover notice in Storage settings", async ({
   await expect(notice).not.toContainText(/[\\/]/);
   const retry = notice.getByRole("button", { name: "Try again", exact: true });
   const box = await retry.boundingBox();
-  expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
+  expect(box?.height ?? 0).toBeGreaterThanOrEqual(await targetSize(page));
   await capture(page, testInfo, "comfortable");
   await attachIpcLog(page, testInfo);
 });
@@ -88,7 +88,7 @@ test("Try again keeps the notice while a folder is still stuck", async ({
   await attachIpcLog(page, testInfo);
 });
 
-for (const density of ["comfortable", "compact"]) {
+for (const density of ["comfortable", "normal", "compact"]) {
   for (const scale of [1, 2]) {
     test(`leftover notice fits ${density} at ${scale * 100}% text`, async ({
       page,
@@ -112,4 +112,15 @@ for (const density of ["comfortable", "compact"]) {
       await capture(page, testInfo, `${density}-${scale * 100}`);
     });
   }
+}
+
+async function targetSize(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const probe = document.createElement("i");
+    probe.style.cssText = "position:fixed;width:var(--target-size)";
+    document.body.append(probe);
+    const width = probe.getBoundingClientRect().width;
+    probe.remove();
+    return width;
+  });
 }

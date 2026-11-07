@@ -88,7 +88,7 @@ export function SetupFlow({
         aria-labelledby="setup-flow-title"
       >
         <header className="setup-brand" data-tauri-drag-region="deep">
-          <AppMark size={52} />
+          <AppMark className="setup-mark" />
           <span>
             <p>{strings.appName}</p>
             <h1 id="setup-flow-title" ref={headingRef} tabIndex={-1}>
@@ -118,7 +118,7 @@ export function SetupFlow({
               }
             >
               <span aria-hidden="true">
-                {position < index ? <Check /> : position + 1}
+                {position < index ? <Check aria-hidden="true" /> : position + 1}
               </span>
               <small>{STEP_LABELS[value]}</small>
               {position < index ? (

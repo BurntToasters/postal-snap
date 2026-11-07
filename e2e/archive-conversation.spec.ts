@@ -1,6 +1,7 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { revealMenuItem } from "./menu-reveal";
 
 // Failure modes covered here:
 // 1. A single message has no conversation move.
@@ -34,6 +35,7 @@ test("archive conversation files the loaded thread and opens the next message", 
     page.getByRole("heading", { name: "Weekend plans" }),
   ).toBeVisible();
   await page.getByRole("button", { name: "More actions" }).click();
+  await revealMenuItem(page, "Archive conversation");
   await page.getByRole("menuitem", { name: "Archive conversation" }).click();
   await expect(
     page.getByRole("heading", { name: "Library hours" }),

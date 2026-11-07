@@ -36,3 +36,38 @@ test("a new message has no original", async ({ page }) => {
   await page.getByRole("button", { name: "Compose", exact: true }).click();
   await expect(page.locator(".compose-original")).toHaveCount(0);
 });
+
+test("reply all aligns the original label to the 16px inset and collapses the lead paragraph", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const row = page
+    .getByRole("option", { name: /Weekend plans/i })
+    .or(page.getByRole("treeitem", { name: /Weekend plans/i }));
+  await row.click();
+  await page.getByRole("button", { name: "Reply all", exact: true }).click();
+  const original = page.locator(".compose-original summary");
+  await expect(original).toBeVisible();
+  const offsets = await page.evaluate(() => {
+    const win = document
+      .querySelector(".composer-window")!
+      .getBoundingClientRect();
+    const label = document
+      .querySelector(".compose-original summary")!
+      .getBoundingClientRect();
+    const lead = document.querySelector(
+      ".composer-window .tiptap > p:first-child",
+    );
+    const leadBox = lead?.getBoundingClientRect();
+    return {
+      labelInset: label.left - win.left,
+      leadHeight: leadBox?.height ?? 0,
+      lineHeight: lead ? parseFloat(getComputedStyle(lead).lineHeight) : 0,
+    };
+  });
+  // Label sits on the --space-4 inset (16px at 1x), inside the composer border.
+  expect(offsets.labelInset).toBeGreaterThanOrEqual(16);
+  expect(offsets.labelInset).toBeLessThanOrEqual(24);
+  // The empty lead paragraph is one line tall, not a block of empty space.
+  expect(offsets.leadHeight).toBeLessThanOrEqual(offsets.lineHeight + 1);
+});

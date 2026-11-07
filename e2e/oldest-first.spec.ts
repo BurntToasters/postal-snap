@@ -24,7 +24,7 @@ test("oldest first lists earlier mail before later mail", async ({ page }) => {
   ).toBeVisible();
   await page.getByRole("button", { name: "More mailbox actions" }).click();
   await page
-    .getByRole("menuitemcheckbox", { name: "Oldest first", exact: true })
+    .getByRole("menuitemradio", { name: "Oldest first", exact: true })
     .click();
 
   const options = page.getByRole("option");
@@ -43,6 +43,7 @@ test("oldest first lists earlier mail before later mail", async ({ page }) => {
   ).toBe(true);
 
   await page.getByRole("button", { name: "More mailbox actions" }).click();
+  await page.getByRole("menuitem", { name: "Sort by", exact: true }).click();
   await page.getByRole("menuitemradio", { name: "Date", exact: true }).click();
   await expect(
     page.getByRole("treeitem", { name: /Weekend plans/i }),
@@ -50,4 +51,39 @@ test("oldest first lists earlier mail before later mail", async ({ page }) => {
   await expect(
     page.getByRole("option", { name: /Older family note/i }),
   ).toHaveCount(0);
+});
+
+// B2: the sort-direction radio item is a menu item the keyboard can reach.
+test("oldest first is reachable with ArrowDown and renders at menu row height", async ({
+  page,
+}) => {
+  await page.goto("/?threadGap=1");
+  await expect(
+    page.getByRole("treeitem", { name: /Weekend plans/i }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "More mailbox actions" }).click();
+  for (let step = 0; step < 15; step += 1) {
+    const focused = await page.evaluate(
+      () => document.activeElement?.textContent?.trim() ?? "",
+    );
+    if (focused.includes("Oldest first")) break;
+    await page.keyboard.press("ArrowDown");
+  }
+  const item = page.getByRole("menuitemradio", {
+    name: "Oldest first",
+    exact: true,
+  });
+  await expect(item).toBeFocused();
+  const box = await item.boundingBox();
+  const rowHeight = await page.evaluate(() => {
+    const probe = document.createElement("div");
+    probe.style.cssText = "position:absolute;visibility:hidden;height:0;";
+    probe.style.width = "var(--menu-row-height)";
+    document.body.append(probe);
+    const width = probe.getBoundingClientRect().width;
+    probe.remove();
+    return width;
+  });
+  expect(rowHeight).toBeGreaterThan(0);
+  expect(box?.height ?? 0).toBeCloseTo(rowHeight, 0);
 });

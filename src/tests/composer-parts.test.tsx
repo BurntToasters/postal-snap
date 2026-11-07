@@ -596,17 +596,11 @@ describe("format toolbar", () => {
     const { chain, editor } = makeEditor();
     const adjustIndent = vi.fn();
     const addLink = vi.fn();
-    const formattingValues: boolean[] = [];
     const moreValues: boolean[] = [];
     render(
       <FormatToolbar
         editor={editor}
         formattingOpen
-        setFormattingOpen={(update) =>
-          formattingValues.push(
-            typeof update === "function" ? update(true) : update,
-          )
-        }
         moreFormattingOpen
         setMoreFormattingOpen={(update) =>
           moreValues.push(typeof update === "function" ? update(true) : update)
@@ -616,9 +610,6 @@ describe("format toolbar", () => {
       />,
     );
 
-    fireEvent.click(
-      screen.getByRole("button", { name: strings.composer.hideFormatting }),
-    );
     fireEvent.change(
       screen.getByRole("combobox", { name: strings.composer.font }),
       {
@@ -664,7 +655,6 @@ describe("format toolbar", () => {
       fireEvent.click(screen.getByRole("button", { name: label }));
     }
 
-    expect(formattingValues).toEqual([false]);
     expect(moreValues).toEqual([false]);
     expect(chain.setFontFamily).toHaveBeenCalledWith("Georgia");
     expect(chain.unsetFontFamily).toHaveBeenCalled();
@@ -692,16 +682,12 @@ describe("format toolbar", () => {
       <FormatToolbar
         editor={null}
         formattingOpen={false}
-        setFormattingOpen={vi.fn()}
         moreFormattingOpen={false}
         setMoreFormattingOpen={vi.fn()}
         adjustIndent={vi.fn()}
         addLink={vi.fn()}
       />,
     );
-    expect(
-      screen.getByRole("button", { name: strings.composer.showFormatting }),
-    ).toHaveAttribute("aria-expanded", "false");
     expect(screen.getByRole("toolbar", { hidden: true })).not.toBeVisible();
   });
 });

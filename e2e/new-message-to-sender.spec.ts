@@ -1,6 +1,7 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { revealMenuItem } from "./menu-reveal";
 
 // Failure modes covered here:
 // 1. The message menu starts a blank letter to the sender.
@@ -25,10 +26,13 @@ async function expectBlankLetter(page: import("@playwright/test").Page) {
 
 test("the message menu starts a new letter to the sender", async ({ page }) => {
   await page.goto("/");
+  await revealMenuItem(page, "New message to sender");
   const row = page
     .getByRole("option", { name: /Weekend plans/i })
     .or(page.getByRole("treeitem", { name: /Weekend plans/i }));
+  await revealMenuItem(page, "New message to sender");
   await row.click({ button: "right" });
+  await revealMenuItem(page, "New message to sender");
   await page.getByRole("menuitem", { name: "New message to sender" }).click();
   await expectBlankLetter(page);
 });
@@ -40,8 +44,11 @@ test("the open message menu starts a new letter to the sender", async ({
   const row = page
     .getByRole("option", { name: /Weekend plans/i })
     .or(page.getByRole("treeitem", { name: /Weekend plans/i }));
+  await revealMenuItem(page, "New message to sender");
   await row.click();
+  await revealMenuItem(page, "New message to sender");
   await page.getByRole("button", { name: "More actions" }).click();
+  await revealMenuItem(page, "New message to sender");
   await page.getByRole("menuitem", { name: "New message to sender" }).click();
   await expectBlankLetter(page);
 });

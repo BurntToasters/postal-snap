@@ -1,6 +1,7 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { revealMenuItem } from "./menu-reveal";
 
 // Failure modes covered here:
 // 1. A message that is not part of a Trash conversation has no delete action.
@@ -45,6 +46,7 @@ test("delete conversation removes the loaded Trash thread", async ({
     );
     void dialog.accept();
   });
+  await revealMenuItem(page, "Delete conversation");
   await page
     .getByRole("menuitem", { name: "Delete conversation", exact: true })
     .click();

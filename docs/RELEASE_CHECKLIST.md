@@ -32,7 +32,8 @@ At the 2026-10-17 audit, npm audit reported zero vulnerabilities and the RustSec
 - [ ] All-inboxes badge counts match the existing Inbox unread semantics for each account; non-Inbox folders and removed accounts do not contribute.
 - [ ] Recipient suggestions exclude junk/trash, blocked or muted senders, no-reply addresses, the user's own addresses and aliases, and addresses from other accounts.
 - [ ] Rich signatures save and render safely with a plain-text alternative; existing plain signatures remain intact through settings changes and message replies.
-- [ ] Comfortable and compact density work at 100% and 200% text, light/dark themes, narrow/wide windows, forced colors, and reduced motion.
+- [ ] Normal, comfortable, and compact density work at 100% and 200% text, light/dark themes, narrow/wide windows, forced colors, and reduced motion.
+- [ ] At the default 1280×840 window with a thread open, the letter takes at least 55% of the reader height in Normal.
 - [ ] Real Proton Bridge smoke passes on Windows, macOS, and Linux, including Flatpak loopback access, combined-address and split-address modes, certificate replacement, and Bridge restart. **Pending: keep support experimental until recorded.**
 
 See [mail compatibility](MAIL_COMPATIBILITY.md). Automated fixtures remain separate from the native and signed-package gates below.

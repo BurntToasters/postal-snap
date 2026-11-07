@@ -107,7 +107,7 @@ test("keeps quiet when only the saved setup step fails", async ({ page }) => {
   ).toBeVisible();
   await page.getByRole("button", { name: "Continue", exact: true }).click();
   await expect(
-    page.getByRole("heading", { name: "Make it comfortable" }),
+    page.getByRole("heading", { name: "Choose your options" }),
   ).toBeVisible();
   await expect(page.getByRole("alert")).toHaveCount(0);
 

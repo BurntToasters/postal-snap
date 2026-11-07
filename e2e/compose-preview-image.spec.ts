@@ -148,7 +148,7 @@ test("Close returns focus to Preview without changing the draft", async ({
 });
 
 // The preview is body-level now, so check its card and Close at 620x540 and 200%.
-for (const density of ["comfortable", "compact"] as const) {
+for (const density of ["comfortable", "normal", "compact"] as const) {
   test(`the picture preview fits a 620x540 window at 200%: ${density}`, async ({
     page,
   }, testInfo) => {
