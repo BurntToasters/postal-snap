@@ -1,4 +1,4 @@
-import type { Dispatch, SetStateAction } from "react";
+import { useRef, type Dispatch, type SetStateAction } from "react";
 import { api } from "../../api";
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
@@ -169,15 +169,29 @@ export function useRowActions({
     }
   }
 
+  // Repeated f presses share one preparation, so one composer opens.
+  const forwardInFlight = useRef(false);
   async function forwardFocused(message: MessageSummary) {
+    if (forwardInFlight.current) return;
+    forwardInFlight.current = true;
     const accountId = message.accountId;
     try {
       const detail = await api.getMessage(accountId, message.id);
+      const attachments = await api.prepareForwardAttachments(
+        accountId,
+        message.id,
+      );
       const state = useAppStore.getState();
       if (state.activeAccountId !== accountId) return;
-      openComposer({ sourceMessage: detail, composeMode: "forward" });
+      openComposer({
+        sourceMessage: detail,
+        composeMode: "forward",
+        prefill: { attachments },
+      });
     } catch (cause) {
       setError(String(cause));
+    } finally {
+      forwardInFlight.current = false;
     }
   }
 

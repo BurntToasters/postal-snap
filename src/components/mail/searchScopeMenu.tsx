@@ -10,7 +10,8 @@ import { createPortal } from "react-dom";
 import { ChevronDown } from "lucide-react";
 import { strings } from "../../i18n";
 import { moveMenuFocus } from "../toolbarNav";
-import { SearchTips } from "./searchTips";
+import { SearchTips, watchAnchorLayout } from "./searchTips";
+import { placeAnchoredMenu } from "../popupPlacement";
 
 interface SearchScopeMenuProps {
   allFolders: boolean;
@@ -24,7 +25,6 @@ export function SearchScopeMenu({
 }: SearchScopeMenuProps) {
   const [open, setOpen] = useState(false);
   const [tipsOpen, setTipsOpen] = useState(false);
-  const [position, setPosition] = useState({ top: 0, right: 8 });
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const menuId = useId();
@@ -32,19 +32,14 @@ export function SearchScopeMenu({
     ? strings.mail.searchAllFolders
     : strings.mail.searchScopeCurrent;
 
+  // Shared placement flips above and caps the height when space runs out.
   useLayoutEffect(() => {
-    if (!open) return;
-    const place = () => {
-      const rect = triggerRef.current?.getBoundingClientRect();
-      if (!rect) return;
-      setPosition({
-        top: rect.bottom + 4,
-        right: Math.max(8, window.innerWidth - rect.right),
-      });
-    };
+    const trigger = triggerRef.current;
+    const menu = menuRef.current;
+    if (!open || !trigger || !menu) return;
+    const place = () => placeAnchoredMenu(menu, trigger);
     place();
-    window.addEventListener("resize", place);
-    return () => window.removeEventListener("resize", place);
+    return watchAnchorLayout(trigger, place);
   }, [open]);
 
   // Menus portal to body, so outside-click checks cover trigger and menu.
@@ -112,7 +107,6 @@ export function SearchScopeMenu({
               className="search-scope-menu app-menu"
               role="menu"
               aria-label={strings.mail.searchScopeMenu}
-              style={{ top: position.top, right: position.right }}
               onKeyDown={onMenuKeyDown}
             >
               <button

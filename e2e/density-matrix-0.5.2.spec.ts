@@ -82,33 +82,57 @@ type Snapshot = {
   letterShare: number | null;
   quickReplyHeight: number | null;
   scrollX: Record<string, number>;
-  smallTargets: string[];
   senderCh: number | null;
   stampOverlapsSender: boolean | null;
   quickReplyOverlapsBody: boolean | null;
   toolbarOverlaps: number;
 };
 
-// Artifact assembly. Each test writes one fragment under parts/ as soon as its
-// value is known. Workers run in parallel, so every worker's afterAll merges
-// whatever fragments exist; the last afterAll to run sees them all.
-const PARTS_DIR = join(ARTIFACT_DIR, "parts");
-const METRICS_FILE = join(ARTIFACT_DIR, "metrics.json");
+// Artifact assembly. Each project (chromium, webkit) gets its own folder and
+// project-prefixed keys, so browsers never overwrite each other's fragments.
+// Each test writes one fragment under parts/ as soon as its value is known.
 const GRID_VIEWS: View[] = ["list", "mix", "reader", "bottom", "thread"];
-const TOKEN_ORDERING_KEY = "tokenOrdering";
-const EXPECTED_KEYS: string[] = [
-  TOKEN_ORDERING_KEY,
-  ...DENSITIES.flatMap((density) =>
-    SCALES.flatMap((scale) =>
-      GRID_VIEWS.map((view) => `${view}|${density}|${scale}`),
-    ),
-  ),
-  // FM3 three-message thread; written by its own test, not the grid.
-  "thread3|normal|1",
-];
+const TOKEN_ORDERING = "tokenOrdering";
 
-function fragmentPath(key: string) {
-  return join(PARTS_DIR, `${key.replaceAll("|", "__")}.json`);
+function tokenOrderingKey(project: string) {
+  return `${project}|${TOKEN_ORDERING}`;
+}
+
+type MergeMeta = {
+  complete: boolean;
+  expected: number;
+  present: number;
+  missing: string[];
+};
+
+function projectDir(project: string) {
+  return join(ARTIFACT_DIR, project);
+}
+
+function gridKey(project: string, view: View, density: Density, scale: Scale) {
+  return `${project}|${view}|${density}|${scale}`;
+}
+
+// Every key a full run of this project must produce.
+function expectedKeys(project: string): string[] {
+  return [
+    tokenOrderingKey(project),
+    ...DENSITIES.flatMap((density) =>
+      SCALES.flatMap((scale) =>
+        GRID_VIEWS.map((view) => gridKey(project, view, density, scale)),
+      ),
+    ),
+    // FM3 three-message thread; written by its own test, not the grid.
+    gridKey(project, "thread3", "normal", 1),
+  ];
+}
+
+function fragmentPath(project: string, key: string) {
+  return join(
+    projectDir(project),
+    "parts",
+    `${key.replaceAll("|", "__")}.json`,
+  );
 }
 
 // Temp file + rename, so readers never see a half-written fragment or metrics file.
@@ -119,37 +143,44 @@ async function writeAtomic(file: string, text: string) {
   await rename(tmp, file);
 }
 
-async function writeFragment(key: string, value: unknown) {
+async function writeFragment(project: string, key: string, value: unknown) {
   await writeAtomic(
-    fragmentPath(key),
+    fragmentPath(project, key),
     `${JSON.stringify({ key, value }, null, 2)}\n`,
   );
 }
 
-// Merges only expected keys, so fragments from removed combos never leak in.
-async function mergeFragments() {
+// Merges only this project's expected keys, so stale fragments never leak in.
+// Writes metrics.json and reports whether every expected combo is present.
+async function mergeFragments(project: string): Promise<MergeMeta> {
+  const expected = expectedKeys(project);
+  const dir = join(projectDir(project), "parts");
   const found = new Map<string, unknown>();
-  const names = await readdir(PARTS_DIR).catch(() => [] as string[]);
+  const names = await readdir(dir).catch(() => [] as string[]);
   for (const name of names) {
     if (!name.endsWith(".json")) continue;
-    const parsed = JSON.parse(
-      await readFile(join(PARTS_DIR, name), "utf8"),
-    ) as { key: string; value: unknown };
-    if (EXPECTED_KEYS.includes(parsed.key)) found.set(parsed.key, parsed.value);
+    const parsed = JSON.parse(await readFile(join(dir, name), "utf8")) as {
+      key: string;
+      value: unknown;
+    };
+    if (expected.includes(parsed.key)) found.set(parsed.key, parsed.value);
   }
-  const missing = EXPECTED_KEYS.filter((key) => !found.has(key));
-  const out: Record<string, unknown> = {
-    _meta: {
-      complete: missing.length === 0,
-      expected: EXPECTED_KEYS.length,
-      present: found.size,
-      missing,
-    },
+  const missing = expected.filter((key) => !found.has(key));
+  const meta: MergeMeta = {
+    complete: missing.length === 0,
+    expected: expected.length,
+    present: found.size,
+    missing,
   };
-  for (const key of EXPECTED_KEYS) {
+  const out: Record<string, unknown> = { _meta: meta };
+  for (const key of expected) {
     if (found.has(key)) out[key] = found.get(key);
   }
-  await writeAtomic(METRICS_FILE, `${JSON.stringify(out, null, 2)}\n`);
+  await writeAtomic(
+    join(projectDir(project), "metrics.json"),
+    `${JSON.stringify(out, null, 2)}\n`,
+  );
+  return meta;
 }
 
 // Runs inside the page. Keep it self-contained (Playwright serializes it).
@@ -176,19 +207,9 @@ function collect(names: string[]): Snapshot {
     const h = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y);
     return w > 1 && h > 1;
   };
-  const describe = (el: HTMLElement) => {
-    const cls = String(el.className).split(" ")[0] ?? "";
-    const label = (
-      el.getAttribute("aria-label") ??
-      el.textContent ??
-      ""
-    ).trim();
-    return `${el.tagName.toLowerCase()}.${cls}[${label.slice(0, 24)}]`;
-  };
 
   const tokens: Record<string, number> = {};
   for (const name of names) tokens[name] = probeWidth(`var(--${name})`);
-  const inset = tokens["target-size-inset"] ?? 0;
 
   const list = rectOf(".message-list-items");
   const top = list ? list.y : 0;
@@ -212,25 +233,6 @@ function collect(names: string[]): Snapshot {
     probe.remove();
     const width = sender.getBoundingClientRect().width;
     senderCh = ch > 0 ? width / ch : null;
-  }
-
-  const small = new Set<string>();
-  for (const scope of [
-    ".app-toolbar",
-    ".folder-pane",
-    ".message-pane",
-    ".reader-actions",
-  ]) {
-    for (const root of document.querySelectorAll(scope)) {
-      for (const el of root.querySelectorAll<HTMLElement>(
-        'button, [role="button"], input, select',
-      )) {
-        if (el.closest(".app-menu")) continue;
-        const r = el.getBoundingClientRect();
-        if (r.width <= 1 || r.height <= 1) continue;
-        if (Math.min(r.width, r.height) < inset) small.add(describe(el));
-      }
-    }
   }
 
   const scrollX: Record<string, number> = {};
@@ -298,7 +300,6 @@ function collect(names: string[]): Snapshot {
       body && pane && pane.height > 0 ? body.height / pane.height : null,
     quickReplyHeight: quick?.height ?? null,
     scrollX,
-    smallTargets: [...small].sort(),
     senderCh,
     stampOverlapsSender: intersects(stamp, readerSender),
     // The sticky reply may cover the letter frame's top margin, never its text.
@@ -343,12 +344,13 @@ function measured(
   scale: Scale,
   view: View,
 ): Promise<Snapshot> {
-  const key = `${view}|${density}|${scale}`;
+  const project = test.info().project.name;
+  const key = gridKey(project, view, density, scale);
   const cached = measurements.get(key);
   if (cached) return cached;
   const result = (async () => {
     // Drop a stale fragment first: if this combo fails, metrics report it missing.
-    await rm(fragmentPath(key), { force: true });
+    await rm(fragmentPath(project, key), { force: true });
     await open(page, density, scale, view);
     // Measure only after the density is applied and web fonts have loaded.
     await page.evaluate(() => document.fonts.ready);
@@ -356,11 +358,14 @@ function measured(
       .poll(() => page.evaluate(() => document.documentElement.dataset.density))
       .toBe(density);
     const snapshot = await page.evaluate(collect, TOKEN_NAMES);
-    await mkdir(ARTIFACT_DIR, { recursive: true });
+    await mkdir(projectDir(project), { recursive: true });
     await page.screenshot({
-      path: join(ARTIFACT_DIR, `${density}-${scale}x-${VIEW_FILE[view]}.png`),
+      path: join(
+        projectDir(project),
+        `${density}-${scale}x-${VIEW_FILE[view]}.png`,
+      ),
     });
-    await writeFragment(key, {
+    await writeFragment(project, key, {
       view,
       density,
       scale,
@@ -508,14 +513,225 @@ function textLeft(page: Page, selector: string) {
   }, selector);
 }
 
+// FM8 helpers. Inline targets are the selectors that take --target-size-inset
+// in the stylesheets; every other button, input, or link is a control.
+const INLINE_TARGETS = [
+  ".cc-toggle",
+  ".unread-folders-toggle",
+  ".folder-expand",
+  ".mailbox-filter-segment",
+  ".bulk-bar button",
+  ".attention-row button",
+  ".search-scope",
+  ".alias-chip button",
+  ".help-more summary",
+  ".account-overview-order button",
+  "a[href]",
+].join(", ");
+
+// Undersized targets on the current tree, matched exactly. Any other undersized
+// target fails; a fixed target must be removed here. Compact's reader actions
+// and filter pills are 28px (floor: --target-size, 32px).
+const REPORTED_UNDERSIZED: Record<string, string[]> = {
+  "compact|1": [
+    "list: control input.[] 28.0<32",
+    ...[
+      "Add star",
+      "Archive",
+      "More actions",
+      "Move to trash",
+      "Next message",
+      "Previous message",
+    ].map(
+      (name) => `thread: control button.reader-icon-action[${name}] 28.0<32`,
+    ),
+    ...["Forward", "Reply all", "Reply"].map(
+      (name) => `thread: control button.reader-reply-action[${name}] 28.0<32`,
+    ),
+  ],
+};
+
+type Floors = { control: number; inline: number };
+type TargetScan = { checked: number; minSize: number; small: string[] };
+type HitReport = {
+  checked: number;
+  minSize: number;
+  small: string[];
+  orderButtons: number;
+  menuRows: number;
+  menuOff: string[];
+};
+
+// Runs in the page. Skips popup rows (checked separately) and pointer-only
+// shortcuts, which are aria-hidden or tabindex -1 with a keyboard twin.
+function scanTargetsInPage(input: {
+  scopes: string[];
+  floors: Floors;
+  inline: string;
+}): TargetScan {
+  const small = new Set<string>();
+  let checked = 0;
+  let minSize = Infinity;
+  for (const scope of input.scopes) {
+    for (const root of document.querySelectorAll(scope)) {
+      for (const el of root.querySelectorAll<HTMLElement>(
+        'button, [role="button"], input, select, summary, a[href]',
+      )) {
+        if (el.closest('.app-menu, [aria-hidden="true"]')) continue;
+        if (el.tabIndex === -1) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width <= 1 || r.height <= 1) continue;
+        const inline = el.matches(input.inline);
+        const floor = inline ? input.floors.inline : input.floors.control;
+        const size = Math.min(r.width, r.height);
+        const label = (el.getAttribute("aria-label") ?? el.textContent ?? "")
+          .trim()
+          .slice(0, 24);
+        const cls = String(el.className).split(" ")[0] ?? "";
+        checked += 1;
+        minSize = Math.min(minSize, size);
+        if (size < floor) {
+          const kind = inline ? "inline" : "control";
+          small.add(
+            `${kind} ${el.tagName.toLowerCase()}.${cls}[${label}] ${size.toFixed(1)}<${floor}`,
+          );
+        }
+      }
+    }
+  }
+  return { checked, minSize, small: [...small].sort() };
+}
+
+// Normal and Comfortable have fixed floors; Compact keeps its own target tokens.
+async function hitFloors(page: Page, density: Density): Promise<Floors> {
+  if (density === "normal") return { control: 36, inline: 32 };
+  if (density === "comfortable") return { control: 44, inline: 44 };
+  return page.evaluate(() => {
+    const probe = (value: string) => {
+      const el = document.createElement("div");
+      el.style.cssText =
+        "position:absolute;visibility:hidden;left:0;top:0;height:0;";
+      el.style.width = value;
+      document.body.append(el);
+      const width = el.getBoundingClientRect().width;
+      el.remove();
+      return width;
+    };
+    return {
+      control: probe("var(--target-size)"),
+      inline: probe("var(--target-size-inset)"),
+    };
+  });
+}
+
+// Popup rows are var(--menu-row-height), 2.25rem at every density and text scale.
+async function menuRows(page: Page) {
+  return page
+    .locator(".app-menu")
+    .first()
+    .evaluate((menu) => {
+      const root = getComputedStyle(document.documentElement);
+      const rem = Number.parseFloat(root.fontSize);
+      const expected = 2.25 * rem;
+      const probe = document.createElement("div");
+      probe.style.cssText = "position:absolute;visibility:hidden;height:0;";
+      probe.style.width = "var(--menu-row-height)";
+      document.body.append(probe);
+      const token = probe.getBoundingClientRect().width;
+      probe.remove();
+      const off: string[] = [];
+      if (Math.abs(token - expected) > 0.5) {
+        off.push(`token ${token.toFixed(1)}!=${expected}`);
+      }
+      const rows = [
+        ...menu.querySelectorAll<HTMLElement>(
+          '[role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]',
+        ),
+      ].filter((el) => el.getBoundingClientRect().height > 0);
+      for (const el of rows) {
+        const height = el.getBoundingClientRect().height;
+        if (Math.abs(height - expected) > 0.5) {
+          const label = (el.textContent ?? "").trim().slice(0, 24);
+          off.push(`${label} ${height.toFixed(1)}!=${expected}`);
+        }
+      }
+      return { rows: rows.length, off };
+    });
+}
+
+// Scans every FM8 surface at one density and text scale.
+async function hitAreaReport(
+  page: Page,
+  density: Density,
+  scale: Scale,
+): Promise<HitReport> {
+  const report: HitReport = {
+    checked: 0,
+    minSize: Infinity,
+    small: [],
+    orderButtons: 0,
+    menuRows: 0,
+    menuOff: [],
+  };
+  const scan = async (label: string, scopes: string[], floors: Floors) => {
+    const result = await page.evaluate(scanTargetsInPage, {
+      scopes,
+      floors,
+      inline: INLINE_TARGETS,
+    });
+    report.checked += result.checked;
+    report.minSize = Math.min(report.minSize, result.minSize);
+    report.small.push(...result.small.map((line) => `${label}: ${line}`));
+  };
+
+  await open(page, density, scale, "list");
+  const floors = await hitFloors(page, density);
+  await scan("list", [".app-toolbar", ".folder-pane", ".message-pane"], floors);
+  await page
+    .getByRole("button", { name: "More mailbox actions", exact: true })
+    .click();
+  const menu = await menuRows(page);
+  report.menuRows += menu.rows;
+  report.menuOff.push(...menu.off);
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".app-menu")).toHaveCount(0);
+
+  await open(page, density, scale, "thread");
+  await scan("thread", [".reader-actions"], floors);
+
+  await open(page, density, scale, "list");
+  await page.getByRole("button", { name: "Compose", exact: true }).click();
+  await expect(page.locator(".composer-window")).toBeVisible();
+  await scan("composer", [".composer-window"], floors);
+
+  // multiAccount lists two accounts, so the order buttons render.
+  await page.goto(`/?density=${density}&scale=${scale}&multiAccount=1`);
+  await expect(page.locator(".message-row").first()).toBeVisible();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await expect(page.locator(".settings-window")).toBeVisible();
+  await scan("settings", [".settings-window"], floors);
+  await page.getByRole("tab", { name: "Accounts", exact: true }).click();
+  await scan("settings accounts", [".settings-window"], floors);
+  report.orderButtons = await page
+    .locator(".account-overview-order button")
+    .count();
+
+  await page.goto(`/?firstRun=1&density=${density}&scale=${scale}`);
+  await expect(page.locator(".setup-flow")).toBeVisible();
+  await scan("setup", [".setup-flow"], floors);
+  return report;
+}
+
 test.describe("0.5.2 density matrix (failure modes FM1-FM38)", () => {
   test.setTimeout(240_000);
 
   test.beforeEach(async ({ page }) => installMockIpc(page));
 
-  // Every worker merges; the last merge to run includes all fragments.
-  test.afterAll(async () => {
-    await mergeFragments();
+  // Every worker merges its project's fragments; metrics.json stays per browser.
+  // Playwright requires a destructuring first argument, even when empty.
+  // eslint-disable-next-line no-empty-pattern
+  test.afterAll(async ({}, testInfo) => {
+    await mergeFragments(testInfo.project.name);
   });
 
   // Full grid (density x scale x view) as one test per combo, so every
@@ -557,7 +773,8 @@ test.describe("0.5.2 density matrix (failure modes FM1-FM38)", () => {
       [],
     );
 
-    await rm(fragmentPath(TOKEN_ORDERING_KEY), { force: true });
+    const project = test.info().project.name;
+    await rm(fragmentPath(project, tokenOrderingKey(project)), { force: true });
     await page.goto("/?density=normal&scale=1");
     await expect(page.locator(".message-row").first()).toBeVisible();
     // px-resolvable tokens get their computed width; anything else (colors,
@@ -584,7 +801,7 @@ test.describe("0.5.2 density matrix (failure modes FM1-FM38)", () => {
       }
       return out;
     }, names);
-    await writeFragment(TOKEN_ORDERING_KEY, values);
+    await writeFragment(project, tokenOrderingKey(project), values);
 
     // Plan §5.1.2: search is wider in the denser layout by design.
     const orderingExempt = new Set(["search-box-max-width"]);
@@ -747,19 +964,41 @@ test.describe("0.5.2 density matrix (failure modes FM1-FM38)", () => {
     });
   }
 
-  // FM8: hit areas meet the inset target size.
+  // FM8: hit areas on every surface at 100% and 200% text. Floors: Normal
+  // 36px controls and 32px inline, Comfortable 44px, Compact its own tokens.
   for (const density of DENSITIES) {
-    test(`FM8 hit areas: no control smaller than target-size-inset (${density})`, async ({
+    for (const scale of SCALES) {
+      test(`FM8 hit areas: list, reader, composer, settings, setup, menu (${density} ${scale}x)`, async ({
+        page,
+      }) => {
+        const report = await hitAreaReport(page, density, scale);
+        expect(report.checked, "targets were scanned").toBeGreaterThan(0);
+        expect(report.menuRows, "popup rows were scanned").toBeGreaterThan(0);
+        expect(
+          report.orderButtons,
+          "account up/down buttons exist",
+        ).toBeGreaterThan(0);
+        const reported = REPORTED_UNDERSIZED[`${density}|${scale}`] ?? [];
+        expect(
+          [...report.small].sort(),
+          "targets below their floor (beyond the reported list)",
+        ).toEqual([...reported].sort());
+        expect(report.menuOff, "popup rows off menu-row-height").toEqual([]);
+      });
+    }
+  }
+
+  // FM8: 200% text must not shrink the smallest target relative to 100%.
+  for (const density of DENSITIES) {
+    test(`FM8 200% text: smallest target does not shrink from 100% (${density})`, async ({
       page,
     }) => {
-      const small: string[] = [];
-      for (const scale of SCALES) {
-        for (const view of ["list", "thread"] as const) {
-          const snap = await measured(page, density, scale, view);
-          small.push(...snap.smallTargets.map((t) => `${scale}x ${view} ${t}`));
-        }
-      }
-      expect(small).toEqual([]);
+      const at1 = await hitAreaReport(page, density, 1);
+      const at2 = await hitAreaReport(page, density, 2);
+      expect(
+        at2.minSize,
+        "smallest target at 200% vs 100%",
+      ).toBeGreaterThanOrEqual(at1.minSize - 0.5);
     });
   }
 
@@ -884,18 +1123,48 @@ test.describe("0.5.2 density matrix (failure modes FM1-FM38)", () => {
     expect(unnamed).toEqual([]);
   });
 
-  test("FM12 keyboard: composer options menu opens from the keyboard", async ({
+  test("FM12 keyboard: composer options are checkboxes with arrow focus, Space toggle, and a spoken state", async ({
     page,
   }) => {
     await open(page, "normal", 1, "list");
     await page.getByRole("button", { name: "Compose", exact: true }).click();
-    const options = page
-      .locator(".composer-window")
-      .getByRole("button", { name: /options/i })
-      .first();
-    await options.focus();
+    const trigger = page.locator(
+      '.composer-window header button[aria-haspopup="menu"]',
+    );
+    await expect(trigger).toHaveAccessibleName("Message options");
+    await trigger.focus();
     await page.keyboard.press("Enter");
-    await expect(page.getByRole("menu").first()).toBeVisible();
+    const menu = page.getByRole("menu", { name: "Message options" });
+    await expect(menu).toBeVisible();
+    await expect(menu.getByRole("menuitem").first()).toBeFocused();
+
+    const high = menu.getByRole("menuitemcheckbox", {
+      name: "High importance",
+      exact: true,
+    });
+    const low = menu.getByRole("menuitemcheckbox", {
+      name: "Low importance",
+      exact: true,
+    });
+    await expect(high).toHaveAttribute("aria-checked", "false");
+    await expect(low).toHaveAttribute("aria-checked", "false");
+
+    await page.keyboard.press("ArrowDown");
+    await expect(high).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(low).toBeFocused();
+    await page.keyboard.press("ArrowUp");
+    await expect(high).toBeFocused();
+
+    await page.keyboard.press(" ");
+    await expect(high).toHaveAttribute("aria-checked", "true");
+    await expect(low).toHaveAttribute("aria-checked", "false");
+    // The trigger's name carries the active option, so screen readers hear it.
+    await expect(trigger).toHaveAccessibleName(/high importance/i);
+
+    await page.keyboard.press(" ");
+    await expect(high).toHaveAttribute("aria-checked", "false");
+    await expect(trigger).toHaveAccessibleName("Message options");
   });
 
   // FM13: density round-trips through Settings to save_settings.
@@ -1651,6 +1920,19 @@ test.describe("0.5.2 density matrix (failure modes FM1-FM38)", () => {
       .evaluateAll((els) => els.map((el) => el.getBoundingClientRect().height));
     expect(navHeights.length).toBeGreaterThan(0);
     for (const h of navHeights) expect(h).toBeGreaterThanOrEqual(36);
+  });
+
+  // Last in file order, so every grid and FM test has written its fragment.
+  // eslint-disable-next-line no-empty-pattern -- Playwright needs a destructuring first argument.
+  test("metrics: every expected combo has a fragment for this project", async ({}, testInfo) => {
+    // A --shard run holds only part of the grid. CLI -g is not visible here,
+    // so a -g run skips this test unless its title is selected too.
+    test.skip(testInfo.config.shard !== null, "a --shard run is partial");
+    const meta = await mergeFragments(testInfo.project.name);
+    expect(
+      meta.missing,
+      `${testInfo.project.name} metrics _meta.complete (${meta.present}/${meta.expected})`,
+    ).toEqual([]);
   });
 });
 

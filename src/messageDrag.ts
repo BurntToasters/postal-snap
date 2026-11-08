@@ -45,27 +45,40 @@ export function setMessageDragChip(
   transfer.setDragImage(chip, 0, 0);
 }
 
+const DRAG_EDGE_CHECK_MS = 100;
+
 /**
- * Opens the drawer when a message drag enters the left edge, and closes it
- * again on dragend or drop. Returns the cleanup.
+ * Opens the drawer when a message drag reaches the left edge, and closes it
+ * again on dragend or drop only if this drag opened it. Returns the cleanup.
  */
-export function watchDrawerDrag(setOpen: (open: boolean) => void): () => void {
+export function watchDrawerDrag(
+  isOpen: () => boolean,
+  setOpen: (open: boolean) => void,
+): () => void {
   let openedByDrag = false;
-  const enter = (event: DragEvent) => {
+  let lastCheck = 0;
+  // dragenter fires once per element, so a drag that stays in one element
+  // never reaches the edge band; dragover repeats, so it is throttled instead.
+  const over = (event: DragEvent) => {
     if (!dragging || event.clientX > DRAG_EDGE_PX) return;
+    const now = performance.now();
+    if (now - lastCheck < DRAG_EDGE_CHECK_MS) return;
+    lastCheck = now;
+    if (openedByDrag || isOpen()) return;
     openedByDrag = true;
     setOpen(true);
   };
   const finish = () => {
+    lastCheck = 0;
     if (!openedByDrag) return;
     openedByDrag = false;
     setOpen(false);
   };
-  window.addEventListener("dragenter", enter);
+  window.addEventListener("dragover", over);
   window.addEventListener("drop", finish);
   window.addEventListener("dragend", finish);
   return () => {
-    window.removeEventListener("dragenter", enter);
+    window.removeEventListener("dragover", over);
     window.removeEventListener("drop", finish);
     window.removeEventListener("dragend", finish);
   };

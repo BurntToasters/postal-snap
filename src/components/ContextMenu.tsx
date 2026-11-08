@@ -27,14 +27,19 @@ import { iconFor } from "./menuIcons";
 import { parseMailto } from "../mailto";
 import { useAppStore } from "../store";
 import { placeSubmenuPanel, syncScrollCue } from "./popupPlacement";
-import { moveMenuFocus } from "./toolbarNav";
+import { MENU_ITEM_SELECTOR, moveMenuFocus } from "./toolbarNav";
 
 type MenuActionItem = Extract<ContextMenuItem, { type: "item" }>;
 
 /** Render model shared by the row menu, reader More, and mailbox More. */
 export type PopupEntry =
   | { kind: "separator" }
-  | { kind: "group"; label: string; entries: PopupEntry[] }
+  | {
+      kind: "group";
+      label: string;
+      hideHeading?: boolean;
+      entries: PopupEntry[];
+    }
   | {
       kind: "action";
       id: string;
@@ -57,8 +62,8 @@ export type PopupEntry =
       entries: PopupEntry[];
     };
 
-const ITEM_SELECTOR =
-  '[role="menuitem"]:not(:disabled), [role="menuitemradio"]:not(:disabled), [role="menuitemcheckbox"]:not(:disabled)';
+// Announces an opening submenu so the other open submenus close.
+const SUBMENU_OPENED = "postal-submenu-opened";
 
 /** Headings own the items after them, up to the next separator. */
 function toPopupEntries(
@@ -69,7 +74,12 @@ function toPopupEntries(
   let group: Extract<PopupEntry, { kind: "group" }> | null = null;
   for (const entry of items) {
     if (entry.type === "heading") {
-      group = { kind: "group", label: entry.label, entries: [] };
+      group = {
+        kind: "group",
+        label: entry.label,
+        hideHeading: entry.hideHeading,
+        entries: [],
+      };
       entries.push(group);
       continue;
     }
@@ -105,12 +115,21 @@ function toPopupEntries(
 
 function PopupGroup({
   label,
+  hideHeading,
   children,
 }: {
   label: string;
+  hideHeading?: boolean;
   children: ReactNode;
 }) {
   const headingId = useId();
+  if (hideHeading) {
+    return (
+      <div role="group" aria-label={label}>
+        {children}
+      </div>
+    );
+  }
   return (
     <div role="group" aria-labelledby={headingId}>
       <div id={headingId} className="context-menu-heading">
@@ -167,6 +186,30 @@ function PopupSubmenu({
   const cancelClose = () => window.clearTimeout(closeTimer.current);
   useEffect(() => cancelClose, []);
 
+  // One open submenu at a time; a parent scroll repositions the open panel.
+  useEffect(() => {
+    if (!open) return;
+    const onOther = (event: Event) => {
+      if ((event as CustomEvent<string>).detail !== panelId) setOpen(false);
+    };
+    document.addEventListener(SUBMENU_OPENED, onOther);
+    document.dispatchEvent(
+      new CustomEvent<string>(SUBMENU_OPENED, { detail: panelId }),
+    );
+    // Scrolling the parent moves the trigger, so the panel follows it.
+    const parentMenu = triggerRef.current?.closest('[role="menu"]');
+    const onParentScroll = () => {
+      if (triggerRef.current && panelRef.current) {
+        placeSubmenuPanel(panelRef.current, triggerRef.current);
+      }
+    };
+    parentMenu?.addEventListener("scroll", onParentScroll);
+    return () => {
+      document.removeEventListener(SUBMENU_OPENED, onOther);
+      parentMenu?.removeEventListener("scroll", onParentScroll);
+    };
+  }, [open, panelId]);
+
   useLayoutEffect(() => {
     if (!open) return;
     const panel = panelRef.current;
@@ -175,7 +218,7 @@ function PopupSubmenu({
     placeSubmenuPanel(panel, trigger);
     if (focusFirstRef.current) {
       focusFirstRef.current = false;
-      panel.querySelector<HTMLElement>(ITEM_SELECTOR)?.focus();
+      panel.querySelector<HTMLElement>(MENU_ITEM_SELECTOR)?.focus();
     }
   }, [open]);
 
@@ -185,7 +228,7 @@ function PopupSubmenu({
     const panel = panelRef.current;
     if (panel) {
       focusFirstRef.current = false;
-      panel.querySelector<HTMLElement>(ITEM_SELECTOR)?.focus();
+      panel.querySelector<HTMLElement>(MENU_ITEM_SELECTOR)?.focus();
     }
   }
 
@@ -199,6 +242,14 @@ function PopupSubmenu({
       onMouseLeave={() => {
         cancelClose();
         closeTimer.current = window.setTimeout(() => setOpen(false), 250);
+      }}
+      onBlur={(event) => {
+        // Focus moving to another row closes this panel; focus lost to the
+        // page (WebKit click) keeps it open so the click still lands.
+        const next = event.relatedTarget;
+        if (next instanceof Element && !event.currentTarget.contains(next)) {
+          setOpen(false);
+        }
       }}
     >
       <button
@@ -217,7 +268,8 @@ function PopupSubmenu({
             event.stopPropagation();
             openFromKeyboard();
           } else if (event.key === "Enter" || event.key === " ") {
-            focusFirstRef.current = true;
+            event.preventDefault();
+            openFromKeyboard();
           }
         }}
       >
@@ -269,7 +321,11 @@ export function PopupEntries({ entries }: { entries: PopupEntry[] }) {
         }
         if (entry.kind === "group") {
           return (
-            <PopupGroup key={`group-${index}`} label={entry.label}>
+            <PopupGroup
+              key={`group-${index}`}
+              label={entry.label}
+              hideHeading={entry.hideHeading}
+            >
               <PopupEntries entries={entry.entries} />
             </PopupGroup>
           );
@@ -612,17 +668,31 @@ export function ContextMenuHost() {
     const node = menuRef.current;
     if (!node || !menu) return;
     const pad = 8;
+    // Measure at natural height: below the pointer, else above, else the
+    // whole viewport, so the menu scrolls only when it cannot fit.
+    node.style.maxHeight = "";
     const rect = node.getBoundingClientRect();
+    const belowRoom = window.innerHeight - pad - menu.y;
+    const aboveRoom = menu.y - pad;
+    let top: number;
+    let room: number;
+    if (rect.height <= belowRoom) {
+      top = menu.y;
+      room = belowRoom;
+    } else if (rect.height <= aboveRoom) {
+      top = menu.y - rect.height;
+      room = aboveRoom;
+    } else {
+      top = pad;
+      room = window.innerHeight - pad * 2;
+    }
     let left = menu.x;
-    let top = menu.y;
     if (left + rect.width > window.innerWidth - pad) {
       left = Math.max(pad, menu.x - rect.width);
     }
-    if (top + rect.height > window.innerHeight - pad) {
-      top = Math.max(pad, menu.y - rect.height);
-    }
     node.style.left = `${left}px`;
     node.style.top = `${top}px`;
+    node.style.maxHeight = `${Math.max(0, room)}px`;
     node
       .querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')
       ?.focus();

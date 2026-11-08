@@ -121,6 +121,21 @@ interface MessagePaneHeaderProps {
   };
 }
 
+/** Shared placement clamps to the viewport; the filter menu must stay in its pane. */
+function keepInsidePane(menu: HTMLElement, trigger: HTMLElement) {
+  const pane = trigger.closest(".message-pane")?.getBoundingClientRect();
+  if (!pane) return;
+  const edge = 8;
+  const lo = pane.left + edge;
+  const hi = pane.right - edge;
+  const span = Math.max(0, hi - lo);
+  menu.style.minWidth = `min(12rem, ${span}px)`;
+  menu.style.maxWidth = `${span}px`;
+  const width = menu.getBoundingClientRect().width;
+  const left = parseFloat(menu.style.left) || 0;
+  menu.style.left = `${Math.max(lo, Math.min(left, hi - width))}px`;
+}
+
 export function MessagePaneHeader({
   heading,
   localAction,
@@ -182,26 +197,8 @@ export function MessagePaneHeader({
     );
     const menu = root?.querySelector<HTMLElement>("[role='menu']");
     if (!trigger || !menu) return;
-    const edge = 8;
-    const gap = 6;
-    const anchor = trigger.getBoundingClientRect();
-    menu.style.maxHeight = "";
-    const pane = trigger.closest(".message-pane")?.getBoundingClientRect();
-    const lo = Math.max(edge, (pane?.left ?? 0) + edge);
-    const hi = Math.min(window.innerWidth, pane?.right ?? Infinity) - edge;
-    menu.style.minWidth = `min(12rem, ${hi - lo}px)`;
-    menu.style.maxWidth = `${hi - lo}px`;
-    const width = menu.offsetWidth;
-    const height = menu.offsetHeight;
-    const below = window.innerHeight - anchor.bottom - gap - edge;
-    const above = anchor.top - gap - edge;
-    const up = height > below && above > below;
-    const room = Math.max(up ? above : below, 0);
-    const shown = Math.min(height, room);
-    menu.style.maxHeight = `${room}px`;
-    menu.style.top = `${up ? anchor.top - gap - shown : anchor.bottom + gap}px`;
-    const fit = Math.min(width, hi - lo);
-    menu.style.left = `${Math.max(lo, Math.min(anchor.right - fit, hi - fit))}px`;
+    placeAnchoredMenu(menu, trigger);
+    keepInsidePane(menu, trigger);
     const close = () => setFilterMenuOpen(false);
     window.addEventListener("resize", close);
     return () => window.removeEventListener("resize", close);

@@ -116,7 +116,6 @@ export const mail = {
     { syntax: "in:inbox", meaning: "In this folder" },
   ],
   searchAllFolders: "All folders",
-  searchAllFoldersTitle: "Search every folder in this account",
   searchScopeCurrent: "This mailbox",
   searchScopeMenu: "Search scope",
   searchTipsMenuItem: "Search tips…",
@@ -129,7 +128,6 @@ export const mail = {
   filterMore: "More",
   moreFilters: "More filters",
   moreFiltersActive: (label: string) => `More filters: ${label}`,
-  sortMessages: "Sort",
   sortDate: "Date",
   sortOldest: "Oldest first",
   sortDescending: "Z to A",
@@ -153,7 +151,8 @@ export const mail = {
   emailAccounts: "Email accounts",
   accountSettings: "Account settings",
   getMailAllAccounts: "Get mail for all accounts",
-  moreGetMailOptions: "More ways to get mail",
+  getMailAllHint: (chord: string) =>
+    `Shift-click or ${chord} gets mail for all accounts`,
   unreadCount: (count: number) => `${count} unread`,
   unreadInside: (count: number) =>
     count === 1 ? "1 unread in a subfolder" : `${count} unread in subfolders`,

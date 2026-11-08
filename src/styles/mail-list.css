@@ -108,7 +108,7 @@
   flex-shrink: 0;
   align-items: center;
   gap: var(--space-1);
-  min-height: var(--target-size-inset);
+  min-height: var(--target-size);
   padding-block: 0;
   padding-inline: var(--space-4);
   border: 0;
@@ -119,6 +119,11 @@
   font: inherit;
   white-space: nowrap;
   cursor: pointer;
+}
+
+/* Compact keeps its traditional smaller track. */
+:root[data-density="compact"] .mailbox-filter-segment {
+  min-height: var(--target-size-inset);
 }
 
 .mailbox-filter-segment svg {
@@ -150,13 +155,13 @@
 
 .mailbox-filter-segment:has(input:focus-visible),
 .mailbox-filter-segment:focus-visible {
-  outline: 2px solid var(--focus);
+  outline: 3px solid var(--focus);
   outline-offset: 2px;
 }
 
-/* At 200% text the segments take less padding; they wrap only when they still do not fit. */
+/* At 200% text a wrapped track is a rounded panel, not a broken pill. */
 html[data-text-scale="large"] .mailbox-filter-control {
-  flex-wrap: wrap;
+  border-radius: var(--radius-md);
 }
 
 html[data-text-scale="large"] .mailbox-filter-segment {
@@ -372,6 +377,11 @@ html[data-text-scale="large"] .mailbox-filter-segment {
 }
 
 @media (forced-colors: active) {
+  /* Forced colors override transparent text, so hide the date itself. */
+  .message-row-wrap:hover .message-when {
+    visibility: hidden;
+  }
+
   .row-actions {
     border: 1px solid ButtonText;
     background: Canvas;

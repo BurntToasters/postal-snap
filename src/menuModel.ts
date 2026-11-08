@@ -30,7 +30,8 @@ export interface EntryDef {
 export interface MenuKit<E> {
   item(def: EntryDef): E[];
   folder(kind: FolderKind, folder: MenuFolder): E[];
-  group(label: string, entries: E[]): E[];
+  /** hideHeading keeps the group named for assistive tech, without a visible label. */
+  group(label: string, entries: E[], hideHeading?: boolean): E[];
   submenu(id: string, label: string, entries: E[]): E[];
   separator(): E[];
 }
@@ -79,12 +80,24 @@ export interface MessageMenuFacts {
 export function buildMessageMenu<E>(f: MessageMenuFacts, kit: MenuKit<E>): E[] {
   const defs = (...list: Array<EntryDef | false | undefined>): E[] =>
     list.flatMap((def) => (def ? kit.item(def) : []));
-  const folders = (kind: FolderKind, label: string, list: MenuFolder[]) => {
+  const folders = (
+    kind: FolderKind,
+    label: string,
+    list: MenuFolder[],
+    hideHeading = false,
+  ) => {
     const rows = list.flatMap((folder) => kit.folder(kind, folder));
-    return rows.length > 0 ? kit.group(label, rows) : [];
+    return rows.length > 0 ? kit.group(label, rows, hideHeading) : [];
   };
   const submenu = (id: string, label: string, entries: E[]) =>
     entries.length > 0 ? kit.submenu(id, label, entries) : [];
+  // Separators only between non-empty parts, so none dangle at an edge.
+  const joinParts = (parts: E[][]): E[] =>
+    parts
+      .filter((part) => part.length > 0)
+      .flatMap((part, index) =>
+        index === 0 ? part : [...kit.separator(), ...part],
+      );
   const isArchive = f.mailboxRole === "archive";
   const isJunk = f.mailboxRole === "junk";
   const isTrash = f.mailboxRole === "trash";
@@ -185,20 +198,22 @@ export function buildMessageMenu<E>(f: MessageMenuFacts, kit: MenuKit<E>): E[] {
                 chord: formatChord("E"),
               },
         )),
+    // The submenu label already names these folders, so no visible heading.
     ...(hasFolders
-      ? submenu("move-to", strings.contextMenu.moveTo, [
-          ...folders("move", strings.contextMenu.moveTo, f.moveFolders),
-          ...(f.conversation
-            ? [
-                ...kit.separator(),
-                ...folders(
+      ? submenu(
+          "move-to",
+          strings.contextMenu.moveTo,
+          joinParts([
+            folders("move", strings.contextMenu.moveTo, f.moveFolders, true),
+            f.conversation
+              ? folders(
                   "move-conversation",
                   strings.contextMenu.moveConversationTo,
                   f.moveFolders,
-                ),
-              ]
-            : []),
-        ])
+                )
+              : [],
+          ]),
+        )
       : []),
     ...defs(
       isJunk
@@ -292,8 +307,8 @@ export function buildMessageMenu<E>(f: MessageMenuFacts, kit: MenuKit<E>): E[] {
       disabled: f.preparing,
     },
   );
-  const copyOptions = [
-    ...defs(
+  const copyOptions = joinParts([
+    defs(
       {
         id: "copy-message-text",
         label: strings.reader.copyMessageText,
@@ -320,23 +335,15 @@ export function buildMessageMenu<E>(f: MessageMenuFacts, kit: MenuKit<E>): E[] {
         icon: "copy",
       },
     ),
-    ...(hasFolders
-      ? [
-          ...kit.separator(),
-          ...folders("copy", strings.contextMenu.copyTo, f.moveFolders),
-          ...(f.conversation
-            ? [
-                ...kit.separator(),
-                ...folders(
-                  "copy-conversation",
-                  strings.contextMenu.copyConversationTo,
-                  f.moveFolders,
-                ),
-              ]
-            : []),
-        ]
-      : []),
-  ];
+    folders("copy", strings.contextMenu.copyTo, f.moveFolders),
+    f.conversation
+      ? folders(
+          "copy-conversation",
+          strings.contextMenu.copyConversationTo,
+          f.moveFolders,
+        )
+      : [],
+  ]);
   const printOptions = defs(
     {
       id: "print",

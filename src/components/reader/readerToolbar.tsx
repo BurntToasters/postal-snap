@@ -25,7 +25,7 @@ import {
   senderSearchQuery,
   subjectSearchQuery,
 } from "../../contextMenu";
-import { formatChord } from "../../format";
+import { formatChord, withChord } from "../../format";
 import { strings } from "../../i18n";
 import { folderPathLabel } from "../../i18n/mail";
 import type { MailboxSummary, MessageDetail, ReadingPane } from "../../types";
@@ -41,10 +41,6 @@ import {
 import { placeAnchoredMenu, syncScrollCue } from "../popupPlacement";
 import { moveMenuFocus, moveToolbarFocus } from "../toolbarNav";
 import type { ReaderToolbarActions } from "./readerActions";
-
-function withShortcut(label: string, keys: string) {
-  return `${label} (${keys})`;
-}
 
 export function ReaderToolbar({
   actions,
@@ -228,6 +224,28 @@ export function ReaderToolbar({
   const showNav = listPosition
     ? listPosition.total > 1
     : Boolean(onPrevious || onNext);
+  // Conversation rows exist only when some conversation action is wired.
+  const hasConversationActions = [
+    onMoveConversationToMailbox,
+    onCopyConversationToMailbox,
+    onArchiveConversation,
+    onTrashConversation,
+    onDeleteConversation,
+    onJunkConversation,
+    onMoveConversationToInbox,
+    onMarkConversationRead,
+    onMarkConversationUnread,
+    onStarConversation,
+    onUnstarConversation,
+    onPinConversation,
+    onUnpinConversation,
+    onSelectConversation,
+    onSnoozeConversation,
+    onSaveConversationFiles,
+    onPrintConversation,
+    onForwardConversation,
+    onCopyConversationText,
+  ].some(Boolean);
   const moveDestinations = withRecentMoveMailbox(
     mailboxes.filter(
       (mailbox) =>
@@ -362,7 +380,9 @@ export function ReaderToolbar({
         },
       ];
     },
-    group: (label, entries) => [{ kind: "group", label, entries }],
+    group: (label, entries, hideHeading) => [
+      { kind: "group", label, hideHeading, entries },
+    ],
     submenu: (id, label, entries) => [{ kind: "submenu", id, label, entries }],
     separator: () => [{ kind: "separator" }],
   };
@@ -382,7 +402,7 @@ export function ReaderToolbar({
     conversationMuted: Boolean(message.conversationMuted),
     mailboxRole,
     // Handler presence gates the conversation entries on this surface.
-    conversation: true,
+    conversation: hasConversationActions,
     conversationUnread: Boolean(onMarkConversationRead),
     conversationRead: Boolean(onMarkConversationUnread),
     conversationHasUnstarred: Boolean(onStarConversation),
@@ -423,7 +443,8 @@ export function ReaderToolbar({
       name: folderPathLabel(box),
       role: box.role,
     })),
-    inToolbar: { primary: true, archiveTrash: false },
+    // Archive and trash sit on the toolbar, so More omits them.
+    inToolbar: { primary: true, archiveTrash: true },
   };
   const moreEntries: PopupEntry[] = buildMessageMenu(facts, readerKit);
 
@@ -465,7 +486,7 @@ export function ReaderToolbar({
             className="reader-reply-action"
             onClick={onReply}
             aria-label={strings.reader.reply}
-            title={withShortcut(strings.reader.reply, formatChord("R"))}
+            title={withChord(strings.reader.reply, formatChord("R"))}
             aria-keyshortcuts="Meta+R Control+R"
           >
             <Reply aria-hidden="true" />
@@ -476,7 +497,7 @@ export function ReaderToolbar({
             className="reader-reply-action"
             onClick={onReplyAll}
             aria-label={strings.reader.replyAll}
-            title={withShortcut(
+            title={withChord(
               strings.reader.replyAll,
               formatChord("R", { shift: true }),
             )}
@@ -511,13 +532,13 @@ export function ReaderToolbar({
                 ? strings.reader.preparing
                 : strings.reader.forward
             }
-            title={withShortcut(
+            title={withChord(
               preparingForward
                 ? strings.reader.preparing
                 : strings.reader.forward,
               formatChord("F", { shift: true }),
             )}
-            aria-keyshortcuts="Meta+Shift+F Control+Shift+F"
+            aria-keyshortcuts="Meta+Shift+F Control+Shift+F F"
           >
             <Forward aria-hidden="true" />
             <span className="reader-action-label">
@@ -538,7 +559,7 @@ export function ReaderToolbar({
                 ? strings.reader.removeStar
                 : strings.reader.addStar
             }
-            title={withShortcut(
+            title={withChord(
               message.isStarred
                 ? strings.reader.removeStar
                 : strings.reader.addStar,
@@ -563,7 +584,7 @@ export function ReaderToolbar({
             title={
               isArchiveMailbox
                 ? strings.reader.moveToInbox
-                : withShortcut(strings.reader.archive, formatChord("E"))
+                : withChord(strings.reader.archive, formatChord("E"))
             }
             aria-keyshortcuts={
               isArchiveMailbox ? undefined : "Meta+E Control+E"
@@ -582,7 +603,7 @@ export function ReaderToolbar({
             aria-label={
               isTrashMailbox ? strings.mail.deleteForever : strings.reader.trash
             }
-            title={withShortcut(
+            title={withChord(
               isTrashMailbox
                 ? strings.mail.deleteForever
                 : strings.reader.trash,

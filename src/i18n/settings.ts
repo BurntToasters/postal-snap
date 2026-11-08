@@ -133,6 +133,7 @@ export const settings = {
   advancedHelpMore:
     "Leave them on unless you have a specific reason to turn them off. Choosing Load images, private-network blocking, and other safety checks still apply.",
   learnMore: "Learn more",
+  learnMoreAbout: (name: string) => `Learn more about ${name}`,
   blockAds: "Block advertising and tracking images",
   blockAdsHelp:
     "After you choose Load images, Postal Snap still hides known advertising and tracking pictures.",
@@ -143,9 +144,7 @@ export const settings = {
     "Postal Snap will no longer hide known advertising and tracking pictures after you choose Load images. Image consent and private-network protections stay on.",
   blockThreats: "Warn about reported dangerous addresses",
   blockThreatsHelp:
-    "Postal Snap checks links and remote images against a local reported-threat list before they can load or open.",
-  blockThreatsHelpMore:
-    "Turning this off is dangerous. You can turn it back on at any time.",
+    "Postal Snap checks links and remote images against a local reported-threat list before they can load or open. Turning this off is dangerous. You can turn it back on at any time.",
   threatOffWarning:
     "Reported-address warnings are off. Postal Snap will not warn you about listed dangerous links or block those remote images. Turn this back on unless you have a specific reason to leave it off.",
   threatDisableTitle: "Turn off reported-address warnings?",

@@ -20,15 +20,17 @@
 .notice-stack .toast {
   position: static;
   box-sizing: border-box;
-  /* Message takes the row; actions and dismiss never drop to a third line. */
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  /* Message takes the row; actions and dismiss drop below it when narrow. */
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  column-gap: 0.5rem;
   max-width: 100%;
   pointer-events: auto;
 }
 
 .notice-stack .toast > span {
+  flex: 1 1 12rem;
   min-width: 0;
   overflow-wrap: anywhere;
 }

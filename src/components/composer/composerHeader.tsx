@@ -5,6 +5,7 @@ import {
   type Dispatch,
   type HTMLAttributes,
   type KeyboardEvent,
+  type ReactNode,
   type SetStateAction,
 } from "react";
 import {
@@ -36,6 +37,45 @@ export interface ComposerMessageOptions {
   onRequestReceiptChange: (value: boolean) => void;
   /** Present only when the account has a signature. */
   signature?: { included: boolean; onChange: (value: boolean) => void };
+}
+
+/** Non-default options as short chips and spoken states. */
+function activeOptionStates(options: ComposerMessageOptions | undefined) {
+  if (!options) return null;
+  const chips: Array<{ key: string; label: string; icon: ReactNode }> = [];
+  const states: string[] = [];
+  if (options.importance === "high") {
+    chips.push({
+      key: "high",
+      label: strings.composer.highImportance,
+      icon: <ArrowUp aria-hidden="true" />,
+    });
+    states.push(strings.composer.highImportanceState);
+  } else if (options.importance === "low") {
+    chips.push({
+      key: "low",
+      label: strings.composer.lowImportance,
+      icon: <ArrowDown aria-hidden="true" />,
+    });
+    states.push(strings.composer.lowImportanceState);
+  }
+  if (options.requestReceipt) {
+    chips.push({
+      key: "receipt",
+      label: strings.composer.receiptRequested,
+      icon: <CheckCheck aria-hidden="true" />,
+    });
+    states.push(strings.composer.receiptOnState);
+  }
+  if (options.signature && !options.signature.included) {
+    chips.push({
+      key: "signature",
+      label: strings.composer.noSignature,
+      icon: <PenLine aria-hidden="true" />,
+    });
+    states.push(strings.composer.signatureOffState);
+  }
+  return chips.length === 0 ? null : { chips, states };
 }
 
 export interface ComposerHeaderProps {
@@ -102,6 +142,10 @@ export function ComposerHeader({
   }
 
   const plain = bodyFormat === "plain";
+  const active = activeOptionStates(messageOptions);
+  const optionsName = active
+    ? strings.composer.messageOptionsState(active.states)
+    : strings.composer.messageOptions;
   return (
     <>
       {/* Floating: drag moves the composer. Maximized: the app window. */}
@@ -124,6 +168,16 @@ export function ComposerHeader({
                 : ""}
           </small>
         </span>
+        {active ? (
+          <div className="composer-option-chips">
+            {active.chips.map((chip) => (
+              <span className="composer-option-chip" key={chip.key}>
+                {chip.icon}
+                {chip.label}
+              </span>
+            ))}
+          </div>
+        ) : null}
         <div className="composer-window-controls">
           {hideFormat ? null : (
             <button
@@ -134,8 +188,8 @@ export function ComposerHeader({
               disabled={sending}
               aria-haspopup="menu"
               aria-expanded={menuOpen}
-              aria-label={strings.composer.messageOptions}
-              title={strings.composer.messageOptions}
+              aria-label={optionsName}
+              title={optionsName}
             >
               <Ellipsis aria-hidden="true" />
             </button>

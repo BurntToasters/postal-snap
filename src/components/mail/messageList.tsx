@@ -279,6 +279,9 @@ export function MessageList({
   const showMessagePreviews = useAppStore(
     (state) => state.settings.showMessagePreviews,
   );
+  // Density and text scale drive the row pitch; the store is the source.
+  const settingsDensity = useAppStore((state) => state.settings.density);
+  const settingsTextScale = useAppStore((state) => state.settings.textScale);
   const mailboxes = useAppStore((state) => state.mailboxes);
   const accounts = useAppStore((state) => state.accounts);
   function sentByYou(message: MessageSummary): boolean {
@@ -602,7 +605,7 @@ export function MessageList({
   }
 
   // Density and text scale change the tokens; the key re-reads them.
-  const densityKey = `${document.documentElement.dataset.density ?? ""}|${document.documentElement.dataset.textScale ?? ""}`;
+  const densityKey = `${settingsDensity}|${settingsTextScale}`;
   const estimates = useMemo(() => readRowEstimates(densityKey), [densityKey]);
   // The virtualizer is read during render; this component is not memoized.
   // eslint-disable-next-line react-hooks/incompatible-library
@@ -1127,7 +1130,6 @@ export function MessageList({
       notableArrival(message.receivedAt, message.arrivedAt)
         ? strings.mail.arrivedLater
         : null,
-      folder,
       message.conversationMuted ? strings.mail.muted : null,
       message.subject || strings.common.noSubject,
       message.attachmentCount
@@ -1200,8 +1202,12 @@ export function MessageList({
           {...messageDragProps(message, false, optionKey)}
           onClick={(event) => {
             if (!selecting) {
-              // Cmd/Ctrl+click starts select mode with this row checked.
-              if (event.metaKey || event.ctrlKey) checkIds([message.id]);
+              // Cmd+click on macOS (Ctrl there opens the menu), Ctrl+click elsewhere, starts select mode.
+              const checkModifier =
+                document.documentElement.dataset.platform === "macos"
+                  ? event.metaKey
+                  : event.ctrlKey;
+              if (checkModifier) checkIds([message.id]);
               else void onChoose(message);
               return;
             }
@@ -1349,12 +1355,12 @@ export function MessageList({
               dateFormatters,
             ),
             conversationLate ? strings.mail.arrivedLater : null,
-            headerFolder,
             conversationMuted ? strings.mail.muted : null,
             group.newest.subject || strings.common.noSubject,
             conversationFiles
               ? strings.mail.draftFiles(conversationFiles)
               : null,
+            // Visible count before the unread text: axe label-content-name-mismatch.
             String(group.items.length),
             group.unread > 0 ? strings.mail.threadUnread(group.unread) : null,
             showMessagePreviews

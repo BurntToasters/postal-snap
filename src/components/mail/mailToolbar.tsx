@@ -18,6 +18,8 @@ import { formatChord, withChord } from "../../format";
 import { strings } from "../../i18n";
 import { moveMenuFocus } from "../toolbarNav";
 import { SearchScopeMenu } from "./searchScopeMenu";
+import { SearchTipsButton, watchAnchorLayout } from "./searchTips";
+import { placeAnchoredMenu } from "../popupPlacement";
 
 type LocalView = "drafts" | "outbox" | "snoozed";
 
@@ -104,31 +106,44 @@ export function SearchBox({
   onToggleScope,
 }: SearchBoxProps) {
   const [open, setOpen] = useState(false);
-  const [recentPlace, setRecentPlace] = useState<{
-    top: number;
-    left: number;
-    width: number;
-  } | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const menuId = useId();
   const showRecent = open && query.trim() === "" && recentSearches.length > 0;
 
-  // The recent menu is portalled with fixed placement: .toolbar-trailing clips.
+  // Portalled with fixed placement (.toolbar-trailing clips); flips when short of room.
   useLayoutEffect(() => {
-    if (!showRecent) return;
+    const form = formRef.current;
+    const menu = document.getElementById(menuId);
+    if (!showRecent || !form || !menu) return;
     const place = () => {
-      const rect = formRef.current?.getBoundingClientRect();
-      if (!rect) return;
-      setRecentPlace({
-        top: rect.bottom + 4,
-        left: rect.left,
-        width: rect.width,
-      });
+      menu.style.width = `${form.getBoundingClientRect().width}px`;
+      placeAnchoredMenu(menu, form);
     };
     place();
-    window.addEventListener("resize", place);
-    return () => window.removeEventListener("resize", place);
-  }, [showRecent]);
+    return watchAnchorLayout(form, place);
+  }, [showRecent, menuId, recentSearches.length]);
+
+  // Outside presses close the recent menu; presses inside it or the field do not.
+  useEffect(() => {
+    if (!showRecent) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (
+        formRef.current?.contains(target) ||
+        document.getElementById(menuId)?.contains(target)
+      )
+        return;
+      // Context menus and their submenus are separate portals; their actions keep this open.
+      if (
+        target instanceof Element &&
+        target.closest(".context-menu, .popup-submenu-panel")
+      )
+        return;
+      setOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [showRecent, menuId]);
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -245,16 +260,11 @@ export function SearchBox({
         aria-keyshortcuts="Meta+F Control+F /"
         aria-controls={showRecent ? menuId : undefined}
       />
-      {showRecent && recentPlace
+      {showRecent
         ? createPortal(
             <div
               id={menuId}
               className="search-recent app-menu"
-              style={{
-                top: recentPlace.top,
-                left: recentPlace.left,
-                width: recentPlace.width,
-              }}
               role="menu"
               aria-label={strings.mail.recentSearches}
               onMouseDown={(event) => event.preventDefault()}
@@ -302,7 +312,9 @@ export function SearchBox({
             if (all !== allFolders) onToggleScope();
           }}
         />
-      ) : null}
+      ) : (
+        <SearchTipsButton />
+      )}
     </form>
   );
 }
@@ -325,6 +337,19 @@ interface MailToolbarProps extends SearchBoxProps {
   onOpenSettings: () => void;
 }
 
+// Plain F5 fetches the active account; Shift+F5 fetches every account.
+function getMailTitle(accountCount: number): string {
+  const label = withChord(
+    strings.mail.getMail,
+    formatChord("F5", { mod: false }),
+  );
+  if (accountCount < 2) return label;
+  const all = strings.mail.getMailAllHint(
+    formatChord("F5", { shift: true, mod: false }),
+  );
+  return `${label}. ${all}`;
+}
+
 export function MailToolbar({
   toolbarRef,
   sidebarToggleRef,
@@ -332,6 +357,7 @@ export function MailToolbar({
   sidebarOpen,
   sidebarVisible,
   busy,
+  accountCount,
   syncingAll,
   onRefreshAll,
   updateReady,
@@ -375,7 +401,7 @@ export function MailToolbar({
         <button
           className="toolbar-button get-mail-button"
           type="button"
-          aria-keyshortcuts="F5 Shift+F5 Meta+Shift+N Control+Shift+N"
+          aria-keyshortcuts="F5 Shift+F5 Meta+Shift+N Meta+Shift+M Control+Shift+N Control+Shift+M"
           onClick={(event) => {
             // Shift+click fetches every account, like Shift+F5.
             if (event.shiftKey) onRefreshAll();
@@ -383,7 +409,7 @@ export function MailToolbar({
           }}
           disabled={busy}
           aria-label={strings.mail.getMail}
-          title={withChord(strings.mail.getMail, formatChord("F5"))}
+          title={getMailTitle(accountCount)}
         >
           <RefreshCw
             aria-hidden="true"

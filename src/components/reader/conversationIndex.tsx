@@ -56,18 +56,15 @@ export function ConversationIndex({
               if (item.id !== message.id) onOpenInConversation?.(item);
             }}
           >
-            {item.subject === message.subject ? null : (
-              <>
-                <span>{subject}</span>{" "}
-              </>
-            )}
-            {!item.isRead ? (
-              <>
+            {/* Fixed columns: subject, sender, date; a hidden subject keeps its cell. */}
+            <span className="conversation-index-subject">
+              {item.subject === message.subject ? null : <span>{subject}</span>}{" "}
+              {item.isRead ? null : (
                 <span className="conversation-index-unread">
                   {strings.mail.unread}
-                </span>{" "}
-              </>
-            ) : null}
+                </span>
+              )}
+            </span>{" "}
             <span className="conversation-index-sender">
               {indexSender(item)}
             </span>{" "}

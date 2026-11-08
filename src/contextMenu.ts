@@ -119,7 +119,7 @@ export type ContextMenuIcon =
 
 export type ContextMenuItem =
   | { type: "separator" }
-  | { type: "heading"; label: string }
+  | { type: "heading"; label: string; hideHeading?: boolean }
   | {
       type: "item";
       id: string;
@@ -420,7 +420,10 @@ const rowMenuKit: MenuKit<ContextMenuItem> = {
       ariaLabel: ROW_FOLDER_ARIA[kind](folder.name),
     }),
   ],
-  group: (label, entries) => [{ type: "heading", label }, ...entries],
+  group: (label, entries, hideHeading) => [
+    { type: "heading", label, hideHeading },
+    ...entries,
+  ],
   submenu: (id, label, entries) => [
     { type: "submenu", id, label, items: entries },
   ],

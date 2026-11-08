@@ -27,7 +27,10 @@ import { rememberMoveMailboxId } from "../../recentMailbox";
 import { copyLoadedConversationText } from "../../copyMessageText";
 import { forwardLoadedConversation } from "../../forwardConversation";
 import { pinLoadedMessages } from "../../pinConversation";
-import { printLoadedConversation } from "../../printConversation";
+import {
+  printLoadedConversation,
+  printSelectedMessages,
+} from "../../printConversation";
 import { saveLoadedConversationFiles } from "../../saveConversation";
 import { starLoadedConversation } from "../../starConversation";
 import { deleteLoadedConversation } from "../../deleteConversation";
@@ -281,6 +284,11 @@ export function handleContextAction(event: Event, ctx: ContextActionCtx) {
     }
     if (id === "print-conversation") {
       void printLoadedConversation(summary);
+      return;
+    }
+    // One print path; opening the message would mark it read.
+    if (id === "print") {
+      void printSelectedMessages(summary.accountId, [summary.id]);
       return;
     }
     if (id.startsWith("copy-conversation:")) {

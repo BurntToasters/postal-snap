@@ -38,7 +38,10 @@ const mockedSaveDraft = vi.mocked(api.saveDraft);
 function optionItem(name: string) {
   if (!screen.queryByRole("menu", { name: strings.composer.messageOptions }))
     fireEvent.click(
-      screen.getByRole("button", { name: strings.composer.messageOptions }),
+      // The name also lists active options, so match its prefix.
+      screen.getByRole("button", {
+        name: new RegExp(`^${strings.composer.messageOptions}`),
+      }),
     );
   return screen.getByRole("menuitemcheckbox", { name });
 }
@@ -747,24 +750,15 @@ describe("composer draft persistence", () => {
     expect(
       screen.queryByRole("button", { name: strings.composer.picture }),
     ).toBeNull();
+    // Redirect has no options control at all, so no menu can offer these.
     expect(
-      screen.queryByRole("menuitemcheckbox", {
-        name: strings.composer.includeSignature,
-      }),
+      screen.queryByRole("button", { name: strings.composer.messageOptions }),
     ).toBeNull();
     expect(
-      screen.queryByRole("menuitemcheckbox", {
-        name: strings.composer.highImportance,
-      }),
-    ).toBeNull();
-    expect(
-      screen.queryByRole("menuitemcheckbox", {
-        name: strings.composer.lowImportance,
-      }),
-    ).toBeNull();
-    expect(
-      screen.queryByRole("menuitemcheckbox", {
-        name: strings.composer.requestReceipt,
+      screen.queryByRole("button", {
+        name: strings.composer.messageOptionsState([
+          strings.composer.highImportanceState,
+        ]),
       }),
     ).toBeNull();
     fireEvent.change(screen.getByPlaceholderText("name@example.com"), {

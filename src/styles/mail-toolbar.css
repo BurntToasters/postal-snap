@@ -48,6 +48,17 @@
   overflow: hidden;
 }
 
+/* At 200% text the Compose label only fits wide windows; the button keeps its name. */
+.app-toolbar {
+  container: toolbar / inline-size;
+}
+
+@container toolbar (max-width: 56rem) {
+  html[data-text-scale="large"] .app-toolbar .compose-button > span {
+    display: none;
+  }
+}
+
 /* Only search shrinks; clipping Compose or the badge corrupts the bar. */
 .toolbar-trailing > :not(.search-box) {
   flex-shrink: 0;
@@ -140,6 +151,12 @@
 .search-box > input:focus-visible {
   outline: none;
   box-shadow: none;
+}
+
+@media (forced-colors: active) {
+  .search-box {
+    border: 1px solid CanvasText;
+  }
 }
 
 /* Portalled to body with inline top, left, and width (B1: clipped otherwise). */

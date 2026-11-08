@@ -133,8 +133,10 @@
 
 .setup-form-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
+  gap: var(--space-3);
 }
 
 .provider-list {
@@ -698,6 +700,12 @@
   white-space: nowrap;
 }
 
+/* Large text: the sample subject wraps instead of clipping in the narrow preview. */
+html[data-text-scale="large"] .setup-preview-row span {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .setup-preview-reader span {
   font-size: var(--fs-md);
   color: var(--text-muted);
@@ -747,4 +755,16 @@
 
 .setup-account-actions {
   margin-top: 0;
+}
+
+/* Step 4: "Back to setup" is a text link, so Open Settings is the one gray button. */
+.setup-account-actions .secondary-button {
+  justify-self: start;
+  border-color: transparent;
+  background: transparent;
+  color: var(--accent-ink);
+}
+
+.setup-account-actions .secondary-button:hover {
+  background: var(--accent-soft);
 }

@@ -756,4 +756,164 @@ test.describe("CSS density token matrix", () => {
     });
     await attachArtifacts(page, testInfo, "avatar-forced-colors");
   });
+  // Computed-style guards: contrast and token values, read from the browser.
+  for (const density of ["normal", "comfortable", "compact"] as const) {
+    for (const theme of ["light", "dark"] as const) {
+      test(`computed guards: surfaces, pressed format toggle, popup rows (${density} ${theme})`, async ({
+        page,
+      }) => {
+        await installMockIpc(page);
+        await page.setViewportSize({ width: 1280, height: 900 });
+        await page.goto(`/?density=${density}&scale=1&theme=${theme}`);
+        await expect(page.locator(".message-row").first()).toBeVisible();
+        await page
+          .getByRole("button", { name: "Compose", exact: true })
+          .click();
+        const formatToggle = page
+          .locator(".composer-window footer .format-toggle")
+          .first();
+        await formatToggle.click();
+        await expect(
+          page.locator(
+            '.composer-window footer .format-toggle[aria-pressed="true"]',
+          ),
+        ).toBeVisible();
+
+        const snap = await page.evaluate(() => {
+          const probe = (value: string) => {
+            const el = document.createElement("div");
+            el.style.cssText = "position:absolute;visibility:hidden;height:0;";
+            el.style.width = value;
+            el.style.backgroundColor = value;
+            document.body.append(el);
+            const style = getComputedStyle(el);
+            const result = {
+              width: el.getBoundingClientRect().width,
+              color: style.backgroundColor,
+            };
+            el.remove();
+            return result;
+          };
+          const toggle = document.querySelector<HTMLElement>(
+            '.composer-window footer .format-toggle[aria-pressed="true"]',
+          );
+          const layers: string[] = [];
+          for (let node = toggle; node; node = node.parentElement) {
+            layers.push(getComputedStyle(node).backgroundColor);
+          }
+          return {
+            theme: document.documentElement.dataset.theme ?? "",
+            surfaceHover: probe("var(--surface-hover)").color,
+            surfaceRaised: probe("var(--surface-raised)").color,
+            menuRaw: getComputedStyle(document.documentElement)
+              .getPropertyValue("--menu-row-height")
+              .trim(),
+            menuPx: probe("var(--menu-row-height)").width,
+            rem: Number.parseFloat(
+              getComputedStyle(document.documentElement).fontSize,
+            ),
+            toggleText: toggle ? getComputedStyle(toggle).color : null,
+            toggleLayers: layers,
+          };
+        });
+
+        expect(snap.theme, "theme applied").toBe(theme);
+        expect(snap.toggleText, "pressed format toggle exists").not.toBeNull();
+        expect(snap.menuRaw, "menu row token").toBe("2.25rem");
+        expect(snap.menuPx).toBeCloseTo(2.25 * snap.rem, 0);
+
+        if (theme === "dark") {
+          const ratio = contrastRatio(
+            parseCssColor(snap.surfaceHover),
+            parseCssColor(snap.surfaceRaised),
+          );
+          expect(ratio, "dark hover vs raised surface").toBeGreaterThanOrEqual(
+            1.25,
+          );
+        }
+
+        // Translucent layers composite over the theme's opaque base, root first.
+        let background: Rgba =
+          theme === "dark" ? [22, 22, 24, 1] : [255, 255, 255, 1];
+        for (const layer of [...snap.toggleLayers].reverse()) {
+          const color = parseCssColor(layer);
+          if (color[3] > 0) background = over(color, background);
+        }
+        const text = over(
+          parseCssColor(snap.toggleText ?? "rgb(0, 0, 0)"),
+          background,
+        );
+        expect(
+          contrastRatio(text, background),
+          "pressed format toggle text on its background",
+        ).toBeGreaterThanOrEqual(4.5);
+      });
+    }
+  }
+
+  test("target-size token: Comfortable 44px, Normal 36px, and Normal grows at 200%", async ({
+    page,
+  }) => {
+    await installMockIpc(page);
+    const sizes: Record<string, number> = {};
+    for (const [key, density, scale] of [
+      ["comfortable-1x", "comfortable", 1],
+      ["normal-1x", "normal", 1],
+      ["normal-2x", "normal", 2],
+    ] as const) {
+      await page.goto(`/?density=${density}&scale=${scale}`);
+      await expect(page.locator(".message-row").first()).toBeVisible();
+      sizes[key] = await page.evaluate(() => {
+        const el = document.createElement("div");
+        el.style.cssText = "position:absolute;visibility:hidden;height:0;";
+        el.style.width = "var(--target-size)";
+        document.body.append(el);
+        const width = el.getBoundingClientRect().width;
+        el.remove();
+        return width;
+      });
+    }
+    expect(
+      sizes["comfortable-1x"],
+      "Comfortable target",
+    ).toBeGreaterThanOrEqual(44);
+    expect(sizes["normal-1x"], "Normal target").toBeGreaterThanOrEqual(36);
+    expect(sizes["normal-2x"], "Normal target at 200%").toBeGreaterThan(
+      sizes["normal-1x"] ?? Infinity,
+    );
+  });
 });
+
+type Rgba = [number, number, number, number];
+
+// Accepts the rgb()/rgba() strings that getComputedStyle returns.
+function parseCssColor(value: string): Rgba {
+  const match = /^rgba?\((.+)\)$/.exec(value.trim());
+  if (!match) throw new Error(`unsupported computed color: ${value}`);
+  const [r = 0, g = 0, b = 0, a = 1] = (match[1] ?? "")
+    .replace("/", " ")
+    .split(/[\s,]+/)
+    .filter(Boolean)
+    .map(Number);
+  return [r, g, b, a];
+}
+
+function over(top: Rgba, below: Rgba): Rgba {
+  const [r, g, b, a] = top;
+  const [br, bg, bb] = below;
+  return [r * a + br * (1 - a), g * a + bg * (1 - a), b * a + bb * (1 - a), 1];
+}
+
+function luminance([r, g, b]: Rgba) {
+  const lin = (channel: number) => {
+    const v = channel / 255;
+    return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+}
+
+function contrastRatio(a: Rgba, b: Rgba) {
+  const la = luminance(a);
+  const lb = luminance(b);
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+}

@@ -196,6 +196,7 @@
   .message-header .message-stamp {
     grid-column: 2 / -1;
     grid-row: 3;
+    justify-items: start;
     text-align: left;
   }
 

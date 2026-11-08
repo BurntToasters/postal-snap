@@ -77,6 +77,8 @@
 
 .palette-option[aria-selected="true"] {
   background: var(--surface-hover);
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .palette-option-label {

@@ -291,7 +291,7 @@ export function SendBar({
           : null}
       </div>
       <button
-        className="toolbar-button"
+        className="toolbar-button footer-action"
         type="button"
         onClick={() => void saveDraft(false)}
         disabled={sending || saveState === "saving"}
@@ -299,42 +299,47 @@ export function SendBar({
         title={withChord(strings.composer.saveDraft, formatChord("S"))}
       >
         <Save aria-hidden="true" />
-        {strings.composer.saveDraft}
+        <span className="action-label">{strings.composer.saveDraft}</span>
       </button>
       {onToggleFormatting ? (
         <button
-          className="toolbar-button format-toggle"
+          className="toolbar-button format-toggle footer-action"
           type="button"
           aria-pressed={formattingOpen}
           aria-controls="composer-formatting"
+          title={strings.composer.showFormatting}
           onClick={onToggleFormatting}
         >
           <span className="format-aa" aria-hidden="true">
             Aa
           </span>
-          {strings.composer.showFormatting}
+          <span className="action-label">
+            {strings.composer.showFormatting}
+          </span>
         </button>
       ) : null}
       {showAttachments ? (
         <button
-          className="toolbar-button"
+          className="toolbar-button footer-action"
           type="button"
           onClick={() => void addAttachments()}
           disabled={sending}
+          title={strings.composer.attach}
         >
           <Paperclip aria-hidden="true" />
-          {strings.composer.attach}
+          <span className="action-label">{strings.composer.attach}</span>
         </button>
       ) : null}
       {showAttachments ? (
         <button
-          className="toolbar-button"
+          className="toolbar-button footer-action"
           type="button"
           onClick={() => void addInlineImage()}
           disabled={sending}
+          title={strings.composer.picture}
         >
           <ImagePlus aria-hidden="true" />
-          {strings.composer.picture}
+          <span className="action-label">{strings.composer.picture}</span>
         </button>
       ) : null}
       <button

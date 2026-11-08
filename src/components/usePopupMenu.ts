@@ -1,7 +1,5 @@
 import { useEffect, useRef, type RefObject } from "react";
-
-const ITEMS =
-  "[role='menuitem']:not(:disabled), [role='menuitemradio']:not(:disabled), [role='menuitemcheckbox']:not(:disabled)";
+import { MENU_ITEM_SELECTOR } from "./toolbarNav";
 
 // Focus on open, outside click closes, Escape/Tab close. Escape returns
 // focus to the trigger button inside rootRef.
@@ -24,7 +22,7 @@ export function usePopupMenu(
     const checked = root?.querySelector<HTMLElement>(
       "[role='menuitemradio'][aria-checked='true']:not(:disabled)",
     );
-    (checked ?? root?.querySelector<HTMLElement>(ITEMS))?.focus();
+    (checked ?? root?.querySelector<HTMLElement>(MENU_ITEM_SELECTOR))?.focus();
     const onMouseDown = (event: MouseEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) {
         close.current(false);

@@ -254,6 +254,15 @@ const CHROME_VARIANTS = [
     headingMax: 46,
     avatar: 32,
   },
+  // Compact tokens: --toolbar-height and --pane-heading-height 2.75rem (44px,
+  // with the same 2px slack as Normal), --sender-avatar-size 1.875rem (30px).
+  {
+    label: "compact",
+    density: "compact",
+    toolbarMax: 46,
+    headingMax: 46,
+    avatar: 30,
+  },
 ] as const;
 
 for (const variant of CHROME_VARIANTS) {

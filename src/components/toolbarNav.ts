@@ -1,5 +1,9 @@
 import type { KeyboardEvent } from "react";
 
+/** Enabled menu rows of every kind; submenu triggers are menuitems too. */
+export const MENU_ITEM_SELECTOR =
+  '[role="menuitem"]:not(:disabled), [role="menuitemradio"]:not(:disabled), [role="menuitemcheckbox"]:not(:disabled)';
+
 const toolbarFocusable =
   'button:not([disabled]), select:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])';
 
@@ -41,8 +45,8 @@ export function moveToolbarFocus(event: KeyboardEvent<HTMLElement>) {
 // handles its own keys.
 function menuItemsOf(menu: HTMLElement, withSelects = false): HTMLElement[] {
   const selector = withSelects
-    ? '[role="menuitem"]:not([disabled]), [role="menuitemradio"]:not([disabled]), [role="menuitemcheckbox"]:not([disabled]), select:not([disabled])'
-    : '[role="menuitem"]:not([disabled]), [role="menuitemradio"]:not([disabled]), [role="menuitemcheckbox"]:not([disabled])';
+    ? `${MENU_ITEM_SELECTOR}, select:not(:disabled)`
+    : MENU_ITEM_SELECTOR;
   return [...menu.querySelectorAll<HTMLElement>(selector)].filter(
     (item) =>
       item.closest('[role="menu"]') === menu &&
@@ -54,7 +58,7 @@ function menuItemsOf(menu: HTMLElement, withSelects = false): HTMLElement[] {
 }
 
 // Typeahead: a printable key jumps to the next item whose visible label
-// starts with it, wrapping around.
+// starts with it, wrapping around. A miss still stops at this menu.
 function focusMenuItemByLetter(event: KeyboardEvent<HTMLElement>) {
   if (
     event.target instanceof HTMLElement &&
@@ -62,6 +66,7 @@ function focusMenuItemByLetter(event: KeyboardEvent<HTMLElement>) {
   ) {
     return;
   }
+  event.stopPropagation();
   const letter = event.key.toLocaleLowerCase();
   const items = menuItemsOf(event.currentTarget);
   const start = items.findIndex((item) => item === document.activeElement);
@@ -70,7 +75,6 @@ function focusMenuItemByLetter(event: KeyboardEvent<HTMLElement>) {
     const label = item.textContent?.trim().toLocaleLowerCase() ?? "";
     if (label.startsWith(letter)) {
       event.preventDefault();
-      event.stopPropagation();
       item.focus();
       return;
     }

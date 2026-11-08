@@ -3,6 +3,7 @@ import { useAppStore } from "../../store";
 import type { DistributionChannel, UpdateChannel } from "../../types";
 import { onUpdateChannelChanged } from "../../update";
 import {
+  HelpMore,
   HelpText,
   SettingRow,
   SettingsGroup,
@@ -39,34 +40,35 @@ export function AdvancedTab({
       </div>
       <div className="settings-lead">
         <HelpText
+          label={strings.settings.advanced}
           short={strings.settings.advancedHelp}
           more={strings.settings.advancedHelpMore}
         />
       </div>
       <SettingsGroup>
-        <label className="switch-row">
-          <span>
-            <strong>{strings.settings.blockAds}</strong>
-            <HelpText
-              short={strings.settings.blockAdsHelp}
-              more={strings.settings.blockAdsHelpMore}
+        <div className="settings-row-stack">
+          <label className="switch-row">
+            <span>
+              <strong>{strings.settings.blockAds}</strong>
+              <small>{strings.settings.blockAdsHelp}</small>
+            </span>
+            <input
+              type="checkbox"
+              checked={advertisingOn}
+              onChange={(event) =>
+                void setAdvertisingBlocking(event.target.checked)
+              }
             />
-          </span>
-          <input
-            type="checkbox"
-            checked={advertisingOn}
-            onChange={(event) =>
-              void setAdvertisingBlocking(event.target.checked)
-            }
+          </label>
+          <HelpMore
+            label={strings.settings.blockAds}
+            more={strings.settings.blockAdsHelpMore}
           />
-        </label>
+        </div>
         <label className="switch-row">
           <span>
             <strong>{strings.settings.blockThreats}</strong>
-            <HelpText
-              short={strings.settings.blockThreatsHelp}
-              more={strings.settings.blockThreatsHelpMore}
-            />
+            <small>{strings.settings.blockThreatsHelp}</small>
           </span>
           <input
             ref={threatSwitchRef}

@@ -146,7 +146,7 @@ export const setup = {
   settingsRestored:
     "Damaged settings were restored to safe defaults. Review the choices below, then continue.",
   previewInbox: "Inbox preview",
-  previewSubject: "Subject line stays readable",
+  previewSubject: "Lunch on Friday?",
   previewSender: "Sam Rivera",
   previewLive:
     "Live preview. It follows your theme, spacing, text size, and reading pane.",

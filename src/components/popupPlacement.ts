@@ -26,7 +26,8 @@ export function placeAnchoredMenu(menu: HTMLElement, trigger: HTMLElement) {
   const above = slot.top - gap - margin;
   const placeBelow = height <= below || below >= above;
   const room = Math.max(0, placeBelow ? below : above);
-  if (height > room) menu.style.maxHeight = `${room}px`;
+  // Use all space on the chosen side before the menu scrolls.
+  menu.style.maxHeight = `${room}px`;
   const shown = Math.min(height, room);
   const left = Math.min(
     Math.max(margin, slot.right - width),
@@ -48,6 +49,7 @@ export function placeSubmenuPanel(panel: HTMLElement, trigger: HTMLElement) {
   panel.style.position = "fixed";
   panel.style.left = "0px";
   panel.style.top = "0px";
+  panel.style.maxHeight = `${window.innerHeight - edge * 2}px`;
   const { width, height } = panel.getBoundingClientRect();
   let left = anchor.right + gap;
   if (left + width > window.innerWidth - edge) {

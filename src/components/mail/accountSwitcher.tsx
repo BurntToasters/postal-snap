@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import {
   Check,
   ChevronDown,
@@ -68,35 +69,44 @@ export function AccountSwitcher({
   onSettings,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const otherUnread = counts
     .filter((item) => item.accountId !== activeAccount?.id)
     .filter((item) => accounts.some((account) => account.id === item.accountId))
     .reduce((sum, item) => sum + item.unreadCount, 0);
   const triggerRef = useRef<HTMLButtonElement>(null);
 
-  // Fixed placement: the sidebar clips absolute menus.
+  // Portalled to the body and fixed: the folder pane clips and transforms.
   useLayoutEffect(() => {
-    if (!open) return;
-    const menu = rootRef.current?.querySelector<HTMLElement>(
-      ".account-switcher-menu",
-    );
+    const menu = menuRef.current;
     const trigger = triggerRef.current;
-    if (!menu || !trigger) return;
+    if (!open || !menu || !trigger) return;
     const update = () => placeAnchoredMenu(menu, trigger);
     update();
     window.addEventListener("resize", update);
-    return () => window.removeEventListener("resize", update);
+    const onScroll = (event: Event) => {
+      if (event.target instanceof Node && menu.contains(event.target)) return;
+      update();
+    };
+    window.addEventListener("scroll", onScroll, true);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", onScroll, true);
+    };
   }, [open]);
 
   useEffect(() => {
     if (!open) return;
-    rootRef.current
+    menuRef.current
       ?.querySelector<HTMLButtonElement>(
         "[role='menuitemradio'][aria-checked='true']",
       )
       ?.focus();
     const close = (event: MouseEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) onOpenChange(false);
+      const target = event.target as Node;
+      if (rootRef.current?.contains(target)) return;
+      if (menuRef.current?.contains(target)) return;
+      onOpenChange(false);
     };
     const keydown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
@@ -143,101 +153,109 @@ export function AccountSwitcher({
         />
         <ChevronDown aria-hidden="true" />
       </button>
-      {open ? (
-        <div
-          className="account-switcher-menu app-menu"
-          role="menu"
-          aria-label={strings.mail.emailAccounts}
-          onKeyDown={(event) => {
-            if (event.key === "Tab") {
-              onOpenChange(false);
-              return;
-            }
-            moveMenuFocus(event);
-          }}
-        >
-          {accounts.map((account) => {
-            const count = counts.find((item) => item.accountId === account.id);
-            const status = accountStatus(account, sync[account.id]);
-            return (
-              <button
-                key={account.id}
-                type="button"
-                role="menuitemradio"
-                aria-checked={account.id === activeAccount?.id}
-                data-context="account"
-                data-account-id={account.id}
-                onClick={() => {
-                  onSelect(account.id);
+      {open
+        ? createPortal(
+            <div
+              ref={menuRef}
+              className="account-switcher-menu app-menu"
+              role="menu"
+              aria-label={strings.mail.emailAccounts}
+              onKeyDown={(event) => {
+                if (event.key === "Tab") {
                   onOpenChange(false);
-                  triggerRef.current?.focus();
+                  return;
+                }
+                moveMenuFocus(event);
+              }}
+            >
+              {accounts.map((account) => {
+                const count = counts.find(
+                  (item) => item.accountId === account.id,
+                );
+                const status = accountStatus(account, sync[account.id]);
+                return (
+                  <button
+                    key={account.id}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={account.id === activeAccount?.id}
+                    data-context="account"
+                    data-account-id={account.id}
+                    onClick={() => {
+                      onSelect(account.id);
+                      onOpenChange(false);
+                      triggerRef.current?.focus();
+                    }}
+                  >
+                    <span
+                      className="account-avatar"
+                      data-color={account.color ?? undefined}
+                      aria-hidden="true"
+                    >
+                      {initial(account)}
+                    </span>
+                    <span className="account-switcher-copy">
+                      <strong title={account.displayName || account.email}>
+                        {account.displayName || account.email}
+                      </strong>
+                      <small title={account.email}>{account.email}</small>
+                      <small className="account-status-label">
+                        <i
+                          className={`account-status-dot ${status.className}`}
+                        />
+                        {status.label}
+                      </small>
+                    </span>
+                    <UnreadBadge
+                      count={count?.unreadCount ?? 0}
+                      label={strings.mail.unreadCount(count?.unreadCount ?? 0)}
+                    />
+                    {account.id === activeAccount?.id ? (
+                      <Check className="account-check" aria-hidden="true" />
+                    ) : null}
+                  </button>
+                );
+              })}
+              <div className="account-switcher-separator" role="separator" />
+              <button
+                type="button"
+                role="menuitem"
+                onClick={onGetAll}
+                disabled={syncingAll}
+                aria-keyshortcuts="Shift+F5"
+              >
+                <RefreshCw
+                  className={syncingAll ? "spinning" : ""}
+                  aria-hidden="true"
+                />
+                <span>{strings.mail.getMailAllAccounts}</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  onAdd();
+                  onOpenChange(false);
                 }}
               >
-                <span
-                  className="account-avatar"
-                  data-color={account.color ?? undefined}
-                  aria-hidden="true"
-                >
-                  {initial(account)}
-                </span>
-                <span className="account-switcher-copy">
-                  <strong title={account.displayName || account.email}>
-                    {account.displayName || account.email}
-                  </strong>
-                  <small title={account.email}>{account.email}</small>
-                  <small className="account-status-label">
-                    <i className={`account-status-dot ${status.className}`} />
-                    {status.label}
-                  </small>
-                </span>
-                <UnreadBadge
-                  count={count?.unreadCount ?? 0}
-                  label={strings.mail.unreadCount(count?.unreadCount ?? 0)}
-                />
-                {account.id === activeAccount?.id ? (
-                  <Check className="account-check" aria-hidden="true" />
-                ) : null}
+                <MailPlus aria-hidden="true" />
+                <span>{strings.mail.addAccount}</span>
               </button>
-            );
-          })}
-          <div className="account-switcher-separator" role="separator" />
-          <button
-            type="button"
-            role="menuitem"
-            onClick={onGetAll}
-            disabled={syncingAll}
-            aria-keyshortcuts="Shift+F5"
-          >
-            <RefreshCw
-              className={syncingAll ? "spinning" : ""}
-              aria-hidden="true"
-            />
-            <span>{strings.mail.getMailAllAccounts}</span>
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              onAdd();
-              onOpenChange(false);
-            }}
-          >
-            <MailPlus aria-hidden="true" />
-            <span>{strings.mail.addAccount}</span>
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              onSettings();
-              onOpenChange(false);
-            }}
-          >
-            <Settings aria-hidden="true" />
-            <span>{strings.mail.accountSettings}</span>
-          </button>
-        </div>
-      ) : null}
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  onSettings();
+                  onOpenChange(false);
+                }}
+              >
+                <Settings aria-hidden="true" />
+                <span>{strings.mail.accountSettings}</span>
+              </button>
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }

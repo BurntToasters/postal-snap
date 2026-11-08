@@ -108,6 +108,13 @@
   }
 }
 
+/* Large text: the header and index are tall, so a sticky reply would cover the letter. */
+@media (max-height: 900px) {
+  html[data-text-scale="large"] .quick-reply {
+    position: static;
+  }
+}
+
 .pane-hidden .reader-pane.reader-hidden,
 .pane-hidden .reader-pane.empty-reader {
   display: none;
@@ -225,6 +232,18 @@ html[data-reduce-transparency="true"] .reader-actions {
   justify-content: center;
 }
 
+/* Reply, Forward and Delete are primary controls: full target size outside Compact. */
+:root:not([data-density="compact"]) .reader-actions .reader-reply-action,
+:root:not([data-density="compact"]) .reader-actions .reader-icon-action {
+  min-height: var(--target-size);
+}
+
+/* Bottom pane has room: labeled replies get air and an inset from the pill. */
+.pane-bottom .reader-action-group {
+  gap: var(--space-1);
+  padding: var(--space-1);
+}
+
 /* Reply actions become icon-only in a narrow reader; the name stays in
    aria-label and the title tooltip. */
 @container reader (max-width: 44rem) {
@@ -271,9 +290,10 @@ html[data-reduce-transparency="true"] .reader-actions {
 }
 
 .conversation-index button {
-  display: flex;
+  display: grid;
+  /* Percent tracks keep the sender column at one x across rows. */
+  grid-template-columns: minmax(0, 60%) minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
   gap: var(--space-2);
   min-height: var(--conversation-row-height);
   padding: 0 var(--space-2);
@@ -283,6 +303,10 @@ html[data-reduce-transparency="true"] .reader-actions {
   background: transparent;
   color: var(--text);
   text-align: start;
+}
+
+.conversation-index button:hover {
+  border-radius: var(--radius-sm);
 }
 
 .conversation-index button[aria-current="true"] {
@@ -302,8 +326,14 @@ html[data-reduce-transparency="true"] .reader-actions {
   white-space: nowrap;
 }
 
+.conversation-index-subject {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
 .conversation-index-sender {
-  flex: 0 1 40%;
   color: var(--text-muted);
   font-weight: 400;
 }
@@ -312,6 +342,10 @@ html[data-reduce-transparency="true"] .reader-actions {
   flex: none;
   color: var(--accent-ink);
   font-weight: 600;
+}
+
+.conversation-index time {
+  white-space: nowrap;
 }
 
 .message-header {
@@ -758,6 +792,14 @@ html[data-text-scale="large"] .message-header .message-stamp {
   border: 0;
   background: var(--mail-canvas);
   color-scheme: light;
+}
+
+/* Wide bottom and hidden panes: the letter starts at the header's text edge. */
+.pane-bottom .message-body pre,
+.pane-bottom .plain-text-body,
+.pane-hidden .message-body pre,
+.pane-hidden .plain-text-body {
+  margin-inline: 0;
 }
 
 /* Plain text uses the frame's margins so both views start at the same edge. */

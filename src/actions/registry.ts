@@ -144,7 +144,8 @@ const ACTIONS: readonly ActionDefinition[] = [
       { key: "f", mod: true, shift: true, focus: "any" },
       { key: "f", mod: false, alt: false, shift: false },
     ],
-    hint: () => formatChord("F", { shift: true }),
+    hint: () =>
+      `${formatChord("F", { shift: true })} · ${formatChord("F", { mod: false })}`,
   },
   {
     id: "archive",
@@ -179,7 +180,7 @@ const ACTIONS: readonly ActionDefinition[] = [
       { key: "f", mod: true, shift: false, alt: false, focus: "any" },
       { key: "/", mod: false, shift: false, focus: "not-editing" },
     ],
-    hint: () => `${formatChord("F")} / /`,
+    hint: () => `${formatChord("F")} · /`,
   },
   {
     id: "find-in-message",

@@ -20,9 +20,7 @@ import {
   CONTEXT_ACTION_EVENT,
   addressSearchQuery,
   subjectSearchQuery,
-  type ContextMenuActionDetail,
 } from "../contextMenu";
-import { printSelectedMessages } from "../printConversation";
 import { strings } from "../i18n";
 import { matchesListFilter, type MessageListFilter } from "../listFilter";
 import { sortFamily, type MessageListSort } from "../listSort";
@@ -211,9 +209,14 @@ export function MailShell({ onOpenSettings }: Props) {
     MEDIA_QUERIES.sidebarDrawer,
     onDrawerChange,
   );
+  // Read by the drag watcher, which must not reopen or close on a stale value.
+  const sidebarOpenRef = useRef(sidebarOpen);
+  useEffect(() => {
+    sidebarOpenRef.current = sidebarOpen;
+  });
   useEffect(() => {
     if (!sidebarDrawerViewport) return;
-    return watchDrawerDrag(setSidebarOpen);
+    return watchDrawerDrag(() => sidebarOpenRef.current, setSidebarOpen);
   }, [sidebarDrawerViewport]);
   const sidebarToggleRef = useRef<HTMLButtonElement>(null);
   const folderPaneRef = useRef<HTMLElement>(null);
@@ -866,15 +869,6 @@ export function MailShell({ onOpenSettings }: Props) {
     const onAction = (event: Event) => {
       const context = contextActionRef.current;
       if (context) handleContextAction(event, context);
-      // Row menu Print: the message prints through the selection print path.
-      const detail = (event as CustomEvent<ContextMenuActionDetail>).detail;
-      const target = detail?.target;
-      if (detail?.id === "print" && target?.kind === "message") {
-        const row = useAppStore
-          .getState()
-          .messages.find((item) => item.id === target.messageId);
-        if (row) void printSelectedMessages(row.accountId, [row.id]);
-      }
     };
     window.addEventListener(CONTEXT_ACTION_EVENT, onAction);
     return () => window.removeEventListener(CONTEXT_ACTION_EVENT, onAction);
@@ -986,7 +980,9 @@ export function MailShell({ onOpenSettings }: Props) {
     }
     if (selectedIds.length === 0) return;
     if (key === "s") {
-      selection.onStar();
+      // Like u: star when any checked message is unstarred, else unstar.
+      if (selection.anySelectedUnstarred) selection.onStar();
+      else selection.onUnstar();
     } else if (key === "u") {
       const anyUnread = listedMessages.some(
         (message) => selectedIds.includes(message.id) && !message.isRead,

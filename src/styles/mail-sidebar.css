@@ -2,7 +2,7 @@
   grid-area: folders;
   display: flex;
   flex-direction: column;
-  padding: var(--space-2);
+  padding: var(--folder-pane-padding);
   overflow: hidden;
   /* Edge-to-edge sidebar a step darker than content (macOS 27). */
   border-right: 1px solid var(--border);
@@ -190,15 +190,6 @@
   font-size: var(--fs-ui);
   font-weight: 600;
   text-transform: none;
-}
-
-.account-select-wrap svg {
-  position: absolute;
-  top: 13px;
-  right: 9px;
-  width: var(--icon-md);
-  height: var(--icon-md);
-  pointer-events: none;
 }
 
 /* Same inset and icon column as mailbox rows, so labels line up. */
@@ -461,14 +452,20 @@
    matches the Settings sidebar so every sidebar selection reads the same. */
 .folder.active {
   color: var(--text);
-  background: var(--sidebar-selection);
+  background: var(--folder-selection);
   font-weight: 600;
 }
 
 .folder svg {
-  width: var(--icon-md);
-  height: var(--icon-md);
+  width: var(--folder-icon-size);
+  height: var(--folder-icon-size);
   color: var(--accent);
+}
+
+@media (forced-colors: active) {
+  .folder svg {
+    color: CanvasText;
+  }
 }
 
 .folder.warning:not(.active) svg {

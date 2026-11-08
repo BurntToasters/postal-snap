@@ -358,10 +358,6 @@ fn parse_and_validate(raw: &str) -> Result<AppSettings, String> {
         settings.setup_completed = true;
         settings.setup_step = None;
     }
-    // Files without a density key predate "normal"; keep them comfortable (D2).
-    if !raw.contains("density") {
-        settings.density = "comfortable".into();
-    }
     settings.image_senders = canonicalize_image_senders(&settings.image_senders)?;
     settings.pinned_mailboxes = canonicalize_pinned_mailboxes(&settings.pinned_mailboxes)?;
     settings.hidden_mailboxes = canonicalize_hidden_mailboxes(&settings.hidden_mailboxes)?;
@@ -1433,6 +1429,16 @@ mod tests {
         value.as_object_mut().unwrap().remove("density");
         let raw = serde_json::to_string(&value).unwrap();
         assert_eq!(parse_and_validate(&raw).unwrap().density, "comfortable");
+
+        // The word "density" in another value does not count as a density key.
+        value["imageSenders"] = serde_json::json!(["density@example.com"]);
+        let raw = serde_json::to_string(&value).unwrap();
+        assert_eq!(parse_and_validate(&raw).unwrap().density, "comfortable");
+
+        // An explicit "normal" stays normal.
+        value["density"] = serde_json::json!("normal");
+        let raw = serde_json::to_string(&value).unwrap();
+        assert_eq!(parse_and_validate(&raw).unwrap().density, "normal");
 
         let directory = tempfile::tempdir().unwrap();
         let store =

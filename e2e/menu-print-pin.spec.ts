@@ -7,6 +7,7 @@ import { installMockIpc } from "./mock-ipc";
 // 1. The row menu offers Print ▸ with Print message for a single message.
 // 2. Print conversation appears in Print ▸ only inside a multi-message thread.
 // 3. The row menu and the reader More menu list the shared groups in one order.
+// 4. Row Print message prints exactly once and does not open or mark read.
 // Mock mailboxes give no Move to submenu, so the shared order skips it.
 // Writes artifacts/0.5.2/menus/menu-model.json. Each test ends with a screenshot.
 
@@ -78,10 +79,21 @@ test("row Print offers Print message and omits Print conversation for a single m
     .allTextContents();
 });
 
-test("row Print message prints through the selection print path", async ({
+test("row Print message prints once through the selection print path", async ({
   page,
 }) => {
   await page.goto("/?threadGap=1");
+  // Counts reader print requests too, so a second print path cannot hide.
+  await page.evaluate(() => {
+    const seen = { readerPrints: 0 };
+    (window as unknown as { __readerPrints: typeof seen }).__readerPrints =
+      seen;
+    window.addEventListener("postal:print-message", () => {
+      seen.readerPrints += 1;
+    });
+  });
+  const row = page.locator(".message-row", { hasText: /Library hours/i });
+  const before = await row.getAttribute("aria-label");
   await openRowMenu(page, /Library hours/i);
   await page.getByRole("menuitem", { name: "Print", exact: true }).click();
   await page
@@ -92,9 +104,16 @@ test("row Print message prints through the selection print path", async ({
       page.evaluate(() => window.__POSTAL_SNAP_TEST__?.printCalls ?? 0),
     )
     .toBe(1);
-  summary.rowPrintCalls = await page.evaluate(
-    () => window.__POSTAL_SNAP_TEST__?.printCalls ?? 0,
-  );
+  // Let any late second print land before asserting it did not.
+  await page.waitForTimeout(600);
+  summary.rowPrintCalls = await page.evaluate(() => ({
+    webview: window.__POSTAL_SNAP_TEST__?.printCalls ?? 0,
+    readerPrints: (
+      window as unknown as { __readerPrints: { readerPrints: number } }
+    ).__readerPrints.readerPrints,
+  }));
+  expect(summary.rowPrintCalls).toEqual({ webview: 1, readerPrints: 0 });
+  expect(await row.getAttribute("aria-label")).toBe(before);
 });
 
 test("row Print offers Print conversation inside a thread", async ({

@@ -5,6 +5,14 @@
   overflow: hidden;
 }
 
+/* Shared focus ring for header fields and the letter: inset, so it stays off
+   row dividers and the dialog edge. */
+.composer-window {
+  --composer-focus-color: var(--focus);
+  --composer-focus-width: 2px;
+  --composer-focus-inset: -4px;
+}
+
 .composer-window > header,
 .composer-window > footer {
   flex-shrink: 0;
@@ -43,9 +51,17 @@
   margin-inline-start: auto;
 }
 
-/* 200% text: the toggles always get their own row so To keeps full width. */
+/* 200% text: To keeps at least 12.5rem beside the toggles, which wrap below
+   it only in narrow windows. The letter keeps the freed height. */
 html[data-text-scale="large"] .composer-window .to-field-row .to-field {
-  flex-basis: 100%;
+  flex: 1 1 0;
+  min-width: min(12.5rem, 100%);
+}
+
+@media (max-width: 760px) {
+  html[data-text-scale="large"] .composer-window .to-field-row .to-field {
+    flex-basis: 100%;
+  }
 }
 
 .composer-layer-followup:not(.composer-layer-maximized) {
@@ -57,7 +73,7 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
 
 .composer-layer-followup:not(.composer-layer-maximized) .composer-window {
   pointer-events: auto;
-  height: min(560px, 70vh, 100%);
+  height: min(35rem, 70vh, 100%);
 }
 
 /* Floating composer: header drags it, the corner grip resizes it. */
@@ -79,7 +95,7 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
   margin-inline-end: auto;
 }
 
-/* 44px target; the drawn grip sits in its lower-right corner. */
+/* Target size token (36px Normal); the drawn grip sits in its lower-right corner. */
 .composer-resize-grip {
   position: absolute;
   right: 0;
@@ -391,7 +407,9 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
 }
 
 .composer-window .tiptap:focus-visible {
-  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 70%, transparent);
+  outline: var(--composer-focus-width) solid var(--composer-focus-color);
+  outline-offset: var(--composer-focus-inset);
+  box-shadow: none;
 }
 
 /* Reply quotes start with an empty paragraph; keep it to one line. */
@@ -584,8 +602,33 @@ html[data-text-scale="large"] .composer-window > header {
 
 /* Pressed formatting toggle in the footer. */
 .composer-window footer .format-toggle[aria-pressed="true"] {
-  color: var(--accent);
+  color: var(--accent-ink);
   background: var(--accent-soft);
+}
+
+/* 200% text: secondary actions keep their names and tooltips as icon buttons. */
+html[data-text-scale="large"] .composer-window footer .footer-action {
+  position: relative;
+  min-width: var(--target-size);
+  justify-content: center;
+  padding-inline: var(--space-2);
+}
+
+html[data-text-scale="large"]
+  .composer-window
+  footer
+  .footer-action
+  .action-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
 .composer-window .discard-button {
@@ -644,6 +687,42 @@ html[data-text-scale="large"] .composer-window > header {
   min-width: var(--composer-options-menu-min-width);
 }
 
+/* Header fields: the shared focus ring replaces the global outline. */
+.composer-window .address-fields input:focus-visible {
+  outline: var(--composer-focus-width) solid var(--composer-focus-color);
+  outline-offset: var(--composer-focus-inset);
+}
+
+/* Message options status, shown beside the options button. */
+.composer-option-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  min-width: 0;
+  margin-inline: auto var(--space-2);
+}
+
+.composer-option-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface-muted);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.composer-option-chip svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
 /* Plain-text editor: same box, focus ring, and text scale as the rich one. */
 .composer-plain-editor {
   display: block;
@@ -665,7 +744,8 @@ html[data-text-scale="large"] .composer-window > header {
 }
 
 .composer-plain-editor:focus-visible {
-  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 70%, transparent);
+  outline: var(--composer-focus-width) solid var(--composer-focus-color);
+  outline-offset: var(--composer-focus-inset);
 }
 
 /* Drop-in attachments: covers the composer while files hover over it. */
@@ -711,7 +791,14 @@ html[data-text-scale="large"] .composer-window > header {
     background: Canvas;
   }
 
+  .composer-window .tiptap:focus-visible,
+  .composer-window .address-fields input:focus-visible,
   .composer-plain-editor:focus-visible {
+    outline-color: Highlight;
+  }
+
+  .composer-window footer .format-toggle[aria-pressed="true"] {
+    border-color: Highlight;
     outline: 2px solid Highlight;
     outline-offset: -2px;
   }

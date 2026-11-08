@@ -69,6 +69,8 @@ svg {
   /* Hover and selection use backgrounds, which forced colors remove. */
   .app-menu [role="menuitem"]:hover:not(:disabled),
   .app-menu [role="menuitemradio"]:hover,
+  .app-menu [role="menuitemcheckbox"]:hover:not(:disabled),
+  .app-menu .popup-submenu-trigger[aria-expanded="true"],
   .recipient-suggestions li:is(:hover, .active) {
     outline: 2px solid Highlight;
     outline-offset: -2px;

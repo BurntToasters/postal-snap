@@ -3,7 +3,11 @@
   display: grid;
   min-height: 0;
   flex: 1;
-  grid-template-columns: minmax(0, var(--settings-nav-width)) minmax(0, 1fr);
+  /* Nav grows to its longest label so no tab wraps. */
+  grid-template-columns: minmax(var(--settings-nav-width), max-content) minmax(
+      0,
+      1fr
+    );
   grid-template-rows: auto minmax(0, 1fr);
   grid-template-areas:
     "nav search"
@@ -26,6 +30,7 @@
   display: flex;
   min-height: var(--target-size);
   align-items: center;
+  text-align: start;
   gap: var(--space-2);
   padding: var(--control-pad-block) var(--space-3);
   font-size: var(--fs-ui);
@@ -55,6 +60,12 @@
   width: var(--icon-md);
   height: var(--icon-md);
   color: var(--accent);
+}
+
+@media (forced-colors: active) {
+  .settings-nav svg {
+    color: CanvasText;
+  }
 }
 
 .settings-content {
@@ -134,6 +145,13 @@
     outline: 2px solid Highlight;
     outline-offset: -2px;
   }
+}
+
+/* Informational row: same padding and copy rhythm as a settings row, no control. */
+.settings-note-row {
+  display: grid;
+  gap: var(--settings-copy-gap);
+  padding: var(--settings-row-pad-block) var(--settings-row-pad-inline);
 }
 
 .settings-group > p {
@@ -781,6 +799,15 @@
 .help-more {
   display: grid;
   gap: var(--space-1);
+}
+
+/* Row with a "Learn more" sits beneath its label, outside the label. */
+.settings-row-stack {
+  display: grid;
+}
+
+.settings-row-stack > .help-more {
+  padding: 0 var(--settings-row-pad-inline) var(--settings-row-pad-block);
 }
 
 .help-more summary {

@@ -60,24 +60,20 @@
   padding-block: 2px;
 }
 
-/* Normal: sender and subject share one line in 36px preview rows. */
-:root[data-density="normal"] .setup-preview-row {
+/* Normal and Compact: sender and subject share one line in the preview. */
+:root:not([data-density="comfortable"]) .setup-preview-row {
   grid-auto-flow: column;
   align-items: center;
   justify-content: start;
   column-gap: var(--space-2);
 }
 
-:root[data-density="normal"] .setup-preview-row span {
+:root:not([data-density="comfortable"]) .setup-preview-row span {
   min-width: 0;
 }
 
 :root[data-density="compact"] .setup-preview-row {
   padding-block: 6px;
-}
-
-:root[data-density="compact"] .setup-preview-row span {
-  display: none;
 }
 
 :root[data-density="compact"] .setup-preview-row strong {
