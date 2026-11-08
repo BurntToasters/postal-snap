@@ -1502,7 +1502,7 @@ test("test-all and package.json include cargo safe update and policy check", asy
   );
   assert.equal(
     packageJson.scripts["test:cargo-safe-update"],
-    "node --test scripts/cargo/safe-update.test.mjs scripts/cargo/check-update-policy.test.mjs",
+    "node --test scripts/cargo/safe-update.test.mjs scripts/cargo/check-update-policy.test.mjs scripts/deps-majors.test.mjs",
   );
   assert.equal(
     packageJson.scripts["check:cargo-update-policy"],
