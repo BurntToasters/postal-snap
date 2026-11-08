@@ -3,6 +3,9 @@ import { join } from "node:path";
 import type { Locator, Page, TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Audit piece C1 (tokens, list/sidebar/toolbar CSS), 0.5.2. Failure modes:
 // 1. Dark --surface-hover too close to --surface-raised (palette, suggestions, menus).
@@ -169,6 +172,8 @@ test.describe("dark surfaces", () => {
       (el) => getComputedStyle(el).backgroundColor,
     );
     const backdrop = await resolveColor(page, sidebar);
+    // WP2.2: a focused pane shows the accent selection, so blur it first.
+    await page.evaluate(() => (document.activeElement as HTMLElement)?.blur());
     const active = page.locator(".folder.active").first();
     const other = page.locator(".folder:not(.active)").first();
     const activeBg = over(

@@ -18,6 +18,8 @@ vi.mock("@tauri-apps/plugin-notification", () => ({
 vi.mock("../api", () => ({
   inTauri: vi.fn(),
   api: {
+    onNotificationOpen: vi.fn().mockResolvedValue(() => undefined),
+    onEmlOpened: vi.fn().mockResolvedValue(() => undefined),
     beginUndoSession: vi.fn().mockResolvedValue("a".repeat(32)),
     listAccounts: vi.fn(),
     getSettings: vi.fn(),
@@ -31,9 +33,14 @@ vi.mock("../api", () => ({
     setMailShortcutGuard: vi.fn(),
     setComposerOpen: vi.fn(),
     setUnreadBadge: vi.fn().mockResolvedValue(undefined),
+    // Echoes the saved patch back, as the native side does.
+    saveSettings: vi.fn(async (settings: unknown) => settings),
   },
 }));
-vi.mock("../settings", () => ({ applySettings: vi.fn() }));
+vi.mock("../settings", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../settings")>()),
+  applySettings: vi.fn(),
+}));
 vi.mock("../update", () => ({
   checkUpdateInteractive: vi.fn(),
   checksUpdatesOnStartup: vi.fn(() => true),
@@ -256,16 +263,24 @@ describe("App lifecycle", () => {
       ]),
     );
 
+    // Text size is applied by useAppShortcuts, so it changes the store, not an event.
+    const textBefore = useAppStore.getState().settings.textScale;
     fireEvent.keyDown(window, { key: "=", ctrlKey: true });
-    fireEvent.keyDown(window, { key: "-", metaKey: true });
-    fireEvent.keyDown(window, { key: "p", ctrlKey: true });
-    expect(dispatched).toEqual(
-      expect.arrayContaining([
-        "text-larger",
-        "text-smaller",
-        "postal:print-message",
-      ]),
+    await waitFor(() =>
+      expect(useAppStore.getState().settings.textScale).toBeGreaterThan(
+        textBefore,
+      ),
     );
+    const textLarger = useAppStore.getState().settings.textScale;
+    fireEvent.keyDown(window, { key: "-", metaKey: true });
+    await waitFor(() =>
+      expect(useAppStore.getState().settings.textScale).toBeLessThan(
+        textLarger,
+      ),
+    );
+    // Print routes through the menu-action bus to the reader that owns it.
+    fireEvent.keyDown(window, { key: "p", ctrlKey: true });
+    expect(dispatched).toContain("print");
     fireEvent.keyDown(window, { key: ",", ctrlKey: true });
     expect(screen.getByText("Settings general")).toBeVisible();
     expect(document.querySelector(".app-viewport")).toHaveAttribute("inert");

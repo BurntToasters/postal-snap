@@ -71,6 +71,7 @@ export type ContextMenuIcon =
   | "mark-unread"
   | "star"
   | "unstar"
+  | "flag"
   | "pin"
   | "unpin"
   | "archive"
@@ -453,6 +454,8 @@ function messageItems(
   const facts: MessageMenuFacts = {
     isRead: message.isRead,
     isStarred: message.isStarred,
+    flagColor: message.flagColor,
+    flagKeywords: mailbox?.allowsKeywords !== false,
     pinned: Boolean(message.pinned),
     canMute: canMuteConversation(message),
     conversationMuted: Boolean(message.conversationMuted),
@@ -591,6 +594,10 @@ function folderItems(mailbox: MailboxSummary): ContextMenuItem[] {
       }),
     );
   }
+  items.push(
+    item("export-mailbox", strings.mail.exportMailbox, { icon: "download" }),
+    item("import-mbox", strings.mail.importMessages, { icon: "open" }),
+  );
   if (destructive.length > 0) {
     items.push({ type: "separator" }, ...destructive);
   }

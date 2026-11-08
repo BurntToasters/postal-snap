@@ -19,6 +19,11 @@ svg {
 }
 
 @media (forced-colors: active) {
+  :focus-visible,
+  .app-toolbar .compose-button:focus {
+    outline-color: Highlight;
+  }
+
   .switch-row input[type="checkbox"] {
     width: var(--target-size);
     min-width: var(--target-size);
@@ -30,6 +35,18 @@ svg {
   .switch-row input[type="checkbox"]::before,
   .switch-row input[type="checkbox"]::after {
     display: none;
+  }
+
+  /* Emphasized selections keep system text colors. */
+  .settings-nav:focus-within button.active,
+  .settings-nav:focus-within button.active svg,
+  .folder-pane:focus-within .folder.active,
+  .folder-pane:focus-within .folder.active svg,
+  .account-switcher:focus-within .account-switcher-menu > [aria-checked="true"],
+  .app-menu
+    [role^="menuitem"]:is(:hover, :focus-visible, [aria-expanded="true"]),
+  .app-menu .popup-submenu-trigger[aria-expanded="true"] {
+    color: CanvasText;
   }
 
   .folder.active,
@@ -146,16 +163,8 @@ svg {
   }
 }
 
-@media (prefers-contrast: more) and (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]):not([data-theme="dark"]) {
-    --text-muted: rgb(255 255 255 / 78%);
-    --border: rgb(255 255 255 / 32%);
-    --border-strong: rgb(255 255 255 / 48%);
-  }
-}
-
 @media (prefers-contrast: more) {
-  :root[data-theme="dark"] {
+  :root[data-resolved-theme="dark"] {
     --text-muted: rgb(255 255 255 / 78%);
     --border: rgb(255 255 255 / 32%);
     --border-strong: rgb(255 255 255 / 48%);

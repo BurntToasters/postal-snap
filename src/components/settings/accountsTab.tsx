@@ -16,47 +16,13 @@ import { AccountDownloadPanel } from "./accountDownload";
 import { ConnectionPanel, FoldersPanel } from "./connectionPanel";
 import { BodyFormatControl } from "./bodyFormatControl";
 import { SettingsPanel, SettingsSection } from "./primitives";
+import { RulesEditor, type AccountRuleDraft } from "./rulesEditor";
 
 const SignatureEditor = lazy(() =>
   import("./SignatureEditor").then((module) => ({
     default: module.SignatureEditor,
   })),
 );
-
-function ruleFieldLabel(field: string): string {
-  if (field === "subject") return strings.settings.matchSubject;
-  if (field === "to") return strings.settings.matchTo;
-  if (field === "domain") return strings.settings.matchDomain;
-  return strings.settings.matchFrom;
-}
-
-function ruleActionLabel(
-  rule: FilterRule,
-  mailboxes: MailboxSummary[],
-): string {
-  switch (rule.action) {
-    case "mark_read":
-      return strings.settings.actionMarkRead;
-    case "move_archive":
-      return strings.settings.actionArchive;
-    case "move_trash":
-      return strings.settings.actionTrash;
-    case "move_junk":
-      return strings.settings.actionJunk;
-    case "move_mailbox": {
-      const target = mailboxes.find(
-        (box) =>
-          box.accountId === rule.accountId &&
-          String(box.id) === (rule.targetMailbox ?? ""),
-      );
-      return target
-        ? strings.settings.actionMoveToFolder(target.displayName || target.name)
-        : strings.settings.actionFolder;
-    }
-    default:
-      return rule.action;
-  }
-}
 
 // Identity saves run through IPC; a button repeats only a real edit.
 function nameChanged(
@@ -91,14 +57,6 @@ function signatureChanged(
     (signatureHtmlInputs[account.id] ?? account.signatureHtml ?? "") !==
       (account.signatureHtml ?? "")
   );
-}
-
-export interface AccountRuleDraft {
-  name: string;
-  field: string;
-  contains: string;
-  action: string;
-  target: string;
 }
 
 interface AccountsTabProps {
@@ -143,7 +101,11 @@ interface AccountsTabProps {
   ) => Promise<void>;
   filterRules: Record<string, FilterRule[]>;
   ruleInput: (accountId: string) => AccountRuleDraft;
-  setRuleField: (accountId: string, patch: Record<string, string>) => void;
+  updateRuleDraft: (
+    accountId: string,
+    change: (draft: AccountRuleDraft) => AccountRuleDraft,
+  ) => void;
+  ruleErrors: Record<string, string>;
   handleAddRule: (accountId: string) => Promise<void>;
   savingRuleAccounts: Record<string, boolean>;
   handlePreviewRule: (accountId: string) => Promise<void>;
@@ -205,7 +167,8 @@ export function AccountsTab({
   handleSaveSignature,
   filterRules,
   ruleInput,
-  setRuleField,
+  updateRuleDraft,
+  ruleErrors,
   handleAddRule,
   savingRuleAccounts,
   handlePreviewRule,
@@ -733,228 +696,21 @@ export function AccountsTab({
                 ) : null}
 
                 {page === "rules" ? (
-                  <div className="account-rules-section">
-                    <div className="aliases-header">
-                      <div>
-                        <strong>{strings.settings.rulesTitle}</strong>
-                        <p className="settings-note">
-                          {strings.settings.rulesHelp}
-                        </p>
-                      </div>
-                    </div>
-                    {ruleStatus[account.id] ? (
-                      <div
-                        className="alias-status-message"
-                        role="status"
-                        aria-live="polite"
-                      >
-                        {ruleStatus[account.id]}
-                      </div>
-                    ) : null}
-                    {(filterRules[account.id] ?? []).length > 0 ? (
-                      <ul className="rule-list">
-                        {(filterRules[account.id] ?? []).map(
-                          (rule, index, rules) => (
-                            <li className="rule-item" key={rule.id}>
-                              <div className="rule-item-text">
-                                <strong>{rule.name}</strong>
-                                <span>
-                                  {strings.settings.describeRule(
-                                    ruleFieldLabel(rule.field),
-                                    rule.contains,
-                                    ruleActionLabel(rule, mailboxes),
-                                  )}
-                                </span>
-                              </div>
-                              <div className="rule-order">
-                                <button
-                                  type="button"
-                                  className="secondary-button"
-                                  disabled={index === 0}
-                                  aria-label={strings.settings.moveRuleEarlier(
-                                    rule.name,
-                                  )}
-                                  onClick={() =>
-                                    void handleMoveRule(account.id, rule.id, -1)
-                                  }
-                                >
-                                  {strings.settings.moveEarlier}
-                                </button>
-                                <button
-                                  type="button"
-                                  className="secondary-button"
-                                  disabled={index === rules.length - 1}
-                                  aria-label={strings.settings.moveRuleLater(
-                                    rule.name,
-                                  )}
-                                  onClick={() =>
-                                    void handleMoveRule(account.id, rule.id, 1)
-                                  }
-                                >
-                                  {strings.settings.moveLater}
-                                </button>
-                              </div>
-                              <button
-                                type="button"
-                                className="rule-toggle"
-                                aria-pressed={rule.enabled}
-                                aria-label={`${rule.name}: ${
-                                  rule.enabled
-                                    ? strings.common.on
-                                    : strings.common.off
-                                }`}
-                                onClick={() =>
-                                  void handleToggleRule(account.id, rule)
-                                }
-                              >
-                                {rule.enabled
-                                  ? strings.common.on
-                                  : strings.common.off}
-                              </button>
-                              <button
-                                type="button"
-                                className="secondary-button rule-delete"
-                                onClick={() =>
-                                  void handleDeleteRule(account.id, rule)
-                                }
-                              >
-                                {strings.common.remove}
-                              </button>
-                            </li>
-                          ),
-                        )}
-                      </ul>
-                    ) : null}
-                    <div className="rule-form">
-                      <label htmlFor={`rule-name-${account.id}`}>
-                        {strings.settings.ruleName}
-                      </label>
-                      <input
-                        id={`rule-name-${account.id}`}
-                        value={ruleInput(account.id).name}
-                        placeholder={strings.settings.ruleNamePlaceholder}
-                        onChange={(event) =>
-                          setRuleField(account.id, {
-                            name: event.target.value,
-                          })
-                        }
-                      />
-                      <label htmlFor={`rule-field-${account.id}`}>
-                        {strings.settings.matchBy}
-                      </label>
-                      <select
-                        id={`rule-field-${account.id}`}
-                        value={ruleInput(account.id).field}
-                        onChange={(event) =>
-                          setRuleField(account.id, {
-                            field: event.target.value,
-                          })
-                        }
-                      >
-                        <option value="from">
-                          {strings.settings.matchFrom}
-                        </option>
-                        <option value="to">{strings.settings.matchTo}</option>
-                        <option value="subject">
-                          {strings.settings.matchSubject}
-                        </option>
-                        <option value="domain">
-                          {strings.settings.matchDomain}
-                        </option>
-                      </select>
-                      <label htmlFor={`rule-contains-${account.id}`}>
-                        {strings.settings.ruleContains}
-                      </label>
-                      <input
-                        id={`rule-contains-${account.id}`}
-                        value={ruleInput(account.id).contains}
-                        placeholder={strings.settings.ruleMatchPlaceholder}
-                        onChange={(event) =>
-                          setRuleField(account.id, {
-                            contains: event.target.value,
-                          })
-                        }
-                      />
-                      <label htmlFor={`rule-action-${account.id}`}>
-                        {strings.settings.ruleAction}
-                      </label>
-                      <select
-                        id={`rule-action-${account.id}`}
-                        value={ruleInput(account.id).action}
-                        onChange={(event) =>
-                          setRuleField(account.id, {
-                            action: event.target.value,
-                          })
-                        }
-                      >
-                        <option value="mark_read">
-                          {strings.settings.actionMarkRead}
-                        </option>
-                        <option value="move_archive">
-                          {strings.settings.actionArchive}
-                        </option>
-                        <option value="move_trash">
-                          {strings.settings.actionTrash}
-                        </option>
-                        <option value="move_junk">
-                          {strings.settings.actionJunk}
-                        </option>
-                        <option value="move_mailbox">
-                          {strings.settings.actionFolder}
-                        </option>
-                      </select>
-                      {ruleInput(account.id).action === "move_mailbox" ? (
-                        <>
-                          <label htmlFor={`rule-target-${account.id}`}>
-                            {strings.settings.actionFolder}
-                          </label>
-                          <select
-                            id={`rule-target-${account.id}`}
-                            value={ruleInput(account.id).target}
-                            onChange={(event) =>
-                              setRuleField(account.id, {
-                                target: event.target.value,
-                              })
-                            }
-                          >
-                            <option value="">
-                              {strings.settings.chooseFolder}
-                            </option>
-                            {mailboxes
-                              .filter(
-                                (box) =>
-                                  box.accountId === account.id &&
-                                  box.role !== "trash" &&
-                                  box.role !== "junk" &&
-                                  box.role !== "inbox",
-                              )
-                              .map((box) => (
-                                <option key={box.id} value={box.id}>
-                                  {box.name}
-                                </option>
-                              ))}
-                          </select>
-                        </>
-                      ) : null}
-                      <div className="rule-form-actions">
-                        <button
-                          type="button"
-                          className="secondary-button"
-                          onClick={() => void handlePreviewRule(account.id)}
-                        >
-                          {strings.settings.checkRuleMatches}
-                        </button>
-                        <button
-                          type="button"
-                          className="primary-button add-rule-button"
-                          disabled={savingRuleAccounts[account.id]}
-                          onClick={() => void handleAddRule(account.id)}
-                        >
-                          {strings.settings.addRule}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
+                  <RulesEditor
+                    account={account}
+                    mailboxes={mailboxes}
+                    filterRules={filterRules}
+                    ruleStatus={ruleStatus}
+                    ruleInput={ruleInput}
+                    updateRuleDraft={updateRuleDraft}
+                    ruleErrors={ruleErrors}
+                    handleAddRule={handleAddRule}
+                    savingRuleAccounts={savingRuleAccounts}
+                    handlePreviewRule={handlePreviewRule}
+                    handleMoveRule={handleMoveRule}
+                    handleToggleRule={handleToggleRule}
+                    handleDeleteRule={handleDeleteRule}
+                  />
                 ) : null}
 
                 {page === "identity" ? (

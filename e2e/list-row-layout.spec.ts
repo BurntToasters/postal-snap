@@ -1,6 +1,9 @@
 import type { Page, TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Failure modes covered here (docs/0.4.2-UI-FAILURE-INVENTORY.md):
 // R1  Star and read hit columns push rows off the 5-7px list gutter.

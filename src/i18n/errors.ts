@@ -31,4 +31,9 @@ export const errors = {
     "Postal Snap could not access local mail data on your computer.",
   invalidInput: "Check the highlighted information and try again.",
   operationFailed: "Postal Snap could not finish that action. Try again.",
+  browserPreviewUnavailable:
+    "Postal Snap native service is unavailable in browser preview.",
+  draftNotReopened: "The saved draft could not be reopened.",
+  undoSessionNotStarted: "The undo session could not be started.",
+  draftSaveTimedOut: "Draft save timed out",
 } as const;

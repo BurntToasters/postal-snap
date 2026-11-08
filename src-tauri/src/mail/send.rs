@@ -1416,6 +1416,7 @@ mod plain_tests {
     fn account() -> AccountRecord {
         AccountRecord {
             summary: AccountSummary {
+                notify_new_mail: true,
                 default_body_format: BodyFormat::Plain,
                 id: "account-1".into(),
                 provider: ProviderKind::Manual,
@@ -2072,6 +2073,7 @@ mod send_timeout_tests {
 
         let account = AccountRecord {
             summary: AccountSummary {
+                notify_new_mail: true,
                 default_body_format: BodyFormat::Plain,
                 id: "account-timeout".into(),
                 provider: ProviderKind::Manual,

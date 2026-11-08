@@ -3,7 +3,7 @@ input,
 select,
 textarea {
   width: 100%;
-  padding: 8px 12px;
+  padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   color: var(--text);
@@ -27,6 +27,15 @@ input:where([type="radio"], [type="checkbox"]) {
   accent-color: var(--accent);
 }
 
+/* macOS popup button: the chevron replaces the native arrow. */
+select {
+  appearance: none;
+  padding-inline-end: 1.75rem;
+  background-image: var(--popup-chevron);
+  background-repeat: no-repeat;
+  background-position: right var(--space-2) center;
+}
+
 input:hover,
 select:hover,
 textarea:hover {
@@ -44,15 +53,15 @@ textarea:focus-visible {
 .server-grid label,
 .field-label {
   display: grid;
-  gap: 6px;
-  font-weight: 600;
+  gap: var(--space-2);
+  font-weight: var(--fw-semibold);
 }
 
 .form-grid.two-columns,
 .server-settings {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 14px;
+  gap: var(--space-4);
 }
 
 .password-field {
@@ -79,20 +88,20 @@ textarea:focus-visible {
 fieldset {
   min-width: 0;
   margin: 0;
-  padding: 14px;
+  padding: var(--space-4);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
 }
 
 legend {
-  padding: 0 5px;
-  font-weight: 700;
+  padding: 0 var(--space-1);
+  font-weight: var(--fw-bold);
 }
 
 .server-grid {
   display: grid;
   grid-template-columns: 2fr 1fr;
-  gap: 10px;
+  gap: var(--space-3);
 }
 
 .server-grid label:nth-child(3),
@@ -116,7 +125,7 @@ legend {
 }
 
 .address-fields label span {
-  font-weight: 700;
+  font-weight: var(--fw-bold);
 }
 
 .address-fields input {
@@ -129,20 +138,16 @@ legend {
   color: var(--text-muted);
 }
 
-.composer-from-value {
-  color: var(--text);
-  font-weight: 500;
-}
-
 .composer-from-select {
   border: 0;
   background: transparent;
-  font-weight: 500;
+  font-weight: var(--fw-medium);
   color: var(--text);
   padding: var(--space-1) var(--space-2);
   border-radius: var(--radius-xs);
+  background-image: var(--popup-chevron);
   cursor: pointer;
-  max-width: calc(100% - 20px);
+  max-width: calc(100% - var(--icon-lg));
 }
 
 .composer-from-select:hover,
@@ -230,7 +235,8 @@ legend {
   position: relative;
   --sw-h: min(var(--switch-track-height), calc(var(--target-size) - 2px));
   --sw-w: calc(var(--sw-h) * 1.64);
-  --sw-knob: calc(var(--sw-h) - 6px);
+  --sw-knob: calc(var(--sw-h) - 0.375rem);
+  --sw-pad: 0.125rem;
   width: calc(var(--sw-w) + 0.25rem);
   height: var(--target-size);
   min-width: calc(var(--sw-w) + 0.25rem);
@@ -256,25 +262,25 @@ legend {
 
 .switch-row input[type="checkbox"]::before {
   top: 50%;
-  left: 0.125rem;
+  left: var(--sw-pad);
   width: var(--sw-w);
   height: var(--sw-h);
   translate: 0 -50%;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-pill);
   background: color-mix(in srgb, var(--surface-sunken) 72%, var(--surface));
-  box-shadow: inset 0 1px 2px rgb(0 0 0 / 16%);
 }
 
+/* The knob stays white in both themes. */
 .switch-row input[type="checkbox"]::after {
   top: 50%;
-  left: calc(0.125rem + 3px);
+  left: calc(var(--sw-pad) + (var(--sw-h) - var(--sw-knob)) / 2);
   width: var(--sw-knob);
   height: var(--sw-knob);
   translate: 0 -50%;
   border-radius: 50%;
-  background: white;
-  box-shadow: 0 1px 3px rgb(0 0 0 / 32%);
+  background: var(--accent-contrast);
+  box-shadow: var(--shadow-control);
 }
 
 .switch-row input[type="checkbox"]:checked::before {
@@ -283,9 +289,18 @@ legend {
 }
 
 .switch-row input[type="checkbox"]:checked::after {
-  transform: translateX(calc(var(--sw-w) - var(--sw-knob) - 6px));
+  transform: translateX(calc(var(--sw-w) - var(--sw-h)));
 }
 
 .switch-row input[type="checkbox"]:focus-visible {
   box-shadow: none;
+}
+
+/* Forced colors keep the native popup look; the chevron would be lost. */
+@media (forced-colors: active) {
+  select,
+  .composer-from-select {
+    appearance: auto;
+    background-image: none;
+  }
 }

@@ -1,7 +1,7 @@
 import type { Page, TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
-import { attachIpcLog, recordIpc, recordedCalls } from "./ipc-recorder";
 import { installMockIpc } from "./mock-ipc";
+import { attachIpcLog, ipcCalls } from "./ipc";
 
 // Failure modes for leftover attachment folders in Storage settings:
 // 1. Leftovers exist but no notice appears, so a failed removal stays silent.
@@ -31,7 +31,6 @@ test("shows a plain leftover notice in Storage settings", async ({
   page,
 }, testInfo) => {
   await installMockIpc(page);
-  await recordIpc(page);
   await page.goto("/?attachmentLeftovers=1");
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("tab", { name: "Storage", exact: true }).click();
@@ -50,7 +49,6 @@ test("omits the leftover notice when nothing was left behind", async ({
   page,
 }, testInfo) => {
   await installMockIpc(page);
-  await recordIpc(page);
   await openStorage(page);
   await expect(page.getByText(NOTICE, { exact: true })).toHaveCount(0);
   await expect(page.locator(".storage-card")).toBeVisible();
@@ -62,14 +60,13 @@ test("Try again clears the notice once leftovers are removed", async ({
   page,
 }, testInfo) => {
   await installMockIpc(page);
-  await recordIpc(page);
   await page.goto("/?attachmentLeftovers=1");
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("tab", { name: "Storage", exact: true }).click();
   await expect(page.getByText(NOTICE, { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Try again", exact: true }).click();
   await expect(page.getByText(NOTICE, { exact: true })).toHaveCount(0);
-  expect((await recordedCalls(page)).map((call) => call.command)).toContain(
+  expect((await ipcCalls(page)).map((call) => call.command)).toContain(
     "retry_attachment_cleanup",
   );
   await attachIpcLog(page, testInfo);
@@ -79,7 +76,6 @@ test("Try again keeps the notice while a folder is still stuck", async ({
   page,
 }, testInfo) => {
   await installMockIpc(page);
-  await recordIpc(page);
   await page.goto("/?attachmentLeftovers=1&attachmentLeftoversStuck=1");
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("tab", { name: "Storage", exact: true }).click();

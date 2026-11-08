@@ -1,6 +1,6 @@
 import { expect, test } from "./coverage-fixture";
-import { attachIpcLog, recordIpc, recordedCalls } from "./ipc-recorder";
 import { installMockIpc } from "./mock-ipc";
+import { attachIpcLog, ipcCalls } from "./ipc";
 
 // Failure modes covered here:
 // 1. Once the downloaded mail runs out, older mail on the server is
@@ -10,7 +10,6 @@ import { installMockIpc } from "./mock-ipc";
 
 test.beforeEach(async ({ page }) => {
   await installMockIpc(page);
-  await recordIpc(page);
 });
 
 test("downloads older mail from the server after the cache runs out", async ({
@@ -22,12 +21,12 @@ test("downloads older mail from the server after the cache runs out", async ({
   await button.click();
   await expect
     .poll(async () =>
-      (await recordedCalls(page)).filter(
+      (await ipcCalls(page)).filter(
         (call) => call.command === "load_older_messages",
       ),
     )
     .toHaveLength(1);
-  const calls = await recordedCalls(page);
+  const calls = await ipcCalls(page);
   const request = calls.find((call) => call.command === "load_older_messages")
     ?.args as { accountId: string; mailboxId: number };
   const listed = calls.find((call) => call.command === "list_messages")

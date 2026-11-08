@@ -12,6 +12,9 @@ import { readFileSync } from "node:fs";
 import type { Page } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Phase 0 density matrix for 0.5.2 (plan.md §8). Written before the
 // implementation, so most tests are expected to fail until Phases 1-4 land.
@@ -536,7 +539,7 @@ const REPORTED_UNDERSIZED: Record<string, string[]> = {
   "compact|1": [
     "list: control input.[] 28.0<32",
     ...[
-      "Add star",
+      "Flag",
       "Archive",
       "More actions",
       "Move to trash",
@@ -1920,6 +1923,44 @@ test.describe("0.5.2 density matrix (failure modes FM1-FM38)", () => {
       .evaluateAll((els) => els.map((el) => el.getBoundingClientRect().height));
     expect(navHeights.length).toBeGreaterThan(0);
     for (const h of navHeights) expect(h).toBeGreaterThanOrEqual(36);
+  });
+
+  // FM39: compact --list-row-inset is 4px on the row; no ancestor overrides it.
+  test("FM39 compact list inset: --list-row-inset is 4px and rows pad from it", async ({
+    page,
+  }) => {
+    await page.goto(`/?density=compact&scale=1${VIEW_QUERY.list}`);
+    const row = page
+      .locator(".message-row:not(.selected):not(.checked)")
+      .first();
+    await expect(row).toBeVisible();
+    const probe = await row.evaluate((el) => {
+      const style = getComputedStyle(el);
+      return {
+        inset: style.getPropertyValue("--list-row-inset").trim(),
+        paddingLeft: style.paddingLeft,
+      };
+    });
+    expect(probe.inset, "compact inset token").toBe("4px");
+    // Inset 4px + compact pad-start 8px.
+    expect(probe.paddingLeft, "row padding from inset").toBe("12px");
+  });
+
+  // FM40: density selectors live only in density.css and variables.css.
+  test("FM40 no [data-density selectors outside density.css and variables.css", async () => {
+    const dir = join(process.cwd(), "src", "styles");
+    const names = (await readdir(dir)).filter(
+      (name) =>
+        name.endsWith(".css") &&
+        name !== "density.css" &&
+        name !== "variables.css",
+    );
+    const offenders: string[] = [];
+    for (const name of names) {
+      const css = await readFile(join(dir, name), "utf8");
+      if (css.includes("[data-density")) offenders.push(name);
+    }
+    expect(offenders, "files with density selectors").toEqual([]);
   });
 
   // Last in file order, so every grid and FM test has written its fragment.

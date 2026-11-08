@@ -1,11 +1,6 @@
 import { expect, test } from "./coverage-fixture";
-import {
-  attachIpcLog,
-  emitTauriEvent,
-  recordIpc,
-  recordedCalls,
-} from "./ipc-recorder";
 import { installMockIpc } from "./mock-ipc";
+import { attachIpcLog, emitTauriEvent, ipcCalls } from "./ipc";
 
 // Failure modes covered here:
 // 1. Quit while writing exits before the latest edits are saved.
@@ -16,11 +11,10 @@ import { installMockIpc } from "./mock-ipc";
 
 test.beforeEach(async ({ page }) => {
   await installMockIpc(page);
-  await recordIpc(page);
 });
 
 const commandsOf = async (page: import("@playwright/test").Page) =>
-  (await recordedCalls(page)).map((call) => call.command);
+  (await ipcCalls(page)).map((call) => call.command);
 
 test("quit saves the open message before exiting", async ({
   page,
@@ -31,7 +25,7 @@ test("quit saves the open message before exiting", async ({
   await page.getByRole("textbox", { name: "Subject" }).fill("Quit check");
   await expect
     .poll(async () =>
-      (await recordedCalls(page)).some(
+      (await ipcCalls(page)).some(
         (call) =>
           call.command === "set_composer_open" &&
           (call.args as { open: boolean }).open,
@@ -43,7 +37,7 @@ test("quit saves the open message before exiting", async ({
   await emitTauriEvent(page, "tray-quit", null);
 
   await expect.poll(() => commandsOf(page)).toContain("quit_app");
-  const calls = await recordedCalls(page);
+  const calls = await ipcCalls(page);
   const saveAt = calls.findIndex((call) => call.command === "save_draft");
   const quitAt = calls.findIndex((call) => call.command === "quit_app");
   expect(saveAt).toBeGreaterThanOrEqual(0);
@@ -158,7 +152,7 @@ test("quit saves edits made during an in-flight save once", async ({
   expect(
     await page.evaluate(() => localStorage.getItem("subject-at-quit")),
   ).toBe("Latest revision");
-  const calls = await recordedCalls(page);
+  const calls = await ipcCalls(page);
   const saves = calls.filter((call) => call.command === "save_draft");
   expect(
     (saves.at(-1)?.args as { draft: { subject: string } }).draft.subject,

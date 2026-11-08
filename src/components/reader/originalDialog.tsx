@@ -7,6 +7,7 @@ import { strings } from "../../i18n";
 import type { MessageSource } from "../../types";
 import { useDialogFocus } from "../useDialogFocus";
 import { useInertBackground } from "../useInertBackground";
+import { errorText } from "../../errors";
 
 /** Raw message source. Always text in <pre> and table cells, never HTML. */
 export function OriginalDialog({
@@ -35,7 +36,7 @@ export function OriginalDialog({
       })
       .catch((cause) => {
         if (!active) return;
-        onError(String(cause));
+        onError(errorText(cause));
         onClose();
       });
     return () => {
@@ -68,7 +69,7 @@ export function OriginalDialog({
     try {
       await api.saveMessageEml(accountId, messageId);
     } catch (cause) {
-      onError(String(cause));
+      onError(errorText(cause));
     } finally {
       setSaving(false);
     }

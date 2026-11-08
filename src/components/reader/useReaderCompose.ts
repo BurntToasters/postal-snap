@@ -3,6 +3,7 @@ import { api } from "../../api";
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
 import { messageSelectionQuote } from "../composer/composerSeed";
+import { errorText } from "../../errors";
 
 interface Options {
   openComposer: ReturnType<typeof useAppStore.getState>["openComposer"];
@@ -52,7 +53,7 @@ export function useReaderCompose({
         current.activeAccountId === accountId &&
         current.selectedMessage?.id === messageId
       )
-        setError(String(cause));
+        setError(errorText(cause));
     } finally {
       if (operation === forwardOperation.current) setPreparingForward(false);
     }
@@ -99,7 +100,7 @@ export function useReaderCompose({
         current.activeAccountId === accountId &&
         current.selectedMessage?.id === messageId
       )
-        setError(String(cause));
+        setError(errorText(cause));
     } finally {
       if (operation === forwardOperation.current) setPreparingForward(false);
     }
@@ -146,7 +147,7 @@ export function useReaderCompose({
         current.activeAccountId === accountId &&
         current.selectedMessage?.id === messageId
       )
-        setError(String(cause));
+        setError(errorText(cause));
     } finally {
       if (operation === forwardOperation.current) setPreparingForward(false);
     }
@@ -183,7 +184,7 @@ export function useReaderCompose({
         current.activeAccountId === accountId &&
         current.selectedMessage?.id === messageId
       )
-        setError(String(cause));
+        setError(errorText(cause));
     } finally {
       if (operation === forwardOperation.current) setPreparingForward(false);
     }

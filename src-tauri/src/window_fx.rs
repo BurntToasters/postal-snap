@@ -1,78 +1,104 @@
-//! Native window blur: Windows Mica / Acrylic via public OS APIs.
-//! macOS keeps opaque chrome because making WKWebView transparent requires the
-//! private `macos-private-api` feature, which must stay off for the store
-//! train. Linux is intentionally a no-op and stays fully opaque.
+//! Native window glass for the main window.
+//! Windows uses Mica through public APIs. macOS uses sidebar vibrancy only in
+//! builds with `macos-vibrancy`, which enables Tauri's private API; direct
+//! builds opt in and store builds never do. Everything else stays opaque.
 
 use tauri::WebviewWindow;
 
-#[cfg(target_os = "windows")]
-fn acrylic_tint(dark: bool) -> (u8, u8, u8, u8) {
-    if dark {
-        (30, 30, 30, 180)
-    } else {
-        (245, 245, 245, 200)
+const DARK_CHROME: tauri::window::Color = tauri::window::Color(0x12, 0x12, 0x12, 0xff);
+const LIGHT_CHROME: tauri::window::Color = tauri::window::Color(0xf5, 0xf5, 0xf5, 0xff);
+
+#[cfg(any(
+    target_os = "windows",
+    all(target_os = "macos", feature = "macos-vibrancy")
+))]
+const GLASS_FAILED: &str = "Could not apply window glass.";
+
+#[cfg(any(
+    target_os = "windows",
+    all(target_os = "macos", feature = "macos-vibrancy")
+))]
+fn apply_native_glass(window: &WebviewWindow, dark: bool) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        window_vibrancy::apply_mica(window, Some(dark)).map_err(|_| GLASS_FAILED.to_string())
+    }
+    #[cfg(all(target_os = "macos", feature = "macos-vibrancy"))]
+    {
+        let _ = dark;
+        use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
+        apply_vibrancy(
+            window,
+            NSVisualEffectMaterial::Sidebar,
+            Some(NSVisualEffectState::FollowsWindowActiveState),
+            None,
+        )
+        .map_err(|_| GLASS_FAILED.to_string())
     }
 }
 
-#[cfg(target_os = "windows")]
-fn apply_windows(window: &WebviewWindow, dark: bool) -> Result<(), String> {
-    use window_vibrancy::{apply_acrylic, apply_mica};
-    match apply_mica(window, Some(dark)) {
-        Ok(()) => Ok(()),
-        Err(_) => apply_acrylic(window, Some(acrylic_tint(dark)))
-            .map_err(|_| "Could not apply window glass.".to_string()),
+#[cfg(any(
+    target_os = "windows",
+    all(target_os = "macos", feature = "macos-vibrancy")
+))]
+fn clear_native_glass(window: &WebviewWindow) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        window_vibrancy::clear_mica(window).map_err(|_| "Could not clear window glass.".to_string())
     }
-}
-
-#[cfg(target_os = "windows")]
-fn clear_windows(window: &WebviewWindow) -> Result<(), String> {
-    use window_vibrancy::{clear_acrylic, clear_mica};
-    let mica = clear_mica(window);
-    let acrylic = clear_acrylic(window);
-    if mica.is_ok() || acrylic.is_ok() {
-        Ok(())
-    } else {
-        Err("Could not clear window glass.".to_string())
+    #[cfg(all(target_os = "macos", feature = "macos-vibrancy"))]
+    {
+        window_vibrancy::clear_vibrancy(window)
+            .map(|_| ())
+            .map_err(|_| "Could not clear window glass.".to_string())
     }
 }
 
 fn paint_opaque_background(window: &WebviewWindow, dark: bool) {
-    let color = if dark {
-        tauri::window::Color(0x12, 0x12, 0x12, 0xff)
-    } else {
-        tauri::window::Color(0xf5, 0xf5, 0xf5, 0xff)
-    };
+    let color = if dark { DARK_CHROME } else { LIGHT_CHROME };
     let _ = window.set_background_color(Some(color));
 }
 
 pub fn apply_basic_window_fx(window: &WebviewWindow, dark: bool) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
+    #[cfg(any(
+        target_os = "windows",
+        all(target_os = "macos", feature = "macos-vibrancy")
+    ))]
     {
         let _ = window.set_background_color(Some(tauri::window::Color(0, 0, 0, 0)));
-        let result = apply_windows(window, dark);
+        let result = apply_native_glass(window, dark);
         if result.is_err() {
             paint_opaque_background(window, dark);
         }
         result
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(
+        target_os = "windows",
+        all(target_os = "macos", feature = "macos-vibrancy")
+    )))]
     {
-        let _ = dark;
+        let _ = window;
         paint_opaque_background(window, dark);
         Ok(())
     }
 }
 
 pub fn clear_basic_window_fx(window: &WebviewWindow, dark: bool) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
+    #[cfg(any(
+        target_os = "windows",
+        all(target_os = "macos", feature = "macos-vibrancy")
+    ))]
     {
-        let result = clear_windows(window);
+        let result = clear_native_glass(window);
         paint_opaque_background(window, dark);
         result
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(
+        target_os = "windows",
+        all(target_os = "macos", feature = "macos-vibrancy")
+    )))]
     {
-        let _ = dark;
+        let _ = window;
         paint_opaque_background(window, dark);
         Ok(())
     }
@@ -98,8 +124,9 @@ pub fn set_workspace_window_fx(
     }
 }
 
+/// True when this build can draw native glass behind the window.
 pub fn supports_basic_window_fx() -> bool {
-    cfg!(target_os = "windows")
+    cfg!(target_os = "windows") || cfg!(all(target_os = "macos", feature = "macos-vibrancy"))
 }
 
 /// WebKit does not implement `prefers-reduced-transparency`, so macOS must
@@ -127,26 +154,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn supports_basic_window_fx_matches_platform() {
-        let expected = cfg!(target_os = "windows");
+    fn supports_basic_window_fx_matches_support_matrix() {
+        let expected = cfg!(target_os = "windows")
+            || cfg!(all(target_os = "macos", feature = "macos-vibrancy"));
         assert_eq!(supports_basic_window_fx(), expected);
         assert_eq!(supports_workspace_window_fx(), expected);
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(all(target_os = "macos", feature = "macos-vibrancy"))]
     #[test]
-    fn acrylic_tint_is_theme_aware() {
-        let dark = acrylic_tint(true);
-        let light = acrylic_tint(false);
-        assert_eq!(dark, (30, 30, 30, 180));
-        assert_eq!(light.0, 245);
-        assert!(light.0 > dark.0);
+    fn macos_vibrancy_build_claims_native_glass() {
+        assert!(supports_basic_window_fx());
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(all(target_os = "macos", not(feature = "macos-vibrancy")))]
     #[test]
-    fn non_windows_platforms_do_not_claim_native_glass() {
+    fn macos_without_vibrancy_feature_stays_opaque() {
         assert!(!supports_basic_window_fx());
-        assert!(!supports_workspace_window_fx());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_stays_opaque() {
+        assert!(!supports_basic_window_fx());
     }
 }

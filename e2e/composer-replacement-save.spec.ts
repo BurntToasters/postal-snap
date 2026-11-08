@@ -1,11 +1,6 @@
 import { expect, test } from "./coverage-fixture";
-import {
-  attachIpcLog,
-  emitTauriEvent,
-  recordIpc,
-  recordedCalls,
-} from "./ipc-recorder";
 import { installMockIpc } from "./mock-ipc";
+import { attachIpcLog, emitTauriEvent, ipcCalls } from "./ipc";
 
 // Failure modes covered here:
 // 1. A mailto arrives while a dirty composer is open and its save fails.
@@ -20,7 +15,6 @@ test("a failed save keeps the dirty composer open", async ({
   page,
 }, testInfo) => {
   await installMockIpc(page);
-  await recordIpc(page);
   await page.addInitScript(() => {
     const mock = window.__POSTAL_SNAP_MOCK__;
     if (!mock) throw new Error("Mock IPC was not installed");
@@ -51,7 +45,6 @@ test("a successful save keeps the edits and opens the replacement", async ({
   page,
 }, testInfo) => {
   await installMockIpc(page);
-  await recordIpc(page);
   await page.goto("/");
   await page.getByRole("button", { name: "Compose", exact: true }).click();
   await page
@@ -62,7 +55,7 @@ test("a successful save keeps the edits and opens the replacement", async ({
   await expect(
     page.getByRole("textbox", { name: "Subject", exact: true }),
   ).toHaveValue("Replacement");
-  const saves = (await recordedCalls(page)).filter(
+  const saves = (await ipcCalls(page)).filter(
     (call) => call.command === "save_draft",
   );
   expect(

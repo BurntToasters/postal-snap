@@ -236,6 +236,7 @@ mod tests {
     fn test_account() -> AccountRecord {
         AccountRecord {
             summary: AccountSummary {
+                notify_new_mail: true,
                 default_body_format: BodyFormat::Html,
                 id: "account-1".into(),
                 provider: ProviderKind::Manual,

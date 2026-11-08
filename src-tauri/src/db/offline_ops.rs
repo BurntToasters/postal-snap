@@ -2,7 +2,23 @@
 
 use super::messages::mark_pending_move_in_transaction;
 use super::{adjust_mailbox_counts, clear_pending_move_in_transaction, db_error, Database};
+use crate::mail::keywords::ColorChange;
 use rusqlite::{params, OptionalExtension};
+
+/// Dedupe key for a flag op. Plain ops keep their historical key; a color
+/// op adds its color so differently colored ops never share a row.
+fn flag_dedupe_key(
+    message_id: i64,
+    has_read: bool,
+    has_star: bool,
+    operation: &serde_json::Value,
+) -> String {
+    let base = format!("flags:{message_id}:{has_read}:{has_star}");
+    match operation["flagColor"].as_u64() {
+        Some(color) if has_star => format!("{base}:c{color}"),
+        _ => base,
+    }
+}
 
 /// Fixed-width UTC timestamp, so `not_before` compares as text in SQL.
 fn format_instant(value: chrono::DateTime<chrono::Utc>) -> String {
@@ -47,12 +63,27 @@ impl Database {
         Ok(next_session)
     }
 
+    #[cfg(test)]
     pub fn record_flag_change(
         &self,
         account_id: &str,
         message_id: i64,
         is_read: Option<bool>,
         is_starred: Option<bool>,
+        queued: Option<&serde_json::Value>,
+    ) -> Result<(), String> {
+        self.record_colored_flag_change(account_id, message_id, is_read, is_starred, None, queued)
+    }
+
+    /// Like `record_flag_change`, also updating the local flag color. A
+    /// mailbox without keywords cannot hold a color, so it stores 0 there.
+    pub fn record_colored_flag_change(
+        &self,
+        account_id: &str,
+        message_id: i64,
+        is_read: Option<bool>,
+        is_starred: Option<bool>,
+        color: Option<ColorChange>,
         queued: Option<&serde_json::Value>,
     ) -> Result<(), String> {
         let mut conn = self.conn()?;
@@ -63,11 +94,13 @@ impl Database {
             was_read,
             source_overlay_active,
             destination_overlay_active,
-        ): (i64, Option<i64>, bool, bool, bool) = tx
+            allows_keywords,
+        ): (i64, Option<i64>, bool, bool, bool, bool) = tx
             .prepare_cached(
                 "SELECT m.mailbox_id,m.pending_move_to,m.is_read != 0,
                          COALESCE(m.pending_move_to IS NOT NULL AND m.pending_source_generation=s.counts_generation,0),
-                         COALESCE(m.pending_move_to IS NOT NULL AND m.pending_destination_generation=d.counts_generation,0)
+                         COALESCE(m.pending_move_to IS NOT NULL AND m.pending_destination_generation=d.counts_generation,0),
+                         s.allows_keywords != 0
                  FROM messages m JOIN mailboxes s ON s.id=m.mailbox_id
                  LEFT JOIN mailboxes d ON d.id=m.pending_move_to
                  WHERE m.id=?1 AND m.account_id=?2",
@@ -80,11 +113,18 @@ impl Database {
                     row.get(2)?,
                     row.get(3)?,
                     row.get(4)?,
+                    row.get(5)?,
                 ))
             })
             .optional()
             .map_err(db_error)?
             .ok_or_else(|| "Message not found.".to_string())?;
+        let color_update: Option<i64> = match color {
+            Some(ColorChange::Set(value)) if allows_keywords => Some(i64::from(value)),
+            Some(ColorChange::Set(_)) | Some(ColorChange::Clear) => Some(0),
+            None if is_starred == Some(false) => Some(0),
+            None => None,
+        };
         let operations: Vec<(i64, String)> = {
             let mut statement = tx.prepare_cached(
                 "SELECT id,payload FROM offline_ops WHERE account_id=?1 AND kind='flags' AND json_valid(payload) AND json_extract(payload,'$.messageId')=?2 ORDER BY id"
@@ -106,6 +146,7 @@ impl Database {
             }
             if is_starred.is_some() {
                 operation["isStarred"] = serde_json::Value::Null;
+                operation["flagColor"] = serde_json::Value::Null;
             }
             let has_read = !operation["isRead"].is_null();
             let has_star = !operation["isStarred"].is_null();
@@ -116,7 +157,7 @@ impl Database {
                     .map_err(db_error)?;
                 continue;
             }
-            let dedupe = format!("flags:{message_id}:{has_read}:{has_star}");
+            let dedupe = flag_dedupe_key(message_id, has_read, has_star, &operation);
             let collision: Option<i64> = tx
                 .prepare_cached(
                     "SELECT id FROM offline_ops WHERE account_id=?1 AND dedupe_key=?2 AND id<>?3",
@@ -152,7 +193,10 @@ impl Database {
                 field["isStarred"] = star
                     .map(serde_json::Value::Bool)
                     .unwrap_or(serde_json::Value::Null);
-                let dedupe = format!("flags:{message_id}:{}:{}", read.is_some(), star.is_some());
+                if star.is_none() {
+                    field["flagColor"] = serde_json::Value::Null;
+                }
+                let dedupe = flag_dedupe_key(message_id, read.is_some(), star.is_some(), &field);
                 tx.prepare_cached(
                     "INSERT INTO offline_ops(account_id,kind,payload,dedupe_key) VALUES(?1,'flags',?2,?3)
                      ON CONFLICT(account_id,dedupe_key) DO UPDATE SET payload=excluded.payload,created_at=CURRENT_TIMESTAMP",
@@ -163,10 +207,15 @@ impl Database {
             }
         }
         tx.prepare_cached(
-            "UPDATE messages SET is_read=COALESCE(?2,is_read),is_starred=COALESCE(?3,is_starred) WHERE id=?1",
+            "UPDATE messages SET is_read=COALESCE(?2,is_read),is_starred=COALESCE(?3,is_starred),flag_color=COALESCE(?4,flag_color) WHERE id=?1",
         )
         .map_err(db_error)?
-        .execute(params![message_id, is_read.map(i32::from), is_starred.map(i32::from)])
+        .execute(params![
+            message_id,
+            is_read.map(i32::from),
+            is_starred.map(i32::from),
+            color_update,
+        ])
         .map_err(db_error)?;
         if let Some(is_read) = is_read.filter(|value| *value != was_read) {
             let delta = if is_read { -1 } else { 1 };
@@ -180,6 +229,41 @@ impl Database {
             }
         }
         tx.commit().map_err(db_error)
+    }
+
+    /// Local flag color after a replayed change. Mailboxes without keywords
+    /// store 0, matching `record_colored_flag_change`.
+    pub fn apply_flag_color(
+        &self,
+        message_id: i64,
+        color: Option<ColorChange>,
+    ) -> Result<(), String> {
+        let value = match color {
+            Some(ColorChange::Set(value)) => i64::from(value),
+            Some(ColorChange::Clear) => 0,
+            None => return Ok(()),
+        };
+        self.conn()?
+            .execute(
+                "UPDATE messages SET flag_color=CASE WHEN (SELECT s.allows_keywords FROM mailboxes s WHERE s.id=messages.mailbox_id)<>0 THEN ?2 ELSE 0 END WHERE id=?1",
+                params![message_id, value],
+            )
+            .map(|_| ())
+            .map_err(db_error)
+    }
+
+    /// Whether a mailbox accepts keywords, as recorded at its last SELECT.
+    pub fn mailbox_allows_keywords(&self, account_id: &str, mailbox: &str) -> Result<bool, String> {
+        Ok(self
+            .conn()?
+            .query_row(
+                "SELECT allows_keywords != 0 FROM mailboxes WHERE account_id=?1 AND name=?2",
+                params![account_id, mailbox],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?
+            .unwrap_or(false))
     }
 
     /// Whether an offline op row exists for this dedupe key, including deferred rows.
@@ -416,4 +500,210 @@ impl Database {
         Ok(())
     }
 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::*;
+    use super::{flag_dedupe_key, ColorChange};
+
+    const ACCOUNT: &str = "color-account";
+
+    fn account() -> AccountRecord {
+        AccountRecord {
+            summary: AccountSummary {
+                notify_new_mail: true,
+                default_body_format: crate::models::BodyFormat::Html,
+                id: ACCOUNT.into(),
+                provider: ProviderKind::Manual,
+                email: "sam@example.com".into(),
+                display_name: "Sam".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+                signature_html: String::new(),
+                reply_to: String::new(),
+                color: None,
+            },
+            imap: ServerConfig {
+                trusted_certificate: None,
+                host: "imap.example.com".into(),
+                port: 993,
+                tls_mode: TlsMode::Tls,
+                username: "sam@example.com".into(),
+            },
+            smtp: ServerConfig {
+                trusted_certificate: None,
+                host: "smtp.example.com".into(),
+                port: 587,
+                tls_mode: TlsMode::StartTls,
+                username: "sam@example.com".into(),
+            },
+        }
+    }
+
+    fn message(uid: u32) -> CachedMessage {
+        CachedMessage {
+            uid,
+            internal_at: None,
+            message_id: Some(format!("<{uid}@example.com>")),
+            subject: "Flagged".into(),
+            sender_name: "Jane".into(),
+            sender_address: "jane@example.com".into(),
+            recipients: "sam@example.com".into(),
+            received_at: "2026-01-01T12:00:00Z".into(),
+            preview: String::new(),
+            is_read: false,
+            is_starred: false,
+            size: 32,
+            to: vec!["sam@example.com".into()],
+            cc: vec![],
+            bcc: vec![],
+            reply_to: None,
+            thread_parent: None,
+            text_body: String::new(),
+            html_body: None,
+            attachments: vec![],
+            raw_message: b"Subject: Flagged\r\n\r\n".to_vec(),
+            has_attachments: false,
+            is_answered: false,
+            is_forwarded: false,
+            has_calendar: false,
+            calendar_json: None,
+            list_unsubscribe: None,
+            list_unsubscribe_post: None,
+            importance: String::new(),
+            disposition_to: String::new(),
+        }
+    }
+
+    /// One account, an INBOX with one cached message. Returns (mailbox, message).
+    fn seed(db: &Database) -> (i64, i64) {
+        db.insert_account(&account()).unwrap();
+        let mailbox = db
+            .upsert_mailbox_with_source(
+                ACCOUNT,
+                "INBOX",
+                &crate::models::MailboxRole::Inbox,
+                "specialUse",
+                Some(1),
+                Some(10),
+                None,
+                1,
+            )
+            .unwrap();
+        db.upsert_envelopes(ACCOUNT, mailbox, &[message(1)])
+            .unwrap();
+        let id = db.list_messages(mailbox, None, 10).unwrap().items[0].id;
+        (mailbox, id)
+    }
+
+    fn color_of(db: &Database, mailbox: i64) -> u8 {
+        db.list_messages(mailbox, None, 10).unwrap().items[0].flag_color
+    }
+
+    #[test]
+    fn color_only_server_change_is_written_by_flag_sync() {
+        let db = Database::memory();
+        let (mailbox, _) = seed(&db);
+        db.reconcile_flags(mailbox, &[(1, false, true)], &[])
+            .unwrap();
+        db.reconcile_flag_colors(mailbox, &[(1, 3)]).unwrap();
+        assert_eq!(color_of(&db, mailbox), 3);
+        db.reconcile_flag_colors(mailbox, &[(1, 0)]).unwrap();
+        assert_eq!(color_of(&db, mailbox), 0);
+    }
+
+    #[test]
+    fn color_is_stored_only_when_the_mailbox_allows_keywords() {
+        let db = Database::memory();
+        let (mailbox, id) = seed(&db);
+        db.set_mailbox_allows_keywords(mailbox, false).unwrap();
+        db.record_colored_flag_change(
+            ACCOUNT,
+            id,
+            None,
+            Some(true),
+            Some(ColorChange::Set(3)),
+            None,
+        )
+        .unwrap();
+        let summary = db.list_messages(mailbox, None, 10).unwrap().items[0].clone();
+        assert!(summary.is_starred, "\\Flagged still applies");
+        assert_eq!(summary.flag_color, 0, "no keywords means no color locally");
+        db.set_mailbox_allows_keywords(mailbox, true).unwrap();
+        db.record_colored_flag_change(
+            ACCOUNT,
+            id,
+            None,
+            Some(true),
+            Some(ColorChange::Set(3)),
+            None,
+        )
+        .unwrap();
+        assert_eq!(color_of(&db, mailbox), 3);
+    }
+
+    #[test]
+    fn clearing_a_flag_clears_its_local_color() {
+        let db = Database::memory();
+        let (mailbox, id) = seed(&db);
+        db.record_colored_flag_change(
+            ACCOUNT,
+            id,
+            None,
+            Some(true),
+            Some(ColorChange::Set(5)),
+            None,
+        )
+        .unwrap();
+        assert_eq!(color_of(&db, mailbox), 5);
+        db.record_colored_flag_change(
+            ACCOUNT,
+            id,
+            None,
+            Some(false),
+            Some(ColorChange::Clear),
+            None,
+        )
+        .unwrap();
+        let summary = db.list_messages(mailbox, None, 10).unwrap().items[0].clone();
+        assert!(!summary.is_starred);
+        assert_eq!(summary.flag_color, 0);
+    }
+
+    #[test]
+    fn replayed_color_is_applied_locally_only_where_keywords_are_allowed() {
+        let db = Database::memory();
+        let (mailbox, id) = seed(&db);
+        db.set_mailbox_allows_keywords(mailbox, false).unwrap();
+        db.apply_flag_color(id, Some(ColorChange::Set(2))).unwrap();
+        assert_eq!(color_of(&db, mailbox), 0);
+        db.set_mailbox_allows_keywords(mailbox, true).unwrap();
+        db.apply_flag_color(id, Some(ColorChange::Set(2))).unwrap();
+        assert_eq!(color_of(&db, mailbox), 2);
+        db.apply_flag_color(id, None).unwrap();
+        assert_eq!(color_of(&db, mailbox), 2, "no change op leaves color alone");
+    }
+
+    #[test]
+    fn plain_star_ops_keep_their_historical_dedupe_key() {
+        let plain = serde_json::json!({ "isRead": null, "isStarred": true, "flagColor": null });
+        assert_eq!(
+            flag_dedupe_key(7, false, true, &plain),
+            "flags:7:false:true"
+        );
+        let colored = serde_json::json!({ "isRead": null, "isStarred": true, "flagColor": 4 });
+        assert_eq!(
+            flag_dedupe_key(7, false, true, &colored),
+            "flags:7:false:true:c4"
+        );
+        let legacy = serde_json::json!({ "isRead": true, "isStarred": null });
+        assert_eq!(
+            flag_dedupe_key(7, true, false, &legacy),
+            "flags:7:true:false"
+        );
+    }
 }

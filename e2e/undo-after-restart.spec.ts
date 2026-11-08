@@ -1,8 +1,8 @@
 import AxeBuilder from "@axe-core/playwright";
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
-import { attachArtifacts } from "./ipc-artifact";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifacts } from "./ipc";
 
 // Failure modes covered here (docs/0.5.0-FAILURE-INVENTORY.md, section A):
 // A7. The app restarts inside the undo window. The archive stays put, is not

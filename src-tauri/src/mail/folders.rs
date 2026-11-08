@@ -1,5 +1,8 @@
 use futures_util::TryStreamExt;
 
+use super::keywords::{
+    junk_store_plan, keyword_permitted, ColorChange, JUNK_KEYWORD, NOT_JUNK_KEYWORD,
+};
 use super::{ImapSession, IMAP_COMMAND_TIMEOUT, MAX_MESSAGE_BYTES};
 use crate::{models::AccountRecord, security::redact_error};
 
@@ -95,11 +98,7 @@ impl SourceKeyword {
 /// `$Forwarded` is a custom keyword: only set it when the mailbox lets
 /// clients create keywords (`\*`) or already lists it.
 pub fn forwarded_permitted(permanent: &[async_imap::types::Flag<'_>]) -> bool {
-    permanent.iter().any(|flag| match flag {
-        async_imap::types::Flag::MayCreate => true,
-        async_imap::types::Flag::Custom(name) => name.eq_ignore_ascii_case("$Forwarded"),
-        _ => false,
-    })
+    super::keywords::keyword_permitted(permanent, "$Forwarded")
 }
 
 /// Set one keyword on one message. `$Forwarded` on a server that forbids it
@@ -150,6 +149,7 @@ pub async fn set_remote_keyword(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn set_remote_flags(
     account: &AccountRecord,
     password: &str,
@@ -158,6 +158,7 @@ pub async fn set_remote_flags(
     expected_uid_validity: Option<u32>,
     is_read: Option<bool>,
     is_starred: Option<bool>,
+    color: Option<ColorChange>,
 ) -> Result<(), MailboxOperationError> {
     set_remote_uid_flags(
         account,
@@ -167,10 +168,12 @@ pub async fn set_remote_flags(
         expected_uid_validity,
         is_read,
         is_starred,
+        color,
     )
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn set_remote_uid_flags(
     account: &AccountRecord,
     password: &str,
@@ -179,6 +182,7 @@ pub async fn set_remote_uid_flags(
     expected_uid_validity: Option<u32>,
     is_read: Option<bool>,
     is_starred: Option<bool>,
+    color: Option<ColorChange>,
 ) -> Result<(), MailboxOperationError> {
     if uids.is_empty() {
         return Ok(());
@@ -201,16 +205,36 @@ pub async fn set_remote_uid_flags(
             "This mailbox changed; refresh mail and try again.".to_string(),
         ));
     }
-    store_uid_flags_selected(&mut session, uids, is_read, is_starred, "Message update").await?;
+    let keywords = super::keywords::color_bits_permitted(&selected.permanent_flags);
+    store_uid_flags_selected(
+        &mut session,
+        uids,
+        FlagUpdate {
+            is_read,
+            is_starred,
+            color,
+            keywords,
+        },
+        "Message update",
+    )
+    .await?;
     session.release();
     Ok(())
+}
+
+/// One flag update for a set of UIDs in the selected mailbox.
+#[derive(Clone, Copy, Default)]
+struct FlagUpdate {
+    is_read: Option<bool>,
+    is_starred: Option<bool>,
+    color: Option<ColorChange>,
+    keywords: bool,
 }
 
 async fn store_uid_flags_selected(
     session: &mut ImapSession,
     uids: &[u32],
-    is_read: Option<bool>,
-    is_starred: Option<bool>,
+    update: FlagUpdate,
     action: &str,
 ) -> Result<(), MailboxOperationError> {
     if uids.is_empty() {
@@ -221,33 +245,16 @@ async fn store_uid_flags_selected(
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(",");
-    if let Some(value) = is_read {
-        let operation = if value {
-            "+FLAGS.SILENT (\\Seen)"
-        } else {
-            "-FLAGS.SILENT (\\Seen)"
-        };
+    let commands = super::keywords::flag_store_commands(
+        update.is_read,
+        update.is_starred,
+        update.color,
+        update.keywords,
+    );
+    for operation in commands {
         tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
             session
                 .uid_store(set.clone(), operation)
-                .await
-                .map_err(|error| remote_failure(error, action))?
-                .try_collect::<Vec<_>>()
-                .await
-                .map_err(|error| remote_failure(error, action))
-        })
-        .await
-        .map_err(|_| MailboxOperationError::transient(format!("{action} timed out.")))??;
-    }
-    if let Some(value) = is_starred {
-        let operation = if value {
-            "+FLAGS.SILENT (\\Flagged)"
-        } else {
-            "-FLAGS.SILENT (\\Flagged)"
-        };
-        tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
-            session
-                .uid_store(set, operation)
                 .await
                 .map_err(|error| remote_failure(error, action))?
                 .try_collect::<Vec<_>>()
@@ -264,6 +271,9 @@ async fn store_uid_flags_selected(
 pub struct MoveReplayFlags {
     pub is_read: Option<bool>,
     pub is_starred: Option<bool>,
+    pub color: Option<ColorChange>,
+    /// From the mailbox's recorded PERMANENTFLAGS at the last SELECT.
+    pub keywords_permitted: bool,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -275,6 +285,8 @@ pub struct MoveOptions<'a> {
     /// Latest queued source flags, copied to an existing destination before
     /// the replay removes its source.
     pub replay_flags: Option<MoveReplayFlags>,
+    /// Junk training for the source copy: `Some(true)` into junk, `Some(false)` out.
+    pub junk_keyword: Option<bool>,
 }
 
 pub async fn move_remote(
@@ -432,13 +444,16 @@ pub async fn server_supports_move(
     Ok(supported)
 }
 
-pub async fn move_remote_uids(
+/// Bulk move with optional junk training on the source UIDs.
+#[allow(clippy::too_many_arguments)]
+pub async fn move_remote_uids_with_junk(
     account: &AccountRecord,
     password: &str,
     source: &str,
     destination: &str,
     uids: &[u32],
     expected_uid_validity: Option<u32>,
+    junk_keyword: Option<bool>,
 ) -> Result<(), MailboxOperationError> {
     move_remote_inner(
         account,
@@ -447,7 +462,10 @@ pub async fn move_remote_uids(
         destination,
         uids,
         expected_uid_validity,
-        MoveOptions::default(),
+        MoveOptions {
+            junk_keyword,
+            ..MoveOptions::default()
+        },
     )
     .await
 }
@@ -545,8 +563,7 @@ async fn replay_uid_exists(
 async fn verify_replayed_flags(
     session: &mut ImapSession,
     uid: u32,
-    is_read: Option<bool>,
-    is_starred: Option<bool>,
+    flags: MoveReplayFlags,
     action: &str,
 ) -> Result<(), MailboxOperationError> {
     let mut rows = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
@@ -578,8 +595,25 @@ async fn verify_replayed_flags(
             async_imap::types::Flag::Flagged => (seen, true),
             _ => (seen, flagged),
         });
-    if is_read.is_some_and(|expected| expected != seen)
-        || is_starred.is_some_and(|expected| expected != flagged)
+    let names: Vec<String> = item
+        .flags()
+        .filter_map(|flag| match flag {
+            async_imap::types::Flag::Custom(name) => Some(name.to_string()),
+            _ => None,
+        })
+        .collect();
+    let color = super::keywords::color_from_keyword_names(names.iter().map(String::as_str));
+    let (expected_starred, expected_color) = match flags.color {
+        Some(ColorChange::Set(value)) => (
+            Some(true),
+            Some(if flags.keywords_permitted { value } else { 0 }),
+        ),
+        Some(ColorChange::Clear) => (Some(false), None),
+        None => (flags.is_starred, None),
+    };
+    if flags.is_read.is_some_and(|expected| expected != seen)
+        || expected_starred.is_some_and(|expected| expected != flagged)
+        || (flagged && expected_color.is_some_and(|expected| expected != color))
     {
         return Err(MailboxOperationError::transient(format!(
             "The mail server did not save the copied message flags for {action}; the source was kept."
@@ -773,6 +807,18 @@ async fn move_remote_inner(
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(",");
+    if let Some(to_junk) = options.junk_keyword {
+        // Best effort: a refused keyword STORE must not block the move.
+        let keywords = keyword_permitted(&selected.permanent_flags, JUNK_KEYWORD)
+            && keyword_permitted(&selected.permanent_flags, NOT_JUNK_KEYWORD);
+        for (junk_set, command) in junk_store_plan(uids, to_junk, keywords) {
+            let _ = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
+                let stream = session.uid_store(junk_set, command).await?;
+                stream.try_collect::<Vec<_>>().await
+            })
+            .await;
+        }
+    }
     if options.dedupe_existing && uids.len() == 1 {
         if let Some(search) = options.message_id.and_then(header_message_id_search) {
             let replay_match = matching_destination_content(
@@ -798,10 +844,11 @@ async fn move_remote_inner(
                             "This mail server cannot safely move messages.".to_string(),
                         ));
                     }
-                    if let Some(flags) = options
-                        .replay_flags
-                        .filter(|flags| flags.is_read.is_some() || flags.is_starred.is_some())
-                    {
+                    if let Some(flags) = options.replay_flags.filter(|flags| {
+                        flags.is_read.is_some()
+                            || flags.is_starred.is_some()
+                            || flags.color.is_some()
+                    }) {
                         select_replay_destination(
                             &mut session,
                             &wire_destination,
@@ -818,8 +865,12 @@ async fn move_remote_inner(
                         store_uid_flags_selected(
                             &mut session,
                             &[uid],
-                            flags.is_read,
-                            flags.is_starred,
+                            FlagUpdate {
+                                is_read: flags.is_read,
+                                is_starred: flags.is_starred,
+                                color: flags.color,
+                                keywords: flags.keywords_permitted,
+                            },
                             "Move",
                         )
                         .await?;
@@ -830,14 +881,7 @@ async fn move_remote_inner(
                             "Move",
                         )
                         .await?;
-                        verify_replayed_flags(
-                            &mut session,
-                            uid,
-                            flags.is_read,
-                            flags.is_starred,
-                            "Move",
-                        )
-                        .await?;
+                        verify_replayed_flags(&mut session, uid, flags, "Move").await?;
                     }
                     select_replay_source(&mut session, &wire_source, expected_uid_validity, "Move")
                         .await?;

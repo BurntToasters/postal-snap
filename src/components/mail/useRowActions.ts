@@ -14,6 +14,7 @@ import {
 } from "../../moveConversation";
 import { beginMessageOpen } from "../../messageOpen";
 import { conversationMessages } from "../../threads";
+import { errorText } from "../../errors";
 
 type AppState = ReturnType<typeof useAppStore.getState>;
 
@@ -165,7 +166,7 @@ export function useRowActions({
             : mode,
       });
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 
@@ -189,7 +190,7 @@ export function useRowActions({
         prefill: { attachments },
       });
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       forwardInFlight.current = false;
     }

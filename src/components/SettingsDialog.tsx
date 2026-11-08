@@ -42,6 +42,8 @@ import type { RuleSeed } from "./settings/useSettingsFilterRules";
 import { useSettingsStorage } from "./settings/useSettingsStorage";
 import { useSettingsThreatProtection } from "./settings/useSettingsThreatProtection";
 import { useSettingsUpdates } from "./settings/useSettingsUpdates";
+import { MEDIA_QUERIES } from "../breakpoints";
+import { errorText } from "../errors";
 
 export type { SettingsTab } from "./settings/primitives";
 export type { RuleSeed } from "./settings/useSettingsFilterRules";
@@ -54,21 +56,64 @@ interface Props {
   onLastAccountRemoved?: () => void;
 }
 
+type SettingsTone = "blue" | "gray" | "indigo" | "green" | "orange" | "red";
+
 const tabs: Array<{
   id: SettingsTab;
   label: string;
   icon: typeof Monitor;
+  tone: SettingsTone;
 }> = [
-  { id: "general", label: strings.settings.general, icon: Monitor },
-  { id: "appearance", label: strings.settings.appearanceTitle, icon: Palette },
-  { id: "reading", label: strings.settings.reading, icon: Eye },
-  { id: "notifications", label: strings.settings.notifications, icon: Bell },
-  { id: "storage", label: strings.settings.storage, icon: Database },
-  { id: "accounts", label: strings.settings.accounts, icon: UserRound },
-  { id: "shortcuts", label: strings.settings.shortcuts, icon: Keyboard },
-  { id: "updates", label: strings.settings.updates, icon: CloudDownload },
-  { id: "advanced", label: strings.settings.advanced, icon: ShieldAlert },
-  { id: "about", label: strings.settings.about, icon: Info },
+  {
+    id: "general",
+    label: strings.settings.general,
+    icon: Monitor,
+    tone: "gray",
+  },
+  {
+    id: "appearance",
+    label: strings.settings.appearanceTitle,
+    icon: Palette,
+    tone: "indigo",
+  },
+  { id: "reading", label: strings.settings.reading, icon: Eye, tone: "blue" },
+  {
+    id: "notifications",
+    label: strings.settings.notifications,
+    icon: Bell,
+    tone: "red",
+  },
+  {
+    id: "storage",
+    label: strings.settings.storage,
+    icon: Database,
+    tone: "orange",
+  },
+  {
+    id: "accounts",
+    label: strings.settings.accounts,
+    icon: UserRound,
+    tone: "blue",
+  },
+  {
+    id: "shortcuts",
+    label: strings.settings.shortcuts,
+    icon: Keyboard,
+    tone: "gray",
+  },
+  {
+    id: "updates",
+    label: strings.settings.updates,
+    icon: CloudDownload,
+    tone: "green",
+  },
+  {
+    id: "advanced",
+    label: strings.settings.advanced,
+    icon: ShieldAlert,
+    tone: "orange",
+  },
+  { id: "about", label: strings.settings.about, icon: Info, tone: "gray" },
 ];
 
 // Arrow step in whole pixels; matches the native line step.
@@ -157,11 +202,11 @@ export function SettingsDialog({
     { action: "detail" | "list"; accountId: string } | undefined
   >(undefined);
   const { saving, update } = useSettingsSave((cause) =>
-    setSaveError(String(cause)),
+    setSaveError(errorText(cause)),
   );
   const [horizontalTabs, setHorizontalTabs] = useState(() =>
     typeof window.matchMedia === "function"
-      ? window.matchMedia("(max-width: 760px)").matches
+      ? window.matchMedia(MEDIA_QUERIES.narrowViewport).matches
       : false,
   );
   const settingsContentRef = useRef<HTMLDivElement>(null);
@@ -221,7 +266,8 @@ export function SettingsDialog({
     ruleInput,
     ruleStatus,
     savingRuleAccounts,
-    setRuleField,
+    updateRuleDraft,
+    ruleErrors,
     handleAddRule,
     handlePreviewRule,
     handleMoveRule,
@@ -274,7 +320,7 @@ export function SettingsDialog({
       setConnectionDirty(false);
       return true;
     } catch (cause) {
-      setSaveError(String(cause));
+      setSaveError(errorText(cause));
       return false;
     } finally {
       discardBusy.current = false;
@@ -299,7 +345,7 @@ export function SettingsDialog({
       .then((leave) => {
         if (leave) onClose();
       })
-      .catch((cause) => setSaveError(String(cause)));
+      .catch((cause) => setSaveError(errorText(cause)));
   }, [cancelThreatOff, confirmThreatOff, confirmDiscard, onClose]);
   const dialogRef = useDialogFocus(requestClose);
   async function changeTab(next: SettingsTab) {
@@ -417,7 +463,7 @@ export function SettingsDialog({
 
   useEffect(() => {
     if (typeof window.matchMedia !== "function") return;
-    const media = window.matchMedia("(max-width: 760px)");
+    const media = window.matchMedia(MEDIA_QUERIES.narrowViewport);
     const updateOrientation = () => setHorizontalTabs(media.matches);
     updateOrientation();
     media.addEventListener("change", updateOrientation);
@@ -600,7 +646,7 @@ export function SettingsDialog({
             role="tablist"
             aria-orientation={horizontalTabs ? "horizontal" : "vertical"}
           >
-            {tabs.map(({ id, label, icon: Icon }, index) => (
+            {tabs.map(({ id, label, icon: Icon, tone }, index) => (
               <button
                 key={id}
                 id={`settings-tab-${id}`}
@@ -620,7 +666,13 @@ export function SettingsDialog({
                 }}
                 onKeyDown={(event) => moveTab(event, index)}
               >
-                <Icon aria-hidden="true" />
+                <span
+                  className="settings-nav-tile"
+                  data-tone={tone}
+                  aria-hidden="true"
+                >
+                  <Icon aria-hidden="true" />
+                </span>
                 <span>{label}</span>
               </button>
             ))}
@@ -741,7 +793,8 @@ export function SettingsDialog({
                     handleSaveSignature={handleSaveSignature}
                     filterRules={filterRules}
                     ruleInput={ruleInput}
-                    setRuleField={setRuleField}
+                    updateRuleDraft={updateRuleDraft}
+                    ruleErrors={ruleErrors}
                     handleAddRule={handleAddRule}
                     savingRuleAccounts={savingRuleAccounts}
                     handlePreviewRule={handlePreviewRule}

@@ -4,6 +4,9 @@ import { join } from "node:path";
 import type { Page, TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Repeatable UI artifact: screenshots and metrics per combination, with
 // soft assertions so every run writes all files. Probes tolerate elements

@@ -13,6 +13,7 @@ import type { ComposeDraft, MailboxSummary } from "../../types";
 import { SetupWizard } from "../SetupWizard";
 import { useDialogFocus } from "../useDialogFocus";
 import { useInertBackground } from "../useInertBackground";
+import { errorText } from "../../errors";
 
 const SENT_NOTICE_ID = "sent-notice";
 
@@ -75,7 +76,7 @@ function undoAction(notice: SentNotice): NoticeAction {
         store.setLastSent(undefined);
         store.openComposer({ draft });
       } catch (cause) {
-        store.setError(String(cause));
+        store.setError(errorText(cause));
       }
     },
   };

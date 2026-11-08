@@ -1,7 +1,7 @@
 import type { Page } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
-import { attachIpcLog, recordIpc, recordedCalls } from "./ipc-recorder";
 import { installMockIpc } from "./mock-ipc";
+import { attachIpcLog, ipcCalls } from "./ipc";
 
 // Failure modes covered here:
 // 1. Switching to plain text silently drops formatting, with no confirmation.
@@ -18,7 +18,6 @@ import { installMockIpc } from "./mock-ipc";
 
 test.beforeEach(async ({ page }) => {
   await installMockIpc(page);
-  await recordIpc(page);
 });
 
 const plainBox = (page: Page) =>
@@ -29,7 +28,7 @@ async function openMenu(page: Page) {
 }
 
 async function callsOf(page: Page, command: string) {
-  return (await recordedCalls(page)).filter((call) => call.command === command);
+  return (await ipcCalls(page)).filter((call) => call.command === command);
 }
 
 test("confirms, converts, and sends a plain text message", async ({
@@ -173,7 +172,8 @@ test("plain editor follows text scale and shows focus", async ({ page }) => {
     Number.parseFloat(getComputedStyle(document.body).fontSize),
   );
   expect(metrics.fontSize).toBeGreaterThanOrEqual(bodySize);
-  expect(metrics.fontSize).toBeGreaterThanOrEqual(rootSize * 0.9);
+  // Normal body is 0.875rem (WP2.2), so the ratio to the root is 0.875.
+  expect(metrics.fontSize).toBeGreaterThanOrEqual(rootSize * 0.875);
   expect(metrics.height).toBeGreaterThanOrEqual(160);
   expect(metrics.focusRing).not.toBe("none");
   expect(metrics.clipped).toBe(false);

@@ -14,12 +14,13 @@ use super::{
     release_attachment_tokens, replay_offline_operations, resolve_draft_files, wake, AccountActor,
     AppState, CommandResult,
 };
+use crate::mail::keywords::ColorChange;
 use crate::{
     db::Database,
     mail::{self, failure::FailureKind},
     models::{
         validate_filter_rule, AccountRecord, CachePolicy, ComposeAttachment, ComposeDraft,
-        MailboxSummary,
+        MailboxSummary, RuleAction, MAX_FLAG_COLOR,
     },
 };
 
@@ -252,7 +253,15 @@ pub(crate) async fn run_sync_pass(
     // Everything below needs the account; the hooks hold it again after any
     // yield.
     let _guard = hooks.guard.take();
-    finish_rule_window(&state.db, &account, filter_watermark, result.is_ok());
+    finish_rule_window(
+        &state.db,
+        &account,
+        filter_watermark,
+        result.is_ok(),
+        &mut |message_id| {
+            crate::notify::rule_notice(app, &state.db, account_id, message_id);
+        },
+    );
     match result {
         Ok(outcome) => {
             let _ = state.db.file_muted_inbox(account_id);
@@ -493,12 +502,63 @@ pub(crate) fn finish_rule_window(
     account: &AccountRecord,
     watermark: Option<i64>,
     succeeded: bool,
+    on_notice: &mut dyn FnMut(i64),
 ) {
     let account_id = &account.summary.id;
-    if succeeded && apply_filter_rules(db, account, watermark) {
+    if succeeded && apply_filter_rules_notifying(db, account, watermark, on_notice) {
         let _ = db.clear_rules_pending_from(account_id);
     } else if let Some(mark) = watermark {
         let _ = db.keep_rules_pending_from(account_id, mark);
+    }
+}
+
+/// A message a rule matched: (id, uid, folder name, folder id).
+type RuleHit = (i64, u32, String, i64);
+
+/// One rule action, resolved against the account's folders.
+enum PlannedStep {
+    MarkRead,
+    Move {
+        destination_id: i64,
+        destination: String,
+    },
+    Flag(u8),
+    Pin,
+    Notify,
+}
+
+fn plan_step(db: &Database, account_id: &str, action: &RuleAction) -> Option<PlannedStep> {
+    match action.kind.as_str() {
+        "mark_read" => Some(PlannedStep::MarkRead),
+        "pin" => Some(PlannedStep::Pin),
+        "notify" => Some(PlannedStep::Notify),
+        "flag" => action
+            .flag_color
+            .filter(|color| *color <= MAX_FLAG_COLOR)
+            .map(PlannedStep::Flag),
+        "move_archive" | "move_trash" | "move_junk" => {
+            let role = action.kind.strip_prefix("move_").unwrap_or("archive");
+            db.mailbox_for_role(account_id, role).ok().flatten().map(
+                |(destination_id, destination)| PlannedStep::Move {
+                    destination_id,
+                    destination,
+                },
+            )
+        }
+        "move_mailbox" => action
+            .target_mailbox
+            .as_deref()
+            .and_then(|id| id.parse::<i64>().ok())
+            .and_then(|id| {
+                db.mailbox(id)
+                    .ok()
+                    .filter(|(owner, _)| owner == account_id)
+                    .map(|(_, name)| PlannedStep::Move {
+                        destination_id: id,
+                        destination: name,
+                    })
+            }),
+        _ => None,
     }
 }
 
@@ -512,35 +572,37 @@ pub(crate) fn apply_filter_rules(
     account: &AccountRecord,
     newer_than_id: Option<i64>,
 ) -> bool {
+    apply_filter_rules_notifying(db, account, newer_than_id, &mut |_| {})
+}
+
+/// `apply_filter_rules` that also reports one notify candidate: the newest
+/// message a notify action matched. Only new mail (`newer_than_id` set)
+/// can produce one, so rule creation never notifies about old mail.
+pub(crate) fn apply_filter_rules_notifying(
+    db: &Database,
+    account: &AccountRecord,
+    newer_than_id: Option<i64>,
+    on_notice: &mut dyn FnMut(i64),
+) -> bool {
     let account_id = &account.summary.id;
     let Ok(rules) = db.list_filter_rules(account_id) else {
         return false;
     };
-    let mut planned = Vec::new();
+    let mut planned: Vec<(PlannedStep, Vec<RuleHit>)> = Vec::new();
     let mut complete = true;
+    let mut notice: Option<i64> = None;
     for rule in rules.iter().filter(|rule| rule.enabled) {
         if validate_filter_rule(rule, account_id).is_err() {
             continue;
         }
-        let destination: Option<(i64, String)> = match rule.action.as_str() {
-            "mark_read" => None,
-            "move_archive" | "move_trash" | "move_junk" => {
-                let role = rule.action.strip_prefix("move_").unwrap_or("archive");
-                db.mailbox_for_role(account_id, role).ok().flatten()
+        let mut steps = Vec::new();
+        for action in &rule.actions {
+            match plan_step(db, account_id, action) {
+                Some(step) => steps.push(step),
+                None => complete = false,
             }
-            _ => rule
-                .target_mailbox
-                .as_deref()
-                .and_then(|id| id.parse::<i64>().ok())
-                .and_then(|id| {
-                    db.mailbox(id)
-                        .ok()
-                        .filter(|(owner, _)| owner == account_id)
-                        .map(|(_, name)| (id, name))
-                }),
-        };
-        if rule.action != "mark_read" && destination.is_none() {
-            complete = false;
+        }
+        if steps.is_empty() {
             continue;
         }
         let Ok(matches) = db.find_rule_matches(account_id, rule, newer_than_id) else {
@@ -548,71 +610,124 @@ pub(crate) fn apply_filter_rules(
             continue;
         };
         complete &= matches.len() < 100;
-        planned.push((rule, destination, matches));
+        for step in steps {
+            match step {
+                PlannedStep::Notify => {
+                    if newer_than_id.is_some() {
+                        let newest = matches.iter().map(|(id, _, _, _)| *id).max();
+                        notice = notice.max(newest);
+                    }
+                }
+                step => planned.push((step, matches.clone())),
+            }
+        }
     }
-    for (rule, destination, matches) in planned {
-        if rule.action == "mark_read" {
-            for (id, uid, mailbox, _) in &matches {
-                let Ok(Some(validity)) = db.mailbox_uid_validity(account_id, mailbox) else {
-                    complete = false;
-                    continue;
-                };
-                let operation = FlagOperation {
-                    message_id: *id,
-                    uid: *uid,
-                    mailbox: mailbox.clone(),
-                    uid_validity: Some(validity),
-                    is_read: Some(true),
-                    is_starred: None,
-                };
-                let dedupe_key = format!("flags:{id}:true:false");
-                if db
-                    .queue_operation(account_id, "flags", &operation, Some(&dedupe_key))
-                    .is_err()
-                {
-                    complete = false;
-                    continue;
-                }
-                complete &= db.set_flags(*id, Some(true), None).is_ok();
-            }
-            continue;
-        }
-        let Some((destination_id, destination)) = destination else {
-            continue;
-        };
-        for (id, uid, source, _) in &matches {
-            if source == &destination {
-                continue;
-            }
-            let Ok(Some(validity)) = db.mailbox_uid_validity(account_id, source) else {
-                complete = false;
-                continue;
-            };
-            let operation = MoveOperation {
-                message_id: *id,
-                uid: *uid,
-                source: source.clone(),
-                destination: destination.clone(),
-                uid_validity: Some(validity),
-            };
-            let dedupe_key = format!("move:{id}");
-            match db.has_offline_op_dedupe_key(account_id, &dedupe_key) {
-                Ok(true) => continue,
-                Ok(false) => {}
-                Err(_) => {
-                    complete = false;
-                    continue;
+    for (step, matches) in planned {
+        match step {
+            PlannedStep::MarkRead => {
+                for (id, uid, mailbox, _) in &matches {
+                    let Ok(Some(validity)) = db.mailbox_uid_validity(account_id, mailbox) else {
+                        complete = false;
+                        continue;
+                    };
+                    let operation = FlagOperation {
+                        message_id: *id,
+                        uid: *uid,
+                        mailbox: mailbox.clone(),
+                        uid_validity: Some(validity),
+                        is_read: Some(true),
+                        is_starred: None,
+                        flag_color: None,
+                    };
+                    let dedupe_key = format!("flags:{id}:true:false");
+                    if db
+                        .queue_operation(account_id, "flags", &operation, Some(&dedupe_key))
+                        .is_err()
+                    {
+                        complete = false;
+                        continue;
+                    }
+                    complete &= db.set_flags(*id, Some(true), None).is_ok();
                 }
             }
-            if db
-                .queue_operation(account_id, "move", &operation, Some(&dedupe_key))
-                .is_err()
-            {
-                complete = false;
-                continue;
+            PlannedStep::Move {
+                destination_id,
+                destination,
+            } => {
+                for (id, uid, source, _) in &matches {
+                    if source == &destination {
+                        continue;
+                    }
+                    let Ok(Some(validity)) = db.mailbox_uid_validity(account_id, source) else {
+                        complete = false;
+                        continue;
+                    };
+                    let operation = MoveOperation {
+                        message_id: *id,
+                        uid: *uid,
+                        source: source.clone(),
+                        destination: destination.clone(),
+                        uid_validity: Some(validity),
+                        junk_keyword: None,
+                    };
+                    let dedupe_key = format!("move:{id}");
+                    match db.has_offline_op_dedupe_key(account_id, &dedupe_key) {
+                        Ok(true) => continue,
+                        Ok(false) => {}
+                        Err(_) => {
+                            complete = false;
+                            continue;
+                        }
+                    }
+                    if db
+                        .queue_operation(account_id, "move", &operation, Some(&dedupe_key))
+                        .is_err()
+                    {
+                        complete = false;
+                        continue;
+                    }
+                    complete &= db.mark_pending_move(*id, destination_id).is_ok();
+                }
             }
-            complete &= db.mark_pending_move(*id, destination_id).is_ok();
+            PlannedStep::Flag(color) => {
+                for (id, uid, mailbox, _) in &matches {
+                    let Ok(Some(validity)) = db.mailbox_uid_validity(account_id, mailbox) else {
+                        complete = false;
+                        continue;
+                    };
+                    // Same path as the manual color command: local color and
+                    // the queued op (with its color bits) commit together.
+                    let operation = FlagOperation {
+                        message_id: *id,
+                        uid: *uid,
+                        mailbox: mailbox.clone(),
+                        uid_validity: Some(validity),
+                        is_read: None,
+                        is_starred: Some(true),
+                        flag_color: Some(color),
+                    };
+                    let payload = serde_json::to_value(&operation).ok();
+                    complete &= db
+                        .record_colored_flag_change(
+                            account_id,
+                            *id,
+                            None,
+                            Some(true),
+                            Some(ColorChange::Set(color)),
+                            payload.as_ref(),
+                        )
+                        .is_ok();
+                }
+            }
+            PlannedStep::Pin => {
+                let ids: Vec<i64> = matches.iter().map(|(id, _, _, _)| *id).collect();
+                complete &= db.set_pinned(account_id, &ids, true).is_ok();
+            }
+            PlannedStep::Notify => {}
         }
+    }
+    if let Some(message_id) = notice {
+        on_notice(message_id);
     }
     complete
 }

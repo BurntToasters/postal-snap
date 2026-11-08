@@ -3,6 +3,7 @@
 import { strings } from "./i18n";
 import { formatChord } from "./format";
 import type { ContextMenuIcon } from "./contextMenu";
+import { FLAG_COLORS, flagColorKeys } from "./flagColors";
 import type { MailboxRole } from "./types";
 
 export type FolderKind =
@@ -39,6 +40,10 @@ export interface MenuKit<E> {
 export interface MessageMenuFacts {
   isRead: boolean;
   isStarred: boolean;
+  /** Color index of a flagged message. */
+  flagColor?: number;
+  /** False when the mailbox cannot store color keywords. */
+  flagKeywords: boolean;
   pinned: boolean;
   canMute: boolean;
   conversationMuted: boolean;
@@ -127,58 +132,87 @@ export function buildMessageMenu<E>(f: MessageMenuFacts, kit: MenuKit<E>): E[] {
         },
       );
 
-  // Group 2: read, star, pin, snooze, mute.
-  const state = defs(
-    f.isRead
-      ? {
-          id: "toggle-read",
-          label: strings.reader.markUnread,
-          icon: "mark-unread",
-          chord: formatChord("U", { shift: true }),
-        }
-      : {
-          id: "toggle-read",
-          label: strings.reader.markRead,
-          icon: "mark-read",
-          chord: formatChord("U", { shift: true }),
-        },
-    f.isStarred
-      ? {
-          id: "toggle-star",
-          label: strings.reader.removeStar,
+  // Group 2: read, flag, pin, snooze, mute.
+  const colorItems = FLAG_COLORS.flatMap((color) =>
+    defs({
+      id: `flag-color:${color}`,
+      label: strings.mail.flagColors[flagColorKeys[color]],
+      icon: "flag",
+      disabled: !f.flagKeywords,
+    }),
+  );
+  const flagSubmenu = submenu(
+    "flag-color",
+    strings.mail.flagColor,
+    joinParts([
+      f.flagKeywords
+        ? colorItems
+        : kit.group(strings.mail.flagKeywordsUnsupported, colorItems, false),
+      defs(
+        f.isStarred && {
+          id: "clear-flag",
+          label: strings.mail.clearFlag,
           icon: "unstar",
-          chord: formatChord("L", { shift: true }),
-        }
-      : {
-          id: "toggle-star",
-          label: strings.reader.addStar,
-          icon: "star",
-          chord: formatChord("L", { shift: true }),
         },
-    f.pinned
-      ? { id: "unpin", label: strings.reader.unpin, icon: "unpin" }
-      : { id: "pin", label: strings.reader.pin, icon: "pin" },
-    {
-      id: "snooze",
-      label: strings.reader.snooze,
-      icon: "snooze",
-      dismiss: true,
-    },
-    f.canMute &&
-      (f.conversationMuted
+      ),
+    ]),
+  );
+  const state = [
+    ...defs(
+      f.isRead
         ? {
-            id: "mute-conversation",
-            label: strings.reader.unmuteConversation,
-            icon: "unmute",
-            dismiss: true,
+            id: "toggle-read",
+            label: strings.reader.markUnread,
+            icon: "mark-unread",
+            chord: formatChord("U", { shift: true }),
           }
         : {
-            id: "mute-conversation",
-            label: strings.reader.muteConversation,
-            icon: "mute",
-            dismiss: true,
-          }),
-  );
+            id: "toggle-read",
+            label: strings.reader.markRead,
+            icon: "mark-read",
+            chord: formatChord("U", { shift: true }),
+          },
+      f.isStarred
+        ? {
+            id: "toggle-star",
+            label: strings.reader.removeStar,
+            icon: "unstar",
+            chord: formatChord("L", { shift: true }),
+          }
+        : {
+            id: "toggle-star",
+            label: strings.reader.addStar,
+            icon: "star",
+            chord: formatChord("L", { shift: true }),
+          },
+    ),
+    ...flagSubmenu,
+    ...defs(
+      f.pinned
+        ? { id: "unpin", label: strings.reader.unpin, icon: "unpin" }
+        : { id: "pin", label: strings.reader.pin, icon: "pin" },
+      {
+        id: "snooze",
+        label: strings.reader.snooze,
+        icon: "snooze",
+        dismiss: true,
+      },
+      f.canMute &&
+        (f.conversationMuted
+          ? {
+              id: "mute-conversation",
+              label: strings.reader.unmuteConversation,
+              icon: "unmute",
+              dismiss: true,
+            }
+          : {
+              id: "mute-conversation",
+              label: strings.reader.muteConversation,
+              icon: "mute",
+              dismiss: true,
+            }),
+    ),
+  ];
 
   // Group 3: archive, move, junk, trash.
   const move = [

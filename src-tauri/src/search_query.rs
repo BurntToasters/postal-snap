@@ -58,6 +58,8 @@ pub(crate) struct ParsedSearch {
     /// `Some(true)` for `is:read`, `Some(false)` for `is:unread`.
     pub read: Option<bool>,
     pub flagged: bool,
+    /// `flag:<color>` (also sets `flagged`). Color index 0 (red) through 6 (gray).
+    pub flag_color: Option<u8>,
     /// `is:replied` (`\Answered`).
     pub answered: bool,
     /// `is:forwarded` (`$Forwarded`).
@@ -215,6 +217,16 @@ fn parse_date(value: &str) -> Option<NaiveDate> {
     NaiveDate::parse_from_str(value, "%Y-%m-%d").ok()
 }
 
+/// Flag color names in Apple Mail's order. The index is the color value.
+const FLAG_COLOR_NAMES: [&str; 7] = ["red", "orange", "yellow", "green", "blue", "purple", "gray"];
+
+fn flag_color_index(name: &str) -> Option<u8> {
+    FLAG_COLOR_NAMES
+        .iter()
+        .position(|candidate| *candidate == name)
+        .map(|index| index as u8)
+}
+
 pub(crate) fn parse(text: &str) -> ParsedSearch {
     let mut out = ParsedSearch::default();
     let mut clauses = 0usize;
@@ -300,6 +312,11 @@ pub(crate) fn parse(text: &str) -> ParsedSearch {
                     }
                     "is" if lowered == "flagged" || lowered == "starred" => {
                         out.flagged = true;
+                        clauses += 1;
+                    }
+                    "flag" if flag_color_index(&lowered).is_some() => {
+                        out.flagged = true;
+                        out.flag_color = flag_color_index(&lowered);
                         clauses += 1;
                     }
                     "is" if lowered == "replied" || lowered == "answered" => {
@@ -447,6 +464,7 @@ impl ParsedSearch {
             && self.folders.is_empty()
             && self.read.is_none()
             && !self.flagged
+            && self.flag_color.is_none()
             && !self.answered
             && !self.forwarded
             && !self.muted
@@ -533,6 +551,17 @@ impl ParsedSearch {
         }
         if self.flagged {
             keys.push("FLAGGED".into());
+        }
+        if let Some(color) = self.flag_color {
+            // Color bits are keywords; a server without them finds nothing.
+            let bits = crate::mail::keywords::bits_for_color(color).unwrap_or(0);
+            for (index, name) in crate::mail::keywords::FLAG_BIT_KEYWORDS.iter().enumerate() {
+                let set = bits & (1 << index) != 0;
+                keys.push(format!(
+                    "{} {name}",
+                    if set { "KEYWORD" } else { "UNKEYWORD" }
+                ));
+            }
         }
         if self.answered {
             keys.push("ANSWERED".into());
@@ -924,6 +953,38 @@ mod tests {
             .imap_criteria()
             .unwrap()
             .contains("CHARSET"));
+    }
+
+    #[test]
+    fn flag_color_operator_maps_to_flagged_and_color_keywords() {
+        let green = parse("flag:green");
+        assert!(green.flagged);
+        assert_eq!(green.flag_color, Some(3));
+        assert!(
+            green.plain.is_empty(),
+            "a known color is an operator, not text"
+        );
+        assert_eq!(
+            green.imap_criteria().unwrap(),
+            "FLAGGED KEYWORD $MailFlagBit0 KEYWORD $MailFlagBit1 UNKEYWORD $MailFlagBit2"
+        );
+        assert_eq!(parse("FLAG:Gray").flag_color, Some(6));
+        assert_eq!(
+            parse("flag:red").imap_criteria().unwrap(),
+            "FLAGGED UNKEYWORD $MailFlagBit0 UNKEYWORD $MailFlagBit1 UNKEYWORD $MailFlagBit2"
+        );
+    }
+
+    #[test]
+    fn unknown_flag_color_is_plain_text_and_starred_stays_uncolored() {
+        let teal = parse("flag:teal");
+        assert_eq!(teal.flag_color, None);
+        assert!(!teal.flagged);
+        assert_eq!(teal.plain.len(), 1);
+        let starred = parse("is:starred");
+        assert!(starred.flagged);
+        assert_eq!(starred.flag_color, None);
+        assert_eq!(starred.imap_criteria().unwrap(), "FLAGGED");
     }
 
     #[test]

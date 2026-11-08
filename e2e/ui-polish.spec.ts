@@ -1,6 +1,9 @@
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
 import { revealMenuItem } from "./menu-reveal";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 test.beforeEach(async ({ page }) => installMockIpc(page));
 
@@ -174,15 +177,15 @@ test("settings search, groups, and rows fit each density", async ({ page }) => {
       if (!nav || !search || !content) return null;
       const navBox = nav.getBoundingClientRect();
       const searchBox = search.getBoundingClientRect();
-      const contentBox = content.getBoundingClientRect();
       return {
-        searchBesideNav: searchBox.left >= navBox.right - 1,
-        columnsAlign: Math.abs(searchBox.left - contentBox.left) < 1,
+        // WP4.7: search heads the nav column, aligned to its left edge.
+        searchAboveNav: searchBox.bottom <= navBox.top + 1,
+        columnsAlign: Math.abs(searchBox.left - navBox.left) < 1,
         contentFits: content.scrollWidth <= content.clientWidth + 1,
       };
     });
     expect(placed, query).not.toBeNull();
-    expect(placed?.searchBesideNav, query).toBe(true);
+    expect(placed?.searchAboveNav, query).toBe(true);
     expect(placed?.columnsAlign, query).toBe(true);
     expect(placed?.contentFits, query).toBe(true);
 

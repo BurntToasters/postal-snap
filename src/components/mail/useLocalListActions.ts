@@ -8,6 +8,7 @@ import { waitToMarkRead } from "../../markRead";
 import { beginMessageOpen, isCurrentMessageOpen } from "../../messageOpen";
 import { messageAfterRemoval, messageAfterRemovals } from "../../threads";
 import { isOversizeError } from "./mailSearch";
+import { errorText } from "../../errors";
 
 type AppState = ReturnType<typeof useAppStore.getState>;
 
@@ -63,7 +64,7 @@ export function useLocalListActions({
         draftSummary: drafts.find((item) => item.id === saved.id),
       });
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 
@@ -84,7 +85,7 @@ export function useLocalListActions({
       if (useAppStore.getState().activeAccountId !== accountId) return;
       setDrafts(drafts);
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 
@@ -100,7 +101,7 @@ export function useLocalListActions({
         draftSummary: current.drafts.find((item) => item.id === id),
       });
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 
@@ -120,7 +121,7 @@ export function useLocalListActions({
         draftSummary: current.drafts.find((draft) => draft.id === id),
       });
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 
@@ -162,7 +163,7 @@ export function useLocalListActions({
       await api.retryOutbox(id, activeAccountId);
       await loadAccountData();
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
       await loadAccountData();
     }
   }
@@ -173,7 +174,7 @@ export function useLocalListActions({
       await api.retrySentCopy(id, activeAccountId);
       await loadAccountData();
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
       await loadAccountData();
     }
   }
@@ -184,7 +185,7 @@ export function useLocalListActions({
       await api.retryArchiveAfterSend(id, activeAccountId);
       await loadAccountData();
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
       await loadAccountData();
     }
   }
@@ -196,7 +197,7 @@ export function useLocalListActions({
       await loadAccountData();
       await refreshList();
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 
@@ -305,7 +306,7 @@ export function useLocalListActions({
         }
       } catch (cause) {
         if (!isCurrentMessageOpen(request)) return;
-        const detail = String(cause);
+        const detail = errorText(cause);
         setError(detail);
         if (isOversizeError(cause)) {
           selectMessage({
@@ -340,7 +341,7 @@ export function useLocalListActions({
       if (useAppStore.getState().activeAccountId !== accountId) return;
       setOutboxPreview(draft);
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 
@@ -363,7 +364,7 @@ export function useLocalListActions({
       openComposer({ draft });
       await loadAccountData();
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 
@@ -397,7 +398,7 @@ export function useLocalListActions({
       }
       await loadAccountData();
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 

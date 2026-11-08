@@ -1,5 +1,8 @@
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // FM16: the setup preview shows three distinct density looks, Normal by default.
 // Sender and subject share a line in Normal and Compact; Comfortable stacks them.

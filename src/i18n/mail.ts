@@ -104,7 +104,7 @@ export const mail = {
     { syntax: "larger:5M", meaning: "Larger than this size" },
     { syntax: "smaller:1M", meaning: "Smaller than this size" },
     { syntax: "is:unread", meaning: "Not read yet (or is:read)" },
-    { syntax: "is:flagged", meaning: "Starred messages (or is:starred)" },
+    { syntax: "is:flagged", meaning: "Flagged messages (or is:starred)" },
     { syntax: "is:muted", meaning: "Muted conversations" },
     { syntax: "is:pinned", meaning: "Pinned on this computer" },
     { syntax: "is:important", meaning: "High importance (or is:low)" },
@@ -123,6 +123,7 @@ export const mail = {
   settings: "Settings",
   noMessage: "Choose a message to read it.",
   emptyMailbox: "No messages here.",
+  emptyMailboxHint: "Messages you receive or move here appear in this list.",
   showMessages: "Show",
   filterAll: "All",
   filterMore: "More",
@@ -136,7 +137,7 @@ export const mail = {
   sortSubject: "Subject",
   sortSize: "Size",
   noUnread: "No unread messages.",
-  noStarred: "No starred messages.",
+  noStarred: "No flagged messages.",
   noAttachments: "No messages with attachments.",
   noPinned: "No pinned messages.",
   toMe: "To me",
@@ -205,7 +206,8 @@ export const mail = {
   loadingOlder: "Loading older mail…",
   read: "Read",
   unread: "Unread",
-  starred: "Starred",
+  starred: "Flagged",
+  flaggedAs: (color: string) => `Flagged, ${color}`,
   you: "You",
   peopleAndMore: (first: string, second: string, extra: number) =>
     extra === 1
@@ -227,6 +229,7 @@ export const mail = {
   addEmailAccount: "Add email account",
   mailboxFallback: "Mailbox",
   noDrafts: "No saved drafts on this device.",
+  noDraftsHint: "Drafts you save appear here until you send them.",
   noDraftMatch: "No drafts match this search.",
   draftFiles: (count: number) => (count === 1 ? "1 file" : `${count} files`),
   draftFrom: (address: string) => `From: ${address}`,
@@ -234,11 +237,13 @@ export const mail = {
   draftForward: "Unsent forward",
   draftRedirect: "Unsent redirect",
   noQueued: "No queued messages.",
+  noQueuedHint: "Mail you send while offline or on a schedule waits here.",
   noOutboxMatch: "No queued messages match this search.",
   outboxEmptyBody: "This message has no text yet.",
   offlineChangesDropped:
     "Some offline changes could not be applied and were undone.",
   noSnoozed: "Nothing snoozed.",
+  noSnoozedHint: "Snoozed messages return to your inbox when their time comes.",
   noSnoozedMatch: "No snoozed messages match this search.",
   snoozed: "Snoozed",
   unsnooze: "Bring back",
@@ -313,6 +318,7 @@ export const mail = {
   // The detail is server text: keep only its first sentence.
   partialSearch: (detail: string) =>
     `Server search unavailable. Showing cached results. ${detail.split(/(?<=[.!?])\s/)[0] ?? ""}`.trimEnd(),
+  noSearchResultsHint: "Check the spelling, or search all mailboxes.",
   noSearchResults: (query: string) =>
     `No messages matching "${query}". Check your spelling or try All Folders.`,
   newFolder: "New folder",
@@ -380,4 +386,32 @@ export const mail = {
   bulkTooMany: "Select up to 200 messages at a time.",
   dragMessageCount: (count: number) => `${count} messages`,
   noTargetFolder: "This account does not have that folder.",
+  flagColor: "Flag color",
+  clearFlag: "Clear Flag",
+  flagColors: {
+    red: "Red",
+    orange: "Orange",
+    yellow: "Yellow",
+    green: "Green",
+    blue: "Blue",
+    purple: "Purple",
+    gray: "Gray",
+  },
+  flagKeywordsUnsupported: "Flags need server keyword support in this mailbox.",
+  exportMailbox: "Export mailbox…",
+  importMessages: "Import messages…",
+  mboxExporting: (done: number, total: number) =>
+    `Exporting ${done} of ${total} messages…`,
+  mboxImporting: (done: number, total: number) =>
+    `Importing ${done} of ${total} messages…`,
+  mboxCancel: "Cancel",
+  mboxCancelling: "Cancelling…",
+  mboxCancelled: "Cancelled.",
+  mboxFailed: "The mailbox file could not be finished. Try again.",
+  mboxExportedCount: (count: number) =>
+    count === 1 ? "Exported 1 message." : `Exported ${count} messages.`,
+  mboxImportedCount: (count: number) =>
+    count === 1 ? "Imported 1 message." : `Imported ${count} messages.`,
+  mboxSkippedCount: (count: number) =>
+    count === 1 ? "1 message was skipped." : `${count} messages were skipped.`,
 } as const;

@@ -41,7 +41,7 @@ impl Database {
     pub fn list_accounts(&self) -> Result<Vec<AccountSummary>, String> {
         let conn = self.read_conn()?;
         let mut statement = conn.prepare(
-            "SELECT id, provider, email, display_name, sync_state, error, aliases_json, auth_method, signature, signature_html, color, default_body_format, reply_to FROM accounts ORDER BY sort_order, created_at",
+            "SELECT id, provider, email, display_name, sync_state, error, aliases_json, auth_method, signature, signature_html, color, default_body_format, reply_to, notify_new_mail FROM accounts ORDER BY sort_order, created_at",
         ).map_err(db_error)?;
         let rows = statement
             .query_map([], |row| {
@@ -63,6 +63,7 @@ impl Database {
                     reply_to: row.get::<_, Option<String>>(12)?.unwrap_or_default(),
                     color: row.get(10)?,
                     default_body_format: BodyFormat::from_db(&row.get::<_, String>(11)?),
+                    notify_new_mail: row.get::<_, i64>(13)? != 0,
                 })
             })
             .map_err(db_error)?;
@@ -75,7 +76,7 @@ impl Database {
             "SELECT id, provider, email, display_name, sync_state, error,
                     imap_host, imap_port, imap_tls, imap_username,
                     smtp_host, smtp_port, smtp_tls, smtp_username,
-                    aliases_json, auth_method, signature, signature_html, color, default_body_format, bridge_certificate, reply_to
+                    aliases_json, auth_method, signature, signature_html, color, default_body_format, bridge_certificate, reply_to, notify_new_mail
              FROM accounts WHERE id = ?1",
             [id],
             |row| {
@@ -98,6 +99,7 @@ impl Database {
                         reply_to: row.get::<_, Option<String>>(21)?.unwrap_or_default(),
                         color: row.get(18)?,
                         default_body_format: BodyFormat::from_db(&row.get::<_, String>(19)?),
+                        notify_new_mail: row.get::<_, i64>(22)? != 0,
                     },
                     imap: ServerConfig {
                         trusted_certificate: row.get(20)?,
@@ -303,6 +305,27 @@ impl Database {
                 .execute(
                     "UPDATE accounts SET signature = ?1, signature_html = ?2 WHERE id = ?3",
                     params![normalized, sanitized_html, id],
+                )
+                .map_err(db_error)?;
+            if updated != 1 {
+                return Err("Account not found.".into());
+            }
+        }
+        Ok(self.account(id)?.summary)
+    }
+
+    /// Per-account arrival notices. Returns the updated summary.
+    pub fn set_account_notifications(
+        &self,
+        id: &str,
+        enabled: bool,
+    ) -> Result<AccountSummary, String> {
+        {
+            let conn = self.conn()?;
+            let updated = conn
+                .execute(
+                    "UPDATE accounts SET notify_new_mail = ?1 WHERE id = ?2",
+                    params![i64::from(enabled), id],
                 )
                 .map_err(db_error)?;
             if updated != 1 {

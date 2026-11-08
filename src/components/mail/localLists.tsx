@@ -1,6 +1,15 @@
 import { outboxDetail } from "../../outboxDetail";
-import { useEffect, useState } from "react";
-import { Clock, FileText, Send, TriangleAlert, X } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
+import {
+  Clock,
+  FileText,
+  MailOpen,
+  Search,
+  Send,
+  TriangleAlert,
+  X,
+} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import {
   formatFullMessageDate,
   formatMessageDate,
@@ -9,6 +18,30 @@ import {
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
 import type { MessageSummary } from "../../types";
+
+/** Icon, title and hint, centered. The icon is decorative; the text is the name. */
+export function ListEmptyState({
+  icon: Icon = MailOpen,
+  title,
+  hint,
+  children,
+}: {
+  icon?: LucideIcon;
+  title: string;
+  hint?: string;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="list-state" role="status" aria-live="polite">
+      <div className="empty-state-icon">
+        <Icon aria-hidden="true" />
+      </div>
+      <p className="list-state-title">{title}</p>
+      {hint ? <p className="list-state-hint">{hint}</p> : null}
+      {children}
+    </div>
+  );
+}
 
 export function SnoozedList({
   items,
@@ -23,9 +56,11 @@ export function SnoozedList({
 }) {
   if (items.length === 0)
     return (
-      <div className="list-state" role="status" aria-live="polite">
-        {emptyLabel ?? strings.mail.noSnoozed}
-      </div>
+      <ListEmptyState
+        icon={emptyLabel ? Search : Clock}
+        title={emptyLabel ?? strings.mail.noSnoozed}
+        hint={emptyLabel ? undefined : strings.mail.noSnoozedHint}
+      />
     );
   return (
     <div className="local-mail-list">
@@ -95,9 +130,11 @@ export function DraftList({
 }) {
   if (drafts.length === 0)
     return (
-      <div className="list-state" role="status" aria-live="polite">
-        {emptyLabel ?? strings.mail.noDrafts}
-      </div>
+      <ListEmptyState
+        icon={emptyLabel ? Search : FileText}
+        title={emptyLabel ?? strings.mail.noDrafts}
+        hint={emptyLabel ? undefined : strings.mail.noDraftsHint}
+      />
     );
   return (
     <div className="local-mail-list">
@@ -262,9 +299,11 @@ export function OutboxList({
   }, [hasScheduled]);
   if (items.length === 0)
     return (
-      <div className="list-state" role="status" aria-live="polite">
-        {emptyLabel ?? strings.mail.noQueued}
-      </div>
+      <ListEmptyState
+        icon={emptyLabel ? Search : Send}
+        title={emptyLabel ?? strings.mail.noQueued}
+        hint={emptyLabel ? undefined : strings.mail.noQueuedHint}
+      />
     );
   return (
     <div className="local-mail-list">

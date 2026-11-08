@@ -1,75 +1,53 @@
 /* ==========================================================================
    Native Window Blur & Vibrancy
-   macOS vibrancy / Windows Mica & Acrylic. Structural chrome may be
-   translucent while message-list and rendered-email content stay opaque.
+   macOS vibrancy / Windows Mica. Only the mailbox sidebar is translucent;
+   the toolbar, message list, reader and rendered email stay opaque.
    ========================================================================== */
 
-/* 1. Root & Shell Translucency */
+/* 1. Root and shell: the native material shows through the sidebar gutter. */
 html[data-window-fx="vibrant"],
 html[data-window-fx="vibrant"] body {
   background: transparent !important;
 }
 
 html[data-window-fx="vibrant"] .mail-shell {
-  background: color-mix(in srgb, var(--canvas) 72%, transparent) !important;
+  background: transparent;
 }
 
-/* 2. Structural chrome: translucent glass. Content panes stay opaque. */
-html[data-window-fx="vibrant"] .app-toolbar {
-  background: color-mix(in srgb, var(--surface) 62%, transparent) !important;
-  backdrop-filter: blur(22px) saturate(140%);
-  -webkit-backdrop-filter: blur(22px) saturate(140%);
-  border-bottom: 1px solid var(--border-soft);
-  box-shadow: inset 0 1px 0 var(--glass-highlight);
-}
-
+/* 2. Sidebar: transparent over the native material, no CSS blur. */
 html[data-window-fx="vibrant"] .folder-pane {
-  background: color-mix(
-    in srgb,
-    var(--surface-muted) 58%,
-    transparent
-  ) !important;
-  backdrop-filter: blur(22px) saturate(130%);
-  -webkit-backdrop-filter: blur(22px) saturate(130%);
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   border-right: 1px solid var(--border-soft);
-  box-shadow: inset 0 1px 0 var(--glass-highlight);
+}
+
+/* 3. Opaque content and chrome. */
+html[data-window-fx="vibrant"] .app-toolbar,
+html[data-window-fx="vibrant"] .message-pane,
+html[data-window-fx="vibrant"] .reader-pane,
+html[data-window-fx="vibrant"] .reader-actions,
+html[data-window-fx="vibrant"] .message-header,
+html[data-window-fx="vibrant"] .remote-content-banner {
+  background: var(--bar);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 html[data-window-fx="vibrant"] .message-pane,
 html[data-window-fx="vibrant"] .reader-pane {
-  background: var(--surface) !important;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
+  background: var(--surface);
 }
 
 html[data-window-fx="vibrant"] .message-pane {
   border-right: 1px solid var(--border-soft);
 }
 
-html[data-window-fx="vibrant"] .reader-actions {
-  background: color-mix(in srgb, var(--surface) 78%, transparent) !important;
-  backdrop-filter: blur(18px) saturate(130%);
-  -webkit-backdrop-filter: blur(18px) saturate(130%);
-}
-
-html[data-window-fx="vibrant"] .message-header,
-html[data-window-fx="vibrant"] .remote-content-banner {
-  background: var(--surface) !important;
-}
-
-/* Controls remain readable over glass; message content remains opaque below. */
-html[data-window-fx="vibrant"]
-  .app-toolbar
-  :is(.toolbar-button, .icon-button, .primary-button) {
-  box-shadow: inset 0 1px 0 var(--glass-highlight);
-}
-
-/* 3. Content windows remain opaque; glass is reserved for app chrome. */
 html[data-window-fx="vibrant"] .composer-window,
 html[data-window-fx="vibrant"] .settings-window,
 html[data-window-fx="vibrant"] .setup-card,
 html[data-window-fx="vibrant"] .attachment-preview-dialog {
-  background: var(--surface) !important;
+  background: var(--surface);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
   box-shadow: var(--shadow);
@@ -80,18 +58,18 @@ html[data-window-fx="vibrant"] .settings-content,
 html[data-window-fx="vibrant"] .setup-card input,
 html[data-window-fx="vibrant"] .setup-card select,
 html[data-window-fx="vibrant"] .setup-card textarea {
-  background: var(--surface) !important;
+  background: var(--surface);
 }
 
-/* 4. CRITICAL EXCLUSION: rendered email stays completely opaque */
+/* 4. Rendered email stays opaque, whatever the chrome does. */
 html[data-window-fx="vibrant"] .message-body,
 html[data-window-fx="vibrant"] .message-body iframe,
 html[data-window-fx="vibrant"] .message-body .plain-text-body,
 html[data-window-fx="vibrant"] .message-body pre {
-  background: var(--mail-canvas) !important;
-  color-scheme: light !important;
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
+  background: var(--mail-canvas);
+  color-scheme: light;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 html[data-window-fx="vibrant"] .message-body[data-follows-theme="true"],
@@ -99,8 +77,8 @@ html[data-window-fx="vibrant"] .message-body[data-follows-theme="true"] iframe,
 html[data-window-fx="vibrant"]
   .message-body[data-follows-theme="true"]
   :is(.plain-text-body, pre) {
-  background: var(--surface) !important;
-  color-scheme: dark !important;
+  background: var(--surface);
+  color-scheme: dark;
 }
 
 html[data-window-fx="vibrant"] .message-body {
@@ -108,7 +86,25 @@ html[data-window-fx="vibrant"] .message-body {
   box-shadow: inset 0 0 0 1px var(--border-soft);
 }
 
-/* 5. Solid opaque shell when native FX is off */
+/* 5. Accessibility: opaque chrome under reduced transparency, more contrast
+   or forced colors, even if the JS attribute has not caught up yet. */
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  html[data-window-fx="vibrant"] .folder-pane {
+    background: var(--sidebar-bg);
+  }
+}
+
+@media (forced-colors: active) {
+  html[data-window-fx="vibrant"] .folder-pane {
+    background: var(--sidebar-bg);
+  }
+}
+
+html[data-reduce-transparency="true"][data-window-fx="vibrant"] .folder-pane {
+  background: var(--sidebar-bg);
+}
+
+/* 6. Solid opaque shell when native FX is off. */
 html[data-window-fx="opaque"] body,
 html:not([data-window-fx]) body {
   background: var(--canvas);

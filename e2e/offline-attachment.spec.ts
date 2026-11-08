@@ -1,8 +1,8 @@
 import AxeBuilder from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
-import { attachArtifacts, ipcCommands } from "./ipc-artifact";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifacts, ipcCommands } from "./ipc";
 
 // Failure modes covered here (docs/0.5.0-FAILURE-INVENTORY.md, E9):
 // 1. Offline, a partial message offers Download full message and fails with a raw error.

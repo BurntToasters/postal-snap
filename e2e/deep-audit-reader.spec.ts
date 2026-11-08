@@ -2,6 +2,9 @@ import type { Page } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
 import { revealMenuItem } from "./menu-reveal";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Deep audit for reader findings: More-menu viewport clamping at 620x540
 // with 200% text, Escape/focus behavior, icon-button targets, reply names,
@@ -98,7 +101,7 @@ test("icon-only reader actions keep the target-size hit area at 100%", async ({
   await openWeekend(page, "theme=light");
   const bar = page.locator(".reader-actions");
   const target = await targetSize(page);
-  for (const name of ["Add star", "Archive", "Move to trash", "More actions"]) {
+  for (const name of ["Flag", "Archive", "Move to trash", "More actions"]) {
     const box = await bar
       .getByRole("button", { name, exact: true })
       .boundingBox();

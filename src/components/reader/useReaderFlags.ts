@@ -1,6 +1,7 @@
 import type { RefObject } from "react";
 import { api } from "../../api";
 import { useAppStore } from "../../store";
+import { errorText } from "../../errors";
 
 type Store = ReturnType<typeof useAppStore.getState>;
 
@@ -28,10 +29,13 @@ export function useReaderFlags({
     const operation = ++starredOperation.current;
     const viewMailboxId = current.activeMailboxId;
     const next = !message.isStarred;
-    selectMessage({ ...message, isStarred: next });
+    const flagColor = next ? 0 : message.flagColor;
+    selectMessage({ ...message, isStarred: next, flagColor });
     setMessages(
       current.messages.map((summary) =>
-        summary.id === message.id ? { ...summary, isStarred: next } : summary,
+        summary.id === message.id
+          ? { ...summary, isStarred: next, flagColor }
+          : summary,
       ),
       current.messageCursor,
       current.hasMoreMessages,
@@ -64,7 +68,7 @@ export function useReaderFlags({
           ...current.selectedMessage,
           isStarred: message.isStarred,
         });
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 
@@ -132,7 +136,7 @@ export function useReaderFlags({
           ),
         );
       }
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 

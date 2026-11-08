@@ -1,6 +1,6 @@
 import { addressMailbox } from "../../contextMenu";
 import { strings } from "../../i18n";
-import { sanitizeComposeHtml } from "../../security";
+import { escapeHtml, sanitizeComposeHtml } from "../../security";
 import type { ComposerSeed } from "../../store";
 import type { DraftSourceKind, MessageDetail } from "../../types";
 
@@ -406,18 +406,22 @@ export function highlightColor(): string {
   return dark ? "#7a6200" : "#fff1a8";
 }
 
-export function escapeHtml(value: string): string {
-  return value.replace(
-    /[&<>"']/g,
-    (char) =>
-      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
-        char
-      ]!,
-  );
-}
-
 export function announceLocalMailChanged(accountId: string) {
   window.dispatchEvent(
     new CustomEvent("postal:local-mail-changed", { detail: accountId }),
   );
+}
+
+/** Signature preview: sanitized, with images and link targets removed. */
+export function signaturePreviewHtml(input: string): string {
+  const doc = new DOMParser().parseFromString(
+    sanitizeComposeHtml(input),
+    "text/html",
+  );
+  for (const image of doc.querySelectorAll("img")) image.remove();
+  for (const link of doc.querySelectorAll("a")) {
+    link.removeAttribute("href");
+    link.removeAttribute("data-external-href");
+  }
+  return doc.body.innerHTML;
 }

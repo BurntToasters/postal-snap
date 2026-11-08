@@ -4,6 +4,7 @@ import { strings } from "./i18n";
 import { useAppStore } from "./store";
 import { conversationMessages } from "./threads";
 import type { MessageSummary } from "./types";
+import { errorText } from "./errors";
 
 const listedStar = createOptimisticGate<number>();
 
@@ -11,14 +12,24 @@ function applyListedStar(messageId: number, starred: boolean): void {
   const store = useAppStore.getState();
   store.setMessages(
     store.messages.map((item) =>
-      item.id === messageId ? { ...item, isStarred: starred } : item,
+      item.id === messageId
+        ? {
+            ...item,
+            isStarred: starred,
+            flagColor: starred ? 0 : item.flagColor,
+          }
+        : item,
     ),
     store.messageCursor,
     store.hasMoreMessages,
   );
   const selected = store.selectedMessage;
   if (selected?.id === messageId) {
-    store.selectMessage({ ...selected, isStarred: starred });
+    store.selectMessage({
+      ...selected,
+      isStarred: starred,
+      flagColor: starred ? 0 : selected.flagColor,
+    });
   }
 }
 
@@ -49,7 +60,7 @@ export async function toggleListedStar(messageId: number): Promise<void> {
       return;
     }
     applyListedStar(messageId, !next);
-    current.setError(String(cause));
+    current.setError(errorText(cause));
   }
 }
 
@@ -70,14 +81,24 @@ export async function starLoadedConversation(
   const viewLocal = store.activeLocalView;
   store.setMessages(
     store.messages.map((item) =>
-      idSet.has(item.id) ? { ...item, isStarred: starred } : item,
+      idSet.has(item.id)
+        ? {
+            ...item,
+            isStarred: starred,
+            flagColor: starred ? 0 : item.flagColor,
+          }
+        : item,
     ),
     store.messageCursor,
     store.hasMoreMessages,
   );
   const selected = store.selectedMessage;
   if (selected && idSet.has(selected.id)) {
-    store.selectMessage({ ...selected, isStarred: starred });
+    store.selectMessage({
+      ...selected,
+      isStarred: starred,
+      flagColor: starred ? 0 : selected.flagColor,
+    });
   }
   try {
     const outcome = await api.setMessagesFlags(
@@ -111,6 +132,6 @@ export async function starLoadedConversation(
     if (open && idSet.has(open.id) && open.isStarred === starred) {
       current.selectMessage({ ...open, isStarred: !starred });
     }
-    current.setError(String(cause));
+    current.setError(errorText(cause));
   }
 }

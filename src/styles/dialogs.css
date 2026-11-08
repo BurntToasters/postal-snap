@@ -1,21 +1,28 @@
-/* Shared dialog shell, header, and preview pattern (moved, no visual change) */
+/* Sheet and setup widths. rem keeps them scaling with text size. */
+:root {
+  --setup-card-width: 40rem;
+  --setup-flow-width: 45rem;
+  --setup-account-width: 48.75rem;
+  --setup-first-sync-width: 32.5rem;
+  --setup-field-min: 15rem;
+  --sheet-width-md: 45rem;
+  --sheet-width-lg: 55rem;
+  --sheet-width-xl: 51.25rem;
+  --sheet-width-credits: 48.75rem;
+}
+
+/* Shared dialog shell, header, and preview pattern */
 .setup-card {
-  width: min(640px, 100%);
+  width: min(var(--setup-card-width), 100%);
   padding: var(--setup-card-padding);
   border: 1px solid var(--border-soft);
-  border-radius: var(--radius-lg);
-  background: linear-gradient(
-    155deg,
-    color-mix(in srgb, var(--surface-raised) 90%, var(--surface-highlight)),
-    var(--surface) 46%
-  );
-  box-shadow:
-    var(--shadow),
-    inset 0 1px 0 var(--surface-highlight);
+  border-radius: var(--radius-xl);
+  background: var(--surface);
+  box-shadow: var(--shadow-window);
 }
 
 .setup-card.account-form {
-  width: min(780px, 100%);
+  width: min(var(--setup-account-width), 100%);
 }
 
 .attachment-preview-dialog {
@@ -23,13 +30,13 @@
   z-index: 1;
   display: flex;
   flex-direction: column;
-  width: min(720px, 94vw);
+  width: min(var(--sheet-width-md), 94vw);
   max-height: 88vh;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-xl);
   background: var(--surface);
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow-window);
 }
 
 .attachment-preview-dialog header {
@@ -43,7 +50,7 @@
 
 .attachment-preview-dialog header > div {
   display: grid;
-  gap: 2px;
+  gap: var(--space-1);
   min-width: 0;
 }
 
@@ -82,17 +89,19 @@
 .license-credits-dialog {
   position: relative;
   z-index: 1;
-  width: min(780px, 94vw);
+  width: min(var(--sheet-width-credits), 94vw);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-window);
 }
 
 .license-credits-body {
   min-height: 0;
   flex: 1;
   overflow: auto;
-  padding: 18px;
+  padding: var(--space-5);
   display: grid;
   align-content: start;
-  gap: 16px;
+  gap: var(--space-4);
 }
 
 .license-credits-body p {
@@ -100,14 +109,14 @@
 }
 
 .license-credits-body h3 {
-  margin: 0 0 8px;
+  margin: 0 0 var(--space-2);
   font-size: var(--fs-base);
 }
 
 .license-credits-body pre,
 .license-card-body pre {
   margin: 0;
-  padding: 14px 16px;
+  padding: var(--space-3) var(--space-4);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface-muted);
@@ -120,7 +129,7 @@
 
 .license-package-list {
   display: grid;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .license-card {
@@ -134,9 +143,9 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: var(--space-3);
   min-height: var(--target-size);
-  padding: 10px 14px;
+  padding: var(--space-3) var(--space-4);
   cursor: pointer;
   list-style: none;
 }
@@ -158,7 +167,7 @@
 
 .license-card-tag {
   flex-shrink: 0;
-  padding: 2px 8px;
+  padding: var(--space-1) var(--space-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
   background: var(--surface-muted);
@@ -167,14 +176,21 @@
 
 .license-card-body {
   display: grid;
-  gap: 10px;
-  padding: 12px 14px 16px;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4) var(--space-4);
   border-top: 1px solid var(--border);
 }
 
 .license-card-body pre {
   max-height: 18rem;
   overflow: auto;
+}
+
+/* Confirm cards share settings.css markup; these rules win on specificity. */
+.settings-confirm-overlay .settings-confirm-card {
+  border-radius: var(--radius-xl);
+  background: var(--surface);
+  box-shadow: var(--shadow-window);
 }
 
 .move-folder-choices {
@@ -197,7 +213,7 @@
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
   place-items: center;
-  padding: 18px;
+  padding: var(--space-5);
 }
 
 .modal-backdrop {
@@ -208,14 +224,14 @@
   border: 0;
   border-radius: 0;
   background: var(--scrim);
-  backdrop-filter: blur(14px) saturate(115%);
-  -webkit-backdrop-filter: blur(14px) saturate(115%);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 .setup-modal .setup-page {
   position: relative;
   z-index: 1;
-  width: min(820px, 100%);
+  width: min(var(--sheet-width-xl), 100%);
   max-height: 100%;
   min-height: auto;
   padding: 0;
@@ -225,7 +241,7 @@
 .setup-dialog {
   position: relative;
   z-index: 1;
-  width: min(820px, 100%);
+  width: min(var(--sheet-width-xl), 100%);
   max-height: 100%;
   min-height: 0;
   overflow: auto;
@@ -236,7 +252,7 @@
   z-index: 2;
   top: 0;
   float: right;
-  margin: 0 0 10px 10px;
+  margin: 0 0 var(--space-2) var(--space-2);
 }
 
 .setup-modal .setup-card {
@@ -254,7 +270,7 @@
   flex-direction: column;
   overflow: auto;
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   background: var(--surface);
   box-shadow:
     var(--shadow),
@@ -308,7 +324,7 @@
   min-height: 0;
   overflow: hidden;
   border: 1px solid var(--border-soft);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   background: var(--surface);
   box-shadow:
     var(--shadow),
@@ -343,4 +359,100 @@
 
 .settings-window header small {
   color: var(--text-muted);
+}
+
+/* Message file viewer (EmlViewer) and PDF page stack (attachment preview). */
+.eml-viewer {
+  width: min(var(--sheet-width-lg), 94vw);
+}
+
+.eml-viewer-body {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  display: grid;
+  align-content: start;
+  gap: var(--space-3);
+  padding: var(--space-4);
+}
+
+.eml-headers {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+
+.eml-headers dt {
+  color: var(--text-muted);
+}
+
+.eml-headers dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.eml-message-body {
+  min-height: 16rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.eml-message-body iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 16rem;
+  border: 0;
+}
+
+.eml-viewer-notice {
+  margin: 0;
+  color: var(--danger-ink);
+}
+
+.eml-attachments h3 {
+  margin: 0 0 var(--space-2);
+  font-size: var(--fs-base);
+}
+
+.eml-attachments ul {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.eml-attachments li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.eml-attachment-name {
+  flex: 1 1 12rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.pdf-pages {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-3);
+  width: 100%;
+}
+
+.pdf-pages img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.pdf-pages p {
+  margin: 0;
 }

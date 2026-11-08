@@ -1,12 +1,21 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import process from "node:process";
 import test from "node:test";
 import { join } from "node:path";
 import { artifactArch, artifactPlatform } from "./lib/artifacts.js";
 import { root } from "./lib/paths.js";
+import { buildMasTauriArgs } from "./build-mas-args.js";
+import { buildTauriBuildArgs, resolveBuildInput } from "./tauri-build-args.js";
 import { isSemVer } from "./lib/versions.js";
 import { validateManifest } from "./validate-updater-manifest.js";
 import {
@@ -1623,5 +1632,152 @@ test("rust toolchain CLI --print matches the bare pin and never combines with an
       `${label} must name --print`,
     );
     assert.equal(result.stdout, "", `${label} must not print or act`);
+  }
+});
+
+const VIBRANCY_FEATURE = "macos-vibrancy";
+const MAC_DIRECT = { target: "universal-apple-darwin", platform: "darwin" };
+const MAS_CONFIG = "src-tauri/tauri.mas.conf.json";
+
+function featuresOf(args) {
+  const index = args.indexOf("--features");
+  return index < 0 ? [] : args[index + 1].split(",");
+}
+
+function buildFor({ input = [], ...options }) {
+  return buildTauriBuildArgs({
+    input: resolveBuildInput({ input, ...options }),
+    target: options.target,
+    overridePath: "override.json",
+  });
+}
+
+test("direct macOS builds enable macos-vibrancy", () => {
+  for (const options of [
+    { ...MAC_DIRECT, additionalConfig: undefined },
+    { ...MAC_DIRECT, target: undefined },
+    { ...MAC_DIRECT, requireMacosSigning: true },
+  ]) {
+    const args = buildFor(options);
+    assert.ok(
+      featuresOf(args).includes(VIBRANCY_FEATURE),
+      `direct macOS build must enable ${VIBRANCY_FEATURE}`,
+    );
+  }
+});
+
+test("store, Windows, and Linux builds never enable macos-vibrancy", () => {
+  const cases = [
+    {
+      name: "Mac App Store config",
+      options: { ...MAC_DIRECT, additionalConfig: MAS_CONFIG },
+    },
+    {
+      name: "Mac App Store feature",
+      options: { ...MAC_DIRECT, input: ["--features", "mas"] },
+    },
+    {
+      name: "Microsoft Store",
+      options: {
+        target: "x86_64-pc-windows-msvc",
+        platform: "win32",
+        additionalConfig: "src-tauri/tauri.msstore.conf.json",
+        input: ["--features", "msstore"],
+      },
+    },
+    {
+      name: "Flatpak",
+      options: {
+        target: "x86_64-unknown-linux-gnu",
+        platform: "linux",
+        additionalConfig: "src-tauri/tauri.flatpak.conf.json",
+        input: ["--features", "flatpak"],
+      },
+    },
+    {
+      name: "Windows direct",
+      options: { target: "x86_64-pc-windows-msvc", platform: "win32" },
+    },
+    {
+      name: "Linux AppImage",
+      options: {
+        target: "x86_64-unknown-linux-gnu",
+        platform: "linux",
+        input: [],
+      },
+    },
+  ];
+  for (const { name, options } of cases) {
+    const args = buildFor(options);
+    assert.ok(
+      !featuresOf(args).includes(VIBRANCY_FEATURE),
+      `${name} must not enable ${VIBRANCY_FEATURE}`,
+    );
+    assert.ok(!args.includes(VIBRANCY_FEATURE), `${name} leaked the feature`);
+  }
+});
+
+test("feature merge keeps caller features and never duplicates", () => {
+  assert.deepEqual(
+    resolveBuildInput({
+      input: ["--features", "foo", "--", "--locked"],
+      ...MAC_DIRECT,
+    }),
+    ["--features", `foo,${VIBRANCY_FEATURE}`, "--", "--locked"],
+  );
+  assert.deepEqual(
+    resolveBuildInput({
+      input: ["--features", VIBRANCY_FEATURE],
+      ...MAC_DIRECT,
+    }),
+    ["--features", VIBRANCY_FEATURE],
+  );
+});
+
+test("mas Tauri args never contain macos-vibrancy", () => {
+  const args = buildMasTauriArgs({ storeConfigPath: "store.json" });
+  assert.ok(!args.join(" ").includes(VIBRANCY_FEATURE));
+  assert.ok(args.includes("mas"));
+});
+
+test("macos-vibrancy is a feature that maps to the Tauri private API", async () => {
+  const cargo = await readFile(join(root, "src-tauri/Cargo.toml"), "utf8");
+  assert.match(cargo, /^macos-vibrancy = \["tauri\/macos-private-api"\]$/m);
+  assert.match(cargo, /^mas = \[\]$/m);
+});
+
+test("only the dev vibrancy script names macos-vibrancy", async () => {
+  const packageJson = JSON.parse(
+    await readFile(join(root, "package.json"), "utf8"),
+  );
+  const named = Object.entries(packageJson.scripts)
+    .filter(([, command]) => command.includes(VIBRANCY_FEATURE))
+    .map(([name]) => name);
+  assert.deepEqual(named, ["tauri:dev:vibrancy"]);
+  const dev = packageJson.scripts["tauri:dev:vibrancy"];
+  assert.match(dev, /tauri dev .*--features macos-vibrancy/);
+  assert.match(dev, /tauri\.direct\.conf\.json/);
+});
+
+test("macOSPrivateApi stays false in every Tauri config", async () => {
+  const dir = join(root, "src-tauri");
+  const configs = (await readdir(dir)).filter((name) =>
+    /^tauri.*\.conf\.json$/.test(name),
+  );
+  assert.ok(configs.includes("tauri.conf.json"));
+  const found = [];
+  const visit = (value, file) => {
+    if (!value || typeof value !== "object") return;
+    for (const [key, child] of Object.entries(value)) {
+      if (key === "macOSPrivateApi") found.push([file, child]);
+      visit(child, file);
+    }
+  };
+  for (const name of configs) {
+    visit(JSON.parse(await readFile(join(dir, name), "utf8")), name);
+  }
+  assert.ok(found.length >= configs.length - 1);
+  for (const [file, value] of found) {
+    assert.equal(value, false, `${file} must keep macOSPrivateApi false`);
   }
 });

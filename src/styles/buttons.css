@@ -11,7 +11,7 @@
   gap: var(--space-2);
   padding: var(--control-pad-block) var(--space-4);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-pill);
   background: var(--surface);
   transition:
     background-color 120ms ease,
@@ -20,17 +20,22 @@
     box-shadow 120ms ease;
 }
 
-.toolbar-button,
-.secondary-button {
+.toolbar-button {
   background: var(--fill);
+}
+
+/* macOS filled and tinted push buttons: pill, medium weight, no shadow. */
+.primary-button,
+.secondary-button,
+.danger-button {
+  font-weight: var(--fw-medium);
 }
 
 .primary-button {
   border-color: var(--accent-fill);
   color: var(--accent-contrast);
   background: var(--accent-fill);
-  font-weight: 700;
-  box-shadow: var(--shadow-control);
+  box-shadow: none;
 }
 
 .primary-button:hover {
@@ -38,7 +43,17 @@
   background: var(--accent-fill-hover);
 }
 
-.secondary-button:hover,
+/* Secondary: tinted fill, no border. */
+.secondary-button {
+  border: 0;
+  background: var(--fill);
+}
+
+.secondary-button:hover {
+  border: 0;
+  background: var(--fill-hover);
+}
+
 .toolbar-button:hover,
 .add-account-button:hover {
   border-color: var(--border-strong);
@@ -113,4 +128,12 @@
 .full-button {
   width: 100%;
   min-height: var(--button-lg-height);
+}
+
+/* Forced colors drop backgrounds, so bordered buttons need a real edge. */
+@media (forced-colors: active) {
+  .secondary-button,
+  .secondary-button:hover {
+    border: 1px solid ButtonText;
+  }
 }

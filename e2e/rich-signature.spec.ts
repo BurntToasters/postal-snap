@@ -4,8 +4,8 @@ import type { TestInfo } from "@playwright/test";
 import { join } from "node:path";
 
 import { expect, test } from "./coverage-fixture";
-import { attachArtifacts } from "./ipc-artifact";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifacts } from "./ipc";
 
 // Failure modes covered here (docs/0.5.0-FAILURE-INVENTORY.md, C1-C3):
 // 1. Rich formatting is lost when a signature is saved or reloaded.

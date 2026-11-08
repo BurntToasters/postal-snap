@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api } from "../../api";
 import { strings } from "../../i18n";
 import type { BridgeCertificate } from "../../types";
+import { errorText } from "../../errors";
 
 export function BridgeCertificateControl({
   accountId,
@@ -21,7 +22,7 @@ export function BridgeCertificateControl({
     try {
       setPending(await api.importBridgeCertificate());
     } catch (cause) {
-      setStatus(String(cause));
+      setStatus(errorText(cause));
     } finally {
       setBusy(false);
     }
@@ -45,7 +46,7 @@ export function BridgeCertificateControl({
       setPending(null);
       setStatus(strings.settings.certificateApproved);
     } catch (cause) {
-      setStatus(String(cause));
+      setStatus(errorText(cause));
     } finally {
       setBusy(false);
     }
@@ -65,7 +66,7 @@ export function BridgeCertificateControl({
       onApproved(undefined);
       setStatus("");
     } catch (cause) {
-      setStatus(String(cause));
+      setStatus(errorText(cause));
     } finally {
       setBusy(false);
     }

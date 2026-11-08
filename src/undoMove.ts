@@ -1,6 +1,7 @@
 import { api } from "./api";
 import { strings } from "./i18n";
 import { folderLabel } from "./i18n/mail";
+import { PostalError } from "./errors";
 import {
   DEFAULT_NOTICE_TIMEOUT_MS,
   UNDO_NOTICE_MAX_MS,
@@ -8,6 +9,7 @@ import {
 } from "./notices";
 import { useAppStore } from "./store";
 import type { MailboxSummary } from "./types";
+import { errorText } from "./errors";
 
 // One fixed id: a newer move replaces this notice, which commits the older move.
 export const UNDO_MOVE_NOTICE_ID = "undo-move";
@@ -19,7 +21,11 @@ export function ensureUndoSession(): Promise<string> {
   if (!undoSessionPromise) {
     const started = api.beginUndoSession().then((session) => {
       if (!/^[a-f0-9]{32}$/.test(session)) {
-        throw new Error("The undo session could not be started.");
+        throw new PostalError({
+          code: "operationFailed",
+          message: strings.errors.undoSessionNotStarted,
+          retryable: true,
+        });
       }
       return session;
     });
@@ -117,7 +123,7 @@ async function settleUndo(
     try {
       await api.commitDeferred(accountId, undoToken);
     } catch (cause) {
-      useAppStore.getState().setError(String(cause));
+      useAppStore.getState().setError(errorText(cause));
     }
     return;
   }
@@ -129,7 +135,7 @@ async function settleUndo(
       timeoutMs: DEFAULT_NOTICE_TIMEOUT_MS,
     });
   } catch (cause) {
-    useAppStore.getState().setError(String(cause));
+    useAppStore.getState().setError(errorText(cause));
   }
 }
 

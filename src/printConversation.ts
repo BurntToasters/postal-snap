@@ -9,6 +9,7 @@ import { useAppStore } from "./store";
 import { conversationMessages } from "./threads";
 import type { MessageDetail, MessageSummary } from "./types";
 import { BULK_LIMIT } from "./bulk";
+import { errorText } from "./errors";
 
 function printHtml(
   detail: MessageDetail,
@@ -67,7 +68,7 @@ export async function printLoadedConversation(
   } catch (cause) {
     const current = useAppStore.getState();
     if (current.activeAccountId !== summary.accountId) return;
-    current.setError(String(cause));
+    current.setError(errorText(cause));
   }
 }
 
@@ -124,6 +125,6 @@ export async function printSelectedMessages(
   } catch (cause) {
     const current = useAppStore.getState();
     if (current.activeAccountId !== accountId) return;
-    current.setError(String(cause));
+    current.setError(errorText(cause));
   }
 }

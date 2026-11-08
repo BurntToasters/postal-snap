@@ -93,7 +93,14 @@
         "bundleMediaFramework": false
       }
     },
-    "fileAssociations": []
+    "fileAssociations": [
+      {
+        "ext": ["eml"],
+        "mimeType": "message/rfc822",
+        "name": "Email Message",
+        "role": "Viewer"
+      }
+    ]
   },
   "plugins": {
     "deep-link": {

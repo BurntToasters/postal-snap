@@ -16,6 +16,7 @@ export interface MockAccount {
   aliases?: string[];
   defaultBodyFormat?: string;
   color?: string | null;
+  notifyNewMail?: boolean;
 }
 
 export interface MockMailbox {
@@ -27,6 +28,7 @@ export interface MockMailbox {
   unreadCount: number;
   totalCount: number;
   delimiter?: string | null;
+  allowsKeywords?: boolean;
 }
 
 export interface MockMessageSummary {
@@ -51,6 +53,7 @@ export interface MockMessageSummary {
   isAnswered?: boolean;
   isForwarded?: boolean;
   importance?: string;
+  flagColor?: number;
 }
 
 export interface MockState {
@@ -95,7 +98,20 @@ export type MockInvokeHandler = (
   args: MockInvokeArgs,
 ) => unknown | Promise<unknown>;
 
+/** Rejection value shaped like Rust's IpcErrorPayload (see src/types.ts). */
+export interface MockIpcError {
+  code: string;
+  message: string;
+  retryable: boolean;
+}
+
 export interface MockShared {
+  /** Builds a coded error for `throw`; `retryable` defaults to false. */
+  mockError: (
+    code: string,
+    message: string,
+    retryable?: boolean,
+  ) => MockIpcError;
   account: MockAccount;
   accounts: MockAccount[];
   mailboxes: MockMailbox[];

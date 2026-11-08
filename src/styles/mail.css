@@ -10,12 +10,7 @@
     0px,
     calc(100dvh - var(--mail-toolbar-height, var(--toolbar-height)))
   );
-  --list-row-inset: 6px;
   --list-row-margin-block: 1px;
-  --list-row-pad-start: 10px;
-  --list-row-pad-end: 12px;
-  --list-dot-track: 0.625rem;
-  --list-row-gap: 8px;
   --list-select-gap: 4px;
   /* Row margin + padding + unread column + gap. Title, filter, day heading,
      and sender all start here. */

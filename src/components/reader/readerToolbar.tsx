@@ -5,13 +5,13 @@ import {
   ArrowLeft,
   ChevronDown,
   ChevronUp,
+  Flag,
   FolderInput,
   Inbox,
   Forward,
   Ellipsis,
   Reply,
   ReplyAll,
-  Star,
   Trash,
   X,
 } from "lucide-react";
@@ -26,6 +26,7 @@ import {
   subjectSearchQuery,
 } from "../../contextMenu";
 import { formatChord, withChord } from "../../format";
+import { FLAG_COLORS } from "../../flagColors";
 import { strings } from "../../i18n";
 import { folderPathLabel } from "../../i18n/mail";
 import type { MailboxSummary, MessageDetail, ReadingPane } from "../../types";
@@ -259,7 +260,20 @@ export function ReaderToolbar({
   );
   // Same ordered groups as the row context menu (src/menuModel.ts). The kit
   // drops entries whose handler this surface does not supply.
+  // Flag colors run in the reader hook, which knows the open message.
+  const flagHandlers = Object.fromEntries(
+    [...FLAG_COLORS.map((color) => `flag-color:${color}`), "clear-flag"].map(
+      (id) => [
+        id,
+        () =>
+          window.dispatchEvent(
+            new CustomEvent("postal:menu-action", { detail: id }),
+          ),
+      ],
+    ),
+  );
   const handlers: Record<string, (() => void) | undefined> = {
+    ...flagHandlers,
     "reply-bare": onReplyWithoutQuoting,
     "reply-all-bare": onReplyAllWithoutQuoting,
     "reply-with-attachments": onReplyWithAttachments,
@@ -397,6 +411,10 @@ export function ReaderToolbar({
   const facts: MessageMenuFacts = {
     isRead: message.isRead,
     isStarred: message.isStarred,
+    flagColor: message.flagColor,
+    flagKeywords:
+      mailboxes.find((box) => box.id === message.mailboxId)?.allowsKeywords !==
+      false,
     pinned: Boolean(message.pinned),
     canMute: canMuteConversation(message),
     conversationMuted: Boolean(message.conversationMuted),
@@ -554,6 +572,9 @@ export function ReaderToolbar({
             className="reader-icon-action"
             onClick={onToggleStar}
             aria-pressed={message.isStarred}
+            data-flag-color={
+              message.isStarred ? (message.flagColor ?? 0) : undefined
+            }
             aria-label={
               message.isStarred
                 ? strings.reader.removeStar
@@ -567,7 +588,8 @@ export function ReaderToolbar({
             )}
             aria-keyshortcuts="Meta+Shift+L Control+Shift+L"
           >
-            <Star
+            <Flag
+              className="flag-glyph"
               aria-hidden="true"
               fill={message.isStarred ? "currentColor" : "none"}
             />

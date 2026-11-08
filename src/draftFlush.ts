@@ -1,3 +1,6 @@
+import { PostalError } from "./errors";
+import { strings } from "./i18n";
+
 // Quit and replacement save the open message first. The composer registers how
 // and whether it is busy (sending or discarding). Quitting bounds the wait and
 // keeps the window open when saving fails.
@@ -64,7 +67,14 @@ export async function flushOpenDraft(timeoutMs = 4_000): Promise<void> {
       registration.flush(),
       new Promise<never>((_, reject) => {
         timer = setTimeout(
-          () => reject(new Error("Draft save timed out")),
+          () =>
+            reject(
+              new PostalError({
+                code: "operationFailed",
+                message: strings.errors.draftSaveTimedOut,
+                retryable: true,
+              }),
+            ),
           timeoutMs,
         );
       }),

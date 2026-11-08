@@ -72,7 +72,7 @@
   gap: 4px;
 }
 
-/* Segmented filter: a pill track that wraps instead of scrolling. */
+/* Segmented filter: a rounded track that wraps instead of scrolling. */
 .mailbox-filter {
   position: relative;
   display: flex;
@@ -90,7 +90,7 @@
   min-width: 0;
   max-width: 100%;
   padding: 2px;
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-md);
   background: var(--fill);
 }
 
@@ -112,18 +112,13 @@
   padding-block: 0;
   padding-inline: var(--space-4);
   border: 0;
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-sm);
   background: transparent;
   box-shadow: none;
   color: var(--text);
   font: inherit;
   white-space: nowrap;
   cursor: pointer;
-}
-
-/* Compact keeps its traditional smaller track. */
-:root[data-density="compact"] .mailbox-filter-segment {
-  min-height: var(--target-size-inset);
 }
 
 .mailbox-filter-segment svg {
@@ -159,13 +154,9 @@
   outline-offset: 2px;
 }
 
-/* At 200% text a wrapped track is a rounded panel, not a broken pill. */
-html[data-text-scale="large"] .mailbox-filter-control {
-  border-radius: var(--radius-md);
-}
-
+/* At 200% text the segments tighten so the track stays on one row. */
 html[data-text-scale="large"] .mailbox-filter-segment {
-  padding-inline: var(--space-3);
+  padding-inline: var(--space-2);
 }
 
 @media (forced-colors: active) {
@@ -334,8 +325,44 @@ html[data-text-scale="large"] .mailbox-filter-segment {
   height: var(--icon-lg);
 }
 
+/* Flag glyphs tint with the flag color; --flag-ink is set per color below. */
 .row-action.starred {
-  color: var(--warning);
+  color: var(--flag-ink, var(--flag-red));
+}
+
+[data-flag-color="0"] {
+  --flag-ink: var(--flag-red);
+}
+
+[data-flag-color="1"] {
+  --flag-ink: var(--flag-orange);
+}
+
+[data-flag-color="2"] {
+  --flag-ink: var(--flag-yellow);
+}
+
+[data-flag-color="3"] {
+  --flag-ink: var(--flag-green);
+}
+
+[data-flag-color="4"] {
+  --flag-ink: var(--flag-blue);
+}
+
+[data-flag-color="5"] {
+  --flag-ink: var(--flag-purple);
+}
+
+[data-flag-color="6"] {
+  --flag-ink: var(--flag-gray);
+}
+
+/* Light mode darkens the tint so the glyph keeps 3:1 contrast. */
+@media not (forced-colors: active) {
+  :root:not([data-resolved-theme="dark"]) .row-action.starred {
+    color: color-mix(in srgb, var(--flag-ink, var(--flag-red)) 55%, #000);
+  }
 }
 
 .row-action:hover {
@@ -508,7 +535,7 @@ html[data-text-scale="large"] .mailbox-filter-segment {
   min-height: var(--target-size);
   padding: 0 var(--space-4);
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--accent-fill);
   color: var(--accent-contrast);
   font: inherit;
@@ -546,14 +573,42 @@ html[data-text-scale="large"] .mailbox-filter-segment {
   }
 }
 
-/* Centered, like Mail's "No Messages"; clamp keeps short panes usable. */
+/* Centered icon, title and hint, like Mail's "No Messages"; clamp keeps short panes usable. */
 .list-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   padding: clamp(52px, 28vh, 260px) 24px 24px;
   text-align: center;
   color: var(--text-muted);
-  font-size: var(--fs-lg);
+  font-size: var(--fs-md);
   line-height: 1.45;
   overflow-wrap: anywhere;
+}
+
+.empty-state-icon {
+  display: flex;
+  margin-bottom: var(--space-3);
+  color: var(--text-muted);
+}
+
+.empty-state-icon svg {
+  width: 2.5rem;
+  height: 2.5rem;
+}
+
+.list-state-title {
+  max-inline-size: 32ch;
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+
+.list-state-hint {
+  max-inline-size: 32ch;
+  margin: var(--space-1) 0 0;
+  font-size: var(--fs-sm);
 }
 
 .list-state-actions {
@@ -561,11 +616,7 @@ html[data-text-scale="large"] .mailbox-filter-segment {
   flex-wrap: wrap;
   justify-content: center;
   gap: var(--space-2);
-}
-
-.list-state p {
-  max-inline-size: 32ch;
-  margin: 0 auto var(--space-4);
+  margin-top: var(--space-4);
 }
 
 .list-day {
@@ -580,11 +631,6 @@ html[data-text-scale="large"] .mailbox-filter-segment {
   font-size: var(--fs-xs);
   font-weight: 600;
   line-height: 1.45;
-}
-
-/* The count stays in the day button's name; comfortable shows it too. */
-:root:not([data-density="comfortable"]) .list-day-count {
-  display: none;
 }
 
 .list-day > span:first-child {
@@ -649,7 +695,7 @@ button.list-day:focus-visible {
   width: 100%;
   min-height: var(--message-row-height);
   /* The sender keeps three characters even when large text widens the date. */
-  grid-template-columns: 0.625rem minmax(3em, 1fr) auto;
+  grid-template-columns: var(--list-dot-track) minmax(3em, 1fr) auto;
   grid-template-areas:
     "dot sender date"
     "dot subject subject"
@@ -666,13 +712,30 @@ button.list-day:focus-visible {
   background: var(--surface);
   color: var(--text);
   line-height: 1.45;
-  box-shadow: inset 0 -1px var(--border-soft);
   transition: background-color 120ms ease;
 }
 
+/* Inset hairline from the text edge; hidden around the selection. */
+.message-row::after {
+  content: "";
+  position: absolute;
+  inset-inline: var(--list-text-inset) var(--list-row-inset);
+  bottom: 0;
+  height: 1px;
+  background: var(--separator);
+  pointer-events: none;
+}
+
+.message-row.selected::after,
+.message-row.checked::after,
+.message-row.precedes-selection::after {
+  display: none;
+}
+
+/* Inset ring: the list clips outside the row. */
 .message-row:focus-visible {
-  outline: none;
-  box-shadow: inset 0 0 0 3px var(--focus);
+  outline: 3px solid var(--focus);
+  outline-offset: -3px;
 }
 
 /* Selection is an inset rounded rectangle; padding keeps the text in place. */
@@ -684,7 +747,7 @@ button.list-day:focus-visible {
     )
     calc(var(--list-row-pad-end) - var(--space-1));
   border-radius: var(--radius-sm);
-  background: var(--sidebar-selection);
+  background: var(--selection-inactive);
 }
 
 /* Two states: accent while the list has focus, neutral otherwise. */
@@ -723,8 +786,9 @@ button.list-day:focus-visible {
   background: var(--accent-contrast);
 }
 
+/* White ring on the accent fill. */
 .message-row.selected:focus-visible {
-  outline: 3px solid var(--focus);
+  outline: 3px solid var(--focus-on-accent);
   outline-offset: -3px;
 }
 
@@ -751,11 +815,11 @@ button.list-day:focus-visible {
 }
 
 .message-sender {
-  font-weight: 600;
+  font-weight: 400;
 }
 
 .message-row.unread .message-sender {
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .message-row.unread .message-subject {
@@ -840,7 +904,15 @@ button.list-day:focus-visible {
 }
 
 .message-subject svg.message-mark.star-mark {
-  color: var(--warning);
+  color: var(--flag-ink, var(--flag-red));
+}
+
+@media not (forced-colors: active) {
+  :root:not([data-resolved-theme="dark"])
+    .message-subject
+    svg.message-mark.star-mark {
+    color: color-mix(in srgb, var(--flag-ink, var(--flag-red)) 55%, #000);
+  }
 }
 
 /* Accent marks vanish on the accent background; selected rows use contrast. */
@@ -853,6 +925,27 @@ button.list-day:focus-visible {
 }
 
 @media (forced-colors: active) {
+  /* Backgrounds are forced away in forced colors, so the hairline uses a border. */
+  .message-row::after {
+    height: 0;
+    background: none;
+    border-top: 1px solid CanvasText;
+  }
+
+  /* The focus-within twin matches the accent rule's specificity and wins. */
+  .message-row.selected,
+  .message-row.checked,
+  .message-list:focus-within :is(.message-row.selected, .message-row.checked) {
+    background: Highlight;
+    color: HighlightText;
+    forced-color-adjust: none;
+  }
+
+  .message-row.selected *,
+  .message-row.checked * {
+    color: HighlightText;
+  }
+
   .message-subject svg.message-mark.star-mark {
     color: CanvasText;
   }

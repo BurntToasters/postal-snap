@@ -37,6 +37,7 @@ import type { useReaderCompose } from "./useReaderCompose";
 import type { useReaderFlags } from "./useReaderFlags";
 import type { useReaderMoves } from "./useReaderMoves";
 import { readerAccount, type useSenderRules } from "./useSenderRules";
+import { errorText } from "../../errors";
 
 type Store = ReturnType<typeof useAppStore.getState>;
 type Compose = ReturnType<typeof useReaderCompose>;
@@ -427,7 +428,7 @@ export function buildReaderActions(
     onSaveEml: () => {
       void api
         .saveMessageEml(message.accountId, message.id)
-        .catch((cause) => setError(String(cause)));
+        .catch((cause) => setError(errorText(cause)));
     },
     onTogglePlain: () =>
       setPlainMessageId((current) =>

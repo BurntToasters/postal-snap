@@ -14,6 +14,7 @@ import { messageAfterRemoval } from "../../threads";
 import { undoableMove, undoTargetFor } from "../../undoMove";
 import type { MessageDetail, MessageSummary } from "../../types";
 import { moveCounts } from "./readerUtils";
+import { errorText } from "../../errors";
 
 type Store = ReturnType<typeof useAppStore.getState>;
 
@@ -87,7 +88,7 @@ export function useReaderMoves({
       await api.deleteTrashMessages(message.accountId, [message.id]);
     } catch (cause) {
       if (useAppStore.getState().selectedMessage?.id === message.id)
-        setError(String(cause));
+        setError(errorText(cause));
       return;
     }
     const after = useAppStore.getState();
@@ -199,7 +200,7 @@ export function useReaderMoves({
       }
     } catch (cause) {
       if (!isCurrentMessageOpen(request)) return;
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 
@@ -222,7 +223,7 @@ export function useReaderMoves({
         await api.unmuteConversation(message.accountId, message.id);
         paintConversationMuted(message, false);
       } catch (cause) {
-        setError(String(cause));
+        setError(errorText(cause));
       }
       return;
     }
@@ -241,7 +242,7 @@ export function useReaderMoves({
       dropFiledMessages(message, filed);
       paintConversationMuted(message, true);
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 
@@ -409,7 +410,7 @@ export function useReaderMoves({
       );
       if (restoredMessages)
         restoreFailedMove(current.selectedMessage?.id, next?.id, message);
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 
@@ -550,7 +551,7 @@ export function useReaderMoves({
       );
       if (restoredMessages)
         restoreFailedMove(current.selectedMessage?.id, next?.id, message);
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 
@@ -570,7 +571,7 @@ export function useReaderMoves({
         current.selectedMessage?.id !== messageId
       )
         return;
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 

@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { normalizeIpcError } from "./errors";
+import { normalizeIpcError, PostalError } from "./errors";
+import { strings } from "./i18n";
 import type { MessageListFilter } from "./listFilter";
 import type { MessageListSort } from "./listSort";
 import type {
@@ -50,6 +51,13 @@ import type {
   SyncState,
   SyncProgress,
   SendOutcome,
+  EmlOpenedEvent,
+  FlagColor,
+  MboxExportResult,
+  MboxImportResult,
+  MboxProgressEvent,
+  NotificationOpenEvent,
+  OpenedMessage,
 } from "./types";
 
 // Settings mutations share one native write queue. This keeps an autosave from
@@ -230,16 +238,31 @@ export type NativeCommand =
   | "supports_workspace_window_fx"
   | "accessibility_reduce_transparency"
   | "set_snap_overlay_bounds"
-  | "set_workspace_window_fx";
+  | "set_workspace_window_fx"
+  | "set_messages_flag_color"
+  | "set_account_notifications"
+  | "export_mailbox_mbox"
+  | "import_mbox"
+  | "cancel_mbox_operation"
+  | "open_eml_file"
+  | "get_opened_message"
+  | "close_opened_message"
+  | "save_opened_attachment"
+  | "preview_opened_attachment"
+  | "view_attachment_message"
+  | "start_attachment_drag"
+  | "start_message_drag";
 
 async function call<T>(
   command: NativeCommand,
   args: Record<string, unknown> = {},
 ): Promise<T> {
   if (!inTauri())
-    throw new Error(
-      "Postal Snap native service is unavailable in browser preview.",
-    );
+    throw new PostalError({
+      code: "operationFailed",
+      message: strings.errors.browserPreviewUnavailable,
+      retryable: false,
+    });
   try {
     return await invoke<T>(command, args);
   } catch (cause) {
@@ -772,6 +795,30 @@ export const api = {
       ({ payload }) => handler(payload),
     );
   },
+  async onNotificationOpen(
+    handler: (event: NotificationOpenEvent) => void,
+  ): Promise<UnlistenFn> {
+    if (!inTauri()) return () => undefined;
+    return listen<NotificationOpenEvent>("notification-open", ({ payload }) =>
+      handler(payload),
+    );
+  },
+  async onEmlOpened(
+    handler: (event: EmlOpenedEvent) => void,
+  ): Promise<UnlistenFn> {
+    if (!inTauri()) return () => undefined;
+    return listen<EmlOpenedEvent>("eml-opened", ({ payload }) =>
+      handler(payload),
+    );
+  },
+  async onMboxProgress(
+    handler: (event: MboxProgressEvent) => void,
+  ): Promise<UnlistenFn> {
+    if (!inTauri()) return () => undefined;
+    return listen<MboxProgressEvent>("mbox-progress", ({ payload }) =>
+      handler(payload),
+    );
+  },
   /** Maximize-overlay hit area in physical pixels. Zero size hides it. */
   setSnapOverlayBounds: (bounds: {
     x: number;
@@ -779,6 +826,51 @@ export const api = {
     width: number;
     height: number;
   }) => call<void>("set_snap_overlay_bounds", bounds),
+  setMessagesFlagColor: (
+    accountId: string,
+    messageIds: number[],
+    color: FlagColor | null,
+  ) => call<void>("set_messages_flag_color", { accountId, messageIds, color }),
+  setAccountNotifications: (accountId: string, enabled: boolean) =>
+    call<void>("set_account_notifications", { accountId, enabled }),
+  exportMailboxMbox: (accountId: string, mailboxId: number) =>
+    call<MboxExportResult>("export_mailbox_mbox", { accountId, mailboxId }),
+  importMbox: (accountId: string, mailboxId: number) =>
+    call<MboxImportResult>("import_mbox", { accountId, mailboxId }),
+  cancelMboxOperation: (operationId: string) =>
+    call<void>("cancel_mbox_operation", { operationId }),
+  /** Resolves to null when the user cancels the file dialog. */
+  openEmlFile: () => call<OpenedMessage | null>("open_eml_file"),
+  getOpenedMessage: (token: string) =>
+    call<OpenedMessage>("get_opened_message", { token }),
+  closeOpenedMessage: (token: string) =>
+    call<void>("close_opened_message", { token }),
+  saveOpenedAttachment: (token: string, attachmentId: string) =>
+    call<void>("save_opened_attachment", { token, attachmentId }),
+  previewOpenedAttachment: (token: string, attachmentId: string) =>
+    call<AttachmentPreview>("preview_opened_attachment", {
+      token,
+      attachmentId,
+    }),
+  viewAttachmentMessage: (
+    accountId: string,
+    messageId: number,
+    attachmentId: string,
+  ) =>
+    call<OpenedMessage>("view_attachment_message", {
+      accountId,
+      messageId,
+      attachmentId,
+    }),
+  /** Drag-out is deferred; these reject with "Not available yet." */
+  startAttachmentDrag: (
+    accountId: string,
+    messageId: number,
+    attachmentId: string,
+  ) =>
+    call<void>("start_attachment_drag", { accountId, messageId, attachmentId }),
+  startMessageDrag: (accountId: string, messageId: number) =>
+    call<void>("start_message_drag", { accountId, messageId }),
   discoverAccountAliases: (accountId: string) =>
     call<AccountSummary>("discover_account_aliases", { accountId }),
   updateAccountAliases: (accountId: string, aliases: string[]) =>

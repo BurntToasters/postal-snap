@@ -1,20 +1,21 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
 import { installMockIpc } from "./mock-ipc";
-import { emitTauriEvent, recordIpc, recordedCalls } from "./ipc-recorder";
+import { attachArtifactsAfterEach, emitTauriEvent, ipcCalls } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Failure modes: a discarded package relaunches without installation; closing
 // an active package breaks installation; failed downloads leak native resources.
 test.beforeEach(async ({ page }) => {
   await installMockIpc(page);
-  await recordIpc(page);
 });
 
 async function artifact(page: Page, name: string) {
   mkdirSync("test-results/updater-safety", { recursive: true });
   writeFileSync(
     `test-results/updater-safety/${name}.json`,
-    JSON.stringify(await recordedCalls(page), null, 2),
+    JSON.stringify(await ipcCalls(page), null, 2),
   );
 }
 
@@ -49,13 +50,13 @@ test("channel change while waiting cancels the old installation", async ({
   await page.getByRole("tab", { name: "Updates", exact: true }).click();
   await page.getByRole("button", { name: "Restart Postal Snap" }).click();
   await expect
-    .poll(async () => (await recordedCalls(page)).map((c) => c.command))
+    .poll(async () => (await ipcCalls(page)).map((c) => c.command))
     .toContain("begin_update_install");
   await advanced(page);
   await expect
     .poll(
       async () =>
-        (await recordedCalls(page)).filter(
+        (await ipcCalls(page)).filter(
           (c) => c.command === "plugin:resources|close",
         ).length,
     )
@@ -64,17 +65,17 @@ test("channel change while waiting cancels the old installation", async ({
     (window as unknown as { releaseInstall: () => void }).releaseInstall(),
   );
   await expect
-    .poll(async () => (await recordedCalls(page)).map((c) => c.command))
+    .poll(async () => (await ipcCalls(page)).map((c) => c.command))
     .toContain("release_update_install");
   await expect
     .poll(
       async () =>
-        (await recordedCalls(page)).filter(
+        (await ipcCalls(page)).filter(
           (c) => c.command === "plugin:updater|check",
         ).length,
     )
     .toBe(2);
-  const calls = await recordedCalls(page);
+  const calls = await ipcCalls(page);
   expect(calls.map((c) => c.command)).not.toContain("plugin:updater|install");
   expect(calls.map((c) => c.command)).not.toContain("relaunch_app");
   await artifact(page, "channel-wait");
@@ -97,16 +98,16 @@ test("channel change while preparing relaunch cancels and clears its marker", as
   await page.getByRole("tab", { name: "Updates", exact: true }).click();
   await page.getByRole("button", { name: "Restart Postal Snap" }).click();
   await expect
-    .poll(async () => (await recordedCalls(page)).map((c) => c.command))
+    .poll(async () => (await ipcCalls(page)).map((c) => c.command))
     .toContain("prepare_update_relaunch");
   await advanced(page);
   await page.evaluate(() =>
     (window as unknown as { releaseMarker: () => void }).releaseMarker(),
   );
   await expect
-    .poll(async () => (await recordedCalls(page)).map((c) => c.command))
+    .poll(async () => (await ipcCalls(page)).map((c) => c.command))
     .toContain("release_update_install");
-  const commands = (await recordedCalls(page)).map((c) => c.command);
+  const commands = (await ipcCalls(page)).map((c) => c.command);
   expect(commands).toContain("clear_update_relaunch");
   expect(commands).not.toContain("plugin:updater|install");
   expect(commands).not.toContain("relaunch_app");
@@ -130,7 +131,7 @@ test("quit still exits when a channel change discards the waiting update", async
   await page.getByRole("tab", { name: "Advanced", exact: true }).click();
   await emitTauriEvent(page, "tray-quit", null);
   await expect
-    .poll(async () => (await recordedCalls(page)).map((c) => c.command))
+    .poll(async () => (await ipcCalls(page)).map((c) => c.command))
     .toContain("begin_update_install");
   await page
     .getByRole("combobox", { name: "Update channel" })
@@ -138,7 +139,7 @@ test("quit still exits when a channel change discards the waiting update", async
   await expect
     .poll(
       async () =>
-        (await recordedCalls(page)).filter(
+        (await ipcCalls(page)).filter(
           (c) => c.command === "plugin:resources|close",
         ).length,
     )
@@ -147,9 +148,9 @@ test("quit still exits when a channel change discards the waiting update", async
     (window as unknown as { releaseInstall: () => void }).releaseInstall(),
   );
   await expect
-    .poll(async () => (await recordedCalls(page)).map((c) => c.command))
+    .poll(async () => (await ipcCalls(page)).map((c) => c.command))
     .toContain("quit_app");
-  const commands = (await recordedCalls(page)).map((c) => c.command);
+  const commands = (await ipcCalls(page)).map((c) => c.command);
   expect(commands).toContain("release_update_install");
   expect(commands).not.toContain("plugin:updater|install");
   expect(commands).not.toContain("relaunch_app");
@@ -173,18 +174,18 @@ test("failed restart can retry without reinstalling an applied update", async ({
   await page.getByRole("tab", { name: "Updates", exact: true }).click();
   await page.getByRole("button", { name: "Restart Postal Snap" }).click();
   await expect
-    .poll(async () => (await recordedCalls(page)).map((c) => c.command))
+    .poll(async () => (await ipcCalls(page)).map((c) => c.command))
     .toContain("release_update_install");
   await page.getByRole("button", { name: "Restart Postal Snap" }).click();
   await expect
     .poll(
       async () =>
-        (await recordedCalls(page)).filter((c) => c.command === "relaunch_app")
+        (await ipcCalls(page)).filter((c) => c.command === "relaunch_app")
           .length,
     )
     .toBe(2);
   expect(
-    (await recordedCalls(page)).filter(
+    (await ipcCalls(page)).filter(
       (c) => c.command === "plugin:updater|install",
     ),
   ).toHaveLength(1);
@@ -208,12 +209,12 @@ test("channel change does not close a package during native installation", async
   await page.getByRole("tab", { name: "Updates", exact: true }).click();
   await page.getByRole("button", { name: "Restart Postal Snap" }).click();
   await expect
-    .poll(async () => (await recordedCalls(page)).map((c) => c.command))
+    .poll(async () => (await ipcCalls(page)).map((c) => c.command))
     .toContain("plugin:updater|install");
   await advanced(page);
   await expect
     .poll(async () =>
-      (await recordedCalls(page)).some(
+      (await ipcCalls(page)).some(
         (c) =>
           c.command === "set_update_ready" &&
           (c.args as { ready: boolean }).ready === false,
@@ -221,7 +222,7 @@ test("channel change does not close a package during native installation", async
     )
     .toBe(true);
   expect(
-    (await recordedCalls(page)).filter(
+    (await ipcCalls(page)).filter(
       (c) => c.command === "plugin:resources|close",
     ),
   ).toHaveLength(0);
@@ -229,7 +230,7 @@ test("channel change does not close a package during native installation", async
     (window as unknown as { releaseInstall: () => void }).releaseInstall(),
   );
   await expect
-    .poll(async () => (await recordedCalls(page)).map((c) => c.command))
+    .poll(async () => (await ipcCalls(page)).map((c) => c.command))
     .toContain("relaunch_app");
   await artifact(page, "channel-install");
 });
@@ -255,7 +256,7 @@ for (const mode of ["background", "interactive"] as const) {
     await expect
       .poll(
         async () =>
-          (await recordedCalls(page)).filter(
+          (await ipcCalls(page)).filter(
             (c) => c.command === "plugin:updater|download",
           ).length,
       )
@@ -270,7 +271,7 @@ for (const mode of ["background", "interactive"] as const) {
       await expect
         .poll(
           async () =>
-            (await recordedCalls(page)).filter(
+            (await ipcCalls(page)).filter(
               (c) => c.command === "plugin:updater|download",
             ).length,
         )
@@ -279,7 +280,7 @@ for (const mode of ["background", "interactive"] as const) {
     await expect
       .poll(
         async () =>
-          (await recordedCalls(page)).filter(
+          (await ipcCalls(page)).filter(
             (c) => c.command === "plugin:resources|close",
           ).length,
       )

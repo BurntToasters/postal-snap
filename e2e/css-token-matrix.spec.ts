@@ -2,9 +2,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "./coverage-fixture";
-import { attachArtifacts } from "./ipc-artifact";
-import { emitTauriEvent } from "./ipc-recorder";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifacts, emitTauriEvent } from "./ipc";
 
 // Failure modes covered here (docs/0.5.0-FAILURE-INVENTORY.md, G9/F7):
 // 1. Avatar, provider, setup-preview, or composer controls overlap or clip.

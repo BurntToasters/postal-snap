@@ -36,3 +36,15 @@ Kept on purpose; each has a planned consumer. Remove if still unused after that 
 - **Linux arm64**: build scripts exist (`build:linux:arm64`, flatpak arm64) but only x64 ships.
 - **Store trains**: MSIX/PKG scripts exist; GitHub-only for now.
 - **Vibrancy on Linux**: intentionally opaque; toggle hidden where unsupported.
+
+## Open at 0.5.2
+
+- **Colored flags need server keywords**: a server that does not allow `$MailFlagBit0/1/2` keeps a plain `\Flagged` flag. The color is not stored there and does not sync to Apple Mail.
+- **Junk training needs server keywords**: `$Junk` and `$NotJunk` are written only when PERMANENTFLAGS allows them. Otherwise moves into or out of Junk do not train the server filter.
+- **`.eml` viewer never loads remote images**: opened files have no consent path for remote content. This is intentional for 0.5.2.
+- **Attachment and message drag-out deferred to 0.5.3**: `start_attachment_drag` and `start_message_drag` are registered stubs that return "Not available yet." Linux has no planned drag-out.
+- **Store manifests lack the `.eml` association**: the direct config declares it in `src-tauri/tauri.conf.json` (`fileAssociations`). The MSIX manifest from `scripts/msstore-pack.js` and the Flatpak desktop entry (`packaging/flatpak/run.rosie.snap.desktop`) do not yet declare `message/rfc822`.
+- **Traffic-light position is unverified visually**: `MAC_TRAFFIC_LIGHTS` (18, 22) in `src-tauri/src/main.rs` must be checked on macOS in all three densities.
+- **PDF preview is partial**: only the first 20 pages render, each at most 1600 px wide. Encrypted or malformed files show an unavailable state.
+- **Leftover "starred" wording**: some search help and empty-state text in `src/i18n/mail.ts` still says "starred" instead of "flagged".
+- **`npm run audit:cargo` fails on pre-existing advisories**: `pin-utils` RUSTSEC-2026-0441 (via `async-imap`) and yanked `async-executor` 1.14.0 (via `zbus`). Neither is in the acknowledged list, and that list is not broadened. A release decision is needed: patch, upgrade, or document an exception with a reason.

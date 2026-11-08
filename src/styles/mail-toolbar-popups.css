@@ -9,16 +9,18 @@
   position: fixed;
   z-index: 60;
   display: grid;
-  gap: 8px;
-  width: min(24rem, calc(100vw - 16px));
+  gap: var(--space-2);
+  width: min(24rem, calc(100vw - 2 * var(--space-4)));
   max-height: calc(100vh - 6rem);
   overflow: auto;
   padding: var(--space-4);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border: 0.5px solid var(--menu-border);
+  border-radius: var(--radius-lg);
   color: var(--text);
-  background: var(--surface-raised);
-  box-shadow: var(--shadow-soft);
+  background: var(--menu-surface);
+  -webkit-backdrop-filter: var(--menu-blur);
+  backdrop-filter: var(--menu-blur);
+  box-shadow: var(--menu-shadow);
   font-size: var(--fs-md);
 }
 
@@ -29,14 +31,14 @@
 
 .search-tips-panel dl {
   display: grid;
-  gap: 6px;
+  gap: var(--space-1);
   margin: 0;
 }
 
 .search-tips-panel dl > div {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 10px;
+  gap: var(--space-3);
   align-items: baseline;
 }
 
@@ -47,12 +49,12 @@
 }
 
 .search-tips-panel code {
-  font-family: var(--font-mono, ui-monospace, monospace);
+  font-family: var(--font-mono);
   font-size: 0.875em;
 }
 
 .search-tips-close {
   justify-self: end;
   min-height: var(--target-size);
-  padding: 4px 14px;
+  padding: var(--space-1) var(--space-4);
 }

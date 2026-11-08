@@ -8,6 +8,7 @@ import {
   type NoticeEndReason,
 } from "../notices";
 import { useAppStore } from "../store";
+import { MboxProgressNotice } from "./mail/MboxProgressNotice";
 
 // Both live regions stay mounted, even when empty, so the first notice is announced.
 // They carry aria-live only; no role, so existing role=status/alert lookups stay unique.
@@ -16,6 +17,7 @@ export function NoticeRegion() {
   return (
     <div className="notice-region">
       <div className="notice-stack" aria-live="polite">
+        <MboxProgressNotice />
         {notices
           .filter((notice) => !isAssertiveNotice(notice))
           .map((notice) => (

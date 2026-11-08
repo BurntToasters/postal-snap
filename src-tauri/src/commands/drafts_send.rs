@@ -372,7 +372,7 @@ async fn deliver_read_receipt(
     state: &AppState,
 ) -> Result<String, String> {
     let account = state.db.account(account_id)?;
-    let detail = state.db.message_detail(message_id, account_id)?;
+    let detail = state.db.message_meta(message_id, account_id)?;
     if detail.receipt_choice == "sent" || detail.receipt_choice == "declined" {
         return Ok(detail.receipt_choice);
     }

@@ -7,6 +7,7 @@ import {
 } from "../../settings";
 import { useAppStore } from "../../store";
 import type { AppSettings, SettingsPatch } from "../../types";
+import { errorText } from "../../errors";
 
 export interface SettingsSaveOptions {
   // Background writes (for example setup progress) fail silently unless a
@@ -114,7 +115,7 @@ export function useSettingsSave(onError?: (cause: unknown) => void) {
           applySettings(reverted);
           if (!reportsError) return;
           if (onErrorRef.current) onErrorRef.current(cause);
-          else setError(String(cause));
+          else setError(errorText(cause));
         } finally {
           if (reportsError) setSaving(false);
         }

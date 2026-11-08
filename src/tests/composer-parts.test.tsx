@@ -11,7 +11,6 @@ import {
 import {
   announceLocalMailChanged,
   composerTitle,
-  escapeHtml,
   highlightColor,
   messageSelectionQuote,
   listPostAddress,
@@ -25,6 +24,7 @@ import {
   seedSource,
   seedSubject,
 } from "../components/composer/composerSeed";
+import { escapeHtml } from "../security";
 import {
   LARGE_RECIPIENT_COUNT,
   hasControlCharacter,

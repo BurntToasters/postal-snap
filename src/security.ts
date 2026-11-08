@@ -165,7 +165,19 @@ export function sanitizeReceivedHtml(input: string): SanitizedMail {
   return { html: clean, blockedImages, blockedImageHosts };
 }
 
+declare global {
+  interface Window {
+    /** Dev-only counters read by e2e perf specs. */
+    __POSTAL_SNAP_PERF__?: { sanitize?: number; [field: string]: unknown };
+  }
+}
+
 export function sanitizeComposeHtml(input: string): string {
+  if (import.meta.env.DEV) {
+    window.__POSTAL_SNAP_PERF__ = window.__POSTAL_SNAP_PERF__ ?? {};
+    const perf = window.__POSTAL_SNAP_PERF__;
+    perf.sanitize = (perf.sanitize ?? 0) + 1;
+  }
   const { html } = sanitizeReceivedHtml(input);
   const doc = new DOMParser().parseFromString(html, "text/html");
   for (const image of doc.querySelectorAll<HTMLImageElement>(
@@ -314,13 +326,39 @@ export function differentLinkAddress(
   return shown;
 }
 
+/** Plain text from sanitized HTML, for the reader's text view and composer checks. */
 export function htmlToPlainText(html: string): string {
   const doc = new DOMParser().parseFromString(html, "text/html");
-  for (const lineBreak of doc.querySelectorAll("br"))
-    lineBreak.replaceWith(doc.createTextNode("\n"));
-  for (const block of doc.querySelectorAll(
-    "p, div, h1, h2, h3, h4, h5, h6, li, blockquote, tr",
-  ))
-    block.append(doc.createTextNode("\n"));
-  return (doc.body.textContent ?? "").replace(/\n{3,}/g, "\n\n").trim();
+  doc.querySelectorAll("script, style").forEach((node) => node.remove());
+  doc.querySelectorAll("br").forEach((node) => node.replaceWith("\n"));
+  doc
+    .querySelectorAll("p, div, li, tr, h1, h2, h3, h4, h5, h6, blockquote")
+    .forEach((node) => node.append("\n"));
+  return (doc.body.textContent ?? "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/** Escapes text for HTML text and attribute values. */
+export function escapeHtml(value: string): string {
+  return value.replace(
+    /[&<>"']/g,
+    (char) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
+        char
+      ]!,
+  );
+}
+
+/**
+ * The URL a link click opens: http(s) first (marked copy, then href), then
+ * mailto. Other schemes never qualify.
+ */
+export function pickLinkUrl(marked: string, href: string): string {
+  if (/^https?:/i.test(marked)) return marked;
+  if (/^https?:/i.test(href)) return href;
+  if (/^mailto:/i.test(href)) return href;
+  if (/^mailto:/i.test(marked)) return marked;
+  return "";
 }

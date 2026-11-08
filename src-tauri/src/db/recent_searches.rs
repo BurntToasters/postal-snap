@@ -149,6 +149,7 @@ mod tests {
     fn account(id: &str, email: &str) -> AccountRecord {
         AccountRecord {
             summary: AccountSummary {
+                notify_new_mail: true,
                 id: id.into(),
                 provider: ProviderKind::Manual,
                 email: email.into(),

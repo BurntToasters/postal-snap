@@ -1,6 +1,6 @@
 import { expect, test } from "./coverage-fixture";
-import { attachIpcLog, recordIpc, recordedCalls } from "./ipc-recorder";
 import { installMockIpc } from "./mock-ipc";
+import { attachIpcLog, ipcCalls } from "./ipc";
 
 // Failure modes covered here:
 // 1. Send starts while an autosave is in flight, so send_message carries no
@@ -11,7 +11,6 @@ import { installMockIpc } from "./mock-ipc";
 
 test.beforeEach(async ({ page }) => {
   await installMockIpc(page);
-  await recordIpc(page);
   await page.addInitScript(() => {
     const mock = (
       window as unknown as {
@@ -46,7 +45,7 @@ test("a send waits for an in-flight autosave and reuses its draft id", async ({
   await page.getByRole("textbox", { name: "Subject" }).fill("Race check");
   await page.getByLabel("Message body").pressSequentially("Body text");
   const callsOf = async (command: string) =>
-    (await recordedCalls(page)).filter((call) => call.command === command);
+    (await ipcCalls(page)).filter((call) => call.command === command);
   // The Send button is disabled while saving, so this uses the keyboard in
   // the same task as the blur: the send sees the pre-save render state.
   await page.evaluate(() => {

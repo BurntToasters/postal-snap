@@ -4,6 +4,7 @@ import { useAppStore } from "./store";
 import { conversationMessages } from "./threads";
 import type { MessageSummary } from "./types";
 import { BULK_LIMIT } from "./bulk";
+import { errorText } from "./errors";
 
 /**
  * Saves every regular file from the loaded messages in this conversation
@@ -29,7 +30,7 @@ export async function saveLoadedConversationFiles(
       saving.map((item) => item.id),
     );
   } catch (cause) {
-    useAppStore.getState().setError(String(cause));
+    useAppStore.getState().setError(errorText(cause));
   }
 }
 
@@ -52,7 +53,7 @@ export async function saveSelectedMessages(
   try {
     await api.saveMessagesEml(accountId, ids);
   } catch (cause) {
-    useAppStore.getState().setError(String(cause));
+    useAppStore.getState().setError(errorText(cause));
   }
 }
 
@@ -79,6 +80,6 @@ export async function saveSelectedFiles(
   try {
     await api.saveConversationAttachments(accountId, ids);
   } catch (cause) {
-    useAppStore.getState().setError(String(cause));
+    useAppStore.getState().setError(errorText(cause));
   }
 }

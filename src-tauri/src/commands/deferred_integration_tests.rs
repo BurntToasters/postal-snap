@@ -67,6 +67,7 @@ impl Drop for Fixture {
 fn account() -> AccountRecord {
     AccountRecord {
         summary: AccountSummary {
+            notify_new_mail: true,
             id: uuid::Uuid::new_v4().to_string(),
             provider: ProviderKind::Manual,
             email: EMAIL.into(),
@@ -661,6 +662,7 @@ async fn greenmail_live_single_move_keeps_the_snooze() {
             message_id: Some(&fixture.message_id),
             dedupe_existing: false,
             replay_flags: None,
+            junk_keyword: None,
         },
     )
     .await
@@ -706,13 +708,14 @@ async fn greenmail_live_bulk_move_keeps_every_snooze() {
         )
         .expect("snooze both messages");
 
-    mail::move_remote_uids(
+    mail::move_remote_uids_with_junk(
         &fixture.account,
         PASSWORD,
         "INBOX",
         "Archive",
         &[fixture.uid, second.uid],
         Some(fixture.uid_validity),
+        None,
     )
     .await
     .expect("live bulk move succeeds on GreenMail");

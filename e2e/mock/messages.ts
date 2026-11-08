@@ -83,7 +83,10 @@ export async function registerMockMessages(page: Page): Promise<void> {
       requests: Array<{ id: number; to: number }>,
     ): number {
       if (state.undoSession && !token.startsWith(state.undoSession))
-        throw new Error("This undo request is no longer valid.");
+        throw mock.mockError(
+          "operationFailed",
+          "This undo request is no longer valid.",
+        );
       const moves = requests.map(({ id, to }) => {
         const message = knownMessages().find((item) => item.id === id);
         return {
@@ -303,7 +306,10 @@ export async function registerMockMessages(page: Page): Promise<void> {
           message.accountId !== args.accountId ||
           !message.attachments.some((file) => file.id === args.attachmentId)
         ) {
-          throw new Error("Attachment does not belong to this message.");
+          throw mock.mockError(
+            "accessDenied",
+            "Attachment does not belong to this message.",
+          );
         }
         return undefined;
       },
@@ -313,7 +319,10 @@ export async function registerMockMessages(page: Page): Promise<void> {
           attachments: { inline?: boolean }[];
         };
         if (message.accountId !== args.accountId)
-          throw new Error("Message does not belong to this account.");
+          throw mock.mockError(
+            "accessDenied",
+            "Message does not belong to this account.",
+          );
         return message.attachments.filter((file) => !file.inline).length;
       },
       copy_message_to_mailbox(args: Record<string, unknown>) {
@@ -328,7 +337,8 @@ export async function registerMockMessages(page: Page): Promise<void> {
           !target ||
           target.accountId !== args.accountId
         ) {
-          throw new Error(
+          throw mock.mockError(
+            "accessDenied",
             "Message and destination must belong to this account.",
           );
         }
@@ -429,7 +439,8 @@ export async function registerMockMessages(page: Page): Promise<void> {
               uid?: unknown;
             };
             if (paginatedCursorConsumed) {
-              throw new Error(
+              throw mock.mockError(
+                "operationFailed",
                 "The message list reused a spent pagination cursor.",
               );
             }
@@ -437,7 +448,8 @@ export async function registerMockMessages(page: Page): Promise<void> {
               cursor.receivedAt !== summary.receivedAt ||
               cursor.uid !== summary.uid
             ) {
-              throw new Error(
+              throw mock.mockError(
+                "operationFailed",
                 "The message list sent a cursor that did not round-trip from the previous page.",
               );
             }
@@ -816,6 +828,8 @@ export async function registerMockMessages(page: Page): Promise<void> {
         }
         if (typeof args.isStarred === "boolean")
           summary.isStarred = args.isStarred;
+        // A plain flag is red, as the Rust side stores it.
+        if (args.isStarred === true) summary.flagColor = 0;
         return undefined;
       },
       mute_conversation(args: Record<string, unknown>) {
@@ -870,6 +884,20 @@ export async function registerMockMessages(page: Page): Promise<void> {
         const ids = (args.messageIds ?? []) as number[];
         if (args.isRead === true) summary.isRead = true;
         return { updated: ids.length, queued: 0, failed: 0 };
+      },
+      set_messages_flag_color(args: Record<string, unknown>) {
+        // Clearing a flag also drops its color, as the Rust side does.
+        const color = args.color == null ? null : Number(args.color);
+        const ids = (args.messageIds ?? []) as number[];
+        for (const item of knownMessages()) {
+          if (!ids.includes(item.id)) continue;
+          item.flagColor = color ?? 0;
+          item.isStarred = color !== null;
+        }
+        const accountId = String(args.accountId);
+        emit("message-changed", { accountId, messageId: null, kind: "flags" });
+        emit("folder-counts-changed", { accountId });
+        return undefined;
       },
       copy_messages_to_mailbox(args: Record<string, unknown>) {
         return {

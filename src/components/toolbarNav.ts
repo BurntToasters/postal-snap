@@ -1,11 +1,9 @@
 import type { KeyboardEvent } from "react";
+import { FOCUSABLE_SELECTOR } from "./focusable";
 
 /** Enabled menu rows of every kind; submenu triggers are menuitems too. */
 export const MENU_ITEM_SELECTOR =
   '[role="menuitem"]:not(:disabled), [role="menuitemradio"]:not(:disabled), [role="menuitemcheckbox"]:not(:disabled)';
-
-const toolbarFocusable =
-  'button:not([disabled]), select:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])';
 
 export function moveToolbarFocus(event: KeyboardEvent<HTMLElement>) {
   if (
@@ -18,7 +16,7 @@ export function moveToolbarFocus(event: KeyboardEvent<HTMLElement>) {
   }
   const toolbar = event.currentTarget;
   const items = [
-    ...toolbar.querySelectorAll<HTMLElement>(toolbarFocusable),
+    ...toolbar.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
   ].filter(
     (item) =>
       !item.hidden &&

@@ -1,7 +1,8 @@
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
-import type { MessageSummary } from "../../types";
+import { setFlagColorFor } from "../../flagColor";
+import type { FlagColor, MessageSummary } from "../../types";
 import { folderPathLabel } from "../../i18n/mail";
 import { copySelectedMessageText } from "../../copyMessageText";
 import { forwardSelectedMessages } from "../../forwardConversation";
@@ -100,6 +101,12 @@ export function useSelectionMenu(ctx: SelectionMenuCtx): SelectionMenu {
       closeMailboxMore();
       void bulkFlags(undefined, false);
     },
+    onFlagColor: (color: FlagColor | null) => {
+      closeMailboxMore();
+      if (activeAccountId)
+        void setFlagColorFor(activeAccountId, selectedIds, color);
+    },
+    flagKeywords: activeMailbox?.allowsKeywords !== false,
     onPin: () => {
       closeMailboxMore();
       void pinSelection(true);

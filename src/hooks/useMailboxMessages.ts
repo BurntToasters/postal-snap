@@ -13,6 +13,7 @@ import type { MessageListSort } from "../listSort";
 import { useAppStore } from "../store";
 import type { MessageCursor } from "../types";
 import { mergeSearchResults } from "../components/mail/mailSearch";
+import { errorText } from "../errors";
 
 interface Options {
   listFilter: MessageListFilter;
@@ -113,7 +114,7 @@ export function useMailboxMessages({
         return;
       setMessages(loaded.items, loaded.nextCursor ?? undefined, loaded.hasMore);
     } catch (cause) {
-      if (request === messageRequestRef.current) setError(String(cause));
+      if (request === messageRequestRef.current) setError(errorText(cause));
     } finally {
       if (request === messageRequestRef.current) setLoadingMessages(false);
     }
@@ -177,7 +178,7 @@ export function useMailboxMessages({
       if (request === pagingRequestRef.current)
         appendMessages(page.items, page.nextCursor ?? undefined, page.hasMore);
     } catch (cause) {
-      if (request === pagingRequestRef.current) setError(String(cause));
+      if (request === pagingRequestRef.current) setError(errorText(cause));
     } finally {
       if (request === pagingRequestRef.current) setLoadingMessages(false);
     }
@@ -212,7 +213,7 @@ export function useMailboxMessages({
       )
         appendMessages(page.items, page.nextCursor ?? undefined, page.hasMore);
     } catch (cause) {
-      if (request === pagingRequestRef.current) setError(String(cause));
+      if (request === pagingRequestRef.current) setError(errorText(cause));
     } finally {
       if (request === pagingRequestRef.current) setLoadingMessages(false);
     }
@@ -308,7 +309,7 @@ export function useMailboxMessages({
           search.allFolders,
         )
       )
-        setError(strings.mail.partialSearch(String(cause)));
+        setError(strings.mail.partialSearch(errorText(cause)));
     } finally {
       if (request === searchRequestRef.current) setLoadingMessages(false);
     }

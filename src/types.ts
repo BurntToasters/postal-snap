@@ -63,6 +63,8 @@ export interface AccountSummary {
   replyTo?: string;
   color?: string | null;
   defaultBodyFormat?: BodyFormat;
+  /** Desktop notifications for new mail in this account. */
+  notifyNewMail?: boolean;
 }
 
 export interface AccountRemovalOutcome {
@@ -92,7 +94,12 @@ export interface MailboxSummary {
   unreadCount: number;
   totalCount: number;
   delimiter?: string | null;
+  /** False when the server cannot store keyword flags, so colors fall back to Flagged. */
+  allowsKeywords?: boolean;
 }
+
+/** Colored flag index: 0 red, 1 orange, 2 yellow, 3 green, 4 blue, 5 purple, 6 gray. */
+export type FlagColor = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 
 export interface MessageSummary {
   id: number;
@@ -126,6 +133,8 @@ export interface MessageSummary {
   arrivedAt?: string;
   /** Regular files. A picture in the letter stays out. */
   attachmentCount?: number;
+  /** Color index 0 to 6. Only meaningful while isStarred is true. */
+  flagColor?: number;
 }
 
 export interface MessageCursor {
@@ -169,6 +178,17 @@ export interface AttachmentPreview {
   size: number;
   text?: string | null;
   imageDataUrl?: string | null;
+  /** PDF page images as data URLs, in page order. */
+  pages?: string[] | null;
+  pageCount?: number | null;
+  /** True when the document has more pages than were rendered. */
+  pagesTruncated?: boolean;
+}
+
+/** A message opened from a file outside the mailbox. Paths never reach the webview. */
+export interface OpenedMessage {
+  token: string;
+  message: MessageDetail;
 }
 
 export interface MessageDetail extends MessageSummary {
@@ -340,6 +360,59 @@ export interface FilterRule {
     "mark_read" | "move_archive" | "move_trash" | "move_junk" | "move_mailbox";
   targetMailbox?: string | null;
   enabled: boolean;
+  /** `all` needs every condition; `any` needs one. Legacy rules read as `all`. */
+  matchMode?: "all" | "any";
+  conditions?: RuleCondition[];
+  actions?: RuleAction[];
+}
+
+export interface RuleCondition {
+  field: FilterRule["field"];
+  value: string;
+}
+
+export interface RuleAction {
+  kind:
+    | "mark_read"
+    | "move_archive"
+    | "move_trash"
+    | "move_junk"
+    | "move_mailbox"
+    | "flag"
+    | "pin"
+    | "notify";
+  targetMailbox?: string | null;
+  /** Required when kind is `flag`. */
+  flagColor?: FlagColor | null;
+}
+
+export interface MboxExportResult {
+  /** Absent when the save dialog was dismissed; nothing ran. */
+  operationId?: string | null;
+  exported: number;
+  skipped: number;
+}
+
+export interface MboxImportResult {
+  /** Absent when the open dialog was dismissed; nothing ran. */
+  operationId?: string | null;
+  imported: number;
+  skipped: number;
+}
+
+export interface MboxProgressEvent {
+  operationId: string;
+  done: number;
+  total: number;
+}
+
+export interface NotificationOpenEvent {
+  accountId: string;
+  messageId: number;
+}
+
+export interface EmlOpenedEvent {
+  token: string;
 }
 
 export interface FilterMatchPreview {

@@ -59,7 +59,7 @@ describe("listed star", () => {
     flags.mockRejectedValueOnce(new Error("offline"));
     await toggleListedStar(message.id);
     expect(useAppStore.getState().messages[0]?.isStarred).toBe(true);
-    expect(useAppStore.getState().error).toMatch(/offline/i);
+    expect(useAppStore.getState().error).toBe(strings.errors.operationFailed);
   });
 
   it("marks a listed message read and restores the unread count when saving fails", async () => {
@@ -80,7 +80,7 @@ describe("listed star", () => {
     await toggleListedRead(message.id);
     expect(useAppStore.getState().messages[0]?.isRead).toBe(true);
     expect(useAppStore.getState().mailboxes[0]?.unreadCount).toBe(1);
-    expect(useAppStore.getState().error).toMatch(/offline/i);
+    expect(useAppStore.getState().error).toBe(strings.errors.operationFailed);
   });
 });
 
@@ -309,7 +309,7 @@ describe("sent notice", () => {
     await vi.waitFor(() =>
       expect(useAppStore.getState().lastSent).toBeUndefined(),
     );
-    expect(useAppStore.getState().error).toBe("Error: restore failed");
+    expect(useAppStore.getState().error).toBe(strings.errors.operationFailed);
 
     useAppStore.setState({
       lastSent: {

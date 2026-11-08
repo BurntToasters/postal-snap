@@ -84,6 +84,7 @@ vi.mock("../api", () => ({
     saveSettings: vi.fn(),
     onFolderCountsChanged: vi.fn(),
     onMessageChanged: vi.fn(),
+    onNotificationOpen: vi.fn().mockResolvedValue(() => undefined),
     onSyncProgress: vi.fn(),
     onFrameLink: vi.fn().mockResolvedValue(() => undefined),
     onDraftSyncChanged: vi.fn().mockResolvedValue(() => undefined),
@@ -1165,7 +1166,7 @@ describe("mail shell", () => {
     );
 
     await waitFor(() =>
-      expect(useAppStore.getState().error).toBe("Error: disk full"),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     expect(
       screen.getByLabelText(/First message/i, {
@@ -1358,7 +1359,7 @@ describe("mail shell", () => {
     );
 
     await waitFor(() =>
-      expect(useAppStore.getState().error).toBe("Error: disk full"),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     expect(screen.getAllByRole("option")[0]).toHaveAttribute(
       "aria-label",
@@ -1968,7 +1969,7 @@ describe("mail shell", () => {
     );
 
     await waitFor(() =>
-      expect(useAppStore.getState().error).toBe("Error: disk full"),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     expect(
       screen.getByLabelText("Select With file", {
@@ -2053,7 +2054,7 @@ describe("mail shell", () => {
     );
 
     await waitFor(() =>
-      expect(useAppStore.getState().error).toBe("Error: disk full"),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     expect(
       screen.getByLabelText("Select Plain note", {
@@ -2152,7 +2153,7 @@ describe("mail shell", () => {
     );
 
     await waitFor(() =>
-      expect(useAppStore.getState().error).toBe("Error: offline"),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     expect(useAppStore.getState().messages.map((item) => item.id)).toEqual([
       1, 2,
@@ -2183,7 +2184,7 @@ describe("mail shell", () => {
     });
     renderShell();
 
-    await screen.findByRole("treeitem", { name: /Starred/i });
+    await screen.findByRole("treeitem", { name: /Flagged/i });
     window.dispatchEvent(
       new CustomEvent(CONTEXT_ACTION_EVENT, {
         detail: {
@@ -2231,7 +2232,7 @@ describe("mail shell", () => {
     });
     renderShell();
 
-    await screen.findByRole("treeitem", { name: /Starred/i });
+    await screen.findByRole("treeitem", { name: /Flagged/i });
     window.dispatchEvent(
       new CustomEvent(CONTEXT_ACTION_EVENT, {
         detail: {
@@ -2250,7 +2251,7 @@ describe("mail shell", () => {
       ),
     );
     expect(
-      screen.queryByRole("treeitem", { name: /Starred/i }),
+      screen.queryByRole("treeitem", { name: /Flagged/i }),
     ).not.toBeInTheDocument();
   });
 
@@ -2285,7 +2286,7 @@ describe("mail shell", () => {
     );
 
     await waitFor(() =>
-      expect(useAppStore.getState().error).toBe("Error: offline"),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     expect(
       useAppStore.getState().messages.every((item) => !item.isStarred),
@@ -2437,7 +2438,7 @@ describe("mail shell", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "More mailbox actions" }),
     );
-    fireEvent.click(screen.getByRole("menuitem", { name: "Add star" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Flag" }));
 
     await waitFor(() =>
       expect(mockedSetMessagesFlags).toHaveBeenCalledWith(
@@ -2925,7 +2926,7 @@ describe("mail shell", () => {
     useAppStore.getState().setError(undefined);
 
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/offline/),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     expect(document.querySelector("iframe")).toBeNull();
     expect(
@@ -3020,7 +3021,7 @@ describe("mail shell", () => {
     );
 
     await waitFor(() =>
-      expect(useAppStore.getState().error).toBe("Error: body unavailable"),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     expect(useAppStore.getState().composeSeed).toBeUndefined();
     expect(useAppStore.getState().selectedMessage).toBeUndefined();
@@ -3172,7 +3173,7 @@ describe("mail shell", () => {
     );
 
     await waitFor(() =>
-      expect(useAppStore.getState().error).toBe("Error: body unavailable"),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     expect(useAppStore.getState().composeSeed).toBeUndefined();
     expect(
@@ -3385,7 +3386,7 @@ describe("mail shell", () => {
     );
 
     await waitFor(() =>
-      expect(useAppStore.getState().error).toBe("Error: clipboard locked"),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     expect(
       screen.getByLabelText("Select Newer note", {
@@ -3470,7 +3471,7 @@ describe("mail shell", () => {
       }),
     );
     await waitFor(() =>
-      expect(useAppStore.getState().error).toBe("Error: disk full"),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     expect(screen.getAllByRole("option")[0]).toHaveAttribute(
       "aria-label",
@@ -3512,7 +3513,7 @@ describe("mail shell", () => {
     );
 
     await waitFor(() =>
-      expect(useAppStore.getState().error).toBe("Error: body unavailable"),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     expect(document.querySelector("iframe")).toBeNull();
     expect(useAppStore.getState().selectedMessage).toBeUndefined();
@@ -3618,7 +3619,7 @@ describe("mail shell", () => {
     );
 
     await waitFor(() =>
-      expect(useAppStore.getState().error).toBe("Error: copy failed"),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     expect(useAppStore.getState().messages.map((item) => item.id)).toEqual([
       1, 2,
@@ -3728,7 +3729,7 @@ describe("mail shell", () => {
     );
 
     await waitFor(() =>
-      expect(useAppStore.getState().error).toBe("Error: offline"),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     expect(useAppStore.getState().messages.map((item) => item.id)).toEqual([
       1, 2,
@@ -4259,7 +4260,7 @@ describe("mail shell", () => {
     await waitFor(() =>
       expect(useAppStore.getState().settings.messagePaneWidth).toBe(380),
     );
-    expect(useAppStore.getState().error).toMatch(/disk full/i);
+    expect(useAppStore.getState().error).toBe(strings.errors.operationFailed);
   });
 
   it("clears the open message after it moves", async () => {
@@ -4418,7 +4419,7 @@ describe("mail shell", () => {
     mockedSyncAccount.mockRejectedValueOnce(new Error("sync unavailable"));
     fireEvent.click(screen.getByRole("button", { name: "Get Mail" }));
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/sync unavailable/i),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
   });
 
@@ -4519,7 +4520,7 @@ describe("mail shell", () => {
     const row = await screen.findByRole("option", { name: /First message/i });
     fireEvent.keyDown(row, { key: "r" });
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/message missing/i),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     expect(useAppStore.getState().composerOpen).toBe(false);
 
@@ -5648,7 +5649,7 @@ describe("mail shell", () => {
     mockedSaveSettings.mockRejectedValueOnce(new Error("settings read-only"));
     fireEvent.click(screen.getByRole("button", { name: "Show mailboxes" }));
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/settings read-only/i),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
 
     switchToAccount(secondAccount.id);
@@ -5698,7 +5699,7 @@ describe("mail shell", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Create folder" }));
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/create denied/i),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     fireEvent.click(
       screen.getByRole("button", { name: strings.common.cancel }),
@@ -5708,19 +5709,19 @@ describe("mail shell", () => {
       screen.getByRole("button", { name: "Delete folder Projects" }),
     );
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/delete denied/i),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Trash" }));
     fireEvent.click(await screen.findByRole("button", { name: "Empty trash" }));
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/trash busy/i),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Junk" }));
     fireEvent.click(await screen.findByRole("button", { name: "Empty junk" }));
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/junk busy/i),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
   });
 
@@ -5764,7 +5765,7 @@ describe("mail shell", () => {
     );
     fireEvent.click(screen.getByRole("menuitem", { name: "Mark read" }));
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/flag batch failed/i),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     expect(screen.getByRole("toolbar", { name: "1 selected" })).toBeVisible();
 
@@ -5775,7 +5776,7 @@ describe("mail shell", () => {
       ),
     );
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/move batch failed/i),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     expect(screen.getByRole("toolbar", { name: "1 selected" })).toBeVisible();
 
@@ -5790,7 +5791,7 @@ describe("mail shell", () => {
     fireEvent.click(mailboxMenu);
     fireEvent.click(screen.getByRole("menuitem", { name: "Mark all read" }));
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/mark all failed/i),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
   });
 
@@ -5836,7 +5837,7 @@ describe("mail shell", () => {
       screen.getByRole("button", { name: "Bring back First message" }),
     );
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/unsnooze failed/i),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
 
     fireEvent.click(screen.getByRole("button", { name: /^Drafts/ }));
@@ -5844,7 +5845,7 @@ describe("mail shell", () => {
       await screen.findByRole("button", { name: /Broken draft/i }),
     );
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/draft missing/i),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
   });
 
@@ -6088,7 +6089,7 @@ describe("mail shell", () => {
       ),
     );
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/retry failed/i),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     fireEvent.click(
       within(screen.getByText("Copy failure").closest("article")!).getByRole(
@@ -6097,18 +6098,18 @@ describe("mail shell", () => {
       ),
     );
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/copy retry failed/i),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     const scheduledRow = within(
       screen.getByText("Schedule failure").closest("article")!,
     );
     fireEvent.click(scheduledRow.getByRole("button", { name: "Send now" }));
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/send now failed/i),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     fireEvent.click(scheduledRow.getByRole("button", { name: "Undo" }));
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/undo failed/i),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     fireEvent.click(
       within(screen.getByText("Discard failure").closest("article")!).getByRole(
@@ -6117,7 +6118,7 @@ describe("mail shell", () => {
       ),
     );
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/discard failed/i),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
   });
 
@@ -6142,7 +6143,7 @@ describe("mail shell", () => {
       await screen.findByRole("heading", { name: "First message" }),
     ).toBeVisible();
     expect(useAppStore.getState().selectedMessage?.textBody).toBe("");
-    expect(useAppStore.getState().error).toMatch(/too large/i);
+    expect(useAppStore.getState().error).toBe(strings.errors.operationFailed);
   });
 
   it("runs future scheduled mail and exposes remaining shell controls", async () => {
@@ -6240,14 +6241,14 @@ describe("mail shell", () => {
       new CustomEvent("postal:menu-action", { detail: "text-larger" }),
     );
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/scale save failed/i),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     mockedSaveSettings.mockRejectedValueOnce(new Error("pane save failed"));
     window.dispatchEvent(
       new CustomEvent("postal:menu-action", { detail: "reading-pane-hidden" }),
     );
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/pane save failed/i),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Outbox" }));
@@ -6307,7 +6308,7 @@ describe("mail shell", () => {
     });
     renderShell();
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/schedule send failed/i),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
   });
 
@@ -6747,7 +6748,7 @@ describe("mail shell", () => {
       screen.getByRole("menuitem", { name: strings.reader.trash }),
     );
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/offline/i),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     expect(api.moveMessage).not.toHaveBeenCalled();
   });

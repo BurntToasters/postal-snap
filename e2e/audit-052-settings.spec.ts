@@ -3,6 +3,9 @@ import { join } from "node:path";
 import type { Page, TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Failure modes (audit-settings, C3):
 // 1-3. Advanced: danger sentence hidden, unnamed "Learn more", details inside the label.

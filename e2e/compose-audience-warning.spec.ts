@@ -1,6 +1,6 @@
 import { expect, test } from "./coverage-fixture";
-import { attachIpcLog, recordIpc, recordedCalls } from "./ipc-recorder";
 import { installMockIpc } from "./mock-ipc";
+import { attachIpcLog, ipcCalls } from "./ipc";
 
 // Failure modes covered here:
 // 1. Ten or more recipients send with no warning.
@@ -10,7 +10,6 @@ import { installMockIpc } from "./mock-ipc";
 
 test.beforeEach(async ({ page }) => {
   await installMockIpc(page);
-  await recordIpc(page);
 });
 
 const people = Array.from(
@@ -37,9 +36,7 @@ test("warns before sending to 10 or more people", async ({
     dialog.getByRole("button", { name: "Review recipients" }),
   ).toBeFocused();
   expect(
-    (await recordedCalls(page)).filter(
-      (call) => call.command === "send_message",
-    ),
+    (await ipcCalls(page)).filter((call) => call.command === "send_message"),
   ).toHaveLength(0);
 
   await page.keyboard.press("Escape");
@@ -49,7 +46,7 @@ test("warns before sending to 10 or more people", async ({
   await page.getByRole("button", { name: "Send", exact: true }).click();
   await dialog.getByRole("button", { name: "Send anyway" }).click();
   await expect(page.locator(".composer-window")).toHaveCount(0);
-  const calls = (await recordedCalls(page)).filter(
+  const calls = (await ipcCalls(page)).filter(
     (call) => call.command === "send_message",
   );
   expect(calls).toHaveLength(1);

@@ -1,5 +1,8 @@
-import { htmlToPlainText, sanitizeComposeHtml } from "../../security";
-import { escapeHtml } from "./composerSeed";
+import {
+  escapeHtml,
+  htmlToPlainText,
+  sanitizeComposeHtml,
+} from "../../security";
 
 /** Rich body to plain text. Quoted blocks become "> " lines. */
 export function htmlToQuotedPlainText(html: string): string {

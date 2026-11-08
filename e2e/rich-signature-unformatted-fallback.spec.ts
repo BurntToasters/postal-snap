@@ -1,8 +1,8 @@
 import type { Page, TestInfo } from "@playwright/test";
 
 import { expect, test } from "./coverage-fixture";
-import { attachArtifacts } from "./ipc-artifact";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifacts } from "./ipc";
 
 // Failure modes covered here:
 // 1. Unformatted rich HTML is dropped when its text differs from the fallback.

@@ -1,5 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(all(feature = "mas", feature = "macos-vibrancy"))]
+compile_error!("macos-vibrancy uses a private API and must not ship in Mac App Store builds");
+
 mod app_nap;
 mod bounded_file;
 mod bridge;
@@ -10,11 +13,15 @@ mod db;
 mod download_mark;
 mod html_sanitize;
 mod mail;
+mod mbox;
 mod models;
+mod notify;
 // Background OAuth groundwork (no UI yet): consumed by a future setup flow.
 #[allow(dead_code)]
 mod oauth;
+mod opened_mail;
 mod outbox_reason;
+mod pdf_preview;
 mod providers;
 mod resume_watch;
 mod search_query;
@@ -46,6 +53,10 @@ use tauri::{
     Emitter, Manager, Runtime, WindowEvent,
 };
 
+// Traffic lights sit centered on the 44px overlay caption.
+#[cfg(target_os = "macos")]
+const MAC_TRAFFIC_LIGHTS: tauri::LogicalPosition<f64> = tauri::LogicalPosition::new(18.0, 22.0);
+
 fn main() {
     let builder = tauri::Builder::default()
         .on_menu_event(|app, event| {
@@ -70,8 +81,11 @@ fn main() {
             }
             let _ = app.emit("menu-action", action);
         })
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             tray::show_main(app);
+            // argv[0] is the executable; the rest may name files to open.
+            let paths = argv.iter().skip(1).map(std::path::PathBuf::from).collect();
+            opened_mail::open_paths(app, paths);
         }))
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
@@ -86,6 +100,12 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build());
     let app = builder
         .setup(|app| {
+            notify::install(app.handle());
+            let launch_paths = std::env::args_os()
+                .skip(1)
+                .map(std::path::PathBuf::from)
+                .collect();
+            opened_mail::open_paths(app.handle(), launch_paths);
             let data_dir = app
                 .path()
                 .app_data_dir()
@@ -245,7 +265,10 @@ fn main() {
             #[cfg(target_os = "macos")]
             let window_builder = window_builder
                 .title_bar_style(tauri::TitleBarStyle::Overlay)
-                .hidden_title(true);
+                .hidden_title(true)
+                .traffic_light_position(MAC_TRAFFIC_LIGHTS);
+            #[cfg(all(target_os = "macos", feature = "macos-vibrancy"))]
+            let window_builder = window_builder.transparent(true);
             // Frameless custom caption (IYERIS/Zinnia). Do not attach a Win32
             // menubar onto this HWND — muda paints it through glass on activate.
             #[cfg(target_os = "windows")]
@@ -355,6 +378,19 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            commands::flags::set_messages_flag_color,
+            commands::flags::set_account_notifications,
+            commands::import_export::export_mailbox_mbox,
+            commands::import_export::import_mbox,
+            commands::import_export::cancel_mbox_operation,
+            commands::opened::open_eml_file,
+            commands::opened::get_opened_message,
+            commands::opened::close_opened_message,
+            commands::opened::save_opened_attachment,
+            commands::opened::preview_opened_attachment,
+            commands::attachments::view_attachment_message,
+            commands::drag::start_attachment_drag,
+            commands::drag::start_message_drag,
             commands::compatibility::get_account_connection,
             commands::compatibility::update_account_connection,
             commands::compatibility::import_bridge_certificate,
@@ -511,6 +547,14 @@ fn main() {
         .expect("Postal Snap failed to start");
 
     app.run(|app, event| {
+        #[cfg(target_os = "macos")]
+        if let tauri::RunEvent::Opened { urls } = &event {
+            let paths = urls
+                .iter()
+                .filter_map(|url| url.to_file_path().ok())
+                .collect();
+            opened_mail::open_paths(app, paths);
+        }
         #[cfg(target_os = "macos")]
         if let tauri::RunEvent::Reopen {
             has_visible_windows: false,

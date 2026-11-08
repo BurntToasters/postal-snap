@@ -1,7 +1,19 @@
 * {
   box-sizing: border-box;
+  /* Thin bars show only while the pointer or focus is inside a container. */
   scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+*:hover,
+*:focus-within {
   scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+/* macOS keeps its native overlay scrollbars: no ::-webkit-scrollbar rules. */
+html[data-platform="macos"] * {
+  scrollbar-width: auto;
+  scrollbar-color: auto;
 }
 
 ::selection {
@@ -9,26 +21,42 @@
   color: var(--text);
 }
 
-::-webkit-scrollbar {
+html:not([data-platform="macos"]) ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
-::-webkit-scrollbar-track {
+html:not([data-platform="macos"]) ::-webkit-scrollbar-track {
   background: transparent;
 }
 
-::-webkit-scrollbar-thumb {
-  background: var(--scrollbar-thumb);
+html:not([data-platform="macos"]) ::-webkit-scrollbar-thumb {
+  background: transparent;
   border-radius: var(--radius-pill);
   border: 2px solid transparent;
   background-clip: content-box;
 }
 
-::-webkit-scrollbar-thumb:hover {
+html:not([data-platform="macos"]) :hover::-webkit-scrollbar-thumb,
+html:not([data-platform="macos"]) :focus-within::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+}
+
+html:not([data-platform="macos"]) :hover::-webkit-scrollbar-thumb:hover {
   background: var(--scrollbar-thumb-hover);
-  border: 2px solid transparent;
-  background-clip: content-box;
+}
+
+/* Always visible when system contrast needs it. */
+@media (forced-colors: active), (prefers-contrast: more) {
+  html:not([data-platform="macos"]) ::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+  }
+
+  *,
+  *:hover,
+  *:focus-within {
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+  }
 }
 
 html,
@@ -62,26 +90,13 @@ html[data-text-scale="large"] #root {
 body {
   color: var(--text);
   font-size: var(--ui-font-size);
-  background:
-    radial-gradient(
-      circle at 12% 8%,
-      color-mix(in srgb, var(--accent) 8%, transparent),
-      transparent 34%
-    ),
-    var(--canvas);
+  background: var(--canvas);
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
 }
 
-/* Dark canvas stays flat: no accent glow behind the panes. */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) body {
-    background: var(--canvas);
-  }
-}
-
-:root[data-theme="dark"] body {
-  background: var(--canvas);
+svg.lucide {
+  stroke-width: 1.75;
 }
 
 button,

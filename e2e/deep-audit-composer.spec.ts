@@ -1,8 +1,8 @@
 import type { Page, TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
-import { attachIpcLog, recordIpc, recordedCalls } from "./ipc-recorder";
 import { installMockIpc } from "./mock-ipc";
 import { receivesPointerHit } from "./pointer-hit";
+import { attachIpcLog, ipcCalls } from "./ipc";
 
 // Failure modes covered here:
 // 1. At 620x540 with 200% text the Send bar sits below the window fold and is
@@ -18,7 +18,6 @@ import { receivesPointerHit } from "./pointer-hit";
 
 test.beforeEach(async ({ page }) => {
   await installMockIpc(page);
-  await recordIpc(page);
 });
 
 test.afterEach(async ({ page }, testInfo: TestInfo) => {
@@ -60,7 +59,7 @@ async function fillLetter(page: Page, subject: string) {
 
 /** The send_message drafts sent so far in this page. */
 async function sentDrafts(page: Page): Promise<Array<{ sendAt?: string }>> {
-  return (await recordedCalls(page))
+  return (await ipcCalls(page))
     .filter((call) => call.command === "send_message")
     .map((call) => (call.args as { draft: { sendAt?: string } }).draft);
 }
@@ -203,7 +202,7 @@ for (const density of ["comfortable", "compact"] as const) {
     await expect
       .poll(
         async () =>
-          (await recordedCalls(page)).filter(
+          (await ipcCalls(page)).filter(
             (call) => call.command === "send_message",
           ).length,
       )

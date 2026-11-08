@@ -2,8 +2,8 @@ import AxeBuilder from "@axe-core/playwright";
 import type { TestInfo } from "@playwright/test";
 
 import { expect, test } from "./coverage-fixture";
-import { attachArtifacts } from "./ipc-artifact";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifacts } from "./ipc";
 
 // Failure modes covered here:
 // 1. The default badge leaves other accounts and non-Inbox folders out.

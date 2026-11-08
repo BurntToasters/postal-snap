@@ -19,7 +19,7 @@
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 8px;
+  gap: var(--pane-heading-gap);
   min-width: 0;
 }
 
@@ -28,7 +28,7 @@
 }
 
 :root[data-density="compact"] .folder-pane {
-  padding-block: 10px 8px;
+  padding-block: var(--folder-pane-pad-block);
 }
 
 :root[data-density="compact"] .folder-pane .folder svg {
@@ -37,19 +37,19 @@
 }
 
 :root[data-density="compact"] .sidebar-section-title {
-  margin-block: 6px 2px;
+  margin-block: var(--sidebar-title-margin-block);
 }
 
 :root[data-density="compact"] .add-account-button {
-  margin-bottom: 4px;
+  margin-bottom: var(--add-account-margin-bottom);
 }
 
 :root[data-density="compact"] .account-heading {
-  padding-block: 2px;
+  padding-block: var(--account-heading-pad-block);
 }
 
 :root[data-density="compact"] .app-toolbar {
-  gap: 6px;
+  gap: var(--app-toolbar-gap);
 }
 
 :root[data-density="compact"] .search-box > input {
@@ -57,7 +57,7 @@
 }
 
 :root[data-density="compact"] .search-scope {
-  padding-block: 2px;
+  padding-block: var(--search-scope-pad-block);
 }
 
 /* Normal and Compact: sender and subject share one line in the preview. */
@@ -73,9 +73,25 @@
 }
 
 :root[data-density="compact"] .setup-preview-row {
-  padding-block: 6px;
+  padding-block: var(--setup-preview-pad-block);
 }
 
 :root[data-density="compact"] .setup-preview-row strong {
   font-size: var(--fs-md);
+}
+
+/* Compact keeps its traditional smaller filter track. */
+:root[data-density="compact"] .mailbox-filter-segment {
+  min-height: var(--target-size-inset);
+}
+
+/* The day count stays in the day button's name; comfortable shows it too. */
+:root:not([data-density="comfortable"]) .list-day-count {
+  display: none;
+}
+
+/* Reply, Forward and Delete are primary controls: full target size outside Compact. */
+:root:not([data-density="compact"]) .reader-actions .reader-reply-action,
+:root:not([data-density="compact"]) .reader-actions .reader-icon-action {
+  min-height: var(--target-size);
 }

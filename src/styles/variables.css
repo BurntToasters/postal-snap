@@ -1,7 +1,8 @@
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
   font-family:
-    -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", sans-serif;
+    -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text",
+    "Segoe UI Variable", "Segoe UI", system-ui, "Helvetica Neue", sans-serif;
   font-size: 16px;
   font-synthesis: none;
   line-height: 1.45;
@@ -28,7 +29,8 @@
   --border: rgb(0 0 0 / 12%);
   --border-strong: rgb(0 0 0 / 24%);
   --border-soft: color-mix(in srgb, var(--border) 72%, transparent);
-  --focus: #1d1d1f;
+  --focus: var(--accent);
+  --focus-on-accent: #ffffff;
   --danger: #d70015;
   --danger-ink: #b3261e;
   --danger-soft: rgb(215 0 21 / 10%);
@@ -39,6 +41,22 @@
   --success-ink: #006b2b;
   --success-soft: rgb(52 199 89 / 14%);
   --shadow: 0 28px 80px rgb(0 0 0 / 18%), 0 3px 12px rgb(0 0 0 / 8%);
+  --shadow-window: 0 20px 60px rgb(0 0 0 / 25%), 0 0 0 0.5px rgb(0 0 0 / 15%);
+  --menu-material: rgb(246 246 246 / 82%);
+  --menu-solid: #f6f6f6;
+  --menu-border: rgb(0 0 0 / 12%);
+  --menu-shadow: 0 0 0 0.5px rgb(0 0 0 / 10%), 0 8px 28px rgb(0 0 0 / 18%);
+  --text-tertiary: rgb(0 0 0 / 45%);
+  --separator: rgb(0 0 0 / 10%);
+  --group-canvas: #f5f5f7;
+  --group-bg: #ffffff;
+  --flag-red: #e0352b;
+  --flag-orange: #d06d00;
+  --flag-yellow: #e0b000;
+  --flag-green: #2a9d3f;
+  --flag-blue: #007aff;
+  --flag-purple: #a550d0;
+  --flag-gray: #8e8e93;
   --shadow-soft: 0 12px 34px rgb(0 0 0 / 10%);
   --shadow-card: 0 1px 2px rgb(0 0 0 / 7%), 0 7px 20px rgb(0 0 0 / 5%);
   --shadow-control: 0 1px 2px rgb(0 0 0 / 8%);
@@ -53,10 +71,11 @@
   --avatar-pink: #bd3975;
   --avatar-purple: #7651c9;
 
-  --radius-xs: 7px;
-  --radius-sm: 9px;
-  --radius-md: 13px;
-  --radius-lg: 18px;
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
   --radius-pill: 999px;
   --space-1: 0.25rem;
   --space-2: 0.5rem;
@@ -65,8 +84,16 @@
   --space-5: 1.25rem;
   --space-6: 1.5rem;
 
-  /* Type scale (weights 400/500/600/700). Not density-driven: density only
-     changes --ui-font-size on body. */
+  /* System UI font (SF, Segoe UI Variable, or system-ui) and mono. */
+  --font-mono:
+    ui-monospace, "SF Mono", SFMono-Regular, "Cascadia Mono", Consolas,
+    "Liberation Mono", Menlo, monospace;
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+
+  /* Type scale. Not density-driven: density only changes --ui-font-size. */
   --fs-xs: 0.75rem;
   --fs-sm: 0.8125rem;
   --fs-md: 0.875rem;
@@ -83,7 +110,7 @@
 
   /* Density tokens. :root is Normal (the default). The comfortable and
      compact blocks below override these; never hard-code sizes. */
-  --ui-font-size: 0.9375rem;
+  --ui-font-size: 0.875rem;
   --control-height: 2.25rem;
   --toolbar-height: 2.75rem;
   --toolbar-pad-block: 2px;
@@ -133,7 +160,19 @@
   --list-row-height: 3.25rem;
   --list-row-pad-block: 8px;
   --list-row-inset: 6px;
+  --list-row-pad-start: 10px;
+  --list-row-pad-end: 12px;
+  --list-dot-track: 0.625rem;
+  --list-row-gap: 8px;
   --list-day-height: 2rem;
+  --pane-heading-gap: 8px;
+  --folder-pane-pad-block: 10px 8px;
+  --sidebar-title-margin-block: 6px 2px;
+  --add-account-margin-bottom: 4px;
+  --account-heading-pad-block: 2px;
+  --app-toolbar-gap: 6px;
+  --search-scope-pad-block: 2px;
+  --setup-preview-pad-block: 6px;
   --list-preview-lines: 1;
   --reader-pad-inline: clamp(16px, 2.5vw, 24px);
   --reader-head-pad-block: 10px;
@@ -164,7 +203,6 @@
   --mailbox-filter-menu-min-width: 11.5rem;
   --reader-more-menu-min-width: 15rem;
   --context-menu-min-width: 12rem;
-  --account-select-arrow-space: 2rem;
   --settings-window-width: 56rem;
   --settings-window-height: 40rem;
   --settings-nav-width: 12rem;
@@ -202,8 +240,8 @@
   --sender-avatar-font-size: min(1rem, calc(var(--sender-avatar-size) * 0.4));
   --setup-page-padding: 1.25rem;
   --caption-button-height: 44px;
-  --scrim: rgb(15 25 33 / 52%);
-  --scrim-soft: rgb(15 25 33 / 38%);
+  --scrim: rgb(0 0 0 / 20%);
+  --scrim-soft: rgb(0 0 0 / 12%);
   --mail-canvas: #ffffff;
   --mail-ink: #20252b;
   --glass-highlight: rgb(255 255 255 / 12%);
@@ -213,22 +251,21 @@
   /* macOS 27 Mail chrome: edge-to-edge sidebar a step darker than content,
      neutral sidebar selection, a solid bar, and borderless system fills for
      grouped controls. */
-  --sidebar-bg: #ececee;
-  --sidebar-selection: rgb(0 0 0 / 9%);
-  --folder-selection: var(--sidebar-selection);
+  --sidebar-bg: #ebebed;
+  --selection-emphasized: var(--accent-fill);
+  --selection-inactive: rgb(0 0 0 / 9%);
   --bar: #fbfbfc;
   --fill: rgb(118 118 128 / 12%);
   --fill-hover: rgb(118 118 128 / 20%);
+  /* Popup-button chevron (up and down), drawn in the text ink. */
+  --popup-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='14' viewBox='0 0 10 14'%3E%3Cpath d='M2 5.5 5 2.5l3 3M2 8.5l3 3 3-3' fill='none' stroke='%23000' stroke-opacity='.6' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   --monogram: var(--fill);
 }
 
-:root[data-theme="light"] {
-  color-scheme: light;
-}
-
 /* Dark palette: near-black canvas, neutral elevated surfaces, flat fills.
-   Mirrored token-for-token in the system-dark block below. */
-:root[data-theme="dark"] {
+   html[data-resolved-theme] is set in settings.ts from the setting and the
+   system appearance. */
+:root[data-resolved-theme="dark"] {
   color-scheme: dark;
   --accent: #0a84ff;
   --accent-hover: #409cff;
@@ -249,7 +286,6 @@
   --border: rgb(255 255 255 / 14%);
   --border-strong: rgb(255 255 255 / 26%);
   --border-soft: color-mix(in srgb, var(--border) 72%, transparent);
-  --focus: #ffffff;
   --danger: #ff453a;
   --danger-ink: #ff7b70;
   --danger-soft: rgb(255 69 58 / 16%);
@@ -260,77 +296,41 @@
   --success-ink: #4cd964;
   --success-soft: rgb(48 209 88 / 16%);
   --shadow: 0 30px 90px rgb(0 0 0 / 68%), 0 4px 16px rgb(0 0 0 / 48%);
+  --shadow-window:
+    0 20px 60px rgb(0 0 0 / 60%), 0 0 0 0.5px rgb(255 255 255 / 10%);
+  --menu-material: rgb(40 40 42 / 82%);
+  --menu-solid: #28282a;
+  --menu-border: rgb(255 255 255 / 16%);
+  --menu-shadow: 0 0 0 0.5px rgb(0 0 0 / 60%), 0 8px 28px rgb(0 0 0 / 50%);
+  --text-tertiary: rgb(255 255 255 / 45%);
+  --separator: rgb(255 255 255 / 12%);
+  --group-canvas: #1e1e20;
+  --group-bg: #28282a;
+  --flag-red: #ff453a;
+  --flag-orange: #ff9f0a;
+  --flag-yellow: #ffd60a;
+  --flag-green: #32d74b;
+  --flag-blue: #0a84ff;
+  --flag-purple: #bf5af2;
+  --flag-gray: #98989d;
   --shadow-soft: 0 14px 38px rgb(0 0 0 / 50%);
   --shadow-card: 0 1px 2px rgb(0 0 0 / 45%), 0 8px 24px rgb(0 0 0 / 24%);
   --shadow-control: 0 1px 3px rgb(0 0 0 / 42%);
   --scrollbar-thumb: rgba(255, 255, 255, 0.24);
   --scrollbar-thumb-hover: rgba(255, 255, 255, 0.38);
-  --scrim: rgb(0 0 0 / 56%);
-  --scrim-soft: rgb(0 0 0 / 42%);
+  --scrim: rgb(0 0 0 / 40%);
+  --scrim-soft: rgb(0 0 0 / 28%);
   --mail-canvas: #ffffff;
   --mail-ink: #20252b;
   --glass-highlight: rgb(255 255 255 / 8%);
   --window-close: #c42b1c;
-  --sidebar-bg: #262628;
-  --sidebar-selection: rgb(255 255 255 / 11%);
-  --folder-selection: rgb(255 255 255 / 18%);
+  --sidebar-bg: #29292b;
+  --selection-inactive: rgb(255 255 255 / 18%);
   --bar: #232325;
   --fill: rgb(118 118 128 / 24%);
   --fill-hover: rgb(118 118 128 / 34%);
+  --popup-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='14' viewBox='0 0 10 14'%3E%3Cpath d='M2 5.5 5 2.5l3 3M2 8.5l3 3 3-3' fill='none' stroke='%23fff' stroke-opacity='.6' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   --monogram: var(--fill);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]):not([data-theme="dark"]) {
-    --accent: #0a84ff;
-    --accent-hover: #409cff;
-    --accent-fill: #0068d6;
-    --accent-fill-hover: #0058b8;
-    --accent-ink: #64b5ff;
-    --accent-soft: rgb(10 132 255 / 20%);
-    --accent-contrast: #ffffff;
-    --canvas: #161618;
-    --surface: #1c1c1e;
-    --surface-muted: #2c2c2e;
-    --surface-hover: #3c3c3f;
-    --surface-raised: #28282b;
-    --surface-sunken: #0f0f10;
-    --surface-highlight: rgb(255 255 255 / 10%);
-    --text: rgb(255 255 255 / 88%);
-    --text-muted: rgb(255 255 255 / 60%);
-    --border: rgb(255 255 255 / 14%);
-    --border-strong: rgb(255 255 255 / 26%);
-    --border-soft: color-mix(in srgb, var(--border) 72%, transparent);
-    --focus: #ffffff;
-    --danger: #ff453a;
-    --danger-ink: #ff7b70;
-    --danger-soft: rgb(255 69 58 / 16%);
-    --warning: #ffd60a;
-    --warning-ink: #ffd60a;
-    --warning-soft: rgb(255 214 10 / 14%);
-    --success: #30d158;
-    --success-ink: #4cd964;
-    --success-soft: rgb(48 209 88 / 16%);
-    --shadow: 0 30px 90px rgb(0 0 0 / 68%), 0 4px 16px rgb(0 0 0 / 48%);
-    --shadow-soft: 0 14px 38px rgb(0 0 0 / 50%);
-    --shadow-card: 0 1px 2px rgb(0 0 0 / 45%), 0 8px 24px rgb(0 0 0 / 24%);
-    --shadow-control: 0 1px 3px rgb(0 0 0 / 42%);
-    --scrollbar-thumb: rgba(255, 255, 255, 0.24);
-    --scrollbar-thumb-hover: rgba(255, 255, 255, 0.38);
-    --scrim: rgb(0 0 0 / 56%);
-    --scrim-soft: rgb(0 0 0 / 42%);
-    --mail-canvas: #ffffff;
-    --mail-ink: #20252b;
-    --glass-highlight: rgb(255 255 255 / 8%);
-    --window-close: #c42b1c;
-    --sidebar-bg: #262628;
-    --sidebar-selection: rgb(255 255 255 / 11%);
-    --folder-selection: rgb(255 255 255 / 18%);
-    --bar: #232325;
-    --fill: rgb(118 118 128 / 24%);
-    --fill-hover: rgb(118 118 128 / 34%);
-    --monogram: var(--fill);
-  }
 }
 
 /* Comfortable: 44px targets with the densified 0.5.2 bands. */
@@ -381,7 +381,19 @@
   --list-row-height: 72px;
   --list-row-pad-block: 11px;
   --list-row-inset: 6px;
+  --list-row-pad-start: 10px;
+  --list-row-pad-end: 12px;
+  --list-dot-track: 0.625rem;
+  --list-row-gap: 8px;
   --list-day-height: 44px;
+  --pane-heading-gap: 8px;
+  --folder-pane-pad-block: 10px 8px;
+  --sidebar-title-margin-block: 6px 2px;
+  --add-account-margin-bottom: 4px;
+  --account-heading-pad-block: 2px;
+  --app-toolbar-gap: 6px;
+  --search-scope-pad-block: 2px;
+  --setup-preview-pad-block: 6px;
   --list-preview-lines: 2;
   --reader-pad-inline: clamp(18px, 3vw, 30px);
   --reader-head-pad-block: 12px;
@@ -412,7 +424,6 @@
   --mailbox-filter-menu-min-width: 12rem;
   --reader-more-menu-min-width: 16rem;
   --context-menu-min-width: 12.5rem;
-  --account-select-arrow-space: 2.125rem;
   --settings-window-width: 64rem;
   --settings-window-height: 46rem;
   --settings-nav-width: 14rem;
@@ -442,7 +453,7 @@
 /* Compact: traditional mail density (macOS Mail). Sizes use rem or min()
    so they scale with text size. */
 :root[data-density="compact"] {
-  --ui-font-size: 0.9375rem;
+  --ui-font-size: 0.8125rem;
   --control-height: 2rem;
   --toolbar-height: 2.75rem;
   --toolbar-pad-block: 2px;
@@ -488,7 +499,19 @@
   --list-row-height: min(3rem, 72px);
   --list-row-pad-block: 6px;
   --list-row-inset: 4px;
+  --list-row-pad-start: 8px;
+  --list-row-pad-end: 10px;
+  --list-dot-track: 0.5rem;
+  --list-row-gap: 6px;
   --list-day-height: 1.75rem;
+  --pane-heading-gap: 8px;
+  --folder-pane-pad-block: 10px 8px;
+  --sidebar-title-margin-block: 6px 2px;
+  --add-account-margin-bottom: 4px;
+  --account-heading-pad-block: 2px;
+  --app-toolbar-gap: 6px;
+  --search-scope-pad-block: 2px;
+  --setup-preview-pad-block: 6px;
   --list-preview-lines: 0;
   --reader-pad-inline: 16px;
   --reader-head-pad-block: 10px;
@@ -519,7 +542,6 @@
   --mailbox-filter-menu-min-width: 11rem;
   --reader-more-menu-min-width: 14.5rem;
   --context-menu-min-width: 11.5rem;
-  --account-select-arrow-space: 2rem;
   --settings-window-width: 54rem;
   --settings-window-height: 38rem;
   --settings-nav-width: 11.5rem;

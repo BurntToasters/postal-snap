@@ -14,6 +14,8 @@ mas = []
 msstore = []
 # Gmail/Outlook sign-in. Off until setup UI and review, deferred to 0.6.0.
 oauth = []
+# macOS sidebar vibrancy via Tauri private API. Direct builds only; never MAS.
+macos-vibrancy = ["tauri/macos-private-api"]
 
 [build-dependencies]
 serde_json = "1"
@@ -29,6 +31,7 @@ imap-proto = "0.16.7"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 futures-util = "0.3"
+hayro = "0.9.0"
 keyring = "4.1.5"
 keyring-core = "1"
 lettre = { version = "0.11", default-features = false, features = ["builder", "hostname", "pool", "smtp-transport", "tokio1-native-tls"] }
@@ -51,8 +54,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync",
 tokio-native-tls = "0.3"
 url = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
-# Native window blur / vibrancy; macOS transparency uses the direct-build
-# private API feature, store builds keep it off.
+# Native window glass: Windows Mica, and macOS vibrancy with macos-vibrancy.
 window-vibrancy = "0.6"
 x509-parser = "0.18.1"
 zeroize = { version = "1", features = ["derive"] }

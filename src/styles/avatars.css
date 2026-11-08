@@ -1,4 +1,13 @@
-/* Shared avatar / brand pattern (moved, no visual change) */
+/* Avatars, monograms and brand marks. Sizes come from tokens. */
+:root {
+  --provider-icon-size: 1.625rem;
+  --swatch-ring: 3px;
+  --swatch-outline: 2px;
+  --swatch-outline-offset: 2px;
+  --avatar-ring: 1px;
+  --focus-ring: 3px;
+}
+
 .provider-symbol {
   display: grid;
   width: var(--provider-symbol-size);
@@ -10,8 +19,8 @@
 }
 
 .provider-symbol svg {
-  width: 1.625rem;
-  height: 1.625rem;
+  width: var(--provider-icon-size);
+  height: var(--provider-icon-size);
 }
 
 .account-avatar {
@@ -20,11 +29,11 @@
   height: var(--account-avatar-size);
   flex: 0 0 auto;
   place-items: center;
-  border-radius: 50%;
+  border-radius: var(--radius-pill);
   color: var(--accent-contrast);
   background: var(--accent-fill);
   font-size: var(--account-avatar-font-size);
-  font-weight: 700;
+  font-weight: var(--fw-bold);
 }
 
 .account-avatar[data-color="teal"],
@@ -72,8 +81,8 @@
   width: var(--target-size);
   height: var(--target-size);
   padding: 0;
-  border: 3px solid transparent;
-  border-radius: 50%;
+  border: var(--swatch-ring) solid transparent;
+  border-radius: var(--radius-pill);
   background: var(--accent-fill);
 }
 
@@ -82,8 +91,8 @@
 }
 
 .account-color-swatch:focus-visible {
-  outline: 3px solid var(--focus);
-  outline-offset: 2px;
+  outline: var(--focus-ring) solid var(--focus);
+  outline-offset: var(--swatch-outline-offset);
 }
 
 .sender-avatar {
@@ -91,36 +100,35 @@
   width: var(--sender-avatar-size);
   height: var(--sender-avatar-size);
   place-items: center;
-  border-radius: 50%;
+  border-radius: var(--radius-pill);
   /* Flat monogram, as Mail shows for senders without a photo. */
   color: var(--text);
   background: var(--monogram);
   font-size: var(--sender-avatar-font-size);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 
 @media (forced-colors: active) {
   .account-avatar[data-color],
   .sender-avatar {
-    border: 1px solid CanvasText;
+    border: var(--avatar-ring) solid CanvasText;
     color: CanvasText;
     background: Canvas;
   }
 
   .account-color-swatch[data-color] {
-    border: 1px solid ButtonText;
+    border: var(--avatar-ring) solid ButtonText;
     background: Canvas;
   }
 
   .account-color-swatch[aria-checked="true"] {
     border-color: Highlight;
-    outline: 2px solid Highlight;
-    outline-offset: 2px;
+    outline: var(--swatch-outline) solid Highlight;
+    outline-offset: var(--swatch-outline-offset);
   }
 }
 
 .app-mark,
-.brand-watermark,
 .brand-mark {
   display: block;
   flex: 0 0 auto;

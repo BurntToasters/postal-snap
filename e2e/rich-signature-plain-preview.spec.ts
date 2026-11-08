@@ -4,8 +4,8 @@ import type { TestInfo } from "@playwright/test";
 import { join } from "node:path";
 
 import { expect, test } from "./coverage-fixture";
-import { attachArtifacts } from "./ipc-artifact";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifacts } from "./ipc";
 
 // Failure modes covered here:
 // 1. Plain-text composition previews the rich signature instead of its fallback.

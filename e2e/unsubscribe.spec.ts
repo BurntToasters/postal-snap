@@ -1,8 +1,8 @@
 import type { Page } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
-import { attachArtifacts, ipcCommands } from "./ipc-artifact";
 import { revealMenuItem } from "./menu-reveal";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifacts, ipcCommands } from "./ipc";
 
 // Failure modes covered here:
 // 1. One-click unsubscribe fires without a confirmation that names the host.

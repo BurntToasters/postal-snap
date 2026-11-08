@@ -5,17 +5,51 @@
   overflow: hidden;
 }
 
-/* Shared focus ring for header fields and the letter: inset, so it stays off
-   row dividers and the dialog edge. */
+/* Shared focus ring for header fields and the letter: the global 3px accent
+   ring, inset so the window clip does not cut it. */
 .composer-window {
   --composer-focus-color: var(--focus);
-  --composer-focus-width: 2px;
-  --composer-focus-inset: -4px;
+  --composer-focus-width: 3px;
+  --composer-focus-inset: -3px;
+  --composer-header-height: min(var(--bar-height-md), 3rem);
+}
+
+/* macOS sheet: xl corners and the window shadow. Maximized stays square. */
+.composer-window:not(.composer-maximized) {
+  border-radius: var(--radius-xl);
+  box-shadow:
+    var(--shadow-window),
+    inset 0 1px 0 var(--surface-highlight);
+}
+
+.composer-window.composer-maximized {
+  box-shadow: none;
 }
 
 .composer-window > header,
 .composer-window > footer {
   flex-shrink: 0;
+}
+
+/* Mail-like header: capped at 48px in every density; hairline below. */
+.composer-window > header {
+  min-height: var(--composer-header-height);
+  border-bottom-color: var(--separator);
+}
+
+.composer-window > header > span {
+  line-height: 1.2;
+}
+
+/* Field labels are secondary; the hairline separates To, Cc and Subject. */
+.composer-window .address-fields label > span:first-child {
+  color: var(--text-muted);
+  font-weight: var(--fw-medium);
+}
+
+.composer-window .address-fields label,
+.composer-window .address-fields .to-field-row {
+  border-bottom-color: var(--separator);
 }
 
 /* Middle row: everything between the header and the send bar scrolls here,
@@ -132,15 +166,15 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
 
 .composer-redirect-note,
 .composer-signature-preview {
-  margin: 0 var(--toolbar-pad-inline) 12px;
-  padding: 8px 12px;
+  margin: 0 var(--toolbar-pad-inline) var(--space-3);
+  padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface-muted, var(--surface));
 }
 
 .composer-signature-preview pre {
-  margin: 6px 0 0;
+  margin: var(--space-1) 0 0;
   white-space: pre-wrap;
   font: inherit;
 }
@@ -149,8 +183,8 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
   display: flex;
   align-items: center;
   gap: 2px;
-  padding: 2px;
-  border: 1px solid var(--border-soft);
+  padding: 0;
+  border: 0;
   border-radius: var(--radius-pill);
   background: var(--surface-muted);
 }
@@ -199,7 +233,7 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  padding: 8px 14px;
+  padding: var(--space-2) 0.875rem;
   border: none;
   background: transparent;
   cursor: pointer;
@@ -295,7 +329,7 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  padding: 2px 4px;
+  padding: 2px var(--space-1);
   border: 0;
   border-radius: var(--radius-pill);
   background: var(--fill);
@@ -316,12 +350,15 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
   padding: 0;
 }
 
-.toolbar-group > button:hover,
+/* Mac format bar: bare icons, a fill on hover, accent ink when pressed. */
+.toolbar-group > button:hover {
+  background: var(--fill-hover);
+}
+
 .toolbar-group > button.active,
 .toolbar-group > button[aria-pressed="true"] {
-  border-color: var(--border);
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-ink);
 }
 
 .toolbar-group button svg {
@@ -329,18 +366,23 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
   height: var(--icon-md);
 }
 
+/* Popup select: transparent fill, but the chevron stays (background-image). */
 .toolbar-group select {
   width: auto;
   min-height: var(--toolbar-button-size);
-  padding: var(--space-1) var(--space-2);
+  padding: var(--space-1) 1.75rem var(--space-1) var(--space-2);
   border: 1px solid transparent;
-  border-radius: var(--radius-pill);
-  background: transparent;
+  border-radius: var(--radius-sm);
+  background-color: transparent;
+  background-image: var(--popup-chevron);
+  background-repeat: no-repeat;
+  background-position: right var(--space-2) center;
+  appearance: none;
   font-size: var(--fs-md);
 }
 
 .toolbar-group select:hover {
-  background: var(--surface-hover);
+  background-color: var(--fill-hover);
 }
 
 .toolbar-group .color-control {
@@ -568,7 +610,7 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
   flex-wrap: wrap;
   gap: var(--space-2);
   padding: var(--bar-pad-block-lg) var(--space-4);
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--separator);
   background: var(--surface);
 }
 
@@ -642,14 +684,15 @@ html[data-text-scale="large"]
   align-items: stretch;
 }
 
+/* Send is a pill; the joined chevron keeps the pill's right end. */
 .send-split .send-button {
-  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+  border-radius: var(--radius-pill) 0 0 var(--radius-pill);
 }
 
 .send-split .send-chevron {
   min-width: var(--target-size);
-  padding-inline: 8px;
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  padding-inline: var(--space-2);
+  border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
   border-left: 1px solid
     color-mix(in srgb, var(--accent-contrast) 30%, transparent);
 }
@@ -795,6 +838,13 @@ html[data-text-scale="large"]
   .composer-window .address-fields input:focus-visible,
   .composer-plain-editor:focus-visible {
     outline-color: Highlight;
+  }
+
+  /* Native popup look: the custom chevron would be lost. */
+  .toolbar-group select {
+    appearance: auto;
+    background-image: none;
+    padding-inline-end: var(--space-2);
   }
 
   .composer-window footer .format-toggle[aria-pressed="true"] {

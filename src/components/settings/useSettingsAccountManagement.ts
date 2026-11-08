@@ -7,6 +7,8 @@ import { htmlToPlainText } from "../../security";
 import { useAppStore } from "../../store";
 import { preparePassword } from "../setup/request";
 import type { SettingsSaveUpdate } from "./useSettingsSave";
+import { forgetAccountSessions } from "../../accountSessions";
+import { errorText } from "../../errors";
 
 interface Options {
   onClose: () => void;
@@ -128,6 +130,7 @@ export function useSettingsAccountManagement({
       );
       if (!confirmed) return;
       const result = await api.removeAccount(id);
+      forgetAccountSessions(id);
       // Rust prunes these too, but a later full save from this copy would
       // write them back, so drop them here through the same save queue.
       const latest = useAppStore.getState().settings;
@@ -161,7 +164,7 @@ export function useSettingsAccountManagement({
         onClose();
       }
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 
@@ -173,7 +176,7 @@ export function useSettingsAccountManagement({
       await api.testSavedAccount(id);
       setTestedHealthy(id);
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       setTestingAccountId(undefined);
     }
@@ -193,7 +196,7 @@ export function useSettingsAccountManagement({
         }));
       });
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       setDetectingAliasesAccountId(undefined);
     }
@@ -241,7 +244,7 @@ export function useSettingsAccountManagement({
         }));
       });
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 
@@ -267,7 +270,7 @@ export function useSettingsAccountManagement({
         mergeAccountFields(accountId, { aliases: updated.aliases });
       });
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 
@@ -293,7 +296,7 @@ export function useSettingsAccountManagement({
         [accountId]: strings.settings.passwordUpdated,
       }));
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       setUpdatingPasswordId(undefined);
     }
@@ -322,7 +325,7 @@ export function useSettingsAccountManagement({
         [accountId]: strings.settings.accountNameSaved,
       }));
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       setSavingNameId(undefined);
     }
@@ -354,7 +357,7 @@ export function useSettingsAccountManagement({
         [accountId]: strings.settings.replyToAddressSaved,
       }));
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       setSavingReplyToId(undefined);
     }
@@ -399,7 +402,7 @@ export function useSettingsAccountManagement({
         [accountId]: strings.settings.signatureSaved,
       }));
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       setSavingSignatureId(undefined);
     }

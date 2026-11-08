@@ -1204,12 +1204,12 @@ describe("SettingsDialog component", () => {
     await screen.findByRole("button", { name: "Add rule" });
 
     fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
-    expect(useAppStore.getState().error).toMatch(/name/i);
+    expect(screen.getByRole("alert")).toHaveTextContent(/name/i);
     fireEvent.change(screen.getByLabelText("Rule name"), {
       target: { value: "Named rule" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
-    expect(useAppStore.getState().error).toMatch(/text to match/i);
+    expect(screen.getByRole("alert")).toHaveTextContent(/text to match/i);
     expect(api.createFilterRule).not.toHaveBeenCalled();
   });
 
@@ -1263,18 +1263,18 @@ describe("SettingsDialog component", () => {
       await screen.findByRole("button", { name: "Export settings" }),
     );
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/export failed/i),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     fireEvent.click(screen.getByRole("button", { name: "Import settings" }));
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/import failed/i),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     fireEvent.click(screen.getByRole("tab", { name: "Storage" }));
     fireEvent.click(
       await screen.findByRole("button", { name: "Clear downloaded mail" }),
     );
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/clear failed/i),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
   });
 
@@ -1325,12 +1325,12 @@ describe("SettingsDialog component", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/test failed/i),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     await accountPage("Identity");
     fireEvent.click(screen.getByRole("button", { name: "Detect from iCloud" }));
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/detect failed/i),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
 
     await accountPage("Connection");
@@ -1339,7 +1339,7 @@ describe("SettingsDialog component", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Update password" }));
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/password failed/i),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     await accountPage("Identity");
     fireEvent.change(screen.getByLabelText("Email signature"), {
@@ -1347,20 +1347,20 @@ describe("SettingsDialog component", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/signature failed/i),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
 
     const aliasInput = screen.getByPlaceholderText("alias@yourdomain.com");
     fireEvent.change(aliasInput, { target: { value: "new@icloud.com" } });
     fireEvent.click(screen.getByRole("button", { name: "Add alias" }));
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/alias add failed/i),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     fireEvent.click(
       screen.getByRole("button", { name: "Remove alias@icloud.com" }),
     );
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/alias remove failed/i),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
 
     await accountPage("Rules");
@@ -1373,11 +1373,11 @@ describe("SettingsDialog component", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/rule create failed/i),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     fireEvent.click(screen.getByRole("button", { name: /Bills: On/ }));
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/rule toggle failed/i),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     fireEvent.click(
       within(screen.getByText("Bills").closest("li")!).getByRole("button", {
@@ -1385,19 +1385,19 @@ describe("SettingsDialog component", () => {
       }),
     );
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/rule delete failed/i),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
 
     fireEvent.click(screen.getAllByRole("button", { name: "Remove" })[0]);
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/remove failed/i),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     fireEvent.click(screen.getByRole("button", { name: "Back to accounts" }));
     fireEvent.click(
       await screen.findByRole("button", { name: "Reset & Restart" }),
     );
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/erase failed/i),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     expect(screen.getByText(/Reset did not finish/)).toBeVisible();
   });
@@ -1414,7 +1414,9 @@ describe("SettingsDialog component", () => {
       },
     );
     await waitFor(() =>
-      expect(screen.getByRole("alert")).toHaveTextContent(/theme save failed/i),
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        strings.errors.operationFailed,
+      ),
     );
     expect(useAppStore.getState().settings.theme).toBe("system");
 

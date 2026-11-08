@@ -49,9 +49,13 @@ function modifiersMatch(
  * Returns the action bound to a key press. Specs with more modifier
  * constraints win; registry order breaks ties.
  */
-export function matchShortcut(event: KeyboardEvent): ActionId | undefined {
+export function matchShortcut(
+  event: KeyboardEvent,
+  options: { allowModal?: boolean } = {},
+): ActionId | undefined {
   if (event.isComposing || event.keyCode === 229) return undefined;
-  if (document.querySelector(".modal-layer")) return undefined;
+  if (!options.allowModal && document.querySelector(".modal-layer"))
+    return undefined;
   const state: Record<Modifier, boolean> = {
     mod: isShortcutModifier(event),
     shift: event.shiftKey,

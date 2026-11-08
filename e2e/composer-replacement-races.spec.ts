@@ -1,11 +1,6 @@
 import { expect, test } from "./coverage-fixture";
-import {
-  attachIpcLog,
-  emitTauriEvent,
-  recordIpc,
-  recordedCalls,
-} from "./ipc-recorder";
 import { installMockIpc } from "./mock-ipc";
+import { attachIpcLog, emitTauriEvent, ipcCalls } from "./ipc";
 
 // Ways a replacement (mailto, Reply, Forward, Compose) can lose or corrupt mail:
 // 1. A replacement during an active Send unmounts the sending composer. If the
@@ -30,7 +25,6 @@ test("a replacement during an active send is refused and the composer survives a
   page,
 }, testInfo) => {
   await installMockIpc(page);
-  await recordIpc(page);
   await page.addInitScript(() => {
     const mock = window.__POSTAL_SNAP_MOCK__!;
     (window as unknown as { rejectSend: () => void }).rejectSend = () => {};
@@ -53,7 +47,7 @@ test("a replacement during an active send is refused and the composer survives a
   await expect
     .poll(
       async () =>
-        (await recordedCalls(page)).filter((c) => c.command === "send_message")
+        (await ipcCalls(page)).filter((c) => c.command === "send_message")
           .length,
     )
     .toBe(1);
@@ -84,7 +78,6 @@ test("a successful send closes its own composer and a refused replacement stays 
   page,
 }, testInfo) => {
   await installMockIpc(page);
-  await recordIpc(page);
   await page.addInitScript(() => {
     const mock = window.__POSTAL_SNAP_MOCK__!;
     const original = mock.handlers.send_message;
@@ -105,7 +98,7 @@ test("a successful send closes its own composer and a refused replacement stays 
   await expect
     .poll(
       async () =>
-        (await recordedCalls(page)).filter((c) => c.command === "send_message")
+        (await ipcCalls(page)).filter((c) => c.command === "send_message")
           .length,
     )
     .toBe(1);
@@ -129,7 +122,6 @@ test("overlapping replacements save each editor before replacing it", async ({
   page,
 }, testInfo) => {
   await installMockIpc(page);
-  await recordIpc(page);
   await page.addInitScript(() => {
     const mock = window.__POSTAL_SNAP_MOCK__!;
     let count = 0;
@@ -151,8 +143,7 @@ test("overlapping replacements save each editor before replacing it", async ({
   const subject = page.getByRole("textbox", { name: "Subject", exact: true });
   await subject.fill("ORIGINAL");
   const saves = async () =>
-    (await recordedCalls(page)).filter((c) => c.command === "save_draft")
-      .length;
+    (await ipcCalls(page)).filter((c) => c.command === "save_draft").length;
   const release = (index: number) =>
     page.evaluate(
       (i) =>
@@ -186,7 +177,6 @@ test("discarding while a replacement waits on a save does not write the draft ba
   page,
 }, testInfo) => {
   await installMockIpc(page);
-  await recordIpc(page);
   await page.addInitScript(() => {
     const mock = window.__POSTAL_SNAP_MOCK__!;
     const original = mock.handlers.save_draft;
@@ -210,7 +200,7 @@ test("discarding while a replacement waits on a save does not write the draft ba
     .getByRole("textbox", { name: "Subject", exact: true })
     .fill("DISCARD ME");
   const callsOf = async (command: string) =>
-    (await recordedCalls(page)).filter((c) => c.command === command);
+    (await ipcCalls(page)).filter((c) => c.command === command);
 
   await emitTauriEvent(page, "deep-link://new-url", [mailto("late")]);
   await expect.poll(async () => (await callsOf("save_draft")).length).toBe(1);
@@ -222,7 +212,7 @@ test("discarding while a replacement waits on a save does not write the draft ba
   await expect.poll(async () => (await callsOf("delete_draft")).length).toBe(1);
   await page.waitForTimeout(300);
 
-  const calls = await recordedCalls(page);
+  const calls = await ipcCalls(page);
   const deleteAt = calls.findIndex((c) => c.command === "delete_draft");
   expect(
     calls.slice(deleteAt + 1).filter((c) => c.command === "save_draft"),
@@ -234,7 +224,6 @@ test("sending while a replacement waits on a save creates no ghost draft", async
   page,
 }, testInfo) => {
   await installMockIpc(page);
-  await recordIpc(page);
   await page.addInitScript(() => {
     const mock = window.__POSTAL_SNAP_MOCK__!;
     const original = mock.handlers.save_draft;
@@ -259,7 +248,7 @@ test("sending while a replacement waits on a save creates no ghost draft", async
     .fill("SEND ME");
   await page.getByLabel("Message body").pressSequentially("Send body");
   const callsOf = async (command: string) =>
-    (await recordedCalls(page)).filter((c) => c.command === command);
+    (await ipcCalls(page)).filter((c) => c.command === command);
 
   await emitTauriEvent(page, "deep-link://new-url", [mailto("late")]);
   await expect.poll(async () => (await callsOf("save_draft")).length).toBe(1);

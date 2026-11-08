@@ -25,10 +25,12 @@ import {
   Printer,
   Send,
   ShieldAlert,
+  Flag,
   Star,
   Trash,
 } from "lucide-react";
 import { strings } from "../../i18n";
+import { FLAG_COLORS, flagColorKeys } from "../../flagColors";
 import type { MessageListFilter } from "../../listFilter";
 import {
   sortFamily,
@@ -36,7 +38,7 @@ import {
   toggleSortDirection,
   type MessageListSort,
 } from "../../listSort";
-import type { MailboxRole } from "../../types";
+import type { FlagColor, MailboxRole } from "../../types";
 import { PopupEntries, type PopupEntry } from "../ContextMenu";
 import { placeAnchoredMenu, syncScrollCue } from "../popupPlacement";
 import { moveMenuFocus } from "../toolbarNav";
@@ -94,6 +96,10 @@ interface MessagePaneHeaderProps {
     onMarkUnread: () => void;
     onStar: () => void;
     onUnstar: () => void;
+    /** Sets or clears the color of every checked message. */
+    onFlagColor: (color: FlagColor | null) => void;
+    /** False when the mailbox cannot store color keywords. */
+    flagKeywords: boolean;
     onPin: () => void;
     onUnpin: () => void;
     anySelectedUnread: boolean;
@@ -134,6 +140,41 @@ function keepInsidePane(menu: HTMLElement, trigger: HTMLElement) {
   const width = menu.getBoundingClientRect().width;
   const left = parseFloat(menu.style.left) || 0;
   menu.style.left = `${Math.max(lo, Math.min(left, hi - width))}px`;
+}
+
+/** Color entries for the selection More menu; a hint explains disabled colors. */
+function selectionFlagEntries(
+  selection: NonNullable<MessagePaneHeaderProps["selection"]>,
+  disabled: boolean,
+): PopupEntry[] {
+  const colors: PopupEntry[] = FLAG_COLORS.map((color) => ({
+    kind: "action" as const,
+    id: `flag-color:${color}`,
+    label: strings.mail.flagColors[flagColorKeys[color]],
+    icon: Flag,
+    disabled: disabled || !selection.flagKeywords,
+    onSelect: () => selection.onFlagColor(color),
+  }));
+  return [
+    ...(selection.flagKeywords
+      ? colors
+      : [
+          {
+            kind: "group" as const,
+            label: strings.mail.flagKeywordsUnsupported,
+            entries: colors,
+          },
+        ]),
+    { kind: "separator" },
+    {
+      kind: "action",
+      id: "clear-flag",
+      label: strings.mail.clearFlag,
+      icon: Star,
+      disabled,
+      onSelect: () => selection.onFlagColor(null),
+    },
+  ];
 }
 
 export function MessagePaneHeader({
@@ -322,6 +363,14 @@ export function MessagePaneHeader({
               },
             ]
           : []),
+        {
+          kind: "submenu" as const,
+          id: "flag-color",
+          label: strings.mail.flagColor,
+          icon: Flag,
+          disabled: selectionDisabled,
+          entries: selectionFlagEntries(selection, selectionDisabled),
+        },
         // Pin shows while any checked message is unpinned (or nothing is checked).
         ...(!selection.pinDisabled || selection.unpinDisabled
           ? [

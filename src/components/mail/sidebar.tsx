@@ -1,6 +1,7 @@
-import type { RefObject } from "react";
+import { useState, type ReactNode, type RefObject } from "react";
 import {
   ArrowUpFromLine,
+  ChevronDown,
   Clock,
   FileText,
   FolderPlus,
@@ -31,6 +32,78 @@ import { mailboxesForUnreadView } from "./folderTreeModel";
 import { SyncStatus } from "./syncStatus";
 
 export type LocalFolderView = "drafts" | "outbox" | "snoozed";
+
+type SidebarSection = "local" | "pinned" | "mailboxes" | "hidden";
+
+// Collapsed sections per account, kept for the session. Least recently
+// changed accounts drop first once the cap is reached.
+const SECTION_MEMORY_LIMIT = 50;
+const collapsedByAccount = new Map<string, Set<SidebarSection>>();
+const NO_SECTIONS: ReadonlySet<SidebarSection> = new Set();
+
+function useCollapsedSections(accountId: string | undefined) {
+  const key = accountId ?? "";
+  const [, setVersion] = useState(0);
+  const collapsed = collapsedByAccount.get(key) ?? NO_SECTIONS;
+  function toggle(section: SidebarSection) {
+    const next = new Set(collapsed);
+    if (next.has(section)) next.delete(section);
+    else next.add(section);
+    collapsedByAccount.delete(key);
+    collapsedByAccount.set(key, next);
+    if (collapsedByAccount.size > SECTION_MEMORY_LIMIT) {
+      const oldest = collapsedByAccount.keys().next().value;
+      if (oldest !== undefined) collapsedByAccount.delete(oldest);
+    }
+    setVersion((version) => version + 1);
+  }
+  return { collapsed, toggle };
+}
+
+function SidebarSectionBlock({
+  id,
+  title,
+  collapsed,
+  onToggle,
+  heading,
+  children,
+  role,
+}: {
+  id: SidebarSection;
+  title: string;
+  collapsed: boolean;
+  onToggle: (section: SidebarSection) => void;
+  /** Extra controls on the heading row, after the toggle. */
+  heading?: ReactNode;
+  children: ReactNode;
+  role?: "group";
+}) {
+  const bodyId = `folder-section-${id}`;
+  return (
+    <div
+      className="sidebar-section"
+      role={role}
+      aria-label={role ? title : undefined}
+    >
+      <div className="sidebar-section-heading">
+        <button
+          type="button"
+          className="sidebar-section-title sidebar-section-toggle"
+          aria-expanded={!collapsed}
+          aria-controls={bodyId}
+          onClick={() => onToggle(id)}
+        >
+          <span>{title}</span>
+          <ChevronDown aria-hidden="true" className="sidebar-section-chevron" />
+        </button>
+        {heading}
+      </div>
+      <div id={bodyId} className="sidebar-section-body" hidden={collapsed}>
+        {children}
+      </div>
+    </div>
+  );
+}
 
 export interface SidebarProps {
   folderPaneRef: RefObject<HTMLElement | null>;
@@ -138,6 +211,7 @@ export function Sidebar({
   onEmptyJunk,
   onDropMessages,
 }: SidebarProps) {
+  const sections = useCollapsedSections(activeAccount?.id);
   return (
     <aside
       id="folder-pane"
@@ -183,34 +257,40 @@ export function Sidebar({
         <MailPlus aria-hidden="true" /> {strings.mail.addAccount}
       </button>
       <nav className="folder-list" aria-label={strings.mail.mailboxes}>
-        <p className="sidebar-section-title">{strings.mail.localFolders}</p>
-        <FolderButton
-          icon={FileText}
-          label={strings.mail.drafts}
-          count={draftsCount}
-          active={activeLocalView === "drafts"}
-          tone="drafts"
-          localView="drafts"
-          onClick={() => onSelectLocalView("drafts")}
-        />
-        <FolderButton
-          icon={outboxCount ? TriangleAlert : ArrowUpFromLine}
-          label={strings.mail.outbox}
-          count={outboxCount}
-          active={activeLocalView === "outbox"}
-          tone={outboxCount ? "warning" : undefined}
-          localView="outbox"
-          onClick={() => onSelectLocalView("outbox")}
-        />
-        <FolderButton
-          icon={Clock}
-          label={strings.mail.snoozed}
-          count={snoozedCount}
-          active={activeLocalView === "snoozed"}
-          tone="archive"
-          localView="snoozed"
-          onClick={() => onSelectLocalView("snoozed")}
-        />
+        <SidebarSectionBlock
+          id="local"
+          title={strings.mail.localFolders}
+          collapsed={sections.collapsed.has("local")}
+          onToggle={sections.toggle}
+        >
+          <FolderButton
+            icon={FileText}
+            label={strings.mail.drafts}
+            count={draftsCount}
+            active={activeLocalView === "drafts"}
+            tone="drafts"
+            localView="drafts"
+            onClick={() => onSelectLocalView("drafts")}
+          />
+          <FolderButton
+            icon={outboxCount ? TriangleAlert : ArrowUpFromLine}
+            label={strings.mail.outbox}
+            count={outboxCount}
+            active={activeLocalView === "outbox"}
+            tone={outboxCount ? "warning" : undefined}
+            localView="outbox"
+            onClick={() => onSelectLocalView("outbox")}
+          />
+          <FolderButton
+            icon={Clock}
+            label={strings.mail.snoozed}
+            count={snoozedCount}
+            active={activeLocalView === "snoozed"}
+            tone="archive"
+            localView="snoozed"
+            onClick={() => onSelectLocalView("snoozed")}
+          />
+        </SidebarSectionBlock>
         <PinnedFolders
           mailboxes={listedMailboxes(
             mailboxes,
@@ -223,46 +303,54 @@ export function Sidebar({
           folderIcons={folderIcons}
           onFolderClick={onFolderClick}
           onDropMessages={onDropMessages}
+          collapsed={sections.collapsed.has("pinned")}
+          onToggle={sections.toggle}
         />
-        <div className="sidebar-section-heading">
-          <p className="sidebar-section-title">{strings.mail.mailboxes}</p>
-          <button
-            type="button"
-            className="unread-folders-toggle"
-            aria-pressed={unreadFoldersOnly}
-            onClick={() => onUnreadFoldersOnlyChange(!unreadFoldersOnly)}
-          >
-            {strings.mail.unreadFolders}
-          </button>
-        </div>
-        <FolderTree
-          mailboxes={mailboxesForUnreadView(
-            listedMailboxes(mailboxes, hiddenMailboxes, activeAccount?.id),
-            unreadFoldersOnly,
-            activeLocalView ? undefined : activeMailboxId,
-          )}
-          activeMailboxId={activeMailboxId}
-          folderIcons={folderIcons}
-          folderDialog={folderDialog}
-          folderName={folderName}
-          folderBusy={folderBusy}
-          onFolderClick={onFolderClick}
-          onRename={onFolderRename}
-          onDelete={onFolderDelete}
-          onFolderDialogKeyDown={onFolderDialogKeyDown}
-          onFolderNameChange={onFolderNameChange}
-          onFolderDialogSubmit={onFolderDialogSubmit}
-          onFolderDialogClose={onFolderDialogClose}
-          onDropMessages={onDropMessages}
-          collapsedMailboxIds={collapsedMailboxIds}
-          onToggleCollapsed={onToggleCollapsed}
-        />
-        <FolderTreeActions
-          mailboxes={mailboxes}
-          collapsedMailboxIds={collapsedMailboxIds}
-          onCollapseFolders={onCollapseFolders}
-          onExpandFolders={onExpandFolders}
-        />
+        <SidebarSectionBlock
+          id="mailboxes"
+          title={strings.mail.mailboxes}
+          collapsed={sections.collapsed.has("mailboxes")}
+          onToggle={sections.toggle}
+          heading={
+            <button
+              type="button"
+              className="unread-folders-toggle"
+              aria-pressed={unreadFoldersOnly}
+              onClick={() => onUnreadFoldersOnlyChange(!unreadFoldersOnly)}
+            >
+              {strings.mail.unreadFolders}
+            </button>
+          }
+        >
+          <FolderTree
+            mailboxes={mailboxesForUnreadView(
+              listedMailboxes(mailboxes, hiddenMailboxes, activeAccount?.id),
+              unreadFoldersOnly,
+              activeLocalView ? undefined : activeMailboxId,
+            )}
+            activeMailboxId={activeMailboxId}
+            folderIcons={folderIcons}
+            folderDialog={folderDialog}
+            folderName={folderName}
+            folderBusy={folderBusy}
+            onFolderClick={onFolderClick}
+            onRename={onFolderRename}
+            onDelete={onFolderDelete}
+            onFolderDialogKeyDown={onFolderDialogKeyDown}
+            onFolderNameChange={onFolderNameChange}
+            onFolderDialogSubmit={onFolderDialogSubmit}
+            onFolderDialogClose={onFolderDialogClose}
+            onDropMessages={onDropMessages}
+            collapsedMailboxIds={collapsedMailboxIds}
+            onToggleCollapsed={onToggleCollapsed}
+          />
+          <FolderTreeActions
+            mailboxes={mailboxes}
+            collapsedMailboxIds={collapsedMailboxIds}
+            onCollapseFolders={onCollapseFolders}
+            onExpandFolders={onExpandFolders}
+          />
+        </SidebarSectionBlock>
         <HiddenFolders
           mailboxes={mailboxes}
           hidden={hiddenMailboxes}
@@ -271,6 +359,8 @@ export function Sidebar({
           folderIcons={folderIcons}
           onFolderClick={onFolderClick}
           onDropMessages={onDropMessages}
+          collapsed={sections.collapsed.has("hidden")}
+          onToggle={sections.toggle}
         />
         {folderDialog?.mode === "create" ? (
           <form
@@ -413,6 +503,8 @@ function HiddenFolders({
   folderIcons,
   onFolderClick,
   onDropMessages,
+  collapsed,
+  onToggle,
 }: {
   mailboxes: MailboxSummary[];
   hidden: PinnedMailbox[];
@@ -421,6 +513,8 @@ function HiddenFolders({
   folderIcons: Record<MailboxRole, typeof Inbox>;
   onFolderClick: (mailbox: MailboxSummary) => void;
   onDropMessages?: (mailboxId: number, payload: string) => void;
+  collapsed: boolean;
+  onToggle: (section: SidebarSection) => void;
 }) {
   if (!accountId) return null;
   const concealed = hidden.flatMap((entry) => {
@@ -431,8 +525,13 @@ function HiddenFolders({
   });
   if (concealed.length === 0) return null;
   return (
-    <div role="group" aria-label={strings.mail.hiddenFolders}>
-      <p className="sidebar-section-title">{strings.mail.hiddenFolders}</p>
+    <SidebarSectionBlock
+      id="hidden"
+      role="group"
+      title={strings.mail.hiddenFolders}
+      collapsed={collapsed}
+      onToggle={onToggle}
+    >
       {concealed.map((mailbox) => (
         <FolderButton
           key={mailbox.id}
@@ -446,7 +545,7 @@ function HiddenFolders({
           onDropMessages={onDropMessages}
         />
       ))}
-    </div>
+    </SidebarSectionBlock>
   );
 }
 
@@ -458,6 +557,8 @@ function PinnedFolders({
   folderIcons,
   onFolderClick,
   onDropMessages,
+  collapsed,
+  onToggle,
 }: {
   mailboxes: MailboxSummary[];
   pins: PinnedMailbox[];
@@ -466,6 +567,8 @@ function PinnedFolders({
   folderIcons: Record<MailboxRole, typeof Inbox>;
   onFolderClick: (mailbox: MailboxSummary) => void;
   onDropMessages?: (mailboxId: number, payload: string) => void;
+  collapsed: boolean;
+  onToggle: (section: SidebarSection) => void;
 }) {
   if (!accountId) return null;
   const pinned = pins.flatMap((pin) => {
@@ -475,8 +578,13 @@ function PinnedFolders({
   });
   if (pinned.length === 0) return null;
   return (
-    <div role="group" aria-label={strings.mail.pinnedFolders}>
-      <p className="sidebar-section-title">{strings.mail.pinnedFolders}</p>
+    <SidebarSectionBlock
+      id="pinned"
+      role="group"
+      title={strings.mail.pinnedFolders}
+      collapsed={collapsed}
+      onToggle={onToggle}
+    >
       {pinned.map((mailbox) => (
         <FolderButton
           key={mailbox.id}
@@ -490,6 +598,6 @@ function PinnedFolders({
           onDropMessages={onDropMessages}
         />
       ))}
-    </div>
+    </SidebarSectionBlock>
   );
 }

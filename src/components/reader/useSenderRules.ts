@@ -10,6 +10,7 @@ import {
 import { senderRuleNeedle } from "../../contextMenu";
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
+import { errorText } from "../../errors";
 
 export function readerAccount(accountId: string) {
   return useAppStore
@@ -53,14 +54,7 @@ export function useSenderRules({
     if (!alreadyJunk) await move("junk");
     try {
       const rules = await api.listFilterRules(message.accountId);
-      const blocked = rules.some(
-        (rule) =>
-          rule.enabled &&
-          rule.field === "from" &&
-          rule.action === "move_junk" &&
-          rule.contains.trim().toLowerCase() === contains.toLowerCase(),
-      );
-      if (blocked) {
+      if (matchingBlockRules(rules, contains).length > 0) {
         rememberBlockedSenders(message.accountId, rules);
         setBlockRevision((revision) => revision + 1);
         return;
@@ -74,11 +68,14 @@ export function useSenderRules({
         action: "move_junk",
         targetMailbox: null,
         enabled: true,
+        matchMode: "all",
+        conditions: [{ field: "from", value: contains }],
+        actions: [{ kind: "move_junk", targetMailbox: null, flagColor: null }],
       });
       rememberBlockedSenders(message.accountId, [...rules, created]);
       setBlockRevision((revision) => revision + 1);
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 
@@ -118,11 +115,14 @@ export function useSenderRules({
         action: "move_junk",
         targetMailbox: null,
         enabled: true,
+        matchMode: "all",
+        conditions: [{ field: "domain", value: domain }],
+        actions: [{ kind: "move_junk", targetMailbox: null, flagColor: null }],
       });
       rememberBlockedSenders(message.accountId, [...rules, created]);
       setBlockRevision((revision) => revision + 1);
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 
@@ -155,7 +155,7 @@ export function useSenderRules({
       );
       setBlockRevision((revision) => revision + 1);
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
       return;
     }
     if (useAppStore.getState().selectedMessage?.id !== message.id) return;
@@ -191,7 +191,7 @@ export function useSenderRules({
       );
       setBlockRevision((revision) => revision + 1);
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
       return;
     }
     if (useAppStore.getState().selectedMessage?.id !== message.id) return;

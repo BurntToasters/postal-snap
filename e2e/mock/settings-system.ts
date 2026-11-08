@@ -143,16 +143,25 @@ export async function registerMockSettingsSystem(page: Page): Promise<void> {
           );
         }
         if (params.has("failStepSave") && next.setupStep) {
-          throw new Error("Could not write settings.");
+          throw mock.mockError(
+            "settingsWriteFailed",
+            "Could not write settings.",
+          );
         }
         if (
           params.has("failChannelSave") &&
           next.updateChannel !== currentSettings.updateChannel
         ) {
-          throw new Error("Could not write settings.");
+          throw mock.mockError(
+            "settingsWriteFailed",
+            "Could not write settings.",
+          );
         }
         if (params.has("failDarkSave") && next.theme === "dark") {
-          throw new Error("Could not write settings.");
+          throw mock.mockError(
+            "settingsWriteFailed",
+            "Could not write settings.",
+          );
         }
         state.savedSettings.push(args.settings);
         try {

@@ -134,7 +134,7 @@ impl Database {
                     COALESCE((SELECT a.role FROM folder_assignments a WHERE a.account_id=f.account_id AND a.mailbox_id=f.id), CASE WHEN EXISTS(SELECT 1 FROM folder_assignments a WHERE a.account_id=f.account_id AND a.role=f.role) THEN 'other' ELSE f.role END),
                     MAX(0, COALESCE(f.server_unread, SUM(CASE WHEN m.is_read = 0 AND m.pending_move_to IS NULL AND {NOT_SNOOZED_SQL} THEN 1 ELSE 0 END)) + f.local_unread_delta),
                     MAX(0, COALESCE(f.server_total, SUM(CASE WHEN m.pending_move_to IS NULL AND m.id IS NOT NULL AND {NOT_SNOOZED_SQL} THEN 1 ELSE 0 END)) + f.local_total_delta),
-                    f.delimiter
+                    f.delimiter, f.allows_keywords
              FROM mailboxes f LEFT JOIN messages m ON m.mailbox_id = f.id
              WHERE f.account_id = ?1 GROUP BY f.id
              ORDER BY CASE f.role WHEN 'inbox' THEN 0 WHEN 'starred' THEN 1 WHEN 'drafts' THEN 2 WHEN 'sent' THEN 3 WHEN 'archive' THEN 4 WHEN 'junk' THEN 5 WHEN 'trash' THEN 6 ELSE 7 END, f.display_name COLLATE NOCASE"
@@ -151,6 +151,7 @@ impl Database {
                     unread_count: row.get::<_, u32>(5)?,
                     total_count: row.get::<_, u32>(6)?,
                     delimiter: row.get(7)?,
+                    allows_keywords: row.get::<_, i64>(8)? != 0,
                 })
             })
             .map_err(db_error)?;
@@ -165,7 +166,7 @@ impl Database {
                     COALESCE((SELECT a.role FROM folder_assignments a WHERE a.account_id=f.account_id AND a.mailbox_id=f.id), CASE WHEN EXISTS(SELECT 1 FROM folder_assignments a WHERE a.account_id=f.account_id AND a.role=f.role) THEN 'other' ELSE f.role END),
                     MAX(0, COALESCE(f.server_unread, SUM(CASE WHEN m.is_read = 0 AND m.pending_move_to IS NULL AND {NOT_SNOOZED_SQL} THEN 1 ELSE 0 END)) + f.local_unread_delta),
                     MAX(0, COALESCE(f.server_total, SUM(CASE WHEN m.pending_move_to IS NULL AND m.id IS NOT NULL AND {NOT_SNOOZED_SQL} THEN 1 ELSE 0 END)) + f.local_total_delta),
-                    f.delimiter
+                    f.delimiter, f.allows_keywords
              FROM mailboxes f LEFT JOIN messages m ON m.mailbox_id = f.id
              GROUP BY f.id
              ORDER BY f.account_id, CASE f.role WHEN 'inbox' THEN 0 WHEN 'starred' THEN 1 WHEN 'drafts' THEN 2 WHEN 'sent' THEN 3 WHEN 'archive' THEN 4 WHEN 'junk' THEN 5 WHEN 'trash' THEN 6 ELSE 7 END, f.display_name COLLATE NOCASE"
@@ -182,6 +183,7 @@ impl Database {
                     unread_count: row.get::<_, u32>(5)?,
                     total_count: row.get::<_, u32>(6)?,
                     delimiter: row.get(7)?,
+                    allows_keywords: row.get::<_, i64>(8)? != 0,
                 })
             })
             .map_err(db_error)?;
@@ -219,6 +221,24 @@ impl Database {
             })
             .map_err(db_error)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+    }
+
+    /// Role as the mailbox list shows it: an explicit assignment, else the
+    /// folder's own role, else `other` when another folder took that role.
+    pub fn mailbox_effective_role(&self, account_id: &str, mailbox: &str) -> Result<String, String> {
+        self.conn()?
+            .query_row(
+                "SELECT COALESCE(
+                   (SELECT a.role FROM folder_assignments a WHERE a.account_id=f.account_id AND a.mailbox_id=f.id),
+                   CASE WHEN EXISTS(SELECT 1 FROM folder_assignments a WHERE a.account_id=f.account_id AND a.role=f.role)
+                        THEN 'other' ELSE f.role END)
+                 FROM mailboxes f WHERE f.account_id=?1 AND f.name=?2",
+                params![account_id, mailbox],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?
+            .ok_or_else(|| "Mailbox not found.".to_string())
     }
 
     pub fn mailbox_for_role(
@@ -791,6 +811,7 @@ mod tests {
     fn account_with(id: &str, email: &str) -> AccountRecord {
         AccountRecord {
             summary: AccountSummary {
+                notify_new_mail: true,
                 default_body_format: crate::models::BodyFormat::Html,
                 id: id.into(),
                 provider: ProviderKind::Manual,

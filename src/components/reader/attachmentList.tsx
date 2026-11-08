@@ -14,9 +14,12 @@ import { accountSyncPhase } from "../../accountStatus";
 import { formatBytes } from "../../format";
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
+import { emitOpenedMessage } from "../../openedMessage";
 import type { Attachment, AttachmentPreview, MessageDetail } from "../../types";
+import { isMessageAttachment, isPageImage } from "./attachmentKinds";
 import { useDialogFocus } from "../useDialogFocus";
 import { useInertBackground } from "../useInertBackground";
+import { errorText } from "../../errors";
 
 const PREVIEW_ZOOM = [1, 1.5, 2, 3];
 
@@ -140,6 +143,24 @@ export function AttachmentPreviewDialog({
                   : undefined
               }
             />
+          ) : preview.pages && preview.pages.length > 0 ? (
+            <div className="pdf-pages">
+              {preview.pages.map((url, index) =>
+                isPageImage(url) ? (
+                  <img
+                    key={index}
+                    src={url}
+                    alt={strings.reader.pdfPageAlt(
+                      index + 1,
+                      preview.pageCount ?? preview.pages?.length ?? 0,
+                    )}
+                  />
+                ) : null,
+              )}
+              {preview.pagesTruncated ? (
+                <p role="note">{strings.reader.pagesTruncated}</p>
+              ) : null}
+            </div>
           ) : (
             <pre>{preview.text ?? ""}</pre>
           )}
@@ -270,9 +291,22 @@ export function AttachmentList({
         store.selectMessage(detail);
       }
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       setFullDownload(undefined);
+    }
+  }
+
+  async function viewMessage(attachment: Attachment) {
+    try {
+      const opened = await api.viewAttachmentMessage(
+        message.accountId,
+        message.id,
+        attachment.id,
+      );
+      emitOpenedMessage(opened);
+    } catch (cause) {
+      setError(errorText(cause));
     }
   }
 
@@ -400,6 +434,21 @@ export function AttachmentList({
                     title={strings.reader.previewTitle(attachment.filename)}
                   >
                     <Eye aria-hidden="true" />
+                  </button>
+                ) : null}
+                {isMessageAttachment(attachment.contentType) ? (
+                  <button
+                    type="button"
+                    className="secondary-button attachment-view-button"
+                    disabled={
+                      downloadingAttachmentId !== undefined || partialOffline
+                    }
+                    onClick={() => void viewMessage(attachment)}
+                    aria-label={strings.reader.viewNamedMessage(
+                      attachment.filename,
+                    )}
+                  >
+                    {strings.reader.viewMessage}
                   </button>
                 ) : null}
                 <button

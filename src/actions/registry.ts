@@ -4,6 +4,7 @@ import {
   previousUnreadMailbox,
 } from "../components/mail/folderTreeModel";
 import { formatChord } from "../format";
+import { openEmlFromPicker } from "../openedMessage";
 import { strings } from "../i18n";
 import { useAppStore } from "../store";
 import { unreadStep } from "../threads";
@@ -32,11 +33,31 @@ function hasSelection(): boolean {
   return app().selectedMessage !== undefined;
 }
 
+/** Color flags need a mailbox that stores keywords. */
+function selectedAllowsKeywords(): boolean {
+  const state = app();
+  const message = state.selectedMessage;
+  return (
+    state.mailboxes.find((box) => box.id === message?.mailboxId)
+      ?.allowsKeywords !== false
+  );
+}
+
 function selectedRole(): MailboxRole | undefined {
   const state = app();
   const message = state.selectedMessage;
   if (!message) return undefined;
   return state.mailboxes.find((box) => box.id === message.mailboxId)?.role;
+}
+
+/** A real folder is open; local views have no mailbox to export or import into. */
+function hasMailboxView(): boolean {
+  const state = app();
+  return (
+    state.accounts.length > 0 &&
+    state.activeMailboxId !== undefined &&
+    !state.activeLocalView
+  );
 }
 
 function trashTargetExists(): boolean {
@@ -157,6 +178,8 @@ const ACTIONS: readonly ActionDefinition[] = [
     shortcut: [
       { key: "e", mod: true, shift: false, focus: "any" },
       { key: "a", ctrl: true, meta: true, focus: "any" },
+      // Plain e reaches here from the letter; list rows stop it before this.
+      { key: "e", mod: false, alt: false, shift: false },
     ],
     hint: () => formatChord("E"),
   },
@@ -209,12 +232,26 @@ const ACTIONS: readonly ActionDefinition[] = [
     scope: "global",
     hint: () => `${formatChord("+")} / ${formatChord("-")}`,
   },
+  // Shortcut-only: the hint lives on text-size, so these stay out of the list.
+  {
+    id: "text-larger",
+    label: () => strings.settings.textSize,
+    scope: "global",
+    shortcut: [{ key: ["=", "+"], mod: true, focus: "any" }],
+  },
+  {
+    id: "text-smaller",
+    label: () => strings.settings.textSize,
+    scope: "global",
+    shortcut: [{ key: "-", mod: true, focus: "any" }],
+  },
   {
     id: "settings",
     keywords: ["preferences", "options"],
     run: viaBus("settings"),
     label: () => strings.mail.settings,
     scope: "global",
+    shortcut: [{ key: ",", mod: true, focus: "any" }],
     hint: () => formatChord(","),
   },
   {
@@ -373,6 +410,7 @@ const ACTIONS: readonly ActionDefinition[] = [
     available: hasSelection,
     label: () => strings.reader.print,
     scope: "reader",
+    shortcut: [{ key: "p", mod: true, shift: false, focus: "any" }],
     hint: () => formatChord("P"),
   },
   {
@@ -457,6 +495,43 @@ const ACTIONS: readonly ActionDefinition[] = [
     hint: () => "?",
     run: viaBus("show-shortcuts"),
     keywords: ["help", "keys", "hotkeys"],
+  },
+  {
+    id: "flag-color",
+    run: viaBus("flag-color"),
+    available: () => hasSelection() && selectedAllowsKeywords(),
+    label: () => strings.mail.flagColor,
+    scope: "list",
+  },
+  {
+    id: "clear-flag",
+    run: viaBus("clear-flag"),
+    available: () => app().selectedMessage?.isStarred === true,
+    label: () => strings.mail.clearFlag,
+    scope: "list",
+  },
+  {
+    id: "export-mailbox",
+    run: viaBus("export-mailbox"),
+    available: hasMailboxView,
+    label: () => strings.mail.exportMailbox,
+    scope: "global",
+    keywords: ["mbox", "backup", "save mailbox"],
+  },
+  {
+    id: "import-mbox",
+    run: viaBus("import-mbox"),
+    available: hasMailboxView,
+    label: () => strings.mail.importMessages,
+    scope: "global",
+    keywords: ["mbox", "restore", "load messages"],
+  },
+  {
+    id: "open-eml",
+    run: () => void openEmlFromPicker(),
+    label: () => strings.reader.openEmlFile,
+    scope: "global",
+    keywords: ["email file", "eml", "message file"],
   },
 ];
 

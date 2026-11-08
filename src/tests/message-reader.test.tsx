@@ -146,10 +146,14 @@ describe("MessageReader", () => {
   it("renders empty and hidden-pane states", () => {
     useAppStore.setState({ selectedMessage: undefined });
     const { rerender } = render(<MessageReader />);
+    expect(screen.getByText(strings.reader.emptyTitle)).toBeVisible();
     expect(screen.getByText(strings.mail.noMessage)).toBeVisible();
-    // Quiet text only, like Mail: no app mark or icon.
+    // Decorative icon only; no app mark.
     expect(document.querySelector(".empty-reader img")).toBeNull();
-    expect(document.querySelector(".empty-reader svg")).toBeNull();
+    expect(document.querySelector(".empty-reader svg")).toHaveAttribute(
+      "aria-hidden",
+      "true",
+    );
     useAppStore.setState({
       settings: { ...defaultSettings, readingPane: "hidden" },
     });
@@ -1040,7 +1044,7 @@ describe("MessageReader", () => {
     );
 
     await waitFor(() =>
-      expect(useAppStore.getState().error).toBe("Error: disk full"),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     expect(useAppStore.getState().messages.map((item) => item.id)).toEqual([
       newer.id,
@@ -1227,7 +1231,7 @@ describe("MessageReader", () => {
     );
 
     await waitFor(() =>
-      expect(useAppStore.getState().error).toBe("Error: disk full"),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     expect(api.moveMessageToMailbox).not.toHaveBeenCalled();
     expect(useAppStore.getState().selectedMessage?.id).toBe(1);
@@ -1243,7 +1247,7 @@ describe("MessageReader", () => {
     );
     fireEvent.click(menuItemBy({ name: strings.reader.markRead }));
     await waitFor(() =>
-      expect(useAppStore.getState().error).toBe("Error: flag failed"),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     expect(useAppStore.getState().selectedMessage?.isRead).toBe(false);
     expect(useAppStore.getState().mailboxes[0].unreadCount).toBe(2);
@@ -1256,7 +1260,7 @@ describe("MessageReader", () => {
     );
     fireEvent.click(menuItemBy({ name: strings.reader.addStar }));
     await waitFor(() =>
-      expect(useAppStore.getState().error).toBe("Error: star failed"),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     expect(useAppStore.getState().selectedMessage?.isStarred).toBe(false);
     expect(useAppStore.getState().messages[0].isStarred).toBe(false);
@@ -1266,7 +1270,7 @@ describe("MessageReader", () => {
       screen.getByRole("button", { name: strings.reader.archive }),
     );
     await waitFor(() =>
-      expect(useAppStore.getState().error).toBe("Error: move failed"),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     expect(useAppStore.getState().selectedMessage?.id).toBe(1);
     expect(useAppStore.getState().messages.map((item) => item.id)).toEqual([1]);
@@ -1283,7 +1287,7 @@ describe("MessageReader", () => {
       }),
     );
     await waitFor(() =>
-      expect(useAppStore.getState().error).toBe("Error: folder move failed"),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     expect(useAppStore.getState().selectedMessage?.id).toBe(1);
     expect(useAppStore.getState().messages.map((item) => item.id)).toEqual([1]);
@@ -1310,7 +1314,9 @@ describe("MessageReader", () => {
         );
       }
       await waitFor(() =>
-        expect(useAppStore.getState().error).toBe(`Error: ${error}`),
+        expect(useAppStore.getState().error).toBe(
+          strings.errors.operationFailed,
+        ),
       );
     }
   });
@@ -1555,7 +1561,7 @@ describe("MessageReader", () => {
       }),
     );
     await waitFor(() =>
-      expect(useAppStore.getState().error).toBe("Error: offline"),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     expect(writeText).not.toHaveBeenCalled();
     expect(useAppStore.getState().selectedMessage?.id).toBe(newer.id);
@@ -1913,7 +1919,7 @@ describe("MessageReader", () => {
       screen.getByRole("button", { name: strings.reader.forward }),
     );
     await waitFor(() =>
-      expect(useAppStore.getState().error).toBe("Error: forward failed"),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
 
     vi.mocked(api.snoozeMessage).mockRejectedValueOnce(
@@ -1927,7 +1933,7 @@ describe("MessageReader", () => {
       screen.getByRole("button", { name: strings.reader.snoozeTomorrow }),
     );
     await waitFor(() =>
-      expect(useAppStore.getState().error).toBe("Error: snooze failed"),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     expect(useAppStore.getState().selectedMessage?.id).toBe(1);
   });
@@ -2549,7 +2555,7 @@ describe("MessageReader", () => {
     );
 
     await waitFor(() =>
-      expect(useAppStore.getState().error).toMatch(/offline/),
+      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
     );
     expect(useAppStore.getState().selectedMessage?.id).toBe(1);
     expect(useAppStore.getState().messages.map((item) => item.id)).toEqual([

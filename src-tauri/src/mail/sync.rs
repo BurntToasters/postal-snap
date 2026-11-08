@@ -12,10 +12,11 @@ use async_imap::types::Mailbox;
 
 use super::connect::connect_imap;
 use super::failure::{FailureKind, MailError};
+use super::keywords::keywords_allowed;
 use super::list_status::{self, ListStatusError, ListedName};
 use super::parse::{
-    internal_date, parse_envelope, parse_message, parse_partial_message, received_at_fallback,
-    reply_flags, system_flags,
+    flag_color_of, internal_date, parse_envelope, parse_message, parse_partial_message,
+    received_at_fallback, reply_flags, system_flags,
 };
 use super::pool::{self, Lease};
 use super::qresync::{
@@ -658,6 +659,7 @@ async fn sync_folder<H: SyncHooks>(
     if selected.uid_validity != status.uid_validity {
         return Err("Mailbox changed during sync.".into());
     }
+    db.set_mailbox_allows_keywords(mailbox_id, keywords_allowed(&selected.permanent_flags))?;
     let Some(uid_validity) = selected.uid_validity else {
         return Err("Mailbox identity is unavailable.".into());
     };
@@ -871,6 +873,7 @@ async fn cache_envelopes(
     .map_err(|_| "Message list download timed out.".to_string())?
     .map_err(|error| redact_error(&error, "Message list download"))?;
     let mut parsed_rows = Vec::new();
+    let mut colors: Vec<(u32, u8)> = Vec::new();
     let mut age_marks: Vec<(u32, bool)> = Vec::new();
     loop {
         let next = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, fetched.try_next())
@@ -885,6 +888,7 @@ async fn cache_envelopes(
             continue;
         };
         (parsed.is_answered, parsed.is_forwarded) = reply_flags(&item);
+        colors.push((parsed.uid, flag_color_of(&item)));
         let is_old = cutoff.is_some_and(|cutoff| {
             item.internal_date()
                 .map(|date| date.with_timezone(&Utc) < *cutoff)
@@ -912,6 +916,7 @@ async fn cache_envelopes(
     let owner = account_id.to_string();
     tokio::task::spawn_blocking(move || {
         writer.upsert_envelopes(&owner, mailbox_id, &parsed_rows)?;
+        writer.reconcile_flag_colors(mailbox_id, &colors)?;
         let _ = writer.repair_thread_roots(&owner, &threaded);
         Ok::<(), String>(())
     })
@@ -1051,6 +1056,13 @@ fn flag_rows(rows: &[async_imap::types::Fetch]) -> (Vec<FlagRow>, Vec<FlagRow>) 
     (changed, replies)
 }
 
+/// Flag color per UID for one UID FLAGS batch.
+fn flag_colors(rows: &[async_imap::types::Fetch]) -> Vec<(u32, u8)> {
+    rows.iter()
+        .filter_map(|item| item.uid.map(|uid| (uid, flag_color_of(item))))
+        .collect()
+}
+
 /// Fetch flag changes since `since`. With QRESYNC, the same command reports
 /// expunged UIDs (VANISHED) and they are applied here; the returned plan tells
 /// the caller whether `reconcile_expunges` can be skipped.
@@ -1086,8 +1098,10 @@ async fn sync_changed_flags(
         plan_vanished(&ranges, drained)
     });
     let (changed, replies) = flag_rows(&rows);
+    let colors = flag_colors(&rows);
     db.reconcile_reply_flags(mailbox_id, &replies)?;
     db.reconcile_flags(mailbox_id, &changed, &[])?;
+    db.reconcile_flag_colors(mailbox_id, &colors)?;
     if let Some(VanishedPlan::Apply(uids)) = &plan {
         db.apply_vanished(mailbox_id, uids)?;
     }
@@ -1111,8 +1125,10 @@ async fn full_flag_scan(lease: &mut Lease, db: &Database, mailbox_id: i64) -> Re
         .map_err(|_| "Flag sync timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Flag sync"))?;
         let (seen, replies) = flag_rows(&rows);
+        let colors = flag_colors(&rows);
         db.reconcile_reply_flags(mailbox_id, &replies)?;
         db.reconcile_flags(mailbox_id, &seen, chunk)?;
+        db.reconcile_flag_colors(mailbox_id, &colors)?;
     }
     db.mark_flag_scan(mailbox_id)
 }
@@ -1591,6 +1607,7 @@ pub async fn refresh_mailbox_envelopes(
         {
             return Err("Mailbox changed during sync.".into());
         }
+        db.set_mailbox_allows_keywords(mailbox_id, keywords_allowed(&selected.permanent_flags))?;
         if let Some((previous_validity, ..)) =
             db.mailbox_sync_state(&account.summary.id, mailbox)?
         {
@@ -2318,6 +2335,7 @@ mod tests {
 
     fn summary(has_attachments: bool) -> crate::models::MessageSummary {
         crate::models::MessageSummary {
+            flag_color: 0,
             id: 1,
             account_id: "account-1".into(),
             mailbox_id: 1,
@@ -2463,6 +2481,7 @@ mod scope_tests {
         };
         AccountRecord {
             summary: AccountSummary {
+                notify_new_mail: true,
                 default_body_format: BodyFormat::Html,
                 id: "scope-account".into(),
                 provider: ProviderKind::Manual,

@@ -1,8 +1,8 @@
 import AxeBuilder from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
-import { attachArtifacts, ipcCommands } from "./ipc-artifact";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifacts, ipcCommands } from "./ipc";
 
 // Failure modes covered here (docs/0.5.0-FAILURE-INVENTORY.md, section E):
 // 1. A partial message hides its known attachments or never says why they are missing.

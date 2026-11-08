@@ -680,7 +680,8 @@ export function SetupWizard({
               {provider === "icloud"
                 ? strings.setup.normalPasswordWarning
                 : strings.setup.providerPasswordWarning(
-                    foundProvider?.providerName ?? "This provider",
+                    foundProvider?.providerName ??
+                      strings.setup.unnamedProvider,
                   )}
             </span>
             <button

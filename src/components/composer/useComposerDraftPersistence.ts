@@ -12,6 +12,7 @@ import { registerDraftFlush } from "../../draftFlush";
 import type { ComposeDraft, DraftSummary } from "../../types";
 import { announceLocalMailChanged } from "./composerSeed";
 import { hasDraftContent } from "./composerValidate";
+import { errorText } from "../../errors";
 
 type SaveState = "unsaved" | "saving" | "saved";
 interface Options {
@@ -113,7 +114,7 @@ export function useComposerDraftPersistence({
           .catch((cause) => {
             if (isDiscardingRef.current) return;
             setSaveState("unsaved");
-            setError(String(cause));
+            setError(errorText(cause));
           })
           .finally(() => {
             saveInFlightRef.current = false;
@@ -209,7 +210,7 @@ export function useComposerDraftPersistence({
       } catch (cause) {
         if (isDiscardingRef.current) return;
         setSaveState("unsaved");
-        setError(String(cause));
+        setError(errorText(cause));
       } finally {
         saveInFlightRef.current = false;
         if (pendingCloseRef.current) {

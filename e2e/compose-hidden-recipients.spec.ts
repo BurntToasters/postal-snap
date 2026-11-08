@@ -1,6 +1,6 @@
 import { expect, test } from "./coverage-fixture";
-import { attachIpcLog, recordIpc } from "./ipc-recorder";
 import { installMockIpc } from "./mock-ipc";
+import { attachIpcLog } from "./ipc";
 
 // Failure modes covered here:
 // 1. The Bcc or Cc toggle hides a field that still holds recipients.
@@ -9,7 +9,6 @@ import { installMockIpc } from "./mock-ipc";
 
 test.beforeEach(async ({ page }) => {
   await installMockIpc(page);
-  await recordIpc(page);
 });
 
 for (const density of ["comfortable", "normal", "compact"] as const) {

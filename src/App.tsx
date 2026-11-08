@@ -16,13 +16,18 @@ import {
   requestPermission,
 } from "@tauri-apps/plugin-notification";
 import { api, inTauri } from "./api";
+import { errorText } from "./errors";
+import { OPENED_MESSAGE_EVENT } from "./openedMessage";
+import type { OpenedMessage } from "./types";
 import { reconcileAccountList } from "./accountMerge";
 import { CONTEXT_DISMISS_EVENT } from "./contextMenu";
 import { strings } from "./i18n";
+import { PostalError } from "./errors";
 import { parseMailto } from "./mailto";
 import { SetupWizard } from "./components/SetupWizard";
 import { SetupFlow } from "./components/SetupFlow";
 import { MailShell } from "./components/MailShell";
+import { EmlViewer } from "./components/EmlViewer";
 import { NoticeRegion } from "./components/NoticeRegion";
 import {
   SettingsDialog,
@@ -33,6 +38,7 @@ import { useAppStore } from "./store";
 import { useSettingsSave } from "./components/settings/useSettingsSave";
 import { applySettings } from "./settings";
 import { mailboxWindowTitle } from "./windowTitle";
+import { useAppShortcuts } from "./hooks/useAppShortcuts";
 import { useUnreadBadge } from "./hooks/useUnreadBadge";
 import { ensureUndoSession } from "./undoMove";
 import {
@@ -87,6 +93,23 @@ export default function App() {
   // Own setup route until user opens the mailbox. Sync events can list an
   // account before add_account returns to its setup component.
   const [setupSession, setSetupSession] = useState<SetupScreen | null>(null);
+  // One message file viewer at a time; a newer file replaces the open one.
+  const [viewer, setViewer] = useState<OpenedMessage | null>(null);
+  const viewerRef = useRef<OpenedMessage | null>(null);
+  const showViewer = useCallback((next: OpenedMessage) => {
+    const previous = viewerRef.current;
+    if (previous && previous.token !== next.token)
+      void api.closeOpenedMessage(previous.token).catch(() => undefined);
+    viewerRef.current = next;
+    setViewer(next);
+  }, []);
+  const closeViewer = useCallback(() => {
+    const current = viewerRef.current;
+    viewerRef.current = null;
+    setViewer(null);
+    if (current)
+      void api.closeOpenedMessage(current.token).catch(() => undefined);
+  }, []);
   const setupScreen: SetupScreen | null =
     setupSession ??
     (accounts.length > 0 ? null : settings.setupCompleted ? "wizard" : "flow");
@@ -140,7 +163,12 @@ export default function App() {
     const summary = summaries.find(
       (item) => item.id === draftId && item.accountId === accountId,
     );
-    if (!summary) throw new Error("The saved draft could not be reopened.");
+    if (!summary)
+      throw new PostalError({
+        code: "operationFailed",
+        message: strings.errors.draftNotReopened,
+        retryable: false,
+      });
 
     const latest = useAppStore.getState();
     if (
@@ -251,6 +279,37 @@ export default function App() {
       severalAccounts: accounts.length > 1,
     });
   }, [accounts, activeAccountId, mailboxes]);
+
+  // A token that arrives before this listener is registered is not replayed;
+  // the file flow and the viewer's own actions never depend on it.
+  useEffect(() => {
+    let active = true;
+    const unlisten: Array<() => void> = [];
+    const onOpened = (event: Event) =>
+      showViewer((event as CustomEvent<OpenedMessage>).detail);
+    window.addEventListener(OPENED_MESSAGE_EVENT, onOpened);
+    void api
+      .onEmlOpened(({ token }) => {
+        if (viewerRef.current?.token === token) return;
+        api
+          .getOpenedMessage(token)
+          .then((opened) => {
+            if (active) showViewer(opened);
+          })
+          .catch((cause) => {
+            if (active) setError(errorText(cause));
+          });
+      })
+      .then((stop) => {
+        if (active) unlisten.push(stop);
+        else stop();
+      });
+    return () => {
+      active = false;
+      window.removeEventListener(OPENED_MESSAGE_EVENT, onOpened);
+      unlisten.forEach((stop) => stop());
+    };
+  }, [showViewer, setError]);
 
   useEffect(() => {
     const onCreateRule = (event: Event) => {
@@ -381,42 +440,7 @@ export default function App() {
     return startPeriodicUpdateCheck(settings.updateCheckInterval);
   }, [settings.updateCheckInterval]);
 
-  useEffect(() => {
-    const keyboard = (event: KeyboardEvent) => {
-      // macOS Control keys edit text (Ctrl+P is previous line); use Command.
-      const mod =
-        document.documentElement.dataset.platform === "macos"
-          ? event.metaKey
-          : event.metaKey || event.ctrlKey;
-      if (mod) {
-        if (event.key === ",") {
-          event.preventDefault();
-          openSettings();
-        } else if (event.key === "=" || event.key === "+") {
-          event.preventDefault();
-          window.dispatchEvent(
-            new CustomEvent("postal:menu-action", { detail: "text-larger" }),
-          );
-        } else if (event.key === "-") {
-          event.preventDefault();
-          window.dispatchEvent(
-            new CustomEvent("postal:menu-action", { detail: "text-smaller" }),
-          );
-        } else if (event.key.toLowerCase() === "p") {
-          if (
-            document.querySelector(
-              ".composer-layer, .settings-window, .modal-layer",
-            )
-          )
-            return;
-          event.preventDefault();
-          window.dispatchEvent(new Event("postal:print-message"));
-        }
-      }
-    };
-    window.addEventListener("keydown", keyboard);
-    return () => window.removeEventListener("keydown", keyboard);
-  }, [openSettings]);
+  useAppShortcuts(() => openSettings(), repairSettings);
 
   useEffect(() => {
     void api.setComposerOpen(composerOpen).catch(() => undefined);
@@ -519,6 +543,15 @@ export default function App() {
       <div className="app-viewport" inert={settingsOpen || undefined}>
         {mainContent}
       </div>
+      {viewer ? (
+        <ErrorBoundary
+          className="modal-layer eml-viewer-recovery crash-recovery"
+          modal
+          onClose={closeViewer}
+        >
+          <EmlViewer key={viewer.token} opened={viewer} onClose={closeViewer} />
+        </ErrorBoundary>
+      ) : null}
       {composerOpen && composerAccountId ? (
         <ErrorBoundary
           className="modal-layer composer-recovery crash-recovery"

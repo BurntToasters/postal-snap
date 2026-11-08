@@ -3,6 +3,9 @@ import { resolve } from "node:path";
 import type { Page, TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // 0.5.2 narrow list at 200% text (a), and forced-colors drag feedback (b).
 // Artifacts: artifacts/0.5.2/narrow-200/metrics-<browser>.json plus PNGs.

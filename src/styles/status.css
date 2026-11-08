@@ -7,9 +7,9 @@
   height: 100%;
   place-content: center;
   justify-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   overflow: auto;
-  padding: 24px;
+  padding: var(--space-6);
   text-align: center;
 }
 
@@ -37,36 +37,36 @@
   background: var(--scrim);
 }
 
+/* Base toast surface. notices.css sets the stacked layout and severity tints. */
 .toast {
   position: fixed;
   z-index: 60;
-  right: 16px;
-  bottom: 16px;
+  right: var(--notice-inset);
+  bottom: var(--notice-inset);
   display: flex;
-  max-width: min(var(--notice-max-width), calc(100vw - 32px));
+  max-width: min(
+    var(--notice-max-width),
+    calc(100vw - 2 * var(--notice-inset))
+  );
   align-items: center;
-  gap: 12px;
-  padding: 12px 14px;
-  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
-  border-radius: var(--radius-md);
-  color: var(--danger-ink);
-  background: color-mix(in srgb, var(--danger-soft) 85%, var(--surface));
-  box-shadow: var(--shadow);
+  gap: var(--space-3);
+  padding: var(--notice-pad-block) var(--notice-pad-inline);
+  border: var(--notice-hairline) solid var(--menu-border);
+  border-radius: var(--notice-radius);
+  color: var(--text);
+  background: var(--menu-surface);
+  -webkit-backdrop-filter: var(--menu-blur);
+  backdrop-filter: var(--menu-blur);
+  box-shadow: var(--menu-shadow);
 }
 
 .toast span {
   flex: 1;
 }
 
-.toast.sent-toast {
-  border-color: color-mix(in srgb, var(--success) 45%, var(--border));
-  color: var(--text);
-  background: color-mix(in srgb, var(--success-soft) 60%, var(--surface));
-}
-
 .toast.sent-toast button {
   font-size: var(--fs-md);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   color: var(--accent-ink);
   padding-inline: var(--space-2);
 }

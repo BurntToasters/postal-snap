@@ -4,6 +4,7 @@ import { useAppStore } from "./store";
 import { conversationMessages } from "./threads";
 import type { MessageSummary } from "./types";
 import { BULK_LIMIT } from "./bulk";
+import { errorText } from "./errors";
 
 function paintPins(ids: ReadonlySet<number>, pinned: boolean): void {
   const store = useAppStore.getState();
@@ -56,7 +57,7 @@ async function applyPin(
     if (updated === ids.length) return;
     fail(strings.reader.pinFailed);
   } catch (cause) {
-    fail(String(cause));
+    fail(errorText(cause));
   }
 }
 

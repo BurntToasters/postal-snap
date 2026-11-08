@@ -5,6 +5,7 @@ import { sanitizeComposeHtml } from "../../security";
 import { strings } from "../../i18n";
 import type { BodyFormat, ComposeAttachment } from "../../types";
 import { readPastedImage, PASTED_IMAGE_UNREADABLE } from "./pasteImage";
+import { errorText } from "../../errors";
 
 type SaveState = "unsaved" | "saving" | "saved";
 
@@ -142,7 +143,7 @@ export function useComposerAttachments({
             setDropNote(strings.composer.dropAttached(dropped.length));
             markUnsaved();
           })
-          .catch((cause) => setError(String(cause)));
+          .catch((cause) => setError(errorText(cause)));
       })
       .then((stop) => {
         if (active) unlisten = stop;
@@ -161,7 +162,7 @@ export function useComposerAttachments({
       setAttachments((items) => [...items, ...selected]);
       if (selected.length) markUnsaved();
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 
@@ -202,7 +203,7 @@ export function useComposerAttachments({
         setError(
           cause === PASTED_IMAGE_UNREADABLE
             ? strings.composer.pastedImageUnreadable
-            : String(cause),
+            : errorText(cause),
         );
       }
     }
@@ -234,7 +235,7 @@ export function useComposerAttachments({
         void api
           .releaseComposeAttachments(accountId, [selectedToken])
           .catch(() => undefined);
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 
@@ -271,7 +272,7 @@ export function useComposerAttachments({
         accountId,
         current.map((item) => item.token),
       )
-      .catch((cause) => setError(String(cause)));
+      .catch((cause) => setError(errorText(cause)));
   }
 
   async function previewComposeImage(item: ComposeAttachment) {
@@ -279,7 +280,7 @@ export function useComposerAttachments({
       const src = await api.readComposeImage(accountId, item.token);
       setAttachmentPreview({ filename: item.filename, src });
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 
@@ -304,7 +305,7 @@ export function useComposerAttachments({
     if (item)
       void api
         .releaseComposeAttachments(accountId, [item.token])
-        .catch((cause) => setError(String(cause)));
+        .catch((cause) => setError(errorText(cause)));
   }
 
   /** Turns inline pictures into file attachments for a plain-text body. */

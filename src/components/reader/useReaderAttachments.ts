@@ -2,6 +2,7 @@ import type { Dispatch, SetStateAction } from "react";
 import { api } from "../../api";
 import { useAppStore } from "../../store";
 import type { Attachment, AttachmentPreview, MessageDetail } from "../../types";
+import { errorText } from "../../errors";
 
 interface Options {
   message: MessageDetail | undefined;
@@ -31,7 +32,13 @@ export function useReaderAttachments({
   function isPreviewable(attachment: Attachment): boolean {
     if (attachment.inline || attachment.size > 10 * 1024 * 1024) return false;
     const contentType = attachment.contentType.toLowerCase();
+    // Size 0 means a partial message's attachment that is not downloaded yet.
+    const isPdf =
+      attachment.size > 0 &&
+      (contentType === "application/pdf" ||
+        attachment.filename.toLowerCase().endsWith(".pdf"));
     return (
+      isPdf ||
       contentType === "text/plain" ||
       ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(
         contentType,
@@ -57,7 +64,7 @@ export function useReaderAttachments({
         preview: loaded,
       });
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       setPreviewAttachmentId(undefined);
     }
@@ -74,7 +81,7 @@ export function useReaderAttachments({
         attachmentIds,
       );
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       setDownloadingAttachmentId(undefined);
     }
@@ -86,7 +93,7 @@ export function useReaderAttachments({
     try {
       await api.saveAllAttachments(message.accountId, message.id);
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       setDownloadingAttachmentId(undefined);
     }
@@ -103,7 +110,7 @@ export function useReaderAttachments({
         filename,
       );
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       setDownloadingAttachmentId(undefined);
     }

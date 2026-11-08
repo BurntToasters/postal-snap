@@ -1,8 +1,8 @@
 import type { Dialog, Page, TestInfo } from "@playwright/test";
 
 import { expect, test } from "./coverage-fixture";
-import { attachArtifacts } from "./ipc-artifact";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifacts } from "./ipc";
 
 async function dismissConfirmFor(page: Page, action: () => Promise<void>) {
   const dialogType = page.waitForEvent("dialog").then(async (dialog) => {

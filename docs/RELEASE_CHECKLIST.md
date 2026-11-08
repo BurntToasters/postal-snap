@@ -19,6 +19,21 @@ At the 2026-10-17 audit, npm audit reported zero vulnerabilities and the RustSec
 - [ ] Generated npm and Cargo notices are present in every package.
 - [ ] `src-tauri/tauri.conf.json` updater pubkey is a real minisign key. `TAURI_UPDATER_PUBLIC_KEY` is not required in `.env`; if it is set, it matches the committed key.
 
+## 0.5.2 manual checks
+
+Record the same details as above. These native checks are required before the 0.5.2 GitHub release.
+
+- [ ] macOS traffic lights sit centered in the caption bar in Normal, Comfortable, and Compact density, at 100% and 200% text. Tune `MAC_TRAFFIC_LIGHTS` in `src-tauri/src/main.rs` if they do not.
+- [ ] The direct macOS build (DMG/ZIP) shows the translucent sidebar. The Mac App Store build shows an opaque sidebar, and its bundle has no `macos-vibrancy` feature and no private API (`macOSPrivateApi` false).
+- [ ] Windows 10 and Windows 11 show the Mica sidebar. On a system where Mica is unavailable, the window is opaque and fully usable.
+- [ ] Print a multi-page letter with an inline image on Windows and Linux: the sandboxed frame prints the whole body. On macOS the native print sheet shows the whole body.
+- [ ] Double-clicking a `.eml` file opens the viewer on macOS, Windows, and Linux. Remote images stay blocked.
+- [ ] Clicking a new-mail notification opens that message on macOS, Windows, and Linux. Turning notifications off for an account silences only that account.
+- [ ] Colored flags set in Postal Snap appear in Apple Mail on the same iCloud account, and colors set in Apple Mail appear here. `flag:<color>` search finds them.
+- [ ] mbox export and import with a real server: export a folder, import the file into another account's folder, and check progress and Cancel. Imported messages appear as read, and no path or file name appears in any error.
+- [ ] Preview a real PDF with more than 20 pages: the first pages render with "Page n of m" labels, the total count is shown, and the reader stays responsive.
+- [ ] Move a message to Junk and back on a server that accepts `$Junk` and `$NotJunk`. Confirm the keywords on the server with its own tools.
+
 ## 0.5.0 compatibility and UI evidence
 
 - [ ] `npm run test:bridge-integration` passes with both TLS modes and negative certificate/authentication fixtures; preserve `artifacts/mail-integration/results.json`.

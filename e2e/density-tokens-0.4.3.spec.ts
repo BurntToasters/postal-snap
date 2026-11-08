@@ -3,6 +3,9 @@ import { join } from "node:path";
 import type { Page } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Density token invariants plus a repeatable artifact in artifacts/0.4.3/.
 const dir = join(process.cwd(), "artifacts", "0.4.3", "density-tokens");

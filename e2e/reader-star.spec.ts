@@ -1,6 +1,9 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Failure modes covered here:
 // 1. The open message can be starred without opening More.
@@ -27,7 +30,7 @@ test("the open message can be starred from the toolbar", async ({ page }) => {
   await row(page).click();
   const star = page
     .locator(".reader-actions")
-    .getByRole("button", { name: "Add star", exact: true });
+    .getByRole("button", { name: "Flag", exact: true });
   await expect(
     page.getByRole("heading", { name: "Weekend plans" }),
   ).toBeVisible();
@@ -35,10 +38,10 @@ test("the open message can be starred from the toolbar", async ({ page }) => {
   await star.click();
   const remove = page
     .locator(".reader-actions")
-    .getByRole("button", { name: "Remove star", exact: true });
+    .getByRole("button", { name: "Unflag", exact: true });
   await expect(remove).toHaveAttribute("aria-pressed", "true");
-  await expect(row(page)).toHaveAccessibleName(/Starred/);
+  await expect(row(page)).toHaveAccessibleName(/Flagged/);
   await remove.click();
   await expect(star).toBeVisible();
-  await expect(row(page)).not.toHaveAccessibleName(/Starred/);
+  await expect(row(page)).not.toHaveAccessibleName(/Flagged/);
 });

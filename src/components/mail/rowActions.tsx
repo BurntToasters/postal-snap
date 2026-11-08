@@ -1,5 +1,5 @@
 import type { MouseEvent } from "react";
-import { Archive, Inbox, Mail, MailOpen, Star, Trash } from "lucide-react";
+import { Archive, Flag, Inbox, Mail, MailOpen, Trash } from "lucide-react";
 import { strings } from "../../i18n";
 import type { MessageSummary } from "../../types";
 
@@ -8,6 +8,8 @@ interface RowActionsProps {
   message: MessageSummary;
   conversation: boolean;
   starred: boolean;
+  /** Color index of a flagged message. */
+  flagColor?: number;
   unread: boolean;
   /** Archive rows move back to Inbox. */
   fromArchive: boolean;
@@ -25,6 +27,7 @@ export function RowActions({
   message,
   conversation,
   starred,
+  flagColor,
   unread,
   fromArchive,
   inTrash,
@@ -94,13 +97,14 @@ export function RowActions({
           type="button"
           className={`row-action${starred ? " starred" : ""}`}
           data-action="star"
+          data-flag-color={starred ? (flagColor ?? 0) : undefined}
           tabIndex={-1}
           aria-pressed={starred}
           aria-label={starLabel}
           title={`${starLabel} (s)`}
           onClick={onStar}
         >
-          <Star fill={starred ? "currentColor" : "none"} aria-hidden="true" />
+          <Flag fill={starred ? "currentColor" : "none"} aria-hidden="true" />
         </button>
       ) : null}
       {onRead ? (

@@ -13,13 +13,12 @@ import {
   type Virtualizer,
 } from "@tanstack/react-virtual";
 import {
-  ArrowDown,
   CalendarDays,
-  CircleAlert,
   Forward,
   Paperclip,
   Pin,
   Reply,
+  Search,
   Star,
 } from "lucide-react";
 import {
@@ -30,16 +29,17 @@ import {
   groupByDayLabel,
   messageListDay,
   notableArrival,
-  type ListDateFormatters,
 } from "../../format";
 import { addressMailbox } from "../../contextMenu";
 import { strings } from "../../i18n";
 import { rememberListScroll, rememberedListScroll } from "../../listScroll";
+import { recordRender } from "../../devPerf";
 import {
   rememberedExpandedThreads,
   rememberExpandedThreads,
 } from "../../threadExpand";
 import { folderPathLabel } from "../../i18n/mail";
+import { ListEmptyState } from "./localLists";
 import {
   MESSAGE_DRAG_TYPE,
   beginMessageDrag,
@@ -50,55 +50,35 @@ import {
 import { HighlightedText } from "../HighlightedText";
 import { RowActions } from "./rowActions";
 import { highlightTerms } from "../../searchHighlight";
+import { ImportanceMark, MessageRow, MessageWhen } from "./messageRow";
 import { useAppStore } from "../../store";
 import { groupThreads, pinnedFirst } from "../../threads";
 import type { MessageSummary } from "../../types";
 
-function MessageWhen({
-  message,
-  now,
-  formatters,
-}: {
-  message: MessageSummary;
-  now: Date;
-  formatters: ListDateFormatters;
-}) {
-  const late = notableArrival(message.receivedAt, message.arrivedAt);
-  return (
-    <span className="message-when">
-      <time
-        className="message-date"
-        dateTime={message.receivedAt}
-        title={formatFullMessageDate(message.receivedAt, now, formatters)}
-      >
-        {formatMessageListWhen(message.receivedAt, now, formatters)}
-      </time>
-      <span className="message-size">{formatBytes(message.size)}</span>
-      {late ? (
-        <>
-          {" "}
-          <span className="message-arrived">{strings.mail.arrivedLater}</span>
-        </>
-      ) : null}
-    </span>
-  );
+// Latest-callback wrapper: the returned function never changes identity,
+// so memoized rows do not re-render when the parent passes a new closure.
+function useStableCallback<A extends unknown[], R>(
+  fn: (...args: A) => R,
+): (...args: A) => R {
+  const ref = useRef(fn);
+  useLayoutEffect(() => {
+    ref.current = fn;
+  });
+  return useCallback((...args: A) => ref.current(...args), []);
 }
 
-function ImportanceMark({ importance }: { importance?: string }) {
-  if (importance === "high") {
-    return (
-      <CircleAlert
-        className="message-mark importance-high"
-        aria-hidden="true"
-      />
-    );
-  }
-  if (importance === "low") {
-    return (
-      <ArrowDown className="message-mark importance-low" aria-hidden="true" />
-    );
-  }
-  return null;
+// Like useStableCallback, but keeps undefined so presence checks still work.
+function useOptionalStable<A extends unknown[], R>(
+  fn: ((...args: A) => R) | undefined,
+): ((...args: A) => R) | undefined {
+  const stable = useStableCallback((...args: A) => fn?.(...args));
+  return fn ? (stable as (...args: A) => R) : undefined;
+}
+
+// Whole-summary snapshot taken at render: the list can hand back the same
+// object after an in-place change, so identity alone would hide it.
+function rowStateKey(message: MessageSummary): string {
+  return JSON.stringify(message);
 }
 
 type VisibleOption = {
@@ -273,6 +253,7 @@ export function MessageList({
   /** Remembers the scroll place for this folder or list. */
   scrollKey?: string;
 }) {
+  recordRender("messageList");
   const groupThreadsSetting = useAppStore(
     (state) => state.settings.groupThreads,
   );
@@ -341,7 +322,9 @@ export function MessageList({
   // One batch of Intl formatters shared by every row and day label in this
   // render; labels still recompute from a fresh `now` each render.
   const dateFormatters = useMemo(() => createListDateFormatters(), []);
-  const listNow = new Date();
+  // Minute-stable: rows re-render only when the minute changes.
+  const minuteKey = Math.floor(Date.now() / 60_000);
+  const listNow = useMemo(() => new Date(minuteKey * 60_000), [minuteKey]);
   const listRef = useRef<HTMLDivElement>(null);
   const restoredScroll = useRef(false);
   useLayoutEffect(() => {
@@ -685,6 +668,27 @@ export function MessageList({
     else setPendingFocusKey(key);
   }, [selectedId, virtualizer]);
 
+  // Rows are memoized, so every handler they receive keeps one identity.
+  const stableChoose = useStableCallback(onChoose);
+  const stableSelectRow = useStableCallback((id: number, shift: boolean) => {
+    if (shift) onRangeSelect?.(id);
+    else pickRow(id);
+  });
+  const stableCheckRow = useStableCallback((id: number) => checkIds([id]));
+  const stableKeyDown = useStableCallback(handleOptionKeyDown);
+  const stableDragStart = useStableCallback(
+    (
+      event: DragEvent<HTMLButtonElement>,
+      message: MessageSummary,
+      optionKey: string,
+    ) => startDrag(event, message, false, optionKey),
+  );
+  const stableDragEnd = useStableCallback(endDrag);
+  const stableStar = useOptionalStable(onToggleStar);
+  const stableRead = useOptionalStable(onToggleRead);
+  const stableArchive = useOptionalStable(onArchiveFocused);
+  const stableTrash = useOptionalStable(onTrashFocused);
+
   if (loading && messages.length === 0)
     return (
       <div className="list-state" role="status">
@@ -694,8 +698,11 @@ export function MessageList({
   if (messages.length === 0) {
     if (searchQuery) {
       return (
-        <div className="list-state" role="status">
-          <p>{strings.mail.noSearchResults(searchQuery)}</p>
+        <ListEmptyState
+          icon={Search}
+          title={strings.mail.noSearchResults(searchQuery)}
+          hint={strings.mail.noSearchResultsHint}
+        >
           {onSearchAllFolders || onClearSearch ? (
             <div className="list-state-actions">
               {onSearchAllFolders ? (
@@ -718,13 +725,14 @@ export function MessageList({
               ) : null}
             </div>
           ) : null}
-        </div>
+        </ListEmptyState>
       );
     }
     return (
-      <div className="list-state" role="status" aria-live="polite">
-        {emptyLabel ?? strings.mail.emptyMailbox}
-      </div>
+      <ListEmptyState
+        title={emptyLabel ?? strings.mail.emptyMailbox}
+        hint={emptyLabel ? undefined : strings.mail.emptyMailboxHint}
+      />
     );
   }
 
@@ -789,6 +797,7 @@ export function MessageList({
         message={message}
         conversation={conversation}
         starred={starred}
+        flagColor={message.flagColor}
         unread={unread}
         fromArchive={role === "archive"}
         inTrash={role === "trash"}
@@ -1075,6 +1084,28 @@ export function MessageList({
     );
   }
 
+  function startDrag(
+    event: DragEvent<HTMLButtonElement>,
+    message: MessageSummary,
+    wholeConversation: boolean,
+    optionKey: string,
+  ) {
+    event.dataTransfer.effectAllowed = "move";
+    const ids = dragIds(message, wholeConversation);
+    event.dataTransfer.setData(
+      MESSAGE_DRAG_TYPE,
+      messageDragPayload(message.accountId, ids),
+    );
+    setMessageDragChip(event.dataTransfer, ids.length);
+    beginMessageDrag();
+    setDragKey(optionKey);
+  }
+
+  function endDrag() {
+    endMessageDrag();
+    setDragKey(undefined);
+  }
+
   function messageDragProps(
     message: MessageSummary,
     wholeConversation: boolean,
@@ -1082,32 +1113,15 @@ export function MessageList({
   ) {
     return {
       draggable: true as const,
-      onDragStart: (event: DragEvent<HTMLButtonElement>) => {
-        event.dataTransfer.effectAllowed = "move";
-        const ids = dragIds(message, wholeConversation);
-        event.dataTransfer.setData(
-          MESSAGE_DRAG_TYPE,
-          messageDragPayload(message.accountId, ids),
-        );
-        setMessageDragChip(event.dataTransfer, ids.length);
-        beginMessageDrag();
-        setDragKey(optionKey);
-      },
-      onDragEnd: () => {
-        endMessageDrag();
-        setDragKey(undefined);
-      },
+      onDragStart: (event: DragEvent<HTMLButtonElement>) =>
+        startDrag(event, message, wholeConversation, optionKey),
+      onDragEnd: endDrag,
     };
   }
 
-  function renderRow(
-    message: MessageSummary,
-    optionKey: string,
-    groupKey?: string,
-    treeLevel?: number,
-    groupEnd = false,
-  ) {
-    const checked = selecting && (selectedIds ?? []).includes(message.id);
+  // Selection state for one message row; shared by the row and its neighbour.
+  function rowStates(message: MessageSummary, groupKey?: string) {
+    const checked = !!selecting && (selectedIds ?? []).includes(message.id);
     const isNewestThreadChild =
       !selecting &&
       groupKey !== undefined &&
@@ -1117,181 +1131,60 @@ export function MessageList({
     const isSelected = selecting
       ? checked
       : selectedId === message.id && !isNewestThreadChild;
-    const folder = folderName(message);
-    // The visible text stays one in-order run so the name contains it (WCAG 2.5.3).
-    const rowLabel = [
-      message.isRead ? strings.mail.read : strings.mail.unread,
-      message.isStarred ? strings.mail.starred : null,
-      message.pinned ? strings.mail.pinned : null,
-      correspondent(message),
-      formatMessageListWhen(message.receivedAt, listNow, dateFormatters),
-      // Visible text must stay one run in order (WCAG 2.5.3); hidden size goes last.
-      showSizes ? formatBytes(message.size) : null,
-      notableArrival(message.receivedAt, message.arrivedAt)
-        ? strings.mail.arrivedLater
-        : null,
-      message.conversationMuted ? strings.mail.muted : null,
-      message.subject || strings.common.noSubject,
-      message.attachmentCount
-        ? strings.mail.draftFiles(message.attachmentCount)
-        : null,
-      showMessagePreviews || loadingMessageId === message.id
-        ? loadingMessageId === message.id
-          ? strings.mail.downloadingMessage
-          : message.preview || strings.mail.openToDownload
-        : null,
-      showSizes ? null : formatBytes(message.size),
-      senderAddressTitle(message),
-      folder ? strings.mail.inFolder(folder) : null,
-      formatFullMessageDate(message.receivedAt, listNow, dateFormatters),
-      !message.attachmentCount && message.hasAttachments
-        ? strings.mail.hasAttachments
-        : null,
-      message.importance === "high"
-        ? strings.mail.highImportance
-        : message.importance === "low"
-          ? strings.mail.lowImportance
-          : null,
-      message.hasCalendar ? strings.mail.hasInvitation : null,
-      message.isAnswered ? strings.mail.replied : null,
-      message.isForwarded ? strings.mail.forwarded : null,
-    ]
-      .filter(Boolean)
-      .join(", ");
+    return { checked, isSelected };
+  }
+
+  function renderRow(
+    message: MessageSummary,
+    optionKey: string,
+    groupKey?: string,
+    treeLevel?: number,
+    groupEnd = false,
+    precedesSelection = false,
+  ) {
+    const { checked, isSelected } = rowStates(message, groupKey);
+    const role = mailboxes.find((box) => box.id === message.mailboxId)?.role;
     return (
-      <div
-        className={`message-row-wrap${groupKey !== undefined ? " thread-child" : ""}${groupEnd ? " thread-end" : ""}${!selecting && isSelected ? " selected" : ""}`}
-      >
-        {selecting ? (
-          // A compact checkbox inside a full 44px click target. The listbox
-          // owns only options, so the visual checkbox stays out of the
-          // accessibility tree; the row button keeps aria-selected and all
-          // keyboard selection behavior.
-          <label className="message-select-hit" aria-hidden="true">
-            <input
-              type="checkbox"
-              className="message-select"
-              checked={checked}
-              tabIndex={-1}
-              aria-hidden="true"
-              onChange={(event) => {
-                // Preventing click would undo the native toggle in browsers.
-                const shift = (event.nativeEvent as MouseEvent).shiftKey;
-                if (shift) onRangeSelect?.(message.id);
-                else pickRow(message.id);
-              }}
-              aria-label={strings.mail.selectMessage(
-                message.subject || strings.common.noSubject,
-              )}
-            />
-          </label>
-        ) : null}
-        <button
-          type="button"
-          role={rowRole}
-          aria-selected={isSelected}
-          aria-level={rowRole === "treeitem" ? (treeLevel ?? 1) : undefined}
-          aria-posinset={optionPosition.get(optionKey)}
-          aria-setsize={visibleOptions.length}
-          data-option-key={optionKey}
-          data-context="message"
-          data-message-id={message.id}
-          tabIndex={activeOptionKey === optionKey ? 0 : -1}
-          aria-label={rowLabel}
-          className={`message-row ${message.isRead ? "read" : "unread"} ${!selecting && isSelected ? "selected" : ""} ${checked ? "checked" : ""}`}
-          {...messageDragProps(message, false, optionKey)}
-          onClick={(event) => {
-            if (!selecting) {
-              // Cmd+click on macOS (Ctrl there opens the menu), Ctrl+click elsewhere, starts select mode.
-              const checkModifier =
-                document.documentElement.dataset.platform === "macos"
-                  ? event.metaKey
-                  : event.ctrlKey;
-              if (checkModifier) checkIds([message.id]);
-              else void onChoose(message);
-              return;
-            }
-            if (event.shiftKey) onRangeSelect?.(message.id);
-            else pickRow(message.id);
-          }}
-          onFocus={() => setFocusedOptionKey(optionKey)}
-          onKeyDown={(event) => handleOptionKeyDown(event, optionKey)}
-        >
-          <span className="unread-dot" aria-hidden="true" />
-          <span className="message-sender" title={senderAddressTitle(message)}>
-            <HighlightedText
-              text={correspondent(message)}
-              terms={marks.correspondent}
-            />
-          </span>{" "}
-          <MessageWhen
-            message={message}
-            now={listNow}
-            formatters={dateFormatters}
-          />{" "}
-          <span className="message-subject">
-            {message.isStarred ? (
-              <Star
-                className="message-mark star-mark"
-                fill="currentColor"
-                aria-hidden="true"
-              />
-            ) : null}
-            {folder ? (
-              <>
-                <span className="message-folder">{folder}</span>{" "}
-              </>
-            ) : null}
-            {message.pinned ? (
-              <Pin className="message-mark pin-mark" aria-hidden="true" />
-            ) : null}
-            {message.conversationMuted ? (
-              <>
-                <span className="message-muted">{strings.mail.muted}</span>{" "}
-              </>
-            ) : null}
-            <span>
-              <HighlightedText
-                text={message.subject || strings.common.noSubject}
-                terms={marks.subject}
-              />
-            </span>
-            {message.attachmentCount ? (
-              <>
-                {" "}
-                <span className="message-file-count">
-                  {strings.mail.draftFiles(message.attachmentCount)}
-                </span>
-              </>
-            ) : message.hasAttachments ? (
-              <Paperclip aria-hidden="true" />
-            ) : null}
-            <ImportanceMark importance={message.importance} />
-            {message.hasCalendar ? (
-              <CalendarDays className="message-mark" aria-hidden="true" />
-            ) : null}
-            {message.isAnswered ? (
-              <Reply className="message-mark" aria-hidden="true" />
-            ) : null}
-            {message.isForwarded ? (
-              <Forward className="message-mark" aria-hidden="true" />
-            ) : null}
-          </span>{" "}
-          {showMessagePreviews || loadingMessageId === message.id ? (
-            <span className="message-preview">
-              {loadingMessageId === message.id ? (
-                strings.mail.downloadingMessage
-              ) : (
-                <HighlightedText
-                  text={message.preview || strings.mail.openToDownload}
-                  terms={message.preview ? marks.preview : []}
-                />
-              )}
-            </span>
-          ) : null}
-        </button>
-        {rowActions(message, false, message.isStarred, !message.isRead)}
-      </div>
+      <MessageRow
+        message={message}
+        stateKey={rowStateKey(message)}
+        optionKey={optionKey}
+        groupKey={groupKey}
+        treeLevel={treeLevel}
+        groupEnd={groupEnd}
+        rowRole={rowRole}
+        position={optionPosition.get(optionKey)}
+        setSize={visibleOptions.length}
+        selecting={selecting ?? false}
+        checked={checked}
+        isSelected={isSelected}
+        precedesSelection={precedesSelection}
+        tabStop={activeOptionKey === optionKey}
+        correspondent={correspondent(message)}
+        senderTitle={senderAddressTitle(message)}
+        folder={folderName(message)}
+        showSizes={showSizes}
+        showPreviews={showMessagePreviews}
+        loading={loadingMessageId === message.id}
+        fromArchive={role === "archive"}
+        inTrash={role === "trash"}
+        canStar={onToggleStar !== undefined}
+        canRead={onToggleRead !== undefined}
+        searchQuery={searchQuery ?? ""}
+        now={listNow}
+        formatters={dateFormatters}
+        onChoose={stableChoose}
+        onSelectRow={stableSelectRow}
+        onCheckRow={stableCheckRow}
+        onFocusRow={setFocusedOptionKey}
+        onKeyDownRow={stableKeyDown}
+        onDragStartRow={stableDragStart}
+        onDragEndRow={stableDragEnd}
+        onStarRow={stableStar}
+        onReadRow={stableRead}
+        onArchiveRow={stableArchive}
+        onTrashRow={stableTrash}
+      />
     );
   }
 
@@ -1481,7 +1374,11 @@ export function MessageList({
     );
   }
 
-  function renderOption(option: VisibleOption, groupEnd: boolean) {
+  function renderOption(
+    option: VisibleOption,
+    groupEnd: boolean,
+    precedesSelection: boolean,
+  ) {
     if (option.kind === "header") {
       const group = option.groupKey
         ? threadsById.get(option.groupKey)
@@ -1494,6 +1391,7 @@ export function MessageList({
       option.groupKey,
       option.groupKey !== undefined ? 2 : undefined,
       groupEnd,
+      precedesSelection,
     );
   }
 
@@ -1575,6 +1473,12 @@ export function MessageList({
         {renderedRows.map((virtualRow) => {
           const item = items[virtualRow.index];
           if (!item) return null;
+          // The next line's selection hides this row's separator (no :has()).
+          const next = items[virtualRow.index + 1];
+          const precedesSelection =
+            next?.kind === "option" &&
+            next.option.kind === "message" &&
+            rowStates(next.option.message, next.option.groupKey).isSelected;
           return (
             <div
               key={virtualRow.key}
@@ -1585,7 +1489,7 @@ export function MessageList({
             >
               {item.kind === "day"
                 ? renderDay(item)
-                : renderOption(item.option, item.groupEnd)}
+                : renderOption(item.option, item.groupEnd, precedesSelection)}
             </div>
           );
         })}

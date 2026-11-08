@@ -2,6 +2,9 @@ import { mkdir, writeFile } from "node:fs/promises";
 import type { Locator, Page } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Failure modes (audit-052 menus):
 // 1. Account switcher inside the clipped folder pane (glass, drawer).
@@ -205,11 +208,27 @@ test("the open submenu's parent row is highlighted", async ({ page }) => {
   // Closing with Escape leaves the row unhighlighted; reopen without hover.
   await page.keyboard.press("ArrowRight");
   await expect(trigger).toHaveAttribute("aria-expanded", "true");
-  const background = await trigger.evaluate(
-    (node) => getComputedStyle(node).backgroundColor,
+  const style = await trigger.evaluate((node) => {
+    const s = getComputedStyle(node);
+    return { background: s.backgroundColor, color: s.color };
+  });
+  expect(style.background).not.toBe("rgba(0, 0, 0, 0)");
+  // WP2.2: the open submenu row is accent-filled with white text.
+  const contrastText = await page.evaluate(() =>
+    getComputedStyle(document.documentElement)
+      .getPropertyValue("--accent-contrast")
+      .trim(),
   );
-  expect(background).not.toBe("rgba(0, 0, 0, 0)");
-  summary.expandedRowBackground = background;
+  const probe = await trigger.evaluate((node, value) => {
+    const el = document.createElement("span");
+    el.style.color = value;
+    node.append(el);
+    const color = getComputedStyle(el).color;
+    el.remove();
+    return color;
+  }, contrastText);
+  expect(style.color).toBe(probe);
+  summary.expandedRowBackground = style.background;
 });
 
 test("forced colors give the open submenu row and hovered checkbox an outline", async ({

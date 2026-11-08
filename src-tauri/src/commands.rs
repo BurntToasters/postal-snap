@@ -14,9 +14,13 @@ pub mod badge;
 pub mod cache_policy;
 pub mod compatibility;
 pub mod drafts_send;
+pub mod drag;
 pub mod drag_drop;
+pub mod flags;
 pub mod folders;
+pub mod import_export;
 pub mod messages;
+pub mod opened;
 pub mod outbox;
 pub mod replied;
 pub mod security_net;
@@ -30,7 +34,6 @@ mod deferred_integration_tests;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
-use tauri_plugin_notification::NotificationExt;
 use tokio::sync::{Mutex as AsyncMutex, Notify, OwnedMutexGuard};
 use zeroize::{Zeroize, Zeroizing};
 
@@ -45,6 +48,7 @@ use crate::{
     settings::SettingsStore,
 };
 
+use crate::mail::keywords::{color_change, ColorChange};
 use messages::{FlagOperation, MoveOperation};
 
 type CommandResult<T> = Result<T, IpcError>;
@@ -592,7 +596,12 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
                     pending_full = false;
                     more_work = outcome.more_work;
                     if !first_pass {
-                        notify_new_mail(app, &state.db, account_id, previous_message_id);
+                        crate::notify::notify_new_mail(
+                            app,
+                            &state.db,
+                            account_id,
+                            previous_message_id,
+                        );
                     }
                     first_pass = false;
                 }
@@ -883,6 +892,7 @@ struct MoveReplayFlagDependencies {
     operation_ids: Vec<i64>,
     is_read: Option<bool>,
     is_starred: Option<bool>,
+    color: Option<ColorChange>,
 }
 
 fn move_replay_flag_dependencies(
@@ -912,7 +922,9 @@ fn move_replay_flag_dependencies(
             dependencies.is_read = flag.is_read;
         }
         if flag.is_starred.is_some() {
+            // A later star op replaces the color of an earlier one.
             dependencies.is_starred = flag.is_starred;
+            dependencies.color = color_change(flag.is_starred, flag.flag_color);
         }
     }
     dependencies
@@ -1205,6 +1217,7 @@ async fn replay_flag_batch(
     };
     let mailbox = first.mailbox.clone();
     let (is_read, is_starred) = (first.is_read, first.is_starred);
+    let color = color_change(first.is_starred, first.flag_color);
     let Some(uid_validity) = first.uid_validity else {
         return Ok(false);
     };
@@ -1214,6 +1227,7 @@ async fn replay_flag_batch(
             || operation.uid_validity != Some(uid_validity)
             || operation.is_read != is_read
             || operation.is_starred != is_starred
+            || color_change(operation.is_starred, operation.flag_color) != color
     }) {
         return Ok(false);
     }
@@ -1229,6 +1243,7 @@ async fn replay_flag_batch(
         Some(uid_validity),
         is_read,
         is_starred,
+        color,
     )
     .await
     .is_err()
@@ -1241,6 +1256,7 @@ async fn replay_flag_batch(
             operation.is_read,
             operation.is_starred,
         )?;
+        db.apply_flag_color(operation.message_id, color)?;
         flag_state.failed_messages.remove(&operation.message_id);
         db.remove_operation(account_id, *id)?;
     }
@@ -1282,10 +1298,12 @@ async fn replay_move_batch(
     let Some(uid_validity) = first.uid_validity else {
         return Ok(false);
     };
+    let junk_keyword = first.junk_keyword;
     if operations.iter().any(|(_, operation)| {
         operation.source != source
             || operation.destination != destination
             || operation.uid_validity != Some(uid_validity)
+            || operation.junk_keyword != junk_keyword
     }) {
         return Ok(false);
     }
@@ -1293,13 +1311,14 @@ async fn replay_move_batch(
         .iter()
         .map(|(_, operation)| operation.uid)
         .collect();
-    if mail::move_remote_uids(
+    if mail::move_remote_uids_with_junk(
         account,
         password,
         &source,
         &destination,
         &uids,
         Some(uid_validity),
+        junk_keyword,
     )
     .await
     .is_err()
@@ -1404,6 +1423,7 @@ async fn replay_offline_operations_with_notification(
                 continue;
             }
             ValidatedReplay::Flags(operation) => {
+                let color = color_change(operation.is_starred, operation.flag_color);
                 let result = mail::set_remote_flags(
                     account,
                     password,
@@ -1412,6 +1432,7 @@ async fn replay_offline_operations_with_notification(
                     operation.uid_validity,
                     operation.is_read,
                     operation.is_starred,
+                    color,
                 )
                 .await;
                 if let Err(error) = &result {
@@ -1431,6 +1452,7 @@ async fn replay_offline_operations_with_notification(
                     operation.is_read,
                     operation.is_starred,
                 )?;
+                db.apply_flag_color(operation.message_id, color)?;
                 if result.is_err() {
                     let _ = db.record_operation_attempt(account_id, id);
                     continue;
@@ -1466,10 +1488,15 @@ async fn replay_offline_operations_with_notification(
                 }
                 let dependencies =
                     move_replay_flag_dependencies(&db.queued_operations(account_id)?, &operation);
+                let keywords_permitted = db
+                    .mailbox_allows_keywords(account_id, &operation.source)
+                    .unwrap_or(false);
                 let replay_flags =
                     (!dependencies.operation_ids.is_empty()).then_some(mail::MoveReplayFlags {
                         is_read: dependencies.is_read,
                         is_starred: dependencies.is_starred,
+                        color: dependencies.color,
+                        keywords_permitted,
                     });
                 if !dependencies.operation_ids.is_empty() {
                     let flag_result = mail::set_remote_flags(
@@ -1480,6 +1507,7 @@ async fn replay_offline_operations_with_notification(
                         operation.uid_validity,
                         dependencies.is_read,
                         dependencies.is_starred,
+                        dependencies.color,
                     )
                     .await;
                     match flag_result {
@@ -1489,6 +1517,7 @@ async fn replay_offline_operations_with_notification(
                                 dependencies.is_read,
                                 dependencies.is_starred,
                             )?;
+                            db.apply_flag_color(operation.message_id, dependencies.color)?;
                             for flag_id in &dependencies.operation_ids {
                                 flag_state.handled.insert(*flag_id);
                             }
@@ -1530,6 +1559,7 @@ async fn replay_offline_operations_with_notification(
                         message_id: remote_message_id.as_deref(),
                         dedupe_existing: true,
                         replay_flags,
+                        junk_keyword: operation.junk_keyword,
                     },
                 )
                 .await;
@@ -1819,98 +1849,6 @@ async fn release_attachment_tokens<'a>(
     }
 }
 
-fn notify_new_mail(
-    app: &AppHandle,
-    db: &Database,
-    account_id: &str,
-    previous_message_id: Option<i64>,
-) {
-    // Sync stores rows with rising ids, so arrival order never depends on
-    // the sender's Date header.
-    let Ok(Some(message)) = db.newest_unread_inbox_after(account_id, previous_message_id) else {
-        return;
-    };
-    let settings = app.state::<AppState>().settings.get().ok();
-    if settings.as_ref().is_some_and(|settings| {
-        !settings.notify_new_mail
-            || crate::settings::quiet_hours_active(
-                &settings.quiet_hours_start,
-                &settings.quiet_hours_end,
-                local_minutes_now(),
-            )
-    }) {
-        return;
-    }
-    let private = settings
-        .as_ref()
-        .map(|settings| settings.private_notifications)
-        .unwrap_or(true);
-    // With several accounts, say which one received the mail. The account's
-    // own display name is shown, never its address, even in private mode.
-    let account_label = (db.account_count().unwrap_or(0) > 1)
-        .then(|| db.account(account_id).ok())
-        .flatten()
-        .map(|account| account.summary.display_name)
-        .filter(|name| !name.trim().is_empty());
-    let (title, body) = if private {
-        (
-            account_label.as_deref().map_or_else(
-                || crate::strings::notify::NEW_MAIL.to_string(),
-                crate::strings::notify::new_mail_for,
-            ),
-            crate::strings::notify::OPEN_TO_READ.to_string(),
-        )
-    } else {
-        let sender = if message.sender_name.is_empty() {
-            message.sender_address.clone()
-        } else {
-            message.sender_name.clone()
-        };
-        (
-            sender,
-            match account_label {
-                Some(name) => format!(
-                    "{}
-{name}",
-                    message.subject
-                ),
-                None => message.subject.clone(),
-            },
-        )
-    };
-    let play_sound = settings
-        .as_ref()
-        .map(|settings| settings.new_mail_sound)
-        .unwrap_or(true);
-    let mut notice = app.notification().builder().title(title).body(body);
-    if play_sound {
-        notice = notice.sound(new_mail_sound_name());
-    }
-    let _ = notice.show();
-}
-
-fn local_minutes_now() -> u32 {
-    use chrono::Timelike;
-    let now = chrono::Local::now();
-    now.hour() * 60 + now.minute()
-}
-
-/// System sound for a new-mail alert. Each desktop has its own name.
-fn new_mail_sound_name() -> &'static str {
-    if cfg!(target_os = "windows") {
-        "Mail"
-    } else if cfg!(target_os = "macos") {
-        "Ping"
-    } else {
-        "message-new-email"
-    }
-}
-
-#[cfg(test)]
-fn mail_alert_sound(play: bool) -> Option<&'static str> {
-    play.then(new_mail_sound_name)
-}
-
 #[cfg(test)]
 mod tests {
     // Get Mail stall failure modes:
@@ -2087,8 +2025,7 @@ mod tests {
     #[cfg(unix)]
     use super::make_unwritable;
     use super::{
-        attachments::preview_text, drafts_send::resolve_requested_send_at, mail_alert_sound,
-        new_mail_sound_name, sync::apply_filter_rules,
+        attachments::preview_text, drafts_send::resolve_requested_send_at, sync::apply_filter_rules,
     };
     use super::{
         cleanup_orphaned_account_dirs, record_orphan_marker, sweep_orphaned_account_dirs,
@@ -2171,12 +2108,6 @@ mod tests {
         assert!(!forward_as_inline(&no_id, Some("<img src=\"cid:\">")));
     }
 
-    #[test]
-    fn mail_alert_sound_follows_setting() {
-        assert_eq!(mail_alert_sound(false), None);
-        assert_eq!(mail_alert_sound(true), Some(new_mail_sound_name()));
-        assert!(!new_mail_sound_name().is_empty());
-    }
     use super::replied;
     use crate::db::{CachedMessage, Database};
     use crate::mail;
@@ -2187,6 +2118,7 @@ mod tests {
     fn rule_account() -> AccountRecord {
         AccountRecord {
             summary: AccountSummary {
+                notify_new_mail: true,
                 default_body_format: crate::models::BodyFormat::Html,
                 id: "account-1".into(),
                 provider: ProviderKind::Manual,
@@ -2263,6 +2195,9 @@ mod tests {
 
     fn enabled_rule(account_id: &str, action: &str) -> FilterRule {
         FilterRule {
+            match_mode: "all".into(),
+            conditions: Vec::new(),
+            actions: Vec::new(),
             id: String::new(),
             account_id: account_id.into(),
             name: "Bills".into(),
@@ -2294,21 +2229,21 @@ mod tests {
 
         let first = begin_rule_window(&db, &account_id);
         bill(&db, &account_id, inbox, 1);
-        finish_rule_window(&db, &account, first, false);
+        finish_rule_window(&db, &account, first, false, &mut |_| {});
         assert!(pending(&db).is_empty());
 
         let second = begin_rule_window(&db, &account_id);
         bill(&db, &account_id, inbox, 2);
-        finish_rule_window(&db, &account, second, false);
+        finish_rule_window(&db, &account, second, false, &mut |_| {});
         assert!(pending(&db).is_empty());
 
         let third = begin_rule_window(&db, &account_id);
-        finish_rule_window(&db, &account, third, true);
+        finish_rule_window(&db, &account, third, true, &mut |_| {});
         assert_eq!(pending(&db), vec![2, 1]);
 
         bill(&db, &account_id, inbox, 3);
         let fourth = begin_rule_window(&db, &account_id);
-        finish_rule_window(&db, &account, fourth, true);
+        finish_rule_window(&db, &account, fourth, true, &mut |_| {});
         assert_eq!(pending(&db), vec![2, 1]);
     }
 
@@ -2329,7 +2264,7 @@ mod tests {
         bill(&db, account_id, inbox, 1);
         let restarted = begin_rule_window(&db, account_id);
         assert_eq!(restarted, first);
-        finish_rule_window(&db, &account, restarted, true);
+        finish_rule_window(&db, &account, restarted, true, &mut |_| {});
         assert_eq!(db.pending_move_uids(inbox).unwrap(), vec![1]);
     }
 
@@ -2349,9 +2284,9 @@ mod tests {
         for uid in 1..=101 {
             bill(&db, account_id, inbox, uid);
         }
-        finish_rule_window(&db, &account, first, true);
+        finish_rule_window(&db, &account, first, true, &mut |_| {});
         let second = begin_rule_window(&db, account_id);
-        finish_rule_window(&db, &account, second, true);
+        finish_rule_window(&db, &account, second, true, &mut |_| {});
         assert_eq!(db.pending_move_uids(inbox).unwrap().len(), 101);
         assert_eq!(db.rules_pending_from(account_id).unwrap(), None);
     }
@@ -2789,6 +2724,7 @@ mod tests {
                 uid_validity: validity,
                 is_read: Some(true),
                 is_starred: None,
+                flag_color: None,
             };
         let flags_payload =
             |operation: &super::messages::FlagOperation| serde_json::to_string(operation).unwrap();
@@ -2863,6 +2799,7 @@ mod tests {
                 source: "INBOX".into(),
                 destination: destination.into(),
                 uid_validity: validity,
+                junk_keyword: None,
             };
         let move_payload =
             |operation: &super::messages::MoveOperation| serde_json::to_string(operation).unwrap();
@@ -3386,6 +3323,7 @@ mod tests {
             source: "INBOX".into(),
             destination: "Archive".into(),
             uid_validity: Some(1),
+            junk_keyword: None,
         };
         db.queue_operation(account_id, "move", &movement, Some(&format!("move:{id}")))
             .unwrap();
@@ -3452,6 +3390,59 @@ mod tests {
     const NO_MOVE: ReplayBatchCaps = ReplayBatchCaps {
         move_supported: false,
     };
+
+    #[test]
+    fn legacy_flag_ops_without_color_replay_as_plain_star_changes() {
+        use super::messages::{FlagOperation, MoveOperation};
+        use super::move_replay_flag_dependencies;
+        use crate::mail::keywords::{color_change, ColorChange};
+        // Queued before flag colors existed: no flagColor key at all.
+        let legacy_star: FlagOperation = serde_json::from_str(
+            r#"{"messageId":4,"uid":2,"mailbox":"INBOX","uidValidity":1,"isRead":null,"isStarred":true}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy_star.flag_color, None);
+        assert_eq!(
+            color_change(legacy_star.is_starred, legacy_star.flag_color),
+            None
+        );
+        let legacy_unstar: FlagOperation = serde_json::from_str(
+            r#"{"messageId":4,"uid":2,"mailbox":"INBOX","uidValidity":1,"isRead":null,"isStarred":false}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            color_change(legacy_unstar.is_starred, legacy_unstar.flag_color),
+            Some(ColorChange::Clear)
+        );
+        let movement = MoveOperation {
+            message_id: 4,
+            uid: 2,
+            source: "INBOX".into(),
+            destination: "Archive".into(),
+            uid_validity: Some(1),
+            junk_keyword: None,
+        };
+        let legacy = vec![(
+            9,
+            "flags".to_string(),
+            r#"{"messageId":4,"uid":2,"mailbox":"INBOX","uidValidity":1,"isRead":true,"isStarred":null}"#
+                .to_string(),
+        )];
+        let dependencies = move_replay_flag_dependencies(&legacy, &movement);
+        assert_eq!(dependencies.operation_ids, vec![9]);
+        assert_eq!(dependencies.is_read, Some(true));
+        assert_eq!(dependencies.color, None);
+        let colored = vec![(
+            10,
+            "flags".to_string(),
+            r#"{"messageId":4,"uid":2,"mailbox":"INBOX","uidValidity":1,"isRead":null,"isStarred":true,"flagColor":3}"#
+                .to_string(),
+        )];
+        assert_eq!(
+            move_replay_flag_dependencies(&colored, &movement).color,
+            Some(ColorChange::Set(3))
+        );
+    }
 
     fn flag_candidate(
         id: i64,

@@ -4,6 +4,7 @@ import { mergeAccountFields } from "../../accountMerge";
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
 import type { AccountSummary, BodyFormat } from "../../types";
+import { errorText } from "../../errors";
 
 /** Per-account default format for new messages. */
 export function BodyFormatControl({ account }: { account: AccountSummary }) {
@@ -25,7 +26,7 @@ export function BodyFormatControl({ account }: { account: AccountSummary }) {
       });
       setStatus(strings.settings.newMessageFormatSaved);
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       setSaving(false);
     }

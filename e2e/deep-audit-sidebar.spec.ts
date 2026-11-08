@@ -1,5 +1,8 @@
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Deep audit for the sidebar findings: nested labels keep width at the
 // default 248 px pane, center clicks open each depth, only depth-0 rows show

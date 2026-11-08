@@ -296,7 +296,8 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
         if (location.search.includes("archiveWarning=1")) {
           const previous = readArchiveWarning();
           if (String(args.accountId ?? "") !== account.id)
-            throw new Error(
+            throw mock.mockError(
+              "accessDenied",
               "Scheduled message does not belong to this account.",
             );
           const value = {
@@ -319,7 +320,10 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
           previous.state !== "archive_pending" ||
           String(args.accountId ?? "") !== account.id
         ) {
-          throw new Error("No archive retry belongs to this account.");
+          throw mock.mockError(
+            "notFound",
+            "No archive retry belongs to this account.",
+          );
         }
         saveArchiveWarning({
           ...previous,
@@ -335,7 +339,10 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
           previous.state !== "archive_pending" ||
           String(args.accountId ?? "") !== account.id
         ) {
-          throw new Error("No archive warning belongs to this account.");
+          throw mock.mockError(
+            "notFound",
+            "No archive warning belongs to this account.",
+          );
         }
         saveArchiveWarning({ ...previous, state: "dismissed" });
         return undefined;
@@ -761,7 +768,10 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
       },
       prepare_forwarded_message(args: Record<string, unknown>) {
         if (args.accountId !== account.id || Number(args.messageId) !== 10)
-          throw new Error("Message does not belong to this account.");
+          throw mock.mockError(
+            "accessDenied",
+            "Message does not belong to this account.",
+          );
         return {
           token: "forwarded-message-token",
           filename: "Weekend plans.eml",

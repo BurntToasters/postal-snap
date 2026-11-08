@@ -1,6 +1,9 @@
 import type { Locator, Page, TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Failure modes covered here (docs/0.4.2-UI-FAILURE-INVENTORY.md):
 // R3-R4  Cluster shows before hover, or sticks on touch.
@@ -195,14 +198,11 @@ test("cluster buttons act without opening the row or taking focus", async ({
   await row.focus();
   await wrap.hover();
   await action(wrap, "star").click();
-  await expect(row).toHaveAccessibleName(/Starred/i);
+  await expect(row).toHaveAccessibleName(/Flagged/i);
   await expect(row).not.toHaveAttribute("aria-selected", "true");
   await expect(row).toBeFocused();
   await expect(action(wrap, "star")).toHaveAttribute("aria-pressed", "true");
-  await expect(action(wrap, "star")).toHaveAttribute(
-    "aria-label",
-    "Remove star",
-  );
+  await expect(action(wrap, "star")).toHaveAttribute("aria-label", "Unflag");
   await action(wrap, "read").click();
   await expect(row).toHaveAccessibleName(/Unread/i);
   await expect(row).not.toHaveAttribute("aria-selected", "true");
@@ -259,7 +259,7 @@ test("conversation rows use conversation labels", async ({ page }) => {
   await wrap.hover();
   await expect(action(wrap, "star")).toHaveAttribute(
     "aria-label",
-    "Star conversation",
+    "Flag conversation",
   );
   await expect(action(wrap, "read")).toHaveAttribute(
     "aria-label",

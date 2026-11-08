@@ -45,6 +45,7 @@
   min-height: var(--control-height);
   max-height: var(--quick-reply-max-block);
   padding-block: var(--control-pad-block);
+  border-radius: var(--radius-sm);
   resize: none;
 }
 
@@ -144,28 +145,11 @@
   padding: 0 var(--reader-pad-inline);
   overflow: visible;
   border-bottom: 1px solid var(--border);
-  /* Soft scroll edge (macOS 27): the message blurs as it passes beneath. */
-  background: color-mix(in srgb, var(--surface) 84%, transparent);
-  backdrop-filter: blur(18px) saturate(160%);
-  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  background: var(--surface);
 }
 
 .mail-shell.pane-right .reader-actions {
   min-height: max(var(--pane-heading-height), var(--reader-bar-height, 0px));
-}
-
-html[data-reduce-transparency="true"] .reader-actions {
-  background: var(--surface);
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-}
-
-@media (prefers-contrast: more), (prefers-reduced-transparency: reduce) {
-  .reader-actions {
-    background: var(--surface);
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-  }
 }
 
 .reader-unified-actions {
@@ -225,17 +209,22 @@ html[data-reduce-transparency="true"] .reader-actions {
   height: var(--icon-md);
 }
 
+/* A flagged toolbar glyph tints with its color, darkened in light mode. */
+.reader-icon-action[data-flag-color] {
+  color: var(--flag-ink);
+}
+
+@media not (forced-colors: active) {
+  :root:not([data-resolved-theme="dark"]) .reader-icon-action[data-flag-color] {
+    color: color-mix(in srgb, var(--flag-ink) 55%, #000);
+  }
+}
+
 /* Icon-only toolbar actions keep the full touch target; text buttons size
    to their labels so they still wrap at large text. */
 .reader-actions .reader-icon-action {
   min-width: var(--target-size);
   justify-content: center;
-}
-
-/* Reply, Forward and Delete are primary controls: full target size outside Compact. */
-:root:not([data-density="compact"]) .reader-actions .reader-reply-action,
-:root:not([data-density="compact"]) .reader-actions .reader-icon-action {
-  min-height: var(--target-size);
 }
 
 /* Bottom pane has room: labeled replies get air and an inset from the pill. */
@@ -311,7 +300,7 @@ html[data-reduce-transparency="true"] .reader-actions {
 
 .conversation-index button[aria-current="true"] {
   background: var(--accent-soft);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 
 .conversation-index button:focus-visible {
@@ -341,7 +330,7 @@ html[data-reduce-transparency="true"] .reader-actions {
 .conversation-index-unread {
   flex: none;
   color: var(--accent-ink);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 
 .conversation-index time {
@@ -380,7 +369,7 @@ html[data-reduce-transparency="true"] .reader-actions {
   grid-column: 1 / -1;
   margin: 0;
   font-size: var(--reader-title-size);
-  font-weight: 600;
+  font-weight: var(--fw-bold);
   line-height: 1.25;
   letter-spacing: -0.02em;
   overflow-wrap: anywhere;
@@ -416,7 +405,7 @@ html[data-reduce-transparency="true"] .reader-actions {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: var(--reader-sender-size);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   color: var(--text);
 }
 
@@ -551,7 +540,7 @@ html[data-text-scale="large"] .message-header .message-stamp {
   color: var(--accent-ink);
   background: transparent;
   font-size: var(--reader-meta-size);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   cursor: pointer;
   transition:
     background-color 0.15s ease,
@@ -583,7 +572,7 @@ html[data-text-scale="large"] .message-header .message-stamp {
 
 .details-grid dt {
   color: var(--text-muted);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   text-align: right;
   padding-top: 2px;
 }
@@ -625,7 +614,7 @@ html[data-text-scale="large"] .message-header .message-stamp {
 .reply-to-highlight {
   padding-left: var(--space-2);
   border-left: 3px solid var(--accent);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 
 .security-badge {
@@ -636,7 +625,7 @@ html[data-text-scale="large"] .message-header .message-stamp {
 }
 
 .security-badge strong {
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 
 .security-badge svg {
@@ -843,12 +832,30 @@ html[data-text-scale="large"] .message-header .message-stamp {
   display: grid;
   place-content: center;
   justify-items: center;
-  color: var(--text-muted);
-  font-size: var(--fs-lg);
+  gap: var(--space-2);
   padding: var(--space-5);
+  color: var(--text-muted);
   text-align: center;
   line-height: 1.45;
   overflow-wrap: anywhere;
+}
+
+.empty-reader svg {
+  width: 2.5rem;
+  height: 2.5rem;
+  margin-block-end: var(--space-1);
+}
+
+.empty-reader-title {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-semibold);
+}
+
+.empty-reader-hint {
+  margin: 0;
+  font-size: var(--fs-sm);
 }
 
 /* Attachments: one wrapping row of chips, with the heading inline. */
@@ -869,7 +876,7 @@ html[data-text-scale="large"] .message-header .message-stamp {
   width: auto;
   margin: 0;
   font-size: var(--fs-sm);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 
 .attachment-list-header .secondary-button {
@@ -888,8 +895,8 @@ html[data-text-scale="large"] .message-header .message-stamp {
   gap: var(--space-2);
   padding: var(--control-pad-block) var(--space-3);
   text-align: left;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-md);
   background: var(--surface-muted);
 }
 
@@ -1003,14 +1010,14 @@ html[data-text-scale="large"] .message-header .message-stamp {
 .sender-name-conflict {
   margin: 0;
   font-size: var(--fs-md);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   color: var(--warning-ink);
 }
 
 .mailing-list-note {
   margin: 0;
   font-size: var(--fs-md);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   color: var(--text-muted);
 }
 
@@ -1018,13 +1025,13 @@ html[data-text-scale="large"] .message-header .message-stamp {
   margin: 0;
   color: var(--text-muted);
   font-size: var(--fs-md);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 
 .message-importance {
   margin: 0;
   font-size: var(--fs-md);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 
 .message-importance.high {
@@ -1076,7 +1083,7 @@ html[data-text-scale="large"] .message-header .message-stamp {
   gap: var(--space-2);
   color: var(--text-muted);
   font-size: var(--fs-sm);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 
 .invite-card-head svg {
@@ -1122,7 +1129,7 @@ html[data-text-scale="large"] .message-header .message-stamp {
 .original-dialog {
   position: relative;
   z-index: 1;
-  width: min(900px, 96vw);
+  width: min(56rem, 96vw);
 }
 
 .original-body {
@@ -1166,7 +1173,7 @@ html[data-text-scale="large"] .message-header .message-stamp {
   width: 1%;
   white-space: nowrap;
   color: var(--text-muted);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 
 .original-source {
@@ -1177,7 +1184,7 @@ html[data-text-scale="large"] .message-header .message-stamp {
   border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--text);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--fs-sm);
   line-height: 1.45;
   white-space: pre-wrap;

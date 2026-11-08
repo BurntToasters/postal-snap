@@ -1,7 +1,12 @@
 import { copyFile, mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { buildTauriBuildArgs } from "./tauri-build-args.js";
+import {
+  buildTauriBuildArgs,
+  isMacosBuild,
+  isStoreBuild,
+  resolveBuildInput,
+} from "./tauri-build-args.js";
 import {
   isLinuxAppImage,
   isLinuxAppImageSignature,
@@ -50,24 +55,12 @@ const requireTauriSigning = has("--require-tauri-signing");
 const requireWindowsSigning = has("--require-windows-signing");
 const requireMacosSigning = has("--require-macos-signing");
 const requireMacosNotarization = has("--require-macos-notarization");
-const storeBuild =
-  additionalConfig?.includes("tauri.mas.conf") ||
-  additionalConfig?.includes("tauri.msstore.conf") ||
-  additionalConfig?.includes("tauri.flatpak.conf") ||
-  input.some(
-    (value, index) =>
-      (input[index - 1] === "--features" &&
-        value
-          .split(",")
-          .some((feature) =>
-            ["flatpak", "mas", "msstore"].includes(feature.trim()),
-          )) ||
-      /^--features=(?:.*,)?(?:flatpak|mas|msstore)(?:,.*)?$/.test(value),
-  );
-const macosBuild =
-  requireMacosSigning ||
-  /apple-darwin/i.test(target ?? "") ||
-  (process.platform === "darwin" && !target);
+const storeBuild = isStoreBuild({ additionalConfig, input });
+const macosBuild = isMacosBuild({
+  requireMacosSigning,
+  target,
+  platform: process.platform,
+});
 const targetReleaseDir = target
   ? join(root, "src-tauri/target", target, "release")
   : join(root, "src-tauri/target/release");
@@ -177,7 +170,13 @@ try {
   await writeJson(overridePath, override);
 
   const args = buildTauriBuildArgs({
-    input,
+    input: resolveBuildInput({
+      input,
+      additionalConfig,
+      target,
+      platform: process.platform,
+      requireMacosSigning,
+    }),
     target,
     bundles,
     noBundle,

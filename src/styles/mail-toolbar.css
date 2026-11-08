@@ -75,12 +75,13 @@
 .app-toolbar .toolbar-button:hover,
 .app-toolbar .icon-button:hover {
   border-color: transparent;
-  background: color-mix(in srgb, var(--surface-hover) 78%, transparent);
+  background: var(--fill-hover);
 }
 
+/* Compose is an accent pill with white text; no colored glow. */
 .app-toolbar .compose-button {
   border-radius: var(--radius-pill);
-  box-shadow: 0 1px 4px color-mix(in srgb, var(--accent) 18%, transparent);
+  box-shadow: none;
 }
 
 /* Programmatic or pointer focus skips :focus-visible; keep the ring visible. */
@@ -122,10 +123,9 @@
   background: var(--fill);
 }
 
+/* Same 3px accent ring as other focus states. */
 .search-box:focus-within {
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--accent) 62%, var(--border)),
-    0 0 0 4px color-mix(in srgb, var(--accent) 16%, transparent);
+  box-shadow: 0 0 0 0.1875rem var(--focus);
 }
 
 .search-box > svg {
@@ -231,10 +231,6 @@
     transform 0.1s ease;
 }
 
-.update-ready-badge {
-  white-space: nowrap;
-}
-
 .update-ready-badge :is(.badge-label-short, .badge-label-tiny) {
   display: none;
 }
@@ -269,11 +265,11 @@
 }
 
 .update-ready-badge .badge-dot {
-  width: 9px;
-  height: 9px;
+  width: 0.5625rem;
+  height: 0.5625rem;
   border-radius: 50%;
   background: var(--success);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--success) 25%, transparent);
+  box-shadow: 0 0 0 0.125rem color-mix(in srgb, var(--success) 25%, transparent);
   /* Opacity only, and it stops after two passes. */
   animation: pulse-badge 2.5s ease-in-out 2;
 }
@@ -295,7 +291,6 @@
   min-height: 0;
 }
 
-.folder-pane,
 .message-pane,
 .reader-pane {
   overflow: auto;

@@ -404,6 +404,12 @@ fn read_named_license_file(dir: &Path, filename: &str, max_bytes: usize) -> Resu
     if path.file_name().and_then(|name| name.to_str()) != Some(filename) {
         return Err("Could not read license credits.".into());
     }
+    // Check the size on disk before allocating the whole file.
+    let metadata =
+        std::fs::metadata(&path).map_err(|_| "Could not read license credits.".to_string())?;
+    if !metadata.is_file() || metadata.len() > max_bytes as u64 {
+        return Err("Could not read license credits.".into());
+    }
     let bytes = std::fs::read(&path).map_err(|_| "Could not read license credits.".to_string())?;
     if bytes.len() > max_bytes {
         return Err("Could not read license credits.".into());
@@ -699,6 +705,7 @@ mod save_prune_tests {
     fn stand_in_account(id: &str) -> AccountRecord {
         AccountRecord {
             summary: AccountSummary {
+                notify_new_mail: true,
                 default_body_format: BodyFormat::Html,
                 id: id.into(),
                 provider: ProviderKind::Manual,
@@ -728,5 +735,39 @@ mod save_prune_tests {
                 username: "sam@example.com".into(),
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod license_read_bound_tests {
+    use super::read_named_license_file;
+    use std::fs;
+
+    #[test]
+    fn license_file_over_the_limit_is_refused() {
+        // Failure mode: an oversized file is read whole before the length check.
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("big.txt"), vec![b'a'; 17]).unwrap();
+        assert!(read_named_license_file(directory.path(), "big.txt", 16).is_err());
+    }
+
+    #[test]
+    fn license_file_at_the_limit_is_read() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("edge.txt"), vec![b'a'; 16]).unwrap();
+        assert_eq!(
+            read_named_license_file(directory.path(), "edge.txt", 16)
+                .unwrap()
+                .len(),
+            16
+        );
+    }
+
+    #[test]
+    fn license_path_that_is_not_a_regular_file_is_refused() {
+        // Failure mode: a directory at the license path is opened or read.
+        let directory = tempfile::tempdir().unwrap();
+        fs::create_dir(directory.path().join("dir.txt")).unwrap();
+        assert!(read_named_license_file(directory.path(), "dir.txt", 16).is_err());
     }
 }

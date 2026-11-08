@@ -5,7 +5,7 @@ export interface LastFromAddress {
   address: string;
 }
 
-function mailboxAddress(value: string): string {
+export function mailboxAddress(value: string): string {
   const trimmed = value.trim();
   const wrapped = trimmed.match(/<([^<>]+)>$/)?.[1] ?? trimmed;
   return wrapped.trim().toLowerCase();

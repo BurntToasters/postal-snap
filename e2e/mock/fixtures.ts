@@ -18,6 +18,7 @@ export async function registerMockFixtures(page: Page): Promise<void> {
         ? "Sign-in failed. Update the account password in Settings > Accounts."
         : null,
       color: "blue",
+      notifyNewMail: true,
       defaultBodyFormat: params.has("defaultPlain") ? "plain" : "html",
       aliases: params.has("aliasCollision")
         ? ["alias@example.test"]
@@ -34,6 +35,7 @@ export async function registerMockFixtures(page: Page): Promise<void> {
       syncState: params.has("secondOffline") ? "offline" : "idle",
       error: null,
       color: "green",
+      notifyNewMail: true,
     };
     const mailboxes = [
       {
@@ -47,6 +49,7 @@ export async function registerMockFixtures(page: Page): Promise<void> {
           ? Number(params.get("folderTotal")) || 1
           : 1,
         delimiter: "/",
+        allowsKeywords: !params.has("noKeywords"),
       },
       {
         id: 2,
@@ -57,6 +60,7 @@ export async function registerMockFixtures(page: Page): Promise<void> {
         unreadCount: params.has("unreadArchive") ? 2 : 0,
         totalCount: params.has("unreadArchive") ? 2 : 0,
         delimiter: "/",
+        allowsKeywords: !params.has("noKeywords"),
       },
       {
         id: 3,
@@ -67,6 +71,7 @@ export async function registerMockFixtures(page: Page): Promise<void> {
         unreadCount: params.has("unreadTrash") ? 1 : 0,
         totalCount: 2,
         delimiter: "/",
+        allowsKeywords: !params.has("noKeywords"),
       },
       {
         id: 21,
@@ -77,6 +82,7 @@ export async function registerMockFixtures(page: Page): Promise<void> {
         unreadCount: 3,
         totalCount: 7,
         delimiter: "/",
+        allowsKeywords: !params.has("noKeywords"),
       },
       {
         id: 22,
@@ -87,6 +93,7 @@ export async function registerMockFixtures(page: Page): Promise<void> {
         unreadCount: 0,
         totalCount: 2,
         delimiter: "/",
+        allowsKeywords: !params.has("noKeywords"),
       },
     ];
     if (params.has("manyFolders")) {
@@ -100,6 +107,7 @@ export async function registerMockFixtures(page: Page): Promise<void> {
           unreadCount: 0,
           totalCount: 0,
           delimiter: "/",
+          allowsKeywords: !params.has("noKeywords"),
         },
         {
           id: 9,
@@ -110,6 +118,7 @@ export async function registerMockFixtures(page: Page): Promise<void> {
           unreadCount: 0,
           totalCount: 0,
           delimiter: "/",
+          allowsKeywords: !params.has("noKeywords"),
         },
         {
           id: 10,
@@ -120,6 +129,7 @@ export async function registerMockFixtures(page: Page): Promise<void> {
           unreadCount: 0,
           totalCount: 0,
           delimiter: "/",
+          allowsKeywords: !params.has("noKeywords"),
         },
         {
           id: 12,
@@ -130,6 +140,7 @@ export async function registerMockFixtures(page: Page): Promise<void> {
           unreadCount: 0,
           totalCount: 0,
           delimiter: "/",
+          allowsKeywords: !params.has("noKeywords"),
         },
         {
           id: 13,
@@ -140,6 +151,7 @@ export async function registerMockFixtures(page: Page): Promise<void> {
           unreadCount: 0,
           totalCount: 0,
           delimiter: "/",
+          allowsKeywords: !params.has("noKeywords"),
         },
       );
     }
@@ -154,6 +166,7 @@ export async function registerMockFixtures(page: Page): Promise<void> {
           unreadCount: 0,
           totalCount: 0,
           delimiter: "/",
+          allowsKeywords: !params.has("noKeywords"),
         },
         {
           id: 5,
@@ -164,6 +177,7 @@ export async function registerMockFixtures(page: Page): Promise<void> {
           unreadCount: 1,
           totalCount: 1,
           delimiter: "/",
+          allowsKeywords: !params.has("noKeywords"),
         },
         {
           id: 6,
@@ -174,6 +188,7 @@ export async function registerMockFixtures(page: Page): Promise<void> {
           unreadCount: 1,
           totalCount: 1,
           delimiter: "/",
+          allowsKeywords: !params.has("noKeywords"),
         },
       );
     }
@@ -187,6 +202,7 @@ export async function registerMockFixtures(page: Page): Promise<void> {
         unreadCount: 0,
         totalCount: 1,
         delimiter: "/",
+        allowsKeywords: !params.has("noKeywords"),
       });
     }
     if (params.has("junkFolder")) {
@@ -199,6 +215,7 @@ export async function registerMockFixtures(page: Page): Promise<void> {
         unreadCount: 0,
         totalCount: 0,
         delimiter: "/",
+        allowsKeywords: !params.has("noKeywords"),
       });
     }
     if (params.has("junkRow")) {
@@ -211,6 +228,7 @@ export async function registerMockFixtures(page: Page): Promise<void> {
         unreadCount: 0,
         totalCount: 0,
         delimiter: "/",
+        allowsKeywords: !params.has("noKeywords"),
       });
     }
     if (params.has("nestedRoleFolders")) {
@@ -224,6 +242,7 @@ export async function registerMockFixtures(page: Page): Promise<void> {
           unreadCount: 0,
           totalCount: 0,
           delimiter: "/",
+          allowsKeywords: !params.has("noKeywords"),
         },
         {
           id: 8,
@@ -234,6 +253,7 @@ export async function registerMockFixtures(page: Page): Promise<void> {
           unreadCount: 0,
           totalCount: 0,
           delimiter: "/",
+          allowsKeywords: !params.has("noKeywords"),
         },
         {
           id: 9,
@@ -244,6 +264,7 @@ export async function registerMockFixtures(page: Page): Promise<void> {
           unreadCount: 0,
           totalCount: 0,
           delimiter: "/",
+          allowsKeywords: !params.has("noKeywords"),
         },
       );
     }
@@ -272,6 +293,7 @@ export async function registerMockFixtures(page: Page): Promise<void> {
       preview: "Are we still meeting on Saturday?",
       isRead: false,
       isStarred: false,
+      flagColor: 0,
       hasAttachments: params.has("fileCount") || params.has("inlineFile"),
       attachmentCount: params.has("fileCount")
         ? Number(params.get("fileCount")) || 0
@@ -320,6 +342,7 @@ export async function registerMockFixtures(page: Page): Promise<void> {
           unreadCount: 0,
           totalCount: 1,
           delimiter: "/",
+          allowsKeywords: !params.has("noKeywords"),
         });
       }
       summary.mailboxId = 6;
@@ -358,6 +381,11 @@ export async function registerMockFixtures(page: Page): Promise<void> {
       olderSummary.threadRoot = "<weekend@example.com>";
     }
     const shared: MockShared = {
+      mockError: (code, message, retryable = false) => ({
+        code,
+        message,
+        retryable,
+      }),
       account,
       accounts: [account, secondAccount],
       mailboxes,

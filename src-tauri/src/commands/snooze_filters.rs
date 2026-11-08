@@ -2,7 +2,9 @@ use tauri::State;
 
 use super::sync::apply_filter_rules;
 use super::{command_result, wake, AppState, CommandResult};
-use crate::models::{validate_filter_rule, FilterMatchPreview, FilterRule, SnoozedSummary};
+use crate::models::{
+    rule_lists, validate_filter_rule, FilterMatchPreview, FilterRule, SnoozedSummary,
+};
 
 #[tauri::command]
 pub async fn snooze_message(
@@ -65,6 +67,28 @@ pub fn unsnooze_message(
     command_result(state.db.unsnooze_message(&account_id, message_id))
 }
 
+/// Every move_mailbox action must file into a folder of this account.
+fn check_move_targets(db: &crate::db::Database, rule: &FilterRule) -> CommandResult<()> {
+    let (_, actions) = rule_lists(rule);
+    for action in actions
+        .iter()
+        .filter(|action| action.kind == "move_mailbox")
+    {
+        let target = action
+            .target_mailbox
+            .as_deref()
+            .ok_or("Choose the folder to move matching mail into.")?;
+        let target_id: i64 = target
+            .parse()
+            .map_err(|_| "Choose the folder to move matching mail into.")?;
+        let (owner, _) = db.mailbox(target_id)?;
+        if owner != rule.account_id {
+            return Err("Folder does not belong to this account.".into());
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command(async)]
 pub fn list_filter_rules(
     account_id: String,
@@ -84,19 +108,7 @@ pub async fn create_filter_rule(
     // replay or reconcile the same messages at the same time.
     let _guard = state.lock_account(&rule.account_id).await?;
     validate_filter_rule(&rule, &rule.account_id.clone())?;
-    if rule.action == "move_mailbox" {
-        if let Some(target) = rule.target_mailbox.as_deref() {
-            let target_id: i64 = target
-                .parse()
-                .map_err(|_| "Choose the folder to move matching mail into.".to_string())?;
-            let (owner, _) = state.db.mailbox(target_id)?;
-            if owner != rule.account_id {
-                return Err("Folder does not belong to this account.".into());
-            }
-        } else {
-            return Err("Choose the folder to move matching mail into.".into());
-        }
-    }
+    check_move_targets(&state.db, &rule)?;
     let created = state.db.create_filter_rule(&rule)?;
     // A new rule applies to existing unread mail immediately.
     if let Ok(account) = state.db.account(&rule.account_id) {
@@ -117,19 +129,7 @@ pub async fn update_filter_rule(
     // replay or reconcile the same messages at the same time.
     let _guard = state.lock_account(&rule.account_id).await?;
     validate_filter_rule(&rule, &rule.account_id.clone())?;
-    if rule.action == "move_mailbox" {
-        if let Some(target) = rule.target_mailbox.as_deref() {
-            let target_id: i64 = target
-                .parse()
-                .map_err(|_| "Choose the folder to move matching mail into.".to_string())?;
-            let (owner, _) = state.db.mailbox(target_id)?;
-            if owner != rule.account_id {
-                return Err("Folder does not belong to this account.".into());
-            }
-        } else {
-            return Err("Choose the folder to move matching mail into.".into());
-        }
-    }
+    check_move_targets(&state.db, &rule)?;
     let updated = state.db.update_filter_rule(&rule)?;
     if let Ok(account) = state.db.account(&rule.account_id) {
         apply_filter_rules(&state.db, &account, None);
@@ -169,19 +169,7 @@ pub fn preview_filter_rule(
         rule.name = "Preview".into();
     }
     validate_filter_rule(&rule, &rule.account_id)?;
-    if rule.action == "move_mailbox" {
-        let target = rule
-            .target_mailbox
-            .as_deref()
-            .ok_or_else(|| "Choose the folder to move matching mail into.".to_string())?;
-        let target_id: i64 = target
-            .parse()
-            .map_err(|_| "Choose the folder to move matching mail into.".to_string())?;
-        let (owner, _) = state.db.mailbox(target_id)?;
-        if owner != rule.account_id {
-            return Err("Folder does not belong to this account.".into());
-        }
-    }
+    check_move_targets(&state.db, &rule)?;
     command_result(state.db.preview_rule_matches(&rule.account_id, &rule))
 }
 

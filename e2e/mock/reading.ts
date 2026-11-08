@@ -13,6 +13,7 @@ export async function registerMockReading(page: Page): Promise<void> {
     type Handler = (args: Record<string, unknown>) => unknown;
     const baseGetMessage = mock.handlers.get_message as Handler;
     const baseSend = mock.handlers.send_message as Handler;
+    const basePreview = mock.handlers.preview_attachment as Handler;
     const baseScheduled = mock.handlers.send_scheduled_outbox as
       Handler | undefined;
 
@@ -120,6 +121,7 @@ export async function registerMockReading(page: Page): Promise<void> {
     // A large multipart message stored without its attachment bodies. Its
     // IDs change once download_full_message stores the full message.
     const partialMessage = params.has("partialMessage");
+    const rfcMessage = params.has("rfcMessage");
     let fullDownloaded = false;
     const partialFiles = [
       {
@@ -164,6 +166,94 @@ export async function registerMockReading(page: Page): Promise<void> {
       }
     }
 
+    // A 1x1 PNG stands in for each rendered PDF page.
+    const PNG_PAGE =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+    const openedMessages = new Map<
+      string,
+      { token: string; message: unknown }
+    >();
+    function emlMessage() {
+      return {
+        id: 0,
+        accountId: mock.account.id,
+        mailboxId: 0,
+        uid: 0,
+        messageId: "<lease@example.test>",
+        subject: "Lease renewal",
+        senderName: "Riley Ng",
+        senderAddress: "riley@example.test",
+        recipients: "sam@icloud.com",
+        receivedAt: "2026-07-02T09:30:00Z",
+        preview: "Here is the signed lease.",
+        isRead: true,
+        isStarred: false,
+        flagColor: 0,
+        hasAttachments: true,
+        attachmentCount: 1,
+        size: 4096,
+        threadRoot: null,
+        to: ["sam@icloud.com"],
+        cc: [],
+        textBody: "Here is the signed lease. Thanks, Riley.",
+        // ?emlHtml adds a script and a remote image to the HTML body.
+        htmlBody: params.has("emlHtml")
+          ? '<p>Here is the signed lease.</p><img src="https://tracker.example.test/pixel.png" alt=""><script>window.__pwned = 1</script>'
+          : null,
+        remoteImagesBlocked: false,
+        attachments: [
+          {
+            id: "pdf-1",
+            filename: "Lease.pdf",
+            contentType: "application/pdf",
+            size: 2048,
+            contentId: null,
+            inline: false,
+          },
+          {
+            id: "forwarded-1",
+            filename: "Forwarded.eml",
+            contentType: "message/rfc822",
+            size: 900,
+            contentId: null,
+            inline: false,
+          },
+        ],
+      };
+    }
+    // ?emlSeeded starts the page with an opened message already in place.
+    if (params.has("emlSeeded"))
+      openedMessages.set("opened-eml-1", {
+        token: "opened-eml-1",
+        message: emlMessage(),
+      });
+    function openedFor(args: Record<string, unknown>) {
+      const opened = openedMessages.get(String(args.token));
+      if (!opened)
+        throw mock.mockError("notFound", "This message is no longer open.");
+      return opened;
+    }
+    function mailboxFor(args: Record<string, unknown>) {
+      const box = mock.mailboxes.find(
+        (item) =>
+          item.id === Number(args.mailboxId) &&
+          item.accountId === args.accountId,
+      );
+      if (!box) throw mock.mockError("notFound", "Mailbox not found.");
+      return box;
+    }
+    // Mirrors the Rust progress cadence: a start event, then one per message.
+    // Cancel sets the flag; the export stops at its next progress step.
+    let mboxCancelled = false;
+    async function reportProgress(operationId: string, total: number) {
+      for (let done = 0; done <= total; done++) {
+        if (mboxCancelled) return false;
+        emit("mbox-progress", { operationId, done, total });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      return true;
+    }
+
     // Mirrors commands/replied.rs: only a confirmed SMTP send marks the
     // source, and only for a source in the sending account.
     function markSource(draft: unknown, outcome: string) {
@@ -191,8 +281,33 @@ export async function registerMockReading(page: Page): Promise<void> {
       get_message(args: Record<string, unknown>) {
         const detail = baseGetMessage(args) as Record<string, unknown>;
         const partial = partialMessage && args.messageId === summary.id;
+        const withFiles = rfcMessage && args.messageId === summary.id;
         return {
           ...detail,
+          ...(withFiles
+            ? {
+                hasAttachments: true,
+                attachmentCount: 2,
+                attachments: [
+                  {
+                    id: "mail-pdf",
+                    filename: "Lease.pdf",
+                    contentType: "application/pdf",
+                    size: 2048,
+                    contentId: null,
+                    inline: false,
+                  },
+                  {
+                    id: "mail-rfc",
+                    filename: "Forwarded.eml",
+                    contentType: "message/rfc822",
+                    size: 900,
+                    contentId: null,
+                    inline: false,
+                  },
+                ],
+              }
+            : {}),
           hasCalendar: Boolean(invite),
           bodyPartial: partial && !fullDownloaded,
           ...(partial
@@ -205,6 +320,20 @@ export async function registerMockReading(page: Page): Promise<void> {
           isForwarded: summary.isForwarded ?? false,
           unsubscribe: unsubscribeFor(params.get("unsub")),
           invite,
+        };
+      },
+      // ?rfcMessage gives the selected mailbox message a PDF and a forwarded message.
+      preview_attachment(args: Record<string, unknown>) {
+        if (args.attachmentId !== "mail-pdf") return basePreview(args);
+        return {
+          filename: "Lease.pdf",
+          contentType: "application/pdf",
+          size: 2048,
+          text: null,
+          imageDataUrl: null,
+          pages: [PNG_PAGE, PNG_PAGE, PNG_PAGE],
+          pageCount: 3,
+          pagesTruncated: false,
         };
       },
       send_message(args: Record<string, unknown>) {
@@ -225,11 +354,15 @@ export async function registerMockReading(page: Page): Promise<void> {
       unsubscribe_one_click() {
         // Rust re-reads the stored header; a message without one-click fails.
         if (params.get("unsub") !== "oneClick")
-          throw new Error(
+          throw mock.mockError(
+            "operationFailed",
             "This message does not support one-click unsubscribe.",
           );
         if (params.has("unsubFail"))
-          throw new Error("The sender's server did not accept the request.");
+          throw mock.mockError(
+            "operationFailed",
+            "The sender's server did not accept the request.",
+          );
         return undefined;
       },
       download_full_message(args: Record<string, unknown>) {
@@ -264,6 +397,98 @@ export async function registerMockReading(page: Page): Promise<void> {
       },
       save_messages_eml() {
         return 2;
+      },
+      // .eml viewer, mbox export/import, and opened-message attachments.
+      // Opened messages live outside the mailbox, so tokens key them here.
+      open_eml_file() {
+        if (params.has("emlCancel")) return null;
+        const opened = { token: "opened-eml-1", message: emlMessage() };
+        openedMessages.set(opened.token, opened);
+        return opened;
+      },
+      get_opened_message(args: Record<string, unknown>) {
+        return openedFor(args);
+      },
+      close_opened_message(args: Record<string, unknown>) {
+        openedMessages.delete(String(args.token));
+        return undefined;
+      },
+      save_opened_attachment(args: Record<string, unknown>) {
+        openedFor(args);
+        return undefined;
+      },
+      preview_opened_attachment(args: Record<string, unknown>) {
+        openedFor(args);
+        if (args.attachmentId !== "pdf-1")
+          throw mock.mockError("notFound", "Attachment not found.");
+        const truncated = params.has("pdfTruncated");
+        // ?pdfBadPage puts a non-data URL first; the viewer must drop it.
+        const pages = Array.from({ length: truncated ? 8 : 3 }, () => PNG_PAGE);
+        if (params.has("pdfBadPage"))
+          pages[0] = "https://tracker.example.test/page.png";
+        return {
+          filename: "Lease.pdf",
+          contentType: "application/pdf",
+          size: 2048,
+          text: null,
+          imageDataUrl: null,
+          pages,
+          pageCount: truncated ? 12 : 3,
+          pagesTruncated: truncated,
+        };
+      },
+      view_attachment_message(args: Record<string, unknown>) {
+        if (
+          args.attachmentId !== "forwarded-1" &&
+          args.attachmentId !== "mail-rfc"
+        )
+          throw mock.mockError("notFound", "Attachment not found.");
+        const opened = {
+          token: "opened-attached-1",
+          message: { ...emlMessage(), subject: "Forwarded note" },
+        };
+        openedMessages.set(opened.token, opened);
+        return opened;
+      },
+      async export_mailbox_mbox(args: Record<string, unknown>) {
+        const box = mailboxFor(args);
+        if (params.has("mboxDismissed"))
+          return { operationId: null, exported: 0, skipped: 0 };
+        if (params.has("mboxLimit"))
+          throw mock.mockError(
+            "limitExceeded",
+            "Too many messages to export at once.",
+          );
+        mboxCancelled = false;
+        const operationId = "mbox-export-1";
+        const finished = await reportProgress(operationId, box.totalCount);
+        if (!finished)
+          throw mock.mockError("operationFailed", "Export stopped.");
+        // ?mboxSkipped=1 counts two messages as too large to export.
+        const skipped = params.has("mboxSkipped") ? 2 : 0;
+        return {
+          operationId,
+          exported: box.totalCount - skipped,
+          skipped,
+        };
+      },
+      async import_mbox(args: Record<string, unknown>) {
+        mailboxFor(args);
+        if (params.has("mboxDismissed"))
+          return { operationId: null, imported: 0, skipped: 0 };
+        const operationId = "mbox-import-1";
+        await reportProgress(operationId, 3);
+        return { operationId, imported: 2, skipped: 1 };
+      },
+      cancel_mbox_operation() {
+        mboxCancelled = true;
+        return undefined;
+      },
+      start_attachment_drag() {
+        throw mock.mockError("operationFailed", "Not available yet.");
+      },
+      start_message_drag() {
+        throw mock.mockError("operationFailed", "Not available yet.");
       },
     });
   });

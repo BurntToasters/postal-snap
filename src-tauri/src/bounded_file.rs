@@ -95,6 +95,39 @@ pub(crate) async fn read_regular_file(
     read_bounded(&mut file, admitted_len, limit).await
 }
 
+/// Open a regular file for streaming. Symlinks are refused, and the size is
+/// checked before and after open. The caller reads the stream itself.
+pub(crate) fn open_regular_for_stream(
+    path: &Path,
+    limit: u64,
+) -> Result<std::fs::File, BoundedFileError> {
+    let before = std::fs::symlink_metadata(path).map_err(|_| BoundedFileError::Unavailable)?;
+    if !before.is_file() {
+        return Err(BoundedFileError::Unavailable);
+    }
+    if before.len() > limit {
+        return Err(BoundedFileError::TooLarge);
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let file = options
+        .open(path)
+        .map_err(|_| BoundedFileError::Unavailable)?;
+    let opened = file.metadata().map_err(|_| BoundedFileError::Unavailable)?;
+    if !opened.is_file() {
+        return Err(BoundedFileError::Unavailable);
+    }
+    if opened.len() > limit {
+        return Err(BoundedFileError::TooLarge);
+    }
+    Ok(file)
+}
+
 #[cfg(windows)]
 async fn windows_identity_matches(
     path: &Path,

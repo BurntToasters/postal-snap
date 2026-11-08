@@ -1,5 +1,8 @@
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Failure hypotheses: the scrolling footer clips Send options; image preview
 // leaves keyboard focus behind its modal or Escape closes the composer.

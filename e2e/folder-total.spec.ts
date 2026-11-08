@@ -1,6 +1,9 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Failure modes covered here:
 // 1. A folder that has more mail than the loaded page names both counts, and its unread count.
@@ -45,7 +48,7 @@ test("a folder with no unread mail leaves that count off", async ({ page }) => {
 
 test("a filter counts the messages on screen", async ({ page }) => {
   await page.goto("/?folderTotal=40");
-  await page.getByRole("radio", { name: "Starred", exact: true }).click();
+  await page.getByRole("radio", { name: "Flagged", exact: true }).click();
   await expect(page.locator(".pane-heading small")).toHaveText("0 items");
   await page.getByRole("radio", { name: "All", exact: true }).click();
   await page.getByRole("searchbox", { name: "Search mail" }).fill("weekend");

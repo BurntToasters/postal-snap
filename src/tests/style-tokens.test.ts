@@ -51,15 +51,6 @@ function themeBlock(selector: string): string {
   return block[1];
 }
 
-// The system-dark block is indented inside @media, so it is matched apart.
-function systemDarkBlock(): string {
-  const block = variablesCss.match(
-    /:root:not\(\[data-theme="light"\]\):not\(\[data-theme="dark"\]\)\s*{([\s\S]*?)\n {2}}/,
-  );
-  if (!block) throw new Error("Missing system dark theme block.");
-  return block[1];
-}
-
 function declarations(block: string): Map<string, string> {
   const map = new Map<string, string>();
   for (const match of block.matchAll(/(--[a-z0-9-]+):\s*([^;]+);/g)) {
@@ -71,20 +62,23 @@ function declarations(block: string): Map<string, string> {
 describe("color accessibility tokens", () => {
   for (const [theme, selector] of [
     ["light", ":root"],
-    ["dark", ':root[data-theme="dark"]'],
+    ["dark", ':root[data-resolved-theme="dark"]'],
   ]) {
     it(`${theme} theme keeps text and focus indicators distinguishable`, () => {
       const block = themeBlock(selector);
       const accent = color(block, "accent");
       const accentFill = color(block, "accent-fill");
       const accentContrast = color(block, "accent-contrast");
-      const focus = color(block, "focus");
       const surface = color(block, "surface");
+      // --focus is an alias of --accent, so the ring matches the accent.
+      expect(declarations(themeBlock(":root")).get("--focus")).toBe(
+        "var(--accent)",
+      );
+      const focusOnAccent = color(themeBlock(":root"), "focus-on-accent");
 
       expect(contrast(accent, surface)).toBeGreaterThanOrEqual(4.5);
       expect(contrast(accentContrast, accentFill)).toBeGreaterThanOrEqual(4.5);
-      expect(contrast(focus, surface)).toBeGreaterThanOrEqual(3);
-      expect(contrast(focus, accent)).toBeGreaterThanOrEqual(3);
+      expect(contrast(focusOnAccent, accentFill)).toBeGreaterThanOrEqual(3);
     });
 
     it(`${theme} theme keeps accent text and muted text readable`, () => {
@@ -103,11 +97,11 @@ describe("color accessibility tokens", () => {
     });
   }
 
-  it("system dark block matches the data-theme dark block token-for-token", () => {
-    const explicit = declarations(themeBlock(':root[data-theme="dark"]'));
-    const system = declarations(systemDarkBlock());
-
-    expect(system.size).toBeGreaterThan(0);
-    expect(system).toEqual(explicit);
+  it("dark palette is defined once, under the resolved theme", () => {
+    expect(variablesCss).not.toContain("prefers-color-scheme");
+    expect(variablesCss).not.toContain('data-theme="dark"');
+    expect(
+      declarations(themeBlock(':root[data-resolved-theme="dark"]')).size,
+    ).toBeGreaterThan(0);
   });
 });

@@ -10,8 +10,25 @@
     );
   grid-template-rows: auto minmax(0, 1fr);
   grid-template-areas:
-    "nav search"
+    "search content"
     "nav content";
+}
+
+/* Window-level macOS chrome: xl corners and the shared window shadow.
+   The class chain outranks window-fx.css's vibrant override. */
+.modal-layer.settings-layer .settings-window {
+  box-shadow: var(--shadow-window);
+}
+
+/* Sidebar tints for nav icon tiles; white glyphs sit on each. */
+.settings-nav {
+  --settings-nav-tile: 1.375rem;
+  --tone-blue: #007aff;
+  --tone-gray: #8e8e93;
+  --tone-indigo: #5856d6;
+  --tone-green: #28a745;
+  --tone-orange: #d06d00;
+  --tone-red: #d70015;
 }
 
 .settings-nav {
@@ -37,9 +54,50 @@
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: transparent;
+  box-shadow: none;
   color: var(--text);
   cursor: pointer;
   transition: background-color 0.12s ease;
+}
+
+.settings-nav-tile {
+  display: inline-grid;
+  flex: 0 0 auto;
+  width: var(--settings-nav-tile);
+  height: var(--settings-nav-tile);
+  place-items: center;
+  border-radius: var(--radius-xs);
+  background: var(--tile-tone, transparent);
+}
+
+.settings-nav-tile[data-tone="blue"] {
+  --tile-tone: var(--tone-blue);
+}
+
+.settings-nav-tile[data-tone="gray"] {
+  --tile-tone: var(--tone-gray);
+}
+
+.settings-nav-tile[data-tone="indigo"] {
+  --tile-tone: var(--tone-indigo);
+}
+
+.settings-nav-tile[data-tone="green"] {
+  --tile-tone: var(--tone-green);
+}
+
+.settings-nav-tile[data-tone="orange"] {
+  --tile-tone: var(--tone-orange);
+}
+
+.settings-nav-tile[data-tone="red"] {
+  --tile-tone: var(--tone-red);
+}
+
+.settings-nav .settings-nav-tile svg {
+  width: 0.875rem;
+  height: 0.875rem;
+  color: #fff;
 }
 
 .settings-nav button:hover {
@@ -49,11 +107,19 @@
 .settings-nav button.active {
   color: var(--text);
   border-color: transparent;
-  background: var(--sidebar-selection);
+  background: var(--selection-inactive);
   font-weight: 600;
-  box-shadow:
-    inset 0 1px 0 var(--surface-highlight),
-    var(--shadow-control);
+}
+
+.settings-nav:focus-within button.active {
+  color: var(--accent-contrast);
+  background: var(--selection-emphasized);
+  /* Enter at once: a fading fill would mix white text with light blue. */
+  transition: none;
+}
+
+.settings-nav:focus-within button.active svg {
+  color: var(--accent-contrast);
 }
 
 .settings-nav svg {
@@ -63,8 +129,13 @@
 }
 
 @media (forced-colors: active) {
-  .settings-nav svg {
+  .settings-nav svg,
+  .settings-nav .settings-nav-tile svg {
     color: CanvasText;
+  }
+
+  .settings-nav-tile {
+    background: transparent;
   }
 }
 
@@ -74,7 +145,7 @@
   min-width: 0;
   padding: var(--settings-page-pad-block) var(--settings-page-pad-inline);
   overflow-y: auto;
-  background: var(--surface);
+  background: var(--group-canvas);
 }
 
 .settings-panel {
@@ -92,7 +163,7 @@
 .settings-group {
   display: grid;
   border-radius: var(--radius-md);
-  background: var(--fill);
+  background: var(--group-bg);
 }
 
 .settings-group > :is(.settings-row, .switch-row, .shortcut-row) {
@@ -112,8 +183,29 @@
   border-bottom-right-radius: var(--radius-md);
 }
 
+/* Inset hairline: starts at the label edge, not the group edge. */
 .settings-group > :not(:first-child) {
-  border-top: 1px solid var(--border-soft);
+  position: relative;
+}
+
+.settings-group > :not(:first-child)::before {
+  content: "";
+  position: absolute;
+  inset-inline: var(--settings-row-pad-inline) 0;
+  top: 0;
+  height: 1px;
+  background: var(--separator);
+  pointer-events: none;
+}
+
+@media (forced-colors: active) {
+  .settings-group > :not(:first-child)::before {
+    display: none;
+  }
+
+  .settings-group > :not(:first-child) {
+    border-top: 1px solid CanvasText;
+  }
 }
 
 .settings-link-row {
@@ -264,7 +356,7 @@
   gap: var(--space-3);
   padding: var(--space-4);
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   background: var(--surface);
   box-shadow: var(--shadow);
 }
@@ -306,8 +398,7 @@
   background: var(--fill);
 }
 
-.settings-data-card > div:first-child,
-.settings-empty-state {
+.settings-data-card > div:first-child {
   display: grid;
   gap: var(--space-1);
 }
@@ -324,8 +415,7 @@
   gap: var(--space-2);
 }
 
-.settings-actions svg,
-.settings-empty-state > svg {
+.settings-actions svg {
   width: var(--icon-md);
   height: var(--icon-md);
 }
@@ -336,6 +426,8 @@
 }
 
 .settings-empty-state {
+  display: grid;
+  gap: var(--space-1);
   place-items: center;
   padding: var(--settings-empty-padding-block) var(--space-4);
   text-align: center;
@@ -709,6 +801,62 @@
   gap: var(--space-2);
 }
 
+/* Rules v2 editor: condition and action rows wrap at large text. */
+.rule-group,
+.rule-match-mode {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.rule-group > legend,
+.rule-match-mode > legend {
+  padding: 0;
+  font-weight: 600;
+}
+
+.rule-match-mode {
+  grid-auto-flow: column;
+  justify-content: start;
+  align-items: center;
+}
+
+.rule-match-mode > label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: var(--target-size);
+}
+
+.rule-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.rule-row > label {
+  font-weight: 600;
+}
+
+.rule-row > select {
+  min-width: 0;
+}
+
+.rule-row > input {
+  min-width: 0;
+  flex: 1 1 var(--settings-field-min-width);
+}
+
+.rule-error {
+  margin: 0;
+  font-weight: 600;
+  color: var(--danger-ink);
+}
+
 /* One titled section per job in the account card: password, signature,
    mail rules, and addresses, split by hairlines. */
 .account-settings-card
@@ -787,7 +935,17 @@
   gap: var(--space-2);
   min-width: 0;
   padding-block: var(--settings-search-pad-block) var(--settings-search-pad-end);
-  padding-inline: var(--settings-page-pad-inline);
+  padding-inline: var(--space-3);
+  border-right: 1px solid var(--border);
+  background: var(--sidebar-bg);
+}
+
+@media (max-width: 760px) {
+  .settings-search {
+    padding-inline: var(--settings-page-pad-inline);
+    border-right: 0;
+    background: transparent;
+  }
 }
 .settings-search input {
   min-width: 0;
@@ -1002,7 +1160,7 @@
 .certificate-details dd {
   margin: 0;
   overflow-wrap: anywhere;
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
 }
 @media (max-width: 760px) {
   .settings-search-result {

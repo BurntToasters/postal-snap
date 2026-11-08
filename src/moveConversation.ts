@@ -10,6 +10,7 @@ import {
 import type { MailboxSummary, MessageSummary } from "./types";
 import { BULK_LIMIT } from "./bulk";
 import { undoableMove, undoTargetFor } from "./undoMove";
+import { errorText } from "./errors";
 
 export type ConversationMoveRole = "archive" | "trash" | "junk" | "inbox";
 
@@ -125,7 +126,7 @@ export async function moveListedMessage(
     });
   } catch (cause) {
     restore();
-    if (sameView()) useAppStore.getState().setError(String(cause));
+    if (sameView()) useAppStore.getState().setError(errorText(cause));
   }
 }
 
@@ -230,6 +231,6 @@ export async function moveLoadedConversation(
     if (outcome.updated + outcome.queued === 0) restore();
   } catch (cause) {
     restore();
-    if (sameView()) useAppStore.getState().setError(String(cause));
+    if (sameView()) useAppStore.getState().setError(errorText(cause));
   }
 }

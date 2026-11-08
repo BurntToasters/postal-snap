@@ -10,6 +10,7 @@ import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
 import { mailboxIsPinned, unpinMailbox } from "../../pinnedMailboxes";
 import { useSettingsSave } from "../settings/useSettingsSave";
+import { errorText } from "../../errors";
 
 type AppState = ReturnType<typeof useAppStore.getState>;
 
@@ -112,7 +113,7 @@ export function useFolderDialog({
       closeFolderDialog();
       await loadAccountData();
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       setFolderBusy(false);
     }
@@ -145,7 +146,7 @@ export function useFolderDialog({
       }
       await loadAccountData();
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       setFolderBusy(false);
     }
@@ -199,7 +200,7 @@ export function useFolderDialog({
       }
       await loadAccountData();
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 
@@ -214,7 +215,7 @@ export function useFolderDialog({
       await api.emptyTrash(activeAccountId);
       await loadAccountData();
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 
@@ -229,7 +230,7 @@ export function useFolderDialog({
       await api.emptyJunk(activeAccountId);
       await loadAccountData();
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 

@@ -1,6 +1,9 @@
 import type { Page, TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Failure modes covered here: T1-T5, H1-H3.
 // T1 more than three toolbar groups; T2 "1 of 1" / nav not last;
@@ -46,7 +49,7 @@ test("one message has two groups and no navigation", async ({ page }) => {
   await expect(page.locator(".reader-action-group")).toHaveCount(2);
   expect(await names(page, 0)).toEqual(["Reply", "Reply all", "Forward"]);
   expect(await names(page, 1)).toEqual([
-    "Add star",
+    "Flag",
     "Archive",
     "Move to trash",
     "More actions",
@@ -59,13 +62,13 @@ test("one message has two groups and no navigation", async ({ page }) => {
 
 test("star keeps its name, pressed state and tooltip", async ({ page }) => {
   await open(page, "theme=light");
-  const star = page.getByRole("button", { name: "Add star", exact: true });
+  const star = page.getByRole("button", { name: "Flag", exact: true });
   await expect(star).toHaveAttribute("aria-pressed", "false");
-  await expect(star).toHaveAttribute("title", /Add star/);
+  await expect(star).toHaveAttribute("title", /Flag/);
   await star.click();
-  const on = page.getByRole("button", { name: "Remove star", exact: true });
+  const on = page.getByRole("button", { name: "Unflag", exact: true });
   await expect(on).toHaveAttribute("aria-pressed", "true");
-  await expect(on).toHaveAttribute("title", /Remove star/);
+  await expect(on).toHaveAttribute("title", /Unflag/);
 });
 
 test("a thread adds navigation last and right-aligned", async ({ page }) => {

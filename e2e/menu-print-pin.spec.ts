@@ -2,6 +2,9 @@ import { mkdir, writeFile } from "node:fs/promises";
 import type { Page, TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Failure modes covered here:
 // 1. The row menu offers Print ▸ with Print message for a single message.

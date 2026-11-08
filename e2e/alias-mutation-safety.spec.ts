@@ -5,7 +5,9 @@ import { resolve } from "node:path";
 
 import { expect, test } from "@playwright/test";
 import { installMockIpc } from "./mock-ipc";
-import { recordIpc, recordedCalls } from "./ipc-recorder";
+import { attachArtifactsAfterEach, ipcCalls } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 test.use({ trace: "off" });
 
@@ -42,7 +44,6 @@ async function openIdentity(page: Page, density: string, scale: number) {
 
 test.beforeEach(async ({ page }) => {
   await installMockIpc(page);
-  await recordIpc(page);
   await page.context().tracing.start({
     screenshots: true,
     snapshots: true,
@@ -53,7 +54,7 @@ test.beforeEach(async ({ page }) => {
 test.afterEach(async ({ page }, testInfo) => {
   const slug = artifactSlug(testInfo);
   await mkdir(artifactDirectory, { recursive: true });
-  const calls = page.isClosed() ? [] : await recordedCalls(page);
+  const calls = page.isClosed() ? [] : await ipcCalls(page);
   const jsonPath = resolve(artifactDirectory, `${slug}.json`);
   const screenshotPath = resolve(artifactDirectory, `${slug}.png`);
   const tracePath = resolve(artifactDirectory, `${slug}.zip`);

@@ -22,11 +22,27 @@ Postal Snap is a calm, accessible desktop email client. Mail stays on your compu
 
 ## Changes in `v0.5.2:`
 
+- **NEW - Mac-style look:** Postal Snap uses macOS-style controls, popup menus, and a Spotlight-style command palette on every system. Settings follows the System Settings layout, with search above the sections and tinted icons.
 - **NEW - Normal density:** A space-efficient default layout. Comfortable (larger controls) and Compact remain in Settings > Appearance and first-run setup.
+- **NEW - Colored flags:** Flag a message in one of seven colors. Colors use the same keywords as Apple Mail, so they match on iCloud. Servers that do not store those keywords keep a plain flag.
+- **NEW - Junk training:** Moving a message to Junk, or back to the Inbox, tells servers that support it to learn from the move.
+- **NEW - Rules v2:** A rule can match all or any of up to 10 conditions and run up to five actions: a flag color, pin, notify, or one move.
+- **NEW - New-mail notifications:** Click a notification to open that message. Turn notifications off for each account in Settings > Notifications.
+- **NEW - Mailbox export and import:** Export a folder to an mbox file, or import an mbox file into a folder. Both show progress and can be canceled.
+- **NEW - Open email files:** Double-click a `.eml` file to read it in a separate viewer. Remote images stay blocked there.
+- **NEW - Attached messages:** Open an email attached to another message.
+- **NEW - PDF preview:** Preview the first 20 pages of a PDF attachment before you save it.
+- **IMPROVED - Window glass:** The sidebar uses macOS vibrancy in the direct download, and Windows uses Mica. Other builds keep solid backgrounds.
 - **IMPROVED - Reader:** The letter gets the room: single-line header, inline attachments, capped conversation index, a toolbar that no longer wraps, and a compact quick reply.
-- **IMPROVED - Message list and sidebar:** Shorter day bands, one-line previews, and tighter rows show more messages at once.
-- **IMPROVED - Composer and Settings:** Flatter controls and smaller windows. The formatting toggle moves to the composer footer, and importance and read receipt move to the Message options menu.
-- **IMPROVED - Window chrome and controls:** Refined window chrome, buttons, and disabled states for more consistent focus and contrast.
+- **IMPROVED - Message list and sidebar:** Shorter day bands, one-line previews, and tighter rows show more messages at once. Sidebar sections collapse.
+- **IMPROVED - Composer, dialogs, and setup:** Flatter controls and smaller windows. The formatting toggle moves to the composer footer, and importance and read receipt move to the Message options menu.
+- **IMPROVED - Text and focus:** The system font is used on each platform, focus rings are a clear accent outline, and keyboard shortcuts work while a letter has focus.
+- **IMPROVED - Opening and typing:** Messages open faster, and the composer no longer rechecks its HTML on every keystroke. Sync causes fewer redraws.
+- **FIX - Links:** The warning for links whose text differs from their address now appears on macOS and Linux too.
+- **FIX - Printing:** The printed letter is shown in a sandboxed frame. Mod+Shift+P no longer prints.
+- **FIX - Error messages:** Errors never show file paths or internal details. Unexpected background errors show a plain message.
+- **FIX - Limits:** Rules are capped at 200, aliases at 50, and reorder requests at 500 items.
+- **FIX - Theme:** The chosen light or dark theme applies before the first frame, so the window does not flash.
 
 ## Changes in `v0.5.1:`
 

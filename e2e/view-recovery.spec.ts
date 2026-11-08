@@ -1,9 +1,8 @@
 import type { Page, TestInfo } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "./coverage-fixture";
-import { attachArtifacts } from "./ipc-artifact";
-import { emitTauriEvent, recordIpc, recordedCalls } from "./ipc-recorder";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifacts, emitTauriEvent, ipcCalls } from "./ipc";
 
 // Failure modes covered here:
 // 1. A render failure in the message list stops the folders and Compose.
@@ -44,7 +43,6 @@ const variants = [
 
 test.beforeEach(async ({ page }) => {
   await installMockIpc(page);
-  await recordIpc(page);
 });
 
 async function setFlags(
@@ -382,7 +380,7 @@ for (const variant of variants) {
     await expect(page.getByLabel("Message body")).toContainText(
       "Autosaved body text",
     );
-    const reads = (await recordedCalls(page)).filter(
+    const reads = (await ipcCalls(page)).filter(
       (call) => call.command === "get_draft",
     );
     expect(reads.at(-1)?.args).toMatchObject({ draftId: "draft-saved" });
@@ -539,7 +537,7 @@ test("a late autosave from a replaced composer cannot replace its recovery draft
   ).toHaveValue("New session draft");
   await expect(page.getByLabel("Message body")).toContainText("New saved body");
 
-  const reads = (await recordedCalls(page)).filter(
+  const reads = (await ipcCalls(page)).filter(
     (call) => call.command === "get_draft",
   );
   expect(reads.at(-1)?.args).toMatchObject({ draftId: "draft-new" });

@@ -13,9 +13,10 @@ use super::{
 };
 use crate::{
     bounded_file::{self, BoundedFileError},
+    db::messages::MessageMeta,
     mail,
-    models::{Attachment, AttachmentPreview, ComposeAttachment},
-    security,
+    models::{Attachment, AttachmentPreview, ComposeAttachment, OpenedMessage},
+    opened_mail, security,
 };
 
 #[tauri::command]
@@ -27,7 +28,7 @@ pub async fn save_attachment(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<()> {
-    let cached = state.db.message_detail(message_id, &account_id)?;
+    let cached = state.db.message_meta(message_id, &account_id)?;
     let suggested = security::safe_filename(&suggested_filename);
     let picker = app.clone();
     let destination = tokio::task::spawn_blocking(move || {
@@ -179,7 +180,10 @@ pub(crate) fn risky_file_names<'a>(names: impl IntoIterator<Item = &'a str>) -> 
 }
 
 /// Ask once before saving files that can run code. True means continue.
-async fn confirm_risky_files(app: &AppHandle, names: Vec<String>) -> Result<bool, String> {
+pub(crate) async fn confirm_risky_files(
+    app: &AppHandle,
+    names: Vec<String>,
+) -> Result<bool, String> {
     if names.is_empty() {
         return Ok(true);
     }
@@ -287,7 +291,7 @@ pub async fn save_chosen_attachments(
     state: State<'_, AppState>,
 ) -> CommandResult<u32> {
     state.db.account(&account_id)?;
-    let cached = state.db.message_detail(message_id, &account_id)?;
+    let cached = state.db.message_meta(message_id, &account_id)?;
     ensure_message_content_for(&account_id, message_id, &state, Need::Full).await?;
     let raw = state.db.raw_message(message_id, &account_id)?;
     let (aliases, current) = mail::parse::attachment_id_variants(&raw)?;
@@ -316,7 +320,7 @@ pub async fn save_all_attachments(
 ) -> CommandResult<u32> {
     state.db.account(&account_id)?;
     ensure_message_content_for(&account_id, message_id, &state, Need::Full).await?;
-    let detail = state.db.message_detail(message_id, &account_id)?;
+    let detail = state.db.message_meta(message_id, &account_id)?;
     if !detail.attachments.iter().any(|item| !item.inline) {
         return Err("This message has no files to save.".into());
     }
@@ -347,38 +351,49 @@ pub async fn save_conversation_attachments(
 ) -> CommandResult<u32> {
     let ids = normalize_conversation_ids(&message_ids)?;
     state.db.account(&account_id)?;
-    let mut known = Vec::with_capacity(ids.len());
+    // Each message's meta loads once: here when cached, else in the risky pass.
+    let mut cached: Vec<Option<MessageMeta>> = Vec::with_capacity(ids.len());
     for id in &ids {
-        let has_file = if state.db.message_content_cached(*id, &account_id)? {
-            let detail = state.db.message_detail(*id, &account_id)?;
-            Some(detail.attachments.iter().any(|item| !item.inline))
+        let meta = if state.db.message_content_cached(*id, &account_id)? {
+            Some(state.db.message_meta(*id, &account_id)?)
         } else {
             None
         };
-        known.push(has_file);
+        cached.push(meta);
     }
+    let known: Vec<Option<bool>> = cached
+        .iter()
+        .map(|meta| {
+            meta.as_ref()
+                .map(|meta| meta.attachments.iter().any(|item| !item.inline))
+        })
+        .collect();
     if conversation_lacks_files(&known) {
         return Err("This conversation has no files to save.".into());
     }
     let Some(folder) = pick_folder(&app).await? else {
         return Ok(0);
     };
+    let mut metas = Vec::with_capacity(ids.len());
     let mut risky = Vec::new();
-    for id in &ids {
+    for (id, meta) in ids.iter().zip(cached) {
         ensure_message_content_for(&account_id, *id, &state, Need::Full).await?;
-        let detail = state.db.message_detail(*id, &account_id)?;
-        risky.extend(risky_file_names(regular_file_names(&detail.attachments)));
+        let meta = match meta {
+            Some(meta) => meta,
+            None => state.db.message_meta(*id, &account_id)?,
+        };
+        risky.extend(risky_file_names(regular_file_names(&meta.attachments)));
+        metas.push(meta);
     }
     if !confirm_risky_files(&app, risky).await? {
         return Ok(0);
     }
     let mut used = HashSet::new();
     let mut saved = 0u32;
-    for id in &ids {
+    for (id, meta) in ids.iter().zip(&metas) {
         // Only one message's source is held in memory at a time.
-        let detail = state.db.message_detail(*id, &account_id)?;
         let raw = state.db.raw_message(*id, &account_id)?;
-        saved += write_message_files(&folder, &raw, &detail.attachments, &mut used).await?;
+        saved += write_message_files(&folder, &raw, &meta.attachments, &mut used).await?;
     }
     if saved == 0 {
         return Err("This conversation has no files to save.".into());
@@ -408,7 +423,7 @@ pub async fn save_messages_eml(
     for id in &ids {
         // Only one message's source is held in memory at a time.
         ensure_message_content_for(&account_id, *id, &state, Need::Full).await?;
-        let detail = state.db.message_detail(*id, &account_id)?;
+        let detail = state.db.message_meta(*id, &account_id)?;
         let raw = state.db.raw_message(*id, &account_id)?;
         write_message_eml(&folder, &detail.summary.subject, &raw, &mut used).await?;
         saved += 1;
@@ -531,7 +546,7 @@ const USER_SAVE_FAILURE: &str = "Could not save the attachment at that location.
 
 /// Write attachment bytes to the exact path the user chose. Never follows a
 /// symlink or reparse point; overwrites an existing regular file in place only.
-async fn write_user_chosen_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
+pub(crate) async fn write_user_chosen_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
     match tokio::fs::symlink_metadata(path).await {
         Ok(meta) => {
             if meta.file_type().is_symlink() || !meta.is_file() {
@@ -667,7 +682,7 @@ fn numbered_filename(filename: &str, index: usize) -> String {
     }
 }
 
-const MAX_PREVIEW_BYTES: usize = 10 * 1024 * 1024;
+pub(crate) const MAX_PREVIEW_BYTES: usize = 10 * 1024 * 1024;
 
 pub(crate) fn preview_text(bytes: &[u8]) -> Option<String> {
     let text = String::from_utf8_lossy(bytes);
@@ -687,7 +702,7 @@ pub async fn preview_attachment(
     attachment_id: String,
     state: State<'_, AppState>,
 ) -> CommandResult<AttachmentPreview> {
-    let cached = state.db.message_detail(message_id, &account_id)?;
+    let cached = state.db.message_meta(message_id, &account_id)?;
     ensure_message_content_for(&account_id, message_id, &state, Need::Full).await?;
     let raw = state.db.raw_message(message_id, &account_id)?;
     let (aliases, current) = mail::parse::attachment_id_variants(&raw)?;
@@ -698,10 +713,26 @@ pub async fn preview_attachment(
         return Err("This attachment is too large to preview.".into());
     }
     let (filename, bytes) = mail::extract_attachment(&raw, &attachment.id)?;
+    Ok(preview_bytes(filename, &attachment.content_type, bytes).await?)
+}
+
+/// A PDF by declared type or by name. The bytes must still start with %PDF-.
+fn is_pdf_candidate(filename: &str, content_type: &str) -> bool {
+    content_type == "application/pdf" || filename.to_ascii_lowercase().ends_with(".pdf")
+}
+
+/// Preview bytes already read from a message: images, PDFs and plain text.
+pub(crate) async fn preview_bytes(
+    filename: String,
+    content_type: &str,
+    bytes: Vec<u8>,
+) -> Result<AttachmentPreview, String> {
     if bytes.len() > MAX_PREVIEW_BYTES {
         return Err("This attachment is too large to preview.".into());
     }
-    let content_type = attachment.content_type.as_str();
+    if is_pdf_candidate(&filename, content_type) && bytes.starts_with(b"%PDF-") {
+        return crate::pdf_preview::render_pdf_pages(filename, bytes).await;
+    }
     if matches!(
         content_type,
         "image/png" | "image/jpeg" | "image/gif" | "image/webp"
@@ -711,6 +742,9 @@ pub async fn preview_attachment(
             return Err("This image format is not supported.".into());
         }
         return Ok(AttachmentPreview {
+            pages: None,
+            page_count: None,
+            pages_truncated: false,
             filename,
             content_type: content_type.to_string(),
             size: bytes.len() as u64,
@@ -726,6 +760,9 @@ pub async fn preview_attachment(
             return Err("This text file cannot be previewed.".into());
         };
         return Ok(AttachmentPreview {
+            pages: None,
+            page_count: None,
+            pages_truncated: false,
             filename,
             content_type: content_type.to_string(),
             size: bytes.len() as u64,
@@ -734,6 +771,31 @@ pub async fn preview_attachment(
         });
     }
     Err("Only images and plain-text files can be previewed.".into())
+}
+
+/// Open a message/rfc822 attachment in its own store entry. Only the bytes
+/// of that one part are read, from the bounded message source.
+#[tauri::command]
+pub async fn view_attachment_message(
+    account_id: String,
+    message_id: i64,
+    attachment_id: String,
+    state: State<'_, AppState>,
+) -> CommandResult<OpenedMessage> {
+    let cached = state.db.message_meta(message_id, &account_id)?;
+    ensure_message_content_for(&account_id, message_id, &state, Need::Full).await?;
+    let raw = state.db.raw_message(message_id, &account_id)?;
+    let (aliases, current) = mail::parse::attachment_id_variants(&raw)?;
+    let attachment = resolve_attachment_id(&cached.attachments, &aliases, &current, &attachment_id)
+        .ok_or_else(|| "Attachment not found.".to_string())?;
+    if !opened_mail::is_message_attachment(attachment) {
+        return Err("This attachment is not an email message.".into());
+    }
+    let (_, bytes) = mail::extract_attachment(&raw, &attachment.id)?;
+    let opened = tokio::task::spawn_blocking(move || opened_mail::open_bytes(bytes))
+        .await
+        .map_err(|_| "Could not open the attached message.".to_string())??;
+    Ok(opened)
 }
 
 /// Forward an inline image as inline only when the forwarded text shows it by
@@ -781,7 +843,7 @@ pub async fn prepare_forwarded_message(
     state: State<'_, AppState>,
 ) -> CommandResult<ComposeAttachment> {
     ensure_message_content_for(&account_id, message_id, &state, Need::Full).await?;
-    let detail = state.db.message_detail(message_id, &account_id)?;
+    let detail = state.db.message_meta(message_id, &account_id)?;
     let raw = state.db.raw_message(message_id, &account_id)?;
     if raw.is_empty() {
         return Err("This message has not been downloaded yet.".into());
@@ -1074,7 +1136,7 @@ pub async fn read_message_inline_image(
     attachment_id: String,
     state: State<'_, AppState>,
 ) -> CommandResult<String> {
-    let cached = state.db.message_detail(message_id, &account_id)?;
+    let cached = state.db.message_meta(message_id, &account_id)?;
     ensure_message_content_for(&account_id, message_id, &state, Need::Full).await?;
     let raw = state.db.raw_message(message_id, &account_id)?;
     let (aliases, current) = mail::parse::attachment_id_variants(&raw)?;
@@ -1169,6 +1231,7 @@ mod tests {
         let account_id = "preview-account".to_string();
         let account = AccountRecord {
             summary: AccountSummary {
+                notify_new_mail: true,
                 id: account_id.clone(),
                 provider: ProviderKind::Manual,
                 email: "preview@example.test".into(),

@@ -149,6 +149,7 @@ pub async fn add_account(
     }
     let id = uuid::Uuid::new_v4().to_string();
     let summary = AccountSummary {
+        notify_new_mail: true,
         default_body_format: crate::models::BodyFormat::Html,
         id: id.clone(),
         provider: request.provider.clone(),
@@ -236,6 +237,7 @@ async fn save_oauth_account(
     mail::probe_mail_login(&imap, &smtp, &signed.email, &signed.access_token, true).await?;
     let id = uuid::Uuid::new_v4().to_string();
     let summary = AccountSummary {
+        notify_new_mail: true,
         default_body_format: BodyFormat::Html,
         id: id.clone(),
         provider: match provider {
@@ -514,6 +516,7 @@ async fn remove_single_account(
         attachment_dir.exists() && tokio::fs::remove_dir_all(attachment_dir).await.is_err();
     drop(guard);
     state.retire_actor(account_id);
+    mail::pool::remove_account(account_id);
     Ok(AccountRemovalOutcome {
         cleanup_pending,
         disk_space_pending: false,
@@ -531,12 +534,7 @@ pub async fn discover_account_aliases(
     }
     let password = credentials::load(&account_id)?;
     let discovered = mail::discover_icloud_aliases(&account.summary.email, &password).await?;
-    let mut updated_aliases = account.summary.aliases.clone();
-    for alias in discovered {
-        if !updated_aliases.contains(&alias) {
-            updated_aliases.push(alias);
-        }
-    }
+    let updated_aliases = merge_discovered_aliases(account.summary.aliases.clone(), discovered);
     let updated = state
         .db
         .update_account_aliases(&account_id, &updated_aliases)?;
@@ -550,7 +548,23 @@ pub fn update_account_aliases(
     state: State<'_, AppState>,
 ) -> CommandResult<AccountSummary> {
     state.db.account(&account_id)?;
-    let mut clean_aliases = Vec::new();
+    let clean_aliases = normalize_aliases(aliases)?;
+    let updated = state
+        .db
+        .update_account_aliases(&account_id, &clean_aliases)?;
+    Ok(updated)
+}
+
+/// Most aliases one account may keep.
+pub(crate) const MAX_ALIASES: usize = 50;
+/// Most account ids one reorder command accepts.
+pub(crate) const MAX_REORDER_IDS: usize = 500;
+
+/// Lowercase, validate, and dedupe aliases, keeping first positions. The cap
+/// counts unique aliases only.
+fn normalize_aliases(aliases: Vec<String>) -> Result<Vec<String>, String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut clean = Vec::new();
     for alias in aliases {
         let trimmed = alias.trim().to_lowercase();
         if trimmed.is_empty() || trimmed.len() > 320 || trimmed.contains(char::is_control) {
@@ -559,14 +573,38 @@ pub fn update_account_aliases(
         if trimmed.parse::<lettre::message::Mailbox>().is_err() {
             return Err("One of the alias addresses is invalid.".into());
         }
-        if !clean_aliases.contains(&trimmed) {
-            clean_aliases.push(trimmed);
+        if seen.insert(trimmed.clone()) {
+            if clean.len() == MAX_ALIASES {
+                return Err("Too many aliases. You can have up to 50.".into());
+            }
+            clean.push(trimmed);
         }
     }
-    let updated = state
-        .db
-        .update_account_aliases(&account_id, &clean_aliases)?;
-    Ok(updated)
+    Ok(clean)
+}
+
+/// Append discovered aliases after the existing ones, skipping duplicates.
+/// Excess discoveries are dropped silently rather than failing discovery.
+fn merge_discovered_aliases(existing: Vec<String>, discovered: Vec<String>) -> Vec<String> {
+    let mut seen: std::collections::HashSet<String> = existing.iter().cloned().collect();
+    let mut merged = existing;
+    for alias in discovered {
+        if merged.len() >= MAX_ALIASES {
+            break;
+        }
+        if seen.insert(alias.clone()) {
+            merged.push(alias);
+        }
+    }
+    merged.truncate(MAX_ALIASES);
+    merged
+}
+
+fn check_reorder_len(len: usize) -> Result<(), String> {
+    if len > MAX_REORDER_IDS {
+        return Err("Too many accounts to reorder. The limit is 500.".into());
+    }
+    Ok(())
 }
 
 /// One mailbox, or blank. A blank address means replies use From.
@@ -670,6 +708,7 @@ pub fn reorder_accounts(
     account_ids: Vec<String>,
     state: State<'_, AppState>,
 ) -> CommandResult<Vec<AccountSummary>> {
+    check_reorder_len(account_ids.len())?;
     state.db.reorder_accounts(&account_ids)?;
     command_result(state.db.list_accounts())
 }
@@ -863,5 +902,92 @@ mod compaction_tests {
         reader.execute_batch("COMMIT;").unwrap();
         assert!(compact_or_mark(&db, &marker).is_ok());
         assert!(!marker.exists());
+    }
+}
+
+#[cfg(test)]
+mod cap_tests {
+    use super::{
+        check_reorder_len, merge_discovered_aliases, normalize_aliases, MAX_ALIASES,
+        MAX_REORDER_IDS,
+    };
+    use crate::models::IpcError;
+
+    fn addresses(count: usize) -> Vec<String> {
+        (0..count)
+            .map(|i| format!("alias{i}@example.com"))
+            .collect()
+    }
+
+    #[test]
+    fn alias_list_over_the_cap_is_refused_as_limit_exceeded() {
+        // Failure modes: the extra alias is silently dropped, or the refusal
+        // carries a generic code instead of limitExceeded.
+        let error = normalize_aliases(addresses(MAX_ALIASES + 1)).unwrap_err();
+        assert_eq!(IpcError::from(error).code, "limitExceeded");
+    }
+
+    #[test]
+    fn alias_list_at_the_cap_is_accepted() {
+        let aliases = normalize_aliases(addresses(MAX_ALIASES)).unwrap();
+        assert_eq!(aliases.len(), MAX_ALIASES);
+    }
+
+    #[test]
+    fn duplicate_aliases_do_not_count_toward_the_cap() {
+        // Failure mode: duplicates inflate the count and reject a valid set.
+        let mut raw = addresses(MAX_ALIASES);
+        raw.extend(addresses(MAX_ALIASES));
+        assert_eq!(normalize_aliases(raw).unwrap().len(), MAX_ALIASES);
+    }
+
+    #[test]
+    fn duplicate_aliases_keep_first_position_and_fold_case() {
+        // Failure mode: dedupe reorders the list or keeps a case variant.
+        let aliases = normalize_aliases(vec![
+            "B@example.com".into(),
+            "a@example.com".into(),
+            "b@example.com ".into(),
+        ])
+        .unwrap();
+        assert_eq!(aliases, vec!["b@example.com", "a@example.com"]);
+    }
+
+    #[test]
+    fn invalid_alias_is_refused() {
+        assert!(normalize_aliases(vec!["not an address".into()]).is_err());
+    }
+
+    #[test]
+    fn reorder_over_the_cap_is_refused_as_limit_exceeded() {
+        // Failure mode: an oversized id list reaches the database transaction.
+        let error = check_reorder_len(MAX_REORDER_IDS + 1).unwrap_err();
+        assert_eq!(IpcError::from(error).code, "limitExceeded");
+    }
+
+    #[test]
+    fn discovered_aliases_are_merged_without_error_and_truncated_to_the_cap() {
+        // Failure modes: discovery errors out past the cap, or the merge drops
+        // existing aliases in favor of discovered ones.
+        let existing = addresses(MAX_ALIASES - 1);
+        let discovered = (0..10).map(|i| format!("found{i}@example.com")).collect();
+        let merged = merge_discovered_aliases(existing.clone(), discovered);
+        assert_eq!(merged.len(), MAX_ALIASES);
+        assert_eq!(&merged[..MAX_ALIASES - 1], existing.as_slice());
+        assert_eq!(merged[MAX_ALIASES - 1], "found0@example.com");
+    }
+
+    #[test]
+    fn discovered_aliases_skip_existing_entries() {
+        let existing = vec!["a@example.com".to_string()];
+        let discovered = vec!["a@example.com".to_string(), "b@example.com".to_string()];
+        let merged = merge_discovered_aliases(existing, discovered);
+        assert_eq!(merged, vec!["a@example.com", "b@example.com"]);
+    }
+
+    #[test]
+    fn reorder_at_the_cap_is_allowed() {
+        assert!(check_reorder_len(MAX_REORDER_IDS).is_ok());
+        assert!(check_reorder_len(0).is_ok());
     }
 }

@@ -1,14 +1,13 @@
 import { expect, test } from "./coverage-fixture";
-import { attachIpcLog, recordIpc, recordedCalls } from "./ipc-recorder";
 import { installMockIpc } from "./mock-ipc";
 import { revealMenuItem } from "./menu-reveal";
+import { attachIpcLog, ipcCalls } from "./ipc";
 
 // Missing command mocks must not turn user actions into silent errors.
 // These flows verify the IPC boundary; native TLS, dialogs, and file writes
 // remain covered by Rust/fixture tests and packaged-app manual checks.
 test.beforeEach(async ({ page }) => {
   await installMockIpc(page);
-  await recordIpc(page);
 });
 test.afterEach(async ({ page }, testInfo) => {
   await attachIpcLog(page, testInfo);
@@ -21,12 +20,11 @@ async function commandArgs(
   await expect
     .poll(
       async () =>
-        (await recordedCalls(page)).filter((call) => call.command === command)
+        (await ipcCalls(page)).filter((call) => call.command === command)
           .length,
     )
     .toBeGreaterThan(0);
-  return (await recordedCalls(page)).find((call) => call.command === command)
-    ?.args;
+  return (await ipcCalls(page)).find((call) => call.command === command)?.args;
 }
 
 for (const all of [false, true]) {
@@ -124,7 +122,7 @@ test("clears downloads only after confirmation", async ({ page }) => {
   page.once("dialog", (dialog) => void dialog.dismiss());
   await clear.click();
   expect(
-    (await recordedCalls(page)).some(
+    (await ipcCalls(page)).some(
       (call) => call.command === "clear_downloaded_mail",
     ),
   ).toBe(false);

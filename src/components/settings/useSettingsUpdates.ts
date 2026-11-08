@@ -9,6 +9,7 @@ import {
   removeUpdateFoundListener,
   type UpdateFoundListener,
 } from "../../update";
+import { errorText } from "../../errors";
 
 interface Options {
   distribution?: DistributionChannel;
@@ -39,7 +40,7 @@ export function useSettingsUpdates({ distribution }: Options) {
     try {
       await checkUpdateInteractive();
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       setCheckingUpdate(false);
       setUpdateStatus(strings.settings.checkUpdates);

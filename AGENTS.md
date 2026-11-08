@@ -1,4 +1,4 @@
-# Critical Information - Do not modify
+# Critical Information - Do not modify this section, sections below this one may be modified.
 
 - NEVER write unit tests after you write code.
 - Highly prefer E2E tests as the sole testing mechanism. Use them to verify complex features work. At the end of E2E tests, produce a verifiable and repeatable artifact.
@@ -21,7 +21,8 @@ The current (0.5.x) scope is deliberately focused:
 - Proton Bridge accounts over loopback with a pinned, user-approved certificate (experimental until the release checklist smoke passes).
 - Multiple isolated accounts; no unified inbox.
 - Familiar folders, message list, reader, search, drafts, outbox, attachments, and rich compose.
-- Shipped extras already in the tree: per-account signatures, filter rules, optional thread grouping, undo-send / scheduled outbox, snooze, iCloud aliases, recipient suggestions, optional window glass, and close-to-tray on Windows/macOS.
+- Shipped extras already in the tree: per-account signatures, filter rules (v2: any/all matching, flag, pin, and notify actions), optional thread grouping, undo-send / scheduled outbox, snooze, iCloud aliases, recipient suggestions, optional window glass, close-to-tray on Windows/macOS, colored flags (Apple Mail-compatible keywords), junk training, per-account new-mail notifications with tap-to-open, mbox import/export of a mailbox, `.eml` file viewer, attached-message view, and in-app PDF page preview.
+- Drag-out of attachments to Finder/Explorer is deferred to 0.5.3. The `start_attachment_drag` and `start_message_drag` commands are registered stubs that return "Not available yet."
 - No telemetry, analytics, licensing server, trial logic, or Postal Snap cloud.
 - English-US first, with UI strings kept central for later localization.
 
@@ -36,6 +37,8 @@ Do not add Gmail/Outlook OAuth setup UI, POP, plaintext transport, contacts, tem
 - `async-imap` over verified TLS for IMAP.
 - `lettre` for SMTP and MIME submission.
 - `mail-parser` for received MIME.
+- `hayro` (pure Rust) for in-memory PDF page previews.
+- `window-vibrancy` for native Mica (Windows) and sidebar vibrancy (direct macOS builds only).
 - Tiptap React for rich compose.
 - Vitest/Testing Library tests in `src/tests/`.
 - Playwright mocked-IPC flows in `e2e/`.
@@ -61,6 +64,14 @@ Important files:
 - `src-tauri/src/bridge.rs`: Proton Bridge certificate staging, approval, and fingerprint pinning.
 - `src-tauri/src/providers.rs`: provider presets, MX matching, and HTTPS autoconfig discovery.
 - `src-tauri/src/strings.rs`: user-facing text shown by native code (menus, tray, notifications, dialogs).
+- `src-tauri/src/window_fx.rs`: Mica on Windows, sidebar vibrancy with `macos-vibrancy`, and opaque fallbacks.
+- `src-tauri/src/notify.rs`: new-mail notifications, bounded notice-to-message map, and tap routing (ids only).
+- `src-tauri/src/opened_mail.rs`: opened `.eml` files held in a bounded token store (LRU, ≤ 8 tokens, ≤ 128 MiB).
+- `src-tauri/src/mbox.rs`: mboxrd reader/writer for mailbox import and export.
+- `src-tauri/src/pdf_preview.rs`: in-memory PDF page rendering to PNG data for attachment preview.
+- `src-tauri/src/mail/keywords.rs`: pure helpers for Apple flag-color bits and `$Junk`/`$NotJunk` keywords.
+- `src/errors.ts`: maps IPC error codes to safe, redacted UI text (`errorText`).
+- `src/components/EmlViewer.tsx`: read-only viewer for opened `.eml` files; same sanitize and sandbox path as the reader.
 - `src/components/ErrorBoundary.tsx`: contains render failures to one view instead of blanking the window.
 - `docs/ARCHITECTURE.md`: architecture overview.
 - `docs/CONTENT_BLOCKING.md`: official EasyList/EasyPrivacy verification and snapshot updates.
@@ -72,6 +83,9 @@ Important files:
 
 - Keep the UI minimalist but recognizably an email client.
 - Optimize for low cognitive load: large labels, clear hierarchy, plain errors, and obvious primary actions.
+- The UI follows macOS conventions on every OS (system font per OS, macOS-style palette, radii, popups, and Settings layout). Windows keeps its HTML caption buttons and Snap overlay; Linux keeps GTK decorations.
+- Window glass: Windows uses Mica with an opaque fallback (no Acrylic). macOS sidebar vibrancy is compiled only with the `macos-vibrancy` Cargo feature, which enables Tauri's private API. Only direct (DMG/ZIP) macOS builds enable it. Mac App Store, Microsoft Store, and Flatpak builds never do. `macOSPrivateApi` stays `false` in every Tauri config. Linux is opaque.
+- User-facing wording is "Flag", not "Star" (Mail-style). Internal names such as `is_starred` and `toggle-star` stay, and `is:starred` remains a search alias.
 - Interactive targets: at least 36px rows and controls and 32px inline targets in Normal (default); at least 44px in Comfortable. Popup menu rows (`.app-menu`) are 2.25rem in every density; they still scale with text size and support full keyboard use.
 - Compact is a traditional mail density (macOS Mail-like 2rem rows). It must stay as polished as the default.
 - Size UI with the density tokens in `src/styles/variables.css` (`--target-size`, `--control-height`, `--bar-height-*`, `--*-pad-block`, row heights). Never hard-code sizes. `:root` is Normal; `[data-density="comfortable"]` and `[data-density="compact"]` override the tokens. `src/styles/density.css` holds only layout changes tokens cannot express.
@@ -104,6 +118,11 @@ These are release blockers. Do not weaken them for convenience.
 - Keep the parse quarantine: `messages.parse_pending` counts parses that started but never returned. It is committed just before the parse (never during the download) and reset after. Two unfinished parses in a row, or one caught parser panic, quarantine the message; one is forgiven because the app may simply have quit. Release builds unwind on panic; keep it that way so one bad message fails one task, not the app.
 - Route only pure reads through `Database::read_conn` (read-only WAL connection). Anything that writes uses `conn`; skippable housekeeping writes on read paths use `try_conn`.
 - Keep `secure_delete` on and compact the database after clearing downloads or removing accounts, so removed mail is not recoverable from the file.
+- Opened `.eml` files and `message/rfc822` parts come only from OS open events, first-launch or single-instance argv, or Rust file dialogs. Paths never cross IPC; events and commands carry opaque ids only. Opened messages use the reader's ammonia, DOMPurify, and sandbox pipeline. Remote images never load there, and nested messages are listed, not rendered automatically.
+- PDF previews render in Rust, in memory, through `hayro`. Limits: ≤ 10 MiB input, 20 pages, ≤ 1600 px wide, ≤ 4 MP per page, and a 10 s timeout. Rendering runs off the async runtime and catches panics. Each PNG must pass `detect_image_mime`. Nothing is written to disk, and PDF content never reaches the privileged webview.
+- mbox import and export run only after Rust file dialogs. Limits: import ≤ 1 GiB and ≤ 10,000 messages, export ≤ 4 GiB and ≤ 10,000 messages, each message ≤ 50 MiB. Imported messages are appended as read (`\Seen`). Errors never include names or paths.
+- The print frame stays sandboxed. Windows and Linux use `allow-same-origin allow-modals` with no scripts. macOS prints the window natively and shows only a sandboxed host frame under `@media print`. Never add `allow-scripts` to a print or preview frame.
+- Notification taps resolve through a bounded map of recent notices (32 entries). Notification payloads and events carry ids only. Accounts with new-mail notifications off never notify.
 
 ## Mail and storage behavior
 
@@ -114,6 +133,8 @@ These are release blockers. Do not weaken them for convenience.
 - Fetch envelopes first and full message bodies on demand. Background backfill is latest-first.
 - Default cache policy is recent mail: 90 days and 1 GiB. Eviction must preserve envelopes, drafts, and unsent mail.
 - Queue offline flag/move/delete/draft operations and replay safely after reconnect.
+- Colored flags use `$MailFlagBit0/1/2` (1, 2, 4) with `\Flagged`, matching Apple Mail and iCloud. Keyword writes happen only when PERMANENTFLAGS allows them. Otherwise only `\Flagged` is written. Junk training writes `$Junk`/`$NotJunk` on user moves into or out of Junk, never on rule moves. Keyword writes are best-effort and never block a move.
+- Rules v2: 1 to 10 conditions joined by any or all, 1 to 5 actions, at most one move per rule. Actions may flag (with a color), pin, or notify. A notify action fires at most once per account per sync pass, only for new mail.
 - Search returns cached FTS results first and may fall back to IMAP server search. Server body-only matches must be returned directly, not filtered through local FTS afterward.
 - Folder roles prefer IMAP SPECIAL-USE and then conservative provider/name fallbacks.
 - iCloud IMAP tries the address local part first, then the full address; SMTP always uses the full address.

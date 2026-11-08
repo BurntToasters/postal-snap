@@ -328,6 +328,22 @@ pub(crate) fn system_flags(item: &async_imap::types::Fetch) -> (bool, bool) {
         })
 }
 
+/// Flag color from `$MailFlagBit0..2`. Unflagged messages read as 0.
+pub(crate) fn flag_color_of(item: &async_imap::types::Fetch) -> u8 {
+    let (_, flagged) = system_flags(item);
+    if !flagged {
+        return 0;
+    }
+    let names: Vec<String> = item
+        .flags()
+        .filter_map(|flag| match flag {
+            async_imap::types::Flag::Custom(name) => Some(name.to_string()),
+            _ => None,
+        })
+        .collect();
+    super::keywords::color_from_keyword_names(names.iter().map(String::as_str))
+}
+
 /// `\Answered` and `$Forwarded` (keywords are case-insensitive atoms).
 pub(crate) fn reply_flags(item: &async_imap::types::Fetch) -> (bool, bool) {
     item.flags()

@@ -1,7 +1,9 @@
 import { useState } from "react";
+import { api } from "../../api";
+import { errorText } from "../../errors";
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
-import { SettingsGroup, SettingsPanel } from "./primitives";
+import { SettingsGroup, SettingsPanel, SettingsSection } from "./primitives";
 import type { SettingsSaveUpdate } from "./useSettingsSave";
 
 interface NotificationsTabProps {
@@ -10,7 +12,32 @@ interface NotificationsTabProps {
 
 export function NotificationsTab({ update }: NotificationsTabProps) {
   const settings = useAppStore((state) => state.settings);
+  const accounts = useAppStore((state) => state.accounts);
   const [sameTimes, setSameTimes] = useState(false);
+  const [accountError, setAccountError] = useState<string>();
+
+  // Optimistic: the switch flips at once and rolls back if the save fails.
+  async function setAccountNotify(accountId: string, enabled: boolean) {
+    const before = accounts.find((item) => item.id === accountId);
+    const apply = (value: boolean) =>
+      useAppStore
+        .getState()
+        .setAccounts(
+          useAppStore
+            .getState()
+            .accounts.map((item) =>
+              item.id === accountId ? { ...item, notifyNewMail: value } : item,
+            ),
+        );
+    apply(enabled);
+    setAccountError(undefined);
+    try {
+      await api.setAccountNotifications(accountId, enabled);
+    } catch (cause) {
+      apply(before?.notifyNewMail !== false);
+      setAccountError(errorText(cause));
+    }
+  }
 
   function changeQuietHours(which: "start" | "end", value: string) {
     const start = which === "start" ? value : settings.quietHoursStart;
@@ -101,6 +128,35 @@ export function NotificationsTab({ update }: NotificationsTabProps) {
           />
         </label>
       </SettingsGroup>
+      {accounts.length > 0 ? (
+        <SettingsSection title={strings.settings.notifyPerAccount}>
+          <SettingsGroup>
+            {accounts.map((account) => (
+              <label className="switch-row" key={account.id}>
+                <span>
+                  <strong>{account.displayName}</strong>
+                  <small>{account.email}</small>
+                </span>
+                <input
+                  type="checkbox"
+                  aria-label={strings.settings.accountNotifyNewMailFor(
+                    account.displayName,
+                  )}
+                  checked={account.notifyNewMail !== false}
+                  onChange={(event) =>
+                    void setAccountNotify(account.id, event.target.checked)
+                  }
+                />
+              </label>
+            ))}
+          </SettingsGroup>
+          {accountError ? (
+            <p className="settings-row-error" role="alert">
+              {accountError}
+            </p>
+          ) : null}
+        </SettingsSection>
+      ) : null}
     </SettingsPanel>
   );
 }

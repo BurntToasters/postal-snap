@@ -4,6 +4,7 @@ import { accountCannotSend } from "../accountStatus";
 import { holdBackgroundUpdate } from "../update";
 import { useAppStore } from "../store";
 import type { OutboxSummary, SyncState } from "../types";
+import { errorText } from "../errors";
 
 // Browsers overflow setTimeout delays above ~24.8 days, so re-check hourly.
 const MAX_TIMER_MS = 60 * 60 * 1000;
@@ -53,7 +54,7 @@ export function useScheduledOutbox(
         }
         await loadAccountData();
       } catch (cause) {
-        setError(String(cause));
+        setError(errorText(cause));
         await loadAccountData();
       }
     },
@@ -91,7 +92,7 @@ export function useScheduledOutbox(
         const request = beginScheduledSend(id, account);
         if (request)
           void request
-            .catch((cause) => setError(String(cause)))
+            .catch((cause) => setError(errorText(cause)))
             .finally(() => void loadAccountData());
       }
       return;
@@ -120,7 +121,7 @@ export function useScheduledOutbox(
           const request = beginScheduledSend(ready.id, current.activeAccountId);
           if (request)
             void request
-              .catch((cause) => setError(String(cause)))
+              .catch((cause) => setError(errorText(cause)))
               .finally(() => void loadAccountData());
         } else {
           const stillScheduled = current.outbox.some(

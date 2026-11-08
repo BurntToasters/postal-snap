@@ -12,11 +12,13 @@
   min-height: 0;
   overflow: auto;
   padding: var(--space-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border: 0.5px solid var(--menu-border);
+  border-radius: var(--radius-xl);
   color: var(--text);
-  background: var(--surface-raised);
-  box-shadow: var(--shadow);
+  background: var(--menu-surface);
+  -webkit-backdrop-filter: var(--menu-blur);
+  backdrop-filter: var(--menu-blur);
+  box-shadow: var(--shadow-window);
 }
 
 .palette-dialog {
@@ -28,11 +30,12 @@
   width: 100%;
   min-height: var(--control-height);
   padding: var(--control-pad-block) var(--space-3);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
+  border: 0;
+  border-radius: var(--radius-pill);
   color: var(--text);
-  background: var(--surface);
+  background: var(--surface-hover);
   font: inherit;
+  font-size: var(--fs-lg);
 }
 
 .palette-empty,
@@ -56,7 +59,7 @@
 }
 
 .palette-group-label {
-  padding: var(--space-2) 8px 2px;
+  padding: var(--space-2) var(--space-2) var(--space-1);
   color: var(--text-muted);
   font-size: var(--fs-md);
   font-weight: 600;
@@ -68,17 +71,23 @@
   min-height: var(--menu-row-height);
   align-items: center;
   column-gap: var(--space-2);
-  padding: 4px 10px 4px 8px;
-  border-radius: var(--radius-xs);
+  padding: 0.25em var(--space-3) 0.25em var(--space-2);
+  border-radius: var(--radius-sm);
   color: var(--text);
   line-height: 1.45;
   cursor: pointer;
 }
 
 .palette-option[aria-selected="true"] {
-  background: var(--surface-hover);
-  outline: 2px solid var(--accent);
+  color: var(--accent-contrast);
+  background: var(--selection-emphasized);
+  outline: 2px solid var(--focus-on-accent);
   outline-offset: -2px;
+}
+
+.palette-option[aria-selected="true"] .palette-option-detail,
+.palette-option[aria-selected="true"] .palette-option-hint {
+  color: inherit;
 }
 
 .palette-option-label {
@@ -96,7 +105,7 @@
 
 .palette-option-hint {
   margin-inline-start: auto;
-  padding: 0 6px;
+  padding: 0 var(--space-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-xs);
   /* Muted but darker than text-muted, so the hint clears 4.6:1 in both
@@ -137,6 +146,15 @@
 }
 
 @media (forced-colors: active) {
+  .palette-dialog,
+  .shortcut-dialog {
+    border-color: CanvasText;
+    background: Canvas;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    box-shadow: none;
+  }
+
   .palette-option[aria-selected="true"] {
     color: HighlightText;
     background: Highlight;

@@ -52,6 +52,7 @@ export const setup = {
     "Do not use your normal Apple Account password. iCloud Mail needs an app-specific password.",
   providerPasswordWarning: (name: string) =>
     `${name} needs an app-specific password when a mail app connects.`,
+  unnamedProvider: "This provider",
   createAppPassword: "Create app-specific password",
   helpLinkDeclined: "Help page not opened.",
   helpLinkFailed:

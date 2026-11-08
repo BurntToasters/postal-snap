@@ -1,7 +1,9 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { expect, test } from "@playwright/test";
 import { installMockIpc } from "./mock-ipc";
-import { recordIpc, recordedCalls } from "./ipc-recorder";
+import { attachArtifactsAfterEach, ipcCalls } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 function artifact(name: string, value: unknown) {
   mkdirSync("test-results/rule-form-safety", { recursive: true });
@@ -15,7 +17,6 @@ function artifact(name: string, value: unknown) {
 // second click while the first create is in flight sends a duplicate rule.
 test.beforeEach(async ({ page }) => {
   await installMockIpc(page);
-  await recordIpc(page);
   await page.addInitScript(() => {
     const mock = window.__POSTAL_SNAP_MOCK__!;
     const create = mock.handlers.create_filter_rule;
@@ -65,7 +66,7 @@ test("a late create response keeps text typed after submission", async ({
   );
   artifact("late-response", {
     draft: { name: "New unsaved rule", contains: "newer@example.test" },
-    calls: await recordedCalls(page),
+    calls: await ipcCalls(page),
   });
 });
 
@@ -80,7 +81,7 @@ test("a second click while create is pending sends one call", async ({
   await expect
     .poll(
       async () =>
-        (await recordedCalls(page)).filter(
+        (await ipcCalls(page)).filter(
           (call) => call.command === "create_filter_rule",
         ).length,
     )
@@ -94,13 +95,13 @@ test("a second click while create is pending sends one call", async ({
   await expect
     .poll(
       async () =>
-        (await recordedCalls(page)).filter(
+        (await ipcCalls(page)).filter(
           (call) => call.command === "create_filter_rule",
         ).length,
     )
     .toBe(1);
   artifact("duplicate-submit", {
-    createCalls: (await recordedCalls(page)).filter(
+    createCalls: (await ipcCalls(page)).filter(
       (call) => call.command === "create_filter_rule",
     ).length,
   });

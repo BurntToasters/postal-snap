@@ -17,6 +17,7 @@ use crate::{
     mail::{
         self,
         failure::{FailureKind, MailError},
+        keywords::{color_change, ColorChange},
     },
     models::{
         MessageCursor, MessageDetail, MessageListFilter, MessageListSort, MessagePage,
@@ -25,7 +26,7 @@ use crate::{
 };
 
 // Must match `BULK_LIMIT` in src/bulk.ts.
-const MAX_BULK_MESSAGES: usize = 200;
+pub(crate) const MAX_BULK_MESSAGES: usize = 200;
 /// Longest an undo-window move waits without a commit. The frontend commits
 /// when its window closes; this only covers a commit that never arrives.
 const UNDO_HOLD_SECONDS: i64 = 60;
@@ -559,6 +560,9 @@ pub(crate) struct FlagOperation {
     pub(crate) uid_validity: Option<u32>,
     pub(crate) is_read: Option<bool>,
     pub(crate) is_starred: Option<bool>,
+    /// Queued color (0 to 6) for a flag op. Older queues lack it.
+    #[serde(default)]
+    pub(crate) flag_color: Option<u8>,
 }
 
 #[tauri::command]
@@ -588,7 +592,9 @@ pub async fn set_message_flags(
         uid_validity: Some(uid_validity),
         is_read,
         is_starred,
+        flag_color: None,
     };
+    let color = color_change(is_starred, None);
     let remote_result = {
         let account = state.db.account(&account_id)?;
         let password = crate::oauth::session_secret(&account).await?;
@@ -600,24 +606,29 @@ pub async fn set_message_flags(
             Some(uid_validity),
             is_read,
             is_starred,
+            color,
         )
         .await
     };
     match remote_result {
-        Ok(()) => {
-            state
-                .db
-                .record_flag_change(&account_id, message_id, is_read, is_starred, None)?
-        }
+        Ok(()) => state.db.record_colored_flag_change(
+            &account_id,
+            message_id,
+            is_read,
+            is_starred,
+            color,
+            None,
+        )?,
         Err(error) if error.terminal => return Err(error.message.into()),
         Err(_) => {
             let queued = serde_json::to_value(&operation)
                 .map_err(|_| "Could not queue the flag change.".to_string())?;
-            state.db.record_flag_change(
+            state.db.record_colored_flag_change(
                 &account_id,
                 message_id,
                 is_read,
                 is_starred,
+                color,
                 Some(&queued),
             )?;
         }
@@ -636,6 +647,9 @@ pub(crate) struct MoveOperation {
     pub(crate) destination: String,
     #[serde(default)]
     pub(crate) uid_validity: Option<u32>,
+    /// Junk training for user moves only: `Some(true)` into junk, `Some(false)` out.
+    #[serde(default)]
+    pub(crate) junk_keyword: Option<bool>,
 }
 
 #[tauri::command]
@@ -794,6 +808,7 @@ async fn copy_message_inner(
         uid,
         source: source.clone(),
         destination: destination.clone(),
+        junk_keyword: None,
         uid_validity: Some(
             state
                 .db
@@ -854,6 +869,7 @@ fn move_operation_for(
         uid,
         source: source.to_string(),
         destination: destination.to_string(),
+        junk_keyword: user_junk_keyword(&state.db, account_id, source, destination),
         uid_validity: Some(
             state
                 .db
@@ -863,6 +879,26 @@ fn move_operation_for(
                 })?,
         ),
     })
+}
+
+/// Junk training for a user move. Rule-driven and bulk moves never train.
+fn user_junk_keyword(
+    db: &Database,
+    account_id: &str,
+    source: &str,
+    destination: &str,
+) -> Option<bool> {
+    let destination_role = db.mailbox_effective_role(account_id, destination).ok()?;
+    let source_role = db.mailbox_effective_role(account_id, source).ok()?;
+    junk_keyword_for_roles(&source_role, &destination_role)
+}
+
+/// Pure role rule behind [`user_junk_keyword`].
+fn junk_keyword_for_roles(source_role: &str, destination_role: &str) -> Option<bool> {
+    if destination_role == "junk" {
+        return Some(true);
+    }
+    (source_role == "junk" && destination_role == "inbox").then_some(false)
 }
 
 fn undo_not_before() -> chrono::DateTime<chrono::Utc> {
@@ -924,6 +960,7 @@ async fn move_message_inner(
             message_id: remote_message_id.as_deref(),
             dedupe_existing: false,
             replay_flags: None,
+            junk_keyword: operation.junk_keyword,
         },
     )
     .await;
@@ -982,12 +1019,13 @@ pub struct BulkOutcome {
 
 /// Apply flag changes to many messages with one IMAP round trip per mailbox.
 /// Stale rows are skipped; only messages that fail locally count as failed.
-async fn bulk_apply_flags(
+pub(crate) async fn bulk_apply_flags(
     state: &AppState,
     account_id: &str,
     items: &[(i64, String, u32)],
     is_read: Option<bool>,
     is_starred: Option<bool>,
+    color: Option<ColorChange>,
 ) -> Result<BulkOutcome, String> {
     let mut groups: std::collections::HashMap<String, Vec<(i64, u32)>> =
         std::collections::HashMap::new();
@@ -1016,6 +1054,7 @@ async fn bulk_apply_flags(
             Some(validity),
             is_read,
             is_starred,
+            color,
         )
         .await;
         match remote {
@@ -1023,7 +1062,9 @@ async fn bulk_apply_flags(
                 for (id, _) in &entries {
                     if state
                         .db
-                        .record_flag_change(account_id, *id, is_read, is_starred, None)
+                        .record_colored_flag_change(
+                            account_id, *id, is_read, is_starred, color, None,
+                        )
                         .is_ok()
                     {
                         updated += 1;
@@ -1042,12 +1083,23 @@ async fn bulk_apply_flags(
                         uid_validity: Some(validity),
                         is_read,
                         is_starred,
+                        flag_color: match color {
+                            Some(ColorChange::Set(value)) => Some(value),
+                            _ => None,
+                        },
                     };
                     let payload = serde_json::to_value(&operation)
                         .map_err(|_| "Could not queue the flag change.".to_string())?;
                     if state
                         .db
-                        .record_flag_change(account_id, *id, is_read, is_starred, Some(&payload))
+                        .record_colored_flag_change(
+                            account_id,
+                            *id,
+                            is_read,
+                            is_starred,
+                            color,
+                            Some(&payload),
+                        )
                         .is_ok()
                     {
                         queued += 1;
@@ -1104,7 +1156,8 @@ pub async fn set_messages_flags(
         }
         items.push((id, mailbox, uid));
     }
-    let outcome = bulk_apply_flags(&state, &account_id, &items, is_read, is_starred).await?;
+    let color = color_change(is_starred, None);
+    let outcome = bulk_apply_flags(&state, &account_id, &items, is_read, is_starred, color).await?;
     emit_message_change(&app, &account_id, None, "flags");
     emit_folder_counts(&app, &account_id);
     Ok(outcome)
@@ -1172,13 +1225,15 @@ pub async fn move_messages_to_mailbox(
             continue;
         };
         let uids: Vec<u32> = entries.iter().map(|(_, uid)| *uid).collect();
-        let remote = mail::move_remote_uids(
+        let junk_keyword = user_junk_keyword(&state.db, &account_id, &source, &destination);
+        let remote = mail::move_remote_uids_with_junk(
             &account,
             &password,
             &source,
             &destination,
             &uids,
             Some(validity),
+            junk_keyword,
         )
         .await;
         if remote.is_ok() {
@@ -1201,6 +1256,7 @@ pub async fn move_messages_to_mailbox(
                     source: source.clone(),
                     destination: destination.clone(),
                     uid_validity: Some(validity),
+                    junk_keyword,
                 };
                 let dedupe_key = format!("move:{id}");
                 let queued_ok = state
@@ -1257,6 +1313,7 @@ fn defer_bulk_moves(
             failed += messages.len();
             continue;
         };
+        let junk_keyword = user_junk_keyword(db, account_id, source, destination);
         for (id, uid) in messages {
             let operation = MoveOperation {
                 message_id: *id,
@@ -1264,6 +1321,7 @@ fn defer_bulk_moves(
                 source: source.clone(),
                 destination: destination.to_string(),
                 uid_validity: Some(validity),
+                junk_keyword,
             };
             entries.push((*id, operation, destination_mailbox_id));
         }
@@ -1400,6 +1458,7 @@ pub async fn copy_messages_to_mailbox(
                     source: source.clone(),
                     destination: destination.clone(),
                     uid_validity: Some(validity),
+                    junk_keyword: None,
                 };
                 let dedupe_key = format!("copy:{id}:{destination}");
                 if state
@@ -1453,7 +1512,7 @@ pub async fn mark_mailbox_read(
             .iter()
             .map(|(id, uid)| (*id, name.clone(), *uid))
             .collect();
-        let batch = bulk_apply_flags(&state, &account_id, &items, Some(true), None).await?;
+        let batch = bulk_apply_flags(&state, &account_id, &items, Some(true), None, None).await?;
         outcome.updated += batch.updated;
         outcome.queued += batch.queued;
         outcome.failed += batch.failed;
@@ -1608,6 +1667,33 @@ mod download_parse_settle_tests {
         AccountRecord, AccountSummary, BodyFormat, MailboxRole, ProviderKind, ServerConfig, TlsMode,
     };
 
+    #[test]
+    fn junk_training_applies_only_to_inbound_and_outbound_junk_moves() {
+        use super::junk_keyword_for_roles;
+        assert_eq!(junk_keyword_for_roles("inbox", "junk"), Some(true));
+        assert_eq!(junk_keyword_for_roles("junk", "inbox"), Some(false));
+        assert_eq!(junk_keyword_for_roles("inbox", "archive"), None);
+        assert_eq!(junk_keyword_for_roles("junk", "trash"), None);
+    }
+
+    #[test]
+    fn move_operations_keep_junk_training_through_undo_json() {
+        use super::MoveOperation;
+        let legacy: MoveOperation = serde_json::from_str(
+            r#"{"messageId":3,"uid":1,"source":"INBOX","destination":"Archive","uidValidity":1}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.junk_keyword, None, "queued before training existed");
+        let trained = MoveOperation {
+            junk_keyword: Some(true),
+            ..legacy
+        };
+        let payload = serde_json::to_value(&trained).unwrap();
+        assert_eq!(payload["junkKeyword"], serde_json::json!(true));
+        let restored: MoveOperation = serde_json::from_value(payload).unwrap();
+        assert_eq!(restored.junk_keyword, Some(true));
+    }
+
     fn envelope(uid: u32) -> CachedMessage {
         CachedMessage {
             uid,
@@ -1646,6 +1732,7 @@ mod download_parse_settle_tests {
     fn test_account() -> AccountRecord {
         AccountRecord {
             summary: AccountSummary {
+                notify_new_mail: true,
                 default_body_format: BodyFormat::Html,
                 id: "account-1".into(),
                 provider: ProviderKind::Manual,
@@ -1810,6 +1897,7 @@ mod undo_session_tls_tests {
     fn account() -> AccountRecord {
         AccountRecord {
             summary: AccountSummary {
+                notify_new_mail: true,
                 id: uuid::Uuid::new_v4().to_string(),
                 provider: ProviderKind::Manual,
                 email: EMAIL.into(),

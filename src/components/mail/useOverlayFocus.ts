@@ -1,5 +1,6 @@
 import { useEffect, type RefObject } from "react";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
+import { FOCUSABLE_SELECTOR } from "../focusable";
 import { MEDIA_QUERIES } from "../../breakpoints";
 import type { AppSettings, MessageDetail } from "../../types";
 
@@ -84,9 +85,7 @@ export function useOverlayFocus({
     const pane = folderPaneRef.current;
     const toggle = sidebarToggleRef.current;
     const previous = document.activeElement as HTMLElement | null;
-    const firstFocusable = pane?.querySelector<HTMLElement>(
-      "button:not([disabled]), select:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex='-1'])",
-    );
+    const firstFocusable = pane?.querySelector<HTMLElement>(FOCUSABLE_SELECTOR);
     window.setTimeout(() => firstFocusable?.focus(), 0);
 
     const onKeyDown = (event: KeyboardEvent) => {

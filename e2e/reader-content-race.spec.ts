@@ -5,8 +5,10 @@ import { resolve } from "node:path";
 
 import { expect, test } from "@playwright/test";
 import { installMockIpc } from "./mock-ipc";
-import { recordIpc, recordedCalls } from "./ipc-recorder";
 import { revealMenuItem } from "./menu-reveal";
+import { attachArtifactsAfterEach, ipcCalls } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 test.use({ trace: "off" });
 
@@ -102,7 +104,6 @@ async function makeTrashNextMessagePartial(
 
 test.beforeEach(async ({ page }) => {
   await installMockIpc(page);
-  await recordIpc(page);
   await page.context().tracing.start({
     screenshots: true,
     snapshots: true,
@@ -113,7 +114,7 @@ test.beforeEach(async ({ page }) => {
 test.afterEach(async ({ page }, testInfo) => {
   const slug = artifactSlug(testInfo);
   await mkdir(artifactDirectory, { recursive: true });
-  const calls = page.isClosed() ? [] : await recordedCalls(page);
+  const calls = page.isClosed() ? [] : await ipcCalls(page);
   const jsonPath = resolve(artifactDirectory, `${slug}.json`);
   const screenshotPath = resolve(artifactDirectory, `${slug}.png`);
   const tracePath = resolve(artifactDirectory, `${slug}.zip`);
@@ -171,9 +172,9 @@ for (const { density, scale } of matrix) {
     await expect(
       page.locator('[data-attachment-id="full-report"]'),
     ).toBeVisible();
-    await page.getByRole("button", { name: "Add star", exact: true }).click();
+    await page.getByRole("button", { name: "Flag", exact: true }).click();
     await expect(
-      page.getByRole("button", { name: "Remove star", exact: true }),
+      page.getByRole("button", { name: "Unflag", exact: true }),
     ).toBeVisible();
 
     await page.evaluate(() => (window as RaceWindow).finishAutomaticRead?.());
@@ -188,7 +189,7 @@ for (const { density, scale } of matrix) {
       page.locator('[data-attachment-id="partial-report"]'),
     ).toHaveCount(0);
     await expect(
-      page.getByRole("button", { name: "Remove star", exact: true }),
+      page.getByRole("button", { name: "Unflag", exact: true }),
     ).toBeVisible();
   });
 
@@ -257,9 +258,9 @@ for (const { density, scale } of matrix) {
     await expect(
       page.locator('[data-attachment-id="full-report"]'),
     ).toBeVisible();
-    await page.getByRole("button", { name: "Add star", exact: true }).click();
+    await page.getByRole("button", { name: "Flag", exact: true }).click();
     await expect(
-      page.getByRole("button", { name: "Remove star", exact: true }),
+      page.getByRole("button", { name: "Unflag", exact: true }),
     ).toBeVisible();
 
     await page.evaluate(() => (window as RaceWindow).finishAutomaticRead?.());
@@ -274,7 +275,7 @@ for (const { density, scale } of matrix) {
       page.locator('[data-attachment-id="partial-report"]'),
     ).toHaveCount(0);
     await expect(
-      page.getByRole("button", { name: "Remove star", exact: true }),
+      page.getByRole("button", { name: "Unflag", exact: true }),
     ).toBeVisible();
   });
 }

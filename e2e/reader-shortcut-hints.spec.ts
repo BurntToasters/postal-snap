@@ -1,6 +1,9 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Failure modes covered here:
 // 1. Reply, reply all, forward, archive, and star hide their keys.
@@ -32,7 +35,7 @@ test("letter actions show their keyboard shortcuts", async ({ page }) => {
     actions.getByRole("button", { name: "Archive", exact: true }),
   ).toHaveAttribute("title", /⌘E|Ctrl\+E/);
   await expect(
-    actions.getByRole("button", { name: "Add star", exact: true }),
+    actions.getByRole("button", { name: "Flag", exact: true }),
   ).toHaveAttribute("title", /⇧⌘L|Ctrl\+Shift\+L/);
   await page.getByRole("button", { name: "More actions", exact: true }).click();
   await expect(

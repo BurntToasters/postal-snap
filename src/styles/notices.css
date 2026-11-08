@@ -1,19 +1,31 @@
-/* Notice queue: toasts and live regions. */
+/* Notice queue: toasts and live regions, styled like macOS notifications. */
+:root {
+  --notice-inset: var(--space-4);
+  --notice-gap: var(--space-2);
+  --notice-pad-block: var(--space-3);
+  --notice-pad-inline: 0.875rem;
+  --notice-radius: var(--radius-lg);
+  --notice-hairline: 0.5px;
+}
+
 .notice-region {
   position: fixed;
   z-index: 60;
-  right: 1rem;
-  bottom: 1rem;
+  right: var(--notice-inset);
+  bottom: var(--notice-inset);
   display: grid;
-  max-width: min(var(--notice-max-width), calc(100vw - 2rem));
-  gap: 0.5rem;
+  max-width: min(
+    var(--notice-max-width),
+    calc(100vw - 2 * var(--notice-inset))
+  );
+  gap: var(--notice-gap);
   justify-items: end;
   pointer-events: none;
 }
 
 .notice-stack {
   display: grid;
-  gap: 0.5rem;
+  gap: var(--notice-gap);
   justify-items: end;
 }
 
@@ -24,8 +36,16 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  column-gap: 0.5rem;
+  column-gap: var(--space-2);
   max-width: 100%;
+  padding: var(--notice-pad-block) var(--notice-pad-inline);
+  border: var(--notice-hairline) solid var(--menu-border);
+  border-radius: var(--notice-radius);
+  color: var(--text);
+  background: var(--menu-surface);
+  -webkit-backdrop-filter: var(--menu-blur);
+  backdrop-filter: var(--menu-blur);
+  box-shadow: var(--menu-shadow);
   pointer-events: auto;
 }
 
@@ -35,42 +55,42 @@
   overflow-wrap: anywhere;
 }
 
-/* Dark raised surface: a visible edge without a light-only color. */
-:root[data-theme="dark"] .notice-region .toast {
-  border-color: var(--border-strong);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .notice-region .toast {
-    border-color: var(--border-strong);
-  }
-}
-
-.notice-stack .toast:not(.error-toast) {
-  color: var(--text);
-  border-color: var(--border);
-  background: var(--surface-raised);
+/* Severity keeps a tint over the material, so the message stays legible. */
+.notice-stack .toast.error-toast {
+  color: var(--danger-ink);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--menu-border));
+  background:
+    linear-gradient(var(--danger-soft), var(--danger-soft)), var(--menu-surface);
 }
 
 .notice-stack .toast.notice-success {
-  border-color: color-mix(in srgb, var(--success) 45%, var(--border));
-  background: color-mix(in srgb, var(--success-soft) 60%, var(--surface));
+  border-color: color-mix(in srgb, var(--success) 45%, var(--menu-border));
+  background:
+    linear-gradient(var(--success-soft), var(--success-soft)),
+    var(--menu-surface);
 }
 
 .notice-stack .toast.notice-warning {
-  border-color: color-mix(in srgb, var(--warning) 45%, var(--border));
-  background: color-mix(in srgb, var(--warning-soft) 60%, var(--surface));
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--menu-border));
+  background:
+    linear-gradient(var(--warning-soft), var(--warning-soft)),
+    var(--menu-surface);
+}
+
+/* Dark raised surface: the hairline gets a touch more weight than light. */
+:root[data-resolved-theme="dark"] .notice-stack .toast:not(.error-toast) {
+  border-color: var(--border-strong);
 }
 
 .notice-stack .toast .notice-action {
   min-height: var(--target-size);
-  padding-inline: 0.5rem;
+  padding-inline: var(--space-2);
   border: 0;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   color: var(--accent-ink);
   background: transparent;
   font-size: inherit;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 
 .notice-stack .toast .notice-dismiss {
@@ -80,7 +100,7 @@
   min-width: var(--target-size);
   min-height: var(--target-size);
   border: 0;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   color: inherit;
   background: transparent;
   font-size: inherit;
@@ -98,4 +118,42 @@
 .notice-stack .toast button:disabled {
   cursor: default;
   opacity: 0.5;
+}
+
+/* Entrance only with motion allowed; reduced motion gets no animation. */
+@keyframes notice-enter {
+  from {
+    opacity: 0;
+    transform: translateY(var(--space-2));
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .notice-stack .toast {
+    animation: notice-enter 180ms ease-out both;
+  }
+}
+
+/* More contrast: a stronger edge and no material. */
+@media (prefers-contrast: more) {
+  .notice-stack .toast {
+    border: 1px solid var(--border-strong);
+  }
+}
+
+/* Forced colors: system colors and a solid edge; errors get a thicker one. */
+@media (forced-colors: active) {
+  .notice-stack .toast {
+    border: 1px solid CanvasText;
+    color: CanvasText;
+    background: Canvas;
+    box-shadow: none;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    animation: none;
+  }
+
+  .notice-stack .toast.error-toast {
+    border-width: 2px;
+  }
 }

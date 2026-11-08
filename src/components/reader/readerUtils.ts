@@ -8,9 +8,15 @@ import {
 import { listPostAddress } from "../composer/composerSeed";
 import { conflictingNameAddress } from "../../senderName";
 import { strings } from "../../i18n";
-import { messageFrameDocument, sanitizeReceivedHtml } from "../../security";
+import {
+  escapeHtml,
+  htmlToPlainText,
+  messageFrameDocument,
+  sanitizeReceivedHtml,
+} from "../../security";
 import { useAppStore } from "../../store";
 import type { Attachment, MessageDetail } from "../../types";
+import { errorText } from "../../errors";
 
 /** Case-insensitive matches in visible text, without overlapping. */
 export function countTextMatches(root: Node, query: string): number {
@@ -253,18 +259,17 @@ export function readableMessageText(message: {
   return htmlToPlainText(sanitizeReceivedHtml(html).html);
 }
 
-/** Plain text from sanitized HTML, for the reader’s text view. */
-export function htmlToPlainText(html: string): string {
+/** Visible text and image presence from one parse of sanitized HTML. */
+export function htmlBodyPresence(html: string): {
+  visible: boolean;
+  text: boolean;
+} {
   const doc = new DOMParser().parseFromString(html, "text/html");
-  doc.querySelectorAll("script, style").forEach((node) => node.remove());
-  doc.querySelectorAll("br").forEach((node) => node.replaceWith("\n"));
-  doc
-    .querySelectorAll("p, div, li, tr, h1, h2, h3, h4, h5, h6, blockquote")
-    .forEach((node) => node.append("\n"));
-  return (doc.body.textContent ?? "")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+  const text = (doc.body.textContent ?? "").trim().length > 0;
+  return {
+    visible: text || doc.body.querySelector("img, hr") !== null,
+    text,
+  };
 }
 
 /** True when sanitized HTML still shows text or an image. */
@@ -274,14 +279,6 @@ export function hasVisibleHtml(html: string): boolean {
     (doc.body.textContent ?? "").trim().length > 0 ||
     doc.body.querySelector("img, hr") !== null
   );
-}
-
-export function escapePrint(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
 }
 
 export function normalizeContentId(value: string): string {
@@ -302,30 +299,30 @@ export function messagePrintSection(
   const listAddress = listPostAddress(message.listPost);
   const arrived = notableArrival(message.receivedAt, message.arrivedAt);
   const header = [
-    `<p><strong>${escapePrint(strings.reader.from)}</strong> ${escapePrint(from)}</p>`,
+    `<p><strong>${escapeHtml(strings.reader.from)}</strong> ${escapeHtml(from)}</p>`,
     nameConflict
-      ? `<p>${escapePrint(strings.reader.nameIncludesDifferentAddress(nameConflict))}</p>`
+      ? `<p>${escapeHtml(strings.reader.nameIncludesDifferentAddress(nameConflict))}</p>`
       : "",
     listAddress
-      ? `<p>${escapePrint(strings.reader.mailingList(listAddress))}</p>`
+      ? `<p>${escapeHtml(strings.reader.mailingList(listAddress))}</p>`
       : "",
-    `<p><strong>${escapePrint(strings.reader.to)}</strong> ${escapePrint(message.to.join(", ") || strings.reader.noRecipients)}</p>`,
+    `<p><strong>${escapeHtml(strings.reader.to)}</strong> ${escapeHtml(message.to.join(", ") || strings.reader.noRecipients)}</p>`,
     message.cc.length
-      ? `<p><strong>${escapePrint(strings.reader.cc)}</strong> ${escapePrint(message.cc.join(", "))}</p>`
+      ? `<p><strong>${escapeHtml(strings.reader.cc)}</strong> ${escapeHtml(message.cc.join(", "))}</p>`
       : "",
     message.bcc?.length
-      ? `<p><strong>${escapePrint(strings.reader.bcc)}</strong> ${escapePrint(message.bcc.join(", "))}</p>`
+      ? `<p><strong>${escapeHtml(strings.reader.bcc)}</strong> ${escapeHtml(message.bcc.join(", "))}</p>`
       : "",
-    `<p><strong>${escapePrint(strings.reader.subject)}</strong> ${escapePrint(message.subject || strings.common.noSubject)}</p>`,
-    `<p><strong>${escapePrint(strings.reader.date)}</strong> ${escapePrint(formatFullMessageDate(message.receivedAt))}</p>`,
+    `<p><strong>${escapeHtml(strings.reader.subject)}</strong> ${escapeHtml(message.subject || strings.common.noSubject)}</p>`,
+    `<p><strong>${escapeHtml(strings.reader.date)}</strong> ${escapeHtml(formatFullMessageDate(message.receivedAt))}</p>`,
     arrived
-      ? `<p><strong>${escapePrint(strings.reader.arrived)}</strong> ${escapePrint(formatFullMessageDate(arrived))}</p>`
+      ? `<p><strong>${escapeHtml(strings.reader.arrived)}</strong> ${escapeHtml(formatFullMessageDate(arrived))}</p>`
       : "",
     printedFiles(message),
   ].join("");
   const body = htmlBody
     ? htmlBody
-    : `<pre style="white-space:pre-wrap;font:inherit">${escapePrint(message.textBody)}</pre>`;
+    : `<pre style="white-space:pre-wrap;font:inherit">${escapeHtml(message.textBody)}</pre>`;
   return `<section style="margin:0 0 16px;padding:0 0 12px;border-bottom:1px solid #c8d2dc">${header}</section>${body}`;
 }
 
@@ -377,7 +374,7 @@ export function presentPrintDocument(html: string): void {
       const height = printer.contentDocument?.documentElement.scrollHeight;
       printer.style.height = `${height ?? 0}px`;
       void api.printWebview().catch((cause) => {
-        useAppStore.getState().setError(String(cause));
+        useAppStore.getState().setError(errorText(cause));
       });
     });
     host.appendChild(printer);
@@ -385,12 +382,10 @@ export function presentPrintDocument(html: string): void {
     return;
   }
   const printer = document.createElement("iframe");
-  // Intentionally unsandboxed: the parent calls contentWindow.print(), but a
-  // sandboxed srcdoc frame is cross-origin (print() is not exposed on the
-  // cross-origin WindowProxy) and its modals flag blocks window.print(), so
-  // sandbox="allow-modals" alone would break printing. The document wraps
-  // sanitized HTML in a restrictive CSP, and this frame is removed
-  // immediately after printing.
+  // Same-origin so the parent can call contentWindow.print(); allow-modals
+  // lets window.print() run. No allow-scripts: the sanitized HTML is inert,
+  // and the frame is removed right after printing.
+  printer.setAttribute("sandbox", "allow-same-origin allow-modals");
   printer.setAttribute("aria-hidden", "true");
   printer.style.position = "fixed";
   printer.style.width = "0";
@@ -412,10 +407,10 @@ function printedFiles(message: MessageDetail): string {
   const names = files
     .map(
       (item) =>
-        `${escapePrint(item.filename)} (${escapePrint(formatBytes(item.size))})`,
+        `${escapeHtml(item.filename)} (${escapeHtml(formatBytes(item.size))})`,
     )
     .join(", ");
-  return `<p><strong>${escapePrint(strings.reader.attachments)}</strong> ${names}</p>`;
+  return `<p><strong>${escapeHtml(strings.reader.attachments)}</strong> ${names}</p>`;
 }
 
 function ownMailbox(value: string | undefined): string | undefined {
