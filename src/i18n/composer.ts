@@ -79,6 +79,7 @@ export const composer = {
   insertRule: "Insert horizontal line",
   clearFormatting: "Clear formatting",
   inlineImage: "Inline image",
+  remoteImagePlaceholder: "Picture will be included when sent",
   pastedImageTooLarge: "That image is too large.",
   pastedImageUnreadable: "Could not read that image.",
   imagePrefix: "Image: ",

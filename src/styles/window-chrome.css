@@ -65,8 +65,8 @@ html[data-platform="windows"] .global-window-caption-controls {
 }
 
 .global-window-caption-controls svg {
-  width: 16px;
-  height: 16px;
+  width: var(--caption-icon-size);
+  height: var(--caption-icon-size);
 }
 
 .global-window-caption-controls button:is(:hover, .snap-hover) {
@@ -109,7 +109,7 @@ html[data-platform="macos"] .sidebar-titlebar-drag {
 }
 
 html[data-platform="macos"][data-window-fullscreen="true"] .folder-pane {
-  padding-top: 14px;
+  padding-top: var(--mac-fullscreen-folder-pad-top);
 }
 
 html[data-platform="macos"][data-window-fullscreen="true"]

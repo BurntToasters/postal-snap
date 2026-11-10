@@ -822,7 +822,7 @@ pub(crate) fn forward_as_inline(
         })
 }
 
-fn forwarded_message_filename(subject: &str) -> String {
+pub(crate) fn forwarded_message_filename(subject: &str) -> String {
     let safe = security::safe_filename(subject);
     let base = if safe == "attachment" {
         "message".to_string()

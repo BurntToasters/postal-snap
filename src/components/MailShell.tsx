@@ -27,7 +27,12 @@ import { sortFamily, type MessageListSort } from "../listSort";
 import { mailboxListView, rememberMailboxView } from "../mailboxView";
 import { folderLabel, folderParentLabel } from "../i18n/mail";
 import { useAppStore } from "../store";
-import type { AccountInboxCount, ComposeDraft, MessageSummary } from "../types";
+import type {
+  AccountInboxCount,
+  AppSettings,
+  ComposeDraft,
+  MessageSummary,
+} from "../types";
 import { applyPendingUpdate } from "../update";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { MessageReader } from "./MessageReader";
@@ -102,6 +107,29 @@ import {
 } from "../threads";
 import { errorText } from "../errors";
 
+// The fields this shell renders from. Other autosaves leave them unchanged.
+function shellSettings(settings: AppSettings) {
+  return {
+    groupThreads: settings.groupThreads,
+    readingPane: settings.readingPane,
+    sidebarVisible: settings.sidebarVisible,
+    folderPaneWidth: settings.folderPaneWidth,
+    messagePaneWidth: settings.messagePaneWidth,
+    readerPaneHeight: settings.readerPaneHeight,
+    unreadFoldersOnly: settings.unreadFoldersOnly,
+    recentMoveMailboxId: settings.recentMoveMailboxId,
+    lastAccountId: settings.lastAccountId,
+    lastMailboxId: settings.lastMailboxId,
+    mailboxSort: settings.mailboxSort,
+    mailboxFilter: settings.mailboxFilter,
+    mailboxViews: settings.mailboxViews,
+    pinnedMailboxes: settings.pinnedMailboxes,
+    hiddenMailboxes: settings.hiddenMailboxes,
+    collapsedMailboxes: settings.collapsedMailboxes,
+  };
+}
+type ShellSettings = ReturnType<typeof shellSettings>;
+
 interface Props {
   onOpenSettings: (tab?: "accounts", accountId?: string) => void;
 }
@@ -146,7 +174,14 @@ export function MailShell({ onOpenSettings }: Props) {
   const selectedMessage = useAppStore((state) => state.selectedMessage);
   const selectMessage = useAppStore((state) => state.selectMessage);
   const openComposer = useAppStore((state) => state.openComposer);
-  const settings = useAppStore((state) => state.settings);
+  // Save responses replace every array, so compare the picked fields by content.
+  const settingsJson = useAppStore((state) =>
+    JSON.stringify(shellSettings(state.settings)),
+  );
+  const settings = useMemo(
+    () => JSON.parse(settingsJson) as ShellSettings,
+    [settingsJson],
+  );
   const setSettings = useAppStore((state) => state.setSettings);
   const setError = useAppStore((state) => state.setError);
   const { update: updateSettings } = useSettingsSave();
@@ -459,7 +494,7 @@ export function MailShell({ onOpenSettings }: Props) {
         outboxResult,
         snoozedResult,
       ].find((result) => result.status === "rejected");
-      if (failed?.status === "rejected") setError(String(failed.reason));
+      if (failed?.status === "rejected") setError(errorText(failed.reason));
     } catch (cause) {
       if (request === mailboxRequest.current) setError(errorText(cause));
     }
@@ -677,9 +712,19 @@ export function MailShell({ onOpenSettings }: Props) {
     return () => window.clearTimeout(timer);
   }, [loadMessages]);
 
-  const loadersRef = useRef({ loadAccountData, loadMessages, runSearch });
+  const loadersRef = useRef({
+    loadAccountData,
+    loadMailboxCounts,
+    loadMessages,
+    runSearch,
+  });
   useEffect(() => {
-    loadersRef.current = { loadAccountData, loadMessages, runSearch };
+    loadersRef.current = {
+      loadAccountData,
+      loadMailboxCounts,
+      loadMessages,
+      runSearch,
+    };
   });
 
   useMailEvents({

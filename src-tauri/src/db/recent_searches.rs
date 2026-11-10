@@ -32,7 +32,7 @@ database_operations! {
 impl Database {
     pub fn list_recent_searches(&self, account_id: &str) -> Result<Vec<String>, String> {
         self.account(account_id)?;
-        let connection = self.conn()?;
+        let connection = self.read_conn()?;
         let mut statement = connection
             .prepare(
                 "SELECT query FROM recent_searches WHERE account_id=?1 ORDER BY used_at DESC LIMIT 8",

@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "./coverage-fixture";
@@ -916,3 +916,89 @@ function contrastRatio(a: Rgba, b: Rgba) {
   const lb = luminance(b);
   return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
 }
+
+// Static guard (F-08): component CSS takes sizes from variables.css tokens.
+// Two-digit px always counts. Single-digit px counts only in layout
+// properties and custom size tokens; 0-2px stays for borders and hairlines.
+const STYLE_ROOT = join(process.cwd(), "src");
+const LAYOUT_PROPERTY =
+  /^(?:padding|margin|gap|row-gap|column-gap|width|height|min-width|min-height|max-width|max-height|top|right|bottom|left|inset|grid-template-columns|grid-template-rows|flex-basis|transform|grid-column|grid-row)(?:-|$)/;
+const SIZE_TOKEN =
+  /^--.*(?:gap|width|height|pad|margin|icon|size|min|max|inset|track|folder|local)/;
+const PX = /(?<![\w.])-?(\d+(?:\.\d+)?)px\b/g;
+// Exceptions need a file, property, value, and reason. Media and container
+// breakpoints are skipped by the scanner: custom properties cannot be used there.
+const ALLOWED_PX: Array<{
+  file: string;
+  property: string;
+  value: string;
+  reason: string;
+}> = [];
+
+async function componentStyleFiles() {
+  const dir = join(STYLE_ROOT, "styles");
+  const names = (await readdir(dir)).filter(
+    (name) => name.endsWith(".css") && name !== "variables.css",
+  );
+  return [
+    ...names.map((name) => join(dir, name)),
+    join(STYLE_ROOT, "root.css"),
+  ];
+}
+
+function stripNonDeclarations(css: string) {
+  const blank = (match: string) => match.replace(/[^\n]/g, " ");
+  return css
+    .replace(/\/\*[\s\S]*?\*\//g, blank)
+    .replace(/@(?:media|container|import)[^{;]*[{;]/g, blank);
+}
+
+test.describe("component CSS keeps px sizes in tokens", () => {
+  test("no hard-coded px sizes outside variables.css", async () => {
+    const violations: string[] = [];
+    const scanned: string[] = [];
+    for (const file of await componentStyleFiles()) {
+      const source = stripNonDeclarations(await readFile(file, "utf8"));
+      const name = file.slice(file.lastIndexOf("/") + 1);
+      scanned.push(name);
+      for (const decl of source.matchAll(
+        /(--[\w-]+|[a-zA-Z-]+)\s*:\s*([^;{}]+)[;}]/g,
+      )) {
+        const [, property, value] = decl;
+        for (const hit of value.matchAll(PX)) {
+          const amount = Math.abs(Number(hit[1]));
+          const flagged =
+            amount >= 10 ||
+            (amount >= 3 &&
+              (LAYOUT_PROPERTY.test(property) || SIZE_TOKEN.test(property)));
+          if (!flagged) continue;
+          const allowed = ALLOWED_PX.some(
+            (entry) =>
+              entry.file === name &&
+              entry.property === property &&
+              entry.value === value.trim(),
+          );
+          if (allowed) continue;
+          const line = source.slice(0, decl.index).split("\n").length;
+          violations.push(
+            `${name}:${line} ${property}: ${value.trim().replace(/\s+/g, " ")}`,
+          );
+          break;
+        }
+      }
+    }
+    const artifactPath = join(
+      process.cwd(),
+      "artifacts",
+      "0.5.2",
+      "css-token-matrix",
+      "px-guard.json",
+    );
+    await mkdir(join(artifactPath, ".."), { recursive: true });
+    await writeFile(
+      artifactPath,
+      JSON.stringify({ scanned: scanned.sort(), violations }, null, 2),
+    );
+    expect(violations).toEqual([]);
+  });
+});

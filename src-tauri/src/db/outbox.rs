@@ -47,7 +47,7 @@ impl Database {
         id: &str,
         account_id: &str,
     ) -> Result<Option<OutboxArchiveSource>, String> {
-        self.conn()?
+        self.read_conn()?
             .query_row(
                 "SELECT o.archive_message_id,o.archive_source_mailbox_id,m.mailbox_id,m.pending_move_to
                  FROM outbox o LEFT JOIN messages m ON m.id=o.archive_message_id AND m.account_id=o.account_id
@@ -281,7 +281,7 @@ impl Database {
 
     pub fn outbox(&self, id: &str, account_id: &str) -> Result<(ComposeDraft, String), String> {
         let row: (String, String) = self
-            .conn()?
+            .read_conn()?
             .query_row(
                 "SELECT draft_json,state FROM outbox WHERE id=?1 AND account_id=?2",
                 params![id, account_id],
@@ -302,7 +302,7 @@ impl Database {
         account_id: &str,
     ) -> Result<(ComposeDraft, String, String, Vec<u8>), String> {
         let row: (String, String, String, Vec<u8>) = self
-            .conn()?
+            .read_conn()?
             .query_row(
                 "SELECT draft_json,state,COALESCE(message_id,''),COALESCE(mime_bytes,X'')
                  FROM outbox WHERE id=?1 AND account_id=?2",
@@ -379,7 +379,7 @@ impl Database {
         if states.is_empty() {
             return Ok(Vec::new());
         }
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let placeholders = std::iter::repeat_n("?", states.len())
             .collect::<Vec<_>>()
             .join(",");
@@ -397,7 +397,7 @@ impl Database {
 
     /// Queued rows whose retry wait has passed, oldest first.
     pub fn due_queued_outbox_ids(&self, account_id: &str) -> Result<Vec<String>, String> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut statement = conn
             .prepare(
                 "SELECT id FROM outbox WHERE account_id=?1 AND state='queued'
@@ -447,7 +447,7 @@ impl Database {
         account_id: &str,
         now: &str,
     ) -> Result<Vec<String>, String> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut statement = conn
             .prepare(
                 "SELECT id FROM outbox WHERE account_id=?1 AND state='scheduled' AND send_at IS NOT NULL AND send_at<=?2 ORDER BY created_at",
@@ -464,7 +464,7 @@ impl Database {
     /// Earliest `send_at` among held or scheduled messages, so the account
     /// worker can wake exactly when the next one is due.
     pub fn next_scheduled_send_at(&self, account_id: &str) -> Result<Option<String>, String> {
-        self.conn()?
+        self.read_conn()?
             .query_row(
                 "SELECT MIN(send_at) FROM outbox WHERE account_id=?1 AND state='scheduled' AND send_at IS NOT NULL",
                 [account_id],

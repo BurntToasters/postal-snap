@@ -311,7 +311,7 @@ export const api = {
   listAccounts: () => call<AccountSummary[]>("list_accounts"),
   reorderAccounts: (accountIds: string[]) =>
     call<AccountSummary[]>("reorder_accounts", { accountIds }),
-  updateAccountColor: (accountId: string, color: string) =>
+  updateAccountColor: (accountId: string, color: string | null) =>
     call<AccountSummary>("update_account_color", { accountId, color }),
   getAccountCachePolicy: (accountId: string) =>
     call<CachePolicy>("get_account_cache_policy", { accountId }),

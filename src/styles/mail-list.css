@@ -18,7 +18,7 @@
   min-height: var(--pane-heading-height);
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: var(--pane-heading-split-gap);
   padding: var(--pane-heading-pad-block) var(--toolbar-pad-inline);
   padding-left: var(--list-text-inset);
   border-bottom: 1px solid var(--border);
@@ -69,7 +69,7 @@
   flex: 0 0 auto;
   flex-wrap: nowrap;
   align-items: center;
-  gap: 4px;
+  gap: var(--pane-heading-actions-gap);
 }
 
 /* Segmented filter: a rounded track that wraps instead of scrolling. */
@@ -446,7 +446,7 @@ html[data-text-scale="large"] .mailbox-filter-segment {
   flex: 0 0 var(--target-size);
   width: var(--target-size);
   min-height: var(--target-size);
-  margin: auto 0 auto 4px;
+  margin: auto 0 auto var(--message-select-margin-start);
   place-items: center;
   cursor: pointer;
 }
@@ -471,8 +471,8 @@ html[data-text-scale="large"] .mailbox-filter-segment {
 
 /* Conversation size reads as a quiet secondary count, not a second badge. */
 .thread-header .thread-count {
-  min-width: 25px;
-  padding: 2px 6px;
+  min-width: var(--thread-count-min-width);
+  padding: var(--thread-count-pad);
   text-align: center;
   border-radius: var(--radius-pill);
   color: var(--text);
@@ -527,11 +527,11 @@ html[data-text-scale="large"] .mailbox-filter-segment {
 
 .new-messages {
   position: sticky;
-  top: 8px;
+  top: var(--new-messages-inset-top);
   z-index: 2;
   display: block;
   width: max-content;
-  margin: 8px auto;
+  margin: var(--new-messages-margin-block) auto;
   min-height: var(--target-size);
   padding: 0 var(--space-4);
   border: 0;
@@ -578,7 +578,7 @@ html[data-text-scale="large"] .mailbox-filter-segment {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: clamp(52px, 28vh, 260px) 24px 24px;
+  padding: var(--list-state-pad);
   text-align: center;
   color: var(--text-muted);
   font-size: var(--fs-md);
@@ -861,7 +861,7 @@ button.list-day:focus-visible {
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 5px;
+  gap: var(--message-subject-gap);
   font-weight: 400;
 }
 
@@ -1010,7 +1010,7 @@ button.list-day:focus-visible {
 .attention-row > span {
   display: grid;
   min-width: 0;
-  gap: 3px;
+  gap: var(--local-mail-gap);
 }
 
 .local-mail-row small,

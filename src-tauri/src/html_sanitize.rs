@@ -12,20 +12,34 @@ pub struct SanitizedHtml {
 /// iteration count for any input bounded by `mail::MAX_MESSAGE_BYTES`.
 const MAX_REWRITE_ITERATIONS: usize = 64 * 1024 * 1024;
 
+/// Placeholder alt that Rust and the frontend add to blocked remote images.
+const REMOTE_PLACEHOLDER_ALT: &str = "Remote image blocked";
+const REMOTE_CLASS: &str = "remote-image-blocked";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mode {
+    /// Reader copy: remote images stay blocked behind a marker and placeholder.
+    Received,
+    /// Composer copy: remote images stay unloaded and keep their marker.
+    Compose,
+    /// Outgoing MIME: remote images get their real `src` back.
+    Send,
+}
+
 pub fn sanitize_received_html(input: &str) -> SanitizedHtml {
-    sanitize_html(input, false, false)
+    sanitize_html(input, Mode::Received)
 }
 
 pub fn sanitize_compose_html(input: &str) -> String {
-    compose_html(input, false)
+    compose_html(input, Mode::Compose)
 }
 
 pub fn sanitize_compose_html_for_send(input: &str) -> String {
-    compose_html(input, true)
+    compose_html(input, Mode::Send)
 }
 
-fn compose_html(input: &str, restore_href: bool) -> String {
-    let sanitized = sanitize_html(input, true, restore_href);
+fn compose_html(input: &str, mode: Mode) -> String {
+    let sanitized = sanitize_html(input, mode);
     if sanitized.html.is_empty() {
         "<p></p>".into()
     } else {
@@ -33,7 +47,7 @@ fn compose_html(input: &str, restore_href: bool) -> String {
     }
 }
 
-fn sanitize_html(input: &str, keep_cid_src: bool, restore_href: bool) -> SanitizedHtml {
+fn sanitize_html(input: &str, mode: Mode) -> SanitizedHtml {
     if input.is_empty() {
         return SanitizedHtml {
             html: String::new(),
@@ -42,8 +56,8 @@ fn sanitize_html(input: &str, keep_cid_src: bool, restore_href: bool) -> Sanitiz
     }
     let normalized = normalize_src_and_href(input);
     let cleaned = mail_builder().clean(&normalized).to_string();
-    let (html, blocked_images) = rewrite_images(&cleaned, keep_cid_src);
-    let html = rewrite_links(&html, restore_href);
+    let (html, blocked_images) = rewrite_images(&cleaned, mode);
+    let html = rewrite_links(&html, mode == Mode::Send);
     SanitizedHtml {
         html,
         blocked_images,
@@ -323,11 +337,7 @@ fn rewrite_links(html: &str, restore_href: bool) -> String {
             return output;
         };
         let tag = &rest[start..start + end];
-        if tag.as_bytes().get(1) == Some(&b'/') {
-            output.push_str(tag);
-        } else {
-            output.push_str(&rewrite_a_tag(tag, restore_href));
-        }
+        output.push_str(&rewrite_a_tag(tag, restore_href));
         rest = &rest[start + end..];
     }
     output.push_str(rest);
@@ -411,7 +421,7 @@ fn find_named_tag_start(html: &str, name: &str) -> Option<usize> {
     None
 }
 
-fn rewrite_images(html: &str, keep_cid_src: bool) -> (String, u32) {
+fn rewrite_images(html: &str, mode: Mode) -> (String, u32) {
     let mut output = String::with_capacity(html.len());
     let mut rest = html;
     let mut blocked = 0;
@@ -427,7 +437,7 @@ fn rewrite_images(html: &str, keep_cid_src: bool) -> (String, u32) {
             return (output, blocked);
         };
         let tag = &rest[start..start + end];
-        output.push_str(&rewrite_img_tag(tag, keep_cid_src, &mut blocked));
+        output.push_str(&rewrite_img_tag(tag, mode, &mut blocked));
         rest = &rest[start + end..];
     }
     output.push_str(rest);
@@ -462,7 +472,7 @@ fn find_tag_end(from_tag: &str) -> Option<usize> {
     None
 }
 
-fn rewrite_img_tag(tag: &str, keep_cid_src: bool, blocked: &mut u32) -> String {
+fn rewrite_img_tag(tag: &str, mode: Mode, blocked: &mut u32) -> String {
     let self_closing = tag.trim_end().ends_with("/>") || tag.trim_end().ends_with("/ >");
     let inside = tag
         .trim()
@@ -514,14 +524,25 @@ fn rewrite_img_tag(tag: &str, keep_cid_src: bool, blocked: &mut u32) -> String {
 
     let mut extras = Vec::new();
     if let Some(remote) = remote {
-        extras.push(("data-remote-src", remote));
-        if alt.is_empty() {
-            alt = "Remote image blocked".into();
-        }
-        extras.push(("class", merge_class(&class, "remote-image-blocked")));
         *blocked += 1;
+        if mode == Mode::Send {
+            extras.push(("src", remote));
+            if alt == REMOTE_PLACEHOLDER_ALT {
+                alt.clear();
+            }
+            let class = remove_class(&class, REMOTE_CLASS);
+            if !class.is_empty() {
+                extras.push(("class", class));
+            }
+        } else {
+            extras.push(("data-remote-src", remote));
+            if mode == Mode::Received && alt.is_empty() {
+                alt = REMOTE_PLACEHOLDER_ALT.into();
+            }
+            extras.push(("class", merge_class(&class, REMOTE_CLASS)));
+        }
     } else if let Some(cid) = cid {
-        if keep_cid_src {
+        if mode != Mode::Received {
             extras.push(("src", format!("cid:{cid}")));
         } else {
             extras.push(("data-inline-cid", cid));
@@ -593,6 +614,14 @@ fn merge_class(existing: &str, extra: &str) -> String {
     } else {
         format!("{existing} {extra}")
     }
+}
+
+fn remove_class(existing: &str, remove: &str) -> String {
+    existing
+        .split_whitespace()
+        .filter(|item| *item != remove)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn push_attr(out: &mut String, name: &str, value: &str) {
@@ -845,6 +874,70 @@ mod tests {
         );
         assert!(html.contains("src=\"cid:photo-1@example.test\""));
         assert!(!html.contains("data-inline-cid"));
+    }
+
+    #[test]
+    fn send_restores_remote_image_src() {
+        let outgoing = sanitize_compose_html_for_send(r#"<img src="https://x/y.png">"#);
+        assert!(outgoing.contains("src=\"https://x/y.png\""), "{outgoing}");
+        assert!(!outgoing.contains("data-remote-src"), "{outgoing}");
+        assert!(!outgoing.contains("remote-image-blocked"), "{outgoing}");
+        assert!(!outgoing.contains("Remote image blocked"), "{outgoing}");
+    }
+
+    #[test]
+    fn forwarded_remote_image_survives_compose_then_send() {
+        let received = sanitize_received_html(
+            r#"<p>Newsletter</p><img src="https://images.example.test/banner.png">"#,
+        );
+        let compose = sanitize_compose_html(&received.html);
+        assert!(compose.contains("data-remote-src=\"https://images.example.test/banner.png\""));
+        assert!(!compose.contains(" src=\"https://"), "{compose}");
+        let outgoing = sanitize_compose_html_for_send(&compose);
+        assert!(outgoing.contains("src=\"https://images.example.test/banner.png\""));
+        assert!(!outgoing.contains("data-remote-src"));
+        assert!(!outgoing.contains("data-content-blocked"));
+        assert!(!outgoing.contains("data-threat-blocked"));
+        assert!(!outgoing.contains("remote-image-blocked"));
+        assert!(!outgoing.contains("Remote image blocked"));
+    }
+
+    #[test]
+    fn send_keeps_original_alt_and_drops_legacy_placeholder_alt() {
+        let outgoing = sanitize_compose_html_for_send(
+            r#"<img data-remote-src="https://x/a.png" class="remote-image-blocked" alt="Team photo"><img data-remote-src="https://x/b.png" class="remote-image-blocked" alt="Remote image blocked">"#,
+        );
+        assert!(outgoing.contains("alt=\"Team photo\""), "{outgoing}");
+        assert!(outgoing.contains("src=\"https://x/a.png\""));
+        assert!(outgoing.contains("src=\"https://x/b.png\""));
+        assert!(!outgoing.contains("Remote image blocked"), "{outgoing}");
+        assert!(!outgoing.contains("remote-image-blocked"), "{outgoing}");
+    }
+
+    #[test]
+    fn compose_draft_keeps_remote_images_unloaded() {
+        let draft = sanitize_compose_html(r#"<img src="https://x/y.png">"#);
+        assert!(
+            draft.contains("data-remote-src=\"https://x/y.png\""),
+            "{draft}"
+        );
+        assert!(!draft.contains(" src=\"https://"), "{draft}");
+        assert!(!draft.contains("Remote image blocked"), "{draft}");
+    }
+
+    #[test]
+    fn received_sanitize_still_blocks_remote_images() {
+        let received = sanitize_received_html(r#"<img src="https://x/y.png">"#);
+        assert_eq!(received.blocked_images, 1);
+        assert!(received
+            .html
+            .contains("data-remote-src=\"https://x/y.png\""));
+        assert!(
+            !received.html.contains(" src=\"https://"),
+            "{}",
+            received.html
+        );
+        assert!(received.html.contains("Remote image blocked"));
     }
 
     #[test]

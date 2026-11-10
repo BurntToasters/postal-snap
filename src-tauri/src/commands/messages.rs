@@ -1,9 +1,11 @@
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 
+use super::attachments::{forwarded_message_filename, write_user_chosen_file};
 use super::sync::account_policy;
 use super::{
     command_result, emit_folder_counts, emit_message_change, wake, AppState, CommandResult,
@@ -20,13 +22,48 @@ use crate::{
         keywords::{color_change, ColorChange},
     },
     models::{
-        MessageCursor, MessageDetail, MessageListFilter, MessageListSort, MessagePage,
+        IpcError, MessageCursor, MessageDetail, MessageListFilter, MessageListSort, MessagePage,
         MessageSummary, SearchQuery,
     },
 };
 
 // Must match `BULK_LIMIT` in src/bulk.ts.
 pub(crate) const MAX_BULK_MESSAGES: usize = 200;
+const BULK_LIMIT_MESSAGE: &str = "Select up to 200 messages at a time.";
+
+/// Refuses a bulk request over the cap. limitExceeded keeps the authored text.
+pub(crate) fn check_bulk_message_count(len: usize) -> CommandResult<()> {
+    if len > MAX_BULK_MESSAGES {
+        return Err(IpcError {
+            code: "limitExceeded".into(),
+            message: BULK_LIMIT_MESSAGE.into(),
+            retryable: false,
+            stage: None,
+        });
+    }
+    Ok(())
+}
+
+/// Resolves selected ids to (id, mailbox, uid) for one account. Ids with no
+/// local row are skipped as stale. An id owned by another account rejects the
+/// whole request before any change.
+pub(crate) fn resolve_bulk_items(
+    account_id: &str,
+    message_ids: &[i64],
+    mut locate: impl FnMut(i64) -> Result<(String, String, u32), String>,
+) -> Result<Vec<(i64, String, u32)>, String> {
+    let mut items = Vec::with_capacity(message_ids.len());
+    for &id in message_ids {
+        let Ok((owner, mailbox, uid)) = locate(id) else {
+            continue;
+        };
+        if owner != account_id {
+            return Err("Message does not belong to this account.".into());
+        }
+        items.push((id, mailbox, uid));
+    }
+    Ok(items)
+}
 /// Longest an undo-window move waits without a commit. The frontend commits
 /// when its window closes; this only covers a commit that never arrives.
 const UNDO_HOLD_SECONDS: i64 = 60;
@@ -462,6 +499,14 @@ pub async fn get_message_source(
     Ok(mail::source::build_source(&raw))
 }
 
+/// Writes the original message with the same symlink and overwrite rules as
+/// attachment saves.
+pub(crate) async fn write_saved_message(destination: &Path, raw: &[u8]) -> Result<(), String> {
+    write_user_chosen_file(destination, raw)
+        .await
+        .map_err(|_| "Could not save the message at that location.".to_string())
+}
+
 /// Save the original message to a destination the user picks.
 #[tauri::command]
 pub async fn save_message_eml(
@@ -472,12 +517,18 @@ pub async fn save_message_eml(
 ) -> CommandResult<()> {
     ensure_message_content_for(&account_id, message_id, &state, Need::Full).await?;
     let raw = state.db.raw_message(message_id, &account_id)?;
+    let subject = state
+        .db
+        .message_detail(message_id, &account_id)?
+        .summary
+        .subject;
+    let suggested = forwarded_message_filename(&subject);
     let picker = app.clone();
     let destination = tokio::task::spawn_blocking(move || {
         picker
             .dialog()
             .file()
-            .set_file_name("message.eml")
+            .set_file_name(suggested)
             .blocking_save_file()
     })
     .await
@@ -488,9 +539,7 @@ pub async fn save_message_eml(
     let destination = destination
         .into_path()
         .map_err(|_| "Choose a valid save location.".to_string())?;
-    tokio::fs::write(&destination, raw)
-        .await
-        .map_err(|_| "Could not save the message at that location.".to_string())?;
+    write_saved_message(&destination, &raw).await?;
     // A saved message can carry attachments; mark it like saved files.
     crate::download_mark::mark_downloaded(&destination);
     Ok(())
@@ -1011,6 +1060,9 @@ async fn move_message_inner(
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Counts for one bulk action. Ids with no local row are skipped and counted
+/// nowhere. An id owned by another account rejects the whole request before
+/// any change. `failed` counts found messages that could not be changed.
 pub struct BulkOutcome {
     pub updated: usize,
     pub queued: usize,
@@ -1019,6 +1071,7 @@ pub struct BulkOutcome {
 
 /// Apply flag changes to many messages with one IMAP round trip per mailbox.
 /// Stale rows are skipped; only messages that fail locally count as failed.
+/// Ids resolve through `resolve_bulk_items`, so see `BulkOutcome` for skips.
 pub(crate) async fn bulk_apply_flags(
     state: &AppState,
     account_id: &str,
@@ -1124,6 +1177,7 @@ pub async fn set_messages_pinned(
     pinned: bool,
     state: State<'_, AppState>,
 ) -> CommandResult<u32> {
+    check_bulk_message_count(message_ids.len())?;
     let db = state.db.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         db.set_pinned(&account_id, &message_ids, pinned)
@@ -1133,6 +1187,7 @@ pub async fn set_messages_pinned(
     command_result(result)
 }
 
+/// Skips ids with no local row and rejects a foreign id. See `BulkOutcome`.
 #[tauri::command]
 pub async fn set_messages_flags(
     account_id: String,
@@ -1142,20 +1197,11 @@ pub async fn set_messages_flags(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<BulkOutcome> {
-    if message_ids.len() > MAX_BULK_MESSAGES {
-        return Err("Select up to 200 messages at a time.".into());
-    }
+    check_bulk_message_count(message_ids.len())?;
     let _guard = state.lock_account(&account_id).await?;
-    let mut items = Vec::new();
-    for id in message_ids {
-        let Ok((owner, mailbox, uid)) = state.db.message_location(id) else {
-            continue;
-        };
-        if owner != account_id {
-            return Err("Message does not belong to this account.".into());
-        }
-        items.push((id, mailbox, uid));
-    }
+    let items = resolve_bulk_items(&account_id, &message_ids, |id| {
+        state.db.message_location(id)
+    })?;
     let color = color_change(is_starred, None);
     let outcome = bulk_apply_flags(&state, &account_id, &items, is_read, is_starred, color).await?;
     emit_message_change(&app, &account_id, None, "flags");
@@ -1172,9 +1218,7 @@ pub async fn move_messages_to_mailbox(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<BulkOutcome> {
-    if message_ids.len() > MAX_BULK_MESSAGES {
-        return Err("Select up to 200 messages at a time.".into());
-    }
+    check_bulk_message_count(message_ids.len())?;
     if let Some(token) = undo_token.as_deref() {
         validate_undo_token(token)?;
     }
@@ -1402,9 +1446,7 @@ pub async fn copy_messages_to_mailbox(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<BulkOutcome> {
-    if message_ids.len() > MAX_BULK_MESSAGES {
-        return Err("Select up to 200 messages at a time.".into());
-    }
+    check_bulk_message_count(message_ids.len())?;
     let _guard = state.lock_account(&account_id).await?;
     let (destination_account_id, destination) = state.db.mailbox(destination_mailbox_id)?;
     if destination_account_id != account_id {
@@ -2137,5 +2179,75 @@ mod undo_session_tls_tests {
         assert!(!replay(&reopened).await);
         assert_eq!(server_count(&reopened, "INBOX").await, 0);
         assert_eq!(server_count(&reopened, "Archive").await, 1);
+    }
+}
+
+#[cfg(test)]
+mod bulk_cap_tests {
+    use super::{check_bulk_message_count, resolve_bulk_items, MAX_BULK_MESSAGES};
+
+    fn locate(id: i64) -> Result<(String, String, u32), String> {
+        match id {
+            1 => Ok(("acct".into(), "INBOX".into(), 10)),
+            2 => Ok(("other".into(), "INBOX".into(), 11)),
+            _ => Err("Message not found.".into()),
+        }
+    }
+
+    #[test]
+    fn bulk_over_the_cap_is_refused_as_limit_exceeded() {
+        // Failure mode: an unbounded id list reaches the database or IMAP.
+        let error = check_bulk_message_count(MAX_BULK_MESSAGES + 1).unwrap_err();
+        assert_eq!(error.code, "limitExceeded");
+        assert_eq!(error.message, "Select up to 200 messages at a time.");
+    }
+
+    #[test]
+    fn bulk_at_the_cap_is_accepted() {
+        assert!(check_bulk_message_count(MAX_BULK_MESSAGES).is_ok());
+    }
+
+    #[test]
+    fn stale_ids_are_skipped_and_owned_ids_are_kept() {
+        // Failure mode: one missing row aborts the whole bulk action.
+        let items = resolve_bulk_items("acct", &[1, 99], locate).unwrap();
+        assert_eq!(items, vec![(1, "INBOX".to_string(), 10)]);
+    }
+
+    #[test]
+    fn a_foreign_id_rejects_the_whole_bulk_request() {
+        // Failure mode: owned ids change while a foreign id is silently dropped.
+        let error = resolve_bulk_items("acct", &[1, 2], locate).unwrap_err();
+        assert_eq!(error, "Message does not belong to this account.");
+    }
+}
+
+#[cfg(test)]
+mod eml_save_tests {
+    use super::write_saved_message;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn saved_eml_refuses_a_symlink_destination() {
+        // Failure mode: tokio::fs::write follows the link and overwrites the target.
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("secret.txt");
+        let link = dir.path().join("message.eml");
+        std::fs::write(&target, b"secret").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(write_saved_message(&link, b"From: a\r\n\r\nbody\r\n")
+            .await
+            .is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"secret");
+    }
+
+    #[tokio::test]
+    async fn saved_eml_overwrites_a_regular_file_in_place() {
+        // Failure mode: the save appends to or keeps the earlier bytes.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("message.eml");
+        std::fs::write(&path, b"old message bytes that are longer").unwrap();
+        write_saved_message(&path, b"new").await.unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
     }
 }

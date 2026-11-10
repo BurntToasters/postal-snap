@@ -68,13 +68,13 @@ function isEditableTarget(target: EventTarget | null): boolean {
 const MIN_FIT_ZOOM = 0.8;
 
 // Mirrors --reader-frame-margin-block per density; the frame is its own document.
-const FRAME_MARGIN_BLOCK: Record<UiDensity, number> = {
+export const FRAME_MARGIN_BLOCK: Record<UiDensity, number> = {
   normal: 12,
   comfortable: 16,
   compact: 10,
 };
 
-function frameMarginBlock(density: UiDensity): number {
+export function frameMarginBlock(density: UiDensity): number {
   return FRAME_MARGIN_BLOCK[density] ?? FRAME_MARGIN_BLOCK.normal;
 }
 

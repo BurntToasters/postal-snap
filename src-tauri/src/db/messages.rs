@@ -699,7 +699,7 @@ impl Database {
         mailbox_id: i64,
         uid: u32,
     ) -> Result<Option<MessageSummary>, String> {
-        self.conn()?
+        self.read_conn()?
             .query_row(
                 &format!(
                     "{} WHERE m.mailbox_id=?1 AND m.uid=?2 AND m.pending_move_to IS NULL",
@@ -923,7 +923,7 @@ impl Database {
         if header_id.is_empty() {
             return Ok(None);
         }
-        self.conn()?
+        self.read_conn()?
             .query_row(
                 &format!(
                     "{MESSAGE_SUMMARY_SELECT} WHERE m.account_id=?1 AND m.mailbox_id=?2 \
@@ -976,7 +976,7 @@ impl Database {
     }
 
     pub fn message_content_cached(&self, id: i64, account_id: &str) -> Result<bool, String> {
-        self.conn()?
+        self.read_conn()?
             .query_row(
                 "SELECT LENGTH(raw_message) > 0 FROM messages WHERE id=?1 AND account_id=?2",
                 params![id, account_id],
@@ -1408,7 +1408,7 @@ impl Database {
     }
 
     pub fn message_rfc_id(&self, id: i64) -> Result<Option<String>, String> {
-        self.conn()?
+        self.read_conn()?
             .query_row("SELECT message_id FROM messages WHERE id=?1", [id], |row| {
                 row.get(0)
             })
@@ -1423,7 +1423,7 @@ impl Database {
         mailbox: &str,
     ) -> Result<Option<u32>, String> {
         let value: Option<Option<u32>> = self
-            .conn()?
+            .read_conn()?
             .prepare_cached("SELECT uid_validity FROM mailboxes WHERE account_id=?1 AND name=?2")
             .map_err(db_error)?
             .query_row(params![account_id, mailbox], |row| row.get(0))
@@ -1438,7 +1438,7 @@ impl Database {
         mailbox: &str,
     ) -> Result<Option<MailboxSyncState>, String> {
         let value: Option<MailboxSyncState> = self
-            .conn()?
+            .read_conn()?
             .query_row(
                 "SELECT uid_validity, uid_next, server_total, server_unread FROM mailboxes WHERE account_id=?1 AND name=?2",
                 params![account_id, mailbox],
@@ -1454,7 +1454,7 @@ impl Database {
         account_id: &str,
         mailbox: &str,
     ) -> Result<Option<i64>, String> {
-        self.conn()?
+        self.read_conn()?
             .query_row(
                 "SELECT id FROM mailboxes WHERE account_id=?1 AND name=?2",
                 params![account_id, mailbox],
@@ -1488,14 +1488,14 @@ impl Database {
         &self,
         id: i64,
     ) -> Result<(String, i64, String, u32, u64), String> {
-        self.conn()?.query_row(
+        self.read_conn()?.query_row(
             "SELECT m.account_id, m.mailbox_id, f.name, m.uid, m.size FROM messages m JOIN mailboxes f ON f.id=m.mailbox_id WHERE m.id=?1",
             [id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get::<_, i64>(4)?.max(0) as u64)),
         ).optional().map_err(db_error)?.ok_or_else(|| "Message not found.".into())
     }
 
     pub fn latest_message_rowid(&self) -> Result<i64, String> {
-        self.conn()?
+        self.read_conn()?
             .query_row("SELECT COALESCE(MAX(id), 0) FROM messages", [], |row| {
                 row.get(0)
             })
@@ -1772,7 +1772,7 @@ impl Database {
         if ids.len() > 200 {
             return Err("Choose up to 200 messages.".into());
         }
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut mailbox_id: Option<i64> = None;
         let mut mailbox_name = String::new();
         let mut uid_validity = 0u32;
@@ -2395,7 +2395,7 @@ struct MuteHit {
 }
 
 fn muted_inbox_hits(db: &Database, account_id: &str) -> Result<Vec<MuteHit>, String> {
-    let conn = db.conn()?;
+    let conn = db.read_conn()?;
     let mut statement = conn
         .prepare(
             "SELECT m.id, m.uid, m.message_id, m.thread_parent, box.name

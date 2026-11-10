@@ -146,7 +146,7 @@ export const settings = {
   blockThreatsHelp:
     "Postal Snap checks links and remote images against a local reported-threat list before they can load or open. Turning this off is dangerous. You can turn it back on at any time.",
   threatOffWarning:
-    "Reported-address warnings are off. Postal Snap will not warn you about listed dangerous links or block those remote images. Turn this back on unless you have a specific reason to leave it off.",
+    "Reported-address warnings are off. Postal Snap will not warn you about links reported as potentially dangerous or block those remote images. Turn this back on unless you have a specific reason to leave it off.",
   threatDisableTitle: "Turn off reported-address warnings?",
   threatDisableLead:
     "This is not a good idea. Postal Snap will no longer warn you about addresses that have been reported as potentially dangerous, and it will not block those remote images. Private-network and image-consent protections stay on, but they do not replace this list.",
@@ -254,6 +254,7 @@ export const settings = {
   accountColor: "Account color",
   accountColorHelp: "This color marks the account in the account list.",
   accountColorFailed: "The account color could not be saved. Try again.",
+  accountColorClear: "Use default color",
   accountColors: {
     blue: "Blue",
     teal: "Teal",

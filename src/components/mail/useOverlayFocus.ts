@@ -68,7 +68,7 @@ interface Options {
   folderPaneRef: RefObject<HTMLElement | null>;
   sidebarToggleRef: RefObject<HTMLButtonElement | null>;
   selectedMessage: MessageDetail | undefined;
-  settings: AppSettings;
+  settings: Pick<AppSettings, "readingPane">;
 }
 
 export function useOverlayFocus({

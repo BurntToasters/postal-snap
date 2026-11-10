@@ -825,4 +825,6 @@ CREATE TRIGGER IF NOT EXISTS messages_after_delete AFTER DELETE ON messages BEGI
 "#;
 
 #[cfg(test)]
+mod read_conn_guard;
+#[cfg(test)]
 mod tests;

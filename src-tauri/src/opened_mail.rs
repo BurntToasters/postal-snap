@@ -148,8 +148,14 @@ fn with_store<T>(action: impl FnOnce(&mut OpenedStore) -> T) -> T {
     action(&mut guard)
 }
 
+/// Extra launch paths would be read and then evicted, so they are ignored.
+fn limit_launch_paths(mut paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    paths.truncate(MAX_OPEN_TOKENS);
+    paths
+}
+
 pub fn open_paths<R: Runtime>(app: &AppHandle<R>, paths: Vec<PathBuf>) {
-    for path in paths {
+    for path in limit_launch_paths(paths) {
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
             let Ok(raw) = read_eml_file(&path).await else {
@@ -579,6 +585,23 @@ From: c@example.com\r\nSubject: Inner\r\nContent-Type: text/html\r\n\r\n\
         assert!(is_message_attachment(&by_type));
         assert!(is_message_attachment(&by_name));
         assert!(!is_message_attachment(&plain));
+    }
+
+    #[test]
+    fn launch_paths_beyond_the_token_bound_are_ignored() {
+        // Failure mode: every argv path spawns a 50 MiB read before the store bound applies.
+        let paths: Vec<PathBuf> = (0..MAX_OPEN_TOKENS + 4)
+            .map(|index| PathBuf::from(format!("m{index}.eml")))
+            .collect();
+        let kept = limit_launch_paths(paths.clone());
+        assert_eq!(kept.len(), MAX_OPEN_TOKENS);
+        assert_eq!(kept, paths[..MAX_OPEN_TOKENS]);
+    }
+
+    #[test]
+    fn launch_paths_under_the_bound_pass_unchanged() {
+        let paths = vec![PathBuf::from("a.eml"), PathBuf::from("b.eml")];
+        assert_eq!(limit_launch_paths(paths.clone()), paths);
     }
 
     #[test]

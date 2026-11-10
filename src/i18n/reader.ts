@@ -181,6 +181,7 @@ export const reader = {
   openedFromFile: "Opened from a file. It is not in your mailbox.",
   closeOpenedFile: "Close file",
   openEmlFailed: "The email file could not be opened.",
+  openedMailtoNeedsAccount: "Add a mail account to write to this address.",
   saveFile: "Save",
   saveNamedFile: (name: string) => `Save ${name}`,
   viewMessage: "View",

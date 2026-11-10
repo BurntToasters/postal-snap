@@ -47,27 +47,47 @@ impl From<MailboxOperationError> for String {
     }
 }
 
-/// A server `NO`/`BAD` response means the command itself was refused; retrying
-/// the identical UID operation cannot succeed. Connection and parse failures
-/// stay transient.
+/// Terminal only when the server names a condition that retrying cannot fix.
+/// Response codes win over wording; a NO or BAD without either stays transient
+/// so an unclear refusal is never dropped from the queue.
 fn classify_imap_failure(error: &async_imap::error::Error) -> bool {
     match error {
         async_imap::error::Error::No(message) | async_imap::error::Error::Bad(message) => {
             let lower = message.to_ascii_lowercase();
-            lower.contains("not found")
-                || lower.contains("no such")
-                || lower.contains("does not exist")
-                || lower.contains("nonexistent")
-                || lower.contains("unknown mailbox")
-                || lower.contains("already")
-                || lower.contains("expung")
-                || lower.contains("missing")
-                || lower.contains("invalid")
+            if TRANSIENT_IMAP_CODES.iter().any(|code| lower.contains(code)) {
+                return false;
+            }
+            if TERMINAL_IMAP_CODES.iter().any(|code| lower.contains(code)) {
+                return true;
+            }
+            DEFINITE_IMAP_WORDING
+                .iter()
+                .any(|text| lower.contains(text))
         }
         async_imap::error::Error::Validate(_) => true,
         _ => false,
     }
 }
+
+/// Codes that clear on retry. async-imap keeps unrecognised codes in the
+/// text, and recognised ones appear as Debug names.
+const TRANSIENT_IMAP_CODES: &[&str] = &["[unavailable]", "[inuse]", "[limit]", "[serverbug]"];
+
+/// Codes that name a permanent condition for this exact operation.
+const TERMINAL_IMAP_CODES: &[&str] = &[
+    "[nonexistent]",
+    "[trycreate]",
+    "some(trycreate)",
+    "[expungeissued]",
+];
+
+/// Servers that send no code but say the target is gone.
+const DEFINITE_IMAP_WORDING: &[&str] = &[
+    "does not exist",
+    "no such mailbox",
+    "no such message",
+    "unknown mailbox",
+];
 
 fn remote_failure(error: async_imap::error::Error, action: &str) -> MailboxOperationError {
     let message = redact_error(&error, action);
@@ -1307,5 +1327,85 @@ mod tests {
         assert!(uid_set(&[]).is_err());
         assert!(uid_set(&[0, 2]).is_err());
         assert!(uid_set(&[1; 201]).is_err());
+    }
+}
+
+#[cfg(test)]
+mod failure_classification_tests {
+    use super::classify_imap_failure;
+    use async_imap::error::{Error, ParseError};
+
+    // Shapes match async-imap's `check_status_ok`: `code: <Debug>, info: <Debug>`.
+    fn no(text: &str) -> Error {
+        Error::No(format!("code: None, info: Some({text:?})"))
+    }
+
+    fn bad(text: &str) -> Error {
+        Error::Bad(format!("code: None, info: Some({text:?})"))
+    }
+
+    // Failure modes for response-code classification:
+    // 1. A recognised code that cannot succeed on retry is terminal.
+    // 2. A code that clears on retry is transient, even with a terminal word.
+    // 3. A NO with no code and no definite wording stays transient.
+    // 4. Connection and local errors never drop a queued op.
+    #[test]
+    fn terminal_codes_drop_the_queued_operation() {
+        assert!(classify_imap_failure(&no("[NONEXISTENT] Unknown Mailbox")));
+        assert!(classify_imap_failure(&no("[TRYCREATE] Mailbox is missing")));
+        assert!(classify_imap_failure(&no(
+            "[EXPUNGEISSUED] Some messages are gone"
+        )));
+        assert!(classify_imap_failure(&Error::No(
+            "code: Some(TryCreate), info: Some(\"Mailbox does not exist\")".into()
+        )));
+    }
+
+    #[test]
+    fn transient_codes_keep_the_queued_operation() {
+        assert!(!classify_imap_failure(&no("[UNAVAILABLE] Try again later")));
+        assert!(!classify_imap_failure(&no("[INUSE] Mailbox is busy")));
+        assert!(!classify_imap_failure(&no("[LIMIT] Too many commands")));
+        assert!(!classify_imap_failure(&bad("[SERVERBUG] Internal error")));
+    }
+
+    #[test]
+    fn transient_code_wins_over_terminal_wording() {
+        assert!(!classify_imap_failure(&no(
+            "[UNAVAILABLE] Mailbox does not exist yet, retry"
+        )));
+    }
+
+    #[test]
+    fn invalid_state_reconnect_is_transient() {
+        assert!(!classify_imap_failure(&no("Invalid state, reconnect")));
+        assert!(!classify_imap_failure(&bad("Invalid state, reconnect")));
+    }
+
+    #[test]
+    fn unknown_no_and_bad_replies_are_transient() {
+        assert!(!classify_imap_failure(&no("Permission denied")));
+        assert!(!classify_imap_failure(&no(
+            "Message already expunged, retry"
+        )));
+        assert!(!classify_imap_failure(&bad("Command syntax error")));
+    }
+
+    #[test]
+    fn definite_wording_without_a_code_is_terminal() {
+        assert!(classify_imap_failure(&no("Mailbox does not exist")));
+        assert!(classify_imap_failure(&no("No such message")));
+        assert!(classify_imap_failure(&no("Unknown mailbox: Archive")));
+    }
+
+    #[test]
+    fn connection_and_parse_failures_are_transient() {
+        assert!(!classify_imap_failure(&Error::ConnectionLost));
+        assert!(!classify_imap_failure(&Error::Parse(
+            ParseError::Unexpected("x".into())
+        )));
+        assert!(!classify_imap_failure(&Error::Io(std::io::Error::other(
+            "reset"
+        ))));
     }
 }

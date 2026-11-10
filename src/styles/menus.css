@@ -2,7 +2,6 @@
    reduced transparency or more contrast, and in forced colors (see below). */
 :root {
   --menu-surface: var(--menu-material);
-  --menu-blur: blur(30px) saturate(180%);
 }
 
 html[data-platform="windows"],

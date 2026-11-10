@@ -248,6 +248,64 @@
   --window-close: #c42b1c;
   --notice-max-width: 28rem;
 
+  /* Component geometry shared by every density. Values are Normal sizes;
+     comfortable and compact inherit them unless a block overrides. */
+  --scrollbar-size: 8px;
+  --caption-icon-size: 16px;
+  --mac-fullscreen-folder-pad-top: 14px;
+  --text-button-gap: 6px;
+  --text-button-pad-inline: 6px;
+  --composer-focus-width: 3px;
+  --composer-focus-inset: -3px;
+  --composer-layer-pad: 12px 18px 18px;
+  --composer-docked-inset-block: 24px;
+  --composer-docked-inset-inline: 28px;
+  --composer-cell-pad: 6px;
+  --composer-drop-gap: 10px;
+  --field-error-margin: 4px 0 6px 15px;
+  --motion-slide-distance: 12px;
+  --pane-heading-split-gap: 10px;
+  --pane-heading-actions-gap: 4px;
+  --list-select-gap: 4px;
+  --message-select-margin-start: 4px;
+  --thread-count-min-width: 25px;
+  --thread-count-pad: 2px 6px;
+  --new-messages-inset-top: 8px;
+  --new-messages-margin-block: 8px;
+  --list-state-pad: clamp(52px, 28vh, 260px) 24px 24px;
+  --message-subject-gap: 5px;
+  --local-mail-gap: 3px;
+  --toolbar-cluster-gap: 6px;
+  --toolbar-spacer-min: 12px;
+  --update-badge-gap: 8px;
+  --update-badge-pad: 6px 16px;
+  --update-badge-pad-fit3-inline: 14px;
+  --reader-details-label-min: 90px;
+  --address-chip-gap: 5px;
+  --security-badge-gap: 7px;
+  --menu-blur: blur(30px) saturate(180%);
+  --splitter-size: 5px;
+  --splitter-hit: 14px;
+  --folder-pane-default-width: 240px;
+  --folder-track-min: 210px;
+  --folder-track-wide: 300px;
+  --message-pane-default-width: 380px;
+  --message-track-min: 240px;
+  --mail-track-gutter: 10px;
+  --reader-pane-default-height: 420px;
+  --reader-reserved-min: 220px;
+  --local-icon: 24px;
+  --local-gap: 12px;
+  --setup-card-narrow-pad: 22px 18px;
+  --setup-progress-narrow-margin-block: 22px;
+  --setup-form-header-gap: 12px;
+  --toolbar-button-narrow-pad-inline: 10px;
+  --offscreen-frame-left: -10000px;
+  --print-frame-width: 720px;
+  --print-frame-min-height: 500px;
+  --print-header-pad-bottom: 16px;
+  --print-header-margin-bottom: 24px;
+
   /* macOS 27 Mail chrome: edge-to-edge sidebar a step darker than content,
      neutral sidebar selection, a solid bar, and borderless system fills for
      grouped controls. */

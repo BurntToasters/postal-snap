@@ -1,10 +1,11 @@
 use tauri::{AppHandle, State};
 
-use super::messages::{bulk_apply_flags, MAX_BULK_MESSAGES};
+use super::messages::{bulk_apply_flags, check_bulk_message_count, resolve_bulk_items};
 use super::{command_result, emit_folder_counts, emit_message_change, AppState, CommandResult};
 use crate::mail::keywords::ColorChange;
 
 /// Flags messages with a color (0 to 6), or clears the flag when `color` is None.
+/// Skips ids with no local row and rejects a foreign id. See `BulkOutcome`.
 #[tauri::command]
 pub async fn set_messages_flag_color(
     account_id: String,
@@ -16,20 +17,11 @@ pub async fn set_messages_flag_color(
     if color.is_some_and(|value| value > 6) {
         return Err("Choose a flag color from the list.".into());
     }
-    if message_ids.len() > MAX_BULK_MESSAGES {
-        return Err("Select up to 200 messages at a time.".into());
-    }
+    check_bulk_message_count(message_ids.len())?;
     let _guard = state.lock_account(&account_id).await?;
-    let mut items = Vec::new();
-    for id in message_ids {
-        let Ok((owner, mailbox, uid)) = state.db.message_location(id) else {
-            continue;
-        };
-        if owner != account_id {
-            return Err("Message does not belong to this account.".into());
-        }
-        items.push((id, mailbox, uid));
-    }
+    let items = resolve_bulk_items(&account_id, &message_ids, |id| {
+        state.db.message_location(id)
+    })?;
     let (is_starred, change) = match color {
         Some(value) => (Some(true), ColorChange::Set(value)),
         None => (Some(false), ColorChange::Clear),

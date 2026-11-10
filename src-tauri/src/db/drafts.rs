@@ -62,7 +62,7 @@ impl Database {
 
     pub fn draft(&self, id: &str, account_id: &str) -> Result<ComposeDraft, String> {
         let json: String = self
-            .conn()?
+            .read_conn()?
             .query_row(
                 "SELECT draft_json FROM drafts WHERE id=?1 AND account_id=?2 AND (deleted_at IS NULL OR sync_state='deletePending')",
                 params![id, account_id],
@@ -118,7 +118,7 @@ impl Database {
     }
 
     pub fn pending_draft_sync(&self, account_id: &str) -> Result<Vec<DraftSyncRecord>, String> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut statement = conn
             .prepare(
                 "SELECT id,draft_json,remote_mailbox,remote_uid,remote_uid_validity,
@@ -249,7 +249,7 @@ impl Database {
         mailbox: &str,
         uid_validity: Option<u32>,
     ) -> Result<std::collections::HashSet<u32>, String> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut statement = conn
             .prepare(
                 "SELECT remote_uid FROM drafts WHERE account_id=?1 AND remote_mailbox=?2
@@ -268,7 +268,7 @@ impl Database {
         id: &str,
         account_id: &str,
     ) -> Result<Option<(String, u32)>, String> {
-        self.conn()?
+        self.read_conn()?
             .query_row(
                 "SELECT sync_state,revision FROM drafts WHERE id=?1 AND account_id=?2",
                 params![id, account_id],

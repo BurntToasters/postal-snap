@@ -22,8 +22,8 @@ html[data-platform="macos"] * {
 }
 
 html:not([data-platform="macos"]) ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
 }
 
 html:not([data-platform="macos"]) ::-webkit-scrollbar-track {

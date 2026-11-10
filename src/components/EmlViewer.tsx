@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Download, Eye, Image, X } from "lucide-react";
 import { api } from "../api";
@@ -6,6 +6,7 @@ import { errorText } from "../errors";
 import { formatBytes, formatFullMessageDate } from "../format";
 import { strings } from "../i18n";
 import { useIsDark } from "../hooks/useColorScheme";
+import { parseMailto } from "../mailto";
 import {
   hasAuthorColors,
   messageFrameDocument,
@@ -15,14 +16,14 @@ import {
 } from "../security";
 import { useAppStore } from "../store";
 import type { Attachment, AttachmentPreview, OpenedMessage } from "../types";
+import { registerFrameLinkSink } from "./frameLinkRouter";
 import { inspectAndOpenExternalLink } from "./externalLink";
 import { AttachmentPreviewDialog } from "./reader/attachmentList";
 import { PlainTextContent } from "./reader/messageBody";
+import { frameMarginBlock } from "./reader/useMessageFrame";
 import { useDialogFocus } from "./useDialogFocus";
 import { useInertBackground } from "./useInertBackground";
 
-// Matches the reader's frame margin for the normal density.
-const FRAME_MARGIN_BLOCK = 12;
 const PREVIEWABLE = new Set([
   "application/pdf",
   "image/png",
@@ -51,6 +52,7 @@ export function EmlViewer({
   useInertBackground();
   const frameRef = useRef<HTMLIFrameElement>(null);
   const textScale = useAppStore((state) => state.settings.textScale);
+  const density = useAppStore((state) => state.settings.density);
   const isDark = useIsDark();
   const [notice, setNotice] = useState<string>();
   const [busyId, setBusyId] = useState<string>();
@@ -72,12 +74,35 @@ export function EmlViewer({
             withFrameLinks(sanitized.html),
             textScale,
             isDark && !hasAuthorColors(sanitized.html),
-            FRAME_MARGIN_BLOCK,
+            frameMarginBlock(density),
           )
         : "",
-    [sanitized, textScale, isDark],
+    [sanitized, textScale, isDark, density],
   );
   const files = message.attachments.filter((item) => !item.inline);
+
+  // Mail to a file's address needs an account to compose from; without one, say so.
+  const openMailto = useCallback((url: string) => {
+    const { activeAccountId, openComposer } = useAppStore.getState();
+    if (!activeAccountId) {
+      setNotice(strings.reader.openedMailtoNeedsAccount);
+      return;
+    }
+    setNotice(undefined);
+    openComposer({ prefill: parseMailto(url) });
+  }, []);
+
+  // Native frame clicks (WebKit) arrive through the app router while this viewer is open.
+  useEffect(
+    () =>
+      registerFrameLinkSink("viewer", {
+        frame: frameRef,
+        openExternal: (url, linkText) =>
+          inspectAndOpenExternalLink(url, linkText),
+        openMailto,
+      }),
+    [openMailto],
+  );
 
   // The frame cannot run scripts, so its links and keys are wired from here.
   function wireFrame() {
@@ -97,6 +122,7 @@ export function EmlViewer({
       );
       if (/^https?:/i.test(url))
         void inspectAndOpenExternalLink(url, link.textContent ?? "");
+      else if (/^mailto:/i.test(url)) openMailto(url);
     };
     // Escape and Tab belong to the viewer's dialog, not the frame.
     const forwardKey = (event: KeyboardEvent) => {
@@ -209,7 +235,7 @@ export function EmlViewer({
               <PlainTextContent
                 text={message.textBody}
                 onOpenLink={(url) => void inspectAndOpenExternalLink(url)}
-                onOpenMailto={() => undefined}
+                onOpenMailto={openMailto}
               />
             ) : (
               <p className="plain-text-body" role="note">

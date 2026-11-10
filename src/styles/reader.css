@@ -257,8 +257,9 @@
   display: flex;
 }
 
-.mobile-reader-back {
-  display: none !important;
+/* Specific enough to beat the shared `.reader-actions button` display rule. */
+.reader-actions .mobile-reader-back {
+  display: none;
 }
 
 .conversation-index {
@@ -563,7 +564,9 @@ html[data-text-scale="large"] .message-header .message-stamp {
 
 .details-grid {
   display: grid;
-  grid-template-columns: minmax(90px, max-content) minmax(0, 1fr);
+  grid-template-columns:
+    minmax(var(--reader-details-label-min), max-content)
+    minmax(0, 1fr);
   gap: var(--space-2) var(--space-3);
   margin: 0;
   font-size: var(--fs-md);
@@ -599,7 +602,7 @@ html[data-text-scale="large"] .message-header .message-stamp {
 .address-chip {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--address-chip-gap);
   padding: 2px var(--space-2);
   background: var(--surface);
   border: 1px solid var(--border);
@@ -620,7 +623,7 @@ html[data-text-scale="large"] .message-header .message-stamp {
 .security-badge {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: var(--security-badge-gap);
   color: var(--success);
 }
 

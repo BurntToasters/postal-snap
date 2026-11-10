@@ -11,8 +11,20 @@ export interface SanitizedMail {
   blockedImageHosts: string[];
 }
 
-export function sanitizeReceivedHtml(input: string): SanitizedMail {
+export interface SanitizeOptions {
+  /**
+   * Composer copy: blocked remote images get no placeholder alt, so the
+   * composer's own placeholder is the only text and nothing English is sent.
+   */
+  composer?: boolean;
+}
+
+export function sanitizeReceivedHtml(
+  input: string,
+  options: SanitizeOptions = {},
+): SanitizedMail {
   const doc = new DOMParser().parseFromString(input, "text/html");
+  const remoteAlt = options.composer ? "" : strings.reader.blockedImageAlt;
   let blockedImages = 0;
   const blockedImageHosts: string[] = [];
 
@@ -70,7 +82,7 @@ export function sanitizeReceivedHtml(input: string): SanitizedMail {
     if (REMOTE_IMAGE.test(src)) {
       image.dataset.remoteSrc = src.startsWith("//") ? `https:${src}` : src;
       image.removeAttribute("src");
-      image.alt = image.alt || strings.reader.blockedImageAlt;
+      image.alt = image.alt || remoteAlt;
       image.classList.add("remote-image-blocked");
       noteBlockedImage(image.dataset.remoteSrc);
     } else if (/^cid:/i.test(src)) {
@@ -86,7 +98,7 @@ export function sanitizeReceivedHtml(input: string): SanitizedMail {
         ? `https:${markedRemote}`
         : markedRemote;
       image.removeAttribute("src");
-      image.alt = image.alt || strings.reader.blockedImageAlt;
+      image.alt = image.alt || remoteAlt;
       image.classList.add("remote-image-blocked");
       noteBlockedImage(image.dataset.remoteSrc);
     } else if (markedCid) {
@@ -178,7 +190,7 @@ export function sanitizeComposeHtml(input: string): string {
     const perf = window.__POSTAL_SNAP_PERF__;
     perf.sanitize = (perf.sanitize ?? 0) + 1;
   }
-  const { html } = sanitizeReceivedHtml(input);
+  const { html } = sanitizeReceivedHtml(input, { composer: true });
   const doc = new DOMParser().parseFromString(html, "text/html");
   for (const image of doc.querySelectorAll<HTMLImageElement>(
     "img[data-inline-cid]",

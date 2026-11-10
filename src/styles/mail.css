@@ -1,17 +1,22 @@
 /* Main mail window */
 .mail-shell {
-  --rendered-folder-width: clamp(210px, var(--folder-pane-width, 240px), 26vw);
+  --rendered-folder-width: clamp(
+    var(--folder-track-min),
+    var(--folder-pane-width, var(--folder-pane-default-width)),
+    26vw
+  );
   --rendered-message-width: clamp(
-    240px,
-    var(--message-pane-width, 380px),
-    calc((100vw - var(--rendered-folder-width) - 10px) * 0.55)
+    var(--message-track-min),
+    var(--message-pane-width, var(--message-pane-default-width)),
+    calc(
+      (100vw - var(--rendered-folder-width) - var(--mail-track-gutter)) * 0.55
+    )
   );
   --mail-body-height: max(
     0px,
     calc(100dvh - var(--mail-toolbar-height, var(--toolbar-height)))
   );
   --list-row-margin-block: 1px;
-  --list-select-gap: 4px;
   /* Row margin + padding + unread column + gap. Title, filter, day heading,
      and sender all start here. */
   --list-text-inset: calc(
@@ -20,18 +25,17 @@
   );
   /* Drafts, Outbox, and Snoozed: padding + icon + gap. The title uses it. */
   --local-row-inline: var(--toolbar-pad-inline);
-  --local-icon: 24px;
-  --local-gap: 12px;
   --local-text-inset: calc(
     var(--local-row-inline) + var(--local-icon) + var(--local-gap)
   );
   --rendered-reader-height: min(
-    var(--reader-pane-height, 420px),
+    var(--reader-pane-height, var(--reader-pane-default-height)),
     max(
       0px,
       calc(
-        var(--mail-body-height) - min(220px, var(--mail-body-height) * 0.5) -
-          5px
+        var(--mail-body-height) -
+          min(var(--reader-reserved-min), var(--mail-body-height) * 0.5) -
+          var(--splitter-size)
       )
     )
   );
@@ -41,8 +45,8 @@
   min-width: 0;
   overflow: hidden;
   grid-template-columns:
-    var(--rendered-folder-width) 5px var(--rendered-message-width)
-    5px minmax(0, 1fr);
+    var(--rendered-folder-width) var(--splitter-size)
+    var(--rendered-message-width) var(--splitter-size) minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
   grid-template-areas:
     "folders folder-splitter toolbar toolbar toolbar"
@@ -51,8 +55,12 @@
 }
 
 .mail-shell.pane-bottom {
-  grid-template-columns: var(--rendered-folder-width) 5px minmax(0, 1fr);
-  grid-template-rows: auto minmax(0, 1fr) 5px var(--rendered-reader-height);
+  grid-template-columns:
+    var(--rendered-folder-width) var(--splitter-size)
+    minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) var(--splitter-size) var(
+      --rendered-reader-height
+    );
   grid-template-areas:
     "folders folder-splitter toolbar"
     "folders folder-splitter messages"
@@ -61,7 +69,9 @@
 }
 
 .mail-shell.pane-hidden {
-  grid-template-columns: var(--rendered-folder-width) 5px minmax(0, 1fr);
+  grid-template-columns:
+    var(--rendered-folder-width) var(--splitter-size)
+    minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
   grid-template-areas:
     "folders folder-splitter toolbar"
@@ -77,7 +87,9 @@
 }
 
 .mail-shell.sidebar-collapsed:where(.pane-right) {
-  grid-template-columns: var(--rendered-message-width) 5px minmax(0, 1fr);
+  grid-template-columns:
+    var(--rendered-message-width) var(--splitter-size)
+    minmax(0, 1fr);
   grid-template-areas:
     "toolbar toolbar toolbar"
     "messages reader-splitter reader";
@@ -103,11 +115,11 @@
   content: "";
   /* Wide enough to grab (a 32px+ hit strip), narrow enough to leave nearby
      buttons clickable. The visual line stays 5px; only this hit area grows. */
-  inset: 0 -14px;
+  inset: 0 calc(-1 * var(--splitter-hit));
 }
 
 .reader-bottom-splitter::before {
-  inset: -14px 0;
+  inset: calc(-1 * var(--splitter-hit)) 0;
 }
 
 .pane-splitter::after {

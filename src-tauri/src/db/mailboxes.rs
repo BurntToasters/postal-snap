@@ -226,7 +226,7 @@ impl Database {
     /// Role as the mailbox list shows it: an explicit assignment, else the
     /// folder's own role, else `other` when another folder took that role.
     pub fn mailbox_effective_role(&self, account_id: &str, mailbox: &str) -> Result<String, String> {
-        self.conn()?
+        self.read_conn()?
             .query_row(
                 "SELECT COALESCE(
                    (SELECT a.role FROM folder_assignments a WHERE a.account_id=f.account_id AND a.mailbox_id=f.id),
@@ -246,7 +246,7 @@ impl Database {
         account_id: &str,
         role: &str,
     ) -> Result<Option<(i64, String)>, String> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let explicit: Option<i64> = conn
             .query_row(
                 "SELECT mailbox_id FROM folder_assignments WHERE account_id=?1 AND role=?2",
@@ -531,7 +531,7 @@ impl Database {
     }
 
     pub fn mailbox(&self, id: i64) -> Result<(String, String), String> {
-        self.conn()?
+        self.read_conn()?
             .query_row(
                 "SELECT account_id,name FROM mailboxes WHERE id=?1",
                 [id],
@@ -543,7 +543,7 @@ impl Database {
     }
 
     pub fn mailbox_delimiter(&self, id: i64) -> Result<Option<String>, String> {
-        self.conn()?
+        self.read_conn()?
             .query_row("SELECT delimiter FROM mailboxes WHERE id=?1", [id], |row| {
                 row.get(0)
             })
@@ -764,7 +764,7 @@ impl Database {
         policy: &crate::models::CachePolicy,
     ) -> Result<crate::models::SyncProgress, String> {
         let cutoff = policy.cutoff().map(crate::mail::parse::canonical_time);
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let (server_total, backfilling): (i64, i64) = conn
             .query_row(
                 "SELECT COALESCE(SUM(server_total),0),

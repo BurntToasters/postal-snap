@@ -10,7 +10,6 @@ import {
 import { useEditor, type UseEditorOptions } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Underline from "@tiptap/extension-underline";
-import Image from "@tiptap/extension-image";
 import TextAlign from "@tiptap/extension-text-align";
 import Highlight from "@tiptap/extension-highlight";
 import Color from "@tiptap/extension-color";
@@ -29,7 +28,7 @@ import type { BodyFormat } from "../../types";
 import { clipboardImages } from "./pasteImage";
 import { seedBody } from "./composerSeed";
 import { isPlainPasteShortcut, plainPasteBlocks } from "./plainText";
-import { FontSize, Indentation, SafeLink } from "./extensions";
+import { FontSize, Indentation, RemoteImage, SafeLink } from "./extensions";
 
 export type PasteImages = (files: File[], tooLarge: boolean) => Promise<void>;
 
@@ -82,7 +81,7 @@ export function useComposerEditor({
       StarterKit.configure({ link: false, underline: false }),
       Underline,
       SafeLink,
-      Image.configure({ allowBase64: true }),
+      RemoteImage.configure({ allowBase64: true }),
       TextStyle,
       FontSize,
       Indentation,

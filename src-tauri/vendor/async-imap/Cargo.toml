@@ -104,9 +104,6 @@ version = "7.0"
 [dependencies.pin-project]
 version = "1"
 
-[dependencies.pin-utils]
-version = "0.1.0-alpha.4"
-
 [dependencies.self_cell]
 version = "1.0.1"
 

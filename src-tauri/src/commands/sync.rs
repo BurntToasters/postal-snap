@@ -127,6 +127,7 @@ struct WorkerHooks<'a> {
     policy: CachePolicy,
     last_progress: Option<Instant>,
     quick: bool,
+    explicit: bool,
 }
 
 impl mail::SyncHooks for WorkerHooks<'_> {
@@ -172,6 +173,10 @@ impl mail::SyncHooks for WorkerHooks<'_> {
 
     fn quick(&self) -> bool {
         self.quick
+    }
+
+    fn explicit_refresh(&self) -> bool {
+        self.explicit
     }
 
     fn folder_changed(&mut self) {
@@ -237,6 +242,9 @@ pub(crate) async fn run_sync_pass(
     let _ = state.db.set_account_state(account_id, "syncing", None);
     emit_sync(app, account_id, "syncing", Some("Checking mail…"), None);
     let filter_watermark = begin_rule_window(&state.db, account_id);
+    // Only Get Mail runs a quick full pass; background passes are never quick
+    // with the full scope.
+    let explicit = quick && scope == mail::sync::SyncScope::All;
     let mut hooks = WorkerHooks {
         actor: actor.clone(),
         guard: Some(guard),
@@ -246,6 +254,7 @@ pub(crate) async fn run_sync_pass(
         policy: policy.clone(),
         last_progress: None,
         quick,
+        explicit,
     };
     let result =
         mail::sync::sync_account_scoped(&state.db, &account, &password, &policy, scope, &mut hooks)

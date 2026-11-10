@@ -26,6 +26,12 @@ Each account has connection settings and Sent, Drafts, Archive, Junk, and Trash 
 
 Connection edits use **Test and save** and retain existing settings if testing fails. IMAP and SMTP failures identify the failing endpoint and give provider-specific next steps. Connection and folder settings show loading and retry states when their data cannot be read. Changing incoming host or username changes mailbox identity: confirmation is required, queued changes and unsent mail must be resolved, and server-derived cache is rebuilt while local drafts and their managed attachments are preserved. The blocker message reports queued-change and unsent-mail counts; queued changes must sync, while unsent mail can be opened in that account's Outbox. Password replacement remains a separate action.
 
+## Flag refresh without CONDSTORE
+
+Servers that advertise CONDSTORE or QRESYNC send flag changes by modification sequence, so Postal Snap only fetches what changed. Servers without it, including GreenMail, need full `UID FLAGS` scans to see flag changes that do not move the unread count.
+
+Those servers use windowed flag scans. Background passes refresh only the newest 5,000 cached UIDs, at most every 15 minutes or when the unread count changes. A full scan of every cached UID runs at most once per 24 hours per folder, on an explicit Get Mail, or when a folder shows a possible expunge. The last full scan is kept in memory, so a restart costs one full scan per folder.
+
 ## Repeatable verification
 
 Run the synthetic native Bridge checks without Docker:

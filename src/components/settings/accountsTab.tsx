@@ -216,9 +216,9 @@ export function AccountsTab({
       setMovingId(undefined);
     }
   }
-  async function chooseColor(accountId: string, color: string) {
+  async function chooseColor(accountId: string, color: string | null) {
     const current = accounts.find((item) => item.id === accountId);
-    if (!current || current.color === color) return;
+    if (!current || (current.color ?? null) === color) return;
     setColorError("");
     try {
       const updated = await api.updateAccountColor(accountId, color);
@@ -516,6 +516,14 @@ export function AccountsTab({
                           />
                         ))}
                       </div>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        disabled={!account.color}
+                        onClick={() => void chooseColor(account.id, null)}
+                      >
+                        {strings.settings.accountColorClear}
+                      </button>
                       {colorError ? (
                         <p className="settings-error-message" role="alert">
                           {colorError}

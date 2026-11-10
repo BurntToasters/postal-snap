@@ -149,9 +149,7 @@ pub async fn export_mailbox_mbox(
             skipped: 0,
         });
     };
-    let file = tokio::fs::File::create(&path)
-        .await
-        .map_err(|_| io_failure())?;
+    let (temp, file) = create_export_temp(&path).await?;
     let operation = Operation::start();
     let outcome = export_messages(
         &app,
@@ -163,7 +161,7 @@ pub async fn export_mailbox_mbox(
         total,
     )
     .await;
-    let (exported, skipped) = finish_export(&path, outcome).await?;
+    let (exported, skipped) = finish_export(&temp, &path, outcome).await?;
     download_mark::mark_downloaded(&path);
     Ok(MboxExportResult {
         operation_id: Some(operation.id.clone()),
@@ -172,16 +170,46 @@ pub async fn export_mailbox_mbox(
     })
 }
 
-/// A failed or cancelled export leaves no partial file. The path was created
-/// by this run, so removing it never touches an earlier file.
+/// Creates a new temp file beside the destination. The destination is not
+/// opened, so a symlink or non-file there is refused and never written through.
+async fn create_export_temp(destination: &Path) -> Result<(PathBuf, tokio::fs::File), String> {
+    match tokio::fs::symlink_metadata(destination).await {
+        Ok(meta) if meta.file_type().is_symlink() || !meta.is_file() => {
+            return Err(io_failure());
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err(io_failure()),
+    }
+    let parent = destination.parent().ok_or_else(io_failure)?;
+    let temp = parent.join(format!(".postal-export-{}.partial", uuid::Uuid::new_v4()));
+    let mut options = tokio::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW);
+    let file = options.open(&temp).await.map_err(|_| io_failure())?;
+    Ok((temp, file))
+}
+
+/// Renames a finished export over the destination. A failed or cancelled
+/// export removes only its temp file, so an earlier file survives.
 async fn finish_export(
-    path: &Path,
+    temp: &Path,
+    destination: &Path,
     outcome: Result<(u32, u32), String>,
 ) -> Result<(u32, u32), String> {
-    if outcome.is_err() {
-        let _ = tokio::fs::remove_file(path).await;
+    let counts = match outcome {
+        Ok(counts) => counts,
+        Err(error) => {
+            let _ = tokio::fs::remove_file(temp).await;
+            return Err(error);
+        }
+    };
+    if tokio::fs::rename(temp, destination).await.is_err() {
+        let _ = tokio::fs::remove_file(temp).await;
+        return Err(io_failure());
     }
-    outcome
+    Ok(counts)
 }
 
 async fn pick_export_destination(app: &AppHandle) -> Result<Option<PathBuf>, String> {
@@ -474,7 +502,7 @@ pub fn cancel_mbox_operation(operation_id: String) -> CommandResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::{io::Write as _, path::Path};
+    use std::path::Path;
 
     use super::*;
 
@@ -504,31 +532,55 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancelled_export_removes_the_partial_file_it_created() {
+    async fn cancelled_export_removes_only_its_temp_file() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("partial.mbox");
-        let mut file = std::fs::File::create(&path).unwrap();
-        let mut record = Vec::new();
-        mbox::write_record(
-            &mut record,
-            b"Subject: a\n\nfirst\n",
-            "Sat Nov  7 10:00:00 2026",
-        )
-        .unwrap();
-        file.write_all(&record).unwrap();
+        let destination = dir.path().join("Mailbox.mbox");
+        let (temp, mut file) = create_export_temp(&destination).await.unwrap();
+        file.write_all(b"From a\n\nfirst\n").await.unwrap();
         drop(file);
-        let outcome = finish_export(&path, Err("Export was cancelled.".into())).await;
+        let outcome = finish_export(&temp, &destination, Err("Export was cancelled.".into())).await;
         assert_eq!(outcome, Err("Export was cancelled.".into()));
-        assert!(!path.exists());
+        assert!(!temp.exists());
+        assert!(!destination.exists());
     }
 
     #[tokio::test]
-    async fn successful_export_keeps_its_file() {
+    async fn failed_export_keeps_a_preexisting_destination() {
+        // Failure mode: a failed export deletes the user's earlier file.
         let dir = tempfile::tempdir().unwrap();
-        let path = temp_file(dir.path(), "done.mbox", b"From a\n\n");
-        let outcome = finish_export(&path, Ok((1, 0))).await;
+        let destination = temp_file(dir.path(), "Mailbox.mbox", b"earlier export");
+        let (temp, file) = create_export_temp(&destination).await.unwrap();
+        drop(file);
+        let outcome = finish_export(&temp, &destination, Err("Export was cancelled.".into())).await;
+        assert_eq!(outcome, Err("Export was cancelled.".into()));
+        assert_eq!(std::fs::read(&destination).unwrap(), b"earlier export");
+        assert!(!temp.exists());
+    }
+
+    #[tokio::test]
+    async fn successful_export_replaces_the_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        let destination = temp_file(dir.path(), "Mailbox.mbox", b"old");
+        let (temp, mut file) = create_export_temp(&destination).await.unwrap();
+        file.write_all(b"From new\n\n").await.unwrap();
+        drop(file);
+        let outcome = finish_export(&temp, &destination, Ok((1, 0))).await;
         assert_eq!(outcome, Ok((1, 0)));
-        assert!(path.exists());
+        assert_eq!(std::fs::read(&destination).unwrap(), b"From new\n\n");
+        assert!(!temp.exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn export_refuses_a_symlink_destination() {
+        // Failure mode: File::create follows the link and truncates its target.
+        let dir = tempfile::tempdir().unwrap();
+        let target = temp_file(dir.path(), "target.mbox", b"keep me");
+        let link = dir.path().join("Mailbox.mbox");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(create_export_temp(&link).await.is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"keep me");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
     }
 
     #[test]

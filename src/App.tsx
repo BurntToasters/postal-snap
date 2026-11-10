@@ -28,6 +28,7 @@ import { SetupWizard } from "./components/SetupWizard";
 import { SetupFlow } from "./components/SetupFlow";
 import { MailShell } from "./components/MailShell";
 import { EmlViewer } from "./components/EmlViewer";
+import { useFrameLinkRouter } from "./components/frameLinkRouter";
 import { NoticeRegion } from "./components/NoticeRegion";
 import {
   SettingsDialog,
@@ -116,6 +117,7 @@ export default function App() {
   const savedComposerDraft = useRef<SavedComposerDraft | undefined>(undefined);
 
   useUnreadBadge();
+  useFrameLinkRouter();
 
   const onComposerDraftSaved = useCallback(
     (draftId: string) => {

@@ -9,8 +9,6 @@
    ring, inset so the window clip does not cut it. */
 .composer-window {
   --composer-focus-color: var(--focus);
-  --composer-focus-width: 3px;
-  --composer-focus-inset: -3px;
   --composer-header-height: min(var(--bar-height-md), 3rem);
 }
 
@@ -100,7 +98,7 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
 
 .composer-layer-followup:not(.composer-layer-maximized) {
   place-items: end center;
-  padding: 12px 18px 18px;
+  padding: var(--composer-layer-pad);
   pointer-events: none;
   background: transparent;
 }
@@ -204,8 +202,8 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
 .composer-docked-pill {
   position: fixed;
   z-index: 50;
-  bottom: 24px;
-  right: 28px;
+  bottom: var(--composer-docked-inset-block);
+  right: var(--composer-docked-inset-inline);
   display: flex;
   align-items: center;
   max-width: var(--composer-docked-pill-max-width);
@@ -221,7 +219,7 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
 @keyframes slide-up {
   from {
     opacity: 0;
-    transform: translateY(12px);
+    transform: translateY(var(--motion-slide-distance));
   }
   to {
     opacity: 1;
@@ -474,10 +472,32 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
   border-collapse: collapse;
 }
 
+/* A blocked remote picture: unloaded here, sent with the message. */
+.composer-editor .composer-remote-image {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-height);
+  padding: var(--space-1) var(--space-3);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  line-height: 1.4;
+  vertical-align: middle;
+  user-select: none;
+}
+
+.composer-editor .composer-remote-image::before {
+  content: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%236e6e73' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='18' height='18' rx='2'/%3E%3Ccircle cx='9' cy='9' r='2'/%3E%3Cpath d='m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21'/%3E%3C/svg%3E");
+  flex-shrink: 0;
+}
+
 .composer-editor td,
 .composer-editor th {
   min-width: var(--composer-table-cell-min-width);
-  padding: 6px;
+  padding: var(--composer-cell-pad);
   border: 1px solid var(--border);
 }
 
@@ -714,7 +734,7 @@ html[data-text-scale="large"]
 }
 
 .field-error {
-  margin: 4px 0 6px 15px;
+  margin: var(--field-error-margin);
   color: var(--danger);
   font-size: var(--fs-md);
   font-weight: 600;
@@ -799,7 +819,7 @@ html[data-text-scale="large"]
   display: grid;
   align-content: center;
   justify-items: center;
-  gap: 10px;
+  gap: var(--composer-drop-gap);
   border: 3px dashed var(--accent, var(--focus));
   border-radius: inherit;
   color: var(--text);

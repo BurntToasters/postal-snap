@@ -100,8 +100,8 @@
   display: inline-flex;
   min-height: var(--control-height);
   align-items: center;
-  gap: 6px;
-  padding: 0 6px;
+  gap: var(--text-button-gap);
+  padding: 0 var(--text-button-pad-inline);
   border: 0;
   border-radius: var(--radius-sm);
   /* Ink, not accent: readable on sidebar and dialog surfaces. */

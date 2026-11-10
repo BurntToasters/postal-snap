@@ -255,7 +255,7 @@ impl Database {
     /// Whether a mailbox accepts keywords, as recorded at its last SELECT.
     pub fn mailbox_allows_keywords(&self, account_id: &str, mailbox: &str) -> Result<bool, String> {
         Ok(self
-            .conn()?
+            .read_conn()?
             .query_row(
                 "SELECT allows_keywords != 0 FROM mailboxes WHERE account_id=?1 AND name=?2",
                 params![account_id, mailbox],
@@ -272,7 +272,7 @@ impl Database {
         account_id: &str,
         dedupe_key: &str,
     ) -> Result<bool, String> {
-        self.conn()?
+        self.read_conn()?
             .query_row(
                 "SELECT 1 FROM offline_ops WHERE account_id=?1 AND dedupe_key=?2 LIMIT 1",
                 params![account_id, dedupe_key],
@@ -322,7 +322,7 @@ impl Database {
     ) -> Result<Vec<(i64, String, String, i64)>, String> {
         let session = self.current_undo_session()?;
         let now = format_instant(chrono::Utc::now());
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut statement = conn
             .prepare(
                 "SELECT o.id,o.kind,o.payload,o.attempts FROM offline_ops o

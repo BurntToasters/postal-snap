@@ -1352,6 +1352,30 @@ fn land_pending_snoozes(db: &Database, account_id: &str, destination: &str) {
     }
 }
 
+/// Transient replay failures before an offline op is retired.
+const MAX_OFFLINE_OP_ATTEMPTS: i64 = 10;
+
+/// `attempts` counts failures before this one, so this failure records
+/// attempt `attempts + 1`. Reaching the cap retires the op.
+fn should_drop_after_transient(attempts: i64) -> bool {
+    attempts.saturating_add(1) >= MAX_OFFLINE_OP_ATTEMPTS
+}
+
+/// Records a transient failure, or retires the op at the cap. True when retired.
+fn record_transient_failure(
+    db: &Database,
+    account_id: &str,
+    id: i64,
+    attempts: i64,
+) -> Result<bool, String> {
+    if should_drop_after_transient(attempts) {
+        db.remove_operation(account_id, id)?;
+        return Ok(true);
+    }
+    let _ = db.record_operation_attempt(account_id, id);
+    Ok(false)
+}
+
 async fn replay_offline_operations(
     app: &AppHandle,
     db: &Database,
@@ -1375,6 +1399,10 @@ async fn replay_offline_operations_with_notification(
     let account_id = &account.summary.id;
     let mut dropped = 0u32;
     let queued = db.queued_operations_with_attempts(account_id)?;
+    let attempts_by_id: HashMap<i64, i64> = queued
+        .iter()
+        .map(|(id, _, _, attempts)| (*id, *attempts))
+        .collect();
     let operations: Vec<(i64, String, String)> = queued
         .iter()
         .map(|(id, kind, payload, _)| (*id, kind.clone(), payload.clone()))
@@ -1454,7 +1482,10 @@ async fn replay_offline_operations_with_notification(
                 )?;
                 db.apply_flag_color(operation.message_id, color)?;
                 if result.is_err() {
-                    let _ = db.record_operation_attempt(account_id, id);
+                    let attempts = attempts_by_id.get(&id).copied().unwrap_or(0);
+                    if record_transient_failure(db, account_id, id, attempts)? {
+                        dropped = dropped.saturating_add(1);
+                    }
                     continue;
                 }
                 flag_state.failed_messages.remove(&operation.message_id);
@@ -1474,7 +1505,10 @@ async fn replay_offline_operations_with_notification(
                         db.remove_operation(account_id, id)?;
                         dropped = dropped.saturating_add(1);
                     } else {
-                        let _ = db.record_operation_attempt(account_id, id);
+                        let attempts = attempts_by_id.get(&id).copied().unwrap_or(0);
+                        if record_transient_failure(db, account_id, id, attempts)? {
+                            dropped = dropped.saturating_add(1);
+                        }
                     }
                     continue;
                 }
@@ -1539,7 +1573,11 @@ async fn replay_offline_operations_with_notification(
                             for flag_id in &dependencies.operation_ids {
                                 flag_state.handled.insert(*flag_id);
                             }
-                            let _ = db.record_operation_attempt(account_id, id);
+                            let attempts = attempts_by_id.get(&id).copied().unwrap_or(0);
+                            if record_transient_failure(db, account_id, id, attempts)? {
+                                let _ = db.clear_pending_move(operation.message_id);
+                                dropped = dropped.saturating_add(1);
+                            }
                             continue;
                         }
                     }
@@ -1581,7 +1619,11 @@ async fn replay_offline_operations_with_notification(
                             )
                             .is_err()
                         {
-                            let _ = db.record_operation_attempt(account_id, id);
+                            let attempts = attempts_by_id.get(&id).copied().unwrap_or(0);
+                            if record_transient_failure(db, account_id, id, attempts)? {
+                                let _ = db.clear_pending_move(operation.message_id);
+                                dropped = dropped.saturating_add(1);
+                            }
                             continue;
                         }
                         let _ = mail::refresh_mailbox_envelopes(
@@ -1607,10 +1649,16 @@ async fn replay_offline_operations_with_notification(
                             for flag_id in &dependencies.operation_ids {
                                 flag_state.handled.insert(*flag_id);
                             }
+                            // Transient failure: keep the queued op and the
+                            // pending-move hiding so a later sync retries it.
+                            // At the cap the move is retired, and its hiding
+                            // is cleared with it.
+                            let attempts = attempts_by_id.get(&id).copied().unwrap_or(0);
+                            if record_transient_failure(db, account_id, id, attempts)? {
+                                let _ = db.clear_pending_move(operation.message_id);
+                                dropped = dropped.saturating_add(1);
+                            }
                         }
-                        // Transient failure: keep the queued op and the
-                        // pending-move hiding so a later sync retries it.
-                        let _ = db.record_operation_attempt(account_id, id);
                         continue;
                     }
                 }
@@ -1635,7 +1683,10 @@ async fn replay_offline_operations_with_notification(
                         db.remove_operation(account_id, id)?;
                         dropped = dropped.saturating_add(1);
                     } else {
-                        let _ = db.record_operation_attempt(account_id, id);
+                        let attempts = attempts_by_id.get(&id).copied().unwrap_or(0);
+                        if record_transient_failure(db, account_id, id, attempts)? {
+                            dropped = dropped.saturating_add(1);
+                        }
                     }
                     continue;
                 }
@@ -3656,5 +3707,59 @@ mod tests {
             plan_replay_batches(&candidates, MOVE_CAPABLE),
             vec![vec![0], vec![1], vec![2], vec![3]]
         );
+    }
+
+    // Attempt cap failure modes for offline replay:
+    // 1. The first transient failures keep the op queued.
+    // 2. The failure that would record the cap retires the op, not just counts it.
+    // 3. A huge attempt count overflows instead of retiring.
+    // 4. The DB helper leaves the row queued below the cap, and removes it at the cap.
+    #[test]
+    fn attempt_cap_keeps_the_op_below_the_cap() {
+        use super::should_drop_after_transient;
+        for attempts in 0..(super::MAX_OFFLINE_OP_ATTEMPTS - 1) {
+            assert!(
+                !should_drop_after_transient(attempts),
+                "attempts {attempts}"
+            );
+        }
+    }
+
+    #[test]
+    fn attempt_cap_retires_the_failure_that_reaches_it() {
+        use super::{should_drop_after_transient, MAX_OFFLINE_OP_ATTEMPTS};
+        assert!(should_drop_after_transient(MAX_OFFLINE_OP_ATTEMPTS - 1));
+        assert!(should_drop_after_transient(MAX_OFFLINE_OP_ATTEMPTS));
+        assert!(should_drop_after_transient(i64::MAX));
+    }
+
+    #[test]
+    fn transient_failure_counts_until_the_cap_then_drops_the_op() {
+        use super::{record_transient_failure, MAX_OFFLINE_OP_ATTEMPTS};
+        let db = Database::memory();
+        let account = rule_account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        db.queue_operation(
+            account_id,
+            "keyword",
+            &serde_json::json!({"m": 1}),
+            Some("cap"),
+        )
+        .unwrap();
+        for expected in 1..MAX_OFFLINE_OP_ATTEMPTS {
+            let (id, _, _, attempts) = db
+                .queued_operations_with_attempts(account_id)
+                .unwrap()
+                .remove(0);
+            assert_eq!(attempts, expected - 1);
+            assert!(!record_transient_failure(&db, account_id, id, attempts).unwrap());
+        }
+        let (id, _, _, attempts) = db
+            .queued_operations_with_attempts(account_id)
+            .unwrap()
+            .remove(0);
+        assert!(record_transient_failure(&db, account_id, id, attempts).unwrap());
+        assert!(db.queued_operations(account_id).unwrap().is_empty());
     }
 }

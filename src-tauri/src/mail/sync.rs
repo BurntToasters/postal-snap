@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
+    sync::{LazyLock, Mutex},
     time::Duration,
 };
 
@@ -84,6 +85,71 @@ const BACKFILL_BATCHES_PER_PASS: u32 = 4;
 /// visible to a full flag scan, so rescan at least this often.
 const FLAG_SCAN_INTERVAL: chrono::Duration = chrono::Duration::minutes(15);
 
+/// Without CONDSTORE, a full flag scan runs at most this often per folder.
+const FULL_FLAG_SCAN_INTERVAL: chrono::Duration = chrono::Duration::hours(24);
+
+/// Newest cached UIDs refreshed by an interval or unread-change flag scan.
+pub(crate) const FLAG_WINDOW_UIDS: usize = 5_000;
+
+/// How a folder without CONDSTORE refreshes flags in one pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FlagScan {
+    Skip,
+    /// Only the newest `FLAG_WINDOW_UIDS` cached UIDs.
+    Window,
+    /// Every cached UID.
+    Full,
+}
+
+/// `due` means the scan interval elapsed or the unread count changed.
+/// `explicit` means the user asked for Get Mail.
+pub(crate) fn plan_flag_scan(
+    due: bool,
+    explicit: bool,
+    last_full: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+) -> FlagScan {
+    if explicit {
+        return FlagScan::Full;
+    }
+    if !due {
+        return FlagScan::Skip;
+    }
+    let full_due = last_full.is_none_or(|last| now - last >= FULL_FLAG_SCAN_INTERVAL);
+    if full_due {
+        FlagScan::Full
+    } else {
+        FlagScan::Window
+    }
+}
+
+/// The newest `limit` UIDs of an ascending list.
+pub(crate) fn flag_scan_window(uids: &[u32], limit: usize) -> &[u32] {
+    &uids[uids.len().saturating_sub(limit)..]
+}
+
+/// Last full flag scan per (account, folder). Memory only: a restart costs one
+/// extra full scan per folder.
+type FullScanMap = HashMap<(String, String), DateTime<Utc>>;
+
+static FULL_FLAG_SCANS: LazyLock<Mutex<FullScanMap>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn last_full_flag_scan(account_id: &str, folder: &str) -> Option<DateTime<Utc>> {
+    let scans = FULL_FLAG_SCANS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    scans
+        .get(&(account_id.to_string(), folder.to_string()))
+        .copied()
+}
+
+fn record_full_flag_scan(account_id: &str, folder: &str, at: DateTime<Utc>) {
+    let mut scans = FULL_FLAG_SCANS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    scans.insert((account_id.to_string(), folder.to_string()), at);
+}
+
 /// Hooks the account worker gives a sync pass: it lets user actions preempt
 /// background work between folders and batches, and reports progress.
 pub trait SyncHooks: Send {
@@ -97,6 +163,12 @@ pub trait SyncHooks: Send {
     /// Get Mail: fetch new envelopes and flags only. Backfill and body
     /// downloads are left to the worker's next pass.
     fn quick(&self) -> bool {
+        false
+    }
+
+    /// An explicit user Get Mail: refresh every flag on servers without
+    /// CONDSTORE instead of the bounded window.
+    fn explicit_refresh(&self) -> bool {
         false
     }
 
@@ -615,15 +687,24 @@ async fn sync_folder<H: SyncHooks>(
     let cutoff = policy.cutoff();
     let backfill_active = meta.backfill_state == "active"
         || (meta.backfill_state == "cutoff" && policy.mode == "full");
-    let flag_scan_due = !condstore
-        && (previous
-            .as_ref()
-            .is_none_or(|meta| meta.server_unread != status.unseen)
-            || meta
-                .last_flag_scan_at
-                .as_deref()
-                .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-                .is_none_or(|last| Utc::now() - last.with_timezone(&Utc) > FLAG_SCAN_INTERVAL));
+    let flag_interval_due = previous
+        .as_ref()
+        .is_none_or(|meta| meta.server_unread != status.unseen)
+        || meta
+            .last_flag_scan_at
+            .as_deref()
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+            .is_none_or(|last| Utc::now() - last.with_timezone(&Utc) > FLAG_SCAN_INTERVAL);
+    let flag_scan = if condstore {
+        FlagScan::Skip
+    } else {
+        plan_flag_scan(
+            flag_interval_due,
+            hooks.explicit_refresh(),
+            last_full_flag_scan(account_id, &folder.name),
+            Utc::now(),
+        )
+    };
     let unchanged = !purged
         && previous.as_ref().is_some_and(|meta| {
             meta.uid_next == status.uid_next
@@ -638,7 +719,8 @@ async fn sync_folder<H: SyncHooks>(
             .is_empty();
     // Work a quick pass leaves for the worker.
     let deferred = quick && (backfill_active || wants_prefetch);
-    if unchanged && !flag_scan_due && (quick || (!backfill_active && !wants_prefetch)) {
+    if unchanged && flag_scan == FlagScan::Skip && (quick || (!backfill_active && !wants_prefetch))
+    {
         return Ok((deferred, false));
     }
     if status.exists == 0 {
@@ -755,10 +837,24 @@ async fn sync_folder<H: SyncHooks>(
         }
         db.set_highest_modseq(mailbox_id, modseq_before_fetch)?;
     } else if condstore {
-        full_flag_scan(lease, db, mailbox_id).await?;
+        full_flag_scan(
+            lease,
+            db,
+            account_id,
+            &folder.name,
+            mailbox_id,
+            FlagScan::Full,
+        )
+        .await?;
         db.set_highest_modseq(mailbox_id, modseq_before_fetch)?;
-    } else if flag_scan_due || expunge_suspected {
-        full_flag_scan(lease, db, mailbox_id).await?;
+    } else if flag_scan != FlagScan::Skip || expunge_suspected {
+        // Only a full scan can find an expunge anywhere in the folder.
+        let scope = if expunge_suspected {
+            FlagScan::Full
+        } else {
+            flag_scan
+        };
+        full_flag_scan(lease, db, account_id, &folder.name, mailbox_id, scope).await?;
     }
 
     let changed = new_fetched > 0 || !unchanged;
@@ -1108,9 +1204,22 @@ async fn sync_changed_flags(
     Ok(plan)
 }
 
-/// Refresh flags for every cached UID and drop rows the server no longer has.
-async fn full_flag_scan(lease: &mut Lease, db: &Database, mailbox_id: i64) -> Result<(), String> {
-    for chunk in db.cached_uids(mailbox_id)?.chunks(250) {
+/// Refresh flags for cached UIDs (all, or the newest window) and drop rows the
+/// server no longer has within the scanned UIDs.
+async fn full_flag_scan(
+    lease: &mut Lease,
+    db: &Database,
+    account_id: &str,
+    folder: &str,
+    mailbox_id: i64,
+    scope: FlagScan,
+) -> Result<(), String> {
+    let cached = db.cached_uids(mailbox_id)?;
+    let uids = match scope {
+        FlagScan::Window => flag_scan_window(&cached, FLAG_WINDOW_UIDS),
+        _ => &cached[..],
+    };
+    for chunk in uids.chunks(250) {
         let (Some(low), Some(high)) = (chunk.first(), chunk.last()) else {
             continue;
         };
@@ -1130,7 +1239,11 @@ async fn full_flag_scan(lease: &mut Lease, db: &Database, mailbox_id: i64) -> Re
         db.reconcile_flags(mailbox_id, &seen, chunk)?;
         db.reconcile_flag_colors(mailbox_id, &colors)?;
     }
-    db.mark_flag_scan(mailbox_id)
+    db.mark_flag_scan(mailbox_id)?;
+    if scope == FlagScan::Full {
+        record_full_flag_scan(account_id, folder, Utc::now());
+    }
+    Ok(())
 }
 
 /// Remove cached rows that were expunged on the server, using the server's
@@ -2602,5 +2715,96 @@ mod scope_tests {
                 crate::mail::MAX_MESSAGE_BYTES + 1
             )
         );
+    }
+}
+
+#[cfg(test)]
+mod flag_scan_tests {
+    use super::{flag_scan_window, plan_flag_scan, FlagScan, FLAG_WINDOW_UIDS};
+    use chrono::{DateTime, Duration, Utc};
+
+    fn now() -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339("2026-11-08T12:00:00+00:00")
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
+    #[test]
+    fn nothing_due_skips_the_flag_scan() {
+        let last_full = Some(now() - Duration::hours(1));
+        assert_eq!(
+            plan_flag_scan(false, false, last_full, now()),
+            FlagScan::Skip
+        );
+    }
+
+    #[test]
+    fn first_due_scan_of_a_folder_is_full() {
+        assert_eq!(plan_flag_scan(true, false, None, now()), FlagScan::Full);
+    }
+
+    #[test]
+    fn due_scan_inside_a_day_is_windowed() {
+        let last_full = Some(now() - Duration::hours(1));
+        assert_eq!(
+            plan_flag_scan(true, false, last_full, now()),
+            FlagScan::Window
+        );
+        let just_under = Some(now() - Duration::hours(24) + Duration::seconds(1));
+        assert_eq!(
+            plan_flag_scan(true, false, just_under, now()),
+            FlagScan::Window
+        );
+    }
+
+    #[test]
+    fn due_scan_after_a_day_is_full() {
+        let exactly = Some(now() - Duration::hours(24));
+        assert_eq!(plan_flag_scan(true, false, exactly, now()), FlagScan::Full);
+        let old = Some(now() - Duration::hours(25));
+        assert_eq!(plan_flag_scan(true, false, old, now()), FlagScan::Full);
+    }
+
+    #[test]
+    fn explicit_get_mail_is_full_even_when_nothing_else_is_due() {
+        let last_full = Some(now() - Duration::minutes(1));
+        assert_eq!(
+            plan_flag_scan(false, true, last_full, now()),
+            FlagScan::Full
+        );
+        assert_eq!(plan_flag_scan(true, true, last_full, now()), FlagScan::Full);
+    }
+
+    #[test]
+    fn future_full_scan_stamp_from_clock_skew_does_not_force_full_scans() {
+        let future = Some(now() + Duration::hours(3));
+        assert_eq!(plan_flag_scan(true, false, future, now()), FlagScan::Window);
+    }
+
+    #[test]
+    fn window_keeps_the_newest_uids_in_ascending_order() {
+        let uids: Vec<u32> = (1..=10).collect();
+        assert_eq!(flag_scan_window(&uids, 3), &[8, 9, 10]);
+    }
+
+    #[test]
+    fn window_returns_everything_when_the_folder_is_small() {
+        let uids: Vec<u32> = (1..=5).collect();
+        assert_eq!(flag_scan_window(&uids, 5), &[1, 2, 3, 4, 5]);
+        assert_eq!(flag_scan_window(&uids, 50), &[1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn window_is_empty_for_an_empty_folder_or_zero_limit() {
+        assert!(flag_scan_window(&[], 10).is_empty());
+        assert!(flag_scan_window(&[1, 2, 3], 0).is_empty());
+    }
+
+    #[test]
+    fn default_window_matches_the_documented_size() {
+        let uids: Vec<u32> = (1..=(FLAG_WINDOW_UIDS as u32 + 7)).collect();
+        let window = flag_scan_window(&uids, FLAG_WINDOW_UIDS);
+        assert_eq!(window.len(), FLAG_WINDOW_UIDS);
+        assert_eq!(window.first(), Some(&8));
     }
 }

@@ -20,6 +20,7 @@ vi.mock("../api", () => ({
   api: {
     onNotificationOpen: vi.fn().mockResolvedValue(() => undefined),
     onEmlOpened: vi.fn().mockResolvedValue(() => undefined),
+    onFrameLink: vi.fn().mockResolvedValue(() => undefined),
     beginUndoSession: vi.fn().mockResolvedValue("a".repeat(32)),
     listAccounts: vi.fn(),
     getSettings: vi.fn(),

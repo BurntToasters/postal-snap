@@ -1,6 +1,6 @@
-# Postal Snap 0.5.0 release checklist
+# Postal Snap release checklist
 
-Record the build commit, tester, date, operating-system version, and result for every manual item. A GitHub 0.5.0 release is blocked by any unchecked **required** item. Store items are listed separately and are not a GitHub-train go/no-go.
+Record the build commit, tester, date, operating-system version, and result for every manual item. A GitHub release is blocked by any unchecked **required** item. Store items are listed separately and are not a GitHub-train go/no-go.
 
 Mocked frontend, Playwright, and unit tests do not by themselves mean the release is ready.
 
@@ -8,9 +8,9 @@ At the 2026-10-17 audit, npm audit reported zero vulnerabilities and the RustSec
 
 ## Automated gates
 
-- [ ] Clean checkout uses Node.js 24 and the Rust version pinned in `rust-toolchain.toml`.
+- [ ] Clean checkout uses Node.js 26.13.0 (CI and `package.json` `engines`; `24.22.1` is also allowed) and the Rust version pinned in `rust-toolchain.toml`.
 - [ ] `npm ci` succeeds without lockfile changes.
-- [ ] `npm run audit` reports no npm or RustSec vulnerabilities (online; signing host).
+- [ ] `npm run audit` passes: no npm high-severity advisory and no denied RustSec warning (online; signing host). Moderate dev-only npm advisories are tracked in `docs/partially_implemented.md`.
 - [ ] `npm run workspace:prepare` passes (`SKIP_E2E=1`; Playwright is not required on the signing host).
 - [ ] CI on the release commit is green, including merged Vitest + Playwright coverage from `npm run test:cov`.
 - [ ] `npm run test:mail-integration` passes against pinned GreenMail 2.1.11 TLS services.
@@ -18,6 +18,13 @@ At the 2026-10-17 audit, npm audit reported zero vulnerabilities and the RustSec
 - [ ] Direct feature builds compile. Store (`mas` / `msstore`) compile checks are optional for GitHub-only 0.5.0.
 - [ ] Generated npm and Cargo notices are present in every package.
 - [ ] `src-tauri/tauri.conf.json` updater pubkey is a real minisign key. `TAURI_UPDATER_PUBLIC_KEY` is not required in `.env`; if it is set, it matches the committed key.
+
+## 0.5.2 additions
+
+Automated gate decisions made for 0.5.2. Each must hold on the release commit.
+
+- [ ] `npm run audit:cargo` passes with the acknowledged list unchanged. `pin-utils` (RUSTSEC-2026-0441) is removed from the vendored `async-imap`, and `async-executor` is 1.14.1 because 1.14.0 is yanked. The five existing acknowledged IDs are still reported and stay listed in `scripts/audit-cargo.js`.
+- [ ] `npm run audit:npm` passes. Its gate is high severity; the 14 moderate advisories all come from `minimatch` and `glob` through dev tooling and are recorded in `docs/partially_implemented.md`.
 
 ## 0.5.2 manual checks
 

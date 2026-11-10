@@ -22,7 +22,7 @@ impl Database {
     pub(crate) fn remove_unowned_account_dir(&self, path: &std::path::Path) -> Result<(), String> {
         let id = path.file_name().and_then(|name| name.to_str())
             .ok_or_else(|| "Could not inspect unused attachments.".to_string())?;
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let owned: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM accounts WHERE id = ?1)",
             [id], |row| row.get(0),
@@ -169,7 +169,7 @@ impl Database {
 
     pub fn email_taken(&self, email: &str) -> Result<bool, String> {
         let found: Option<i64> = self
-            .conn()?
+            .read_conn()?
             .query_row(
                 "SELECT 1 FROM accounts WHERE email = ?1 LIMIT 1",
                 [email],
@@ -412,7 +412,7 @@ impl Database {
 
     pub fn account_count(&self) -> Result<usize, String> {
         let count: i64 = self
-            .conn()?
+            .read_conn()?
             .query_row("SELECT COUNT(*) FROM accounts", [], |row| row.get(0))
             .map_err(db_error)?;
         Ok(count.max(0) as usize)
@@ -482,7 +482,7 @@ impl Database {
         &self,
         account_id: &str,
     ) -> Result<crate::models::AccountRemovalImpact, String> {
-        self.conn()?
+        self.read_conn()?
             .query_row(
                 "SELECT
                    (SELECT COUNT(*) FROM outbox WHERE account_id=?1),

@@ -24,11 +24,11 @@
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 6px;
+  gap: var(--toolbar-cluster-gap);
 }
 
 .toolbar-flex-spacer {
-  min-width: 12px;
+  min-width: var(--toolbar-spacer-min);
   flex: 1 1 auto;
 }
 
@@ -214,9 +214,9 @@
 .update-ready-badge {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--update-badge-gap);
   min-height: var(--target-size);
-  padding: 6px 16px;
+  padding: var(--update-badge-pad);
   border: 1px solid var(--accent);
   border-radius: var(--radius-pill);
   background: var(--accent-soft);
@@ -251,7 +251,7 @@
 }
 
 .app-toolbar[data-fit3] .update-ready-badge {
-  padding-inline: 14px;
+  padding-inline: var(--update-badge-pad-fit3-inline);
 }
 
 .app-toolbar[data-fit4] .get-mail-button > span,

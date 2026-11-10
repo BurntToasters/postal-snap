@@ -1,13 +1,14 @@
 use tauri::State;
 
+use super::messages::check_bulk_message_count;
 use super::sync::apply_filter_rules;
 use super::{command_result, wake, AppState, CommandResult};
 use crate::models::{
     rule_lists, validate_filter_rule, FilterMatchPreview, FilterRule, SnoozedSummary,
 };
 
-#[tauri::command]
-pub async fn snooze_message(
+#[tauri::command(async)]
+pub fn snooze_message(
     account_id: String,
     message_id: i64,
     until_iso: String,
@@ -40,6 +41,7 @@ pub fn snooze_messages(
     state: State<'_, AppState>,
 ) -> CommandResult<()> {
     use chrono::{DateTime, Utc};
+    check_bulk_message_count(message_ids.len())?;
     state.db.account(&account_id)?;
     let until = DateTime::parse_from_rfc3339(&until_iso)
         .map_err(|_| "Pick a valid date and time.".to_string())?

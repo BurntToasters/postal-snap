@@ -130,6 +130,18 @@ fn redirect_headers(
     Ok(format!("{}\r\n", lines.join("\r\n")))
 }
 
+/// The From mailbox. lettre quotes a name with commas or quotes; control
+/// characters are removed so they cannot split the header.
+fn sender_mailbox(display_name: &str, email: &str) -> Result<Mailbox, String> {
+    let address: lettre::Address = email
+        .parse()
+        .map_err(|_| "The sender address is invalid.".to_string())?;
+    let name: String = display_name.chars().filter(|c| !c.is_control()).collect();
+    let name = name.trim();
+    let name = (!name.is_empty()).then(|| name.to_string());
+    Ok(Mailbox::new(name, address))
+}
+
 fn redirect_from(display_name: &str, email: &str) -> Result<String, String> {
     let address: lettre::Address = email
         .parse()
@@ -371,6 +383,13 @@ fn non_pinned_send_timeout(len: usize) -> Duration {
     send_timeout(len)
 }
 
+/// lettre keeps its connect-failure kind private. Its Debug output opens with
+/// the kind, so only that prefix counts, never a source message.
+/// `refused_smtp_connection_is_not_sent` pins this.
+fn lettre_connect_failed(error: &lettre::transport::smtp::Error) -> bool {
+    format!("{error:?}").starts_with("lettre::transport::smtp::Error { kind: Connection")
+}
+
 /// A send that runs past its limit may have reached the server: Uncertain.
 async fn within_send_timeout<T>(
     limit: Duration,
@@ -399,16 +418,7 @@ pub async fn send_prepared(
     if account.smtp.trusted_certificate.is_some() {
         let mut connection = connect_pinned_smtp(&account.smtp, &password, xoauth2)
             .await
-            .map_err(|message| SendError {
-                kind: if message.to_ascii_lowercase().contains("certificate")
-                    || message.to_ascii_lowercase().contains("tls")
-                    || message.contains("sign-in")
-                {
-                    SendFailure::NotSentRefused
-                } else {
-                    SendFailure::NotSentRetry
-                },
-            })?;
+            .map_err(|error| SendError { kind: error.kind })?;
         within_send_timeout(send_timeout(bytes.len()), async {
             connection
                 .send(&envelope, bytes)
@@ -430,11 +440,9 @@ pub async fn send_prepared(
             .send_raw(&envelope, bytes)
             .await
             .map_err(|error| SendError {
-                // lettre keeps its connect-failure kind private; its Debug output
-                // names it. `refused_smtp_connection_is_not_sent` pins this.
                 kind: classify_send_failure(SmtpErrorTraits::of(
                     &error,
-                    format!("{error:?}").contains("kind: Connection"),
+                    lettre_connect_failed(&error),
                 )),
             })
     })
@@ -609,77 +617,138 @@ async fn smtp_reply(tcp: &mut TcpStream, expected: &[u8; 3]) -> Result<bool, Str
     Err("Outgoing server response exceeded the safe limit.".into())
 }
 
+/// A pinned connect failure. Every step runs before the message is sent, so
+/// the kind is a retry or a refusal, never Uncertain.
+#[derive(Debug)]
+struct PinnedConnectError {
+    kind: SendFailure,
+    message: String,
+}
+
+impl PinnedConnectError {
+    /// Configuration, certificate, TLS, or sign-in problems: a retry cannot help.
+    fn refused(message: impl Into<String>) -> Self {
+        Self {
+            kind: SendFailure::NotSentRefused,
+            message: message.into(),
+        }
+    }
+
+    fn retry(message: impl Into<String>) -> Self {
+        Self {
+            kind: SendFailure::NotSentRetry,
+            message: message.into(),
+        }
+    }
+}
+
+/// Socket and reply text is retry-class.
+impl From<String> for PinnedConnectError {
+    fn from(message: String) -> Self {
+        Self::retry(message)
+    }
+}
+
+impl From<PinnedConnectError> for String {
+    fn from(error: PinnedConnectError) -> Self {
+        error.message
+    }
+}
+
 async fn connect_pinned_smtp(
     server: &ServerConfig,
     password: &str,
     xoauth2: bool,
-) -> Result<lettre::transport::smtp::client::AsyncSmtpConnection, String> {
+) -> Result<lettre::transport::smtp::client::AsyncSmtpConnection, PinnedConnectError> {
     if xoauth2 {
-        return Err("This sign-in only works with the provider's mail servers.".into());
+        return Err(PinnedConnectError::refused(
+            "This sign-in only works with the provider's mail servers.",
+        ));
     }
-    tokio::time::timeout(CONNECT_TIMEOUT, async {
-        use lettre::transport::smtp::{client::AsyncSmtpConnection, extension::ClientId};
-        crate::bridge::validate_loopback(&server.host)?;
-        let pem = server
-            .trusted_certificate
-            .as_deref()
-            .ok_or("The Bridge certificate is unavailable.")?;
-        crate::bridge::certificate_metadata(pem)?;
-        let certificate = tokio_native_tls::native_tls::Certificate::from_pem(pem.as_bytes())
-            .map_err(|_| "The saved Bridge certificate is invalid.".to_string())?;
-        let connector = tokio_native_tls::native_tls::TlsConnector::builder()
-            .add_root_certificate(certificate)
-            .build()
-            .map_err(|error| crate::bridge::tls_error(&error, "Outgoing TLS setup"))?;
-        let mut tcp = TcpStream::connect((server.host.as_str(), server.port))
-            .await
-            .map_err(|error| redact_error(&error, "Outgoing connection"))?;
-        let peer = tcp
-            .peer_addr()
-            .map_err(|_| "Outgoing connection is unavailable.".to_string())?;
-        let greeting = match server.tls_mode {
-            TlsMode::Tls => &b""[..],
-            TlsMode::StartTls => {
-                smtp_reply(&mut tcp, b"220").await?;
-                tcp.write_all(b"EHLO localhost\r\n")
-                    .await
-                    .map_err(|_| "Outgoing connection failed.".to_string())?;
-                if !smtp_reply(&mut tcp, b"250").await? {
-                    return Err("Required outgoing STARTTLS is unavailable.".into());
-                }
-                tcp.write_all(b"STARTTLS\r\n")
-                    .await
-                    .map_err(|_| "Required outgoing STARTTLS failed.".to_string())?;
-                smtp_reply(&mut tcp, b"220").await?;
-                &b"220 localhost ESMTP\r\n"[..]
-            }
-        };
-        let connector = tokio_native_tls::TlsConnector::from(connector);
-        let stream = connector
-            .connect(&server.host, tcp)
-            .await
-            .map_err(|error| crate::bridge::tls_error(&error, "Outgoing TLS negotiation"))?;
-        verify_pinned_stream(server, &stream)?;
-        let stream = PinnedSmtpStream {
-            stream,
-            peer,
-            greeting,
-        };
-        let mut connection =
-            AsyncSmtpConnection::connect_with_transport(Box::new(stream), &ClientId::default())
+    match tokio::time::timeout(CONNECT_TIMEOUT, pinned_connect_steps(server, password)).await {
+        Ok(result) => result,
+        Err(_) => Err(PinnedConnectError::retry(
+            "Outgoing server timed out before sending.",
+        )),
+    }
+}
+
+async fn pinned_connect_steps(
+    server: &ServerConfig,
+    password: &str,
+) -> Result<lettre::transport::smtp::client::AsyncSmtpConnection, PinnedConnectError> {
+    use lettre::transport::smtp::{client::AsyncSmtpConnection, extension::ClientId};
+    crate::bridge::validate_loopback(&server.host).map_err(PinnedConnectError::refused)?;
+    let pem = server
+        .trusted_certificate
+        .as_deref()
+        .ok_or_else(|| PinnedConnectError::refused("The Bridge certificate is unavailable."))?;
+    crate::bridge::certificate_metadata(pem).map_err(PinnedConnectError::refused)?;
+    let certificate = tokio_native_tls::native_tls::Certificate::from_pem(pem.as_bytes())
+        .map_err(|_| PinnedConnectError::refused("The saved Bridge certificate is invalid."))?;
+    let connector = tokio_native_tls::native_tls::TlsConnector::builder()
+        .add_root_certificate(certificate)
+        .build()
+        .map_err(|error| {
+            PinnedConnectError::refused(crate::bridge::tls_error(&error, "Outgoing TLS setup"))
+        })?;
+    let mut tcp = TcpStream::connect((server.host.as_str(), server.port))
+        .await
+        .map_err(|error| redact_error(&error, "Outgoing connection"))?;
+    let peer = tcp
+        .peer_addr()
+        .map_err(|_| "Outgoing connection is unavailable.".to_string())?;
+    let greeting = match server.tls_mode {
+        TlsMode::Tls => &b""[..],
+        TlsMode::StartTls => {
+            smtp_reply(&mut tcp, b"220").await?;
+            tcp.write_all(b"EHLO localhost\r\n")
                 .await
-                .map_err(|error| redact_error(&error, "Outgoing greeting"))?;
-        connection
-            .auth(
-                &smtp_auth_mechanisms(false),
-                &Credentials::new(server.username.clone(), password.to_owned()),
-            )
+                .map_err(|_| "Outgoing connection failed.".to_string())?;
+            if !smtp_reply(&mut tcp, b"250").await? {
+                return Err(PinnedConnectError::refused(
+                    "Required outgoing STARTTLS is unavailable.",
+                ));
+            }
+            tcp.write_all(b"STARTTLS\r\n")
+                .await
+                .map_err(|_| "Required outgoing STARTTLS failed.".to_string())?;
+            smtp_reply(&mut tcp, b"220").await?;
+            &b"220 localhost ESMTP\r\n"[..]
+        }
+    };
+    let connector = tokio_native_tls::TlsConnector::from(connector);
+    let stream = connector
+        .connect(&server.host, tcp)
+        .await
+        .map_err(|error| {
+            PinnedConnectError::refused(crate::bridge::tls_error(
+                &error,
+                "Outgoing TLS negotiation",
+            ))
+        })?;
+    verify_pinned_stream(server, &stream).map_err(PinnedConnectError::refused)?;
+    let stream = PinnedSmtpStream {
+        stream,
+        peer,
+        greeting,
+    };
+    // Before MAIL FROM, so nothing was sent.
+    let mut connection =
+        AsyncSmtpConnection::connect_with_transport(Box::new(stream), &ClientId::default())
             .await
-            .map_err(|error| redact_error(&error, "Outgoing sign-in"))?;
-        Ok(connection)
-    })
-    .await
-    .map_err(|_| "Outgoing server timed out before sending.".to_string())?
+            .map_err(|error| PinnedConnectError {
+                kind: classify_send_failure(SmtpErrorTraits::of(&error, true)),
+                message: redact_error(&error, "Outgoing greeting"),
+            })?;
+    connection
+        .auth(
+            &smtp_auth_mechanisms(false),
+            &Credentials::new(server.username.clone(), password.to_owned()),
+        )
+        .await
+        .map_err(|error| PinnedConnectError::refused(redact_error(&error, "Outgoing sign-in")))?;
+    Ok(connection)
 }
 
 pub(crate) async fn test_smtp(
@@ -977,10 +1046,7 @@ async fn build_message_with_id(
         .map(str::trim)
         .filter(|addr| !addr.is_empty())
         .unwrap_or(&account.summary.email);
-    let from: Mailbox = format!("{} <{}>", account.summary.display_name, sender_email)
-        .parse()
-        .or_else(|_| sender_email.parse())
-        .map_err(|_| "The sender address is invalid.".to_string())?;
+    let from = sender_mailbox(&account.summary.display_name, sender_email)?;
     let mut builder = Message::builder()
         .from(from)
         .subject(draft.subject.clone())
@@ -2131,5 +2197,143 @@ mod send_timeout_tests {
         let result = send_prepared(&account, "fixture-password", &draft, bytes).await;
         assert!(started.elapsed() < Duration::from_secs(5));
         assert_eq!(result.unwrap_err().kind, SendFailure::Uncertain);
+    }
+}
+
+#[cfg(test)]
+mod sender_and_pinned_failure_tests {
+    use super::*;
+    use crate::models::{AccountSummary, BodyFormat, ProviderKind, TlsMode};
+
+    // Failure modes for the sender header and pinned Bridge connects:
+    // 1. A display name with a comma is split into two mailboxes or dropped.
+    // 2. A display name with quotes is dropped or sent unquoted.
+    // 3. Control characters in a display name reach the header or sink the send.
+    // 4. A pinned host, certificate, or TLS setup problem is retried instead of refused.
+
+    fn account(display_name: &str, host: &str, trusted: Option<&str>) -> AccountRecord {
+        AccountRecord {
+            summary: AccountSummary {
+                notify_new_mail: true,
+                default_body_format: BodyFormat::Plain,
+                id: "account-sender".into(),
+                provider: ProviderKind::Manual,
+                email: "sam@example.com".into(),
+                display_name: display_name.into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+                signature_html: String::new(),
+                reply_to: String::new(),
+                color: None,
+            },
+            imap: ServerConfig {
+                trusted_certificate: None,
+                host: "imap.example.com".into(),
+                port: 993,
+                tls_mode: TlsMode::Tls,
+                username: "sam".into(),
+            },
+            smtp: ServerConfig {
+                trusted_certificate: trusted.map(str::to_string),
+                host: host.into(),
+                port: 1143,
+                tls_mode: TlsMode::StartTls,
+                username: "sam".into(),
+            },
+        }
+    }
+
+    fn draft() -> ComposeDraft {
+        ComposeDraft {
+            body_format: BodyFormat::Plain,
+            source_message_id: None,
+            source_kind: None,
+            include_signature: false,
+            importance: String::new(),
+            request_receipt: false,
+            reply_to: None,
+            id: None,
+            account_id: "account-sender".into(),
+            from: None,
+            to: vec!["jane@example.com".into()],
+            cc: vec![],
+            bcc: vec![],
+            subject: "Hi".into(),
+            html_body: String::new(),
+            text_body: "Hi".into(),
+            attachments: vec![],
+            in_reply_to: None,
+            references: None,
+            send_at: None,
+        }
+    }
+
+    async fn from_header(display_name: &str) -> (String, String) {
+        let message = build_message_with_id(
+            &account(display_name, "smtp.example.com", None),
+            &draft(),
+            "<id@postal-snap.test>",
+            false,
+        )
+        .await
+        .unwrap();
+        let text = String::from_utf8(message.formatted()).unwrap();
+        let parsed = mail_parser::MessageParser::default()
+            .parse(text.as_bytes())
+            .unwrap();
+        let line = text
+            .split("\r\n")
+            .find(|line| line.starts_with("From:"))
+            .unwrap()
+            .to_string();
+        let sender = parsed.from().and_then(|list| list.first()).unwrap();
+        (line, sender.name().unwrap_or_default().to_string())
+    }
+
+    #[tokio::test]
+    async fn comma_in_display_name_is_kept_not_dropped() {
+        // lettre RFC 2047-encodes a name with a comma; the decoded name must match.
+        let (line, name) = from_header("Smith, Jane").await;
+        assert!(line.ends_with(" <sam@example.com>"), "{line}");
+        assert_eq!(name, "Smith, Jane");
+    }
+
+    #[tokio::test]
+    async fn quotes_in_display_name_survive_the_header() {
+        let (_, name) = from_header("Jane \"JJ\" Smith").await;
+        assert_eq!(name, "Jane \"JJ\" Smith");
+    }
+
+    #[tokio::test]
+    async fn empty_display_name_sends_the_bare_address() {
+        let (line, _) = from_header("   ").await;
+        assert_eq!(line, "From: sam@example.com");
+    }
+
+    #[tokio::test]
+    async fn control_characters_are_removed_from_the_display_name() {
+        let (_, name) = from_header("Sam\u{7} Lee").await;
+        assert_eq!(name, "Sam Lee");
+    }
+
+    #[tokio::test]
+    async fn pinned_host_that_is_not_loopback_is_refused_before_connecting() {
+        let account = account("Sam", "mail.example.com", Some("not a certificate"));
+        let failure = send_prepared(&account, "unused", &draft(), b"Subject: Hi\r\n\r\nHi")
+            .await
+            .unwrap_err();
+        assert_eq!(failure.kind, SendFailure::NotSentRefused);
+    }
+
+    #[tokio::test]
+    async fn invalid_pinned_certificate_is_refused_before_connecting() {
+        let account = account("Sam", "127.0.0.1", Some("not a certificate"));
+        let failure = send_prepared(&account, "unused", &draft(), b"Subject: Hi\r\n\r\nHi")
+            .await
+            .unwrap_err();
+        assert_eq!(failure.kind, SendFailure::NotSentRefused);
     }
 }
