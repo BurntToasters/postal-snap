@@ -95,7 +95,9 @@
     },
     "fileAssociations": [
       {
-        "ext": ["eml"],
+        "ext": [
+          "eml"
+        ],
         "mimeType": "message/rfc822",
         "name": "Email Message",
         "role": "Viewer"
