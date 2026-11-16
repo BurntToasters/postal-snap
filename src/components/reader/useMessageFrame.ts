@@ -88,7 +88,15 @@ interface Options {
   currentLoadedHtml: string | undefined;
   inlineAttachments: Attachment[];
   setLoadedHtml: Dispatch<
-    SetStateAction<{ messageId: number; html: string } | undefined>
+    SetStateAction<
+      | {
+          messageId: number;
+          html: string;
+          sourceHtml?: string;
+          remoteAttempted?: boolean;
+        }
+      | undefined
+    >
   >;
   searchQuery: string | undefined;
   settings: AppSettings;
@@ -165,7 +173,12 @@ export function useMessageFrame({
       inlineAttachments,
     ).then(() => {
       if (contentOperation.current === operation)
-        setLoadedHtml({ messageId, html: doc.body.innerHTML });
+        setLoadedHtml({
+          messageId,
+          html: doc.body.innerHTML,
+          sourceHtml: sanitized.html,
+          remoteAttempted: false,
+        });
     });
     return () => {
       if (contentOperation.current === operation) contentOperation.current += 1;

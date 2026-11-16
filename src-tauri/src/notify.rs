@@ -108,13 +108,28 @@ fn route_tap<R: Runtime>(app: &AppHandle<R>, action: &ActionPerformed) {
 /// Arrival notice for the newest unread Inbox message after the previous
 /// pass. Sync stores rows with rising ids, so arrival order never depends on
 /// the sender's Date header.
+/// Picks the newest unread Inbox message after `previous_message_id`, skipping
+/// messages already notified by a filter rule in the same sync pass.
+pub(crate) fn pick_new_mail_message(
+    db: &Database,
+    account_id: &str,
+    previous_message_id: Option<i64>,
+    exclude_ids: &[i64],
+) -> Option<crate::models::MessageSummary> {
+    db.newest_unread_inbox_after_excluding(account_id, previous_message_id, exclude_ids)
+        .ok()
+        .flatten()
+}
+
 pub(crate) fn notify_new_mail(
     app: &AppHandle,
     db: &Database,
     account_id: &str,
     previous_message_id: Option<i64>,
+    exclude_ids: &[i64],
 ) {
-    let Ok(Some(message)) = db.newest_unread_inbox_after(account_id, previous_message_id) else {
+    let Some(message) = pick_new_mail_message(db, account_id, previous_message_id, exclude_ids)
+    else {
         return;
     };
     if !arrival_allowed(app, db, account_id) {
@@ -123,15 +138,22 @@ pub(crate) fn notify_new_mail(
     show_arrival(app, db, account_id, &message);
 }
 
-/// Arrival notice for the message a rule's notify action matched.
-pub(crate) fn rule_notice(app: &AppHandle, db: &Database, account_id: &str, message_id: i64) {
+/// Arrival notice for the message a rule's notify action matched. Returns whether
+/// an OS notification was queued.
+pub(crate) fn rule_notice(
+    app: &AppHandle,
+    db: &Database,
+    account_id: &str,
+    message_id: i64,
+) -> bool {
     if !arrival_allowed(app, db, account_id) {
-        return;
+        return false;
     }
     let Ok(Some(message)) = db.rule_notice_message(account_id, message_id) else {
-        return;
+        return false;
     };
     show_arrival(app, db, account_id, &message);
+    true
 }
 
 fn arrival_allowed(app: &AppHandle, db: &Database, account_id: &str) -> bool {
@@ -338,5 +360,115 @@ mod tests {
     #[test]
     fn mail_sound_has_a_name_on_every_desktop() {
         assert!(!new_mail_sound_name().is_empty());
+    }
+
+    // Failure modes:
+    // - A message already notified by a filter rule triggers a second new-mail notice.
+    // - Suppressing the rule-notified message hides a different unread Inbox arrival.
+    #[test]
+    fn new_mail_skips_rule_notified_messages_without_hiding_others() {
+        use crate::db::CachedMessage;
+        use crate::models::{
+            AccountRecord, AccountSummary, BodyFormat, MailboxRole, ProviderKind, ServerConfig,
+            TlsMode,
+        };
+
+        let db = Database::memory();
+        let account = AccountRecord {
+            summary: AccountSummary {
+                id: "account-1".into(),
+                provider: ProviderKind::Manual,
+                email: "sam@example.com".into(),
+                display_name: "Sam".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+                signature_html: String::new(),
+                reply_to: String::new(),
+                color: None,
+                default_body_format: BodyFormat::Html,
+                notify_new_mail: true,
+            },
+            imap: ServerConfig {
+                host: "imap.example.com".into(),
+                port: 993,
+                tls_mode: TlsMode::Tls,
+                username: "sam@example.com".into(),
+                trusted_certificate: None,
+            },
+            smtp: ServerConfig {
+                host: "smtp.example.com".into(),
+                port: 587,
+                tls_mode: TlsMode::StartTls,
+                username: "sam@example.com".into(),
+                trusted_certificate: None,
+            },
+        };
+        db.insert_account(&account).unwrap();
+        let inbox = db
+            .upsert_mailbox(
+                "account-1",
+                "INBOX",
+                &MailboxRole::Inbox,
+                Some(1),
+                Some(2),
+                Some(0),
+                0,
+            )
+            .unwrap();
+        let insert = |uid: u32| {
+            let msg = CachedMessage {
+                uid,
+                internal_at: None,
+                message_id: Some(format!("<{uid}@example.com>")),
+                subject: format!("Msg {uid}"),
+                sender_name: "Sender".into(),
+                sender_address: "sender@example.com".into(),
+                recipients: "sam@example.com".into(),
+                received_at: "2026-08-18T12:00:00Z".into(),
+                preview: "Hello".into(),
+                is_read: false,
+                is_starred: false,
+                size: 32,
+                to: vec!["sam@example.com".into()],
+                cc: vec![],
+                bcc: vec![],
+                reply_to: None,
+                thread_parent: None,
+                text_body: "Hello".into(),
+                html_body: None,
+                attachments: vec![],
+                raw_message: b"Subject: Hi\r\n\r\nHello".to_vec(),
+                has_attachments: false,
+                is_answered: false,
+                is_forwarded: false,
+                has_calendar: false,
+                calendar_json: None,
+                list_unsubscribe: None,
+                list_unsubscribe_post: None,
+                importance: String::new(),
+                disposition_to: String::new(),
+            };
+            db.upsert_message("account-1", inbox, &msg).unwrap();
+        };
+        insert(1);
+        let first_id = db.list_messages(inbox, None, 10).unwrap().items[0].id;
+        assert!(
+            pick_new_mail_message(&db, "account-1", None, &[first_id]).is_none(),
+            "rule-notified message must not also trigger new-mail notice"
+        );
+
+        insert(2);
+        let items = db.list_messages(inbox, None, 10).unwrap().items;
+        let second_id = items
+            .iter()
+            .find(|item| item.id != first_id)
+            .expect("second message")
+            .id;
+        let picked = pick_new_mail_message(&db, "account-1", None, &[second_id])
+            .expect("unrelated unread arrival still notifies");
+        assert_eq!(picked.id, first_id);
     }
 }

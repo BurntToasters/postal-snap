@@ -555,6 +555,13 @@ pub(crate) async fn write_user_chosen_file(path: &Path, bytes: &[u8]) -> Result<
             let file = open_user_file_for_overwrite(path)
                 .await
                 .map_err(|_| USER_SAVE_FAILURE.to_string())?;
+            let opened_meta = file
+                .metadata()
+                .await
+                .map_err(|_| USER_SAVE_FAILURE.to_string())?;
+            if opened_meta.file_type().is_symlink() || !opened_meta.is_file() {
+                return Err(USER_SAVE_FAILURE.into());
+            }
             #[cfg(windows)]
             windows_write_identity_matches(path, &file)
                 .await
@@ -583,7 +590,7 @@ async fn open_user_file_for_overwrite(path: &Path) -> io::Result<tokio::fs::File
     let mut options = tokio::fs::OpenOptions::new();
     options.write(true);
     #[cfg(unix)]
-    options.custom_flags(libc::O_NOFOLLOW);
+    options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     options.open(path).await
 }
 
@@ -591,7 +598,7 @@ async fn open_user_file_exclusive(path: &Path) -> io::Result<tokio::fs::File> {
     let mut options = tokio::fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
-    options.custom_flags(libc::O_NOFOLLOW);
+    options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     options.open(path).await
 }
 
@@ -2013,5 +2020,34 @@ mod tests {
         let error = read_attachment_source(&path, 1024).await.unwrap_err();
         assert_eq!(error, "That attachment is too large.");
         assert!(!error.contains("sparse.bin"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn write_user_chosen_file_rejects_fifo_and_symlinks_without_blocking() {
+        use std::time::Duration;
+
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("save-pipe.txt");
+        nix::unistd::mkfifo(
+            &fifo,
+            nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+        )
+        .unwrap();
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            write_user_chosen_file(&fifo, b"data"),
+        )
+        .await
+        .expect("saving over a FIFO must not hang");
+        assert!(result.is_err());
+
+        let target = dir.path().join("target.txt");
+        let link = dir.path().join("link.txt");
+        std::fs::write(&target, b"keep").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(write_user_chosen_file(&link, b"overwrite").await.is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"keep");
     }
 }

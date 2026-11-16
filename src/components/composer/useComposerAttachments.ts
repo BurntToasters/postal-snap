@@ -210,6 +210,7 @@ export function useComposerAttachments({
   };
 
   async function addInlineImage() {
+    if (bodyFormatRef.current === "plain") return;
     let selectedToken: string | undefined;
     try {
       const [selected] = await api.chooseAttachments(accountId, true);
@@ -288,12 +289,17 @@ export function useComposerAttachments({
     const item = attachments[index];
     const inline = item ? inlineImages.get(item.token) : undefined;
     if (inline && editor) {
-      const transaction = editor.state.tr;
+      const ranges: Array<{ from: number; to: number }> = [];
       editor.state.doc.descendants((node, position) => {
         if (node.type.name === "image" && node.attrs.src === inline.dataUrl)
-          transaction.delete(position, position + node.nodeSize);
+          ranges.push({ from: position, to: position + node.nodeSize });
       });
-      if (transaction.docChanged) editor.view.dispatch(transaction);
+      if (ranges.length > 0) {
+        const transaction = editor.state.tr;
+        for (const range of ranges.reverse())
+          transaction.delete(range.from, range.to);
+        if (transaction.docChanged) editor.view.dispatch(transaction);
+      }
       setInlineImages((items) => {
         const next = new Map(items);
         next.delete(item.token);

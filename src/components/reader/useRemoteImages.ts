@@ -18,7 +18,15 @@ interface Options {
   inlineAttachments: Attachment[];
   contentOperationRef: RefObject<number>;
   setLoadedHtml: Dispatch<
-    SetStateAction<{ messageId: number; html: string } | undefined>
+    SetStateAction<
+      | {
+          messageId: number;
+          html: string;
+          sourceHtml?: string;
+          remoteAttempted?: boolean;
+        }
+      | undefined
+    >
   >;
   setError: (error?: string) => void;
 }
@@ -92,7 +100,12 @@ export function useRemoteImages({
           inlineAttachments,
         );
       if (message && contentOperationRef.current === operation)
-        setLoadedHtml({ messageId: message.id, html: doc.body.innerHTML });
+        setLoadedHtml({
+          messageId: message.id,
+          html: doc.body.innerHTML,
+          sourceHtml: sanitized?.html,
+          remoteAttempted: true,
+        });
     } catch (cause) {
       if (contentOperationRef.current === operation) setError(errorText(cause));
     } finally {

@@ -3999,3 +3999,377 @@ async fn greenmail_batch_move_lands_every_message_once() {
     }
     verify.logout().await.unwrap();
 }
+
+fn loopback_bridge_account(id: &str, port: u16) -> AccountRecord {
+    let server = ServerConfig {
+        host: "127.0.0.1".into(),
+        port,
+        tls_mode: TlsMode::Tls,
+        username: "fixture@example.test".into(),
+        trusted_certificate: Some(super::test_tls::CERT_PEM.into()),
+    };
+    AccountRecord {
+        summary: AccountSummary {
+            notify_new_mail: true,
+            id: id.into(),
+            provider: ProviderKind::ProtonBridge,
+            email: "fixture@example.test".into(),
+            display_name: "Fixture".into(),
+            sync_state: "idle".into(),
+            error: None,
+            aliases: vec![],
+            auth_method: "password".into(),
+            signature: String::new(),
+            signature_html: String::new(),
+            reply_to: String::new(),
+            color: None,
+            default_body_format: crate::models::BodyFormat::Plain,
+        },
+        imap: server.clone(),
+        smtp: server,
+    }
+}
+
+fn imap_line_ok(tag: &str, msg: &str) -> Vec<u8> {
+    format!("{tag} OK {msg}\r\n").into_bytes()
+}
+
+fn imap_literal_fetch(uid: u32, flags: &str, size: u64, body: &[u8]) -> Vec<u8> {
+    let mut out = format!(
+        "* 1 FETCH (UID {uid} FLAGS ({flags}) RFC822.SIZE {size} INTERNALDATE \"18-Aug-2026 12:00:00 +0000\" BODY[] {{{}}}\r\n",
+        body.len()
+    )
+    .into_bytes();
+    out.extend_from_slice(body);
+    out.extend_from_slice(b")\r\n");
+    out
+}
+
+#[tokio::test]
+async fn sync_folder_failure_does_not_commit_uid_next_and_recovers_on_retry() {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+
+    let fail_fetch = Arc::new(AtomicBool::new(true));
+    let fail_flag = fail_fetch.clone();
+    let (port, _, server) = super::test_tls::spawn_imap_server(move |tag, verb, rest| {
+        let fail = fail_flag.load(Ordering::SeqCst);
+        let tag = tag.to_string();
+        let verb = verb.to_string();
+        let rest = rest.to_string();
+        Box::pin(async move {
+            let reply = match verb.as_str() {
+                "CAPABILITY" => format!("* CAPABILITY IMAP4rev1 UIDPLUS\r\n{tag} OK done\r\n").into_bytes(),
+                "LOGIN" | "NOOP" | "LOGOUT" => imap_line_ok(&tag, "ok"),
+                "LIST" => format!("* LIST (\\HasNoChildren) \"/\" \"INBOX\"\r\n{tag} OK list\r\n").into_bytes(),
+                "STATUS" => format!("* STATUS \"INBOX\" (MESSAGES 1 UNSEEN 1 UIDNEXT 2 UIDVALIDITY 10)\r\n{tag} OK status\r\n").into_bytes(),
+                "EXAMINE" | "SELECT" => format!("* 1 EXISTS\r\n* OK [UIDVALIDITY 10]\r\n* OK [UIDNEXT 2]\r\n* OK [PERMANENTFLAGS (\\Seen \\Flagged \\*)]\r\n{tag} OK selected\r\n").into_bytes(),
+                "UID" if rest.to_ascii_uppercase().starts_with("UID SEARCH") => {
+                    format!("* SEARCH 1\r\n{tag} OK search\r\n").into_bytes()
+                }
+                "FETCH" => {
+                    if fail {
+                        format!("{tag} NO transient envelope fetch failure\r\n").into_bytes()
+                    } else {
+                        let header = b"Message-ID: <recover-1@example.test>\r\nFrom: Jane <jane@example.test>\r\nSubject: Recovered\r\nDate: Tue, 18 Aug 2026 12:00:00 +0000\r\nContent-Type: text/plain\r\n\r\n";
+                        let mut out = format!(
+                            "* 1 FETCH (UID 1 FLAGS () RFC822.SIZE 120 INTERNALDATE \"18-Aug-2026 12:00:00 +0000\" ENVELOPE (\"Tue, 18 Aug 2026 12:00:00 +0000\" \"Recovered\" ((\"Jane\" NIL \"jane\" \"example.test\")) NIL NIL ((\"Fixture\" NIL \"fixture\" \"example.test\")) NIL NIL NIL \"<recover-1@example.test>\") BODY[HEADER.FIELDS (MESSAGE-ID IN-REPLY-TO REFERENCES CONTENT-TYPE)]<0> {{{}}}\r\n",
+                            header.len()
+                        )
+                        .into_bytes();
+                        out.extend_from_slice(header);
+                        out.extend_from_slice(format!(")\r\n{tag} OK fetch\r\n").as_bytes());
+                        out
+                    }
+                }
+                "UID" if rest.to_ascii_uppercase().starts_with("UID FETCH") => {
+                    if fail {
+                        format!("{tag} NO transient envelope fetch failure\r\n").into_bytes()
+                    } else {
+                        let header = b"Message-ID: <recover-1@example.test>\r\nFrom: Jane <jane@example.test>\r\nSubject: Recovered\r\nDate: Tue, 18 Aug 2026 12:00:00 +0000\r\nContent-Type: text/plain\r\n\r\n";
+                        let mut out = format!(
+                            "* 1 FETCH (UID 1 FLAGS () RFC822.SIZE 120 INTERNALDATE \"18-Aug-2026 12:00:00 +0000\" ENVELOPE (\"Tue, 18 Aug 2026 12:00:00 +0000\" \"Recovered\" ((\"Jane\" NIL \"jane\" \"example.test\")) NIL NIL ((\"Fixture\" NIL \"fixture\" \"example.test\")) NIL NIL NIL \"<recover-1@example.test>\") BODY[HEADER.FIELDS (MESSAGE-ID IN-REPLY-TO REFERENCES CONTENT-TYPE)]<0> {{{}}}\r\n",
+                            header.len()
+                        )
+                        .into_bytes();
+                        out.extend_from_slice(header);
+                        out.extend_from_slice(format!(")\r\n{tag} OK fetch\r\n").as_bytes());
+                        out
+                    }
+                }
+                _ => imap_line_ok(&tag, "ignored"),
+            };
+            Some(reply)
+        })
+    })
+    .await;
+
+    let account_id = format!("b1-sync-{}", uuid::Uuid::new_v4());
+    let account = loopback_bridge_account(&account_id, port);
+    pool::forget(&account_id);
+    let db = Database::memory();
+    db.insert_account(&account).unwrap();
+
+    let _ = sync_account(
+        &db,
+        &account,
+        "pw",
+        &CachePolicy::default(),
+        &mut Uncontended,
+    )
+    .await;
+    let inbox = db
+        .mailbox_id_for_name(&account_id, "INBOX")
+        .unwrap()
+        .unwrap();
+    let meta = db.mailbox_sync_meta(inbox).unwrap();
+    assert_eq!(
+        meta.uid_next, None,
+        "failed sync_folder must not advance uid_next before envelopes cache"
+    );
+
+    fail_fetch.store(false, Ordering::SeqCst);
+    sync_account(
+        &db,
+        &account,
+        "pw",
+        &CachePolicy::default(),
+        &mut Uncontended,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        db.cached_message_count(inbox).unwrap(),
+        1,
+        "retry sync must fetch the message once uid_next was not prematurely committed"
+    );
+    pool::forget(&account_id);
+    server.abort();
+}
+
+#[tokio::test]
+async fn refresh_mailbox_envelopes_failure_does_not_commit_uid_next() {
+    let (port, _, server) = super::test_tls::spawn_imap_server(|tag, verb, rest| {
+        let tag = tag.to_string();
+        let verb = verb.to_string();
+        let rest = rest.to_string();
+        Box::pin(async move {
+            let reply = match verb.as_str() {
+                "CAPABILITY" => format!("* CAPABILITY IMAP4rev1\r\n{tag} OK done\r\n").into_bytes(),
+                "LOGIN" | "LOGOUT" => imap_line_ok(&tag, "ok"),
+                "STATUS" => format!("* STATUS \"INBOX\" (MESSAGES 1 UNSEEN 1 UIDNEXT 5 UIDVALIDITY 10)\r\n{tag} OK status\r\n").into_bytes(),
+                "EXAMINE" | "SELECT" => format!("* 1 EXISTS\r\n* OK [UIDVALIDITY 10]\r\n* OK [UIDNEXT 5]\r\n* OK [PERMANENTFLAGS (\\Seen)]\r\n{tag} OK selected\r\n").into_bytes(),
+                "FETCH" => format!("{tag} NO failed refresh\r\n").into_bytes(),
+                "UID" if rest.to_ascii_uppercase().starts_with("UID FETCH") => {
+                    format!("{tag} NO failed refresh\r\n").into_bytes()
+                }
+                _ => imap_line_ok(&tag, "ok"),
+            };
+            Some(reply)
+        })
+    })
+    .await;
+
+    let account_id = format!("b1-refresh-{}", uuid::Uuid::new_v4());
+    let account = loopback_bridge_account(&account_id, port);
+    pool::forget(&account_id);
+    let db = Database::memory();
+    db.insert_account(&account).unwrap();
+    let inbox = db
+        .upsert_mailbox(
+            &account_id,
+            "INBOX",
+            &MailboxRole::Inbox,
+            Some(10),
+            Some(1),
+            Some(0),
+            0,
+        )
+        .unwrap();
+
+    let err =
+        refresh_mailbox_envelopes(&account, "pw", "INBOX", &db, &CachePolicy::default()).await;
+    assert!(err.is_err());
+    assert_eq!(db.mailbox_sync_meta(inbox).unwrap().uid_next, Some(1));
+    pool::forget(&account_id);
+    server.abort();
+}
+
+#[tokio::test]
+async fn download_body_batch_omitted_full_clears_parse_pending() {
+    let body_raw = b"Message-ID: <large-1@example.test>\r\nSubject: Large\r\nContent-Type: text/plain\r\n\r\nPartial non-mixed";
+    let header_raw =
+        b"Message-ID: <large-1@example.test>\r\nSubject: Large\r\nContent-Type: text/plain\r\n\r\n";
+    let (port, cmd_log, server) = super::test_tls::spawn_imap_server(move |tag, verb, rest| {
+        let tag = tag.to_string();
+        let verb = verb.to_string();
+        let rest = rest.to_string();
+        let body_bytes = body_raw.to_vec();
+        let header_bytes = header_raw.to_vec();
+        Box::pin(async move {
+            let upper = rest.to_ascii_uppercase();
+            let reply = match verb.as_str() {
+                "CAPABILITY" => format!("* CAPABILITY IMAP4rev1 UIDPLUS\r\n{tag} OK done\r\n").into_bytes(),
+                "LOGIN" | "LOGOUT" => imap_line_ok(&tag, "ok"),
+                "LIST" => format!("* LIST (\\HasNoChildren) \"/\" \"INBOX\"\r\n{tag} OK list\r\n").into_bytes(),
+                "STATUS" => format!("* STATUS \"INBOX\" (MESSAGES 1 UNSEEN 1 UIDNEXT 2 UIDVALIDITY 10)\r\n{tag} OK status\r\n").into_bytes(),
+                "EXAMINE" | "SELECT" => format!("* 1 EXISTS\r\n* OK [UIDVALIDITY 10]\r\n* OK [UIDNEXT 2]\r\n* OK [PERMANENTFLAGS (\\Seen)]\r\n{tag} OK selected\r\n").into_bytes(),
+                "UID" if upper.starts_with("UID SEARCH") => {
+                    format!("* SEARCH 1\r\n{tag} OK search\r\n").into_bytes()
+                }
+                "FETCH" => {
+                    let mut out = format!(
+                        "* 1 FETCH (UID 1 FLAGS () RFC822.SIZE 2000000 INTERNALDATE \"18-Aug-2026 12:00:00 +0000\" ENVELOPE (\"Tue, 18 Aug 2026 12:00:00 +0000\" \"Large\" ((\"Jane\" NIL \"jane\" \"example.test\")) NIL NIL ((\"Fixture\" NIL \"fixture\" \"example.test\")) NIL NIL NIL \"<large-1@example.test>\") BODY[HEADER.FIELDS (MESSAGE-ID IN-REPLY-TO REFERENCES CONTENT-TYPE)]<0> {{{}}}\r\n",
+                        header_bytes.len()
+                    )
+                    .into_bytes();
+                    out.extend_from_slice(&header_bytes);
+                    out.extend_from_slice(format!(")\r\n{tag} OK fetch\r\n").as_bytes());
+                    out
+                }
+                "UID" if upper.starts_with("UID FETCH") && upper.contains("(UID FLAGS)") => {
+                    format!("* 1 FETCH (UID 1 FLAGS ())\r\n{tag} OK flags\r\n").into_bytes()
+                }
+                "UID" if upper.starts_with("UID FETCH") && upper.contains("ENVELOPE") => {
+                    let mut out = format!(
+                        "* 1 FETCH (UID 1 FLAGS () RFC822.SIZE 2000000 INTERNALDATE \"18-Aug-2026 12:00:00 +0000\" ENVELOPE (\"Tue, 18 Aug 2026 12:00:00 +0000\" \"Large\" ((\"Jane\" NIL \"jane\" \"example.test\")) NIL NIL ((\"Fixture\" NIL \"fixture\" \"example.test\")) NIL NIL NIL \"<large-1@example.test>\") BODY[HEADER.FIELDS (MESSAGE-ID IN-REPLY-TO REFERENCES CONTENT-TYPE)]<0> {{{}}}\r\n",
+                        header_bytes.len()
+                    )
+                    .into_bytes();
+                    out.extend_from_slice(&header_bytes);
+                    out.extend_from_slice(format!(")\r\n{tag} OK fetch\r\n").as_bytes());
+                    out
+                }
+                "UID" if upper.starts_with("UID FETCH") && upper.contains("BODY.PEEK[]<0.262144>") => {
+                    let mut out = format!(
+                        "* 1 FETCH (UID 1 FLAGS () RFC822.SIZE 2000000 INTERNALDATE \"18-Aug-2026 12:00:00 +0000\" BODY[]<0> {{{}}}\r\n",
+                        body_bytes.len()
+                    )
+                    .into_bytes();
+                    out.extend_from_slice(&body_bytes);
+                    out.extend_from_slice(format!(")\r\n{tag} OK partial\r\n").as_bytes());
+                    out
+                }
+                "UID" if upper.starts_with("UID FETCH") => {
+                    // Simulate full-fetch response omitting UID 1 so continuing_parse settles.
+                    imap_line_ok(&tag, "empty full fetch")
+                }
+                _ => imap_line_ok(&tag, "ok"),
+            };
+            Some(reply)
+        })
+    })
+    .await;
+
+    let account_id = format!("b2-partial-{}", uuid::Uuid::new_v4());
+    let account = loopback_bridge_account(&account_id, port);
+    pool::forget(&account_id);
+    let db = Database::memory();
+    db.insert_account(&account).unwrap();
+    db.set_keep_attachments_offline(false);
+    sync_account(
+        &db,
+        &account,
+        "pw",
+        &CachePolicy::default(),
+        &mut Uncontended,
+    )
+    .await
+    .unwrap();
+    let inbox = db.mailbox_id_for_name(&account_id, "INBOX").unwrap();
+    let count = inbox.map(|id| db.cached_message_count(id).unwrap_or(0));
+    let pending: i64 = db
+        .conn()
+        .unwrap()
+        .query_row(
+            "SELECT parse_pending FROM messages WHERE uid=1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or_else(|e| {
+            panic!(
+                "missing uid=1 ({e}); inbox={inbox:?} count={count:?} cmds={:?}",
+                cmd_log.lock().unwrap()
+            )
+        });
+    assert_eq!(
+        pending, 0,
+        "omitted full fetch must clear open parse_pending"
+    );
+    let _ = imap_literal_fetch;
+    pool::forget(&account_id);
+    server.abort();
+}
+
+#[tokio::test]
+async fn search_mailbox_reconciles_flag_colors() {
+    let header_raw = b"Message-ID: <color-5@example.test>\r\nSubject: Flagged color\r\nContent-Type: text/plain\r\n\r\n";
+    let (port, _, server) = super::test_tls::spawn_imap_server(move |tag, verb, rest| {
+        let tag = tag.to_string();
+        let verb = verb.to_string();
+        let rest = rest.to_string();
+        let header_bytes = header_raw.to_vec();
+        Box::pin(async move {
+            let upper = rest.to_ascii_uppercase();
+            let reply = match verb.as_str() {
+                "CAPABILITY" => format!("* CAPABILITY IMAP4rev1\r\n{tag} OK done\r\n").into_bytes(),
+                "LOGIN" | "LOGOUT" => imap_line_ok(&tag, "ok"),
+                "EXAMINE" | "SELECT" => format!("* 1 EXISTS\r\n* OK [UIDVALIDITY 10]\r\n* OK [UIDNEXT 6]\r\n* OK [PERMANENTFLAGS (\\Seen \\Flagged $MailFlagBit1)]\r\n{tag} OK selected\r\n").into_bytes(),
+                "UID" if upper.starts_with("UID SEARCH") => {
+                    format!("* SEARCH 5\r\n{tag} OK search\r\n").into_bytes()
+                }
+                "UID" if upper.starts_with("UID FETCH") => {
+                    let mut out = format!(
+                        "* 1 FETCH (UID 5 FLAGS (\\Seen \\Flagged $MailFlagBit1) RFC822.SIZE 120 INTERNALDATE \"18-Aug-2026 12:00:00 +0000\" ENVELOPE (\"Tue, 18 Aug 2026 12:00:00 +0000\" \"Flagged color\" ((\"Jane\" NIL \"jane\" \"example.test\")) NIL NIL ((\"Fixture\" NIL \"fixture\" \"example.test\")) NIL NIL NIL \"<color-5@example.test>\") BODY[HEADER.FIELDS (MESSAGE-ID IN-REPLY-TO REFERENCES CONTENT-TYPE)]<0> {{{}}}\r\n",
+                        header_bytes.len()
+                    )
+                    .into_bytes();
+                    out.extend_from_slice(&header_bytes);
+                    out.extend_from_slice(format!(")\r\n{tag} OK fetch\r\n").as_bytes());
+                    out
+                }
+                _ => imap_line_ok(&tag, "ok"),
+            };
+            Some(reply)
+        })
+    })
+    .await;
+
+    let account_id = format!("b11-search-{}", uuid::Uuid::new_v4());
+    let account = loopback_bridge_account(&account_id, port);
+    pool::forget(&account_id);
+    let db = Database::memory();
+    db.insert_account(&account).unwrap();
+    let inbox = db
+        .upsert_mailbox(
+            &account_id,
+            "INBOX",
+            &MailboxRole::Inbox,
+            Some(10),
+            None,
+            None,
+            0,
+        )
+        .unwrap();
+    let hits = server_search(
+        &db,
+        &account,
+        "pw",
+        &SearchQuery {
+            account_id: account_id.clone(),
+            mailbox_id: Some(inbox),
+            text: "Flagged".into(),
+            all_folders: false,
+            limit: 20,
+        },
+        &mut Uncontended,
+    )
+    .await
+    .unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].flag_color, 2);
+    pool::forget(&account_id);
+    server.abort();
+}

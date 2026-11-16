@@ -993,11 +993,16 @@ pub async fn create_folder(
 ) -> Result<(), String> {
     let mut session = super::pool::checkout(account, password).await?;
     let wire_name = session.mailbox_name(name);
-    let result = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.create(&wire_name))
-        .await
-        .map_err(|_| "Creating the folder timed out.".to_string())?
-        .map_err(|error| redact_error(&error, "Folder creation"));
-    session.release();
+    let result = match tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.create(&wire_name)).await
+    {
+        Ok(inner) => inner.map_err(|error| redact_error(&error, "Folder creation")),
+        Err(_) => Err("Creating the folder timed out.".to_string()),
+    };
+    if result.is_ok() {
+        session.release();
+    } else {
+        session.discard();
+    }
     result
 }
 
@@ -1010,14 +1015,20 @@ pub async fn rename_folder(
     let mut session = super::pool::checkout(account, password).await?;
     let wire_old_name = session.mailbox_name(old_name);
     let wire_new_name = session.mailbox_name(new_name);
-    let result = tokio::time::timeout(
+    let result = match tokio::time::timeout(
         IMAP_COMMAND_TIMEOUT,
         session.rename(&wire_old_name, &wire_new_name),
     )
     .await
-    .map_err(|_| "Renaming the folder timed out.".to_string())?
-    .map_err(|error| redact_error(&error, "Folder rename"));
-    session.release();
+    {
+        Ok(inner) => inner.map_err(|error| redact_error(&error, "Folder rename")),
+        Err(_) => Err("Renaming the folder timed out.".to_string()),
+    };
+    if result.is_ok() {
+        session.release();
+    } else {
+        session.discard();
+    }
     result
 }
 
@@ -1028,12 +1039,49 @@ pub async fn delete_folder(
 ) -> Result<(), String> {
     let mut session = super::pool::checkout(account, password).await?;
     let wire_name = session.mailbox_name(name);
-    let result = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.delete(&wire_name))
-        .await
-        .map_err(|_| "Deleting the folder timed out.".to_string())?
-        .map_err(|error| redact_error(&error, "Folder deletion"));
-    session.release();
+    let result = match tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.delete(&wire_name)).await
+    {
+        Ok(inner) => inner.map_err(|error| redact_error(&error, "Folder deletion")),
+        Err(_) => Err("Deleting the folder timed out.".to_string()),
+    };
+    if result.is_ok() {
+        session.release();
+    } else {
+        session.discard();
+    }
     result
+}
+
+#[cfg(test)]
+thread_local! {
+    static EMPTY_FOLDER_TIMEOUT_OVERRIDE: std::cell::Cell<Option<std::time::Duration>> =
+        const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+struct TestEmptyFolderTimeoutGuard;
+
+#[cfg(test)]
+impl TestEmptyFolderTimeoutGuard {
+    fn install(timeout: std::time::Duration) -> Self {
+        EMPTY_FOLDER_TIMEOUT_OVERRIDE.with(|slot| slot.set(Some(timeout)));
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestEmptyFolderTimeoutGuard {
+    fn drop(&mut self) {
+        EMPTY_FOLDER_TIMEOUT_OVERRIDE.with(|slot| slot.set(None));
+    }
+}
+
+fn empty_folder_timeout() -> std::time::Duration {
+    #[cfg(test)]
+    if let Some(limit) = EMPTY_FOLDER_TIMEOUT_OVERRIDE.with(std::cell::Cell::get) {
+        return limit;
+    }
+    IMAP_COMMAND_TIMEOUT
 }
 
 pub async fn empty_folder(
@@ -1104,7 +1152,7 @@ pub async fn empty_folder(
         .await
         .map_err(|_| "Emptying the folder timed out.".to_string())??;
     }
-    let uid_expunge = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
+    let uid_expunge = tokio::time::timeout(empty_folder_timeout(), async {
         session
             .uid_expunge(set)
             .await
@@ -1116,8 +1164,12 @@ pub async fn empty_folder(
     .await;
     match uid_expunge {
         Ok(Ok(_)) => {}
-        _ => {
-            tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
+        Err(_) => {
+            session.discard();
+            return Err("Emptying the folder timed out.".to_string());
+        }
+        Ok(Err(_)) => {
+            let fallback = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
                 session
                     .expunge()
                     .await
@@ -1126,8 +1178,18 @@ pub async fn empty_folder(
                     .await
                     .map_err(|error| redact_error(&error, "Folder empty"))
             })
-            .await
-            .map_err(|_| "Emptying the folder timed out.".to_string())??;
+            .await;
+            match fallback {
+                Ok(Ok(_)) => {}
+                Ok(Err(error)) => {
+                    session.discard();
+                    return Err(error);
+                }
+                Err(_) => {
+                    session.discard();
+                    return Err("Emptying the folder timed out.".to_string());
+                }
+            }
         }
     }
     session.release();
@@ -1327,6 +1389,170 @@ mod tests {
         assert!(uid_set(&[]).is_err());
         assert!(uid_set(&[0, 2]).is_err());
         assert!(uid_set(&[1; 201]).is_err());
+    }
+
+    #[tokio::test]
+    async fn empty_folder_timeout_discards_session_without_expunge() {
+        use crate::models::{
+            AccountRecord, AccountSummary, BodyFormat, ProviderKind, ServerConfig, TlsMode,
+        };
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+
+        let _timeout =
+            super::TestEmptyFolderTimeoutGuard::install(std::time::Duration::from_millis(60));
+        let login_count = Arc::new(AtomicUsize::new(0));
+        let logins = login_count.clone();
+        let (port, cmd_log, server) = crate::mail::test_tls::spawn_imap_server(move |tag, verb, rest| {
+            let logins = logins.clone();
+            let tag = tag.to_string();
+            let verb = verb.to_string();
+            let rest = rest.to_string();
+            Box::pin(async move {
+                let upper = rest.to_ascii_uppercase();
+                let reply = match verb.as_str() {
+                    "CAPABILITY" => format!("* CAPABILITY IMAP4rev1 UIDPLUS\r\n{tag} OK done\r\n").into_bytes(),
+                    "LOGIN" => {
+                        logins.fetch_add(1, Ordering::SeqCst);
+                        format!("{tag} OK logged in\r\n").into_bytes()
+                    }
+                    "SELECT" | "EXAMINE" => format!(
+                        "* 1 EXISTS\r\n* OK [UIDVALIDITY 7]\r\n* OK [UIDNEXT 2]\r\n* OK [PERMANENTFLAGS (\\Seen \\Deleted)]\r\n{tag} OK selected\r\n"
+                    )
+                    .into_bytes(),
+                    "UID" if upper.starts_with("UID SEARCH") => {
+                        format!("* SEARCH 1\r\n{tag} OK search\r\n").into_bytes()
+                    }
+                    "UID" if upper.starts_with("UID EXPUNGE") => {
+                        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                        format!("{tag} OK expunged\r\n").into_bytes()
+                    }
+                    _ => format!("{tag} OK ok\r\n").into_bytes(),
+                };
+                Some(reply)
+            })
+        })
+        .await;
+
+        let account_id = format!("b7-empty-{}", uuid::Uuid::new_v4());
+        let server_cfg = ServerConfig {
+            host: "127.0.0.1".into(),
+            port,
+            tls_mode: TlsMode::Tls,
+            username: "fixture@example.test".into(),
+            trusted_certificate: Some(crate::mail::test_tls::CERT_PEM.into()),
+        };
+        let account = AccountRecord {
+            summary: AccountSummary {
+                notify_new_mail: true,
+                id: account_id.clone(),
+                provider: ProviderKind::ProtonBridge,
+                email: "fixture@example.test".into(),
+                display_name: "Fixture".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+                signature_html: String::new(),
+                reply_to: String::new(),
+                color: None,
+                default_body_format: BodyFormat::Plain,
+            },
+            imap: server_cfg.clone(),
+            smtp: server_cfg,
+        };
+        crate::mail::pool::forget(&account_id);
+        let result = super::empty_folder(&account, "pw", "Trash", Some(7), &[]).await;
+        assert!(result.is_err(), "timed-out UID EXPUNGE must return Err");
+        let commands = cmd_log.lock().unwrap().clone();
+        assert!(
+            !commands.iter().any(|cmd| cmd.ends_with(" EXPUNGE")),
+            "timed-out UID EXPUNGE must never fall back to session.expunge(); got {commands:?}"
+        );
+        crate::mail::pool::forget(&account_id);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn folder_mutation_error_discards_broken_session() {
+        use crate::models::{
+            AccountRecord, AccountSummary, BodyFormat, ProviderKind, ServerConfig, TlsMode,
+        };
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+
+        let login_count = Arc::new(AtomicUsize::new(0));
+        let logins = login_count.clone();
+        let (port, _, server) = crate::mail::test_tls::spawn_imap_server(move |tag, verb, rest| {
+            let logins = logins.clone();
+            let tag = tag.to_string();
+            let verb = verb.to_string();
+            let rest = rest.to_string();
+            Box::pin(async move {
+                if verb == "LOGIN" {
+                    logins.fetch_add(1, Ordering::SeqCst);
+                    return Some(format!("{tag} OK ok\r\n").into_bytes());
+                }
+                if verb == "CAPABILITY" {
+                    return Some(
+                        format!("* CAPABILITY IMAP4rev1\r\n{tag} OK done\r\n").into_bytes(),
+                    );
+                }
+                if verb == "DELETE" && rest.contains("Broken") {
+                    return Some(format!("{tag} BAD broken state\r\n").into_bytes());
+                }
+                Some(format!("{tag} OK ok\r\n").into_bytes())
+            })
+        })
+        .await;
+
+        let account_id = format!("b7-folder-{}", uuid::Uuid::new_v4());
+        let server_cfg = ServerConfig {
+            host: "127.0.0.1".into(),
+            port,
+            tls_mode: TlsMode::Tls,
+            username: "fixture@example.test".into(),
+            trusted_certificate: Some(crate::mail::test_tls::CERT_PEM.into()),
+        };
+        let account = AccountRecord {
+            summary: AccountSummary {
+                notify_new_mail: true,
+                id: account_id.clone(),
+                provider: ProviderKind::ProtonBridge,
+                email: "fixture@example.test".into(),
+                display_name: "Fixture".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+                signature_html: String::new(),
+                reply_to: String::new(),
+                color: None,
+                default_body_format: BodyFormat::Plain,
+            },
+            imap: server_cfg.clone(),
+            smtp: server_cfg,
+        };
+        crate::mail::pool::forget(&account_id);
+        assert!(super::delete_folder(&account, "pw", "Broken")
+            .await
+            .is_err());
+        super::delete_folder(&account, "pw", "Healthy")
+            .await
+            .unwrap();
+        assert_eq!(
+            login_count.load(Ordering::SeqCst),
+            2,
+            "errored folder session must be discarded instead of released back to pool"
+        );
+        crate::mail::pool::forget(&account_id);
+        server.abort();
     }
 }
 

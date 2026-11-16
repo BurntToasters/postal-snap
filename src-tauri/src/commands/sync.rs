@@ -83,6 +83,17 @@ pub async fn sync_all_accounts(
     Ok(synced_ids)
 }
 
+pub(crate) struct SyncPassOutcome {
+    pub more_work: bool,
+    pub rule_notify_suppressed_ids: Vec<i64>,
+}
+
+pub(crate) struct SyncPassOptions {
+    pub quick: bool,
+    pub scope: mail::sync::SyncScope,
+    pub allow_rule_notices: bool,
+}
+
 /// Get Mail: run a full pass now, ahead of the background worker.
 pub async fn sync_one(account_id: &str, app: &AppHandle, state: &AppState) -> Result<(), String> {
     let actor = state.actor(account_id)?;
@@ -94,8 +105,11 @@ pub async fn sync_one(account_id: &str, app: &AppHandle, state: &AppState) -> Re
         state,
         &actor,
         guard,
-        true,
-        mail::sync::SyncScope::All,
+        SyncPassOptions {
+            quick: true,
+            scope: mail::sync::SyncScope::All,
+            allow_rule_notices: true,
+        },
     )
     .await
     {
@@ -217,9 +231,13 @@ pub(crate) async fn run_sync_pass(
     state: &AppState,
     actor: &Arc<AccountActor>,
     guard: OwnedMutexGuard<()>,
-    quick: bool,
-    scope: mail::sync::SyncScope,
-) -> Result<mail::SyncOutcome, PassError> {
+    options: SyncPassOptions,
+) -> Result<SyncPassOutcome, PassError> {
+    let SyncPassOptions {
+        quick,
+        scope,
+        allow_rule_notices,
+    } = options;
     let account = state.db.account(account_id).map_err(PassError::Other)?;
     let password = match crate::oauth::session_secret(&account).await {
         Ok(password) => password,
@@ -262,14 +280,13 @@ pub(crate) async fn run_sync_pass(
     // Everything below needs the account; the hooks hold it again after any
     // yield.
     let _guard = hooks.guard.take();
-    finish_rule_window(
+    let rule_notify_suppressed_ids = finish_sync_rule_window(
         &state.db,
         &account,
         filter_watermark,
         result.is_ok(),
-        &mut |message_id| {
-            crate::notify::rule_notice(app, &state.db, account_id, message_id);
-        },
+        allow_rule_notices,
+        &mut |message_id| crate::notify::rule_notice(app, &state.db, account_id, message_id),
     );
     match result {
         Ok(outcome) => {
@@ -297,7 +314,10 @@ pub(crate) async fn run_sync_pass(
             emit_message_change(app, account_id, None, "synced");
             emit_draft_change(app, account_id, None, None);
             emit_outbox_change(app, account_id, None, None);
-            Ok(outcome)
+            Ok(SyncPassOutcome {
+                more_work: outcome.more_work,
+                rule_notify_suppressed_ids,
+            })
         }
         Err(error) => {
             // Sign-in failures (expired app password, revoked access) need a
@@ -506,6 +526,40 @@ pub(crate) fn begin_rule_window(db: &Database, account_id: &str) -> Option<i64> 
     Some(mark)
 }
 
+pub(crate) fn finish_sync_rule_window(
+    db: &Database,
+    account: &AccountRecord,
+    watermark: Option<i64>,
+    succeeded: bool,
+    allow_notices: bool,
+    on_notice: &mut dyn FnMut(i64) -> bool,
+) -> Vec<i64> {
+    if !succeeded {
+        if let Some(mark) = watermark {
+            let _ = db.keep_rules_pending_from(&account.summary.id, mark);
+        }
+        return Vec::new();
+    }
+    let mut fired = false;
+    let (complete, matched_notify_ids) =
+        apply_filter_rules_collecting(db, account, watermark, &mut |message_id| {
+            if allow_notices && on_notice(message_id) {
+                fired = true;
+            }
+        });
+    if complete {
+        let _ = db.clear_rules_pending_from(&account.summary.id);
+    } else if let Some(mark) = watermark {
+        let _ = db.keep_rules_pending_from(&account.summary.id, mark);
+    }
+    if fired {
+        matched_notify_ids
+    } else {
+        Vec::new()
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn finish_rule_window(
     db: &Database,
     account: &AccountRecord,
@@ -513,12 +567,10 @@ pub(crate) fn finish_rule_window(
     succeeded: bool,
     on_notice: &mut dyn FnMut(i64),
 ) {
-    let account_id = &account.summary.id;
-    if succeeded && apply_filter_rules_notifying(db, account, watermark, on_notice) {
-        let _ = db.clear_rules_pending_from(account_id);
-    } else if let Some(mark) = watermark {
-        let _ = db.keep_rules_pending_from(account_id, mark);
-    }
+    finish_sync_rule_window(db, account, watermark, succeeded, true, &mut |id| {
+        on_notice(id);
+        true
+    });
 }
 
 /// A message a rule matched: (id, uid, folder name, folder id).
@@ -593,13 +645,23 @@ pub(crate) fn apply_filter_rules_notifying(
     newer_than_id: Option<i64>,
     on_notice: &mut dyn FnMut(i64),
 ) -> bool {
+    apply_filter_rules_collecting(db, account, newer_than_id, on_notice).0
+}
+
+fn apply_filter_rules_collecting(
+    db: &Database,
+    account: &AccountRecord,
+    newer_than_id: Option<i64>,
+    on_notice: &mut dyn FnMut(i64),
+) -> (bool, Vec<i64>) {
     let account_id = &account.summary.id;
     let Ok(rules) = db.list_filter_rules(account_id) else {
-        return false;
+        return (false, Vec::new());
     };
     let mut planned: Vec<(PlannedStep, Vec<RuleHit>)> = Vec::new();
     let mut complete = true;
     let mut notice: Option<i64> = None;
+    let mut notify_matched_ids: Vec<i64> = Vec::new();
     for rule in rules.iter().filter(|rule| rule.enabled) {
         if validate_filter_rule(rule, account_id).is_err() {
             continue;
@@ -623,6 +685,7 @@ pub(crate) fn apply_filter_rules_notifying(
             match step {
                 PlannedStep::Notify => {
                     if newer_than_id.is_some() {
+                        notify_matched_ids.extend(matches.iter().map(|(id, _, _, _)| *id));
                         let newest = matches.iter().map(|(id, _, _, _)| *id).max();
                         notice = notice.max(newest);
                     }
@@ -648,15 +711,20 @@ pub(crate) fn apply_filter_rules_notifying(
                         is_starred: None,
                         flag_color: None,
                     };
-                    let dedupe_key = format!("flags:{id}:true:false");
-                    if db
-                        .queue_operation(account_id, "flags", &operation, Some(&dedupe_key))
-                        .is_err()
-                    {
+                    let Ok(queued) = serde_json::to_value(&operation) else {
                         complete = false;
                         continue;
-                    }
-                    complete &= db.set_flags(*id, Some(true), None).is_ok();
+                    };
+                    complete &= db
+                        .record_colored_flag_change(
+                            account_id,
+                            *id,
+                            Some(true),
+                            None,
+                            None,
+                            Some(&queued),
+                        )
+                        .is_ok();
                 }
             }
             PlannedStep::Move {
@@ -738,7 +806,7 @@ pub(crate) fn apply_filter_rules_notifying(
     if let Some(message_id) = notice {
         on_notice(message_id);
     }
-    complete
+    (complete, notify_matched_ids)
 }
 
 async fn sync_drafts_locked(state: &AppState, account: &AccountRecord, password: &str) {
@@ -899,16 +967,25 @@ async fn import_remote_drafts_locked(
         let existing = state.db.draft_sync_state(&id, account_id).ok().flatten();
         let mut sync_state = "synced";
         let mut sync_detail = None;
+        if existing.as_ref().is_some_and(|(state, _, is_deleted)| {
+            *is_deleted
+                || matches!(
+                    state.as_str(),
+                    "reserved" | "deletePending" | "outboxDeletePending"
+                )
+        }) {
+            continue;
+        }
         if existing
             .as_ref()
-            .is_some_and(|(state, _)| state != "synced" && state != "conflict")
+            .is_some_and(|(state, _, _)| state != "synced" && state != "conflict")
         {
             id = uuid::Uuid::new_v4().to_string();
             sync_state = "conflict";
             sync_detail = Some("Recovered server copy; your local changes were preserved.");
         } else if existing
             .as_ref()
-            .is_some_and(|(_, local_revision)| *local_revision > revision)
+            .is_some_and(|(_, local_revision, _)| *local_revision > revision)
         {
             let _ = state.db.update_remote_draft_tracking(
                 &id,
@@ -1149,5 +1226,123 @@ mod tests {
                 "state {sync_state:?} must keep replaying"
             );
         }
+    }
+
+    #[test]
+    fn rule_mark_read_updates_local_unread_delta() {
+        use crate::db::{CachedMessage, Database};
+        use crate::models::{
+            AccountRecord, AccountSummary, BodyFormat, FilterRule, MailboxRole, ProviderKind,
+            RuleAction, RuleCondition, ServerConfig, TlsMode,
+        };
+
+        let db = Database::memory();
+        let server = ServerConfig {
+            host: "mail.example.test".into(),
+            port: 993,
+            tls_mode: TlsMode::Tls,
+            username: "sam@example.test".into(),
+            trusted_certificate: None,
+        };
+        let account = AccountRecord {
+            summary: AccountSummary {
+                notify_new_mail: true,
+                id: "acct-rule-read".into(),
+                provider: ProviderKind::Manual,
+                email: "sam@example.test".into(),
+                display_name: "Sam".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+                signature_html: String::new(),
+                reply_to: String::new(),
+                color: None,
+                default_body_format: BodyFormat::Plain,
+            },
+            imap: server.clone(),
+            smtp: server,
+        };
+        db.insert_account(&account).unwrap();
+        let inbox = db
+            .upsert_mailbox(
+                &account.summary.id,
+                "INBOX",
+                &MailboxRole::Inbox,
+                Some(1),
+                Some(2),
+                Some(1),
+                1,
+            )
+            .unwrap();
+        db.upsert_envelope(
+            &account.summary.id,
+            inbox,
+            &CachedMessage {
+                uid: 1,
+                internal_at: None,
+                message_id: Some("<r1@example.test>".into()),
+                subject: "Statement".into(),
+                sender_name: "Billing".into(),
+                sender_address: "billing@power.example.test".into(),
+                recipients: String::new(),
+                received_at: "2026-08-18T12:00:00Z".into(),
+                preview: String::new(),
+                is_read: false,
+                is_starred: false,
+                size: 100,
+                to: vec![],
+                cc: vec![],
+                bcc: vec![],
+                reply_to: None,
+                thread_parent: None,
+                text_body: String::new(),
+                html_body: None,
+                attachments: vec![],
+                raw_message: vec![],
+                has_attachments: false,
+                is_answered: false,
+                is_forwarded: false,
+                has_calendar: false,
+                calendar_json: None,
+                list_unsubscribe: None,
+                list_unsubscribe_post: None,
+                importance: String::new(),
+                disposition_to: String::new(),
+            },
+        )
+        .unwrap();
+        let rule = FilterRule {
+            id: "rule-mark-read".into(),
+            account_id: account.summary.id.clone(),
+            name: "Mark read".into(),
+            field: "from".into(),
+            contains: "power.example.test".into(),
+            action: "mark_read".into(),
+            target_mailbox: None,
+            enabled: true,
+            match_mode: "all".into(),
+            conditions: vec![RuleCondition {
+                field: "from".into(),
+                value: "power.example.test".into(),
+            }],
+            actions: vec![RuleAction {
+                kind: "mark_read".into(),
+                target_mailbox: None,
+                flag_color: None,
+            }],
+        };
+        db.create_filter_rule(&rule).unwrap();
+
+        let (complete, _) = super::apply_filter_rules_collecting(&db, &account, None, &mut |_| {});
+        assert!(complete);
+        let inbox_summary = db
+            .list_mailboxes(&account.summary.id)
+            .unwrap()
+            .into_iter()
+            .find(|box_| box_.id == inbox)
+            .unwrap();
+        assert_eq!(inbox_summary.unread_count, 0);
     }
 }

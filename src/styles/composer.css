@@ -337,15 +337,13 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
   display: grid;
   min-width: var(--toolbar-button-size);
   min-height: var(--toolbar-button-size);
-  width: var(--toolbar-button-size);
-  height: var(--toolbar-button-size);
   place-items: center;
   border: 1px solid transparent;
   border-radius: var(--radius-pill);
   background: transparent;
   color: var(--text);
   cursor: pointer;
-  padding: 0;
+  padding: 0 var(--space-1);
 }
 
 /* Mac format bar: bare icons, a fill on hover, accent ink when pressed. */
@@ -386,15 +384,14 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
 .toolbar-group .color-control {
   min-width: var(--toolbar-button-size);
   min-height: var(--toolbar-button-size);
-  width: var(--toolbar-button-size);
-  height: var(--toolbar-button-size);
+  padding: 0 var(--space-1);
 }
 
 .color-control {
   position: relative;
   display: grid;
-  width: var(--target-size);
-  height: var(--target-size);
+  min-width: var(--toolbar-button-size);
+  min-height: var(--toolbar-button-size);
   place-items: center;
 }
 

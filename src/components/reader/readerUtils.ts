@@ -18,6 +18,19 @@ import { useAppStore } from "../../store";
 import type { Attachment, MessageDetail } from "../../types";
 import { errorText } from "../../errors";
 
+/** True when a closed <details> hides this text (its own summary stays visible). */
+function hiddenInClosedDetails(node: Node): boolean {
+  let element = node.parentElement;
+  while (element) {
+    const details = element.closest("details:not([open])");
+    if (!details) return false;
+    const summary = element.closest("summary");
+    if (!summary || summary.parentElement !== details) return true;
+    element = details.parentElement;
+  }
+  return false;
+}
+
 /** Case-insensitive matches in visible text, without overlapping. */
 export function countTextMatches(root: Node, query: string): number {
   const needle = query.trim().toLowerCase();
@@ -29,6 +42,7 @@ export function countTextMatches(root: Node, query: string): number {
   );
   if (!walker) return 0;
   while (walker.nextNode()) {
+    if (hiddenInClosedDetails(walker.currentNode)) continue;
     const text = (walker.currentNode.textContent ?? "").toLowerCase();
     let index = 0;
     while (index <= text.length) {
@@ -56,6 +70,7 @@ export function selectTextMatch(
   let seen = 0;
   while (walker.nextNode()) {
     const node = walker.currentNode;
+    if (hiddenInClosedDetails(node)) continue;
     const text = (node.textContent ?? "").toLowerCase();
     let index = 0;
     while (index <= text.length) {

@@ -10,6 +10,7 @@ import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { AppMark } from "./components/AppMark";
 import { ContextMenuHost } from "./components/ContextMenu";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { useInertBackground } from "./components/useInertBackground";
 import { WindowChrome } from "./components/WindowChrome";
 import {
   isPermissionGranted,
@@ -477,6 +478,8 @@ export default function App() {
     window.dispatchEvent(new Event(CONTEXT_DISMISS_EVENT));
   }, [settingsOpen]);
 
+  useInertBackground(undefined, settingsOpen);
+
   if (!ready)
     return (
       <>
@@ -542,9 +545,7 @@ export default function App() {
     <>
       <ContextMenuHost />
       <WindowChrome />
-      <div className="app-viewport" inert={settingsOpen || undefined}>
-        {mainContent}
-      </div>
+      <div className="app-viewport">{mainContent}</div>
       {viewer ? (
         <ErrorBoundary
           className="modal-layer eml-viewer-recovery crash-recovery"

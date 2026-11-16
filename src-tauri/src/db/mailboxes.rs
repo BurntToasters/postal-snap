@@ -28,6 +28,79 @@ impl Database {
         Ok(())
     }
 
+    pub fn prepare_mailbox_for_sync(
+        &self,
+        account_id: &str,
+        name: &str,
+        role: &MailboxRole,
+        role_source: &str,
+        uid_validity: Option<u32>,
+    ) -> Result<i64, String> {
+        let mut conn = self.conn()?;
+        let transaction = conn.transaction().map_err(db_error)?;
+        let previous_validity: Option<Option<u32>> = transaction
+            .query_row(
+                "SELECT uid_validity FROM mailboxes WHERE account_id = ?1 AND name = ?2",
+                params![account_id, name],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?;
+        let validity_changed =
+            previous_validity.is_some() && previous_validity != Some(uid_validity);
+        let existing: Option<i64> = transaction
+            .query_row(
+                "SELECT id FROM mailboxes WHERE account_id=?1 AND name=?2",
+                params![account_id, name],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?;
+        let stable_id = match existing {
+            Some(id) => id,
+            None => transaction.query_row("UPDATE mailbox_id_sequence SET last_id=MAX(last_id,(SELECT COALESCE(MAX(id),0) FROM (SELECT id FROM mailboxes UNION ALL SELECT mailbox_id AS id FROM folder_assignments)))+1 WHERE singleton=1 RETURNING last_id", [], |row| row.get::<_, i64>(0)).map_err(db_error)?,
+        };
+        if existing.is_none() {
+            transaction
+                .execute(
+                    "INSERT INTO mailboxes (id, account_id, name, display_name, role, role_source, uid_validity, uid_next, server_unread, server_total)
+                     VALUES (?5, ?1, ?2, ?2, ?3, ?4, ?6, NULL, NULL, 0)",
+                    params![account_id, name, role.as_str(), role_source, stable_id, uid_validity],
+                )
+                .map_err(db_error)?;
+        } else if validity_changed {
+            transaction
+                .execute(
+                    "UPDATE mailboxes SET role=?1, role_source=?2, uid_validity=?3, uid_next=NULL,
+                     server_unread=NULL, server_total=0, local_total_delta=0, local_unread_delta=0,
+                     counts_generation=counts_generation+1, server_available=1,
+                     backfill_uid=NULL, backfill_state='active', highest_modseq=NULL, last_flag_scan_at=NULL
+                     WHERE id=?4",
+                    params![role.as_str(), role_source, uid_validity, stable_id],
+                )
+                .map_err(db_error)?;
+            transaction
+                .execute("DELETE FROM messages WHERE mailbox_id = ?1", [stable_id])
+                .map_err(db_error)?;
+            // UIDs from the old generation cannot target recycled server UIDs.
+            transaction
+                .execute(
+                    "DELETE FROM offline_ops WHERE account_id=?1 AND ((kind='flags' AND json_extract(payload,'$.mailbox')=?2) OR (kind='move' AND json_extract(payload,'$.source')=?2))",
+                    params![account_id, name],
+                )
+                .map_err(db_error)?;
+        } else {
+            transaction
+                .execute(
+                    "UPDATE mailboxes SET role=?1, role_source=?2, uid_validity=COALESCE(uid_validity,?3), server_available=1 WHERE id=?4",
+                    params![role.as_str(), role_source, uid_validity, stable_id],
+                )
+                .map_err(db_error)?;
+        }
+        transaction.commit().map_err(db_error)?;
+        Ok(stable_id)
+    }
+
     #[allow(dead_code, clippy::too_many_arguments)]
     pub fn upsert_mailbox(
         &self,

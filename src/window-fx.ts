@@ -12,6 +12,7 @@ const ACCESSIBILITY_QUERIES = [
 const REDUCE_POLL_MS = 10_000;
 
 let lastSync: { enabled: boolean; isDark: boolean } | undefined;
+let syncSequence = 0;
 let accessibilityBound = false;
 let reduceTransparencyPoll: number | undefined;
 let lastNativeReduceTransparency: boolean | undefined;
@@ -65,8 +66,11 @@ function startReduceTransparencyPoll() {
   reduceTransparencyPoll = window.setInterval(() => {
     void (async () => {
       if (!lastSync) return;
+      const seq = syncSequence;
       const reduce = await nativeReduceTransparency();
-      if (reduce === lastNativeReduceTransparency) return;
+      if (seq !== syncSequence || reduce === lastNativeReduceTransparency) {
+        return;
+      }
       lastNativeReduceTransparency = reduce;
       await syncWorkspaceWindowFx(lastSync.enabled, lastSync.isDark);
     })();
@@ -77,10 +81,13 @@ export async function syncWorkspaceWindowFx(
   enabled = false,
   isDark = false,
 ): Promise<void> {
+  const seq = ++syncSequence;
   lastSync = { enabled, isDark };
   bindAccessibilityListeners();
   const supports = await supportsWorkspaceWindowFx();
+  if (seq !== syncSequence) return;
   const nativeReduce = await nativeReduceTransparency();
+  if (seq !== syncSequence) return;
   lastNativeReduceTransparency = nativeReduce;
   const macos = document.documentElement.dataset.platform === "macos";
   if (supports && enabled && macos) startReduceTransparencyPoll();
@@ -109,6 +116,7 @@ export async function syncWorkspaceWindowFx(
       enabled: active,
       dark: isDark,
     });
+    if (seq !== syncSequence) return;
     document.documentElement.dataset.windowFx =
       typeof effective === "boolean"
         ? effective
@@ -118,6 +126,7 @@ export async function syncWorkspaceWindowFx(
           ? "vibrant"
           : "opaque";
   } catch {
+    if (seq !== syncSequence) return;
     // Native effect unavailable: keep CSS and document state opaque so
     // translucent chrome never claims glass without a working backend.
     document.documentElement.dataset.windowFx = "opaque";

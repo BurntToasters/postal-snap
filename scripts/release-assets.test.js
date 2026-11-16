@@ -795,6 +795,7 @@ test("direct and Store builds keep separate capabilities", async () => {
   );
 
   assert.deepEqual(direct.app.security.capabilities, ["default"]);
+  assert.equal(direct.plugins.updater.requireSignedVersion, true);
   assert.deepEqual(mas.app.security.capabilities, ["store"]);
   assert.deepEqual(msstore.app.security.capabilities, ["store"]);
   assert.deepEqual(flatpak.app.security.capabilities, ["store"]);

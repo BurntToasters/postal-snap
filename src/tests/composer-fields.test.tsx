@@ -170,8 +170,12 @@ describe("send bar", () => {
     fireEvent.click(
       screen.getByRole("menuitem", { name: strings.composer.sendCustom }),
     );
+    const customDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    customDate.setHours(10, 30, 0, 0);
+    const pad = (value: number) => String(value).padStart(2, "0");
+    const scheduleInput = `${customDate.getFullYear()}-${pad(customDate.getMonth() + 1)}-${pad(customDate.getDate())}T10:30`;
     const schedule = screen.getByLabelText(strings.composer.scheduleTime);
-    fireEvent.change(schedule, { target: { value: "2026-09-15T10:30" } });
+    fireEvent.change(schedule, { target: { value: scheduleInput } });
     fireEvent.submit(schedule.closest("form")!);
 
     fireEvent.click(
@@ -192,9 +196,7 @@ describe("send bar", () => {
     expect(sendMessage.mock.calls[1]).toEqual([]);
     expect(new Date(sendMessage.mock.calls[2][0]).getHours()).toBe(21);
     expect(new Date(sendMessage.mock.calls[3][0]).getHours()).toBe(8);
-    expect(sendMessage.mock.calls[4][0]).toBe(
-      new Date(2026, 8, 15, 10, 30).toISOString(),
-    );
+    expect(sendMessage.mock.calls[4][0]).toBe(customDate.toISOString());
     expect(saveDraft).toHaveBeenCalledWith(false);
     expect(addAttachments).toHaveBeenCalled();
     expect(addInlineImage).toHaveBeenCalled();

@@ -146,6 +146,12 @@ export const settingsSearchEntries: SettingsSearchEntry[] = [
     keywords: "privacy alerts",
   },
   {
+    section: "notifications",
+    title: s.notifyPerAccount,
+    help: s.accountNotifyNewMailHelp,
+    keywords: "account alert new mail per account",
+  },
+  {
     section: "accounts",
     title: s.connection,
     help: strings.setup.bridgeUnavailableHint,
@@ -233,7 +239,7 @@ export const settingsSearchEntries: SettingsSearchEntry[] = [
   },
   {
     section: "shortcuts",
-    title: s.shortcuts,
+    title: s.shortcutsTitle,
     help: "",
     keywords: "keyboard keys",
   },

@@ -12,6 +12,7 @@ import {
 } from "./setupFlow/steps";
 import { useSetupProgress } from "./setupFlow/useSetupProgress";
 import { useSettingsSave } from "./settings/useSettingsSave";
+import { useSettingsCapabilities } from "./settings/useSettingsCapabilities";
 
 interface Props {
   startupNotice?: string | null;
@@ -73,6 +74,8 @@ export function SetupFlow({
     // Setting the flag here first would briefly show the standalone wizard.
     await onComplete();
   }
+
+  const { windowFxSupported } = useSettingsCapabilities();
 
   function go(next: SetupStep) {
     setError(undefined);
@@ -146,7 +149,12 @@ export function SetupFlow({
         ) : null}
 
         {step === "comfort" ? (
-          <ComfortStep saving={saving} persist={persist} go={go} />
+          <ComfortStep
+            saving={saving}
+            persist={persist}
+            windowFxSupported={windowFxSupported}
+            go={go}
+          />
         ) : null}
 
         {step === "account" ? (

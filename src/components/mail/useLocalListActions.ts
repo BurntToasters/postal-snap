@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { api } from "../../api";
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
@@ -22,6 +22,9 @@ interface Options {
   scheduledSendInFlight: ReturnType<
     typeof useScheduledOutbox
   >["scheduledSendInFlight"];
+  isScheduledSendInFlight?: ReturnType<
+    typeof useScheduledOutbox
+  >["isScheduledSendInFlight"];
   selectMessage: AppState["selectMessage"];
   openComposer: AppState["openComposer"];
   setDrafts: AppState["setDrafts"];
@@ -36,11 +39,23 @@ export function useLocalListActions({
   setLoadingMessageId,
   setOutboxPreview,
   scheduledSendInFlight,
+  isScheduledSendInFlight,
   selectMessage,
   openComposer,
   setDrafts,
   setError,
 }: Options) {
+  const scheduledSendInFlightRef = useRef(scheduledSendInFlight);
+  useEffect(() => {
+    scheduledSendInFlightRef.current = scheduledSendInFlight;
+  }, [scheduledSendInFlight]);
+
+  function sendIsInFlight(id: string, accountId: string): boolean {
+    return Boolean(
+      scheduledSendInFlightRef.current?.has(`${accountId}:${id}`) ||
+      isScheduledSendInFlight?.(id, accountId),
+    );
+  }
   async function duplicateDraft(id: string) {
     if (!activeAccountId) return;
     const accountId = activeAccountId;
@@ -349,18 +364,24 @@ export function useLocalListActions({
     id: string,
     state: ReturnType<typeof useAppStore.getState>["outbox"][number]["state"],
   ) {
-    if (!activeAccountId) return;
+    const accountId = activeAccountId;
+    if (!accountId) return;
     if (state !== "queued" && state !== "needs_attention") return;
-    if (scheduledSendInFlight?.has(`${activeAccountId}:${id}`)) return;
+    if (sendIsInFlight(id, accountId)) return;
     if (state === "needs_attention") {
       const confirmed = await api.showNativeConfirm(
         strings.mail.editUncertainTitle,
         strings.mail.editUncertainDetail,
       );
       if (!confirmed) return;
+      if (
+        useAppStore.getState().activeAccountId !== accountId ||
+        sendIsInFlight(id, accountId)
+      )
+        return;
     }
     try {
-      const draft = await api.restoreOutbox(id, activeAccountId);
+      const draft = await api.restoreOutbox(id, accountId);
       openComposer({ draft });
       await loadAccountData();
     } catch (cause) {
@@ -372,7 +393,9 @@ export function useLocalListActions({
     id: string,
     state: ReturnType<typeof useAppStore.getState>["outbox"][number]["state"],
   ) {
-    if (!activeAccountId) return;
+    const accountId = activeAccountId;
+    if (!accountId) return;
+    if (sendIsInFlight(id, accountId)) return;
     const question =
       state === "archive_pending"
         ? strings.mail.dismissArchiveWarning
@@ -387,14 +410,19 @@ export function useLocalListActions({
         : strings.composer.discard;
     const confirmed = await api.showNativeConfirm(title, question);
     if (!confirmed) return;
+    if (
+      useAppStore.getState().activeAccountId !== accountId ||
+      sendIsInFlight(id, accountId)
+    )
+      return;
     try {
       if (state === "scheduled") {
-        const draft = await api.restoreOutbox(id, activeAccountId);
+        const draft = await api.restoreOutbox(id, accountId);
         openComposer({ draft });
       } else if (state === "archive_pending") {
-        await api.dismissArchiveWarning(id, activeAccountId);
+        await api.dismissArchiveWarning(id, accountId);
       } else {
-        await api.deleteOutbox(id, activeAccountId);
+        await api.deleteOutbox(id, accountId);
       }
       await loadAccountData();
     } catch (cause) {

@@ -7557,3 +7557,171 @@ fn new_summary_columns_default_and_map_from_storage() {
     let detail = db.message_detail(id, &account.summary.id).unwrap();
     assert_eq!(detail.summary.flag_color, 3);
 }
+
+#[test]
+fn remove_unowned_account_dir_waits_for_concurrent_writer_transaction() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("postal.sqlite");
+    let attachments_root = dir.path().join("attachments");
+    let db = Database::open(&db_path).unwrap();
+    let mut record = account();
+    record.summary.id = "acct-race".into();
+    let account_dir = attachments_root.join(&record.summary.id);
+    std::fs::create_dir_all(&account_dir).unwrap();
+    std::fs::write(account_dir.join("keep.bin"), b"attachment").unwrap();
+
+    // Hold the writer connection with an uncommitted account insert.
+    let writer_db = db.clone();
+    let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+    let (commit_tx, commit_rx) = std::sync::mpsc::channel();
+    let writer = std::thread::spawn(move || {
+        let conn = writer_db.conn().unwrap();
+        conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+        conn.execute(
+            "INSERT INTO accounts (id, provider, email, display_name, imap_host, imap_port, imap_tls, imap_username, smtp_host, smtp_port, smtp_tls, smtp_username) VALUES (?1, 'custom', 'race@example.com', 'Race', 'imap.example.com', 993, 'tls', 'race@example.com', 'smtp.example.com', 465, 'tls', 'race@example.com')",
+            [&record.summary.id],
+        )
+        .unwrap();
+        locked_tx.send(()).unwrap();
+        commit_rx.recv().unwrap();
+        conn.execute_batch("COMMIT").unwrap();
+    });
+    locked_rx.recv().unwrap();
+
+    let cleanup_db = db.clone();
+    let cleanup_path = account_dir.clone();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let cleaner = std::thread::spawn(move || {
+        cleanup_db
+            .remove_unowned_account_dir(&cleanup_path)
+            .unwrap();
+        done_tx.send(()).unwrap();
+    });
+
+    // Under WAL, read_conn() would proceed before COMMIT and delete the dir.
+    std::thread::sleep(std::time::Duration::from_millis(80));
+    assert!(
+        done_rx.try_recv().is_err(),
+        "cleanup must block on the writer lock while an account write is active"
+    );
+    commit_tx.send(()).unwrap();
+    writer.join().unwrap();
+    cleaner.join().unwrap();
+    assert!(account_dir.join("keep.bin").exists());
+}
+
+#[test]
+fn file_muted_inbox_adjusts_local_unread_delta_and_totals() {
+    let db = Database::memory();
+    let account = account();
+    db.insert_account(&account).unwrap();
+    let inbox = db
+        .upsert_mailbox(
+            &account.summary.id,
+            "INBOX",
+            &MailboxRole::Inbox,
+            Some(1),
+            Some(10),
+            Some(1),
+            1,
+        )
+        .unwrap();
+    let archive = db
+        .upsert_mailbox(
+            &account.summary.id,
+            "Archive",
+            &MailboxRole::Archive,
+            Some(1),
+            Some(5),
+            Some(0),
+            0,
+        )
+        .unwrap();
+    let _sent = mailbox(&db, &account.summary.id, "Sent", &MailboxRole::Sent);
+
+    let mut parent = message(1, "2026-08-18T12:00:00Z");
+    parent.is_read = true;
+    db.upsert_envelope(&account.summary.id, inbox, &parent)
+        .unwrap();
+    let parent_id = db.list_messages(inbox, None, 10).unwrap().items[0].id;
+    db.remember_muted_conversation(&account.summary.id, parent_id)
+        .unwrap();
+    db.file_muted_inbox(&account.summary.id).unwrap();
+
+    // Reset counts cleanly to isolate filing an unread muted reply while unread count is synced.
+    db.update_mailbox_status(inbox, Some(1), Some(11), Some(1), 1)
+        .unwrap();
+    db.update_mailbox_status(archive, Some(1), Some(6), Some(0), 1)
+        .unwrap();
+
+    let mut reply = message(2, "2026-08-18T13:00:00Z");
+    reply.is_read = false;
+    reply.thread_parent = Some("<1@example.com>".into());
+    db.upsert_envelope(&account.summary.id, inbox, &reply)
+        .unwrap();
+    let reply_id = db
+        .list_messages(inbox, None, 10)
+        .unwrap()
+        .items
+        .into_iter()
+        .find(|item| item.uid == 2)
+        .unwrap()
+        .id;
+
+    assert_eq!(
+        db.file_muted_inbox(&account.summary.id).unwrap(),
+        vec![reply_id]
+    );
+    let mailboxes = db.list_mailboxes(&account.summary.id).unwrap();
+    let inbox_summary = mailboxes.iter().find(|m| m.id == inbox).unwrap();
+    let archive_summary = mailboxes.iter().find(|m| m.id == archive).unwrap();
+    assert_eq!(inbox_summary.unread_count, 0);
+    assert_eq!(inbox_summary.total_count, 0);
+    assert_eq!(archive_summary.unread_count, 0);
+    assert_eq!(archive_summary.total_count, 2);
+}
+
+#[test]
+fn import_remote_draft_does_not_resurrect_deleted_draft() {
+    let db = Database::memory();
+    let account = account();
+    db.insert_account(&account).unwrap();
+    let mut deleted = draft(&account.summary.id);
+    deleted.id = Some("deleted-draft-1".into());
+    db.save_draft(&deleted).unwrap();
+    db.mark_draft_synced(
+        "deleted-draft-1",
+        &account.summary.id,
+        "Drafts",
+        44,
+        Some(9),
+        "<draft.deleted-draft-1.1@postal-snap.test>",
+        1,
+    )
+    .unwrap();
+    db.remove_draft("deleted-draft-1", &account.summary.id)
+        .unwrap();
+    db.finish_remote_draft_delete("deleted-draft-1", &account.summary.id)
+        .unwrap();
+    assert!(db.list_drafts(&account.summary.id).unwrap().is_empty());
+
+    let imported = db
+        .import_remote_draft(
+            "deleted-draft-1",
+            &deleted,
+            "Drafts",
+            44,
+            Some(9),
+            Some("<draft.deleted-draft-1.1@postal-snap.test>"),
+            1,
+            "2026-08-18T14:00:00Z",
+            "synced",
+            None,
+        )
+        .unwrap();
+    assert_eq!(imported, "deleted-draft-1");
+    assert!(
+        db.list_drafts(&account.summary.id).unwrap().is_empty(),
+        "deleted draft tombstone must not be resurrected by remote import"
+    );
+}

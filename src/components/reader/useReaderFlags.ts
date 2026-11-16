@@ -29,7 +29,7 @@ export function useReaderFlags({
     const operation = ++starredOperation.current;
     const viewMailboxId = current.activeMailboxId;
     const next = !message.isStarred;
-    const flagColor = next ? 0 : message.flagColor;
+    const flagColor = 0;
     selectMessage({ ...message, isStarred: next, flagColor });
     setMessages(
       current.messages.map((summary) =>
@@ -54,7 +54,11 @@ export function useReaderFlags({
       setMessages(
         current.messages.map((summary) =>
           summary.id === message.id && summary.isStarred === next
-            ? { ...summary, isStarred: message.isStarred }
+            ? {
+                ...summary,
+                isStarred: message.isStarred,
+                flagColor: message.flagColor,
+              }
             : summary,
         ),
         current.messageCursor,
@@ -67,6 +71,7 @@ export function useReaderFlags({
         selectMessage({
           ...current.selectedMessage,
           isStarred: message.isStarred,
+          flagColor: message.flagColor,
         });
       setError(errorText(cause));
     }

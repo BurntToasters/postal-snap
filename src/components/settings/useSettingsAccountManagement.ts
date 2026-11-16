@@ -13,7 +13,15 @@ import { errorText } from "../../errors";
 interface Options {
   onClose: () => void;
   onLastAccountRemoved?: () => void;
+  onAccountRemoved?: (accountId: string) => void;
   update: SettingsSaveUpdate;
+}
+
+function withoutAccount<T>(record: Record<string, T>, accountId: string) {
+  if (!(accountId in record)) return record;
+  const next = { ...record };
+  delete next[accountId];
+  return next;
 }
 
 const aliasMutationQueues = new Map<string, Promise<void>>();
@@ -39,6 +47,7 @@ function serializeAliasMutation<T>(
 export function useSettingsAccountManagement({
   onClose,
   onLastAccountRemoved,
+  onAccountRemoved,
   update,
 }: Options) {
   const accounts = useAppStore((state) => state.accounts);
@@ -154,6 +163,13 @@ export function useSettingsAccountManagement({
       }
       const remaining = await api.listAccounts();
       setAccounts(remaining);
+      setNameInputs((prev) => withoutAccount(prev, id));
+      setReplyToInputs((prev) => withoutAccount(prev, id));
+      setSignatureInputs((prev) => withoutAccount(prev, id));
+      setSignatureHtmlInputs((prev) => withoutAccount(prev, id));
+      setNewAliasInputs((prev) => withoutAccount(prev, id));
+      setPasswordInputs((prev) => withoutAccount(prev, id));
+      onAccountRemoved?.(id);
       if (result?.cleanupPending) {
         setError(strings.settings.accountCleanupWarning);
       } else if (result?.diskSpacePending) {

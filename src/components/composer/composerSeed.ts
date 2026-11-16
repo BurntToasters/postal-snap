@@ -36,7 +36,8 @@ export function seedRecipients(
   if (!message) return "";
   if (
     seed.composeMode === "forward" ||
-    seed.composeMode === "forwardAttachment"
+    seed.composeMode === "forwardAttachment" ||
+    seed.composeMode === "redirect"
   )
     return "";
   if (seed.composeMode === "editAsNew") {

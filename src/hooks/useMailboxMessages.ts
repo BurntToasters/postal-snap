@@ -93,7 +93,7 @@ export function useMailboxMessages({
       submittedQueryRef.current
     ) {
       messageRequestRef.current += 1;
-      setLoadingMessages(false);
+      if (!submittedQueryRef.current) setLoadingMessages(false);
       return;
     }
     const accountId = activeAccountId;

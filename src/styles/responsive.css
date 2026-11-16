@@ -348,12 +348,6 @@
       );
   }
 
-  .address-fields .to-field {
-    grid-template-columns:
-      calc(var(--address-label-width) - 0.75rem) minmax(0, 1fr)
-      auto;
-  }
-
   .aliases-header {
     flex-direction: column;
     align-items: stretch;

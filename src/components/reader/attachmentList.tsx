@@ -7,7 +7,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../../api";
 import { accountSyncPhase } from "../../accountStatus";
@@ -67,16 +67,26 @@ export function AttachmentPreviewDialog({
   onDownload: () => void;
   onClose: () => void;
 }) {
-  const dialogRef = useDialogFocus(onClose);
-  useInertBackground();
-  const previewKey = `${preview.filename}\0${preview.imageDataUrl ?? ""}`;
+  const dialogRef = useRef<HTMLElement>(null);
+  useInertBackground(dialogRef);
+  useDialogFocus(onClose, { ref: dialogRef });
+  const previewKey = [
+    preview.filename,
+    preview.contentType,
+    preview.size,
+    preview.text ?? "",
+    preview.pages?.length ?? 0,
+    preview.imageDataUrl ?? "",
+    preview.pages?.[0] ?? "",
+  ].join("\0");
   const [zoomState, setZoomState] = useState({ key: previewKey, zoom: 1 });
-  if (zoomState.key !== previewKey) {
-    setZoomState({ key: previewKey, zoom: 1 });
-  }
   const zoom = zoomState.key === previewKey ? zoomState.zoom : 1;
   function setZoom(next: number) {
     setZoomState({ key: previewKey, zoom: next });
+  }
+  function stepFile(navigate: () => void) {
+    setZoomState({ key: "", zoom: 1 });
+    navigate();
   }
   return createPortal(
     <div className="modal-layer attachment-preview-layer">
@@ -95,11 +105,11 @@ export function AttachmentPreviewDialog({
         onKeyDown={(event) => {
           if (event.key === "ArrowLeft" && onPrevious) {
             event.preventDefault();
-            onPrevious();
+            stepFile(onPrevious);
           }
           if (event.key === "ArrowRight" && onNext) {
             event.preventDefault();
-            onNext();
+            stepFile(onNext);
           }
           if (
             preview.imageDataUrl &&
@@ -190,13 +200,17 @@ export function AttachmentPreviewDialog({
             <button
               type="button"
               className="secondary-button"
-              onClick={onPrevious}
+              onClick={() => stepFile(onPrevious)}
             >
               <ChevronLeft aria-hidden="true" /> {strings.reader.previousFile}
             </button>
           ) : null}
           {onNext ? (
-            <button type="button" className="secondary-button" onClick={onNext}>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => stepFile(onNext)}
+            >
               {strings.reader.nextFile} <ChevronRight aria-hidden="true" />
             </button>
           ) : null}
@@ -436,7 +450,7 @@ export function AttachmentList({
                     <Eye aria-hidden="true" />
                   </button>
                 ) : null}
-                {isMessageAttachment(attachment.contentType) ? (
+                {isMessageAttachment(attachment) ? (
                   <button
                     type="button"
                     className="secondary-button attachment-view-button"

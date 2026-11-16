@@ -1,6 +1,7 @@
 import {
   useEffect,
   useId,
+  useRef,
   useState,
   type KeyboardEvent,
   type MouseEvent,
@@ -60,8 +61,9 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
     // The dialog restores focus before the inert background clears.
     window.setTimeout(() => invoker?.focus(), 0);
   };
-  const dialogRef = useDialogFocus(dismiss);
-  useInertBackground();
+  const dialogRef = useRef<HTMLElement>(null);
+  useInertBackground(dialogRef);
+  useDialogFocus(dismiss, { ref: dialogRef });
   const baseId = useId();
   const titleId = `${baseId}-title`;
   const inputId = `${baseId}-input`;

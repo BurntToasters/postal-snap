@@ -7,10 +7,16 @@ use std::path::Path;
 
 /// Functions that read through `conn()` on purpose, keyed by `file::fn`.
 /// Each entry needs a reason. Entries that no longer match fail the guard.
-const WRITER_READ_ALLOWLIST: &[(&str, &str)] = &[(
-    "db.rs::maintain_search_index",
-    "recover_fts_index may rebuild the FTS index, which writes",
-)];
+const WRITER_READ_ALLOWLIST: &[(&str, &str)] = &[
+    (
+        "db.rs::maintain_search_index",
+        "recover_fts_index may rebuild the FTS index, which writes",
+    ),
+    (
+        "db/accounts.rs::remove_unowned_account_dir",
+        "serializes account directory removal against concurrent account creation",
+    ),
+];
 
 /// Words that mean a body may write. Matched as whole tokens, any case.
 const WRITE_WORDS: &[&str] = &[

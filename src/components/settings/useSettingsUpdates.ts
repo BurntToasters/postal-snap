@@ -5,8 +5,10 @@ import { useAppStore } from "../../store";
 import type { DistributionChannel } from "../../types";
 import {
   addUpdateFoundListener,
+  addUpdateSettledListener,
   checkUpdateInteractive,
   removeUpdateFoundListener,
+  removeUpdateSettledListener,
   type UpdateFoundListener,
 } from "../../update";
 import { errorText } from "../../errors";
@@ -27,10 +29,19 @@ export function useSettingsUpdates({ distribution }: Options) {
     setUpdateStatus(strings.settings.installing(version ?? ""));
   }, []);
 
+  const handleUpdateSettled = useCallback(() => {
+    setCheckingUpdate(false);
+    setUpdateStatus(strings.settings.checkUpdates);
+  }, []);
+
   useEffect(() => {
     addUpdateFoundListener(handleUpdateFound);
-    return () => removeUpdateFoundListener(handleUpdateFound);
-  }, [handleUpdateFound]);
+    addUpdateSettledListener(handleUpdateSettled);
+    return () => {
+      removeUpdateFoundListener(handleUpdateFound);
+      removeUpdateSettledListener(handleUpdateSettled);
+    };
+  }, [handleUpdateFound, handleUpdateSettled]);
 
   const checkForUpdates = useCallback(async () => {
     if (checkingUpdate || distribution?.updatesManagedBy !== "postalSnap")

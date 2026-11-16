@@ -140,19 +140,19 @@ legend {
 
 .composer-from-select {
   border: 0;
-  background: transparent;
+  background-color: transparent;
   font-weight: var(--fw-medium);
   color: var(--text);
-  padding: var(--space-1) var(--space-2);
+  padding-block: var(--space-1);
+  padding-inline-start: var(--space-2);
   border-radius: var(--radius-xs);
-  background-image: var(--popup-chevron);
   cursor: pointer;
   max-width: calc(100% - var(--icon-lg));
 }
 
 .composer-from-select:hover,
 .composer-from-select:focus-visible {
-  background: var(--surface-hover);
+  background-color: var(--surface-hover);
 }
 
 .address-fields .to-field-row {

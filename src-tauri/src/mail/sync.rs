@@ -669,15 +669,12 @@ async fn sync_folder<H: SyncHooks>(
             return Err("Mailbox changed during sync.".into());
         }
     }
-    let mailbox_id = db.upsert_mailbox_with_source(
+    let mailbox_id = db.prepare_mailbox_for_sync(
         account_id,
         &folder.name,
         &folder.role,
         folder.role_source,
         status.uid_validity,
-        status.uid_next,
-        status.unseen,
-        status.exists,
     )?;
     db.set_mailbox_listing(mailbox_id, folder.delimiter.as_deref())?;
     let purged = previous.as_ref().is_some_and(|meta| {
@@ -721,6 +718,13 @@ async fn sync_folder<H: SyncHooks>(
     let deferred = quick && (backfill_active || wants_prefetch);
     if unchanged && flag_scan == FlagScan::Skip && (quick || (!backfill_active && !wants_prefetch))
     {
+        db.update_mailbox_status(
+            mailbox_id,
+            status.uid_validity,
+            status.uid_next,
+            status.unseen,
+            status.exists,
+        )?;
         return Ok((deferred, false));
     }
     if status.exists == 0 {
@@ -728,6 +732,13 @@ async fn sync_folder<H: SyncHooks>(
             .as_ref()
             .is_some_and(|meta| meta.server_total.is_some_and(|total| total > 0));
         reconcile_empty_mailbox(db, mailbox_id)?;
+        db.update_mailbox_status(
+            mailbox_id,
+            status.uid_validity,
+            status.uid_next,
+            status.unseen,
+            0,
+        )?;
         db.set_highest_modseq(mailbox_id, status.highest_modseq)?;
         return Ok((false, changed));
     }
@@ -856,6 +867,18 @@ async fn sync_folder<H: SyncHooks>(
         };
         full_flag_scan(lease, db, account_id, &folder.name, mailbox_id, scope).await?;
     }
+    let committed_uid_next = if catch_up_incomplete {
+        None
+    } else {
+        status.uid_next
+    };
+    db.update_mailbox_status(
+        mailbox_id,
+        Some(uid_validity),
+        committed_uid_next,
+        status.unseen,
+        status.exists,
+    )?;
 
     let changed = new_fetched > 0 || !unchanged;
     if quick {
@@ -1475,23 +1498,28 @@ async fn download_body_batch(
     let mut continuing_parse = HashSet::new();
     if !partial.is_empty() {
         // A rejected prefix is fetched whole in the same batch.
-        whole.extend(
-            fetch_body_group(
-                lease,
-                db,
-                mailbox_id,
-                uid_validity,
-                &partial,
-                BodyFetch::Partial,
-                &rows,
-                &mut state,
-                &mut continuing_parse,
-            )
-            .await?,
-        );
+        match fetch_body_group(
+            lease,
+            db,
+            mailbox_id,
+            uid_validity,
+            &partial,
+            BodyFetch::Partial,
+            &rows,
+            &mut state,
+            &mut continuing_parse,
+        )
+        .await
+        {
+            Ok(rejected) => whole.extend(rejected),
+            Err(error) => {
+                let _ = settle_abandoned_continuing_parses(db, mailbox_id, &mut continuing_parse);
+                return Err(error);
+            }
+        }
     }
     if !whole.is_empty() {
-        fetch_body_group(
+        if let Err(error) = fetch_body_group(
             lease,
             db,
             mailbox_id,
@@ -1502,8 +1530,13 @@ async fn download_body_batch(
             &mut state,
             &mut continuing_parse,
         )
-        .await?;
+        .await
+        {
+            let _ = settle_abandoned_continuing_parses(db, mailbox_id, &mut continuing_parse);
+            return Err(error);
+        }
     }
+    settle_abandoned_continuing_parses(db, mailbox_id, &mut continuing_parse)?;
     if !state.repair_ids.is_empty() {
         let _ = db.repair_thread_roots_batch(&parsed_account(db, mailbox_id)?, &state.repair_ids);
     }
@@ -1513,6 +1546,17 @@ async fn download_body_batch(
         }
     }
     Ok(state.consumed)
+}
+
+fn settle_abandoned_continuing_parses(
+    db: &Database,
+    mailbox_id: i64,
+    continuing_parse: &mut HashSet<u32>,
+) -> Result<(), String> {
+    for uid in continuing_parse.drain() {
+        db.end_parse(mailbox_id, uid)?;
+    }
+    Ok(())
 }
 
 /// Fetch and store one group of bodies. Returns the UIDs whose prefix was
@@ -1728,16 +1772,16 @@ pub async fn refresh_mailbox_envelopes(
                 db.purge_stale_mailbox(&account.summary.id, mailbox, mailbox_id)?;
             }
         }
-        db.update_mailbox_status(
-            mailbox_id,
-            selected.uid_validity,
-            selected.uid_next,
-            status.unseen,
-            status.exists,
-        )?;
         let max_uid = db.max_uid(mailbox_id)?;
         if selected.exists == 0 {
             reconcile_empty_mailbox(db, mailbox_id)?;
+            db.update_mailbox_status(
+                mailbox_id,
+                selected.uid_validity,
+                selected.uid_next,
+                status.unseen,
+                0,
+            )?;
             return Ok(());
         }
         if max_uid == 0 {
@@ -1776,6 +1820,13 @@ pub async fn refresh_mailbox_envelopes(
             )
             .await?;
         }
+        db.update_mailbox_status(
+            mailbox_id,
+            selected.uid_validity,
+            selected.uid_next,
+            status.unseen,
+            status.exists,
+        )?;
         Ok::<(), String>(())
     }
     .await;
@@ -2084,17 +2135,20 @@ async fn search_mailbox(
         .await
         .map_err(|_| "Server search timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Server search"))?;
+        let mut colors = Vec::with_capacity(fetched.len());
         let parsed = fetched
             .iter()
             .filter_map(|item| {
                 let (seen, flagged) = system_flags(item);
                 parse_envelope(item, seen, flagged).ok().map(|mut parsed| {
                     (parsed.is_answered, parsed.is_forwarded) = reply_flags(item);
+                    colors.push((parsed.uid, flag_color_of(item)));
                     parsed
                 })
             })
             .collect::<Vec<_>>();
         db.upsert_envelopes(&account.summary.id, mailbox_id, &parsed)?;
+        db.reconcile_flag_colors(mailbox_id, &colors)?;
         for item in &fetched {
             let Some(uid) = item.uid else {
                 continue;

@@ -22,6 +22,7 @@ import { api } from "../api";
 import { strings } from "../i18n";
 import { useAppStore } from "../store";
 import { useDialogFocus } from "./useDialogFocus";
+import { useInertBackground } from "./useInertBackground";
 import type { SettingsTab } from "./settings/primitives";
 import { useSettingsSave } from "./settings/useSettingsSave";
 import { settingsSearchEntries } from "./settings/settingsSearch";
@@ -213,6 +214,14 @@ export function SettingsDialog({
   const accountSettings = useSettingsAccountManagement({
     onClose,
     onLastAccountRemoved,
+    onAccountRemoved: (accountId) => {
+      ruleSettings.forgetAccount(accountId);
+      setSelectedAccountId((current) =>
+        current === accountId ? undefined : current,
+      );
+      setRequestedAccountPage("connection");
+      setConnectionDirty(false);
+    },
     update,
   });
   const ruleSettings = useSettingsFilterRules({
@@ -347,7 +356,9 @@ export function SettingsDialog({
       })
       .catch((cause) => setSaveError(errorText(cause)));
   }, [cancelThreatOff, confirmThreatOff, confirmDiscard, onClose]);
-  const dialogRef = useDialogFocus(requestClose);
+  const dialogRef = useRef<HTMLElement>(null);
+  useInertBackground(dialogRef);
+  useDialogFocus(requestClose, { ref: dialogRef });
   async function changeTab(next: SettingsTab) {
     if (next === tab) return true;
     if (await confirmDiscard()) {
@@ -654,7 +665,9 @@ export function SettingsDialog({
                 role="tab"
                 aria-label={label}
                 aria-selected={tab === id}
-                aria-controls={!query.trim() ? `settings-${id}` : undefined}
+                aria-controls={
+                  tab === id && !query.trim() ? `settings-${id}` : undefined
+                }
                 tabIndex={tab === id ? 0 : -1}
                 className={tab === id ? "active" : ""}
                 onClick={(event) => {

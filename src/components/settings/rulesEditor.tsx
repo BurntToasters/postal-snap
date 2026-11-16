@@ -1,5 +1,6 @@
 import { ruleActionsOf, ruleConditionsOf } from "../../blockedSenders";
 import { strings } from "../../i18n";
+import { folderPathLabel } from "../../i18n/mail";
 import type {
   AccountSummary,
   FilterRule,
@@ -10,6 +11,7 @@ import {
   MAX_RULE_ACTIONS,
   MAX_RULE_CONDITIONS,
   MAX_RULE_VALUE_CHARS,
+  nextRuleRowId,
   type RuleDraft,
 } from "./useSettingsFilterRules";
 
@@ -70,7 +72,7 @@ function actionText(
           String(box.id) === (action.targetMailbox ?? ""),
       );
       return target
-        ? strings.settings.actionMoveToFolder(target.displayName || target.name)
+        ? strings.settings.actionMoveToFolder(folderPathLabel(target))
         : strings.settings.actionFolder;
     }
     case "flag":
@@ -270,7 +272,10 @@ export function RulesEditor({
           {draft.conditions.map((condition, index) => {
             const position = index + 1;
             return (
-              <div className="rule-row rule-condition-row" key={index}>
+              <div
+                className="rule-row rule-condition-row"
+                key={condition.id ?? `cond-${index}`}
+              >
                 <label htmlFor={`rule-cond-field-${account.id}-${index}`}>
                   {numbered(strings.settings.matchBy, position)}
                 </label>
@@ -338,7 +343,7 @@ export function RulesEditor({
                   ...current,
                   conditions: [
                     ...current.conditions,
-                    { field: "from", value: "" },
+                    { id: nextRuleRowId(), field: "from", value: "" },
                   ],
                 }))
               }
@@ -355,7 +360,7 @@ export function RulesEditor({
               (item, i) => i !== index && isMove(item.kind),
             );
             return (
-              <div className="rule-row" key={index}>
+              <div className="rule-row" key={action.id ?? `action-${index}`}>
                 <label htmlFor={`rule-action-kind-${account.id}-${index}`}>
                   {numbered(strings.settings.ruleAction, position)}
                 </label>
@@ -403,7 +408,7 @@ export function RulesEditor({
                       <option value="">{strings.settings.chooseFolder}</option>
                       {folders.map((box) => (
                         <option key={box.id} value={box.id}>
-                          {box.name}
+                          {folderPathLabel(box)}
                         </option>
                       ))}
                     </select>
@@ -461,7 +466,12 @@ export function RulesEditor({
                   ...current,
                   actions: [
                     ...current.actions,
-                    { kind: "mark_read", target: "", flagColor: "0" },
+                    {
+                      id: nextRuleRowId(),
+                      kind: "mark_read",
+                      target: "",
+                      flagColor: "0",
+                    },
                   ],
                 }))
               }

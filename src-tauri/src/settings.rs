@@ -352,9 +352,17 @@ fn parse_and_validate(raw: &str) -> Result<AppSettings, String> {
     if settings.schema_version == 1 {
         return normalize_legacy(settings);
     }
-    // Files written before first-run tracking lack the flag. Do not force
-    // existing users through setup again; fresh installs have no file.
-    if !raw.contains("setupCompleted") {
+    // Files written before first-run tracking lack the key. Check parsed JSON
+    // rather than raw substring matching (which fails on escapes and string values).
+    let has_setup_completed = serde_json::from_str::<serde_json::Value>(raw)
+        .ok()
+        .and_then(|value| {
+            value
+                .as_object()
+                .map(|obj| obj.contains_key("setupCompleted"))
+        })
+        .unwrap_or(false);
+    if !has_setup_completed {
         settings.setup_completed = true;
         settings.setup_step = None;
     }
@@ -703,19 +711,23 @@ fn serialize(settings: &AppSettings) -> Result<String, String> {
 }
 
 fn read_bounded(path: &Path) -> Result<Option<String>, String> {
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
+    match fs::symlink_metadata(path) {
+        Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(_) => return Err("Could not inspect application settings.".into()),
-    };
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err("Settings path is not a regular file.".into());
     }
-    if metadata.len() > MAX_SETTINGS_BYTES as u64 {
+    let (file, len) =
+        crate::bounded_file::open_regular_file_sync(path).map_err(|error| match error {
+            crate::bounded_file::BoundedFileError::TooLarge => {
+                "Settings file is too large.".to_string()
+            }
+            crate::bounded_file::BoundedFileError::Unavailable => {
+                "Settings path is not a regular file.".to_string()
+            }
+        })?;
+    if len > MAX_SETTINGS_BYTES as u64 {
         return Err("Settings file is too large.".into());
     }
-    let file =
-        fs::File::open(path).map_err(|_| "Could not open application settings.".to_string())?;
     let mut raw = String::new();
     file.take((MAX_SETTINGS_BYTES + 1) as u64)
         .read_to_string(&mut raw)
@@ -1792,5 +1804,46 @@ mod tests {
             })
             .count();
         assert_eq!(remaining, 5);
+    }
+
+    #[test]
+    fn setup_completed_migration_uses_json_key_not_raw_substring() {
+        let escaped_false = "{\"schemaVersion\":2,\"setup\\u0043ompleted\":false}";
+        let parsed = parse_and_validate(escaped_false).unwrap();
+        assert!(!parsed.setup_completed);
+
+        let omitted_with_value_collision =
+            "{\"schemaVersion\":2,\"imageSenders\":[\"setupCompleted@example.test\"]}";
+        let legacy = parse_and_validate(omitted_with_value_collision).unwrap();
+        assert!(legacy.setup_completed);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn read_bounded_rejects_fifo_and_symlink_without_blocking() {
+        use std::time::Duration;
+
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("pipe-settings.json");
+        nix::unistd::mkfifo(
+            &fifo,
+            nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+        )
+        .unwrap();
+        let fifo_path = fifo.clone();
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            tokio::task::spawn_blocking(move || read_bounded(&fifo_path)),
+        )
+        .await
+        .expect("reading a FIFO settings file must not hang")
+        .unwrap();
+        assert!(result.is_err());
+
+        let target = dir.path().join("real.json");
+        let link = dir.path().join("settings-link.json");
+        fs::write(&target, "{}").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(read_bounded(&link).is_err());
     }
 }

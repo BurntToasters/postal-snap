@@ -293,7 +293,9 @@ html[data-text-scale="large"] .mailbox-filter-segment {
   pointer-events: none;
 }
 
-.message-list:focus-within .message-row-wrap.selected .row-actions {
+.message-list:focus-within
+  :is(.message-row-wrap.selected, .message-row-wrap.checked)
+  .row-actions {
   --row-actions-bg: var(--accent-fill);
   color: var(--accent-contrast);
 }
@@ -430,7 +432,9 @@ html[data-text-scale="large"] .mailbox-filter-segment {
     outline-offset: -2px;
   }
 
-  .message-list:focus-within .message-row-wrap.selected .row-actions {
+  .message-list:focus-within
+    :is(.message-row-wrap.selected, .message-row-wrap.checked)
+    .row-actions {
     border-color: HighlightText;
     background: Highlight;
   }
@@ -482,7 +486,9 @@ html[data-text-scale="large"] .mailbox-filter-segment {
   font-weight: 600;
 }
 
-.message-list:focus-within .message-row.selected .thread-count {
+.message-list:focus-within
+  :is(.message-row.selected, .message-row.checked)
+  .thread-count {
   color: var(--accent-contrast);
   background: color-mix(in srgb, var(--accent-contrast) 22%, transparent);
 }
@@ -492,7 +498,9 @@ html[data-text-scale="large"] .mailbox-filter-segment {
   font-weight: 600;
 }
 
-.message-list:focus-within .message-row.selected .thread-unread {
+.message-list:focus-within
+  :is(.message-row.selected, .message-row.checked)
+  .thread-unread {
   color: var(--accent-contrast);
 }
 
@@ -787,7 +795,7 @@ button.list-day:focus-visible {
 }
 
 /* White ring on the accent fill. */
-.message-row.selected:focus-visible {
+:is(.message-row.selected, .message-row.checked):focus-visible {
   outline: 3px solid var(--focus-on-accent);
   outline-offset: -3px;
 }
@@ -882,6 +890,9 @@ button.list-day:focus-visible {
 .message-folder {
   flex: 0 1 auto;
   max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text-muted);
   font-size: var(--fs-sm);
   font-weight: 600;
@@ -916,9 +927,12 @@ button.list-day:focus-visible {
 }
 
 /* Accent marks vanish on the accent background; selected rows use contrast. */
-.message-list:focus-within .message-row.selected .message-subject svg,
 .message-list:focus-within
-  .message-row.selected
+  :is(.message-row.selected, .message-row.checked)
+  .message-subject
+  svg,
+.message-list:focus-within
+  :is(.message-row.selected, .message-row.checked)
   .message-subject
   svg.message-mark {
   color: var(--accent-contrast);

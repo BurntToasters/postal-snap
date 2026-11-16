@@ -14,12 +14,12 @@ import {
 } from "@tanstack/react-virtual";
 import {
   CalendarDays,
+  Flag,
   Forward,
   Paperclip,
   Pin,
   Reply,
   Search,
-  Star,
 } from "lucide-react";
 import {
   createListDateFormatters,
@@ -378,8 +378,12 @@ export function MessageList({
   }, [messages, searchQuery]);
 
   function toggleThread(key: string) {
+    const isOpen = effectiveExpanded.includes(key);
+    if (key === selectedThreadKey) {
+      setCollapsedSelectedThread(isOpen ? { key } : undefined);
+    }
     updateExpanded((prev) =>
-      prev.includes(key) ? prev.filter((item) => item !== key) : [...prev, key],
+      isOpen ? prev.filter((item) => item !== key) : [...prev, key],
     );
   }
 
@@ -419,8 +423,20 @@ export function MessageList({
           group.items.some((item) => item.id === selectedId),
       )?.key
     : undefined;
+  // The user may fold the open message's thread; reset when it changes.
+  const [collapsedSelectedThread, setCollapsedSelectedThread] = useState<{
+    key: string;
+  }>();
+  const [lastSelectedThreadKey, setLastSelectedThreadKey] =
+    useState(selectedThreadKey);
+  if (lastSelectedThreadKey !== selectedThreadKey) {
+    setLastSelectedThreadKey(selectedThreadKey);
+    setCollapsedSelectedThread(undefined);
+  }
   const effectiveExpanded =
-    selectedThreadKey && !expandedThreads.includes(selectedThreadKey)
+    selectedThreadKey &&
+    collapsedSelectedThread?.key !== selectedThreadKey &&
+    !expandedThreads.includes(selectedThreadKey)
       ? [...expandedThreads, selectedThreadKey]
       : expandedThreads;
   // Conversation headers expand, which listbox options cannot express. Use a
@@ -864,7 +880,7 @@ export function MessageList({
         if (
           option?.kind === "header" &&
           option.groupKey &&
-          expandedThreads.includes(option.groupKey)
+          effectiveExpanded.includes(option.groupKey)
         ) {
           event.preventDefault();
           event.stopPropagation();
@@ -1219,6 +1235,7 @@ export function MessageList({
         : "";
     return (
       <div
+        role="none"
         className={`message-row-wrap thread-header-wrap${group.newest.id === selectedId ? " selected" : ""}${groupEnd ? " thread-end" : ""}`}
       >
         <button
@@ -1236,8 +1253,12 @@ export function MessageList({
           data-message-id={group.newest.id}
           aria-expanded={expanded}
           onClick={() => {
+            const alreadyNewest =
+              selectedId === undefined || group.newest.id === selectedId;
             void onChoose(group.newest);
-            toggleThread(group.key);
+            if (!expanded || alreadyNewest) {
+              toggleThread(group.key);
+            }
           }}
           aria-label={[
             strings.mail.conversation,
@@ -1308,10 +1329,16 @@ export function MessageList({
           />{" "}
           <span className="message-subject">
             {conversationStarred ? (
-              <Star
+              <Flag
                 className="message-mark star-mark"
-                fill="currentColor"
                 aria-hidden="true"
+                fill="currentColor"
+                data-flag-color={
+                  group.newest.isStarred
+                    ? (group.newest.flagColor ?? 0)
+                    : (group.items.find((item) => item.isStarred)?.flagColor ??
+                      0)
+                }
               />
             ) : null}
             {headerFolder ? (
@@ -1423,7 +1450,7 @@ export function MessageList({
             {dayCountLabel}
           </button>
         ) : (
-          <div className="list-day">
+          <div role="none" className="list-day">
             <span>{item.label}</span>
             {dayCountLabel}
           </div>
@@ -1464,9 +1491,7 @@ export function MessageList({
         role={hasThreadedGroups ? "tree" : "listbox"}
         aria-label={strings.mail.messages}
         aria-busy={loading}
-        aria-multiselectable={
-          !hasThreadedGroups && selecting ? true : undefined
-        }
+        aria-multiselectable={selecting ? true : undefined}
         className="message-list-items"
         style={{ height: virtualizer.getTotalSize() }}
       >
@@ -1482,6 +1507,7 @@ export function MessageList({
           return (
             <div
               key={virtualRow.key}
+              role="none"
               data-index={virtualRow.index}
               ref={virtualizer.measureElement}
               className="virtual-row"

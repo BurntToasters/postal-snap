@@ -21,6 +21,7 @@ import { useAppStore } from "../store";
 import type { BodyFormat, ComposeAttachment, ComposeDraft } from "../types";
 import { useSettingsSave } from "./settings/useSettingsSave";
 import { useDialogFocus } from "./useDialogFocus";
+import { useInertBackground } from "./useInertBackground";
 import { AddressFields } from "./composer/addressFields";
 import { ConfirmDialog } from "./composer/confirmDialog";
 import { ComposerHeader } from "./composer/composerHeader";
@@ -256,6 +257,7 @@ export function Composer({ accountId, onDraftSaved }: Props) {
   const isSending = useRef(false);
   const draftRevision = useRef(0);
   const saveInFlight = useRef(false);
+  const closePromptOpen = useRef(false);
   const pendingClose = useRef(false);
   const draftIdRef = useRef<string | undefined>(
     seed?.draft?.id ?? seed?.draftSummary?.id,
@@ -268,7 +270,9 @@ export function Composer({ accountId, onDraftSaved }: Props) {
   const keepSourceVisible = Boolean(
     seed?.composeMode && seed.composeMode !== "editAsNew" && !maximized,
   );
-  const dialogRef = useDialogFocus(
+  const dialogRef = useRef<HTMLElement>(null);
+  useInertBackground(dialogRef, !keepSourceVisible && !minimized);
+  useDialogFocus(
     () => {
       if (linkDialogOpen) {
         setLinkDialogOpen(false);
@@ -276,7 +280,7 @@ export function Composer({ accountId, onDraftSaved }: Props) {
       }
       void requestClose();
     },
-    { trapFocus: !keepSourceVisible },
+    { trapFocus: !keepSourceVisible && !minimized, ref: dialogRef },
   );
 
   const narrowViewport = useMediaQuery(MEDIA_QUERIES.narrowViewport);
@@ -331,6 +335,29 @@ export function Composer({ accountId, onDraftSaved }: Props) {
     minimized,
     setMinimized,
   });
+
+  const composerSubModalOpen = Boolean(
+    audienceWarning || confirmPlain || linkDialogOpen,
+  );
+  useEffect(() => {
+    const windowEl = dialogRef.current;
+    if (!windowEl || !composerSubModalOpen) return;
+    const backgroundChildren = [...windowEl.children].filter(
+      (child): child is HTMLElement =>
+        child instanceof HTMLElement &&
+        !child.classList.contains("settings-confirm-overlay"),
+    );
+    const added: HTMLElement[] = [];
+    for (const child of backgroundChildren) {
+      if (!child.hasAttribute("inert")) {
+        child.setAttribute("inert", "");
+        added.push(child);
+      }
+    }
+    return () => {
+      for (const child of added) child.removeAttribute("inert");
+    };
+  }, [composerSubModalOpen]);
 
   const editorRef = useRef(editor);
   const didFocusLetter = useRef(false);
@@ -482,6 +509,7 @@ export function Composer({ accountId, onDraftSaved }: Props) {
     isDiscardingRef: isDiscarding,
     draftRevisionRef: draftRevision,
     saveInFlightRef: saveInFlight,
+    closePromptOpenRef: closePromptOpen,
     pendingCloseRef: pendingClose,
     closedByComposerRef: closedByComposer,
     session: composeSession,
@@ -548,11 +576,25 @@ export function Composer({ accountId, onDraftSaved }: Props) {
       return;
     }
     if (saveState === "unsaved") {
-      const confirmed = await api.showNativeConfirm(
-        strings.appName,
-        strings.composer.saveCloseQuestion,
-      );
+      let confirmed: boolean;
+      try {
+        closePromptOpen.current = true;
+        confirmed = await api.showNativeConfirm(
+          strings.appName,
+          strings.composer.saveCloseQuestion,
+        );
+      } finally {
+        closePromptOpen.current = false;
+      }
       if (!confirmed) return;
+      if (saveInFlight.current) {
+        pendingClose.current = true;
+        return;
+      }
+      if (!hasDraftContent(buildDraft(), currentBodyText())) {
+        close();
+        return;
+      }
     }
     void saveDraft(true);
   }
@@ -1049,6 +1091,8 @@ export function Composer({ accountId, onDraftSaved }: Props) {
               : () => setFormattingOpen((value) => !value)
           }
           showAttachments={!redirecting}
+          canInsertInlineImages={bodyFormat === "html"}
+          onScheduleError={setError}
           addAttachments={addAttachments}
           addInlineImage={addInlineImage}
           discardDraft={discardDraft}

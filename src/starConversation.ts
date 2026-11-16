@@ -8,7 +8,11 @@ import { errorText } from "./errors";
 
 const listedStar = createOptimisticGate<number>();
 
-function applyListedStar(messageId: number, starred: boolean): void {
+function applyListedStar(
+  messageId: number,
+  starred: boolean,
+  flagColor = 0,
+): void {
   const store = useAppStore.getState();
   store.setMessages(
     store.messages.map((item) =>
@@ -16,7 +20,7 @@ function applyListedStar(messageId: number, starred: boolean): void {
         ? {
             ...item,
             isStarred: starred,
-            flagColor: starred ? 0 : item.flagColor,
+            flagColor,
           }
         : item,
     ),
@@ -28,7 +32,7 @@ function applyListedStar(messageId: number, starred: boolean): void {
     store.selectMessage({
       ...selected,
       isStarred: starred,
-      flagColor: starred ? 0 : selected.flagColor,
+      flagColor,
     });
   }
 }
@@ -46,7 +50,7 @@ export async function toggleListedStar(messageId: number): Promise<void> {
   const generation = listedStar.begin(messageId);
   const viewMailboxId = store.activeMailboxId;
   const viewLocal = store.activeLocalView;
-  applyListedStar(messageId, next);
+  applyListedStar(messageId, next, 0);
   try {
     await api.setMessageFlags(summary.accountId, messageId, undefined, next);
   } catch (cause) {
@@ -59,7 +63,7 @@ export async function toggleListedStar(messageId: number): Promise<void> {
     ) {
       return;
     }
-    applyListedStar(messageId, !next);
+    applyListedStar(messageId, !next, summary.flagColor);
     current.setError(errorText(cause));
   }
 }
@@ -77,6 +81,9 @@ export async function starLoadedConversation(
   const ids = matches.slice(0, BULK_LIMIT).map((item) => item.id);
   if (matches.length > BULK_LIMIT) store.setError(strings.mail.bulkTooMany);
   const idSet = new Set(ids);
+  const previousColorById = new Map(
+    matches.slice(0, BULK_LIMIT).map((item) => [item.id, item.flagColor]),
+  );
   const viewMailboxId = store.activeMailboxId;
   const viewLocal = store.activeLocalView;
   store.setMessages(
@@ -85,7 +92,7 @@ export async function starLoadedConversation(
         ? {
             ...item,
             isStarred: starred,
-            flagColor: starred ? 0 : item.flagColor,
+            flagColor: 0,
           }
         : item,
     ),
@@ -97,7 +104,7 @@ export async function starLoadedConversation(
     store.selectMessage({
       ...selected,
       isStarred: starred,
-      flagColor: starred ? 0 : selected.flagColor,
+      flagColor: 0,
     });
   }
   try {
@@ -122,7 +129,11 @@ export async function starLoadedConversation(
     current.setMessages(
       current.messages.map((item) =>
         idSet.has(item.id) && item.isStarred === starred
-          ? { ...item, isStarred: !starred }
+          ? {
+              ...item,
+              isStarred: !starred,
+              flagColor: previousColorById.get(item.id) ?? item.flagColor,
+            }
           : item,
       ),
       current.messageCursor,
@@ -130,7 +141,11 @@ export async function starLoadedConversation(
     );
     const open = current.selectedMessage;
     if (open && idSet.has(open.id) && open.isStarred === starred) {
-      current.selectMessage({ ...open, isStarred: !starred });
+      current.selectMessage({
+        ...open,
+        isStarred: !starred,
+        flagColor: previousColorById.get(open.id) ?? open.flagColor,
+      });
     }
     current.setError(errorText(cause));
   }

@@ -26,7 +26,7 @@ import {
   Send,
   ShieldAlert,
   Flag,
-  Star,
+  FlagOff,
   Trash,
 } from "lucide-react";
 import { strings } from "../../i18n";
@@ -41,7 +41,11 @@ import {
 import type { FlagColor, MailboxRole } from "../../types";
 import { PopupEntries, type PopupEntry } from "../ContextMenu";
 import { placeAnchoredMenu, syncScrollCue } from "../popupPlacement";
-import { moveMenuFocus } from "../toolbarNav";
+import {
+  moveMenuFocus,
+  moveToolbarFocus,
+  useRovingToolbar,
+} from "../toolbarNav";
 import { usePopupMenu } from "../usePopupMenu";
 import { folderIcons } from "./folderIcons";
 
@@ -170,7 +174,7 @@ function selectionFlagEntries(
       kind: "action",
       id: "clear-flag",
       label: strings.mail.clearFlag,
-      icon: Star,
+      icon: FlagOff,
       disabled,
       onSelect: () => selection.onFlagColor(null),
     },
@@ -345,7 +349,7 @@ export function MessagePaneHeader({
                 kind: "action" as const,
                 id: "star",
                 label: strings.reader.addStar,
-                icon: Star,
+                icon: Flag,
                 disabled: selectionDisabled,
                 onSelect: selection.onStar,
               },
@@ -357,7 +361,7 @@ export function MessagePaneHeader({
                 kind: "action" as const,
                 id: "unstar",
                 label: strings.reader.removeStar,
-                icon: Star,
+                icon: FlagOff,
                 disabled: selectionDisabled,
                 onSelect: selection.onUnstar,
               },
@@ -770,11 +774,15 @@ export function BulkBar({
   trashLabel = strings.reader.trash,
 }: BulkBarProps) {
   const disabled = selectedCount === 0 || busy;
+  const barRef = useRef<HTMLDivElement>(null);
+  useRovingToolbar(barRef, [disabled]);
   return (
     <div
+      ref={barRef}
       className="bulk-bar"
       role="toolbar"
       aria-label={strings.mail.selectedCount(selectedCount)}
+      onKeyDown={moveToolbarFocus}
     >
       <button type="button" disabled={disabled} onClick={onArchive}>
         <Archive aria-hidden="true" /> {archiveLabel}

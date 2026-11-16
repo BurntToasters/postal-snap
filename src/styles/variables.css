@@ -391,7 +391,7 @@
   --monogram: var(--fill);
 }
 
-/* Comfortable: 44px targets with the densified 0.5.2 bands. */
+/* Comfortable: 44px targets with the densified 0.5.2 bands, scaling with text. */
 :root[data-density="comfortable"] {
   --ui-font-size: 1rem;
   --control-height: 2.75rem;

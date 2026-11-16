@@ -7,6 +7,7 @@ import { strings } from "../../i18n";
 import { sanitizeComposeHtml } from "../../security";
 import { plainTextToHtml } from "../composer/plainText";
 import { SafeLink } from "../composer/extensions";
+import { moveToolbarFocus, useRovingToolbar } from "../toolbarNav";
 
 interface Props {
   accountId: string;
@@ -91,6 +92,8 @@ export function SignatureEditor({
     }
     customizedFallback.current = fallbackTextRef.current !== richText;
   }, [editor]);
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  useRovingToolbar(toolbarRef, [Boolean(editor)]);
   const activeMarks = useEditorState({
     editor,
     selector: ({ editor: current }) => ({
@@ -115,9 +118,11 @@ export function SignatureEditor({
         {strings.settings.signatureEditorHelp}
       </p>
       <div
+        ref={toolbarRef}
         className="signature-editor-toolbar"
         role="toolbar"
         aria-label={strings.settings.signatureFormatting}
+        onKeyDown={moveToolbarFocus}
       >
         <button
           type="button"

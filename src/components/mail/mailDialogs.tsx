@@ -1,5 +1,6 @@
-import { useEffect, useId } from "react";
+import { useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
+import { X } from "lucide-react";
 import { api } from "../../api";
 import {
   folderMoveDestinations,
@@ -95,8 +96,9 @@ export function MoveFolderDialog({
   onMove: (parentId: number | null) => void;
   onClose: () => void;
 }) {
-  const dialogRef = useDialogFocus(onClose);
-  useInertBackground();
+  const dialogRef = useRef<HTMLElement>(null);
+  useInertBackground(dialogRef);
+  useDialogFocus(onClose, { ref: dialogRef });
   const titleId = useId();
   const destinations: FolderMoveDestination[] = folderMoveDestinations(
     mailbox,
@@ -164,8 +166,9 @@ export function OutboxPreviewDialog({
   draft: ComposeDraft;
   onClose: () => void;
 }) {
-  const dialogRef = useDialogFocus(onClose);
-  useInertBackground();
+  const dialogRef = useRef<HTMLElement>(null);
+  useInertBackground(dialogRef);
+  useDialogFocus(onClose, { ref: dialogRef });
   const title = draft.subject.trim() || strings.common.noSubject;
   const body = outboxPlainText(draft);
   const lines = [
@@ -199,7 +202,7 @@ export function OutboxPreviewDialog({
             aria-label={strings.common.close}
             title={strings.common.close}
           >
-            {strings.common.close}
+            <X aria-hidden="true" />
           </button>
         </header>
         <div className="original-body">
@@ -228,8 +231,9 @@ export function AddAccountDialog({
   onClose: () => void;
   onComplete: () => Promise<void>;
 }) {
-  const dialogRef = useDialogFocus(onClose);
-  useInertBackground();
+  const dialogRef = useRef<HTMLElement>(null);
+  useInertBackground(dialogRef);
+  useDialogFocus(onClose, { ref: dialogRef });
   return createPortal(
     <div className="modal-layer setup-modal">
       <button

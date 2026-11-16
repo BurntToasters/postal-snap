@@ -62,8 +62,18 @@ async function resolveBackground(page: Page, value: string): Promise<string> {
 }
 
 // The blur sits on the menu's ::before layer, so read the element, then ::before.
-async function blurOf(locator: Locator) {
-  return locator.evaluate((node) => {
+async function blurOf(
+  locator: Locator,
+  setup?: { platform?: string; reduceTransparency?: string },
+) {
+  return locator.evaluate((node, next) => {
+    if (next?.platform !== undefined) {
+      document.documentElement.dataset.platform = next.platform;
+    }
+    if (next?.reduceTransparency !== undefined) {
+      document.documentElement.dataset.reduceTransparency =
+        next.reduceTransparency;
+    }
     const pick = (s: CSSStyleDeclaration) =>
       s.backdropFilter ||
       (s as CSSStyleDeclaration & { webkitBackdropFilter?: string })
@@ -71,7 +81,7 @@ async function blurOf(locator: Locator) {
       "none";
     const own = pick(getComputedStyle(node));
     return own !== "none" ? own : pick(getComputedStyle(node, "::before"));
-  });
+  }, setup);
 }
 
 async function attachShots(page: Page, testInfo: TestInfo, name: string) {
@@ -181,18 +191,15 @@ test("FM3 menus are solid under reduced transparency and more contrast", async (
 }) => {
   const menu = await openRowMenu(page);
   // Not macOS: the native poll would reset the attribute while the test runs.
-  await page.evaluate(() => {
-    document.documentElement.dataset.platform = "linux";
-    document.documentElement.dataset.reduceTransparency = "true";
-  });
-  expect(await blurOf(menu)).toBe("none");
+  // Apply and measure in one evaluation so async startup sync cannot reset it mid-check.
+  expect(
+    await blurOf(menu, { platform: "linux", reduceTransparency: "true" }),
+  ).toBe("none");
   // The attribute and the media query are separate paths; check the query alone.
-  await page.evaluate(() => {
-    document.documentElement.dataset.platform = "linux";
-    document.documentElement.dataset.reduceTransparency = "false";
-  });
   await page.emulateMedia({ contrast: "more" });
-  expect(await blurOf(menu)).toBe("none");
+  expect(
+    await blurOf(menu, { platform: "linux", reduceTransparency: "false" }),
+  ).toBe("none");
 });
 
 // FM4. Forced colors: system colors only, Highlight on the active row.

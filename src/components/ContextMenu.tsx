@@ -27,6 +27,7 @@ import { iconFor } from "./menuIcons";
 import { parseMailto } from "../mailto";
 import { useAppStore } from "../store";
 import { placeSubmenuPanel, syncScrollCue } from "./popupPlacement";
+import { FOCUSABLE_SELECTOR } from "./focusable";
 import { MENU_ITEM_SELECTOR, moveMenuFocus } from "./toolbarNav";
 
 type MenuActionItem = Extract<ContextMenuItem, { type: "item" }>;
@@ -554,7 +555,11 @@ export function ContextMenuHost() {
         return;
       }
       openerRef.current =
-        event.target instanceof HTMLElement ? event.target : null;
+        event.target instanceof Element
+          ? (event.target.closest<HTMLElement>(
+              `${FOCUSABLE_SELECTOR}, [data-option-key], [tabindex]`,
+            ) ?? null)
+          : null;
       openAt(
         event.clientX,
         event.clientY,
@@ -693,6 +698,7 @@ export function ContextMenuHost() {
     node.style.left = `${left}px`;
     node.style.top = `${top}px`;
     node.style.maxHeight = `${Math.max(0, room)}px`;
+    syncScrollCue(node);
     node
       .querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')
       ?.focus();

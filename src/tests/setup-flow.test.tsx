@@ -5,9 +5,15 @@ import { defaultSettings, useAppStore } from "../store";
 import { mockSaveSettingsPassthrough } from "./helpers/api-mocks";
 import { resetStore } from "./helpers/store";
 
+vi.mock("../window-fx", () => ({
+  supportsWorkspaceWindowFx: vi.fn().mockResolvedValue(true),
+  syncWorkspaceWindowFx: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock("../api", () => ({
   api: {
     addAccount: vi.fn(),
+    distribution: vi.fn().mockResolvedValue("direct"),
     getSettings: vi.fn(),
     saveSettings: vi.fn((settings: unknown) => Promise.resolve(settings)),
     openHelpUrl: vi.fn(),
@@ -150,6 +156,9 @@ describe("first-run setup flow", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
     fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
+    await screen.findByRole("checkbox", {
+      name: /Translucent window background/i,
+    });
     const toggles = screen.getAllByRole("checkbox");
     for (const toggle of toggles) fireEvent.click(toggle);
     await waitFor(() => {

@@ -192,6 +192,7 @@ fn main() {
                 if let Ok(accounts) = app.state::<AppState>().db.list_accounts() {
                     for account in accounts {
                         let _ = credentials::remove(&account.id);
+                        let _ = oauth::remove_tokens(&account.id);
                     }
                 }
                 app.handle().exit(0);

@@ -333,8 +333,13 @@ pub async fn import_mbox(
             skipped: 0,
         });
     };
-    let file = bounded_file::open_regular_for_stream(&path, MAX_IMPORT_BYTES)
-        .map_err(|error| error.to_string())?;
+    let import_path = path.clone();
+    let file = tokio::task::spawn_blocking(move || {
+        bounded_file::open_regular_for_stream(&import_path, MAX_IMPORT_BYTES)
+    })
+    .await
+    .map_err(|_| "Could not open the selected file.".to_string())?
+    .map_err(|error| error.to_string())?;
     let operation = Operation::start();
     let outcome = import_messages(&app, &state, &account_id, &mailbox_name, file, &operation).await;
     // Imported batches stay on the server; wake a sync so they appear.

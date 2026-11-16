@@ -11,7 +11,7 @@ export function MboxProgressNotice() {
       : strings.mail.mboxImporting(job.done, job.total);
   return (
     // Progress updates are frequent; the notice stays quiet for screen readers.
-    <div className="toast notice notice-info" aria-live="off">
+    <div className="toast notice notice-info notice-progress" aria-live="off">
       <span>{label}</span>
       <progress
         value={job.done}

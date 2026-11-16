@@ -288,14 +288,46 @@ pub(crate) struct SmtpErrorTraits {
 
 impl SmtpErrorTraits {
     fn of(error: &lettre::transport::smtp::Error, connect_failed: bool) -> Self {
+        let (has_tls_source, has_transient_io_source) = smtp_tls_error_sources(error);
         Self {
             permanent: error.is_permanent(),
             transient: error.is_transient(),
-            tls: error.is_tls(),
+            tls: error.is_tls() || (has_tls_source && !has_transient_io_source),
             connect_failed,
             client: error.is_client(),
         }
     }
+}
+
+fn smtp_tls_error_sources(error: &lettre::transport::smtp::Error) -> (bool, bool) {
+    let mut has_tls = false;
+    let mut has_transient_io = false;
+    let mut current: Option<&(dyn std::error::Error + 'static)> = Some(error);
+    while let Some(err) = current {
+        if err
+            .downcast_ref::<tokio_native_tls::native_tls::Error>()
+            .is_some()
+        {
+            has_tls = true;
+        }
+        if let Some(io_err) = err.downcast_ref::<io::Error>() {
+            if matches!(
+                io_err.kind(),
+                io::ErrorKind::ConnectionRefused
+                    | io::ErrorKind::ConnectionReset
+                    | io::ErrorKind::ConnectionAborted
+                    | io::ErrorKind::BrokenPipe
+                    | io::ErrorKind::TimedOut
+                    | io::ErrorKind::UnexpectedEof
+                    | io::ErrorKind::WouldBlock
+                    | io::ErrorKind::Interrupted
+            ) {
+                has_transient_io = true;
+            }
+        }
+        current = err.source();
+    }
+    (has_tls, has_transient_io)
 }
 
 /// SMTP replies are final: a 4xx or 5xx means the server did not take the
@@ -2335,5 +2367,43 @@ mod sender_and_pinned_failure_tests {
             .await
             .unwrap_err();
         assert_eq!(failure.kind, SendFailure::NotSentRefused);
+    }
+
+    #[tokio::test]
+    async fn untrusted_smtp_certificate_is_refused_not_retried() {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let acceptor = crate::mail::test_tls::acceptor();
+        let server = tokio::spawn(async move {
+            if let Ok((stream, _)) = listener.accept().await {
+                let _ = acceptor.accept(stream).await;
+            }
+        });
+        let mut account = account("Sam", "127.0.0.1", None);
+        account.smtp.port = port;
+        account.smtp.tls_mode = TlsMode::Tls;
+        let failure = send_prepared(&account, "unused", &draft(), b"Subject: Hi\r\n\r\nHi")
+            .await
+            .unwrap_err();
+        server.abort();
+        assert_eq!(failure.kind, SendFailure::NotSentRefused);
+    }
+
+    #[tokio::test]
+    async fn connection_refused_smtp_is_still_retried() {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let mut account = account("Sam", "127.0.0.1", None);
+        account.smtp.port = port;
+        account.smtp.tls_mode = TlsMode::Tls;
+        let failure = send_prepared(&account, "unused", &draft(), b"Subject: Hi\r\n\r\nHi")
+            .await
+            .unwrap_err();
+        assert_eq!(failure.kind, SendFailure::NotSentRetry);
     }
 }

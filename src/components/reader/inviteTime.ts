@@ -74,7 +74,11 @@ export function formatInviteRange(
     const day = new Intl.DateTimeFormat(undefined, { dateStyle: "full" });
     // An all-day end date is exclusive.
     const last = validTo
-      ? new Date(validTo.date.getTime() - 24 * 60 * 60 * 1000)
+      ? new Date(
+          validTo.date.getFullYear(),
+          validTo.date.getMonth(),
+          validTo.date.getDate() - 1,
+        )
       : undefined;
     const text =
       last && last.getTime() > from.date.getTime()

@@ -275,6 +275,7 @@ export function MessageBody({
   plainText,
   followsTheme = false,
   currentLoadedHtml,
+  remoteAttempted = Boolean(currentLoadedHtml),
   frameHtml,
   filteredImages,
   threatImages,
@@ -304,6 +305,8 @@ export function MessageBody({
   /** Dark mode and no sender colors: draw the body in the app theme. */
   followsTheme?: boolean;
   currentLoadedHtml?: string;
+  /** A remote-image load already ran for this body. */
+  remoteAttempted?: boolean;
   frameHtml: string;
   filteredImages: number;
   threatImages: number;
@@ -370,7 +373,7 @@ export function MessageBody({
           >
             {loadingImages
               ? strings.common.loading
-              : currentLoadedHtml
+              : remoteAttempted
                 ? strings.reader.retryImages
                 : strings.reader.loadImages}
           </button>

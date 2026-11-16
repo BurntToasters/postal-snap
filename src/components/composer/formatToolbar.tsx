@@ -1,4 +1,4 @@
-import type { Dispatch, SetStateAction } from "react";
+import { useRef, type Dispatch, type SetStateAction } from "react";
 import type { Editor } from "@tiptap/core";
 import {
   TextAlignCenter,
@@ -23,7 +23,7 @@ import {
   Undo2,
 } from "lucide-react";
 import { strings } from "../../i18n";
-import { moveToolbarFocus } from "../toolbarNav";
+import { moveToolbarFocus, useRovingToolbar } from "../toolbarNav";
 import { highlightColor } from "./composerSeed";
 
 export interface FormatToolbarProps {
@@ -43,9 +43,16 @@ export function FormatToolbar({
   adjustIndent,
   addLink,
 }: FormatToolbarProps) {
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  useRovingToolbar(toolbarRef, [
+    formattingOpen,
+    moreFormattingOpen,
+    Boolean(editor),
+  ]);
   return (
     <>
       <div
+        ref={toolbarRef}
         id="composer-formatting"
         className="format-toolbar"
         role="toolbar"

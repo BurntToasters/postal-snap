@@ -23,14 +23,24 @@ export interface RuleSeed {
 }
 
 export interface RuleConditionDraft {
+  id?: string;
   field: string;
   value: string;
 }
 
 export interface RuleActionDraft {
+  id?: string;
   kind: string;
   target: string;
   flagColor: string;
+}
+
+let nextRowSeq = 0;
+
+/** Monotonic client-only key for draft condition and action rows. */
+export function nextRuleRowId(): string {
+  nextRowSeq += 1;
+  return `rule-row-${nextRowSeq}`;
 }
 
 export interface RuleDraft {
@@ -71,10 +81,46 @@ export function useSettingsFilterRules({ enabled, initialRuleSeed }: Options) {
     Record<string, boolean>
   >({});
   const pendingRuleAccounts = useRef(new Set<string>());
+  // Bumped by every mutation so an older list response cannot overwrite it.
+  const ruleGenerations = useRef(new Map<string, number>());
+  const ruleMutationQueues = useRef(new Map<string, Promise<void>>());
+  const filterRulesRef = useRef(filterRules);
+  useEffect(() => {
+    filterRulesRef.current = filterRules;
+  }, [filterRules]);
 
-  const hasDirtyForms = Object.values(newRuleInputs).some(
-    (draft) => !sameDraft(draft, emptyRuleDraft()),
+  function bumpRuleGeneration(accountId: string) {
+    ruleGenerations.current.set(
+      accountId,
+      (ruleGenerations.current.get(accountId) ?? 0) + 1,
+    );
+  }
+
+  function queueRuleMutation(accountId: string, mutation: () => Promise<void>) {
+    bumpRuleGeneration(accountId);
+    const previous =
+      ruleMutationQueues.current.get(accountId) ?? Promise.resolve();
+    const run = previous.then(mutation, mutation);
+    ruleMutationQueues.current.set(accountId, run);
+    return run.finally(() => {
+      if (ruleMutationQueues.current.get(accountId) === run)
+        ruleMutationQueues.current.delete(accountId);
+    });
+  }
+
+  const hasDirtyForms = Object.entries(newRuleInputs).some(
+    ([accountId, draft]) =>
+      accounts.some((account) => account.id === accountId) &&
+      !sameDraft(draft, emptyRuleDraft()),
   );
+
+  const forgetAccount = useCallback((accountId: string) => {
+    bumpRuleGeneration(accountId);
+    setFilterRules((prev) => withoutKey(prev, accountId));
+    setNewRuleInputs((prev) => withoutKey(prev, accountId));
+    setRuleErrors((prev) => withoutKey(prev, accountId));
+    setRuleStatus((prev) => withoutKey(prev, accountId));
+  }, []);
 
   const discardUnsavedForms = useCallback(() => {
     setNewRuleInputs({});
@@ -93,18 +139,13 @@ export function useSettingsFilterRules({ enabled, initialRuleSeed }: Options) {
     void (async () => {
       for (const account of accounts) {
         try {
+          const generation = ruleGenerations.current.get(account.id) ?? 0;
           const rules = (await api.listFilterRules(account.id)) ?? [];
-          if (active) {
-            setFilterRules((prev) => {
-              const existing = prev[account.id] ?? [];
-              const merged = [...existing];
-              for (const rule of rules) {
-                if (!merged.some((item) => item.id === rule.id)) {
-                  merged.push(rule);
-                }
-              }
-              return { ...prev, [account.id]: merged };
-            });
+          if (
+            active &&
+            generation === (ruleGenerations.current.get(account.id) ?? 0)
+          ) {
+            setFilterRules((prev) => ({ ...prev, [account.id]: rules }));
           }
         } catch {
           // Rules stay empty; the form below still works.
@@ -153,6 +194,7 @@ export function useSettingsFilterRules({ enabled, initialRuleSeed }: Options) {
     setSavingRuleAccounts((prev) => ({ ...prev, [accountId]: true }));
     try {
       const created = await api.createFilterRule(built.rule);
+      bumpRuleGeneration(accountId);
       setFilterRules((prev) => {
         const existing = prev[accountId] ?? [];
         if (existing.some((item) => item.id === created.id)) return prev;
@@ -203,44 +245,58 @@ export function useSettingsFilterRules({ enabled, initialRuleSeed }: Options) {
     }
   }
 
-  async function handleMoveRule(
+  function handleMoveRule(
     accountId: string,
     ruleId: string,
     direction: -1 | 1,
   ) {
-    const rules = filterRules[accountId] ?? [];
-    const index = rules.findIndex((rule) => rule.id === ruleId);
-    const next = index + direction;
-    if (index < 0 || next < 0 || next >= rules.length) return;
-    const ordered = [...rules];
-    const [moved] = ordered.splice(index, 1);
-    ordered.splice(next, 0, moved);
-    try {
-      const saved = await api.reorderFilterRules(
-        accountId,
-        ordered.map((rule) => rule.id),
-      );
-      setFilterRules((prev) => ({ ...prev, [accountId]: saved }));
-    } catch (cause) {
-      setError(errorText(cause));
-    }
+    return queueRuleMutation(accountId, async () => {
+      const rules = filterRulesRef.current[accountId] ?? [];
+      const index = rules.findIndex((rule) => rule.id === ruleId);
+      const next = index + direction;
+      if (index < 0 || next < 0 || next >= rules.length) return;
+      const ordered = [...rules];
+      const [moved] = ordered.splice(index, 1);
+      ordered.splice(next, 0, moved);
+      try {
+        const saved = await api.reorderFilterRules(
+          accountId,
+          ordered.map((rule) => rule.id),
+        );
+        filterRulesRef.current = {
+          ...filterRulesRef.current,
+          [accountId]: saved,
+        };
+        setFilterRules((prev) => ({ ...prev, [accountId]: saved }));
+      } catch (cause) {
+        setError(errorText(cause));
+      }
+    });
   }
 
-  async function handleToggleRule(accountId: string, rule: FilterRule) {
-    try {
-      const updated = await api.updateFilterRule({
-        ...rule,
-        enabled: !rule.enabled,
-      });
-      setFilterRules((prev) => ({
-        ...prev,
-        [accountId]: (prev[accountId] ?? []).map((item) =>
-          item.id === rule.id ? updated : item,
-        ),
-      }));
-    } catch (cause) {
-      setError(errorText(cause));
-    }
+  function handleToggleRule(accountId: string, rule: FilterRule) {
+    return queueRuleMutation(accountId, async () => {
+      const latest =
+        (filterRulesRef.current[accountId] ?? []).find(
+          (item) => item.id === rule.id,
+        ) ?? rule;
+      try {
+        const updated = await api.updateFilterRule({
+          ...latest,
+          enabled: !latest.enabled,
+        });
+        const apply = (prev: Record<string, FilterRule[]>) => ({
+          ...prev,
+          [accountId]: (prev[accountId] ?? []).map((item) =>
+            item.id === rule.id ? updated : item,
+          ),
+        });
+        filterRulesRef.current = apply(filterRulesRef.current);
+        setFilterRules(apply);
+      } catch (cause) {
+        setError(errorText(cause));
+      }
+    });
   }
 
   async function handleDeleteRule(accountId: string, rule: FilterRule) {
@@ -249,21 +305,25 @@ export function useSettingsFilterRules({ enabled, initialRuleSeed }: Options) {
       strings.settings.removeRuleConfirm(rule.name),
     );
     if (!confirmed) return;
-    try {
-      await api.deleteFilterRule(accountId, rule.id);
-      setFilterRules((prev) => ({
-        ...prev,
-        [accountId]: (prev[accountId] ?? []).filter(
-          (item) => item.id !== rule.id,
-        ),
-      }));
-      setRuleStatus((prev) => ({
-        ...prev,
-        [accountId]: strings.settings.ruleRemoved,
-      }));
-    } catch (cause) {
-      setError(errorText(cause));
-    }
+    await queueRuleMutation(accountId, async () => {
+      try {
+        await api.deleteFilterRule(accountId, rule.id);
+        const apply = (prev: Record<string, FilterRule[]>) => ({
+          ...prev,
+          [accountId]: (prev[accountId] ?? []).filter(
+            (item) => item.id !== rule.id,
+          ),
+        });
+        filterRulesRef.current = apply(filterRulesRef.current);
+        setFilterRules(apply);
+        setRuleStatus((prev) => ({
+          ...prev,
+          [accountId]: strings.settings.ruleRemoved,
+        }));
+      } catch (cause) {
+        setError(errorText(cause));
+      }
+    });
   }
 
   return {
@@ -271,6 +331,7 @@ export function useSettingsFilterRules({ enabled, initialRuleSeed }: Options) {
     filterRules,
     hasDirtyForms,
     discardUnsavedForms,
+    forgetAccount,
     newRuleInputs,
     ruleErrors,
     ruleInput,
@@ -359,9 +420,20 @@ function seededDraft(seed?: RuleSeed): RuleDraft | undefined {
     name: contains.slice(0, 80),
     matchMode: "all",
     conditions: [
-      { field: seedField(seed.field), value: contains.slice(0, 200) },
+      {
+        id: nextRuleRowId(),
+        field: seedField(seed.field),
+        value: contains.slice(0, 200),
+      },
     ],
-    actions: [{ kind: "move_archive", target: "", flagColor: "0" }],
+    actions: [
+      {
+        id: nextRuleRowId(),
+        kind: "move_archive",
+        target: "",
+        flagColor: "0",
+      },
+    ],
   };
 }
 
@@ -369,11 +441,34 @@ export function emptyRuleDraft(): RuleDraft {
   return {
     name: "",
     matchMode: "all",
-    conditions: [{ field: "from", value: "" }],
-    actions: [{ kind: "mark_read", target: "", flagColor: "0" }],
+    conditions: [{ id: nextRuleRowId(), field: "from", value: "" }],
+    actions: [
+      { id: nextRuleRowId(), kind: "mark_read", target: "", flagColor: "0" },
+    ],
   };
 }
 
 function sameDraft(left: RuleDraft, right: RuleDraft): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+  if (left.name !== right.name || left.matchMode !== right.matchMode) {
+    return false;
+  }
+  if (
+    left.conditions.length !== right.conditions.length ||
+    left.actions.length !== right.actions.length
+  ) {
+    return false;
+  }
+  return (
+    left.conditions.every(
+      (cond, index) =>
+        cond.field === right.conditions[index]?.field &&
+        cond.value === right.conditions[index]?.value,
+    ) &&
+    left.actions.every(
+      (action, index) =>
+        action.kind === right.actions[index]?.kind &&
+        action.target === right.actions[index]?.target &&
+        action.flagColor === right.actions[index]?.flagColor,
+    )
+  );
 }

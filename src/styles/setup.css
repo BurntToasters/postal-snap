@@ -73,7 +73,11 @@
   color: var(--text-muted);
 }
 
-.setup-progress > span:not(.visually-hidden) {
+.setup-progress-step {
+  display: contents;
+}
+
+.setup-progress-step > span:not(.visually-hidden) {
   display: grid;
   width: var(--setup-step-size);
   height: var(--setup-step-size);
@@ -85,13 +89,13 @@
   font-weight: 700;
 }
 
-.setup-progress > span:is(.active, .done) {
+.setup-progress-step:is(.active, .done) > span:not(.visually-hidden) {
   border-color: var(--accent-fill);
   color: var(--accent-contrast);
   background: var(--accent-fill);
 }
 
-.setup-progress > span:not(.visually-hidden) svg {
+.setup-progress-step > span:not(.visually-hidden) svg {
   width: var(--icon-md);
   height: var(--icon-md);
 }
@@ -101,19 +105,19 @@
   background: var(--border);
 }
 
-.setup-progress > small {
+.setup-progress-step > small {
   padding-top: var(--space-1);
   font-size: var(--fs-xs);
   white-space: nowrap;
 }
 
 /* Labels span past the step columns so they never wrap per word. */
-.setup-progress > small:first-of-type {
+.setup-progress-step:first-child > small {
   grid-row: 2;
   grid-column: 1 / 3;
 }
 
-.setup-progress > small:last-child {
+.setup-progress-step:last-child > small {
   grid-row: 2;
   grid-column: 2 / 4;
   justify-self: end;

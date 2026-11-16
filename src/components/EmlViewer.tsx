@@ -19,25 +19,11 @@ import type { Attachment, AttachmentPreview, OpenedMessage } from "../types";
 import { registerFrameLinkSink } from "./frameLinkRouter";
 import { inspectAndOpenExternalLink } from "./externalLink";
 import { AttachmentPreviewDialog } from "./reader/attachmentList";
+import { isPreviewableAttachment } from "./reader/attachmentKinds";
 import { PlainTextContent } from "./reader/messageBody";
 import { frameMarginBlock } from "./reader/useMessageFrame";
 import { useDialogFocus } from "./useDialogFocus";
 import { useInertBackground } from "./useInertBackground";
-
-const PREVIEWABLE = new Set([
-  "application/pdf",
-  "image/png",
-  "image/jpeg",
-  "image/gif",
-  "image/webp",
-  "text/plain",
-]);
-
-function canPreview(attachment: Attachment): boolean {
-  return (
-    !attachment.inline && PREVIEWABLE.has(attachment.contentType.toLowerCase())
-  );
-}
 
 /** A message opened from a file. Same sanitize, sandbox and frame as the reader; remote images stay blocked. */
 export function EmlViewer({
@@ -48,18 +34,26 @@ export function EmlViewer({
   onClose: () => void;
 }) {
   const { token, message } = opened;
-  const dialogRef = useDialogFocus(onClose);
-  useInertBackground();
+  const dialogRef = useRef<HTMLElement>(null);
+  useInertBackground(dialogRef);
+  useDialogFocus(onClose, { ref: dialogRef });
   const frameRef = useRef<HTMLIFrameElement>(null);
   const textScale = useAppStore((state) => state.settings.textScale);
   const density = useAppStore((state) => state.settings.density);
   const isDark = useIsDark();
   const [notice, setNotice] = useState<string>();
   const [busyId, setBusyId] = useState<string>();
+  const previewRequest = useRef(0);
   const [preview, setPreview] = useState<{
     attachmentId: string;
     value: AttachmentPreview;
   }>();
+
+  useEffect(() => {
+    return () => {
+      previewRequest.current += 1;
+    };
+  }, [token]);
 
   const subject = message.subject || strings.common.noSubject;
   const sanitized = useMemo(
@@ -67,17 +61,19 @@ export function EmlViewer({
       message.htmlBody ? sanitizeReceivedHtml(message.htmlBody) : undefined,
     [message.htmlBody],
   );
+  const followsTheme =
+    isDark && (!sanitized || !hasAuthorColors(sanitized.html));
   const frameHtml = useMemo(
     () =>
       sanitized
         ? messageFrameDocument(
             withFrameLinks(sanitized.html),
             textScale,
-            isDark && !hasAuthorColors(sanitized.html),
+            followsTheme,
             frameMarginBlock(density),
           )
         : "",
-    [sanitized, textScale, isDark, density],
+    [sanitized, textScale, followsTheme, density],
   );
   const files = message.attachments.filter((item) => !item.inline);
 
@@ -153,11 +149,14 @@ export function EmlViewer({
   }
 
   async function openPreview(attachment: Attachment) {
+    const requestId = ++previewRequest.current;
     setNotice(undefined);
     try {
       const value = await api.previewOpenedAttachment(token, attachment.id);
+      if (previewRequest.current !== requestId) return;
       setPreview({ attachmentId: attachment.id, value });
     } catch (cause) {
+      if (previewRequest.current !== requestId) return;
       setNotice(errorText(cause));
     }
   }
@@ -220,7 +219,10 @@ export function EmlViewer({
               </span>
             </div>
           ) : null}
-          <div className="message-body eml-message-body">
+          <div
+            className="message-body eml-message-body"
+            data-follows-theme={followsTheme ? "true" : undefined}
+          >
             {sanitized ? (
               <iframe
                 ref={frameRef}
@@ -258,7 +260,7 @@ export function EmlViewer({
                       <strong>{attachment.filename}</strong>{" "}
                       <small>{formatBytes(attachment.size)}</small>
                     </span>
-                    {canPreview(attachment) ? (
+                    {isPreviewableAttachment(attachment) ? (
                       <button
                         type="button"
                         className="secondary-button"
@@ -296,7 +298,10 @@ export function EmlViewer({
             );
             if (attachment) void save(attachment);
           }}
-          onClose={() => setPreview(undefined)}
+          onClose={() => {
+            previewRequest.current += 1;
+            setPreview(undefined);
+          }}
         />
       ) : null}
     </div>,

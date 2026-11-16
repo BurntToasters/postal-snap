@@ -3,7 +3,7 @@ import { api } from "../../api";
 import { earlierHeaderId } from "../../contextMenu";
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
-import type { MessageSummary } from "../../types";
+import type { MessageDetail, MessageSummary } from "../../types";
 import { waitToMarkRead } from "../../markRead";
 import { beginMessageOpen, isCurrentMessageOpen } from "../../messageOpen";
 import { rememberedOpenMessage } from "../../recentMessage";
@@ -11,6 +11,19 @@ import { isOversizeError } from "./mailSearch";
 import { errorText } from "../../errors";
 
 type AppState = ReturnType<typeof useAppStore.getState>;
+
+function oversizePlaceholder(summary: MessageSummary): MessageDetail {
+  return {
+    ...summary,
+    to: [],
+    cc: [],
+    replyTo: null,
+    textBody: "",
+    htmlBody: null,
+    remoteImagesBlocked: false,
+    attachments: [],
+  };
+}
 
 interface Options {
   activeAccountId: AppState["activeAccountId"];
@@ -127,16 +140,7 @@ export function useMessageOpening({
         const detail = errorText(cause);
         setError(detail);
         if (isOversizeError(cause)) {
-          selectMessage({
-            ...summary,
-            to: [],
-            cc: [],
-            replyTo: null,
-            textBody: "",
-            htmlBody: null,
-            remoteImagesBlocked: false,
-            attachments: [],
-          });
+          selectMessage(oversizePlaceholder(summary));
         }
       } finally {
         if (isCurrentMessageOpen(request)) setLoadingMessageId(undefined);
@@ -282,14 +286,25 @@ export function useMessageOpening({
         if (
           isCurrentMessageOpen(request) &&
           latest.selectedMessage?.id === found.id
-        )
+        ) {
           selectMessage({
             ...useAppStore.getState().selectedMessage!,
             isRead: true,
           });
+          await loadMailboxCounts();
+        }
       }
     } catch (cause) {
-      if (isCurrentMessageOpen(request)) setError(errorText(cause));
+      if (!isCurrentMessageOpen(request)) return;
+      setError(errorText(cause));
+      if (
+        isOversizeError(cause) &&
+        useAppStore.getState().activeAccountId === accountId &&
+        useAppStore.getState().activeMailboxId === mailboxId &&
+        !useAppStore.getState().activeLocalView
+      ) {
+        selectMessage(oversizePlaceholder(found));
+      }
     } finally {
       if (isCurrentMessageOpen(request)) setLoadingMessageId(undefined);
     }

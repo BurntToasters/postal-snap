@@ -207,6 +207,7 @@ export const MessageRow = memo(function MessageRow(props: MessageRowProps) {
     .join(", ");
   return (
     <div
+      role="none"
       className={`message-row-wrap${groupKey !== undefined ? " thread-child" : ""}${groupEnd ? " thread-end" : ""}${!selecting && isSelected ? " selected" : ""}`}
     >
       {selecting ? (

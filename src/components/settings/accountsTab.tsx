@@ -274,8 +274,8 @@ export function AccountsTab({
                           <small role="alert">{account.error}</small>
                         </>
                       ) : null}
-                    </span>{" "}
-                    <SyncStatus account={account} sync={undefined} />
+                    </span>
+                    <SyncStatus account={account} sync={undefined} passive />
                   </button>
                   {accounts.length > 1 ? (
                     <div className="account-overview-order">
@@ -499,22 +499,62 @@ export function AccountsTab({
                         role="radiogroup"
                         aria-labelledby={`account-color-${account.id}`}
                       >
-                        {(
-                          Object.keys(strings.settings.accountColors) as Array<
+                        {(() => {
+                          const colors = Object.keys(
+                            strings.settings.accountColors,
+                          ) as Array<
                             keyof typeof strings.settings.accountColors
-                          >
-                        ).map((color) => (
-                          <button
-                            key={color}
-                            type="button"
-                            role="radio"
-                            className="account-color-swatch"
-                            data-color={color}
-                            aria-label={strings.settings.accountColors[color]}
-                            aria-checked={account.color === color}
-                            onClick={() => void chooseColor(account.id, color)}
-                          />
-                        ))}
+                          >;
+                          const checkedIdx = colors.indexOf(
+                            account.color as keyof typeof strings.settings.accountColors,
+                          );
+                          const focusColor =
+                            colors[checkedIdx >= 0 ? checkedIdx : 0];
+                          return colors.map((color, colorIndex) => (
+                            <button
+                              key={color}
+                              type="button"
+                              role="radio"
+                              className="account-color-swatch"
+                              data-color={color}
+                              tabIndex={color === focusColor ? 0 : -1}
+                              aria-label={strings.settings.accountColors[color]}
+                              aria-checked={account.color === color}
+                              onKeyDown={(event) => {
+                                let nextIndex = -1;
+                                if (
+                                  event.key === "ArrowRight" ||
+                                  event.key === "ArrowDown"
+                                ) {
+                                  nextIndex = (colorIndex + 1) % colors.length;
+                                } else if (
+                                  event.key === "ArrowLeft" ||
+                                  event.key === "ArrowUp"
+                                ) {
+                                  nextIndex =
+                                    (colorIndex - 1 + colors.length) %
+                                    colors.length;
+                                } else if (event.key === "Home") {
+                                  nextIndex = 0;
+                                } else if (event.key === "End") {
+                                  nextIndex = colors.length - 1;
+                                }
+                                if (nextIndex < 0) return;
+                                event.preventDefault();
+                                const nextColor = colors[nextIndex];
+                                const radios =
+                                  event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>(
+                                    '[role="radio"]',
+                                  );
+                                radios?.[nextIndex]?.focus();
+                                void chooseColor(account.id, nextColor);
+                              }}
+                              onClick={() =>
+                                void chooseColor(account.id, color)
+                              }
+                            />
+                          ));
+                        })()}
                       </div>
                       <button
                         type="button"

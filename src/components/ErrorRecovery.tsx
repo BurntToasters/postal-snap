@@ -1,4 +1,4 @@
-import type { ReactNode, RefObject } from "react";
+import { useRef, type ReactNode, type RefObject } from "react";
 import { strings } from "../i18n";
 import { useDialogFocus } from "./useDialogFocus";
 import { useInertBackground } from "./useInertBackground";
@@ -62,8 +62,9 @@ export function ModalRecoveryFallback({
   children: ReactNode;
   onClose?: () => void;
 }) {
-  const dialogRef = useDialogFocus(onClose ?? (() => undefined));
-  useInertBackground();
+  const dialogRef = useRef<HTMLElement>(null);
+  useInertBackground(dialogRef);
+  useDialogFocus(onClose ?? (() => undefined), { ref: dialogRef });
   return (
     <div
       ref={dialogRef as unknown as RefObject<HTMLDivElement | null>}

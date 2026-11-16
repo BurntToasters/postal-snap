@@ -22,7 +22,7 @@ impl Database {
     pub(crate) fn remove_unowned_account_dir(&self, path: &std::path::Path) -> Result<(), String> {
         let id = path.file_name().and_then(|name| name.to_str())
             .ok_or_else(|| "Could not inspect unused attachments.".to_string())?;
-        let conn = self.read_conn()?;
+        let conn = self.conn()?;
         let owned: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM accounts WHERE id = ?1)",
             [id], |row| row.get(0),

@@ -316,12 +316,21 @@ test("the cluster follows the selected row colors", async ({ page }) => {
   await expect(row).toHaveAttribute("aria-selected", "true");
   await wrap.hover();
   await expect.poll(async () => (await measure(wrap)).opacity).toBe(1);
-  const colors = await wrap.evaluate((node) => ({
-    row: getComputedStyle(node.querySelector(".message-row")!).backgroundColor,
-    cluster: getComputedStyle(node.querySelector(".row-actions")!)
-      .backgroundColor,
-  }));
-  expect(colors.cluster).toBe(colors.row);
+  // .message-row transitions background-color over 120ms, which can finish
+  // one frame after .row-actions opacity reaches 1 under parallel load.
+  await expect
+    .poll(() =>
+      wrap.evaluate((node) => {
+        const rowBg = getComputedStyle(
+          node.querySelector(".message-row")!,
+        ).backgroundColor;
+        const clusterBg = getComputedStyle(
+          node.querySelector(".row-actions")!,
+        ).backgroundColor;
+        return clusterBg === rowBg ? "match" : `${clusterBg} !== ${rowBg}`;
+      }),
+    )
+    .toBe("match");
 });
 
 test("right-clicking the cluster opens the row menu", async ({ page }) => {

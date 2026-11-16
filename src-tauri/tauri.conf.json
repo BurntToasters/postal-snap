@@ -111,6 +111,7 @@
       }
     },
     "updater": {
+      "requireSignedVersion": true,
       "endpoints": [
         "https://github.com/BurntToasters/postal-snap/releases/latest/download/latest-{{target}}-{{arch}}.json"
       ],

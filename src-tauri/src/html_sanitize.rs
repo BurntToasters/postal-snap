@@ -268,14 +268,23 @@ fn rewrite_quoted_url(value: &str, is_src: bool) -> String {
     value.to_string()
 }
 
+fn starts_with_ascii_ignore_case(value: &str, prefix: &str) -> bool {
+    value
+        .as_bytes()
+        .get(..prefix.len())
+        .is_some_and(|head| head.eq_ignore_ascii_case(prefix.as_bytes()))
+}
+
 fn is_http_url(value: &str) -> bool {
     let value = value.trim();
-    value.starts_with("https://") || value.starts_with("http://")
+    starts_with_ascii_ignore_case(value, "https://")
+        || starts_with_ascii_ignore_case(value, "http://")
 }
 
 fn is_safe_href(value: &str) -> bool {
     let value = value.trim();
-    value.len() <= 16 * 1024 && (is_http_url(value) || value.starts_with("mailto:") || value == "#")
+    value.len() <= 16 * 1024
+        && (is_http_url(value) || starts_with_ascii_ignore_case(value, "mailto:") || value == "#")
 }
 
 fn is_kept_image_src(value: &str) -> bool {
@@ -373,7 +382,7 @@ fn rewrite_a_tag(tag: &str, restore_href: bool) -> String {
     let mailto = href
         .as_deref()
         .map(str::trim)
-        .filter(|value| value.starts_with("mailto:"))
+        .filter(|value| starts_with_ascii_ignore_case(value, "mailto:"))
         .map(ToOwned::to_owned);
     let mut extras = Vec::new();
     if let Some(http) = http {
@@ -1172,5 +1181,47 @@ mod tests {
         );
         assert_eq!(decode_html_entities("&#x00000041;"), "A");
         assert_eq!(decode_html_entities("&#x000000041;"), "&#x000000041;");
+    }
+
+    #[test]
+    fn sanitize_preserves_mixed_case_http_and_mailto_schemes() {
+        let received = sanitize_received_html(
+            r#"<a href="HTTPS://example.test/path">Web</a><a href="Mailto:Jane@example.test">Mail</a><img src="HTTP://cdn.example.test/pic.png">"#,
+        );
+        assert!(
+            received
+                .html
+                .contains("data-external-href=\"https://example.test/path\"")
+                || received
+                    .html
+                    .contains("data-external-href=\"HTTPS://example.test/path\""),
+            "expected preserved https link in: {}",
+            received.html
+        );
+        assert!(
+            received
+                .html
+                .to_ascii_lowercase()
+                .contains("href=\"mailto:jane@example.test\""),
+            "expected preserved mailto link in: {}",
+            received.html
+        );
+        assert_eq!(received.blocked_images, 1);
+
+        let draft = sanitize_compose_html(
+            r#"<a href="HTTPS://example.test/path">Web</a><a href="Mailto:Jane@example.test">Mail</a>"#,
+        );
+        assert!(
+            draft
+                .to_ascii_lowercase()
+                .contains("href=\"https://example.test/path\""),
+            "expected draft https link in: {draft}"
+        );
+        assert!(
+            draft
+                .to_ascii_lowercase()
+                .contains("href=\"mailto:jane@example.test\""),
+            "expected draft mailto link in: {draft}"
+        );
     }
 }

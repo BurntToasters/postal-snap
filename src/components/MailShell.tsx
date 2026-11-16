@@ -525,13 +525,14 @@ export function MailShell({ onOpenSettings }: Props) {
     }
   }, [activeAccountId, setError, setMailboxes]);
 
-  const { scheduledSendInFlight, sendScheduledNow } = useScheduledOutbox(
-    activeAccountId,
-    outbox,
-    sync,
-    loadAccountData,
-    setError,
-  );
+  const { scheduledSendInFlight, isScheduledSendInFlight, sendScheduledNow } =
+    useScheduledOutbox(
+      activeAccountId,
+      outbox,
+      sync,
+      loadAccountData,
+      setError,
+    );
 
   const {
     loadMessages,
@@ -734,9 +735,16 @@ export function MailShell({ onOpenSettings }: Props) {
     setError,
   });
 
+  const jumpToMailboxRef = useRef<(mailboxId: number) => void>(() => undefined);
+  const selectMailboxFromShortcut = useCallback(
+    (mailboxId: number) => jumpToMailboxRef.current(mailboxId),
+    [],
+  );
+
   useMailShortcuts({
     accounts,
     selectAccount,
+    selectMailbox: selectMailboxFromShortcut,
     setAccountSwitcherOpen,
     openComposer,
     refresh,
@@ -832,6 +840,7 @@ export function MailShell({ onOpenSettings }: Props) {
     setLoadingMessageId,
     setOutboxPreview,
     scheduledSendInFlight,
+    isScheduledSendInFlight,
     selectMessage,
     openComposer,
     setDrafts,
@@ -916,6 +925,20 @@ export function MailShell({ onOpenSettings }: Props) {
     [activeAccountId, accounts],
   );
   const busy = activeAccountId ? syncingAccountIds.has(activeAccountId) : false;
+  function jumpToMailbox(mailboxId: number) {
+    const sameMailbox = mailboxId === activeMailboxId && !activeLocalView;
+    if (!sameMailbox) messageRequest.current += 1;
+    searchRequest.current += 1;
+    clearQuery();
+    resetListState();
+    selectMailbox(mailboxId);
+    setSidebarOpen(false);
+    if (sameMailbox) void loadMessages();
+  }
+  useEffect(() => {
+    jumpToMailboxRef.current = jumpToMailbox;
+  });
+
   function openRoleMailbox(role: "inbox" | "sent") {
     closeMailboxMore();
     const mailbox = mailboxByRole(mailboxes, role);
@@ -923,13 +946,22 @@ export function MailShell({ onOpenSettings }: Props) {
       setError(role === "inbox" ? strings.mail.noInbox : strings.mail.noSent);
       return;
     }
-    if (mailbox.id === activeMailboxId && !activeLocalView) return;
-    selectMailbox(mailbox.id);
+    if (
+      mailbox.id === activeMailboxId &&
+      !activeLocalView &&
+      !submittedQueryRef.current &&
+      !selecting
+    ) {
+      return;
+    }
+    jumpToMailbox(mailbox.id);
   }
 
   function roleMailboxOpen(role: "inbox" | "sent") {
     return (
-      mailboxByRole(mailboxes, role)?.id === activeMailboxId && !activeLocalView
+      mailboxByRole(mailboxes, role)?.id === activeMailboxId &&
+      !activeLocalView &&
+      !submittedQuery
     );
   }
 
@@ -1160,19 +1192,19 @@ export function MailShell({ onOpenSettings }: Props) {
             if (next) void updateSettings({ collapsedMailboxes: next });
           }}
           onToggleCollapsed={(mailboxId, collapsed) => {
-            if (!activeAccountId) return;
+            if (!activeAccountId) return Promise.resolve(false);
             const current = settings.collapsedMailboxes ?? [];
             if (
               collapsed &&
               mailboxIsPinned(current, activeAccountId, mailboxId)
             ) {
-              return;
+              return Promise.resolve(false);
             }
             const next = collapsed
               ? pinMailbox(current, activeAccountId, mailboxId, 200)
               : unpinMailbox(current, activeAccountId, mailboxId);
-            if (!next) return;
-            void updateSettings({ collapsedMailboxes: next });
+            if (!next) return Promise.resolve(false);
+            return updateSettings({ collapsedMailboxes: next });
           }}
           activeMailboxId={activeMailboxId}
           folderIcons={folderIcons}
@@ -1181,15 +1213,7 @@ export function MailShell({ onOpenSettings }: Props) {
           folderBusy={folderBusy}
           newFolderButtonRef={newFolderButtonRef}
           onFolderClick={(mailbox) => {
-            const sameMailbox =
-              mailbox.id === activeMailboxId && !activeLocalView;
-            if (!sameMailbox) messageRequest.current += 1;
-            searchRequest.current += 1;
-            clearQuery();
-            resetListState();
-            selectMailbox(mailbox.id);
-            setSidebarOpen(false);
-            if (sameMailbox) void loadMessages();
+            jumpToMailbox(mailbox.id);
           }}
           onFolderRename={(mailbox) => {
             openFolderDialog({
@@ -1321,7 +1345,7 @@ export function MailShell({ onOpenSettings }: Props) {
                 setError(strings.mail.noOtherUnreadMailbox);
                 return;
               }
-              selectMailbox(next.id);
+              jumpToMailbox(next.id);
             }}
             nextUnreadMailboxDisabled={
               !nextUnreadMailbox(mailboxes, activeMailboxId)
@@ -1336,7 +1360,7 @@ export function MailShell({ onOpenSettings }: Props) {
                 setError(strings.mail.noOtherUnreadMailbox);
                 return;
               }
-              selectMailbox(previous.id);
+              jumpToMailbox(previous.id);
             }}
             previousUnreadMailboxDisabled={
               !previousUnreadMailbox(mailboxes, activeMailboxId)
@@ -1353,6 +1377,12 @@ export function MailShell({ onOpenSettings }: Props) {
                   listSort,
                   filter,
                 ),
+              }).then((saved) => {
+                if (!saved) {
+                  setPendingFilter((current) =>
+                    current === filter ? null : current,
+                  );
+                }
               });
             }}
             listSort={listSort}
@@ -1369,6 +1399,12 @@ export function MailShell({ onOpenSettings }: Props) {
                   sort,
                   listFilter,
                 ),
+              }).then((saved) => {
+                if (!saved) {
+                  setPendingSort((current) =>
+                    current === sort ? null : current,
+                  );
+                }
               });
             }}
             selection={selection}

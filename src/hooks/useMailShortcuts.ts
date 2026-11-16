@@ -23,6 +23,7 @@ import {
 export interface MailShortcutsOptions {
   accounts: AccountSummary[];
   selectAccount: (id: string) => void;
+  selectMailbox?: (mailboxId: number) => void;
   setAccountSwitcherOpen: (open: boolean) => void;
   openComposer: () => void;
   refresh: () => Promise<void>;
@@ -47,6 +48,7 @@ function archiveShortcutAction(): "archive" | "move-to-inbox" {
 export function useMailShortcuts({
   accounts,
   selectAccount,
+  selectMailbox,
   setAccountSwitcherOpen,
   openComposer,
   refresh,
@@ -94,7 +96,7 @@ export function useMailShortcuts({
         }
         if (inbox.id === state.activeMailboxId && !state.activeLocalView)
           return;
-        state.selectMailbox(inbox.id);
+        (selectMailbox ?? state.selectMailbox)(inbox.id);
       }
       if (
         action === "next-unread-mailbox" ||
@@ -109,7 +111,7 @@ export function useMailShortcuts({
           state.setError(strings.mail.noOtherUnreadMailbox);
           return;
         }
-        state.selectMailbox(next.id);
+        (selectMailbox ?? state.selectMailbox)(next.id);
       }
       if (
         action === "text-larger" ||
@@ -295,6 +297,7 @@ export function useMailShortcuts({
     relativeMessage,
     searchInput,
     selectAccount,
+    selectMailbox,
     setAccountSwitcherOpen,
     updateSettings,
   ]);

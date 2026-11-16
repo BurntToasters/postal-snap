@@ -38,6 +38,7 @@ interface Options {
   isDiscardingRef: RefObject<boolean>;
   draftRevisionRef: RefObject<number>;
   saveInFlightRef: RefObject<boolean>;
+  closePromptOpenRef?: RefObject<boolean>;
   pendingCloseRef: RefObject<boolean>;
   closedByComposerRef: RefObject<boolean>;
   session: number;
@@ -64,6 +65,7 @@ export function useComposerDraftPersistence({
   isDiscardingRef,
   draftRevisionRef,
   saveInFlightRef,
+  closePromptOpenRef,
   pendingCloseRef,
   closedByComposerRef,
   session,
@@ -87,6 +89,7 @@ export function useComposerDraftPersistence({
         !sending &&
         !isSendingRef.current &&
         !isDiscardingRef.current &&
+        !closePromptOpenRef?.current &&
         saveStateRef.current === "unsaved" &&
         !saveInFlightRef.current &&
         hasDraftContent(draft, currentBodyText())
@@ -160,6 +163,7 @@ export function useComposerDraftPersistence({
     draftRevisionRef,
     isDiscardingRef,
     isSendingRef,
+    closePromptOpenRef,
     pendingCloseRef,
     saveInFlightRef,
     savePromiseRef,
@@ -172,13 +176,11 @@ export function useComposerDraftPersistence({
 
   const saveDraft = useCallback(
     async (showStatus = true) => {
-      if (
-        sending ||
-        isSendingRef.current ||
-        isDiscardingRef.current ||
-        saveInFlightRef.current
-      )
+      if (sending || isSendingRef.current || isDiscardingRef.current) return;
+      if (saveInFlightRef.current) {
+        if (showStatus) pendingCloseRef.current = true;
         return;
+      }
       const draft = buildDraft();
       if (!hasDraftContent(draft, currentBodyText())) {
         if (showStatus) close();

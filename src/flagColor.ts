@@ -6,13 +6,18 @@ import type { FlagColor, MessageSummary } from "./types";
 type Snapshot = Pick<MessageSummary, "isStarred" | "flagColor">;
 
 /** Sets or clears the color of loaded messages. Clearing also unflags them. */
+let flagColorGeneration = 0;
+
 export async function setFlagColorFor(
   accountId: string,
   messageIds: number[],
   color: FlagColor | null,
 ): Promise<void> {
   if (messageIds.length === 0) return;
+  const generation = ++flagColorGeneration;
   const store = useAppStore.getState();
+  const snapshotMailboxId = store.activeMailboxId;
+  const snapshotView = store.activeLocalView;
   const ids = new Set(messageIds);
   const previous = new Map<number, Snapshot>();
   for (const item of store.messages) {
@@ -41,7 +46,15 @@ export async function setFlagColorFor(
     await api.setMessagesFlagColor(accountId, messageIds, color);
   } catch (cause) {
     const current = useAppStore.getState();
-    if (current.activeAccountId !== accountId) return;
+    current.setError(errorText(cause));
+    if (
+      generation !== flagColorGeneration ||
+      current.activeAccountId !== accountId ||
+      current.activeMailboxId !== snapshotMailboxId ||
+      current.activeLocalView !== snapshotView
+    ) {
+      return;
+    }
     current.setMessages(
       current.messages.map((item) => {
         const before = previous.get(item.id);
@@ -53,7 +66,6 @@ export async function setFlagColorFor(
     const open = current.selectedMessage;
     if (open && selectedBefore && open.id === selected?.id)
       current.selectMessage({ ...open, ...selectedBefore });
-    current.setError(errorText(cause));
   }
 }
 

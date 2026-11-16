@@ -67,6 +67,14 @@ pub(crate) async fn validate_public_https_url(raw_url: &str) -> Result<PublicHtt
     .await
 }
 
+pub(crate) fn is_localhost_host(host: &str) -> bool {
+    let host = host.trim_end_matches('.');
+    let suffix = b".localhost";
+    host.eq_ignore_ascii_case("localhost")
+        || (host.len() > suffix.len()
+            && host.as_bytes()[host.len() - suffix.len()..].eq_ignore_ascii_case(suffix))
+}
+
 pub(crate) async fn validate_public_https_url_with_resolver<F, Fut>(
     raw_url: &str,
     resolve: F,
@@ -86,7 +94,7 @@ where
         .host_str()
         .ok_or_else(|| "Invalid settings address.".to_string())?
         .to_string();
-    if host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost") {
+    if is_localhost_host(&host) {
         return Err("Private-network settings addresses are blocked.".into());
     }
     if url.port_or_known_default() != Some(443) {
@@ -308,7 +316,7 @@ where
         .host_str()
         .ok_or_else(|| "Invalid image address.".to_string())?
         .to_string();
-    if host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost") {
+    if is_localhost_host(&host) {
         return Err("Private-network images are blocked.".into());
     }
     let port = url
@@ -716,6 +724,34 @@ mod tests {
         )
         .await
         .is_err());
+
+        for url in [
+            "https://localhost./photo.jpg",
+            "https://sub.localhost./photo.jpg",
+        ] {
+            assert!(validate_public_url_with_resolver(
+                url,
+                None,
+                ProtectionPolicy {
+                    block_advertising_and_tracking: false,
+                    block_reported_threats: false,
+                },
+                |_, _| async { panic!("Trailing-dot localhost images must never resolve DNS") },
+            )
+            .await
+            .is_err());
+        }
+
+        for url in [
+            "https://localhost./autoconfig.xml",
+            "https://mail.localhost./settings.json",
+        ] {
+            assert!(validate_public_https_url_with_resolver(url, |_, _| async {
+                panic!("Trailing-dot localhost settings must never resolve DNS")
+            })
+            .await
+            .is_err());
+        }
     }
 
     #[test]

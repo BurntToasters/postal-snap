@@ -267,12 +267,12 @@ impl Database {
         &self,
         id: &str,
         account_id: &str,
-    ) -> Result<Option<(String, u32)>, String> {
+    ) -> Result<Option<(String, u32, bool)>, String> {
         self.read_conn()?
             .query_row(
-                "SELECT sync_state,revision FROM drafts WHERE id=?1 AND account_id=?2",
+                "SELECT sync_state,revision,deleted_at IS NOT NULL FROM drafts WHERE id=?1 AND account_id=?2",
                 params![id, account_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()
             .map_err(db_error)
@@ -322,7 +322,7 @@ impl Database {
                  remote_mailbox=excluded.remote_mailbox,remote_uid=excluded.remote_uid,
                  remote_uid_validity=excluded.remote_uid_validity,
                  remote_message_id=excluded.remote_message_id,revision=excluded.revision,deleted_at=NULL
-                 WHERE drafts.account_id=excluded.account_id",
+                 WHERE drafts.account_id=excluded.account_id AND drafts.deleted_at IS NULL",
                 params![
                     id,
                     draft.account_id,

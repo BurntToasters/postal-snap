@@ -55,6 +55,23 @@
   overflow-wrap: anywhere;
 }
 
+.notice-stack .toast.notice-progress {
+  width: min(var(--notice-max-width), calc(100vw - 2 * var(--notice-inset)));
+}
+
+.notice-stack .toast.notice-progress > span {
+  font-variant-numeric: tabular-nums;
+}
+
+.notice-stack .toast progress {
+  flex: 1 1 100%;
+  width: 100%;
+  height: var(--space-2);
+  border: 0;
+  border-radius: var(--radius-pill);
+  accent-color: var(--accent);
+}
+
 /* Severity keeps a tint over the material, so the message stays legible. */
 .notice-stack .toast.error-toast {
   color: var(--danger-ink);
@@ -155,5 +172,9 @@
 
   .notice-stack .toast.error-toast {
     border-width: 2px;
+  }
+
+  .notice-stack .toast progress {
+    border: 1px solid CanvasText;
   }
 }

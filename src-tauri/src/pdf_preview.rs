@@ -73,16 +73,56 @@ pub(crate) fn guard<T>(work: impl FnOnce() -> Result<T, String>) -> Result<T, St
     }
 }
 
+fn fits_pixel_caps(width: f32, height: f32, scale: f32) -> bool {
+    if !scale.is_finite() || scale <= 0.0 {
+        return false;
+    }
+    let pw = f64::from((width * scale).ceil()).max((f64::from(width) * f64::from(scale)).ceil());
+    let ph = f64::from((height * scale).ceil()).max((f64::from(height) * f64::from(scale)).ceil());
+    pw.is_finite()
+        && ph.is_finite()
+        && pw >= 1.0
+        && ph >= 1.0
+        && pw <= f64::from(MAX_PAGE_WIDTH)
+        && pw * ph <= MAX_PAGE_PIXELS as f64
+}
+
 /// Scale that fits a page inside the width and pixel caps. None when the
 /// page size is unusable.
 pub(crate) fn fit_scale(width: f32, height: f32) -> Option<f32> {
     if !(width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0) {
         return None;
     }
-    let by_width = MAX_PAGE_WIDTH as f32 / width;
-    let by_pixels = (MAX_PAGE_PIXELS as f32 / (width * height)).sqrt();
-    let scale = MAX_SCALE.min(by_width).min(by_pixels);
-    (scale.is_finite() && scale > 0.0).then_some(scale)
+    let w = f64::from(width);
+    let h = f64::from(height);
+    let by_width = f64::from(MAX_PAGE_WIDTH) / w;
+    // A 1-pixel minimum scaled dimension bounds ultra-tall pages too.
+    let by_height = MAX_PAGE_PIXELS as f64 / h;
+    let by_pixels = (MAX_PAGE_PIXELS as f64 / (w * h)).sqrt();
+    let mut scale = f64::from(MAX_SCALE)
+        .min(by_width)
+        .min(by_height)
+        .min(by_pixels) as f32;
+    for _ in 0..8 {
+        if fits_pixel_caps(width, height, scale) {
+            return Some(scale);
+        }
+        let pw = (w * f64::from(scale)).ceil().max(1.0);
+        let ph = (h * f64::from(scale)).ceil().max(1.0);
+        let next = if pw > f64::from(MAX_PAGE_WIDTH) {
+            ((f64::from(MAX_PAGE_WIDTH) - 0.5) / w) as f32
+        } else {
+            let ratio = ((MAX_PAGE_PIXELS as f64 - 1.0) / (pw * ph))
+                .sqrt()
+                .min(0.9999);
+            ((f64::from(scale) * ratio) as f32).min(f32::from_bits(scale.to_bits() - 1))
+        };
+        if !(next.is_finite() && next > 0.0 && next < scale) {
+            break;
+        }
+        scale = next;
+    }
+    fits_pixel_caps(width, height, scale).then_some(scale)
 }
 
 /// Render the first pages of a PDF. Encrypted, malformed or empty files error.
@@ -259,7 +299,7 @@ mod tests {
     // FM8 a panic inside the work becomes an error; FM9 unusable sizes have no scale.
     // FM10 a .pdf name without %PDF magic is refused; FM11 oversize bytes are refused.
     // FM12 the PNG output budget stops rendering and sets pages_truncated.
-    // FM13 work past the time limit errors; fast work returns its result.
+    // FM13 work past timeout errors; FM14 boundary sizes stay within pixel/width caps.
 
     #[test]
     fn fm1_malformed_pdf_is_an_error_not_a_panic() {
@@ -408,5 +448,39 @@ mod tests {
         assert!(!preview.pages_truncated);
         assert_eq!(preview.pages.as_ref().map(Vec::len), Some(1));
         assert!(preview.image_data_url.is_none());
+    }
+
+    #[test]
+    fn fm14_boundary_pages_never_fail_pixel_or_width_cap_rounding() {
+        let cases = [
+            (2000u32, 2001u32),
+            (1600, 2501),
+            (2001, 2000),
+            (1601, 2500),
+            (2828, 1415),
+            (1601, 100),
+        ];
+        for (w, h) in cases {
+            let scale = fit_scale(w as f32, h as f32).expect("usable page size");
+            let ceil_w = (w as f32 * scale).ceil() as u64;
+            let ceil_h = (h as f32 * scale).ceil() as u64;
+            assert!(
+                ceil_w <= u64::from(MAX_PAGE_WIDTH),
+                "{w}x{h} scale {scale} rounded width to {ceil_w} (> {MAX_PAGE_WIDTH})"
+            );
+            assert!(
+                ceil_w * ceil_h <= MAX_PAGE_PIXELS,
+                "{w}x{h} scale {scale} rounded pixels to {} (> {MAX_PAGE_PIXELS})",
+                ceil_w * ceil_h
+            );
+            let rendered = render_document(&build_pdf(&[(w, h)]))
+                .unwrap_or_else(|err| panic!("{w}x{h} failed to render cleanly: {err}"));
+            let (pw, ph) = png_dimensions(&decode_page(&rendered.pages[0]));
+            assert!(pw <= MAX_PAGE_WIDTH, "{w}x{h} rendered width {pw}");
+            assert!(
+                u64::from(pw) * u64::from(ph) <= MAX_PAGE_PIXELS,
+                "{w}x{h} rendered {pw}x{ph}"
+            );
+        }
     }
 }

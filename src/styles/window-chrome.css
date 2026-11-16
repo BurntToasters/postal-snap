@@ -121,6 +121,13 @@ html[data-platform="windows"] .app-toolbar {
   padding-right: var(--caption-controls-space);
 }
 
+@media (min-width: 760.02px) and (max-width: 899.98px) {
+  html[data-platform="macos"]:not([data-window-fullscreen="true"])
+    .app-toolbar {
+    padding-left: var(--mac-traffic-light-space);
+  }
+}
+
 @media (max-width: 760px) {
   html:is([data-platform="macos"], [data-platform="windows"]) .app-toolbar {
     padding: calc(var(--native-chrome-height) + var(--toolbar-pad-block))

@@ -30,7 +30,10 @@ pub fn normalize_url(url: &Url) -> Option<String> {
     if !url.username().is_empty() || url.password().is_some() {
         return None;
     }
-    let host = url.host_str()?.to_ascii_lowercase();
+    let host = url.host_str()?.trim_end_matches('.').to_ascii_lowercase();
+    if host.is_empty() {
+        return None;
+    }
     let mut normalized = url.clone();
     normalized.set_host(Some(&host)).ok()?;
     if matches!(
@@ -171,5 +174,14 @@ mod tests {
     async fn warmup_loads_the_shared_lists() {
         warmup().await;
         assert!(LISTS.get().is_some());
+    }
+
+    #[test]
+    fn trailing_dot_host_in_listed_url_does_not_bypass_blocklist() {
+        let urls = "https://shared.test/kit\nhttp://discord.gg/monoxidevip\n";
+        assert!(reports_with("", urls, "https://shared.test./kit"));
+        assert!(reports_with("", urls, "https://SHARED.TEST.:443/kit#frag"));
+        assert!(reports_with("", urls, "http://discord.gg./monoxidevip"));
+        assert_eq!(normalize_url(&Url::parse("https://./kit").unwrap()), None);
     }
 }

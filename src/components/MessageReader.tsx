@@ -120,6 +120,8 @@ export function MessageReader({
   const [loadedHtml, setLoadedHtml] = useState<{
     messageId: number;
     html: string;
+    sourceHtml?: string;
+    remoteAttempted?: boolean;
   }>();
   const [preparingForward, setPreparingForward] = useState(false);
   const [downloadingAttachmentId, setDownloadingAttachmentId] =
@@ -367,6 +369,8 @@ export function MessageReader({
     // eslint-disable-next-line react-hooks/refs -- latest-ref pattern
     keepSnooze.current = false;
     if (originalOpen) setOriginalOpen(false);
+    if (findIndex !== 0) setFindIndex(0);
+    if (findStatus) setFindStatus("");
   }
 
   const {
@@ -604,10 +608,17 @@ export function MessageReader({
       : undefined;
   const canViewPlain =
     formatted && (Boolean(message?.textBody.trim()) || bodyPresence.text);
+  // Loaded HTML is valid only for the body it was built from.
+  const loadedIsCurrent = Boolean(
+    loadedHtml &&
+    loadedHtml.messageId === message?.id &&
+    loadedHtml.sourceHtml === sanitized?.html,
+  );
   const currentLoadedHtml =
-    loadedHtml && loadedHtml.messageId === message?.id
-      ? loadedHtml.html
-      : undefined;
+    loadedHtml && loadedIsCurrent ? loadedHtml.html : undefined;
+  const remoteAttempted = Boolean(
+    loadedIsCurrent && loadedHtml?.remoteAttempted,
+  );
   const { remainingBlockedImages, filteredImages, threatImages } =
     useMemo(() => {
       if (!currentLoadedHtml) {
@@ -857,8 +868,7 @@ export function MessageReader({
         onSaveChosen={(ids) => void saveChosenAttachments(ids)}
         onPreviewDownload={() => {
           const current = message.attachments.find(
-            (item) =>
-              item.filename === preview?.preview.filename && !item.inline,
+            (item) => item.id === preview?.attachmentId,
           );
           if (current) void download(current.id, current.filename);
         }}
@@ -871,6 +881,7 @@ export function MessageReader({
         plainText={plainText}
         followsTheme={isDark && (!showHtml || !hasAuthorColors(frameSource))}
         currentLoadedHtml={currentLoadedHtml}
+        remoteAttempted={remoteAttempted}
         frameHtml={frameHtml}
         filteredImages={filteredImages}
         threatImages={threatImages}

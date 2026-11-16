@@ -53,7 +53,11 @@ pub(crate) fn resolve_bulk_items(
     mut locate: impl FnMut(i64) -> Result<(String, String, u32), String>,
 ) -> Result<Vec<(i64, String, u32)>, String> {
     let mut items = Vec::with_capacity(message_ids.len());
+    let mut seen = std::collections::HashSet::with_capacity(message_ids.len());
     for &id in message_ids {
+        if !seen.insert(id) {
+            continue;
+        }
         let Ok((owner, mailbox, uid)) = locate(id) else {
             continue;
         };
@@ -142,9 +146,16 @@ fn settle_open_download<T>(
     mailbox_id: i64,
     uid: u32,
     attempt_open: bool,
+    continue_parse: bool,
     result: &Result<T, MailError>,
 ) -> Result<(), MailError> {
     if !attempt_open {
+        if continue_parse {
+            state
+                .db
+                .end_parse(mailbox_id, uid)
+                .map_err(MailError::local_storage)?;
+        }
         return Ok(());
     }
     let action = crate::mail::sync::full_parse_action(result);
@@ -202,6 +213,7 @@ async fn download_full_once(
         location.mailbox_id,
         location.uid,
         attempt_open.load(Ordering::SeqCst),
+        continue_parse,
         &result,
     )?;
     result
@@ -1229,15 +1241,12 @@ pub async fn move_messages_to_mailbox(
     if destination_account_id != account_id {
         return Err("Messages cannot be moved between accounts.".into());
     }
+    let items = resolve_bulk_items(&account_id, &message_ids, |id| {
+        state.db.message_location(id)
+    })?;
     let mut groups: std::collections::HashMap<String, Vec<(i64, u32)>> =
         std::collections::HashMap::new();
-    for id in message_ids {
-        let Ok((owner, source, uid)) = state.db.message_location(id) else {
-            continue;
-        };
-        if owner != account_id {
-            return Err("Message does not belong to this account.".into());
-        }
+    for (id, source, uid) in items {
         if source == destination {
             continue;
         }
@@ -1452,15 +1461,12 @@ pub async fn copy_messages_to_mailbox(
     if destination_account_id != account_id {
         return Err("Messages cannot be copied between accounts.".into());
     }
+    let items = resolve_bulk_items(&account_id, &message_ids, |id| {
+        state.db.message_location(id)
+    })?;
     let mut groups: std::collections::HashMap<String, Vec<(i64, u32)>> =
         std::collections::HashMap::new();
-    for id in message_ids {
-        let Ok((owner, source, uid)) = state.db.message_location(id) else {
-            continue;
-        };
-        if owner != account_id {
-            return Err("Message does not belong to this account.".into());
-        }
+    for (id, source, uid) in items {
         if source == destination {
             continue;
         }
@@ -2215,6 +2221,12 @@ mod bulk_cap_tests {
     }
 
     #[test]
+    fn duplicate_ids_are_deduplicated_preserving_first_order() {
+        let items = resolve_bulk_items("acct", &[1, 1, 99, 1], locate).unwrap();
+        assert_eq!(items, vec![(1, "INBOX".to_string(), 10)]);
+    }
+
+    #[test]
     fn a_foreign_id_rejects_the_whole_bulk_request() {
         // Failure mode: owned ids change while a foreign id is silently dropped.
         let error = resolve_bulk_items("acct", &[1, 2], locate).unwrap_err();
@@ -2249,5 +2261,187 @@ mod eml_save_tests {
         std::fs::write(&path, b"old message bytes that are longer").unwrap();
         write_saved_message(&path, b"new").await.unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"new");
+    }
+
+    #[tokio::test]
+    async fn download_full_once_pre_parse_failure_clears_open_prefix_parse() {
+        use crate::commands::messages::{fetch_and_store, ContentPlan, Location};
+        use crate::commands::AppState;
+        use crate::models::{
+            AccountRecord, AccountSummary, BodyFormat, MailboxRole, ProviderKind, ServerConfig,
+            TlsMode,
+        };
+        use crate::{
+            db::{CachedMessage, Database},
+            mail::sync::BodyFetch,
+        };
+
+        // Failure mode: download_partial_once returns Fallback (LeaveOpen -> parse_pending=1),
+        // then download_full_once hits a pre-parse network/IMAP failure before before_parse,
+        // leaving parse_pending=1 until the next retry hits PARSE_QUARANTINE_AT=2.
+        let prefix = b"Message-ID: <b2-open@example.test>\r\nSubject: OpenPrefix\r\nContent-Type: text/plain\r\n\r\nPartial prefix body";
+        let (port, _, server) = crate::mail::test_tls::spawn_imap_server(move |tag, verb, rest| {
+            let tag = tag.to_string();
+            let verb = verb.to_string();
+            let rest = rest.to_string();
+            let prefix_bytes = prefix.to_vec();
+            Box::pin(async move {
+                let upper = rest.to_ascii_uppercase();
+                let reply = match verb.as_str() {
+                    "CAPABILITY" => {
+                        format!("* CAPABILITY IMAP4rev1\r\n{tag} OK done\r\n").into_bytes()
+                    }
+                    "LOGIN" | "LOGOUT" => format!("{tag} OK ok\r\n").into_bytes(),
+                    "EXAMINE" | "SELECT" => format!(
+                        "* 1 EXISTS\r\n* OK [UIDVALIDITY 10]\r\n* OK [UIDNEXT 2]\r\n* OK [PERMANENTFLAGS (\\Seen)]\r\n{tag} OK selected\r\n"
+                    )
+                    .into_bytes(),
+                    "UID" if upper.starts_with("UID FETCH") && upper.contains("BODY.PEEK[]<0.262144>") => {
+                        let mut out = format!(
+                            "* 1 FETCH (UID 1 FLAGS () RFC822.SIZE 2000000 INTERNALDATE \"15-Nov-2026 12:00:00 +0000\" BODY[]<0> {{{}}}\r\n",
+                            prefix_bytes.len()
+                        )
+                        .into_bytes();
+                        out.extend_from_slice(&prefix_bytes);
+                        out.extend_from_slice(format!(")\r\n{tag} OK partial\r\n").as_bytes());
+                        out
+                    }
+                    "UID" if upper.starts_with("UID FETCH") => {
+                        // Subsequent full download fails before before_parse runs.
+                        format!("{tag} NO temporary full download failure\r\n").into_bytes()
+                    }
+                    _ => format!("{tag} OK ok\r\n").into_bytes(),
+                };
+                Some(reply)
+            })
+        })
+        .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::memory();
+        let settings =
+            crate::settings::SettingsStore::load(dir.path().join("settings.json"), &db).unwrap();
+        let state = AppState::new(db.clone(), settings, dir.path().to_path_buf());
+        let account_id = format!("b2-open-{}", uuid::Uuid::new_v4());
+        let _secret = crate::oauth::TestSecretGuard::install(&account_id, "pw");
+        let server_cfg = ServerConfig {
+            host: "127.0.0.1".into(),
+            port,
+            tls_mode: TlsMode::Tls,
+            username: "fixture@example.test".into(),
+            trusted_certificate: Some(crate::mail::test_tls::CERT_PEM.into()),
+        };
+        let account = AccountRecord {
+            summary: AccountSummary {
+                notify_new_mail: true,
+                id: account_id.clone(),
+                provider: ProviderKind::ProtonBridge,
+                email: "fixture@example.test".into(),
+                display_name: "Fixture".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+                signature_html: String::new(),
+                reply_to: String::new(),
+                color: None,
+                default_body_format: BodyFormat::Plain,
+            },
+            imap: server_cfg.clone(),
+            smtp: server_cfg,
+        };
+        crate::mail::pool::forget(&account_id);
+        state.db.insert_account(&account).unwrap();
+        let inbox = state
+            .db
+            .upsert_mailbox(
+                &account_id,
+                "INBOX",
+                &MailboxRole::Inbox,
+                Some(10),
+                Some(2),
+                Some(1),
+                1,
+            )
+            .unwrap();
+        state
+            .db
+            .upsert_envelopes(
+                &account_id,
+                inbox,
+                &[CachedMessage {
+                    uid: 1,
+                    message_id: Some("<b2-open@example.test>".into()),
+                    subject: "OpenPrefix".into(),
+                    sender_name: "Jane".into(),
+                    sender_address: "jane@example.test".into(),
+                    recipients: "fixture@example.test".into(),
+                    received_at: "2026-11-15T12:00:00Z".into(),
+                    internal_at: Some("2026-11-15T12:00:00Z".into()),
+                    preview: String::new(),
+                    is_read: false,
+                    is_starred: false,
+                    size: 2_000_000,
+                    to: vec!["fixture@example.test".into()],
+                    cc: vec![],
+                    bcc: vec![],
+                    reply_to: None,
+                    thread_parent: None,
+                    text_body: String::new(),
+                    html_body: None,
+                    attachments: vec![],
+                    raw_message: Vec::new(),
+                    has_attachments: false,
+                    is_answered: false,
+                    is_forwarded: false,
+                    has_calendar: false,
+                    calendar_json: None,
+                    list_unsubscribe: None,
+                    list_unsubscribe_post: None,
+                    importance: String::new(),
+                    disposition_to: String::new(),
+                }],
+            )
+            .unwrap();
+        let msg_id = state
+            .db
+            .message_summary_by_uid(inbox, 1)
+            .unwrap()
+            .unwrap()
+            .id;
+        let loc = Location {
+            message_id: msg_id,
+            mailbox_id: inbox,
+            mailbox: "INBOX".into(),
+            uid: 1,
+            size: 2_000_000,
+        };
+
+        let res = fetch_and_store(
+            &state,
+            &account_id,
+            &loc,
+            10,
+            ContentPlan::Download(BodyFetch::Partial),
+        )
+        .await;
+        assert!(res.is_err());
+        let pending: i64 = state
+            .db
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT parse_pending FROM messages WHERE id=?1",
+                [msg_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            pending, 0,
+            "pre-parse full download failure after prefix fallback must clear parse_pending"
+        );
+        crate::mail::pool::forget(&account_id);
+        server.abort();
     }
 }

@@ -1676,7 +1676,7 @@ describe("MessageReader", () => {
       ),
     );
     fireEvent.click(
-      screen.getByRole("button", { name: strings.reader.retryImages }),
+      screen.getByRole("button", { name: strings.reader.loadImages }),
     );
     await waitFor(() => expect(api.fetchRemoteImage).toHaveBeenCalledTimes(4));
     expect(

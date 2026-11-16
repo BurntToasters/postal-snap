@@ -40,6 +40,11 @@ async function openIdentity(page: Page, density: string, scale: number) {
   await page.getByRole("tab", { name: "Accounts", exact: true }).click();
   await page.getByRole("button", { name: /^Manage Sam\b/ }).click();
   await page.getByRole("button", { name: "Identity", exact: true }).click();
+  // SignatureEditor loads via Suspense above the alias controls; wait for it so
+  // Detect and Remove buttons cannot shift under clicks.
+  await expect(
+    page.getByRole("textbox", { name: "Rich signature" }),
+  ).toBeVisible();
 }
 
 test.beforeEach(async ({ page }) => {
@@ -249,6 +254,9 @@ for (const { density, scale } of matrix) {
     await page.getByRole("tab", { name: "Accounts", exact: true }).click();
     await page.getByRole("button", { name: /^Manage Sam\b/ }).click();
     await page.getByRole("button", { name: "Identity", exact: true }).click();
+    await expect(
+      page.getByRole("textbox", { name: "Rich signature" }),
+    ).toBeVisible();
     await expect(
       page.getByRole("button", {
         name: "Remove custom@mydomain.com",

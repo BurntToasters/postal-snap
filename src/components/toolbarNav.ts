@@ -1,9 +1,54 @@
-import type { KeyboardEvent } from "react";
+import { useEffect, type KeyboardEvent, type RefObject } from "react";
 import { FOCUSABLE_SELECTOR } from "./focusable";
 
 /** Enabled menu rows of every kind; submenu triggers are menuitems too. */
 export const MENU_ITEM_SELECTOR =
   '[role="menuitem"]:not(:disabled), [role="menuitemradio"]:not(:disabled), [role="menuitemcheckbox"]:not(:disabled)';
+
+function isElementVisible(item: HTMLElement): boolean {
+  return (
+    !item.hidden &&
+    (typeof item.checkVisibility === "function"
+      ? item.checkVisibility()
+      : item.offsetParent !== null || item.getClientRects().length > 0)
+  );
+}
+
+function syncRovingToolbarButtons(toolbar: HTMLElement) {
+  const buttons = [...toolbar.querySelectorAll<HTMLButtonElement>("button")];
+  const enabled = buttons.filter(
+    (btn) => !btn.disabled && isElementVisible(btn),
+  );
+  const pool = enabled.length > 0 ? enabled : buttons;
+  if (pool.length === 0) return;
+  const focused = document.activeElement;
+  const active =
+    pool.find((btn) => btn === focused) ??
+    pool.find((btn) => btn.getAttribute("tabindex") === "0") ??
+    pool[0];
+  for (const btn of buttons) {
+    btn.tabIndex = btn === active ? 0 : -1;
+  }
+}
+
+export function useRovingToolbar(
+  toolbarRef: RefObject<HTMLElement | null>,
+  deps: readonly unknown[] = [],
+) {
+  useEffect(() => {
+    const toolbar = toolbarRef.current;
+    if (!toolbar) return;
+    syncRovingToolbarButtons(toolbar);
+    const onFocusIn = (event: FocusEvent) => {
+      if (event.target instanceof HTMLButtonElement && !event.target.disabled) {
+        syncRovingToolbarButtons(toolbar);
+      }
+    };
+    toolbar.addEventListener("focusin", onFocusIn);
+    return () => toolbar.removeEventListener("focusin", onFocusIn);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deps control re-sync across dynamic toolbar changes
+  }, deps);
+}
 
 export function moveToolbarFocus(event: KeyboardEvent<HTMLElement>) {
   if (
@@ -14,16 +59,18 @@ export function moveToolbarFocus(event: KeyboardEvent<HTMLElement>) {
   ) {
     return;
   }
+  const target = event.target as HTMLElement | null;
+  if (
+    target instanceof HTMLSelectElement ||
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement
+  ) {
+    return;
+  }
   const toolbar = event.currentTarget;
   const items = [
     ...toolbar.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
-  ].filter(
-    (item) =>
-      !item.hidden &&
-      (typeof item.checkVisibility === "function"
-        ? item.checkVisibility()
-        : item.offsetParent !== null || item.getClientRects().length > 0),
-  );
+  ].filter(isElementVisible);
   if (items.length === 0) return;
   event.stopPropagation();
   const active = document.activeElement as HTMLElement | null;
@@ -36,7 +83,13 @@ export function moveToolbarFocus(event: KeyboardEvent<HTMLElement>) {
   else if (event.key === "End") index = items.length - 1;
   else if (event.key === "ArrowRight") index = (index + 1) % items.length;
   else index = (index - 1 + items.length) % items.length;
-  items[index].focus();
+  const next = items[index];
+  if (next instanceof HTMLButtonElement) {
+    for (const btn of toolbar.querySelectorAll<HTMLButtonElement>("button")) {
+      btn.tabIndex = btn === next ? 0 : -1;
+    }
+  }
+  next.focus();
 }
 
 // Items of this menu only: a submenu panel is a nested role="menu" and

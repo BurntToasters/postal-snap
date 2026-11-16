@@ -126,10 +126,16 @@ export function AppearanceStep({ saving, persist, go }: AppearanceStepProps) {
 interface ComfortStepProps {
   saving: boolean;
   persist: SetupPersist;
+  windowFxSupported: boolean;
   go: SetupGo;
 }
 
-export function ComfortStep({ saving, persist, go }: ComfortStepProps) {
+export function ComfortStep({
+  saving,
+  persist,
+  windowFxSupported,
+  go,
+}: ComfortStepProps) {
   const settings = useAppStore((state) => state.settings);
 
   return (
@@ -177,19 +183,21 @@ export function ComfortStep({ saving, persist, go }: ComfortStepProps) {
             }
           />
         </label>
-        <label className="switch-row">
-          <span>
-            <strong>{strings.settings.windowEffects}</strong>
-            <small>{strings.settings.windowEffectsHelp}</small>
-          </span>
-          <input
-            type="checkbox"
-            checked={settings.windowEffects}
-            onChange={(event) =>
-              void persist({ windowEffects: event.target.checked })
-            }
-          />
-        </label>
+        {windowFxSupported ? (
+          <label className="switch-row">
+            <span>
+              <strong>{strings.settings.windowEffects}</strong>
+              <small>{strings.settings.windowEffectsHelp}</small>
+            </span>
+            <input
+              type="checkbox"
+              checked={settings.windowEffects}
+              onChange={(event) =>
+                void persist({ windowEffects: event.target.checked })
+              }
+            />
+          </label>
+        ) : null}
         <CloseToTraySwitch
           checked={settings.closeToTray}
           onChecked={(checked) => void persist({ closeToTray: checked })}

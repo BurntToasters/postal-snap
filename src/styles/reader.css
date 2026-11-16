@@ -479,11 +479,18 @@ html[data-text-scale="large"] .message-header .message-stamp {
 /* Bottom pane: the date and its meta share one line. */
 .pane-bottom .message-header .message-stamp {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   gap: var(--space-2);
-  max-inline-size: none;
+  max-inline-size: 100%;
+  min-width: 0;
   white-space: nowrap;
+}
+
+html[data-text-scale="large"] .pane-bottom .message-header .message-stamp {
+  justify-content: flex-start;
+  white-space: normal;
 }
 
 /* Date, size and Details share the stamp column. */

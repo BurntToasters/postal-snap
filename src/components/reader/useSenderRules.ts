@@ -51,6 +51,7 @@ export function useSenderRules({
         : strings.reader.blockSenderQuestion,
     );
     if (!confirmed) return;
+    if (useAppStore.getState().selectedMessage?.id !== message.id) return;
     if (!alreadyJunk) await move("junk");
     try {
       const rules = await api.listFilterRules(message.accountId);
@@ -98,6 +99,7 @@ export function useSenderRules({
         : strings.reader.blockDomainQuestion(domain),
     );
     if (!confirmed) return;
+    if (useAppStore.getState().selectedMessage?.id !== message.id) return;
     if (!alreadyJunk) await move("junk");
     try {
       const rules = await api.listFilterRules(message.accountId);

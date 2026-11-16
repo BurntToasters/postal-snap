@@ -97,6 +97,7 @@ html[data-reduce-transparency="true"] {
    would also clip submenu panels, so the fade is an overlay row instead. */
 .app-menu[data-scroll-cue="more"]::after {
   content: "";
+  display: block;
   position: sticky;
   bottom: 0;
   height: var(--menu-row-height);

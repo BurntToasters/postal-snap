@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Copy, Download, X } from "lucide-react";
 import { api } from "../../api";
@@ -21,8 +21,9 @@ export function OriginalDialog({
   onClose: () => void;
   onError: (message: string) => void;
 }) {
-  const dialogRef = useDialogFocus(onClose);
-  useInertBackground();
+  const dialogRef = useRef<HTMLElement>(null);
+  useInertBackground(dialogRef);
+  useDialogFocus(onClose, { ref: dialogRef });
   const [source, setSource] = useState<MessageSource>();
   const [copied, setCopied] = useState(false);
   const [saving, setSaving] = useState(false);

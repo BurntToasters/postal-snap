@@ -46,6 +46,8 @@ export interface SendBarProps {
   onToggleFormatting?: () => void;
   addAttachments: () => void | Promise<void>;
   addInlineImage: () => void | Promise<void>;
+  canInsertInlineImages?: boolean;
+  onScheduleError?: (error: string) => void;
   discardDraft: () => void | Promise<void>;
   showAttachments?: boolean;
   /** Resize grip for the floating composer. */
@@ -70,6 +72,8 @@ export function SendBar({
   onToggleFormatting,
   addAttachments,
   addInlineImage,
+  canInsertInlineImages = true,
+  onScheduleError,
   discardDraft,
   showAttachments = true,
   children,
@@ -258,10 +262,17 @@ export function SendBar({
                     className="schedule-form"
                     onSubmit={(event) => {
                       event.preventDefault();
-                      const iso = new Date(scheduleValue).toISOString();
+                      const when = new Date(scheduleValue);
+                      const ms = when.getTime();
+                      const now = Date.now();
+                      const maxMs = now + 366 * 24 * 60 * 60 * 1000;
+                      if (!Number.isFinite(ms) || ms <= now || ms > maxMs) {
+                        onScheduleError?.(strings.composer.invalidSchedule);
+                        return;
+                      }
                       setSendMenuOpen(false);
                       setScheduleOpen(false);
-                      void sendMessage(iso);
+                      void sendMessage(when.toISOString());
                     }}
                   >
                     <label>
@@ -335,7 +346,7 @@ export function SendBar({
           className="toolbar-button footer-action"
           type="button"
           onClick={() => void addInlineImage()}
-          disabled={sending}
+          disabled={sending || !canInsertInlineImages}
           title={strings.composer.picture}
         >
           <ImagePlus aria-hidden="true" />

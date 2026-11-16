@@ -24,6 +24,7 @@ import {
 } from "../../markConversation";
 import { hideMailbox, pinMailbox, unpinMailbox } from "../../pinnedMailboxes";
 import { rememberMoveMailboxId } from "../../recentMailbox";
+import { toggleListedRead } from "../../markRead";
 import { copyLoadedConversationText } from "../../copyMessageText";
 import { forwardLoadedConversation } from "../../forwardConversation";
 import { pinLoadedMessages } from "../../pinConversation";
@@ -364,10 +365,31 @@ export function handleContextAction(event: Event, ctx: ContextActionCtx) {
       void markLoadedConversationUnread(summary);
       return;
     }
+    if (id === "toggle-read") {
+      if (!summary.isRead && current.settings.markRead === "after2s") {
+        // Explicit Mark read must apply immediately instead of waiting 2s in chooseMessage.
+        void toggleListedRead(summary.id);
+        void chooseMessage({ ...summary, isRead: true });
+        return;
+      }
+      void (async () => {
+        const opened = await chooseMessage(summary);
+        if (!opened) return;
+        const latest = useAppStore.getState();
+        const isNowRead =
+          latest.selectedMessage?.id === summary.id
+            ? latest.selectedMessage.isRead
+            : summary.isRead;
+        if (!summary.isRead && isNowRead) return;
+        window.dispatchEvent(
+          new CustomEvent("postal:menu-action", { detail: id }),
+        );
+      })();
+      return;
+    }
     void (async () => {
       const opened = await chooseMessage(summary);
       if (!opened) return;
-      if (id === "toggle-read" && !summary.isRead) return;
       if (id === "snooze") {
         window.dispatchEvent(new Event("postal:open-snooze"));
         return;

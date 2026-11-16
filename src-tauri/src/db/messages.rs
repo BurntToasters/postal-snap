@@ -725,16 +725,40 @@ impl Database {
     }
 
     /// Newest unread Inbox arrival cached after `after`, by arrival order.
+    #[cfg(test)]
     pub fn newest_unread_inbox_after(
         &self,
         account_id: &str,
         after: Option<i64>,
     ) -> Result<Option<MessageSummary>, String> {
+        self.newest_unread_inbox_after_excluding(account_id, after, &[])
+    }
+
+    /// Newest unread Inbox arrival cached after `after`, skipping already-notified ids.
+    pub fn newest_unread_inbox_after_excluding(
+        &self,
+        account_id: &str,
+        after: Option<i64>,
+        exclude_ids: &[i64],
+    ) -> Result<Option<MessageSummary>, String> {
         let conn = self.read_conn()?;
-        conn.query_row(
-            &format!("{} JOIN mailboxes box ON box.id=m.mailbox_id WHERE m.account_id=?1 AND box.role='inbox' AND m.pending_move_to IS NULL AND m.is_read=0 AND (?2 IS NULL OR m.id>?2) ORDER BY m.id DESC LIMIT 1", MESSAGE_SUMMARY_SELECT),
-            params![account_id, after], map_message_summary,
-        ).optional().map_err(db_error)
+        let excluded: std::collections::HashSet<i64> = exclude_ids.iter().copied().collect();
+        let mut statement = conn
+            .prepare(&format!(
+                "{} JOIN mailboxes box ON box.id=m.mailbox_id WHERE m.account_id=?1 AND box.role='inbox' AND m.pending_move_to IS NULL AND m.is_read=0 AND (?2 IS NULL OR m.id>?2) ORDER BY m.id DESC",
+                MESSAGE_SUMMARY_SELECT
+            ))
+            .map_err(db_error)?;
+        let mut rows = statement
+            .query(params![account_id, after])
+            .map_err(db_error)?;
+        while let Some(row) = rows.next().map_err(db_error)? {
+            let summary = map_message_summary(row).map_err(db_error)?;
+            if !excluded.contains(&summary.id) {
+                return Ok(Some(summary));
+            }
+        }
+        Ok(None)
     }
 
     /// Full message for display. Sanitizes the body after the reader guard
@@ -1912,7 +1936,6 @@ impl Database {
                 let Some(validity) = self.mailbox_uid_validity(account_id, &hit.mailbox)? else {
                     continue;
                 };
-                self.set_flags(hit.id, Some(true), None)?;
                 let flag = serde_json::json!({
                     "messageId": hit.id,
                     "uid": hit.uid,
@@ -1921,11 +1944,13 @@ impl Database {
                     "isRead": true,
                     "isStarred": null,
                 });
-                self.queue_operation(
+                self.record_colored_flag_change(
                     account_id,
-                    "flags",
-                    &flag,
-                    Some(&format!("flags:{}:true:false", hit.id)),
+                    hit.id,
+                    Some(true),
+                    None,
+                    None,
+                    Some(&flag),
                 )?;
                 if let Some(rfc_id) = hit.message_id.as_deref() {
                     remember_reply_id(self, account_id, rfc_id, hit.thread_parent.as_deref())?;

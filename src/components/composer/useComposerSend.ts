@@ -265,6 +265,7 @@ export function useComposerSend({
         }
         close();
       } catch (cause) {
+        pendingCloseRef.current = false;
         announceLocalMailChanged(accountId);
         setError(errorText(cause));
       } finally {
